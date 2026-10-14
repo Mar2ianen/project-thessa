@@ -286,7 +286,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "-",
             unit: "-",
             advanced: false,
-            restart_required: false,
+            restart_required: true,
             description: "Cloud sampling budget; never changes atmosphere or physics.",
         },
         SettingMeta {
@@ -330,7 +330,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "1",
             unit: "shells",
             advanced: false,
-            restart_required: false,
+            restart_required: true,
             description: "One low deck, or low plus cirrus. The volume path marches the low deck; cirrus stays a shell in both paths.",
         },
         SettingMeta {
@@ -341,7 +341,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "0.05",
             unit: "-",
             advanced: false,
-            restart_required: false,
+            restart_required: true,
             description: "Coverage threshold over the procedural deck field.",
         },
         SettingMeta {
@@ -396,7 +396,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "-",
             unit: "-",
             advanced: true,
-            restart_required: false,
+            restart_required: true,
             description: "Aurora shell or volumetric-curtain budget.",
         },
         SettingMeta {
@@ -693,6 +693,17 @@ mod tests {
             .find(|m| m.path == "gas_giant.enabled")
             .unwrap();
         assert!(gas_giant.restart_required);
+        let cloud_qual = metas.iter().find(|m| m.path == "clouds.quality").unwrap();
+        assert!(cloud_qual.restart_required);
+        let cloud_lay = metas.iter().find(|m| m.path == "clouds.layers").unwrap();
+        assert!(cloud_lay.restart_required);
+        let cloud_cov = metas.iter().find(|m| m.path == "clouds.coverage").unwrap();
+        assert!(cloud_cov.restart_required);
+        let aurora_q = metas
+            .iter()
+            .find(|m| m.path == "upper_atmosphere.aurora_quality")
+            .unwrap();
+        assert!(aurora_q.restart_required);
         let steps = metas
             .iter()
             .find(|m| m.path == "atmosphere.ray_steps")

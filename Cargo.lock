@@ -5705,6 +5705,7 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_core_pipeline",
+ "glam 0.32.1",
  "naga",
  "pollster",
  "thessa-atmosphere",

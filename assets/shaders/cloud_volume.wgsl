@@ -206,8 +206,9 @@ fn billow_cubic(p: vec3<f32>) -> f32 {
 const BILLOW_MEAN: f32 = 0.933;
 
 // Hierarchical cauliflower billow field with rotational scrambling & fluid advection:
-// Step-footprint filtered: higher octaves fade out to verified empirical mean (0.933) when step_km cannot resolve
-// their spatial frequency, conserving energy without aliasing or brightness shifts.
+// Step-footprint filtered: higher octaves fade out toward verified empirical mean (~0.933) when step_km cannot resolve
+// their spatial frequency, suppressing sub-step Nyquist aliasing while preserving the linear field expectation prior
+// to downstream nonlinear density shaping.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
     // Bandlimiting against raymarch step: periods are ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
     let w0 = smoothstep(14.0, 4.0, step_km);
@@ -228,8 +229,8 @@ fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
             b2 = mix(BILLOW_MEAN, billow_cubic(p2), w2);
         }
     }
-    // Energy conservation: weights sum to 1.0 (0.40 + 0.38 + 0.22 = 1.00), and unresolvable octaves
-    // fade towards their statistical expectation (0.933), maintaining constant expected energy across LODs:
+    // Weights sum to 1.0 (0.40 + 0.38 + 0.22 = 1.00); unresolvable octaves fade towards their statistical
+    // expectation (0.933), maintaining the expectation of the linear field across LODs before nonlinear shaping:
     return b0 * 0.40 + b1 * 0.38 + b2 * 0.22;
 }
 
@@ -348,16 +349,26 @@ fn slab_density(
 
     // Cumulus deck (deck 0):
     // Fast path for sun self-shadow rays: evaluates Perlin mass + primary 2 billow octaves
-    // Skips 12 Perlin curl-warp evaluations per shadow tap to eliminate register pressure on Radeon 880M
+    // Uses large-scale domain warp (1 curl evaluation) so shadow features geometrically align with view rays,
+    // while skipping high-frequency vortex curl to maintain bounded register pressure on iGPU.
     if (!full_detail) {
-        let p_w = p_drift;
+        let w_warp_large = smoothstep(16.0, 6.0, step_km);
+        var warp_large = vec3<f32>(0.0);
+        if (w_warp_large > 0.0001) {
+            warp_large = curl_warp3d(p_drift * 0.022) * (4.2 * w_warp_large);
+        }
+        let p_w = p_drift + warp_large;
         let p0_s = perlin3d(p_w * 0.016) * 0.60 + 0.50;
         let p1_s = perlin3d(p_w * 0.038 + vec3<f32>(2.4, 5.1, 8.9)) * 0.50 + 0.50;
         let macro_s = p0_s * 0.70 + p1_s * 0.30;
         let b0_s = billow_cubic(p_w * 0.072);
-        let p1_s_rot = ROT_OCTAVE * (p_w * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
-        let b1_s = billow_cubic(p1_s_rot);
-        let cauli_s = b0_s * 0.45 + b1_s * 0.55;
+        let w1_s = smoothstep(3.5, 0.8, step_km);
+        var b1_s = BILLOW_MEAN;
+        if (w1_s > 0.01) {
+            let p1_s_rot = ROT_OCTAVE * (p_w * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
+            b1_s = mix(BILLOW_MEAN, billow_cubic(p1_s_rot), w1_s);
+        }
+        let cauli_s = b0_s * 0.51 + b1_s * 0.49;
         let billow_lift_s = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01));
         let shape_s = macro_s * (1.0 - billow_lift_s) + cauli_s * billow_lift_s;
         let cov_s = clamp(base * mix(0.88, 1.12, weather.x), 0.0, 1.0);
@@ -371,13 +382,19 @@ fn slab_density(
     }
 
     // Multi-scale convective fluid domain warp (curl-advected streamlines):
-    // Bandlimit small vortex turbulence when step_km cannot resolve the sub-5km scale:
-    let w_curl = smoothstep(5.0, 1.5, step_km);
+    // Continuous frequency-aware amplitude scaling prevents spatial popping across step sizes:
+    // 1. Large continental eddy warp (period ~45 km, Nyquist ~22 km): smoothly fades to 0 between 16 and 6 km steps
+    let w_warp_large = smoothstep(16.0, 6.0, step_km);
     var warp_large = vec3<f32>(0.0);
+    if (w_warp_large > 0.0001) {
+        warp_large = curl_warp3d(p_drift * 0.022) * (4.2 * w_warp_large);
+    }
+
+    // 2. Small vortex turbulence (period ~12 km, Nyquist ~6 km): smoothly fades to 0 between 6 and 1.5 km steps
+    let w_warp_turb = smoothstep(6.0, 1.5, step_km);
     var warp_turb = vec3<f32>(0.0);
-    if (w_curl > 0.01) {
-        warp_large = curl_warp3d(p_drift * 0.022) * 4.2;
-        warp_turb = curl_warp3d(p_drift * 0.085 + warp_large * 0.3) * (1.6 * w_curl);
+    if (w_warp_turb > 0.0001) {
+        warp_turb = curl_warp3d(p_drift * 0.085 + warp_large * 0.3) * (1.6 * w_warp_turb);
     }
     let p_w = p_drift + warp_large + warp_turb;
 
@@ -514,10 +531,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // 4. Bound max march distance through the slab:
-    // From surface/cockpit views, clamp to 80 km (0.025 radii) so rays near the horizon
-    // concentrate their step budget where clouds are actually visible through haze.
-    let full_chord = 2.0 * sqrt(max(top * top - bot * bot, 1e-4));
-    let max_chord = select(full_chord, min(full_chord, 0.020), r_cam < top + 0.02);
+    // Full geometric tangent chord through the expanded volume slab bounded by march_top:
+    // For low-altitude observers (surface/cockpit, r_cam < march_top + 0.02), apply an intentional
+    // horizon budget cap of 160 km (0.025 planet radii) so the 24-step march concentrates detail
+    // where clouds are visible through haze rather than spreading steps across an 868 km limb chord.
+    // For orbital observers, the full geometric tangent chord is preserved without truncation.
+    let geometric_tangent_chord = 2.0 * sqrt(max(march_top * march_top - bot * bot, 1e-4));
+    let max_chord = select(
+        geometric_tangent_chord,
+        min(geometric_tangent_chord, 0.025),
+        r_cam < march_top + 0.02
+    );
     t1 = min(t1, t0 + max_chord);
 
     if (t1 <= t0 + 1e-5) {

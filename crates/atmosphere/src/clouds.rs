@@ -461,6 +461,43 @@ pub fn ambient_rgb(
     ]
 }
 
+/// Multi-star cloud illumination input conforming to `docs/39 §13`.
+///
+/// In Project Thessa, a single-Sun assumption is forbidden as an architectural boundary.
+/// The renderer consumes an array/slice of star emitters with direction, spectral contribution,
+/// and eclipse visibility factor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CloudLightingInputs {
+    pub stars: Vec<crate::lights::CelestialLight>,
+}
+
+impl CloudLightingInputs {
+    pub fn new(stars: Vec<crate::lights::CelestialLight>) -> Self {
+        Self { stars }
+    }
+
+    pub fn single(star: crate::lights::CelestialLight) -> Self {
+        Self { stars: vec![star] }
+    }
+
+    /// Primary star emitter: dominant contributor by weighted irradiance.
+    pub fn primary_star(&self) -> Option<&crate::lights::CelestialLight> {
+        self.stars.iter().max_by(|a, b| {
+            let ea = a.irradiance_w_m2 * a.visibility.clamp(0.0, 1.0);
+            let eb = b.irradiance_w_m2 * b.visibility.clamp(0.0, 1.0);
+            ea.partial_cmp(&eb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    /// Combined direct sunlight illuminance across all visible star emitters (W/m^2).
+    pub fn total_direct_irradiance(&self) -> f64 {
+        self.stars
+            .iter()
+            .map(|s| s.irradiance_w_m2 * s.visibility.clamp(0.0, 1.0))
+            .sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -955,11 +992,74 @@ mod tests {
     }
 
     #[test]
+    fn wgsl_fract_matches_spec_on_negative_and_positive() {
+        let cases: &[(f32, f32)] = &[
+            (-2.5, 0.5),
+            (-1.25, 0.75),
+            (-1.0, 0.0),
+            (-0.75, 0.25),
+            (0.0, 0.0),
+            (0.5, 0.5),
+            (1.25, 0.25),
+        ];
+        for &(val, expected) in cases {
+            let v = glam::Vec3::splat(val);
+            let f = v.fract_gl();
+            assert!(
+                (f.x - expected).abs() < 1e-6,
+                "val {val}: fract_gl is {}, expected {expected}",
+                f.x
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_lighting_inputs_supports_multi_star_and_eclipses() {
+        let star_a = crate::lights::CelestialLight {
+            direction_to_star: glam::DVec3::new(0.0, 1.0, 0.0),
+            irradiance_w_m2: 1000.0,
+            color_rgb: [1.0, 0.95, 0.9],
+            angular_radius_rad: 0.0046,
+            visibility: 0.2, // Partially eclipsed: effective 200 W/m^2
+        };
+        let star_b = crate::lights::CelestialLight {
+            direction_to_star: glam::DVec3::new(1.0, 0.0, 0.0),
+            irradiance_w_m2: 350.0,
+            color_rgb: [0.8, 0.85, 1.0],
+            angular_radius_rad: 0.0030,
+            visibility: 1.0, // Fully visible: effective 350 W/m^2
+        };
+
+        let inputs = CloudLightingInputs::new(vec![star_a.clone(), star_b.clone()]);
+
+        // Star A weighted: 1000 * 0.2 = 200 W/m^2.
+        // Star B weighted: 350 * 1.0 = 350 W/m^2.
+        // Primary star must be Star B due to higher effective irradiance:
+        let primary = inputs.primary_star().expect("primary star present");
+        assert_eq!(primary.irradiance_w_m2, 350.0);
+
+        // Total direct irradiance: 200 + 350 = 550 W/m^2:
+        let total = inputs.total_direct_irradiance();
+        assert!((total - 550.0).abs() < 1e-6);
+
+        // Single star helper:
+        let single = CloudLightingInputs::single(star_a.clone());
+        assert_eq!(single.stars.len(), 1);
+        assert!((single.total_direct_irradiance() - 200.0).abs() < 1e-6);
+
+        // Empty input:
+        let empty = CloudLightingInputs::new(vec![]);
+        assert!(empty.primary_star().is_none());
+        assert_eq!(empty.total_direct_irradiance(), 0.0);
+    }
+
+    #[test]
     fn billow_noise_empirical_mean_matches_shader_lod_constant() {
         // Verification of WGSL billow_cubic noise expectation used in cauliflower_fbm LOD:
-        // Replicates the exact WGSL hash33, hash_grad, and quintic Perlin noise equations.
+        // Replicates the exact WGSL hash33, hash_grad, and quintic Perlin noise equations using
+        // fract_gl() to strictly mirror WGSL spec fract(e) = e - floor(e) on both negative and positive coordinates.
         fn hash33(p: glam::Vec3) -> glam::Vec3 {
-            let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract();
+            let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
             let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
             q += glam::Vec3::splat(dot_val);
             let val = (glam::Vec3::new(
@@ -967,7 +1067,7 @@ mod tests {
                 (q.x + q.z) * q.y,
                 (q.y + q.z) * q.x,
             ))
-            .fract();
+            .fract_gl();
             val * 2.0 - glam::Vec3::ONE
         }
 
@@ -978,7 +1078,7 @@ mod tests {
 
         fn perlin3d(p: glam::Vec3) -> f32 {
             let i = p.floor();
-            let f = p.fract();
+            let f = p.fract_gl();
             let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
 
             let g000 = hash_grad(i + glam::Vec3::new(0.0, 0.0, 0.0));
@@ -1016,20 +1116,178 @@ mod tests {
         let n_samples = 50_000;
         let mut sum = 0.0f64;
         for i in 0..n_samples {
-            let x = ((i * 1973 % 100_000) as f32) * 0.01;
-            let y = ((i * 9277 % 100_000) as f32) * 0.01;
-            let z = ((i * 2699 % 100_000) as f32) * 0.01;
+            // Span [-50.0, +50.0] km: testing both negative and positive coordinates, cell crossings, and rotations
+            let x = (((i * 1973 % 100_000) as f32) * 0.001) - 50.0;
+            let y = (((i * 9277 % 100_000) as f32) * 0.001) - 50.0;
+            let z = (((i * 2699 % 100_000) as f32) * 0.001) - 50.0;
             let p = glam::Vec3::new(x, y, z) * 0.072;
             let val = billow_cubic(p);
             sum += val as f64;
         }
         let mean = sum / (n_samples as f64);
-        // The empirical mean of billow_cubic is ~0.933 (analytically 1.0 - 1.85 * Var(n) ≈ 0.9328),
-        // confirming that substituting 0.42 was an error (> 50% deviation) and that 0.933 strictly
-        // conserves expected energy across raymarch step footprints:
+        // The empirical mean of billow_cubic is ~0.933 (analytically 1.0 - 1.85 * Var(n) ≈ 0.9328).
+        // Fading unresolvable octaves to 0.933 preserves the expectation of the linear billow field
+        // across step footprints, suppressing sub-step aliasing while minimizing mean shift before
+        // downstream nonlinear density shaping:
         assert!(
             (mean - 0.933).abs() < 0.005,
             "mean {mean} deviates from BILLOW_MEAN 0.933"
         );
+    }
+
+    #[test]
+    fn lod_nonlinear_density_characterization_bounds_variance_across_step_sizes() {
+        // Characterization test demonstrating that noise bandlimiting preserves macroscopic
+        // cloud body envelope across LOD step sizes, and documenting the effect of nonlinear
+        // operations (f(E[X]) != E[f(X)]) under thresholding and power laws.
+        fn hash33(p: glam::Vec3) -> glam::Vec3 {
+            let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
+            let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
+            q += glam::Vec3::splat(dot_val);
+            let val = (glam::Vec3::new(
+                (q.x + q.y) * q.z,
+                (q.x + q.z) * q.y,
+                (q.y + q.z) * q.x,
+            ))
+            .fract_gl();
+            val * 2.0 - glam::Vec3::ONE
+        }
+
+        fn hash_grad(p: glam::Vec3) -> glam::Vec3 {
+            let h = hash33(p);
+            (h + glam::Vec3::splat(1e-5)).normalize()
+        }
+
+        fn perlin3d(p: glam::Vec3) -> f32 {
+            let i = p.floor();
+            let f = p.fract_gl();
+            let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+            let g000 = hash_grad(i + glam::Vec3::new(0.0, 0.0, 0.0));
+            let g100 = hash_grad(i + glam::Vec3::new(1.0, 0.0, 0.0));
+            let g010 = hash_grad(i + glam::Vec3::new(0.0, 1.0, 0.0));
+            let g110 = hash_grad(i + glam::Vec3::new(1.0, 1.0, 0.0));
+            let g001 = hash_grad(i + glam::Vec3::new(0.0, 0.0, 1.0));
+            let g101 = hash_grad(i + glam::Vec3::new(1.0, 0.0, 1.0));
+            let g011 = hash_grad(i + glam::Vec3::new(0.0, 1.0, 1.0));
+            let g111 = hash_grad(i + glam::Vec3::new(1.0, 1.0, 1.0));
+
+            let v000 = g000.dot(f - glam::Vec3::new(0.0, 0.0, 0.0));
+            let v100 = g100.dot(f - glam::Vec3::new(1.0, 0.0, 0.0));
+            let v010 = g010.dot(f - glam::Vec3::new(0.0, 1.0, 0.0));
+            let v110 = g110.dot(f - glam::Vec3::new(1.0, 1.0, 0.0));
+            let v001 = g001.dot(f - glam::Vec3::new(0.0, 0.0, 1.0));
+            let v101 = g101.dot(f - glam::Vec3::new(1.0, 0.0, 1.0));
+            let v011 = g011.dot(f - glam::Vec3::new(0.0, 1.0, 1.0));
+            let v111 = g111.dot(f - glam::Vec3::new(1.0, 1.0, 1.0));
+
+            let vx00 = v000 + u.x * (v100 - v000);
+            let vx10 = v010 + u.x * (v110 - v010);
+            let vx01 = v001 + u.x * (v101 - v001);
+            let vx11 = v011 + u.x * (v111 - v011);
+            let vxy0 = vx00 + u.y * (vx10 - vx00);
+            let vxy1 = vx01 + u.y * (vx11 - vx01);
+            vxy0 + u.z * (vxy1 - vxy0)
+        }
+
+        fn billow_cubic(p: glam::Vec3) -> f32 {
+            let n = perlin3d(p);
+            (1.0 - 1.85 * n * n).clamp(0.0, 1.0)
+        }
+
+        fn smoothstep_f32(e0: f32, e1: f32, x: f32) -> f32 {
+            let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        }
+
+        let rot_octave = glam::Mat3::from_cols(
+            glam::Vec3::new(0.00, 0.80, 0.60),
+            glam::Vec3::new(-0.80, 0.36, -0.48),
+            glam::Vec3::new(-0.60, -0.48, 0.64),
+        );
+        let frac_1_sqrt_2 = std::f32::consts::FRAC_1_SQRT_2;
+        let rot_octave_2 = glam::Mat3::from_cols(
+            glam::Vec3::new(-0.573576, frac_1_sqrt_2, -0.414214),
+            glam::Vec3::new(-0.573576, -frac_1_sqrt_2, -0.414214),
+            glam::Vec3::new(0.585501, 0.000000, -0.810672),
+        );
+
+        let eval_density = |p: glam::Vec3, step_km: f32| -> f32 {
+            let p0 = perlin3d(p * 0.016) * 0.60 + 0.50;
+            let w_macro = smoothstep_f32(12.0, 4.0, step_km);
+            let p1 = if w_macro > 0.01 {
+                let p1_raw = perlin3d(p * 0.038 + glam::Vec3::new(2.4, 5.1, 8.9)) * 0.50 + 0.50;
+                0.50 * (1.0 - w_macro) + p1_raw * w_macro
+            } else {
+                0.50
+            };
+            let macro_perlin = p0 * 0.70 + p1 * 0.30;
+
+            let w0 = smoothstep_f32(14.0, 4.0, step_km);
+            let b0 = if w0 > 0.01 {
+                0.933 * (1.0 - w0) + billow_cubic(p * 0.072) * w0
+            } else {
+                0.933
+            };
+            let w1 = smoothstep_f32(3.5, 0.8, step_km);
+            let (b1, b2) = if w1 > 0.01 {
+                let p1_rot = rot_octave * (p * 0.162) + glam::Vec3::new(1.73, 4.29, 8.11);
+                let b1_val = 0.933 * (1.0 - w1) + billow_cubic(p1_rot) * w1;
+                let w2 = smoothstep_f32(1.8, 0.4, step_km);
+                let b2_val = if w2 > 0.01 {
+                    let p2_rot = rot_octave_2 * (p1_rot * 2.21) + glam::Vec3::new(5.19, 1.87, 3.63);
+                    0.933 * (1.0 - w2) + billow_cubic(p2_rot) * w2
+                } else {
+                    0.933
+                };
+                (b1_val, b2_val)
+            } else {
+                (0.933, 0.933)
+            };
+            let cauli = b0 * 0.40 + b1 * 0.38 + b2 * 0.22;
+
+            let billow_lift = 0.35;
+            let shape_body = macro_perlin * (1.0 - billow_lift) + cauli * billow_lift;
+
+            let threshold = 0.35;
+            if shape_body <= threshold {
+                return 0.0;
+            }
+            let base_cloud = (shape_body - threshold) / (1.0 - threshold);
+            smoothstep_f32(0.0, 0.12, base_cloud) * base_cloud.powf(1.1) * 6.2
+        };
+
+        let n_samples = 5_000;
+        let step_sizes = [0.5, 2.0, 6.0, 12.0];
+        let mut mean_densities = Vec::new();
+
+        for &step_km in &step_sizes {
+            let mut sum = 0.0f64;
+            for i in 0..n_samples {
+                let x = ((i * 1973 % 100_000) as f32) * 0.0004 - 20.0;
+                let y = ((i * 9277 % 100_000) as f32) * 0.0004 - 20.0;
+                let z = ((i * 2699 % 100_000) as f32) * 0.0004 - 20.0;
+                let p = glam::Vec3::new(x, y, z);
+                sum += eval_density(p, step_km) as f64;
+            }
+            let mean = sum / (n_samples as f64);
+            mean_densities.push(mean);
+        }
+
+        let baseline = mean_densities[0]; // 0.5 km step size
+        assert!(baseline > 0.05, "baseline density should be non-zero");
+
+        for (idx, &step_km) in step_sizes.iter().enumerate() {
+            let mean = mean_densities[idx];
+            let ratio = mean / baseline;
+            // Characterize bounded variation:
+            // Under nonlinear thresholding and power laws, f(E[X]) != E[f(X)], so higher-step
+            // LOD bandlimiting slightly softens peak densities, but the macroscopic mass remains
+            // well within a bounded factor (0.5 to 1.5) without collapsing or blowing up:
+            assert!(
+                ratio > 0.5 && ratio < 1.5,
+                "step {step_km} km density ratio {ratio} out of bounds"
+            );
+        }
     }
 }

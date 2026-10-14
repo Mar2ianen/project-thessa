@@ -414,7 +414,33 @@ impl ResolvedGraphicsSettings {
             Some(true) => {}
         }
     }
+}
 
+/// Pure resolution of requested cloud integrator and optional environment override string.
+/// Zero allocations, pure enum mapping.
+pub fn resolve_cloud_integrator(
+    requested: crate::settings::CloudIntegratorRequest,
+    env_override: Option<&str>,
+) -> crate::settings::CloudIntegratorRequest {
+    if let Some(val) = env_override {
+        if val.eq_ignore_ascii_case("pt")
+            || val.eq_ignore_ascii_case("stochastic")
+            || val == "1"
+            || val.eq_ignore_ascii_case("pathtrace")
+        {
+            return crate::settings::CloudIntegratorRequest::Stochastic;
+        }
+        if val.eq_ignore_ascii_case("march")
+            || val == "0"
+            || val.eq_ignore_ascii_case("raymarch")
+        {
+            return crate::settings::CloudIntegratorRequest::March;
+        }
+    }
+    requested
+}
+
+impl ResolvedGraphicsSettings {
     /// Evaluates the true runtime representation selected for clouds:
     /// Disabled when clouds are off, Shell when volumetric is off,
     /// and VolumeMarch / VolumeStochastic when volume marching.
@@ -437,22 +463,7 @@ impl ResolvedGraphicsSettings {
         } else if !self.clouds_volumetric {
             ActiveCloudRepresentation::Shell
         } else {
-            if let Some(val) = override_env {
-                if val.eq_ignore_ascii_case("pt")
-                    || val.eq_ignore_ascii_case("stochastic")
-                    || val == "1"
-                    || val.eq_ignore_ascii_case("pathtrace")
-                {
-                    return ActiveCloudRepresentation::VolumeStochastic;
-                }
-                if val.eq_ignore_ascii_case("march")
-                    || val == "0"
-                    || val.eq_ignore_ascii_case("raymarch")
-                {
-                    return ActiveCloudRepresentation::VolumeMarch;
-                }
-            }
-            match self.cloud_integrator {
+            match resolve_cloud_integrator(self.cloud_integrator, override_env) {
                 crate::settings::CloudIntegratorRequest::March => {
                     ActiveCloudRepresentation::VolumeMarch
                 }

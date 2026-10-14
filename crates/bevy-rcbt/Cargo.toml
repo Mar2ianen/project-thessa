@@ -29,6 +29,7 @@ wgpu.workspace = true
 pollster = "0.4"
 thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
 thessa-atmosphere = { path = "../atmosphere" }
+glam.workspace = true
 
 [[bench]]
 name = "material_storage"

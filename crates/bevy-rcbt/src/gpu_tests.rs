@@ -1629,3 +1629,138 @@ fn test_optical_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
         );
     }
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn cloud_noise_kernel_matches_cpu_perlin_on_hardware() {
+    let gpu = Gpu::new();
+
+    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wgsl:
+    // Extracts hash33, hash_grad, and perlin3d functions.
+    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+    let start_idx = PROD_WGSL
+        .find("fn hash33")
+        .expect("hash33 in cloud_volume.wgsl");
+    let end_idx = PROD_WGSL
+        .find("const ROT_OCTAVE")
+        .expect("ROT_OCTAVE in cloud_volume.wgsl");
+    let prod_functions = &PROD_WGSL[start_idx..end_idx];
+
+    let shader = format!(
+        r#"
+@group(0) @binding(0) var<storage, read> in_points: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> out_results: array<f32>;
+
+{prod_functions}
+
+@compute @workgroup_size(64)
+fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    if (idx >= arrayLength(&in_points)) {{
+        return;
+    }}
+    let p = in_points[idx].xyz;
+    out_results[idx] = perlin3d(p);
+}}
+"#
+    );
+
+    // Replicate CPU reference oracle using fract_gl() strictly matching WGSL fract(x) = x - floor(x):
+    fn cpu_hash33(p: glam::Vec3) -> glam::Vec3 {
+        let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
+        let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
+        q += glam::Vec3::splat(dot_val);
+        let val = (glam::Vec3::new(
+            (q.x + q.y) * q.z,
+            (q.x + q.z) * q.y,
+            (q.y + q.z) * q.x,
+        ))
+        .fract_gl();
+        val * 2.0 - glam::Vec3::ONE
+    }
+
+    fn cpu_hash_grad(p: glam::Vec3) -> glam::Vec3 {
+        let h = cpu_hash33(p);
+        (h + glam::Vec3::splat(1e-5)).normalize()
+    }
+
+    fn cpu_perlin3d(p: glam::Vec3) -> f32 {
+        let i = p.floor();
+        let f = p.fract_gl();
+        let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+        let g000 = cpu_hash_grad(i + glam::Vec3::new(0.0, 0.0, 0.0));
+        let g100 = cpu_hash_grad(i + glam::Vec3::new(1.0, 0.0, 0.0));
+        let g010 = cpu_hash_grad(i + glam::Vec3::new(0.0, 1.0, 0.0));
+        let g110 = cpu_hash_grad(i + glam::Vec3::new(1.0, 1.0, 0.0));
+        let g001 = cpu_hash_grad(i + glam::Vec3::new(0.0, 0.0, 1.0));
+        let g101 = cpu_hash_grad(i + glam::Vec3::new(1.0, 0.0, 1.0));
+        let g011 = cpu_hash_grad(i + glam::Vec3::new(0.0, 1.0, 1.0));
+        let g111 = cpu_hash_grad(i + glam::Vec3::new(1.0, 1.0, 1.0));
+
+        let v000 = g000.dot(f - glam::Vec3::new(0.0, 0.0, 0.0));
+        let v100 = g100.dot(f - glam::Vec3::new(1.0, 0.0, 0.0));
+        let v010 = g010.dot(f - glam::Vec3::new(0.0, 1.0, 0.0));
+        let v110 = g110.dot(f - glam::Vec3::new(1.0, 1.0, 0.0));
+        let v001 = g001.dot(f - glam::Vec3::new(0.0, 0.0, 1.0));
+        let v101 = g101.dot(f - glam::Vec3::new(1.0, 0.0, 1.0));
+        let v011 = g011.dot(f - glam::Vec3::new(0.0, 1.0, 1.0));
+        let v111 = g111.dot(f - glam::Vec3::new(1.0, 1.0, 1.0));
+
+        let vx00 = v000 + u.x * (v100 - v000);
+        let vx10 = v010 + u.x * (v110 - v010);
+        let vx01 = v001 + u.x * (v101 - v001);
+        let vx11 = v011 + u.x * (v111 - v011);
+        let vxy0 = vx00 + u.y * (vx10 - vx00);
+        let vxy1 = vx01 + u.y * (vx11 - vx01);
+        vxy0 + u.z * (vxy1 - vxy0)
+    }
+
+    let num_samples = 256;
+    let mut test_points: Vec<glam::Vec3> = Vec::with_capacity(num_samples);
+    for i in 0..num_samples {
+        // Test diverse ranges including negative coordinates, near integer lattice boundaries, and large chords:
+        let x = ((i * 1973 % 100_000) as f32) * 0.001 - 50.0;
+        let y = ((i * 9277 % 100_000) as f32) * 0.001 - 50.0;
+        let z = ((i * 2699 % 100_000) as f32) * 0.001 - 50.0;
+        test_points.push(glam::Vec3::new(x, y, z));
+    }
+
+    let in_words: Vec<u32> = test_points
+        .iter()
+        .flat_map(|p| [p.x.to_bits(), p.y.to_bits(), p.z.to_bits(), 0u32])
+        .collect();
+    let out_words: Vec<u32> = vec![0u32; num_samples];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    gpu.dispatch(
+        &shader,
+        &[("test_noise_kernel", 4)],
+        &[&in_buf, &out_buf],
+        &[],
+        &[1],
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words
+        .iter()
+        .map(|&w| f32::from_bits(w))
+        .collect();
+
+    let mut max_diff = 0.0f32;
+    for (i, &p) in test_points.iter().enumerate() {
+        let gpu_val = readback_floats[i];
+        let cpu_val = cpu_perlin3d(p);
+        let diff = (gpu_val - cpu_val).abs();
+        if diff > max_diff {
+            max_diff = diff;
+        }
+    }
+    eprintln!("cloud_noise_kernel: max_diff between GPU and CPU perlin3d is {max_diff}");
+    assert!(
+        max_diff < 0.005,
+        "max_diff {max_diff} exceeds 0.005 threshold"
+    );
+}

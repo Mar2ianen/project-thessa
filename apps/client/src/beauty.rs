@@ -1201,33 +1201,29 @@ impl EffectiveCloudBackend {
     }
 }
 
+pub(crate) fn cloud_backend_override_env() -> Option<&'static str> {
+    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    BACKEND_OVERRIDE
+        .get_or_init(|| std::env::var("THESSA_CLOUD_BACKEND").ok())
+        .as_deref()
+}
+
 /// Pure resolution of effective cloud backend from requested integrator and optional dev environment override.
 ///
 /// CRITICAL: `CloudIntegratorRequest::March` strictly resolves to `March`, completely decoupled
-/// from `rt_clouds` or other global RT participation settings.
+/// from `rt_clouds` or other global RT participation settings. Zero allocations.
 pub(crate) fn resolve_effective_cloud_backend(
     integrator: thessa_graphics::CloudIntegratorRequest,
     env_override: Option<&str>,
 ) -> EffectiveCloudBackend {
-    let r = ResolvedGraphicsSettings {
-        clouds_enabled: true,
-        clouds_volumetric: true,
-        cloud_integrator: integrator,
-        ..Default::default()
-    };
-    match r.active_cloud_representation_with_override(env_override) {
-        thessa_graphics::ActiveCloudRepresentation::VolumeStochastic => {
-            EffectiveCloudBackend::Stochastic
-        }
-        _ => EffectiveCloudBackend::March,
+    match thessa_graphics::resolve_cloud_integrator(integrator, env_override) {
+        thessa_graphics::CloudIntegratorRequest::Stochastic => EffectiveCloudBackend::Stochastic,
+        thessa_graphics::CloudIntegratorRequest::March => EffectiveCloudBackend::March,
     }
 }
 
 pub(crate) fn effective_cloud_backend(r: &ResolvedGraphicsSettings) -> EffectiveCloudBackend {
-    resolve_effective_cloud_backend(
-        r.cloud_integrator,
-        std::env::var("THESSA_CLOUD_BACKEND").ok().as_deref(),
-    )
+    resolve_effective_cloud_backend(r.cloud_integrator, cloud_backend_override_env())
 }
 
 pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {

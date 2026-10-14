@@ -505,6 +505,103 @@ impl CloudLightingInputs {
     }
 }
 
+/// Deterministic lattice hash in [0,1) for procedural cloud coverage baking.
+fn hash2_bake(seed: u64, x: i32, y: i32) -> f64 {
+    let mut h = seed
+        .wrapping_add((x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .wrapping_add((y as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    (h as f64) / (u64::MAX as f64)
+}
+
+fn smootherstep_bake(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+fn value_noise_bake(seed: u64, x: f64, y: f64, x_period: i32) -> f64 {
+    let xi = x.floor() as i32;
+    let yi = y.floor() as i32;
+    let xf = x - xi as f64;
+    let yf = y - yi as f64;
+    let wrap = |v: i32| v.rem_euclid(x_period.max(1));
+    let a = hash2_bake(seed, wrap(xi), yi);
+    let b = hash2_bake(seed, wrap(xi + 1), yi);
+    let c = hash2_bake(seed, wrap(xi), yi + 1);
+    let d = hash2_bake(seed, wrap(xi + 1), yi + 1);
+    let u = smootherstep_bake(xf);
+    let v = smootherstep_bake(yf);
+    a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+}
+
+fn fbm_bake(seed: u64, u: f64, v: f64, base_freq: f64) -> f64 {
+    let mut sum = 0.0;
+    let mut amp = 0.5;
+    let mut freq = base_freq;
+    for o in 0..4 {
+        let period = (freq as i32).max(1);
+        sum += amp * value_noise_bake(seed + o as u64 * 101, u * freq, v * freq, period);
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    sum
+}
+
+/// Single deck bake. Alpha = coverage-shaped domain-warped fBm (EVE-style weather map);
+/// RGB near-white with slight density shading.
+/// Canonical production implementation shared across client beauty rendering and testing harnesses.
+pub fn bake_clouds(
+    seed: u64,
+    w: u32,
+    h: u32,
+    coverage: f32,
+    opacity: f32,
+    aniso: (f64, f64),
+) -> Vec<u8> {
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    let edge0 = (coverage * 0.76).clamp(0.0, 0.95);
+    let (au, av) = aniso;
+    for y in 0..h {
+        let v = y as f64 / h as f64;
+        let stretch = 1.0 - 0.35 * (1.0 - (v * std::f64::consts::PI).sin());
+        for x in 0..w {
+            let u = x as f64 / w as f64;
+            let wx = fbm_bake(seed ^ 0x9E9, u * 2.0, v * 4.0, 2.0) - 0.5;
+            let wy = fbm_bake(seed ^ 0xBEE, u * 2.0 + 5.2, v * 4.0 + 1.3, 2.0) - 0.5;
+            let us = u + 0.35 * (v - 0.5);
+            let d = fbm_bake(
+                seed,
+                (us * 10.0 + wx * 1.8) * au,
+                (v * 20.0 * stretch + wy * 1.8 + 3.1) * av,
+                10.0,
+            );
+            let swirl = fbm_bake(seed ^ 0x51AB, us * 4.0 * au + d * 1.5, v * 8.0 * av, 4.0);
+            let polar = (v * std::f64::consts::PI).sin().powf(0.7);
+            let billow = fbm_bake(
+                seed ^ 0xB110,
+                (us * 24.0 + d * 2.0) * au,
+                (v * 40.0 * stretch + 9.7) * av,
+                24.0,
+            ) * (0.25 + 0.75 * polar);
+            let field = (d * 0.46 + swirl * 0.28 + billow * 0.26) as f32;
+            let a = ((field - edge0) / (1.0 - edge0).max(1e-3)).clamp(0.0, 1.0);
+            let a = (a * (1.6 - 0.6 * a)).clamp(0.0, 1.0) * opacity;
+            let core = a.clamp(0.0, 1.0);
+            let brightness = 0.55 + 0.45 * core;
+            let cool = (1.0 - core) * 0.25;
+            let r = (255.0 * brightness).clamp(0.0, 255.0) as u8;
+            let g = (255.0 * (brightness - cool * 0.35)).clamp(0.0, 255.0) as u8;
+            let b = (255.0 * (brightness - cool * 0.05)).clamp(0.0, 255.0) as u8;
+            px.extend_from_slice(&[r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8]);
+        }
+    }
+    px
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1305,3 +1402,4 @@ mod tests {
         }
     }
 }
+

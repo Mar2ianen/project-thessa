@@ -1823,88 +1823,28 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
     );
 }
 
-#[test]
-#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
-fn production_slab_density_and_lod_continuity_on_hardware() {
-    let gpu = Gpu::new();
-
-    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wgsl:
-    // Extracts quat_rotate, shell_mesh_uv, convective_cumulus_gradient, perlin3d,
-    // cauliflower_fbm, edge_wisps, slab_density and all intermediate procedural math.
+fn get_cloud_volume_wgsl_slice() -> &'static str {
     const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wgsl");
     let start_idx = PROD_WGSL
-        .find("fn quat_rotate")
-        .expect("quat_rotate in cloud_volume.wgsl");
+        .find("const CLOUD_MARCH_MAX")
+        .expect("const CLOUD_MARCH_MAX in cloud_volume.wgsl");
     let end_idx = PROD_WGSL
         .find("@fragment")
         .expect("@fragment in cloud_volume.wgsl");
-    let prod_functions = &PROD_WGSL[start_idx..end_idx];
+    &PROD_WGSL[start_idx..end_idx]
+}
 
-    let shader = format!(
-        r#"
-struct CloudUniforms {{
-    center_radius: vec4<f32>,
-    slab: vec4<f32>,
-    sun: vec4<f32>,
-    deck_to_local: vec4<f32>,
-    params: vec4<f32>,
-    shape: vec4<f32>,
-}}
-
-@group(0) @binding(0) var<uniform> cloud: CloudUniforms;
-@group(0) @binding(1) var coverage_tex: texture_2d<f32>;
-@group(0) @binding(2) var coverage_sampler: sampler;
-@group(0) @binding(3) var<storage, read> in_samples: array<vec4<f32>>;
-@group(0) @binding(4) var<storage, read_write> out_results: array<vec4<f32>>;
-
-{prod_functions}
-
-@compute @workgroup_size(64)
-fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let idx = gid.x;
-    if (idx >= arrayLength(&in_samples)) {{
-        return;
-    }}
-    let s = in_samples[idx];
-    let p_norm = s.xyz;
-    let step_km = s.w;
-    let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.7);
-    let weather = vec3<f32>(0.5, 0.5, 0.5);
-
-    let d_full = slab_density(p_norm, drift, weather, step_km, true);
-    let d_fast = slab_density(p_norm, drift, weather, step_km, false);
-
-    out_results[idx] = vec4<f32>(d_full, d_fast, 0.0, 0.0);
-}}
-"#
-    );
-
-    // 1. Create coverage weather map texture (64x64 RGBA8Unorm) with realistic cloud island:
-    let tex_size = 64u32;
-    let mut tex_bytes = vec![0u8; (tex_size * tex_size * 4) as usize];
-    for y in 0..tex_size {
-        for x in 0..tex_size {
-            let u = (x as f32 + 0.5) / (tex_size as f32);
-            let v = (y as f32 + 0.5) / (tex_size as f32);
-            // Center island at u=0.5, v=0.5 with radius 0.25 (coverage 0.8 at core, falls off to 0):
-            let du = (u - 0.5).abs();
-            let dv = (v - 0.5).abs();
-            let dist = (du * du + dv * dv).sqrt();
-            let cov = (1.0 - (dist / 0.25)).clamp(0.0, 1.0) * 0.85;
-            let alpha = (cov * 255.0).round() as u8;
-            let offset = ((y * tex_size + x) * 4) as usize;
-            tex_bytes[offset] = 255;
-            tex_bytes[offset + 1] = 255;
-            tex_bytes[offset + 2] = 255;
-            tex_bytes[offset + 3] = alpha;
-        }
-    }
-
-    let coverage_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+fn create_gpu_coverage_texture(
+    gpu: &Gpu,
+    w: u32,
+    h: u32,
+    tex_bytes: &[u8],
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-coverage-tex"),
         size: wgpu::Extent3d {
-            width: tex_size,
-            height: tex_size,
+            width: w,
+            height: h,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -1917,26 +1857,26 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     gpu.queue.write_texture(
         wgpu::TexelCopyTextureInfo {
-            texture: &coverage_texture,
+            texture: &texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &tex_bytes,
+        tex_bytes,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(tex_size * 4),
-            rows_per_image: Some(tex_size),
+            bytes_per_row: Some(w * 4),
+            rows_per_image: Some(h),
         },
         wgpu::Extent3d {
-            width: tex_size,
-            height: tex_size,
+            width: w,
+            height: h,
             depth_or_array_layers: 1,
         },
     );
 
-    let coverage_view = coverage_texture.create_view(&Default::default());
-    let coverage_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+    let view = texture.create_view(&Default::default());
+    let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
@@ -1944,74 +1884,52 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
         ..Default::default()
     });
 
-    // 2. Uniform buffer with realistic Thessa planetary parameters:
-    let mut cloud_uniform_words = vec![0u32; 64]; // 256 bytes padded
-    let cloud_uniform_floats: [f32; 24] = [
-        0.0, 0.0, 0.0, 3_200_000.0,       // center_radius
-        1.000625, 1.0028125, 42.0, 24.0,   // slab (2 to 9 km above 3200 km planet)
-        0.0, 1.0, 0.0, 1.0,                // sun
-        0.0, 0.0, 0.0, 1.0,                // deck_to_local (identity quat)
-        1.0, 0.0, 0.003, 1.6,              // params (opacity 1.0, detail 1.6)
-        0.0, 0.05, 1.0, 0.0,               // shape (cumulus deck 0, cov_floor 0.05)
+    (texture, view, sampler)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pack_cloud_uniform_words(
+    planet_radius_m: f32,
+    bot_radius: f32,
+    top_radius: f32,
+    extinction: f32,
+    steps: f32,
+    sun_dir: glam::Vec3,
+    sun_vis: f32,
+    opacity: f32,
+    drift: f32,
+    sun_span: f32,
+    detail_amp: f32,
+    march_top: f32,
+    pathtrace: bool,
+) -> Vec<u32> {
+    let mut words = vec![0u32; 64];
+    let floats: [f32; 24] = [
+        0.0, 0.0, 0.0, planet_radius_m,
+        bot_radius, top_radius, extinction, steps,
+        sun_dir.x, sun_dir.y, sun_dir.z, sun_vis,
+        0.0, 0.0, 0.0, 1.0,
+        opacity, drift, sun_span, detail_amp,
+        0.0, 0.05, march_top, if pathtrace { 1.0 } else { 0.0 },
     ];
-    for (i, &f) in cloud_uniform_floats.iter().enumerate() {
-        cloud_uniform_words[i] = f.to_bits();
+    for (i, &f) in floats.iter().enumerate() {
+        words[i] = f.to_bits();
     }
-    let uniform_buf = gpu.buffer(&cloud_uniform_words, true);
+    words
+}
 
-    // 3. Generate test sample points:
-    let step_sizes = [0.5f32, 2.0f32, 6.0f32, 12.0f32];
-    let r_bottom = 1.000625f32;
-    let r_top = 1.0028125f32;
-    let r_span = r_top - r_bottom;
-
-    let mut samples: Vec<[f32; 4]> = Vec::new();
-
-    // Group A: Vertical column through cloud island center (local dir [-1, 0, 0] -> u=0.5, v=0.5)
-    // 32 height samples per step size:
-    let h_steps = 32;
-    for &step_km in &step_sizes {
-        for i in 0..h_steps {
-            let h01 = (i as f32) / ((h_steps - 1) as f32) * 1.1; // 0.0 to 1.1 (spans below LCL to above top)
-            let r = r_bottom + h01 * r_span;
-            samples.push([-r, 0.0, 0.0, step_km]);
-        }
-    }
-
-    // Group B: Vertical column in clear sky (local dir [1, 0, 0] -> u=0.0, v=0.5, outside cloud)
-    for &step_km in &step_sizes {
-        for i in 0..h_steps {
-            let h01 = (i as f32) / ((h_steps - 1) as f32);
-            let r = r_bottom + h01 * r_span;
-            samples.push([r, 0.0, 0.0, step_km]);
-        }
-    }
-
-    // Group C: Horizontal slice across cloud edge at h01 = 0.40 (64 points across boundary)
-    let boundary_steps = 64;
-    let r_mid = r_bottom + 0.40 * r_span;
-    for &step_km in &step_sizes {
-        for i in 0..boundary_steps {
-            // Sweep u from 0.30 to 0.70:
-            let u = 0.30 + 0.40 * (i as f32) / ((boundary_steps - 1) as f32);
-            let angle = u * std::f32::consts::TAU;
-            let dir_x = angle.cos();
-            let dir_y = angle.sin();
-            samples.push([dir_x * r_mid, dir_y * r_mid, 0.0, step_km]);
-        }
-    }
-
-    let num_samples = samples.len();
-    let in_words: Vec<u32> = samples
-        .iter()
-        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
-        .collect();
-    let out_words = vec![0u32; num_samples * 4];
-
-    let in_buf = gpu.buffer(&in_words, false);
-    let out_buf = gpu.buffer(&out_words, false);
-
-    // 4. Build pipeline & dispatch:
+#[allow(clippy::too_many_arguments)]
+fn execute_cloud_compute(
+    gpu: &Gpu,
+    shader_source: &str,
+    entry_point: &str,
+    uniform_buf: &wgpu::Buffer,
+    coverage_view: &wgpu::TextureView,
+    coverage_sampler: &wgpu::Sampler,
+    in_buf: &wgpu::Buffer,
+    out_buf: &wgpu::Buffer,
+    workgroups: u32,
+) {
     let uniform_layout = |binding: u32| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -2052,7 +1970,7 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let bind_layout = gpu
         .device
         .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("slab-density-bind-layout"),
+            label: Some("cloud-bind-layout"),
             entries: &[
                 uniform_layout(0),
                 texture_layout(1),
@@ -2063,7 +1981,7 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
         });
 
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("slab-density-bind-group"),
+        label: Some("cloud-bind-group"),
         layout: &bind_layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -2072,11 +1990,11 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(&coverage_view),
+                resource: wgpu::BindingResource::TextureView(coverage_view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&coverage_sampler),
+                resource: wgpu::BindingResource::Sampler(coverage_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -2092,8 +2010,8 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let module = gpu
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cbt-production-slab-density-wgsl"),
-            source: wgpu::ShaderSource::Wgsl(shader.into()),
+            label: Some(entry_point),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
     let pipeline_layout = gpu
         .device
@@ -2105,10 +2023,10 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let pipeline = gpu
         .device
         .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("test_slab_density"),
+            label: Some(entry_point),
             layout: Some(&pipeline_layout),
             module: &module,
-            entry_point: Some("test_slab_density"),
+            entry_point: Some(entry_point),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -2118,42 +2036,408 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(num_samples.div_ceil(64) as u32, 1, 1);
+        pass.dispatch_workgroups(workgroups, 1, 1);
     }
     gpu.queue.submit([encoder.finish()]);
+}
 
-    let readback_words = gpu.read(&out_buf);
-    let readback_floats: Vec<f32> = readback_words
-        .iter()
-        .map(|&w| f32::from_bits(w))
-        .collect();
+fn build_cloud_test_wgsl() -> String {
+    let prod_slice = get_cloud_volume_wgsl_slice();
+    format!(
+        r#"
+struct CloudUniforms {{
+    center_radius: vec4<f32>,
+    slab: vec4<f32>,
+    sun: vec4<f32>,
+    deck_to_local: vec4<f32>,
+    params: vec4<f32>,
+    shape: vec4<f32>,
+}}
 
-    // 5. Assertions on hardware results:
-    for i in 0..num_samples {
-        let base = i * 4;
-        let d_full = readback_floats[base];
-        let d_fast = readback_floats[base + 1];
-        assert!(d_full.is_finite(), "sample {i} d_full non-finite: {d_full}");
-        assert!(d_fast.is_finite(), "sample {i} d_fast non-finite: {d_fast}");
-        assert!(d_full >= 0.0, "sample {i} d_full negative: {d_full}");
-        assert!(d_fast >= 0.0, "sample {i} d_fast negative: {d_fast}");
+@group(0) @binding(0) var<uniform> cloud: CloudUniforms;
+@group(0) @binding(1) var coverage_tex: texture_2d<f32>;
+@group(0) @binding(2) var coverage_sampler: sampler;
+@group(0) @binding(3) var<storage, read> in_samples: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read_write> out_results: array<vec4<f32>>;
+
+{prod_slice}
+
+@compute @workgroup_size(64)
+fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    if (idx >= arrayLength(&in_samples)) {{
+        return;
+    }}
+    let s = in_samples[idx];
+    let p_norm = s.xyz;
+    let step_km = s.w;
+    let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.7);
+    let weather = vec3<f32>(0.5, 0.5, 0.5);
+
+    let d_full = slab_density(p_norm, drift, weather, step_km, true);
+    let d_fast = slab_density(p_norm, drift, weather, step_km, false);
+
+    out_results[idx] = vec4<f32>(d_full, d_fast, weather.x, 0.0);
+}}
+
+@compute @workgroup_size(64)
+fn test_raymarch(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    let total_rays = arrayLength(&in_samples) / 2u;
+    if (idx >= total_rays) {{
+        return;
+    }}
+
+    let ro = in_samples[idx * 2u].xyz;
+    let rd_param = in_samples[idx * 2u + 1u];
+    let rd = rd_param.xyz;
+    let steps_override = rd_param.w;
+
+    let center = cloud.center_radius.xyz;
+    let radius = max(cloud.center_radius.w, 1e-6);
+    let r_cam = length(ro);
+    let bot = cloud.slab.x;
+    let top = cloud.slab.y;
+    let march_top = cloud.shape.z;
+    let ext = max(cloud.slab.z, 0.0);
+    let steps = select(max(i32(cloud.slab.w + 0.5), 1), max(i32(steps_override + 0.5), 1), steps_override > 0.5);
+    let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.32);
+
+    let b = dot(ro, rd);
+
+    let disc_top = b * b - (r_cam * r_cam - march_top * march_top);
+    if (disc_top < 0.0) {{
+        out_results[idx * 2u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        out_results[idx * 2u + 1u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return;
+    }}
+    let sq_top = sqrt(disc_top);
+    let t_top0 = -b - sq_top;
+    let t_top1 = -b + sq_top;
+    if (t_top1 <= 0.0) {{
+        out_results[idx * 2u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        out_results[idx * 2u + 1u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return;
+    }}
+
+    var t0 = max(t_top0, 0.0);
+    var t1 = t_top1;
+
+    let disc_bot = b * b - (r_cam * r_cam - bot * bot);
+    if (disc_bot > 0.0) {{
+        let sq_bot = sqrt(disc_bot);
+        let t_bot0 = -b - sq_bot;
+        let t_bot1 = -b + sq_bot;
+
+        if (r_cam < bot) {{
+            if (t_bot1 > 0.0) {{
+                t0 = max(t0, t_bot1);
+            }}
+        }} else {{
+            if (t_bot0 > 0.0) {{
+                t1 = min(t1, t_bot0);
+            }}
+        }}
+    }}
+
+    let disc_planet = b * b - (r_cam * r_cam - 1.0);
+    if (disc_planet > 0.0) {{
+        let t_planet0 = -b - sqrt(disc_planet);
+        if (t_planet0 > 1e-5) {{
+            t1 = min(t1, t_planet0);
+        }} else if (b <= 0.0) {{
+            out_results[idx * 2u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            out_results[idx * 2u + 1u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            return;
+        }}
+    }}
+
+    let geometric_tangent_chord = 2.0 * sqrt(max(march_top * march_top - bot * bot, 1e-4));
+    let r_low = march_top;
+    let r_high = march_top + 0.05;
+    let altitude_weight = smoothstep(r_low, r_high, r_cam);
+    let max_chord = mix(min(geometric_tangent_chord, 0.025), geometric_tangent_chord, altitude_weight);
+    t1 = min(t1, t0 + max_chord);
+
+    let chord = max(t1 - t0, 0.0);
+    let radius_km = radius * 0.001;
+    let chord_km = chord * radius_km;
+
+    if (t1 <= t0 + 1e-5) {{
+        out_results[idx * 2u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        out_results[idx * 2u + 1u] = vec4<f32>(t0, t1, chord_km, 0.0);
+        return;
+    }}
+
+    let sun_dir = normalize(cloud.sun.xyz + vec3<f32>(1e-9, 0.0, 0.0));
+    let sun_vis = clamp(cloud.sun.w, 0.0, 1.0);
+    let cos_theta = dot(rd, sun_dir);
+    let thick = max(top - bot, 1e-6);
+    let inv_radius = 1.0 / radius;
+    let shadow_span = max(cloud.params.z / 0.8, 0.05);
+
+    let w_entry = weather_at(ro + rd * t0, drift);
+    let w_exit = weather_at(ro + rd * t1, drift);
+    var transmittance = 1.0;
+    var scat = vec3<f32>(0.0);
+
+    let dt = chord / f32(steps);
+    let step_km = dt * radius_km;
+    let dither = 0.5;
+    var prev_density = -1.0;
+
+    let loop_limit = min(steps, 256);
+    for (var i = 0; i < 256; i += 1) {{
+        if (i >= loop_limit) {{
+            break;
+        }}
+        let t_current = t0 + (f32(i) + dither) * dt;
+        if (t_current >= t1) {{
+            break;
+        }}
+
+        let p = ro + rd * t_current;
+        let f = clamp((t_current - t0) / chord, 0.0, 1.0);
+        let w2 = mix(w_entry, w_exit, f);
+        let weather = vec3<f32>(w2.x, 0.0, w2.y);
+
+        let density = slab_density(p, drift, weather, step_km, true);
+        if (density <= 0.001) {{
+            prev_density = -1.0;
+            continue;
+        }}
+
+        let integ_density = select((density + prev_density) * 0.5, density, prev_density < 0.0);
+        prev_density = density;
+
+        let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
+
+        let shadow_d0 = 180.0 * inv_radius * shadow_span;
+        let shadow_d1 = 650.0 * inv_radius * shadow_span;
+        let shadow_d2 = 1800.0 * inv_radius * shadow_span;
+
+        let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, 0.80, false);
+        let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, 2.20, false);
+        let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, 5.00, false);
+
+        let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
+
+        let direct_attenuation = beer_powder(sun_depth);
+        let ms1 = exp(-sun_depth * 0.32) * 0.35;
+        let ms2 = exp(-sun_depth * 0.10) * 0.12;
+
+        let up = p / max(length(p), 1e-6);
+        let elev = dot(up, sun_dir);
+        let day = smoothstep(-0.06, 0.16, elev) * sun_vis;
+        let tint = mix(vec3<f32>(1.0, 0.45, 0.18), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.35, elev));
+
+        let phase_direct = dual_lobe_phase(cos_theta);
+        let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
+
+        let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
+        let sun_radiance = tint * (day * sun_scatter * 2.8);
+
+        let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
+        let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
+        let height_occ = smoothstep(0.04, 0.40, h01);
+        let core_occ = transmittance * transmittance;
+        let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
+        let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
+
+        let step_ext = integ_density * ext * dt;
+        let step_trans = exp(-step_ext);
+        let point_light = sun_radiance + ambient_radiance;
+        scat += transmittance * point_light * (1.0 - step_trans);
+        transmittance *= step_trans;
+
+        if (transmittance < 0.01) {{
+            transmittance = 0.0;
+            break;
+        }}
+    }}
+
+    let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
+    out_results[idx * 2u] = vec4<f32>(scat, alpha);
+    out_results[idx * 2u + 1u] = vec4<f32>(t0, t1, chord_km, step_km);
+}}
+
+@compute @workgroup_size(64)
+fn test_solar_shadow(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    let total_samples = arrayLength(&in_samples) / 2u;
+    if (idx >= total_samples) {{
+        return;
+    }}
+
+    let p = in_samples[idx * 2u].xyz;
+    let sun_dir = normalize(in_samples[idx * 2u + 1u].xyz);
+
+    let radius = max(cloud.center_radius.w, 1e-6);
+    let radius_km = radius * 0.001;
+    let inv_radius = 1.0 / radius;
+    let top = cloud.slab.y;
+    let ext = max(cloud.slab.z, 0.0);
+    let shadow_span = max(cloud.params.z / 0.8, 0.05);
+    let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.32);
+    let weather = vec3<f32>(0.5, 0.0, 0.5);
+
+    let shadow_d0 = 180.0 * inv_radius * shadow_span;
+    let shadow_d1 = 650.0 * inv_radius * shadow_span;
+    let shadow_d2 = 1800.0 * inv_radius * shadow_span;
+
+    let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, 0.80, false);
+    let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, 2.20, false);
+    let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, 5.00, false);
+
+    let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
+    let t_3tap = beer_powder(sun_depth);
+
+    let r_p = length(p);
+    let b = dot(p, sun_dir);
+    let disc = b * b - (r_p * r_p - top * top);
+    var t_top = 0.0;
+    if (disc > 0.0) {{
+        t_top = max(-b + sqrt(disc), 0.0);
+    }}
+
+    let n_steps = 32;
+    let dt = t_top / f32(n_steps);
+    let step_km = dt * radius_km;
+    var tau_march = 0.0;
+    for (var i = 0; i < n_steps; i += 1) {{
+        let t_s = (f32(i) + 0.5) * dt;
+        let p_s = p + sun_dir * t_s;
+        let d = slab_density(p_s, drift, weather, step_km, false);
+        tau_march += d * ext * dt;
+    }}
+    let t_march = exp(-tau_march);
+
+    out_results[idx * 2u] = vec4<f32>(t_3tap, t_march, sun_depth, tau_march);
+    out_results[idx * 2u + 1u] = vec4<f32>(t_top * radius_km, step_km, s0, s1);
+}}
+"#
+    )
+}
+
+/// Helper to bake a 64x64 synthetic island coverage map texture.
+fn make_synthetic_island_tex() -> (u32, Vec<u8>) {
+    let tex_size = 64u32;
+    let mut tex_bytes = vec![0u8; (tex_size * tex_size * 4) as usize];
+    for y in 0..tex_size {
+        for x in 0..tex_size {
+            let u = (x as f32 + 0.5) / (tex_size as f32);
+            let v = (y as f32 + 0.5) / (tex_size as f32);
+            let du = (u - 0.5).abs();
+            let dv = (v - 0.5).abs();
+            let dist = (du * du + dv * dv).sqrt();
+            let cov = (1.0 - (dist / 0.25)).clamp(0.0, 1.0) * 0.85;
+            let alpha = (cov * 255.0).round() as u8;
+            let offset = ((y * tex_size + x) * 4) as usize;
+            tex_bytes[offset] = 255;
+            tex_bytes[offset + 1] = 255;
+            tex_bytes[offset + 2] = 255;
+            tex_bytes[offset + 3] = alpha;
+        }
+    }
+    (tex_size, tex_bytes)
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn synthetic_fixture_slab_density_and_lod_characterization_on_hardware() {
+    let gpu = Gpu::new();
+    let (tex_size, tex_bytes) = make_synthetic_island_tex();
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_size, tex_size, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.000625,
+        1.0028125,
+        42.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.0),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0028125,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    let step_sizes = [0.5f32, 2.0f32, 6.0f32, 12.0f32];
+    let r_bottom = 1.000625f32;
+    let r_top = 1.0028125f32;
+    let r_span = r_top - r_bottom;
+    let h_steps = 32;
+
+    let mut samples: Vec<[f32; 4]> = Vec::new();
+    // Group A: Vertical column through cloud island center (local dir [-1, 0, 0] -> u=0.5, v=0.5)
+    for &step_km in &step_sizes {
+        for i in 0..h_steps {
+            let h01 = (i as f32 + 0.5) / (h_steps as f32);
+            let r = r_bottom + h01 * r_span;
+            samples.push([-r, 0.0, 0.0, step_km]);
+        }
+    }
+    // Group B: Vertical column in clear sky (local dir [1, 0, 0] -> u=0.0, v=0.5)
+    for &step_km in &step_sizes {
+        for i in 0..h_steps {
+            let h01 = (i as f32 + 0.5) / (h_steps as f32);
+            let r = r_bottom + h01 * r_span;
+            samples.push([r, 0.0, 0.0, step_km]);
+        }
     }
 
-    // Check Group B: Clear sky produces strictly zero density:
+    let num_samples = samples.len();
+    let in_words: Vec<u32> = samples
+        .iter()
+        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; num_samples * 4];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_slab_density",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        num_samples.div_ceil(64) as u32,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    // Assert Group B clear sky strictly zero density and tau:
     let group_b_offset = step_sizes.len() * h_steps;
     for i in 0..(step_sizes.len() * h_steps) {
         let sample_idx = group_b_offset + i;
         let d_full = readback_floats[sample_idx * 4];
-        assert_eq!(
-            d_full, 0.0,
-            "Clear sky sample {sample_idx} must have strictly zero density"
-        );
+        assert_eq!(d_full, 0.0, "Clear sky sample {sample_idx} must have strictly zero density");
     }
 
-    // Check Group A: Column optical depth stability across step sizes (LOD):
-    eprintln!("\n=== Production WGSL slab_density Hardware Column Optical Depth ===");
+    // Quadrature analysis of Group A:
+    // Discretization interval: slab thickness 7.0 km over 32 midpoint intervals.
+    // ds = 7.0 / 32 km.
+    // True optical depth tau = sigma_t * integral(rho * dt) = sigma_t * (integral(rho * ds) / R_planet).
+    // For R = 3200 km, ext = 42: factor is (42.0 / 3200.0) = 0.013125.
+    eprintln!("\n=== [GPU FUNCTION TESTED] Synthetic Fixture Column Density & Optical Depth ===");
+    let slab_thickness_km = 7.0f32;
+    let ds_km = slab_thickness_km / (h_steps as f32);
+    let ext = 42.0f32;
+    let r_planet_km = 3200.0f32;
+    let mut column_dens_integrals = Vec::new();
     let mut column_tau = Vec::new();
     let mut column_tau_fast = Vec::new();
+
     for (step_idx, &step_km) in step_sizes.iter().enumerate() {
         let offset = step_idx * h_steps;
         let mut sum_density = 0.0f32;
@@ -2169,81 +2453,817 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 active_count += 1;
             }
         }
-        let tau = sum_density * (7.0 / (h_steps as f32)); // Optical depth across 7 km slab
-        let tau_fast = sum_density_fast * (7.0 / (h_steps as f32));
+        let density_integral_km = sum_density * ds_km;
+        let density_integral_fast_km = sum_density_fast * ds_km;
+        let tau = density_integral_km * (ext / r_planet_km);
+        let tau_fast = density_integral_fast_km * (ext / r_planet_km);
+        let transmittance = (-tau).exp();
+        let alpha = 1.0 - transmittance;
+
+        column_dens_integrals.push(density_integral_km);
         column_tau.push(tau);
         column_tau_fast.push(tau_fast);
+
         eprintln!(
-            "Step {:>4.1} km | Active Samples: {:>2}/{} | Tau(Full) = {:.4} | Tau(Fast Shadow) = {:.4}",
-            step_km, active_count, h_steps, tau, tau_fast
+            "Step {:>4.1} km | Active: {:>2}/{} | Dens Integral: {:>7.4} km | Tau: {:.4} | Transmittance: {:.4} | Alpha: {:.4}",
+            step_km, active_count, h_steps, density_integral_km, tau, transmittance, alpha
         );
-        assert!(tau > 0.5, "Column optical depth must be significant in cloud center");
+        assert!(tau > 0.1, "Column optical depth must be non-zero in cloud core");
         assert!(active_count >= 10, "Cloud body must span significant height range");
     }
 
-    // Verify bounded optical depth variation across a 24x change in step size (0.5 to 12.0 km):
-    let tau_0_5 = column_tau[0];
-    let tau_12 = column_tau[3];
-    let rel_tau_diff = (tau_12 - tau_0_5).abs() / tau_0_5;
-    eprintln!("Optical depth variation across 24x step span: {:.2}%", rel_tau_diff * 100.0);
-    assert!(
-        rel_tau_diff < 0.35,
-        "Column optical depth variation ({rel_tau_diff:.3}) must be < 35% across 24x step change"
-    );
+    let int_0_5 = column_dens_integrals[0];
+    let int_12 = column_dens_integrals[3];
+    let rel_var = (int_12 - int_0_5).abs() / int_0_5;
+    eprintln!("Density line integral variation across 24x step span: {:.2}%", rel_var * 100.0);
+    assert!(rel_var < 0.20, "Filter response variation ({rel_var:.3}) must be < 20%");
 
-    // Verify shadow fast-path optical depth tracks full-path within 25%:
     for (step_idx, (&tau, &tau_f)) in column_tau.iter().zip(&column_tau_fast).enumerate() {
         let shadow_err = (tau_f - tau).abs() / tau;
         eprintln!(
-            "Step {:>4.1} km | Shadow fast-path optical depth relative discrepancy = {:.2}%",
+            "Step {:>4.1} km | Shadow fast-path optical depth discrepancy: {:.2}%",
             step_sizes[step_idx], shadow_err * 100.0
         );
-        assert!(
-            shadow_err < 0.25,
-            "Shadow fast-path error {shadow_err:.3} exceeds 25% at step {}", step_sizes[step_idx]
-        );
+        assert!(shadow_err < 0.25, "Shadow fast-path error {shadow_err:.3} exceeds 25%");
+    }
+    eprintln!("[GPU FUNCTION TESTED] synthetic_fixture_slab_density_and_lod_characterization_on_hardware: PASSED\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn fine_resolution_cloud_boundary_silhouette_stability_on_hardware() {
+    let gpu = Gpu::new();
+    let (tex_size, tex_bytes) = make_synthetic_island_tex();
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_size, tex_size, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.000625,
+        1.0028125,
+        42.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.0),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0028125,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    let r_bottom = 1.000625f32;
+    let r_top = 1.0028125f32;
+    let r_mid = r_bottom + 0.40 * (r_top - r_bottom);
+
+    // 1. Coarse probe along equator to locate the cloud edge crossing rho=0.05:
+    let n_probe = 32;
+    let u_probe_start = 0.60f32;
+    let u_probe_end = 0.72f32;
+    let mut probe_samples = Vec::new();
+    for i in 0..n_probe {
+        let u = u_probe_start + (u_probe_end - u_probe_start) * (i as f32) / ((n_probe - 1) as f32);
+        let theta = u * std::f32::consts::TAU;
+        probe_samples.push([theta.cos() * r_mid, theta.sin() * r_mid, 0.0, 0.5]);
+    }
+    let probe_in_words: Vec<u32> = probe_samples
+        .iter()
+        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+        .collect();
+    let probe_out_words = vec![0u32; n_probe * 4];
+    let probe_in_buf = gpu.buffer(&probe_in_words, false);
+    let probe_out_buf = gpu.buffer(&probe_out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_slab_density",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &probe_in_buf,
+        &probe_out_buf,
+        (n_probe as u32).div_ceil(64),
+    );
+    let probe_readback = gpu.read(&probe_out_buf);
+    let probe_floats: Vec<f32> = probe_readback.iter().map(|&w| f32::from_bits(w)).collect();
+    for i in 0..n_probe {
+        let u = u_probe_start + (u_probe_end - u_probe_start) * (i as f32) / ((n_probe - 1) as f32);
+        eprintln!("probe {i}: u={u:.4}, d={}", probe_floats[i * 4]);
     }
 
-    // Check Group C: Boundary silhouette stability across step sizes:
-    eprintln!("\n=== Cloud Silhouette Edge Position Across LODs ===");
-    let group_c_offset = group_b_offset + step_sizes.len() * h_steps;
-    let mut boundary_entries = Vec::new();
+    let mut u_seg_start = 0.0f32;
+    let mut u_seg_end = 0.0f32;
+    let du_probe = (u_probe_end - u_probe_start) / ((n_probe - 1) as f32);
+    for i in 0..(n_probe - 1) {
+        let d0 = probe_floats[i * 4];
+        let d1 = probe_floats[(i + 1) * 4];
+        if (d0 >= 0.05 && d1 < 0.05) || (d0 < 0.05 && d1 >= 0.05) {
+            u_seg_start = u_probe_start + (i as f32) * du_probe;
+            u_seg_end = u_probe_start + ((i + 1) as f32) * du_probe;
+            break;
+        }
+    }
+    assert!(u_seg_end > u_seg_start, "coarse probe must locate cloud boundary segment");
+
+    // Stage 2 refinement probe on the detected [u_seg_start, u_seg_end] segment (spans ~78 km):
+    let n_refine = 32;
+    let mut refine_samples = Vec::new();
+    for i in 0..n_refine {
+        let u = u_seg_start + (u_seg_end - u_seg_start) * (i as f32) / ((n_refine - 1) as f32);
+        let theta = u * std::f32::consts::TAU;
+        refine_samples.push([theta.cos() * r_mid, theta.sin() * r_mid, 0.0, 0.5]);
+    }
+    let refine_in_words: Vec<u32> = refine_samples
+        .iter()
+        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+        .collect();
+    let refine_out_words = vec![0u32; n_refine * 4];
+    let refine_in_buf = gpu.buffer(&refine_in_words, false);
+    let refine_out_buf = gpu.buffer(&refine_out_words, false);
+
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_slab_density",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &refine_in_buf,
+        &refine_out_buf,
+        (n_refine as u32).div_ceil(64),
+    );
+    let refine_readback = gpu.read(&refine_out_buf);
+    let refine_floats: Vec<f32> = refine_readback.iter().map(|&w| f32::from_bits(w)).collect();
+
+    let du_refine = (u_seg_end - u_seg_start) / ((n_refine - 1) as f32);
+    let mut u_boundary = None;
+    for i in 0..(n_refine - 1) {
+        let d0 = refine_floats[i * 4];
+        let d1 = refine_floats[(i + 1) * 4];
+        if (d0 >= 0.05 && d1 < 0.05) || (d0 < 0.05 && d1 >= 0.05) {
+            let frac = (0.05 - d0) / (d1 - d0);
+            let u = u_seg_start + (i as f32 + frac) * du_refine;
+            u_boundary = Some(u);
+            break;
+        }
+    }
+    let u_edge = u_boundary.expect("refinement probe must locate cloud boundary crossing");
+
+    // 2. High-resolution localized 30.0 km sweep centered at the detected cloud boundary:
+    // N = 128 points -> dx = 30.0 / 127 ≈ 236.2 metres per point.
+    let sweep_span_km = 30.0f32;
+    let n_points = 128;
+    let dx_km = sweep_span_km / ((n_points - 1) as f32);
+    let arc_span = sweep_span_km / 3200.0f32;
+    let theta_center = u_edge * std::f32::consts::TAU;
+
+    let step_sizes = [0.5f32, 2.0f32, 6.0f32];
+    let mut fine_samples = Vec::new();
+
+    for &step_km in &step_sizes {
+        for i in 0..n_points {
+            let frac = (i as f32) / ((n_points - 1) as f32) - 0.5f32;
+            let theta = theta_center + frac * arc_span;
+            let dir_x = theta.cos();
+            let dir_y = theta.sin();
+            fine_samples.push([dir_x * r_mid, dir_y * r_mid, 0.0, step_km]);
+        }
+    }
+
+    let in_words: Vec<u32> = fine_samples
+        .iter()
+        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; fine_samples.len() * 4];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_slab_density",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        fine_samples.len().div_ceil(64) as u32,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    eprintln!("Coarse probe detected u_edge = {:.6}", u_edge);
+    eprintln!("\n=== [GPU FUNCTION TESTED] Fine-Resolution Cloud Boundary Stability (30 km sweep, dx ≈ 236 m) ===");
+    let mut boundary_positions_km = Vec::new();
+
     for (step_idx, &step_km) in step_sizes.iter().enumerate() {
-        let offset = group_c_offset + step_idx * boundary_steps;
-        let mut first_cloud_idx = None;
-        let mut last_cloud_idx = None;
-        for i in 0..boundary_steps {
-            let sample_idx = offset + i;
-            let d = readback_floats[sample_idx * 4];
-            if d > 0.001 {
-                if first_cloud_idx.is_none() {
-                    first_cloud_idx = Some(i);
-                }
-                last_cloud_idx = Some(i);
+        let offset = step_idx * n_points;
+        let d_start = readback_floats[offset * 4];
+        let d_end = readback_floats[(offset + n_points - 1) * 4];
+        eprintln!("Step {:>4.1} km | d_start = {:.4}, d_end = {:.4}", step_km, d_start, d_end);
+        let mut crossing_km = None;
+        for i in 0..(n_points - 1) {
+            let d0 = readback_floats[(offset + i) * 4];
+            let d1 = readback_floats[(offset + i + 1) * 4];
+            if (d0 >= 0.05 && d1 < 0.05) || (d0 < 0.05 && d1 >= 0.05) {
+                let frac = (0.05 - d0) / (d1 - d0);
+                let pos_km = (i as f32 + frac) * dx_km;
+                crossing_km = Some(pos_km);
+                break;
             }
         }
-        let first = first_cloud_idx.expect("cloud entry boundary");
-        let last = last_cloud_idx.expect("cloud exit boundary");
-        boundary_entries.push((first, last));
+        let cross = crossing_km.expect("fine sweep boundary contour crossing rho=0.05 must exist in 30 km sweep");
+        boundary_positions_km.push(cross);
         eprintln!(
-            "Step {:>4.1} km | Cloud Boundary Range: index [{:>2} .. {:>2}] (span {})",
-            step_km, first, last, last - first + 1
+            "Step {:>4.1} km | Boundary position x = {:>6.3} km (from start of 30 km sweep)",
+            step_km, cross
         );
     }
 
-    // Boundary entry and exit must not shift by more than 3 sample points (~4.7% of boundary sweep) across LODs:
-    // (At 0.5 km, high-frequency edge wisps extend boundary by ~1-2 cells, which smoothly contract as step increases).
-    let (ref_first, ref_last) = boundary_entries[0];
-    for (step_idx, &(first, last)) in boundary_entries.iter().enumerate().skip(1) {
-        let d_first = (first as i32 - ref_first as i32).abs();
-        let d_last = (last as i32 - ref_last as i32).abs();
-        assert!(
-            d_first <= 3,
-            "Boundary entry shifted by {d_first} cells at step {}", step_sizes[step_idx]
+    let ref_cross = boundary_positions_km[0];
+    for (step_idx, &cross) in boundary_positions_km.iter().enumerate().skip(1) {
+        let shift_km = (cross - ref_cross).abs();
+        eprintln!(
+            "Step {:>4.1} km | Physical Boundary Shift: {:>6.3} km (<= 1.5 km required)",
+            step_sizes[step_idx], shift_km
         );
         assert!(
-            d_last <= 3,
-            "Boundary exit shifted by {d_last} cells at step {}", step_sizes[step_idx]
+            shift_km <= 1.5,
+            "Boundary shift {shift_km:.3} km exceeds 1.5 km tolerance at step {}",
+            step_sizes[step_idx]
         );
     }
+    eprintln!("[GPU FUNCTION TESTED] fine_resolution_cloud_boundary_silhouette_stability_on_hardware: PASSED\n");
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
+    let gpu = Gpu::new();
+
+    // Canonical production coverage texture baked via thessa_atmosphere::clouds::bake_clouds:
+    let tex_w = 256u32;
+    let tex_h = 128u32;
+    let tex_bytes = thessa_atmosphere::clouds::bake_clouds(
+        0xC10D_0000_0000_0001,
+        tex_w,
+        tex_h,
+        0.55,
+        1.0,
+        (1.0, 1.0),
+    );
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_w, tex_h, &tex_bytes);
+
+    // Canonical Thessa planetary configuration:
+    // Planet radius = 3200 km (3,200,000 m).
+    // Low-deck slab: 25.6 km to 44.8 km (1.008 to 1.014 radii). Thickness = 19.2 km.
+    // March ceiling = 54.72 km (1.0171 radii).
+    // Production extinction CLOUD_EXT_LOW = 1000.0 per radius.
+    let r_planet = 3_200_000.0f32;
+    let bot = 1.008f32;
+    let top = 1.014f32;
+    let march_top = 1.0171f32;
+    let ext = 1000.0f32;
+    let steps = 24.0f32;
+
+    // Direct unit vectors derived from the canonical bake texture:
+    // Peak cloud core (coverage ~ 0.77, alpha 196 at (57, 78)):
+    let dir_peak = glam::Vec3::new(0.1488, 0.9262, -0.346).normalize();
+    // Clear sky (North pole polar region, coverage strictly 0):
+    let dir_clear = glam::Vec3::new(0.0, 0.0, 1.0);
+    let right = glam::Vec3::new(0.0, 0.0, 1.0).cross(dir_peak).normalize();
+
+    let uniform_words = pack_cloud_uniform_words(
+        r_planet,
+        bot,
+        top,
+        ext,
+        steps,
+        glam::Vec3::new(0.0, 1.0, 0.5).normalize(),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        march_top,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    // 5 Canonical Viewing Regimes:
+    // 0: Surface Zenith (overcast cloud core: cam at r=1.0, rd pointing straight up into overcast core)
+    // 1: Surface Zenith (clear sky: cam at r=1.0, rd pointing straight up into clear oceanic sky)
+    // 2: In-Cloud Observer (cam at r=1.011, h=35.2 km inside deck, viewing horizontally)
+    // 3: Low-Sun / Sunset Regime (sun elevation 15 deg, view directed at sun for dual-lobe silver lining)
+    // 4: Orbit Limb (cam in orbit at r=1.080, h=256 km, tangent ray with coarse step ds ≈ 36 km)
+    let in_cloud_ro = dir_peak * 1.011;
+    let sun_15 = (dir_peak * 15.0_f32.to_radians().sin() + right * 15.0_f32.to_radians().cos()).normalize();
+    let r_cam = 1.080f32;
+    let r_graze = (bot + top) * 0.5;
+    let sin_theta = (r_graze / r_cam).clamp(0.0, 1.0);
+    let cos_theta = (1.0 - sin_theta * sin_theta).sqrt();
+    let orb_ro = dir_peak * r_cam;
+    let orb_rd = (-dir_peak * cos_theta + right * sin_theta).normalize();
+
+    let ray_data: Vec<[f32; 4]> = vec![
+        // Regime 0: Overcast core zenith (cam at surface under peak cloud core, looking up)
+        [dir_peak.x, dir_peak.y, dir_peak.z, 0.0],
+        [dir_peak.x, dir_peak.y, dir_peak.z, 0.0],
+        // Regime 1: Clear sky zenith (cam at surface under clear polar sky, looking up)
+        [dir_clear.x, dir_clear.y, dir_clear.z, 0.0],
+        [dir_clear.x, dir_clear.y, dir_clear.z, 0.0],
+        // Regime 2: In-cloud observer at h = 35.2 km (r = 1.011) looking horizontally
+        [in_cloud_ro.x, in_cloud_ro.y, in_cloud_ro.z, 0.0],
+        [right.x, right.y, right.z, 0.0],
+        // Regime 3: Sunset silver-lining forward scatter (viewing towards 15° sun)
+        [dir_peak.x * 1.0001, dir_peak.y * 1.0001, dir_peak.z * 1.0001, 0.0],
+        [sun_15.x, sun_15.y, sun_15.z, 0.0],
+        // Regime 4: Orbital insertion (r = 1.080, 256 km altitude) looking at horizon tangent
+        [orb_ro.x, orb_ro.y, orb_ro.z, 0.0],
+        [orb_rd.x, orb_rd.y, orb_rd.z, 0.0],
+    ];
+
+    let num_rays = ray_data.len() / 2;
+    let in_words: Vec<u32> = ray_data
+        .iter()
+        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; num_rays * 8];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_raymarch",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        num_rays.div_ceil(64) as u32,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    eprintln!("\n=== [GPU RENDER VERIFIED] Production Thessa Fixture across 5 Viewing Regimes ===");
+    let regime_names = [
+        "Surface Zenith (Overcast Core)",
+        "Surface Zenith (Clear Air)",
+        "In-Cloud Observer (h=35.2 km)",
+        "Low-Sun Silver Lining (15 deg)",
+        "Orbital Limb Horizon (h=256 km)",
+    ];
+
+    for (idx, &name) in regime_names.iter().enumerate().take(num_rays) {
+        let base = idx * 8;
+        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let alpha = readback_floats[base + 3];
+        let chord_km = readback_floats[base + 6];
+        let step_km = readback_floats[base + 7];
+
+        assert!(scat.is_finite(), "regime {idx} scat non-finite: {scat:?}");
+        assert!(alpha.is_finite(), "regime {idx} alpha non-finite: {alpha}");
+        assert!((0.0..=1.0).contains(&alpha), "regime {idx} alpha out of [0, 1]: {alpha}");
+
+        eprintln!(
+            "Regime {}: {:<32} | Chord: {:>6.2} km | Step: {:>5.2} km | Alpha: {:>6.4} | Scat: ({:.3}, {:.3}, {:.3})",
+            idx, name, chord_km, step_km, alpha, scat.x, scat.y, scat.z
+        );
+    }
+
+    // Regime 0: Surface Zenith Overcast:
+    let r0_alpha = readback_floats[3];
+    assert!(
+        r0_alpha > 0.95,
+        "Overcast core must be essentially opaque (alpha > 0.95, got {r0_alpha:.4})"
+    );
+
+    // Regime 1: Surface Zenith Clear Sky:
+    let r1_alpha = readback_floats[8 + 3];
+    assert_eq!(
+        r1_alpha, 0.0,
+        "Clear sky zenith must have strictly zero opacity"
+    );
+
+    // Regime 2: In-Cloud Observer:
+    let r2_t0 = readback_floats[16 + 4];
+    assert_eq!(
+        r2_t0, 0.0,
+        "In-cloud observer must start raymarch immediately at t0=0"
+    );
+
+    // Regime 3: Sunset Silver Lining:
+    let r3_scat = glam::Vec3::new(readback_floats[24], readback_floats[25], readback_floats[26]);
+    assert!(
+        r3_scat.length() > 0.05,
+        "Forward scattering in sunset regime must produce bright radiance"
+    );
+
+    // Regime 4: Orbital Insertion:
+    let r4_chord_km = readback_floats[32 + 6];
+    assert!(
+        r4_chord_km > 300.0,
+        "Orbital horizon tangent chord must be long (> 300 km, got {r4_chord_km:.1} km)"
+    );
+
+    eprintln!("[GPU RENDER VERIFIED] production_thessa_fixture_cloud_render_and_quadrature_on_hardware: PASSED\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn production_raymarch_quadrature_convergence_on_hardware() {
+    let gpu = Gpu::new();
+    let tex_w = 256u32;
+    let tex_h = 128u32;
+    let tex_bytes = thessa_atmosphere::clouds::bake_clouds(
+        0xC10D_0000_0000_0001,
+        tex_w,
+        tex_h,
+        0.55,
+        1.0,
+        (1.0, 1.0),
+    );
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_w, tex_h, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.008,
+        1.014,
+        1000.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.0),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0171,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    // Slant ray directed through the canonical cloud core:
+    let dir_peak = glam::Vec3::new(0.1488, 0.9262, -0.346).normalize();
+    let right = glam::Vec3::new(0.0, 0.0, 1.0).cross(dir_peak).normalize();
+    let slant_rd = (dir_peak * 0.866 + right * 0.50).normalize();
+
+    // Variable step marching: N = [96, 48, 24, 12, 6] steps
+    // (step sizes approx 0.25, 0.50, 1.00, 2.00, 4.00 km)
+    let step_counts = [96.0f32, 48.0f32, 24.0f32, 12.0f32, 6.0f32];
+    let mut ray_data = Vec::new();
+    for &n_steps in &step_counts {
+        ray_data.push([dir_peak.x, dir_peak.y, dir_peak.z, 0.0]); // ro at surface
+        ray_data.push([slant_rd.x, slant_rd.y, slant_rd.z, n_steps]); // rd, steps_override
+    }
+
+    let num_rays = step_counts.len();
+    let in_words: Vec<u32> = ray_data
+        .iter()
+        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; num_rays * 8];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_raymarch",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        num_rays.div_ceil(64) as u32,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    eprintln!("\n=== [GPU RENDER VERIFIED] Production Raymarch Quadrature Convergence ===");
+    let mut transmittances = Vec::new();
+    let mut radiances = Vec::new();
+
+    for (idx, &n_steps) in step_counts.iter().enumerate() {
+        let base = idx * 8;
+        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let alpha = readback_floats[base + 3];
+        let chord_km = readback_floats[base + 6];
+        let step_km = readback_floats[base + 7];
+        let trans = 1.0 - alpha;
+        transmittances.push(trans);
+        radiances.push(scat.length());
+
+        eprintln!(
+            "Steps: {:>2} (ds = {:>4.2} km) | Chord: {:>5.2} km | Transmittance: {:.4} | Alpha: {:.4} | Radiance: {:.4}",
+            n_steps as u32, step_km, chord_km, trans, alpha, scat.length()
+        );
+    }
+
+    let ref_trans = transmittances[0]; // N=96 reference
+    for (idx, &n_steps) in step_counts.iter().enumerate().skip(1) {
+        let err = (transmittances[idx] - ref_trans).abs();
+        eprintln!(
+            "Steps {:>2} | Transmittance error vs N=96 reference: {:.4}",
+            n_steps as u32, err
+        );
+        if n_steps >= 24.0 {
+            assert!(
+                err < 0.08,
+                "N={n_steps} error {err:.4} exceeds 0.08 tolerance vs N=96 reference"
+            );
+        } else if n_steps >= 12.0 {
+            assert!(
+                err < 0.15,
+                "N={n_steps} error {err:.4} exceeds 0.15 tolerance vs N=96 reference"
+            );
+        }
+    }
+    eprintln!("[GPU RENDER VERIFIED] production_raymarch_quadrature_convergence_on_hardware: PASSED\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn production_solar_shadow_transmittance_on_hardware() {
+    let gpu = Gpu::new();
+    let tex_w = 256u32;
+    let tex_h = 128u32;
+    let tex_bytes = thessa_atmosphere::clouds::bake_clouds(
+        0xC10D_0000_0000_0001,
+        tex_w,
+        tex_h,
+        0.55,
+        1.0,
+        (1.0, 1.0),
+    );
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_w, tex_h, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.008,
+        1.014,
+        1000.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.0),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0171,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    // In-cloud sample point p at h01 = 0.35 inside the canonical cumulus core:
+    let dir_peak = glam::Vec3::new(0.1488, 0.9262, -0.346).normalize();
+    let right = glam::Vec3::new(0.0, 0.0, 1.0).cross(dir_peak).normalize();
+    let r_p = 1.008 + 0.35 * (1.014 - 1.008);
+    let p = dir_peak * r_p;
+
+    // Three sun elevation angles relative to the local zenith:
+    // 0: Noon (sun straight up at 90° elevation along local zenith dir_peak)
+    // 1: Afternoon (sun at 45° elevation)
+    // 2: Sunset (sun at 15° elevation)
+    let sun_noon = dir_peak;
+    let sun_45 = (dir_peak * 45.0_f32.to_radians().sin() + right * 45.0_f32.to_radians().cos()).normalize();
+    let sun_15 = (dir_peak * 15.0_f32.to_radians().sin() + right * 15.0_f32.to_radians().cos()).normalize();
+    let sun_dirs = [sun_noon, sun_45, sun_15];
+
+    let mut sample_data = Vec::new();
+    for &dir in &sun_dirs {
+        sample_data.push([p.x, p.y, p.z, 0.0]);
+        sample_data.push([dir.x, dir.y, dir.z, 0.0]);
+    }
+
+    let num_samples = sun_dirs.len();
+    let in_words: Vec<u32> = sample_data
+        .iter()
+        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; num_samples * 8];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_solar_shadow",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        num_samples.div_ceil(64) as u32,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    eprintln!("\n=== [GPU FUNCTION TESTED] Production Solar Shadow Transmittance along Sun Vectors ===");
+    let angles = ["Noon (90 deg)", "Afternoon (45 deg)", "Sunset (15 deg)"];
+    let mut trans_3tap = Vec::new();
+    let mut trans_march = Vec::new();
+
+    let mut taus_march = Vec::new();
+    let mut march_dists = Vec::new();
+
+    for (idx, &angle_name) in angles.iter().enumerate().take(num_samples) {
+        let base = idx * 8;
+        let t_3tap = readback_floats[base];
+        let t_march = readback_floats[base + 1];
+        let sun_depth = readback_floats[base + 2];
+        let tau_march = readback_floats[base + 3];
+        let march_dist_km = readback_floats[base + 4];
+
+        trans_3tap.push(t_3tap);
+        trans_march.push(t_march);
+        taus_march.push(tau_march);
+        march_dists.push(march_dist_km);
+
+        eprintln!(
+            "Angle: {:<18} | March Dist: {:>5.2} km | T(3-tap): {:.4} (depth {:.2}) | T(March): {:.4} (tau {:.2})",
+            angle_name, march_dist_km, t_3tap, sun_depth, t_march, tau_march
+        );
+    }
+
+    // Physical monotonicity assertion: oblique sun travels longer distance through slab,
+    // so path distance and multi-step optical depth tau_march strictly increase:
+    assert!(
+        march_dists[0] < march_dists[1] && march_dists[1] < march_dists[2],
+        "Sun ray path distance through slab must strictly increase as sun descends: {:?}",
+        march_dists
+    );
+    assert!(
+        taus_march[0] < taus_march[1] && taus_march[1] < taus_march[2],
+        "Multi-step march optical depth must strictly increase as sun descends: {:?}",
+        taus_march
+    );
+    assert!(
+        trans_march[0] >= trans_march[1] && trans_march[1] >= trans_march[2],
+        "Multi-step march transmittance must monotonically decrease as sun descends: {:?}",
+        trans_march
+    );
+    for i in 0..num_samples {
+        assert!(
+            trans_march[i] <= 0.05,
+            "Deep cloud core must be strongly shadowed (trans_march <= 0.05, got {})",
+            trans_march[i]
+        );
+        assert!(
+            trans_3tap[i] <= 0.05,
+            "Deep cloud core must be strongly shadowed in 3-tap approximation (trans_3tap <= 0.05, got {})",
+            trans_3tap[i]
+        );
+    }
+
+    eprintln!("[GPU FUNCTION TESTED] production_solar_shadow_transmittance_on_hardware: PASSED\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
+    let gpu = Gpu::new();
+    let tex_w = 256u32;
+    let tex_h = 128u32;
+    let tex_bytes = thessa_atmosphere::clouds::bake_clouds(
+        0xC10D_0000_0000_0001,
+        tex_w,
+        tex_h,
+        0.55,
+        1.0,
+        (1.0, 1.0),
+    );
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_w, tex_h, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.008,
+        1.014,
+        1000.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.0),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0171,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    // Camera ascending from 50 km to 220 km in 35 steps (delta_h = 5.0 km) on actual Vulkan GPU:
+    let n_alts = 35;
+    let h_min = 50.0f32;
+    let h_max = 220.0f32;
+    let delta_h = (h_max - h_min) / ((n_alts - 1) as f32);
+
+    let mut ray_data = Vec::new();
+    let mut alt_km_list = Vec::new();
+
+    let r_graze = (1.008f32 + 1.014f32) * 0.5;
+
+    for i in 0..n_alts {
+        let h_km = h_min + (i as f32) * delta_h;
+        alt_km_list.push(h_km);
+        let r_cam = 1.0 + (h_km / 3200.0);
+        let sin_theta = (r_graze / r_cam).clamp(0.0, 1.0);
+        let cos_theta = (1.0 - sin_theta * sin_theta).sqrt();
+        ray_data.push([0.0, -r_cam, 0.0, 0.0]); // ro
+        ray_data.push([sin_theta, cos_theta, 0.0, 0.0]); // rd: aimed at grazing tangent
+    }
+
+    let in_words: Vec<u32> = ray_data
+        .iter()
+        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; n_alts * 8];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_raymarch",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        (n_alts as u32).div_ceil(64),
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    eprintln!("\n=== [GPU RENDER VERIFIED] Production Camera Ascent Continuity (50–220 km on Hardware) ===");
+    let mut chords = Vec::new();
+    let mut steps = Vec::new();
+    let mut alphas = Vec::new();
+
+    for (i, &alt_km) in alt_km_list.iter().enumerate().take(n_alts) {
+        let base = i * 8;
+        let alpha = readback_floats[base + 3];
+        let chord_km = readback_floats[base + 6];
+        let step_km = readback_floats[base + 7];
+        chords.push(chord_km);
+        steps.push(step_km);
+        alphas.push(alpha);
+
+        if i % 5 == 0 || i == n_alts - 1 {
+            eprintln!(
+                "Alt: {:>5.1} km | Chord: {:>6.2} km | Step: {:>5.2} km | Rendered Alpha: {:.4}",
+                alt_km, chord_km, step_km, alpha
+            );
+        }
+    }
+
+    // Verify discrete derivatives:
+    let max_chord_rate = 8.0f32; // km/km
+    let max_step_rate = 0.35f32; // km/km
+
+    for i in 0..(n_alts - 1) {
+        let dh = alt_km_list[i + 1] - alt_km_list[i];
+        let d_chord = (chords[i + 1] - chords[i]).abs() / dh;
+        let d_step = (steps[i + 1] - steps[i]).abs() / dh;
+
+        assert!(
+            d_chord <= max_chord_rate,
+            "Discrete chord rate {d_chord:.2} km/km at alt {} km exceeds limit {max_chord_rate}",
+            alt_km_list[i]
+        );
+        assert!(
+            d_step <= max_step_rate,
+            "Discrete step rate {d_step:.3} km/km at alt {} km exceeds limit {max_step_rate}",
+            alt_km_list[i]
+        );
+        assert!(
+            alphas[i].is_finite() && (0.0..=1.0).contains(&alphas[i]),
+            "Rendered alpha {} at alt {} km must be finite and within [0, 1]",
+            alphas[i], alt_km_list[i]
+        );
+    }
+    assert!(
+        alphas[n_alts - 1].is_finite() && (0.0..=1.0).contains(&alphas[n_alts - 1]),
+        "Rendered alpha at final alt must be finite and within [0, 1]"
+    );
+    eprintln!("[GPU RENDER VERIFIED] production_camera_ascent_continuity_across_full_transition_on_hardware: PASSED\n");
+}
+
+

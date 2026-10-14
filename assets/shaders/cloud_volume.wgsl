@@ -348,18 +348,35 @@ fn slab_density(
     }
 
     // Cumulus deck (deck 0):
-    // Fast path for sun self-shadow rays: evaluates Perlin mass + primary 2 billow octaves.
-    // Uses consistent large-scale domain warp so shadow features geometrically align with view rays,
-    // while skipping high-frequency vortex curl and erosion to maintain bounded register pressure on iGPU.
-    // Note: this 2-octave solar path is an intentional performance approximation (saving 60%+ shadow ALU).
-    let warp_large = curl_warp3d(p_drift * 0.022) * 4.2;
+    // Large atmospheric domain warp (swirl eddies, period ~45 km, Nyquist limit ~22 km):
+    // Smoothly fades across 22.0 km to 8.0 km step sizes so coarse orbital steps (> 22 km)
+    // do not alias high spatial frequencies, and saves 3x perlin3d calls on orbital chords.
+    let w_warp_large = smoothstep(22.0, 8.0, step_km);
+    var warp_large = vec3<f32>(0.0);
+    if (w_warp_large > 0.0001) {
+        warp_large = curl_warp3d(p_drift * 0.022) * (4.2 * w_warp_large);
+    }
 
     if (!full_detail) {
         let p_w = p_drift + warp_large;
-        let p0_s = perlin3d(p_w * 0.016) * 0.60 + 0.50;
-        let p1_s = perlin3d(p_w * 0.038 + vec3<f32>(2.4, 5.1, 8.9)) * 0.50 + 0.50;
+        let w_p0_s = smoothstep(36.0, 16.0, step_km);
+        var p0_s = 0.50;
+        if (w_p0_s > 0.001) {
+            let p0_raw = perlin3d(p_w * 0.016) * 0.60 + 0.50;
+            p0_s = mix(0.50, p0_raw, w_p0_s);
+        }
+        let w_macro_s = smoothstep(12.0, 4.0, step_km);
+        var p1_s = 0.50;
+        if (w_macro_s > 0.01) {
+            let p1_raw = perlin3d(p_w * 0.038 + vec3<f32>(2.4, 5.1, 8.9)) * 0.50 + 0.50;
+            p1_s = mix(0.50, p1_raw, w_macro_s);
+        }
         let macro_s = p0_s * 0.70 + p1_s * 0.30;
-        let b0_s = billow_cubic(p_w * 0.072);
+        let w0_s = smoothstep(7.0, 2.5, step_km);
+        var b0_s = BILLOW_MEAN;
+        if (w0_s > 0.01) {
+            b0_s = mix(BILLOW_MEAN, billow_cubic(p_w * 0.072), w0_s);
+        }
         let w1_s = smoothstep(3.1, 1.2, step_km);
         var b1_s = BILLOW_MEAN;
         if (w1_s > 0.01) {
@@ -388,7 +405,12 @@ fn slab_density(
     let p_w = p_drift + warp_large + warp_turb;
 
     // 1. Continuous continental cloud mass (Perlin macro connectivity, periods ~60 km and ~26 km):
-    let p0 = perlin3d(p_w * 0.016) * 0.60 + 0.50;
+    let w_p0 = smoothstep(36.0, 16.0, step_km);
+    var p0 = 0.50;
+    if (w_p0 > 0.001) {
+        let p0_raw = perlin3d(p_w * 0.016) * 0.60 + 0.50;
+        p0 = mix(0.50, p0_raw, w_p0);
+    }
     // Bandlimit p1 (period ~26 km, Nyquist ~13 km) to its expectation (0.50) when step_km > 10 km:
     let w_macro = smoothstep(12.0, 4.0, step_km);
     var p1 = 0.50;

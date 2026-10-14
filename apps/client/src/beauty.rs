@@ -271,62 +271,7 @@ fn bake_clouds(
     opacity: f32,
     aniso: (f64, f64),
 ) -> Vec<u8> {
-    let mut px = Vec::with_capacity((w * h * 4) as usize);
-    // Widen the transition: decks keep hard cores but grow bright skirts.
-    // Calibrated so coverage 0.55 reads ~40% broken deck (warp biases the
-    // field low, hence the below-unity gain).
-    let edge0 = (coverage * 0.76).clamp(0.0, 0.95);
-    let (au, av) = aniso;
-    for y in 0..h {
-        let v = y as f64 / h as f64;
-        let stretch = 1.0 - 0.35 * (1.0 - (v * std::f64::consts::PI).sin()); // polar pinch
-        for x in 0..w {
-            let u = x as f64 / w as f64;
-            // Domain warp: a low-frequency offset field bends the main
-            // octaves into natural swirls instead of blobby lattice cells.
-            // Warp periods (2, 4) divide the base frequencies, so the seam
-            // still tiles.
-            let wx = fbm(seed ^ 0x9E9, u * 2.0, v * 4.0, 2.0) - 0.5;
-            let wy = fbm(seed ^ 0xBEE, u * 2.0 + 5.2, v * 4.0 + 1.3, 2.0) - 0.5;
-            // Slanted fronts: shearing u by latitude breaks the zonal
-            // banding that pure lat/long octaves print (gas-giant look).
-            // Shear is v-only, so the u seam still tiles.
-            let us = u + 0.35 * (v - 0.5);
-            let d = fbm(
-                seed,
-                (us * 10.0 + wx * 1.8) * au,
-                (v * 20.0 * stretch + wy * 1.8 + 3.1) * av,
-                10.0,
-            );
-            let swirl = fbm(seed ^ 0x51AB, us * 4.0 * au + d * 1.5, v * 8.0 * av, 4.0);
-            // Billow octave: small cells riding the large field so decks read
-            // as structured tops instead of smooth blobs. Bake-time only.
-            // Faded toward the poles: the meridional pinch squeezes this
-            // octave into coherent ringing arches there (measured).
-            let polar = (v * std::f64::consts::PI).sin().powf(0.7);
-            let billow = fbm(
-                seed ^ 0xB110,
-                (us * 24.0 + d * 2.0) * au,
-                (v * 40.0 * stretch + 9.7) * av,
-                24.0,
-            ) * (0.25 + 0.75 * polar);
-            let field = (d * 0.46 + swirl * 0.28 + billow * 0.26) as f32;
-            let a = ((field - edge0) / (1.0 - edge0).max(1e-3)).clamp(0.0, 1.0);
-            let a = (a * (1.6 - 0.6 * a)).clamp(0.0, 1.0) * opacity;
-            // Density shading: white cores, steel-grey body, cool thin skirts.
-            // The full 0.55..1.0 span keeps structure under minification:
-            // an all-0.9 wash reads as cream from orbit, not cloud.
-            let core = a.clamp(0.0, 1.0);
-            let brightness = 0.55 + 0.45 * core;
-            let cool = (1.0 - core) * 0.25;
-            // R warm, B cool: thin edges go steel-blue, cores white.
-            let r = (255.0 * brightness).clamp(0.0, 255.0) as u8;
-            let g = (255.0 * (brightness - cool * 0.35)).clamp(0.0, 255.0) as u8;
-            let b = (255.0 * (brightness - cool * 0.05)).clamp(0.0, 255.0) as u8;
-            px.extend_from_slice(&[r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8]);
-        }
-    }
-    px
+    thessa_atmosphere::clouds::bake_clouds(seed, w, h, coverage, opacity, aniso)
 }
 
 // ---------------------------------------------------------------------------

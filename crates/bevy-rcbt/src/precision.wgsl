@@ -46,14 +46,73 @@ struct CbtAabb {
 // Slab ray-AABB intersection for portable WGSL ray query / bounding volume acceleration.
 // Returns vec2<f32>(t_enter, t_exit) if hit (with t_exit >= 0.0 and t_enter <= t_exit), or vec2<f32>(-1.0, -1.0) on miss.
 fn cbt_ray_intersect_aabb(aabb_min: vec3<f32>, aabb_max: vec3<f32>, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec2<f32> {
-    let inv_d = 1.0 / ray_dir;
-    let t0 = (aabb_min - ray_origin) * inv_d;
-    let t1 = (aabb_max - ray_origin) * inv_d;
-    let t_smaller = min(t0, t1);
-    let t_bigger = max(t0, t1);
-    let t_min = max(max(t_smaller.x, t_smaller.y), t_smaller.z);
-    let t_max = min(min(t_bigger.x, t_bigger.y), t_bigger.z);
-    if (t_max < max(t_min, 0.0)) {
+    var t_min: f32 = -3.402823466e+38;
+    var t_max: f32 = 3.402823466e+38;
+
+    // Axis X
+    if (ray_dir.x == 0.0) {
+        if (ray_origin.x < aabb_min.x || ray_origin.x > aabb_max.x) {
+            return vec2<f32>(-1.0, -1.0);
+        }
+    } else {
+        let inv_dx = 1.0 / ray_dir.x;
+        var t0x = (aabb_min.x - ray_origin.x) * inv_dx;
+        var t1x = (aabb_max.x - ray_origin.x) * inv_dx;
+        if (t0x > t1x) {
+            let tmp = t0x;
+            t0x = t1x;
+            t1x = tmp;
+        }
+        t_min = max(t_min, t0x);
+        t_max = min(t_max, t1x);
+        if (t_max < t_min) {
+            return vec2<f32>(-1.0, -1.0);
+        }
+    }
+
+    // Axis Y
+    if (ray_dir.y == 0.0) {
+        if (ray_origin.y < aabb_min.y || ray_origin.y > aabb_max.y) {
+            return vec2<f32>(-1.0, -1.0);
+        }
+    } else {
+        let inv_dy = 1.0 / ray_dir.y;
+        var t0y = (aabb_min.y - ray_origin.y) * inv_dy;
+        var t1y = (aabb_max.y - ray_origin.y) * inv_dy;
+        if (t0y > t1y) {
+            let tmp = t0y;
+            t0y = t1y;
+            t1y = tmp;
+        }
+        t_min = max(t_min, t0y);
+        t_max = min(t_max, t1y);
+        if (t_max < t_min) {
+            return vec2<f32>(-1.0, -1.0);
+        }
+    }
+
+    // Axis Z
+    if (ray_dir.z == 0.0) {
+        if (ray_origin.z < aabb_min.z || ray_origin.z > aabb_max.z) {
+            return vec2<f32>(-1.0, -1.0);
+        }
+    } else {
+        let inv_dz = 1.0 / ray_dir.z;
+        var t0z = (aabb_min.z - ray_origin.z) * inv_dz;
+        var t1z = (aabb_max.z - ray_origin.z) * inv_dz;
+        if (t0z > t1z) {
+            let tmp = t0z;
+            t0z = t1z;
+            t1z = tmp;
+        }
+        t_min = max(t_min, t0z);
+        t_max = min(t_max, t1z);
+        if (t_max < t_min) {
+            return vec2<f32>(-1.0, -1.0);
+        }
+    }
+
+    if (t_max < 0.0) {
         return vec2<f32>(-1.0, -1.0);
     }
     return vec2<f32>(max(t_min, 0.0), t_max);

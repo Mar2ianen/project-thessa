@@ -132,10 +132,20 @@ pub fn ray_intersect_slab(
     origin: [f64; 3],
     dir: [f64; 3],
 ) -> Option<(f64, f64)> {
+    if !aabb_min.iter().all(|x| x.is_finite())
+        || !aabb_max.iter().all(|x| x.is_finite())
+        || !origin.iter().all(|x| x.is_finite())
+        || !dir.iter().all(|x| x.is_finite())
+    {
+        return None;
+    }
+    if dir[0] == 0.0 && dir[1] == 0.0 && dir[2] == 0.0 {
+        return None;
+    }
     let mut t_min = f64::NEG_INFINITY;
     let mut t_max = f64::INFINITY;
     for i in 0..3 {
-        if dir[i].abs() < 1e-12 {
+        if dir[i] == 0.0 {
             if origin[i] < aabb_min[i] || origin[i] > aabb_max[i] {
                 return None;
             }

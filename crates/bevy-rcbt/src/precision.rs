@@ -558,7 +558,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn direct_body_projection(frame: &TileAnchor, uv: [f64; 2], height_m: f64) -> [f64; 3] {
         let delta = add(
             scale_vec(frame.raw_axis_u, 2.0 * (uv[0] - 0.5) * frame.half_extent),

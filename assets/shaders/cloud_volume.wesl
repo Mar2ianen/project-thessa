@@ -246,10 +246,17 @@ fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
     return mix(0.50, n0 * 0.70 + n1 * 0.30, w);
 }
 
-// Jorge Jimenez's Interleaved Gradient Noise (Call of Duty):
-// Optimal high-frequency isotropic noise with zero directional bias or diagonal bands
+// 2D isotropic quasi-blue noise dither (plastic constant R2 dispersion):
+// Eliminates directional diagonal striping and stippling on static single-frame raymarch edges:
+fn dither2d(pos: vec2<f32>) -> f32 {
+    let p = fract(pos * vec2<f32>(0.754877666, 0.56984029));
+    let q = fract(vec2<f32>(p.y * 13.17, p.x * 19.31) + dot(p, p + 31.416));
+    return fract(p.x + p.y + q.x * 0.5);
+}
+
+// Interleaved Gradient Noise kept for compatibility:
 fn ign(pos: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(pos.x * 0.06711056 + pos.y * 0.00583715));
+    return dither2d(pos);
 }
 
 // Floored float modulus (WGSL has no `mod` builtin, and `%` truncates
@@ -586,7 +593,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let step_km = dt * radius_km;
         var rng_seed = u32(in.position.x) * 1973u + u32(in.position.y) * 9277u + u32(fract(dot(p0_deck, vec3<f32>(17.1, 31.7, 53.3))) * 100000.0);
 
-        let dither = ign(in.position.xy);
+        let dither_raw = dither2d(in.position.xy);
+        let dither = (dither_raw - 0.5) * 0.70 + 0.5;
         for (var step = 0; step < CLOUD_MARCH_MAX; step += 1) {
             let t_sample = t0 + (f32(step) + dither) * dt;
             if (t_sample >= t1) {
@@ -663,7 +671,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // ====================================================================
         let dt = chord / f32(steps);
         let step_km = dt * radius_km;
-        let dither = ign(in.position.xy);
+        let dither_raw = dither2d(in.position.xy);
+        let dither = (dither_raw - 0.5) * 0.70 + 0.5;
 
         for (var i = 0; i < CLOUD_MARCH_MAX; i += 1) {
             let t_current = t0 + (f32(i) + dither) * dt;
@@ -713,7 +722,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
             let height_occ = smoothstep(0.04, 0.40, h01);
             let core_occ = transmittance * transmittance;
-            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
+            let dens_occ = clamp(1.0 - (density / max(6.2 * cloud.params.x, 1e-3)) * 0.40, 0.35, 1.0);
+            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ) * dens_occ;
             let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
 
             let step_ext = density * ext * dt;
@@ -739,10 +749,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let up_cam = select(vec3<f32>(0.0, 1.0, 0.0), ro / r_cam_len, r_cam_len > 1e-6);
     let elev_cam = dot(rd, up_cam);
     let march_dist_km = t0 * radius * 0.001;
-    let haze_amount = 1.0 - exp(-march_dist_km * 0.014);
+    let haze_amount = 1.0 - exp(-march_dist_km * 0.012);
     let haze_color = vec3<f32>(0.55, 0.70, 0.92);
-    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.05, 0.35, elev_cam)), 0.0, 0.60);
-    let out_rgb = mix(scat, haze_color * alpha, haze_mix);
+    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.02, 0.35, elev_cam)), 0.0, 0.92);
+    let horizon_soften = 1.0 - smoothstep(120.0, 350.0, march_dist_km) * clamp(1.0 - smoothstep(0.0, 0.12, elev_cam), 0.0, 0.85);
+    let alpha_out = alpha * horizon_soften;
+    let out_rgb = mix(scat, haze_color * alpha_out, haze_mix);
 
-    return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha);
+    return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha_out);
 }

@@ -67,6 +67,24 @@ fn exact_tangent_is_invariant_under_translation_of_world_origin() {
     assert_near(exit, 10.0 + 11.0_f64.sqrt(), "translated far exit");
 }
 
+
+#[test]
+fn thessa_scale_exact_tangent_preserves_entire_visible_cloud_chord() {
+    // Canonical Thessa radius and low-cloud envelope in metres. All integer
+    // squares below 2^53 yield an exactly zero inner-sphere discriminant:
+    // no epsilon-based near-tangency ambiguity is involved.
+    let planet_m = 3_200_000.0;
+    let bottom_m = 3_225_600.0;
+    let top_m = 3_254_720.0;
+    let slab = CloudSlab::new(planet_m, bottom_m, top_m).unwrap();
+    let origin = DVec3::new(bottom_m, -2_000_000.0, 0.0);
+    let (entry, exit) = intersect_shell(origin, DVec3::Y, DVec3::ZERO, slab)
+        .expect("canonical tangent ray must traverse the outer cloud layer");
+    let half_chord = (top_m * top_m - bottom_m * bottom_m).sqrt();
+    assert_near(entry, 2_000_000.0 - half_chord, "Thessa tangent entry");
+    assert_near(exit, 2_000_000.0 + half_chord, "Thessa tangent exit");
+}
+
 #[test]
 fn ray_just_outside_inner_sphere_keeps_complete_outer_interval() {
     // Control: a nearby ray that MISSES r=5 by 0.01 does not hit the

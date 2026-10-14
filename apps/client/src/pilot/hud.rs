@@ -182,6 +182,7 @@ fn button(
     parent
         .spawn((
             Button,
+            Hovered::default(),
             action,
             Node {
                 min_width: px(42),
@@ -239,6 +240,20 @@ fn button(
             }
         });
 }
+/// Fill for a HUD action button under the Bevy 0.20 hover model.
+///
+/// Hover wins over the active tint; the palette matches the pre-0.20
+/// `Interaction::Hovered` branch exactly. Pinned by `hud_button_fill_*` tests.
+pub(crate) fn hud_button_fill(hovered: bool, enabled: bool) -> Color {
+    if hovered {
+        Color::srgb(0.14, 0.23, 0.28)
+    } else if enabled {
+        Color::srgba(0.08, 0.28, 0.22, 0.95)
+    } else {
+        PANEL
+    }
+}
+
 fn action_active(
     action: Action,
     state: &PilotHudState,
@@ -270,30 +285,25 @@ pub(super) fn pilot_hud_buttons(
     mut clock: ResMut<SimulationClock>,
     mut buttons: Query<
         (
-            &Interaction,
             &Action,
             &mut BackgroundColor,
             &mut BorderColor,
-            Ref<Interaction>,
+            Has<Pressed>,
+            Option<&Hovered>,
         ),
         With<Button>,
     >,
+    just_pressed: Query<&Action, (With<Button>, Added<Pressed>)>,
     mut panels: Query<&mut Node, With<ModePanel>>,
     icons: Res<FlightIcons>,
-    surfaces: Query<&Interaction, With<HudSurface>>,
+    surfaces: Query<&Hovered, With<HudSurface>>,
     mut glyphs: Query<(&ActionIcon, &mut ImageNode)>,
     mut lamps: Query<(&StateLamp, &mut BackgroundColor), Without<Button>>,
 ) {
     let visible = state.view_mode == ClientViewMode::Pilot && !state.ui_hidden;
-    state.pointer_over_ui = visible
-        && surfaces
-            .iter()
-            .any(|interaction| *interaction != Interaction::None);
-    for (interaction, action, mut background, mut border, changed) in &mut buttons {
-        if visible && *interaction != Interaction::None {
-            state.pointer_over_ui = true;
-        }
-        if visible && *interaction == Interaction::Pressed && changed.is_changed() {
+    state.pointer_over_ui = visible && surfaces.iter().any(|hovered| hovered.get());
+    if visible {
+        for action in &just_pressed {
             match action {
                 Action::Speed => state.speed_frame = state.speed_frame.next(),
                 Action::Altitude => state.altitude_frame = state.altitude_frame.toggle(),
@@ -350,14 +360,14 @@ pub(super) fn pilot_hud_buttons(
                 }
             }
         }
+    }
+    for (action, mut background, mut border, held, hovered) in &mut buttons {
+        let hovered = hovered.map(Hovered::get).unwrap_or(false);
+        if visible && (hovered || held) {
+            state.pointer_over_ui = true;
+        }
         let enabled = action_active(*action, &state, &runtime, &clock);
-        background.0 = if *interaction == Interaction::Hovered {
-            Color::srgb(0.14, 0.23, 0.28)
-        } else if enabled {
-            Color::srgba(0.08, 0.28, 0.22, 0.95)
-        } else {
-            PANEL
-        };
+        background.0 = hud_button_fill(hovered, enabled);
         *border = BorderColor::all(if enabled { HUD_GREEN } else { EDGE });
     }
     for (glyph, mut image) in &mut glyphs {
@@ -546,7 +556,7 @@ pub(super) fn spawn_pilot_hud(
                 readout(dock, &font, Readout::Status, 13.0, HUD_AMBER);
                 dock.spawn((
                     HudSurface,
-                    Interaction::None,
+                    Hovered::default(),
                     Node {
                         align_items: AlignItems::End,
                         column_gap: px(8),
@@ -657,6 +667,7 @@ pub(super) fn spawn_pilot_hud(
                             right
                                 .spawn((
                                     Button,
+                                    Hovered::default(),
                                     Action::Altitude,
                                     Node {
                                         align_items: AlignItems::Start,
@@ -726,6 +737,7 @@ pub(super) fn spawn_pilot_hud(
                             right
                                 .spawn((
                                     Button,
+                                    Hovered::default(),
                                     Action::Mode,
                                     Node {
                                         height: px(48),
@@ -757,7 +769,7 @@ pub(super) fn spawn_pilot_hud(
                 dock.spawn((
                     ModePanel,
                     HudSurface,
-                    Interaction::None,
+                    Hovered::default(),
                     Node {
                         position_type: PositionType::Absolute,
                         bottom: px(60),
@@ -781,7 +793,7 @@ pub(super) fn spawn_pilot_hud(
             root.spawn((
                 HelpPanel,
                 HudSurface,
-                Interaction::None,
+                Hovered::default(),
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(16),
@@ -894,6 +906,7 @@ fn spawn_navball(
             instrument
                 .spawn((
                     Button,
+                    Hovered::default(),
                     Action::Speed,
                     Node {
                         width: px(156),
@@ -1309,6 +1322,28 @@ Shift+F12: RT / raster (supported GPUs).",
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hud_button_fill_hover_wins_over_active() {
+        // Palette matches the pre-0.20 `Interaction::Hovered` branch exactly.
+        assert_eq!(
+            hud_button_fill(true, true),
+            Color::srgb(0.14, 0.23, 0.28)
+        );
+        assert_eq!(
+            hud_button_fill(true, false),
+            Color::srgb(0.14, 0.23, 0.28)
+        );
+    }
+
+    #[test]
+    fn hud_button_fill_active_and_idle_palette() {
+        assert_eq!(
+            hud_button_fill(false, true),
+            Color::srgba(0.08, 0.28, 0.22, 0.95)
+        );
+        assert_eq!(hud_button_fill(false, false), PANEL);
+    }
+
     #[test]
     fn vector_cues_use_selected_reference_and_hide_unavailable_directions() {
         let mut flight = FlightUiState::demo_preview(0.0, None);

@@ -12,10 +12,8 @@
 // `1/(1+6zn^2)`). The CPU `integrate_ray` is the oracle; representation
 // detail (noise deformation, near fade) stays inside tolerance.
 
-#import bevy_pbr::{
-    mesh_view_bindings::view,
-    forward_io::VertexOutput,
-}
+import bevy_pbr::render::mesh_view_bindings::view;
+import bevy_pbr::render::forward_io::VertexOutput;
 
 struct PlumeUniforms {
     // origin.xyz + length (m)
@@ -33,7 +31,7 @@ struct PlumeUniforms {
     edge_rgb: vec4<f32>,
 }
 
-// Material bind group is 3 in Bevy 0.19 (MATERIAL_BIND_GROUP_INDEX), NOT 2:
+// Material bind group is 3 in Bevy 0.20 (MATERIAL_BIND_GROUP_INDEX), NOT 2:
 // group 0 = view, 1 = mesh, 2 = lights/clustered, 3 = material.
 @group(3) @binding(0)
 var<uniform> plume: PlumeUniforms;

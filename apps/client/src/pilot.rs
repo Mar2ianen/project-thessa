@@ -1344,6 +1344,7 @@ fn pilot_input(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
+    pixels_per_line: Res<MouseScrollPixelsPerLine>,
     mut state: ResMut<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
     mut flyby: ResMut<FlybyAssist>,
@@ -1475,10 +1476,7 @@ fn pilot_input(
             clock.paused = !clock.paused;
         }
         for event in mouse_wheel.read() {
-            scroll += match event.unit {
-                MouseScrollUnit::Line => event.y,
-                MouseScrollUnit::Pixel => event.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
-            };
+            scroll += wheel_event_lines(event, **pixels_per_line);
         }
         let mouse_delta = mouse_motion.delta;
         if mouse_buttons.pressed(MouseButton::Right) {

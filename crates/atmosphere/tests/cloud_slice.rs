@@ -4,11 +4,11 @@
 //! Prints an ASCII brightness map plus contrast stats; tune the lighting
 //! constants here in seconds instead of screenshot cycles.
 //!
-//! Constants marked SYNC mirror `assets/shaders/cloud_volume.wgsl`.
+//! Constants marked SYNC mirror `assets/shaders/cloud_volume.wesl`.
 
 use thessa_atmosphere::clouds::{ambient_rgb, beer_powder, dual_lobe_phase, type_gradient};
 
-// SYNC with cloud_volume.wgsl. Units: per SLAB thickness (the shader's
+// SYNC with cloud_volume.wesl. Units: per SLAB thickness (the shader's
 // 900/radii over a 0.006-radii slab = 5.4 per slab here, since this bench
 // marches in slab fractions, not radii).
 const EXT: f64 = 6.5;

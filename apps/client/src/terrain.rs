@@ -543,6 +543,8 @@ fn setup_terrain(
                 row.spawn((
                     Button,
                     SurveyButton(i),
+                    // No `Hovered` tracker: survey buttons have no hover tint;
+                    // press edges arrive via `Added<Pressed>` below.
                     UiInputBlocker,
                     Node {
                         padding: UiRect::axes(px(10), px(6)),
@@ -580,7 +582,7 @@ fn setup_terrain(
 }
 fn survey_input(
     keys: Res<ButtonInput<KeyCode>>,
-    buttons: Query<(&Interaction, &SurveyButton), Changed<Interaction>>,
+    buttons: Query<&SurveyButton, (With<Button>, Added<Pressed>)>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
@@ -593,9 +595,7 @@ fn survey_input(
         wheel.clear();
         return;
     }
-    let mut selected = buttons.iter().find_map(|(interaction, button)| {
-        (*interaction == Interaction::Pressed).then_some(button.0)
-    });
+    let mut selected = buttons.iter().map(|button| button.0).next();
     if keys.just_pressed(KeyCode::F6) {
         selected = Some(if survey.active {
             (survey.site + 1) % 3

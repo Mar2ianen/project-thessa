@@ -27,10 +27,8 @@
 // Per-step weather bake test (< 0.02) skips expensive 3D procedural noise on clear steps.
 // N <= CLOUD_MARCH_MAX (24), resolved from `clouds.ray_steps` (`crates/graphics`).
 
-#import bevy_pbr::{
-    mesh_view_bindings::view,
-    forward_io::VertexOutput,
-}
+import bevy_pbr::render::mesh_view_bindings::view;
+import bevy_pbr::render::forward_io::VertexOutput;
 
 struct CloudUniforms {
     // planet center (world) + planet radius (world units).
@@ -50,7 +48,7 @@ struct CloudUniforms {
     shape: vec4<f32>,
 }
 
-// Material bind group is 3 in Bevy 0.19 (MATERIAL_BIND_GROUP_INDEX), NOT 2.
+// Material bind group is 3 in Bevy 0.20 (MATERIAL_BIND_GROUP_INDEX), NOT 2.
 @group(3) @binding(0)
 var<uniform> cloud: CloudUniforms;
 @group(3) @binding(1)

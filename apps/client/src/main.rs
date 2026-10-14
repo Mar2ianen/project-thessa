@@ -32,12 +32,21 @@ use bevy::solari::prelude::SolariPlugins;
 use bevy::{
     asset::AssetPlugin,
     camera::Hdr,
-    core_pipeline::tonemapping::Tonemapping,
-    input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel},
+    input::mouse::{AccumulatedMouseMotion, MouseScrollPixelsPerLine, MouseScrollUnit, MouseWheel},
     post_process::bloom::Bloom,
     prelude::*,
+    render::view::Tonemapping,
     window::{PrimaryWindow, WindowResolution},
 };
+// Bevy 0.20 UI buttons: the headless `ui_widgets::Button` marker plus the
+// opt-in `Hovered` tracker and the `Pressed` hold marker maintained by
+// `UiWidgetsPlugins` (in `DefaultPlugins`). Press edges use `Added<Pressed>`
+// (pointer-down), matching the old `Interaction::Pressed` + `Changed` pair;
+// hover highlight reads `Hovered::get()`, which covers descendants like the
+// old propagated hover.
+use bevy::picking::hover::Hovered;
+use bevy::ui::Pressed;
+use bevy::ui_widgets::Button;
 use bevy_brp_extras::BrpExtrasPlugin;
 use serde::Deserialize;
 use thessa_graphics::{Capabilities, RequestedGraphics, ResolvedGraphicsSettings};
@@ -1175,6 +1184,19 @@ fn format_sim_time(seconds: f64) -> (u64, u64, u64, u64) {
     (days, hours, minutes, seconds)
 }
 
+/// Lines-equivalent scroll delta for one wheel event.
+///
+/// Bevy 0.20 removed `MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR` (was
+/// exactly 100.0); the ratio now lives in the `MouseScrollPixelsPerLine`
+/// resource (default 100.0 px/line). Pure helper so the conversion is pinned
+/// by unit tests rather than by manual input.
+pub(crate) fn wheel_event_lines(event: &MouseWheel, pixels_per_line: f32) -> f32 {
+    match event.unit {
+        MouseScrollUnit::Line => event.y,
+        MouseScrollUnit::Pixel => event.y / pixels_per_line,
+    }
+}
+
 fn next_unit(seed: &mut u32) -> f32 {
     *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     (*seed >> 8) as f32 / (u32::MAX >> 8) as f32
@@ -1183,6 +1205,46 @@ fn next_unit(seed: &mut u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wheel_event(y: f32, unit: MouseScrollUnit) -> MouseWheel {
+        MouseWheel {
+            unit,
+            x: 0.0,
+            y,
+            window: Entity::from_raw_u32(7).unwrap(),
+            phase: bevy::input::touch::TouchPhase::Moved,
+        }
+    }
+
+    #[test]
+    fn wheel_lines_pass_line_units_through() {
+        assert_eq!(
+            wheel_event_lines(&wheel_event(3.0, MouseScrollUnit::Line), 100.0),
+            3.0
+        );
+        assert_eq!(
+            wheel_event_lines(&wheel_event(-1.5, MouseScrollUnit::Line), 50.0),
+            -1.5
+        );
+    }
+
+    #[test]
+    fn wheel_pixels_divide_by_configured_ratio() {
+        // Bevy 0.20 moved the old 100 px/line constant into the
+        // `MouseScrollPixelsPerLine` resource; the default keeps parity.
+        assert_eq!(
+            wheel_event_lines(&wheel_event(200.0, MouseScrollUnit::Pixel), 100.0),
+            2.0
+        );
+        assert_eq!(
+            wheel_event_lines(&wheel_event(200.0, MouseScrollUnit::Pixel), 50.0),
+            4.0
+        );
+        assert_eq!(
+            wheel_event_lines(&wheel_event(-150.0, MouseScrollUnit::Pixel), 100.0),
+            -1.5
+        );
+    }
 
     #[test]
     fn development_assets_resolve_without_cargo_runtime_environment() {

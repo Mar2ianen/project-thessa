@@ -42,6 +42,8 @@ fn main() {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        // Headless compute: exact adapter limits, no fingerprint bucketing.
+        apply_limit_buckets: false,
     }));
     let Ok(adapter) = adapter else {
         println!("SKIP: no GPU adapter available");

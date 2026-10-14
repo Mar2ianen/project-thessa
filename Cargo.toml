@@ -41,12 +41,12 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.97"
 
 [workspace.dependencies]
-# Match Bevy's glam line in 0.19.x to make adapter boundaries cheap.
-glam = { version = "0.32", features = ["serde"] }
-wgpu = "29.0.4"
+# Match Bevy's glam line in 0.20.x to make adapter boundaries cheap.
+glam = { version = "0.33", features = ["serde"] }
+wgpu = "30"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.9"
@@ -54,7 +54,7 @@ rayon = "1.12.0"
 rapier3d-f64 = "0.35.3"
 postcard = { version = "1.1.3", features = ["alloc"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
-bevy = { version = "0.19.1", default-features = true, features = ["bevy_remote", "jpeg"] }
+bevy = { version = "0.20.0", default-features = true, features = ["bevy_remote", "jpeg"] }
 
 [profile.dev.package."*"]
 opt-level = 3

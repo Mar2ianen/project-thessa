@@ -140,6 +140,7 @@ impl Gpu {
         let words = staging
             .slice(..)
             .get_mapped_range()
+            .expect("staging range mapped")
             .as_chunks::<4>()
             .0
             .iter()
@@ -1531,15 +1532,15 @@ fn raster_surface_shader_validates_on_hardware() {
 fn cloud_optical_kernel_matches_cpu_reference_on_hardware() {
     let gpu = Gpu::new();
 
-    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wgsl:
+    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wesl:
     // Ensures the hardware test evaluates the exact production shader functions without duplication.
-    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wesl");
     let start_idx = PROD_WGSL
         .find("fn powder_scatter_term")
-        .expect("powder_scatter_term in cloud_volume.wgsl");
+        .expect("powder_scatter_term in cloud_volume.wesl");
     let end_idx = PROD_WGSL
         .find("fn hash12")
-        .expect("hash12 in cloud_volume.wgsl");
+        .expect("hash12 in cloud_volume.wesl");
     let prod_functions = &PROD_WGSL[start_idx..end_idx];
 
     let shader = format!(
@@ -1639,15 +1640,15 @@ fn test_optical_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
 fn cloud_noise_kernel_matches_cpu_perlin_on_hardware() {
     let gpu = Gpu::new();
 
-    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wgsl:
+    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wesl:
     // Extracts hash33, hash_grad, and perlin3d functions.
-    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wesl");
     let start_idx = PROD_WGSL
         .find("fn hash33")
-        .expect("hash33 in cloud_volume.wgsl");
+        .expect("hash33 in cloud_volume.wesl");
     let end_idx = PROD_WGSL
         .find("const ROT_OCTAVE")
-        .expect("ROT_OCTAVE in cloud_volume.wgsl");
+        .expect("ROT_OCTAVE in cloud_volume.wesl");
     let prod_functions = &PROD_WGSL[start_idx..end_idx];
 
     let shader = format!(
@@ -1828,13 +1829,13 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }
 
 fn get_cloud_volume_wgsl_slice() -> &'static str {
-    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wesl");
     let start_idx = PROD_WGSL
         .find("const CLOUD_MARCH_MAX")
-        .expect("const CLOUD_MARCH_MAX in cloud_volume.wgsl");
+        .expect("const CLOUD_MARCH_MAX in cloud_volume.wesl");
     let end_idx = PROD_WGSL
         .find("@fragment")
-        .expect("@fragment in cloud_volume.wgsl");
+        .expect("@fragment in cloud_volume.wesl");
     &PROD_WGSL[start_idx..end_idx]
 }
 
@@ -3742,7 +3743,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
 
-    let mapped = staging_buf.slice(..).get_mapped_range();
+    let mapped = staging_buf.slice(..).get_mapped_range().expect("staging range mapped");
     let get_pixel = |x: u32, y: u32| -> [u8; 4] {
         let offset = (y * padded_bytes_per_row + x * 4) as usize;
         [mapped[offset], mapped[offset + 1], mapped[offset + 2], mapped[offset + 3]]
@@ -4043,7 +4044,7 @@ fn cloud_raymarch_dispatch_hardware_benchmark() {
         gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
 
-        let mapped = read_buf.slice(..).get_mapped_range();
+        let mapped = read_buf.slice(..).get_mapped_range().expect("readback range mapped");
         let mut raw = [0u8; 16];
         raw.copy_from_slice(&mapped);
         drop(mapped);

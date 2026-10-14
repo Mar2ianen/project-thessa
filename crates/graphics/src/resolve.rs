@@ -371,7 +371,7 @@ impl ResolvedGraphicsSettings {
     }
 
     /// Volume path needs the same shader loop bound as
-    /// `assets/shaders/cloud_volume.wgsl` (`CLOUD_MARCH_MAX`).
+    /// `assets/shaders/cloud_volume.wesl` (`CLOUD_MARCH_MAX`).
     const CLOUD_MARCH_STEP_CAP: u32 = 24;
 
     fn resolve_cloud_volume(requested: &RequestedGraphics, notes: &mut Vec<String>) -> bool {

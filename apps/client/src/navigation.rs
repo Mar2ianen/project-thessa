@@ -231,6 +231,7 @@ pub(super) fn update_camera(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
+    pixels_per_line: Res<MouseScrollPixelsPerLine>,
     mut navigation: ResMut<NavigationState>,
     mut query: Query<(&mut Transform, &mut OrbitCamera, &mut Projection), With<Camera3d>>,
     mut perf: ResMut<perf::PerfMonitor>,
@@ -248,10 +249,7 @@ pub(super) fn update_camera(
     // be replayed as soon as the pointer leaves it.
     let mut scroll = 0.0;
     for event in mouse_wheel.read() {
-        scroll += match event.unit {
-            MouseScrollUnit::Line => event.y,
-            MouseScrollUnit::Pixel => event.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
-        };
+        scroll += wheel_event_lines(event, **pixels_per_line);
     }
 
     // Pilot owns the same Camera3d while it is visible. Its input system

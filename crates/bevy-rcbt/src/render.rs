@@ -35,7 +35,7 @@ use bevy::{
             RenderQueue, ViewQuery,
         },
         texture::GpuImage,
-        view::{ExtractedView, ViewDepthTexture, ViewTarget, ViewUniformOffset, ViewUniforms},
+        view::{ExtractedView, ViewDepthStencilTexture, ViewTarget, ViewUniformOffset, ViewUniforms},
     },
 };
 
@@ -44,7 +44,7 @@ use crate::{
     material_cache::{SlotCache, SlotChange},
 };
 
-impl ExtractResource for CbtGpuPresentation {
+impl ExtractResource<RenderApp> for CbtGpuPresentation {
     type Source = Self;
     fn extract_resource(source: &Self) -> Self {
         source.clone()
@@ -54,7 +54,7 @@ use thessa_rcbt_core::HeightPage;
 #[path = "material_render.rs"]
 mod material_render;
 
-impl ExtractResource for CbtRenderMaterialPages {
+impl ExtractResource<RenderApp> for CbtRenderMaterialPages {
     type Source = Self;
     fn extract_resource(source: &Self) -> Self {
         source.clone()
@@ -69,7 +69,7 @@ use super::{
     MaterialStorageSetting,
 };
 
-impl ExtractResource for MaterialStorageSetting {
+impl ExtractResource<RenderApp> for MaterialStorageSetting {
     type Source = Self;
 
     fn extract_resource(source: &Self::Source) -> Self {
@@ -77,7 +77,7 @@ impl ExtractResource for MaterialStorageSetting {
     }
 }
 
-impl ExtractResource for CbtRenderMaterial {
+impl ExtractResource<RenderApp> for CbtRenderMaterial {
     type Source = Self;
 
     fn extract_resource(source: &Self::Source) -> Self {
@@ -145,12 +145,12 @@ fn mesh_dispatch_supported(limits: &wgpu::Limits, leaves: u32) -> bool {
         .div_ceil(u64::from(MESHLET_PRIMITIVE_COUNT));
     let width = groups.min(u64::from(MESH_DISPATCH_WIDTH));
     let height = groups.div_ceil(u64::from(MESH_DISPATCH_WIDTH)).max(1);
-    width <= u64::from(limits.max_task_mesh_workgroups_per_dimension)
-        && height <= u64::from(limits.max_task_mesh_workgroups_per_dimension)
-        && width * height <= u64::from(limits.max_task_mesh_workgroup_total_count)
+    width <= u64::from(limits.max_mesh_workgroups_per_dimension)
+        && height <= u64::from(limits.max_mesh_workgroups_per_dimension)
+        && width * height <= u64::from(limits.max_mesh_workgroup_total_count)
 }
 
-impl ExtractResource for CbtRenderTopology {
+impl ExtractResource<RenderApp> for CbtRenderTopology {
     type Source = Self;
 
     fn extract_resource(source: &Self::Source) -> Self {
@@ -158,7 +158,7 @@ impl ExtractResource for CbtRenderTopology {
     }
 }
 
-impl ExtractResource for CbtRenderPages {
+impl ExtractResource<RenderApp> for CbtRenderPages {
     type Source = Self;
 
     fn extract_resource(source: &Self::Source) -> Self {
@@ -166,7 +166,7 @@ impl ExtractResource for CbtRenderPages {
     }
 }
 
-impl ExtractResource for CbtRenderSurface {
+impl ExtractResource<RenderApp> for CbtRenderSurface {
     type Source = Self;
 
     fn extract_resource(source: &Self::Source) -> Self {
@@ -2162,7 +2162,7 @@ fn draw_cbt_geometry(
         &ExtractedCamera,
         &ExtractedView,
         &ViewTarget,
-        &ViewDepthTexture,
+        &ViewDepthStencilTexture,
         &ViewUniformOffset,
     )>,
     render_adapter: Res<RenderAdapter>,
@@ -2778,14 +2778,14 @@ mod tests {
     fn mesh_dispatch_limits_preserve_indexed_fallback() {
         let mut limits = wgpu::Limits::default();
         assert!(!mesh_dispatch_supported(&limits, 1));
-        limits.max_task_mesh_workgroups_per_dimension = 256;
-        limits.max_task_mesh_workgroup_total_count = 65_536;
+        limits.max_mesh_workgroups_per_dimension = 256;
+        limits.max_mesh_workgroup_total_count = 65_536;
         assert!(mesh_dispatch_supported(&limits, 1));
         assert!(mesh_dispatch_supported(&limits, 910));
         assert!(!mesh_dispatch_supported(&limits, 911));
-        limits.max_task_mesh_workgroup_total_count = 71;
+        limits.max_mesh_workgroup_total_count = 71;
         assert!(!mesh_dispatch_supported(&limits, 1));
-        limits.max_task_mesh_workgroup_total_count = 72;
+        limits.max_mesh_workgroup_total_count = 72;
         assert!(mesh_dispatch_supported(&limits, 1));
     }
 

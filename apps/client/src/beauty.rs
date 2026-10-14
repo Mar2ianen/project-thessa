@@ -1030,12 +1030,12 @@ fn cloud_shell_fade(cam_frac: f32, deck_frac: f32) -> f32 {
 //
 // One [`CloudVolumeMaterial`] per volume deck: the unit-sphere mesh is
 // coverage only, every pixel marches the planet-normalized slab in
-// `assets/shaders/cloud_volume.wgsl` (Beer-Lambert over the deck bake the
+// `assets/shaders/cloud_volume.wesl` (Beer-Lambert over the deck bake the
 // shells show, so both paths agree on coverage). Sun self-shadowing,
 // forward-lobe silver lining, and eclipse-aware day factor run in-shader;
 // per-frame uniforms carry planet frame, sun, and march budget.
 
-/// Packed uniforms mirroring `assets/shaders/cloud_volume.wgsl`.
+/// Packed uniforms mirroring `assets/shaders/cloud_volume.wesl`.
 #[derive(Debug, Clone, Copy, ShaderType)]
 pub struct CloudUniforms {
     center_radius: Vec4,
@@ -1057,7 +1057,7 @@ pub struct CloudVolumeMaterial {
 
 impl Material for CloudVolumeMaterial {
     fn fragment_shader() -> ShaderRef {
-        "shaders/cloud_volume.wgsl".into()
+        "shaders/cloud_volume.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -1938,12 +1938,23 @@ mod tests {
     }
 
     #[test]
-    fn cloud_volume_wgsl_parses() {
-        // The Bevy `#import` prologue (view + vertex IO) is resolved by the
+    fn cloud_volume_wesl_prologue_uses_render_paths() {
+        let src = include_str!("../../../assets/shaders/cloud_volume.wesl");
+        assert!(src.contains("import bevy_pbr::render::mesh_view_bindings::view;"));
+        assert!(src.contains("import bevy_pbr::render::forward_io::VertexOutput;"));
+        assert!(
+            !src.contains("#import"),
+            "naga_oil prologue must not survive WESL conversion"
+        );
+    }
+
+    #[test]
+    fn cloud_volume_wesl_body_parses() {
+        // The Bevy WESL import prologue (view + vertex IO) is resolved by the
         // asset pipeline at runtime; stub the two bindings this shader
         // consumes so naga validates everything else (helpers, march loop,
         // bindings). Catches syntax/type errors without a GPU.
-        let src = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+        let src = include_str!("../../../assets/shaders/cloud_volume.wesl");
         let (_, body) = src
             .split_once("struct CloudUniforms")
             .expect("shader keeps its uniforms block");
@@ -1956,14 +1967,14 @@ mod tests {
             }\nstruct CloudUniforms";
         let assembled = format!("{stub}{body}");
         let module = naga::front::wgsl::parse_str(&assembled)
-            .map_err(|e| format!("cloud_volume.wgsl must parse: {e:?}"))
+            .map_err(|e| format!("cloud_volume.wesl must parse: {e:?}"))
             .unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
-        .expect("cloud_volume.wgsl must validate");
+        .expect("cloud_volume.wesl must validate");
     }
 
     #[test]

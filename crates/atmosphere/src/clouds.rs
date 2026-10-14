@@ -124,6 +124,9 @@ pub fn intersect_shell(
     center: DVec3,
     slab: CloudSlab,
 ) -> Option<(f64, f64)> {
+    if !origin.is_finite() || !center.is_finite() {
+        return None;
+    }
     if !dir.length_squared().is_finite() || dir.length_squared() <= 1e-12 {
         return None;
     }
@@ -143,7 +146,9 @@ pub fn intersect_shell(
     // Only the nearest surviving slab piece is returned; a far-side piece
     // past a clear sub-deck gap is accepted representation error (the
     // shell fallback has the same single-layer alpha).
+    // Zero-discriminant inner tangencies (i1 == i0) do not enter the core.
     if let Some((i0, i1)) = sphere_interval(origin, d, center, slab.bottom_m)
+        && i1 > i0
         && i1 > f0
         && i0 < f1
     {
@@ -176,13 +181,28 @@ pub fn clip_to_planet(
     center: DVec3,
     planet_radius_m: f64,
 ) -> Option<(f64, f64)> {
-    if !(t1 > t0) || !planet_radius_m.is_finite() || !(planet_radius_m > 0.0) {
+    if !(t1 > t0)
+        || !t0.is_finite()
+        || !t1.is_finite()
+        || !origin.is_finite()
+        || !center.is_finite()
+        || !dir.length_squared().is_finite()
+        || dir.length_squared() <= 1e-12
+        || !planet_radius_m.is_finite()
+        || !(planet_radius_m > 0.0)
+    {
         return None;
     }
     let d = dir.normalize_or_zero();
+    if d.length_squared() < 0.5 {
+        return None;
+    }
     let Some((p0, p1)) = sphere_interval(origin, d, center, planet_radius_m) else {
         return Some((t0, t1));
     };
+    if p1 <= p0 {
+        return Some((t0, t1));
+    }
     // Origin inside or on the surface of the planet pointing inward:
     // If p0 <= 0.0 and p1 > 0.0, the ray penetrates the solid planet starting at or behind the origin.
     // Below or on the surface with inward direction: no sky visible.

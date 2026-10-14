@@ -222,6 +222,16 @@ Bevy touch surface:
 - Regression tests added (8): `wheel_lines_*` (2), `hud_button_fill_*` (2),
   `*_wesl_prologue_uses_render_paths` (2) + `cloud_volume_wesl_body_parses`,
   `extraction_targets_render_app`.
+- Visual parity (2026-10-14, Xvfb `:99` 1280x720, `THESSA_AUTOBENCH=1
+  --local`, 8 timeline shots 11–39 s): baseline `c129181` vs migrated —
+  8/8 OK, mean abs diff ≤ 0.14 on an idle machine (≤ 0.97 under load, and a
+  new-vs-new control shows identical drift, so the residual is wall-timer
+  jitter, not rendering divergence). Shots + perf CSVs under
+  `/tmp/opencode/shots/{base,base2,new-full,new-full2,new-full3}`.
+- Perf parity (median frame, same rig): base 9.01/9.23 ms, migrated
+  9.26 ms on idle runs (contended runs read higher on both builds alike).
+  No migration-attributable CPU regression; instrumented scopes match
+  within 0.15 ms.
 - `docs/00_STATUS.md` row for this doc + touched feature docs agree with
   the landed code. No new Bevy-0.20-only API outside
   `apps/client` + `crates/bevy-rcbt` + `crates/rcbt-wgpu` (freeze rule).

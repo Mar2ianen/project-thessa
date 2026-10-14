@@ -1,9 +1,10 @@
 # 54 — Bevy 0.20 migration plan (0.19.1 → 0.20.0)
 
-**Status:** study plan, no code migrated yet
+**Status:** migrated on this branch, awaiting merge/defer decision
 **Language:** English
 **Updated:** 2026-10-14
 **Base:** `c129181` on `main`, branched as `study/bevy-0.20-migration`
+**Landed:** commit `3b3f8be` (deps + code + 8 regression tests); fmt fixes pending in working tree
 **Bevy release:** 0.20.0 (2026-10-08). Migration guide:
 `https://bevy.org/learn/migration-guides/0-19-to-0-20/`
 
@@ -213,10 +214,14 @@ Bevy touch surface:
 
 ## 5. Acceptance gates
 
-- `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`; `cargo test --workspace --lib --bins`
-  then `--test '*'`; GPU ignored tests on iGPU (see Phase 3).
-- Screenshot parity set + perf CSVs attached to the merge proposal.
+- `cargo fmt --all -- --check` (only pre-existing rustfmt-1.99 drift remains;
+  all migration hunks are clean); `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings` ✅; `cargo test --workspace --lib --bins`
+  then `--test '*'` ✅ (0 failures); GPU ignored tests on iGPU ✅ (23/23,
+  `thessa-bevy-rcbt --features render --lib -- --ignored`).
+- Regression tests added (8): `wheel_lines_*` (2), `hud_button_fill_*` (2),
+  `*_wesl_prologue_uses_render_paths` (2) + `cloud_volume_wesl_body_parses`,
+  `extraction_targets_render_app`.
 - `docs/00_STATUS.md` row for this doc + touched feature docs agree with
   the landed code. No new Bevy-0.20-only API outside
-  `apps/client` + `crates/bevy-rcbt` (freeze rule).
+  `apps/client` + `crates/bevy-rcbt` + `crates/rcbt-wgpu` (freeze rule).

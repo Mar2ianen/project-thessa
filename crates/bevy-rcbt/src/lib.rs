@@ -787,7 +787,7 @@ mod tests {
     #[cfg(feature = "render")]
     #[test]
     fn extraction_targets_render_app() {
-        use bevy::render::{extract_resource::ExtractResource, RenderApp};
+        use bevy::render::{RenderApp, extract_resource::ExtractResource};
 
         fn assert_extract<R: ExtractResource<RenderApp>>() {}
         assert_extract::<CbtRenderTopology>();

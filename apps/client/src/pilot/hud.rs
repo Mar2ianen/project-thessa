@@ -1325,14 +1325,8 @@ mod tests {
     #[test]
     fn hud_button_fill_hover_wins_over_active() {
         // Palette matches the pre-0.20 `Interaction::Hovered` branch exactly.
-        assert_eq!(
-            hud_button_fill(true, true),
-            Color::srgb(0.14, 0.23, 0.28)
-        );
-        assert_eq!(
-            hud_button_fill(true, false),
-            Color::srgb(0.14, 0.23, 0.28)
-        );
+        assert_eq!(hud_button_fill(true, true), Color::srgb(0.14, 0.23, 0.28));
+        assert_eq!(hud_button_fill(true, false), Color::srgb(0.14, 0.23, 0.28));
     }
 
     #[test]

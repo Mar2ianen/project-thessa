@@ -35,7 +35,9 @@ use bevy::{
             RenderQueue, ViewQuery,
         },
         texture::GpuImage,
-        view::{ExtractedView, ViewDepthStencilTexture, ViewTarget, ViewUniformOffset, ViewUniforms},
+        view::{
+            ExtractedView, ViewDepthStencilTexture, ViewTarget, ViewUniformOffset, ViewUniforms,
+        },
     },
 };
 

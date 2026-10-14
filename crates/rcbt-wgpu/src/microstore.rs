@@ -248,9 +248,9 @@ impl MicrostoreDecode {
         rx.recv()
             .map_err(|_| WgpuError::Device("staging map channel closed".into()))?
             .map_err(|e| WgpuError::Device(format!("staging map failed: {e:?}")))?;
-        let view = slice.get_mapped_range().map_err(|e| {
-            WgpuError::Device(format!("staging map range failed: {e:?}"))
-        })?;
+        let view = slice
+            .get_mapped_range()
+            .map_err(|e| WgpuError::Device(format!("staging map range failed: {e:?}")))?;
         let mut out = Vec::with_capacity(texels);
         let (chunks, _) = view.as_chunks::<4>();
         for chunk in chunks {

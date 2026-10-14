@@ -106,11 +106,7 @@ fn gas_giant_size(quality: Quality, big: bool) -> (u32, u32) {
 }
 
 fn cloud_size(quality: Quality) -> (u32, u32) {
-    match quality {
-        Quality::Low => (512, 256),
-        Quality::Medium => (1024, 512),
-        Quality::High => (2048, 1024),
-    }
+    quality.cloud_size()
 }
 
 /// CBT LOD address used for a whole-sphere impostor bake: the coarsest tile

@@ -52,6 +52,22 @@ pub enum Quality {
     High,
 }
 
+impl Quality {
+    /// Canonical bake dimensions (width, height) for whole-planet weather maps.
+    ///
+    /// - Low: 512 x 256
+    /// - Medium: 1024 x 512
+    /// - High: 2048 x 1024
+    #[inline]
+    pub const fn cloud_size(self) -> (u32, u32) {
+        match self {
+            Self::Low => (512, 256),
+            Self::Medium => (1024, 512),
+            Self::High => (2048, 1024),
+        }
+    }
+}
+
 /// Requested render backend. `dx12` is accepted by the parser but resolves to
 /// `auto` with a note until a dedicated ADR allows direct DX paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

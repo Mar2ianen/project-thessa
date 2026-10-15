@@ -10,6 +10,7 @@ description = "Thessa-owned wgpu backend bring-up: headless device, capability p
 [dependencies]
 thessa-graphics = { path = "../graphics" }
 thessa-wgpu-exp = { path = "../wgpu-exp" }
+glam.workspace = true
 wgpu.workspace = true
 pollster = "0.4"
 

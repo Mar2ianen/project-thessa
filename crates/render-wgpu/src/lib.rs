@@ -32,6 +32,8 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod view;
+
 /// Mesh limits the terrain mesh-shader path needs. Duplicates the bridge
 /// (`bevy-rcbt/src/render.rs`); see module docs for the hoist plan.
 const MESH_MIN_OUTPUT_VERTICES: u32 = 96;

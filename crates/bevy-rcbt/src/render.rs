@@ -2738,6 +2738,83 @@ fn mesh_pipeline(
 mod tests {
     use super::*;
 
+    /// Numerical mirror of the `cbt_surface_sample` gradient stencils in
+    /// `surface_sample.wgsl`: second-order clamped form (old everywhere)
+    /// versus fourth-order interior form (new). The analytic field has exact
+    /// derivatives, so the test measures the formulas, not a bake.
+    fn analytic_h(u: f64, v: f64) -> f64 {
+        let g =
+            |cu: f64, cv: f64, s: f64| -> f64 { ((u - cu) * (u - cu) + (v - cv) * (v - cv)) / s };
+        (-g(0.3, 0.7, 0.02)).exp() + 0.5 * (-g(0.8, 0.2, 0.005)).exp()
+    }
+
+    fn analytic_dh_du(u: f64, v: f64) -> f64 {
+        let g =
+            |cu: f64, cv: f64, s: f64| -> f64 { ((u - cu) * (u - cu) + (v - cv) * (v - cv)) / s };
+        (-g(0.3, 0.7, 0.02)).exp() * (-2.0 * (u - 0.3) / 0.02)
+            + 0.5 * (-g(0.8, 0.2, 0.005)).exp() * (-2.0 * (u - 0.8) / 0.005)
+    }
+
+    fn second_order(u: f64, v: f64, du: f64) -> f64 {
+        let u0 = (u - du).max(0.0);
+        let u1 = (u + du).min(1.0);
+        let _ = v;
+        (analytic_h(u1, v) - analytic_h(u0, v)) / (u1 - u0)
+    }
+
+    fn fourth_order(u: f64, v: f64, du: f64) -> f64 {
+        (-analytic_h(u + 2.0 * du, v) + 8.0 * analytic_h(u + du, v) - 8.0 * analytic_h(u - du, v)
+            + analytic_h(u - 2.0 * du, v))
+            / (12.0 * du)
+    }
+
+    #[test]
+    fn fourth_order_interior_beats_second_order() {
+        let du: f64 = 1.0 / 32.0;
+        let mut worst_second = 0.0f64;
+        let mut worst_fourth = 0.0f64;
+        let mut sum_second = 0.0f64;
+        let mut sum_fourth = 0.0f64;
+        let mut count = 0u64;
+        let mut worst_edge = 0.0f64;
+        for iu in 0..33 {
+            let u = iu as f64 / 32.0;
+            for iv in 0..33 {
+                let v = iv as f64 / 32.0;
+                let exact = analytic_dh_du(u, v);
+                let err2 = (second_order(u, v, du) - exact).abs();
+                if u >= 2.0 * du && u <= 1.0 - 2.0 * du {
+                    let err4 = (fourth_order(u, v, du) - exact).abs();
+                    worst_second = worst_second.max(err2);
+                    worst_fourth = worst_fourth.max(err4);
+                    sum_second += err2;
+                    sum_fourth += err4;
+                    count += 1;
+                } else {
+                    worst_edge = worst_edge.max(err2);
+                }
+            }
+        }
+        let mean_second = sum_second / count as f64;
+        let mean_fourth = sum_fourth / count as f64;
+        // The field mixes a resolved swell with a near-Nyquist bump, like
+        // real page content: the narrow bump caps the mean win at ~6x, so
+        // the bar is 4x with max never worse. (On purely smooth content the
+        // same stencils differ by 100x+; the mixed field is the honest one.)
+        assert!(
+            worst_fourth <= worst_second,
+            "interior 4th-order max {worst_fourth:.2e} must not exceed 2nd-order {worst_second:.2e}"
+        );
+        assert!(
+            mean_fourth * 4.0 < mean_second,
+            "interior 4th-order mean {mean_fourth:.2e} must beat 2nd-order {mean_second:.2e} by 4x"
+        );
+        assert!(
+            worst_edge < 0.5,
+            "edge fallback must stay bounded, got {worst_edge:.2e}"
+        );
+    }
+
     #[test]
     fn geometry_shader_is_portable_wgsl() {
         let module = naga::front::wgsl::parse_str(CBT_GEOMETRY_WGSL)

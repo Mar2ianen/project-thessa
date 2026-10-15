@@ -703,22 +703,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // BACKEND A: Real-Time Stratified Ray Marching (bounded real-time budget on iGPU / Radeon 880M)
         // Midpoint numerical integration with space-skipping and Nyquist-bandlimited detail
         // ====================================================================
-        let dt_coarse = chord / f32(steps);
-        let fine_subdiv = 6.0;
-        let dt_fine = dt_coarse / fine_subdiv;
-        let step_km_coarse = dt_coarse * radius_km;
-        let step_km_fine = dt_fine * radius_km;
+        let dt = chord / f32(steps);
+        let step_km = dt * radius_km;
         let dither_raw = dither2d(in.position.xy);
-        let dither = (dither_raw - 0.5) * 0.25 + 0.5;
+        let dither = (dither_raw - 0.5) * 0.65 + 0.5;
 
         let is_diag_tau = (cloud.shape.w >= 2.5 && cloud.shape.w < 3.5);
 
-        var t_current = t0 + dither * dt_coarse;
-        var in_cloud = false;
-        var dt = dt_coarse;
-        var step_km = step_km_coarse;
-
         for (var i = 0; i < CLOUD_MARCH_MAX; i += 1) {
+            let t_current = t0 + (f32(i) + dither) * dt;
             if (t_current >= t1) {
                 break;
             }
@@ -729,47 +722,34 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let weather = vec3<f32>(w2.x, 0.0, w2.y);
 
             let density = slab_density(p, drift, weather, step_km, true);
-
-            // Empty-space skipping: coarse steps across vacuum; on first hit,
-            // backtrack exactly 1 coarse step (6 fine steps) with harmonic phase lock:
-            if (!in_cloud) {
-                if (density <= 0.001) {
-                    t_current += dt_coarse;
-                    continue;
-                }
-                in_cloud = true;
-                dt = dt_fine;
-                step_km = step_km_fine;
-                t_current = max(t_current - dt_coarse, t0) + dt_fine;
-                continue;
-            }
-
-            // Once in fine-marching mode near/inside clouds:
-            if (density <= 0.001) {
-                t_current += dt_fine;
-                continue;
-            }
-
             steps_taken += 1.0;
-            let step_ext = density * ext * dt_fine;
+            if (density <= 0.001) {
+                continue;
+            }
+
+            let step_ext = density * ext * dt;
             unsaturated_tau += step_ext;
 
             let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
 
-            // Sun self-shadowing: sample along sun direction with micro-shadow tap for crisp crevices
-            let shadow_d0 = 180.0 * inv_radius * shadow_span;
-            let shadow_d1 = 650.0 * inv_radius * shadow_span;
-            let shadow_d2 = 1800.0 * inv_radius * shadow_span;
+            // Adaptive step-scaled sun shadow taps:
+            let d0_km = max(step_km * 0.35, 0.40) * shadow_span;
+            let d1_km = max(step_km * 1.10, 1.20) * shadow_span;
+            let d2_km = max(step_km * 2.60, 3.00) * shadow_span;
+            let shadow_d0 = d0_km * 1000.0 * inv_radius;
+            let shadow_d1 = d1_km * 1000.0 * inv_radius;
+            let shadow_d2 = d2_km * 1000.0 * inv_radius;
 
-            let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, 0.80, false);
-            let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, 2.20, false);
-            let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, 5.00, false);
+            let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, max(d0_km * 0.8, 0.80), false);
+            let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, max(d1_km * 0.8, 2.20), false);
+            let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, max(d2_km * 0.8, 5.00), false);
 
-            let sun_depth = (s0 * 0.55 + s1 * 0.85 + s2 * 1.25) * 1.9;
+            let s_local = density / max(6.2 * cloud.params.x, 1e-3);
+            let sun_depth = (s_local * 0.25 + s0 * 0.45 + s1 * 0.75 + s2 * 1.15) * 1.6;
 
             let direct_attenuation = beer_powder(sun_depth);
-            let ms1 = exp(-sun_depth * 0.22) * 0.55;
-            let ms2 = exp(-sun_depth * 0.08) * 0.25;
+            let ms1 = exp(-sun_depth * 0.20) * 0.55;
+            let ms2 = exp(-sun_depth * 0.07) * 0.25;
 
             let up = p / max(length(p), 1e-6);
             let elev = dot(up, sun_dir);
@@ -786,15 +766,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let ground_amb = vec3<f32>(0.18, 0.22, 0.18) * (0.08 + 0.92 * day);
             let height_occ = smoothstep(0.04, 0.40, h01);
             let core_occ = transmittance * transmittance;
-            let amb_occ = (0.28 + 0.72 * height_occ) * (0.20 + 0.80 * core_occ);
+            let dens_occ = clamp(1.0 - s_local * 0.45, 0.35, 1.0);
+            let amb_occ = (0.28 + 0.72 * height_occ) * (0.20 + 0.80 * core_occ) * dens_occ;
             let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.50;
 
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
             scat += transmittance * point_light * (1.0 - step_trans);
             transmittance *= step_trans;
-
-            t_current += dt;
 
             // In diagnostic Mode 3, bypass early-out to accumulate the entire unsaturated column optical depth:
             if (!is_diag_tau && transmittance < 0.01) {

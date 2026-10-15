@@ -491,7 +491,7 @@ mod tests {
             return;
         };
         let mut backend = BatchSlab::new(device, queue);
-        for (rays, boxes) in [(17, 19), (3, 2), (1, 323), (323, 1), (7, 9)] {
+        for (rays, boxes) in [(17, 19), (17, 2), (1, 323), (323, 1), (7, 9)] {
             let origins = vec![[-1.0, 0.5, 0.5]; rays];
             let dirs = vec![[1.0, 0.0, 0.0]; rays];
             let mins = vec![[0.0; 3]; boxes];
@@ -504,8 +504,9 @@ mod tests {
                     t_exit: 2.0,
                     hit: true
                 }));
-            // The first unused pooled element must stay zero: the shader
-            // must not write rounded workgroup tails using stale inputs.
+            // Inspect the first unused output. On the shrinking 17x2
+            // batch it still contains a prior hit. An arrayLength-only
+            // guard overwrites it with a zero-direction miss from ray 17.
             let pool = backend.pool.as_ref().unwrap();
             let offset = (rays * boxes * 16) as u64;
             let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -523,10 +524,17 @@ mod tests {
                 .unwrap();
             rx.recv().unwrap().unwrap();
             let data = pool.staging.slice(..16).get_mapped_range().unwrap();
-            // On growth buffers start zero; after shrinking only logical
-            // output is specified, so inspect the fresh first batch only.
-            if rays == 17 {
+            if (rays, boxes) == (17, 19) {
                 assert!(data.iter().all(|b| *b == 0));
+            }
+            if (rays, boxes) == (17, 2) {
+                assert_eq!(
+                    &*data,
+                    &[1.0_f32, 2.0, 1.0, 0.0]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect::<Vec<_>>()
+                );
             }
             drop(data);
             pool.staging.unmap();

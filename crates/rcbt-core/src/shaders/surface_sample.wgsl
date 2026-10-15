@@ -37,9 +37,9 @@ struct CbtSurfaceSample {
 // Shared by indexed compute and native mesh emission. Differentiate the
 // unit cube sphere, never subtract two radius-sized f32 positions.
 //
-// Interior vertices use fourth-order central differences (error O(h^4),
-// two extra taps per axis); within 2h of an edge the stencil would reach
-// outside [0,1], so those vertices keep the second-order clamped form.
+// The source is quantized piecewise bilinear, not C4-smooth. Use bounded
+// two-tap secants: fourth-order negative weights create false slopes two
+// cells before a cliff (covered by the actual HeightPage GPU regression).
 fn cbt_surface_sample(frame: CbtPrecisionFrame, page: vec4<u32>, uv: vec2<f32>) -> CbtSurfaceSample {
     let h = page_sample(page, uv.x, uv.y);
     let du = 1.0 / 32.0;
@@ -53,26 +53,8 @@ fn cbt_surface_sample(frame: CbtPrecisionFrame, page: vec4<u32>, uv: vec2<f32>) 
     let raw = frame.raw_center.xyz + span * (axis_u * (uv.x - 0.5) + axis_v * (uv.y - 0.5));
     let direction = normalize(raw);
     let metric = (frame.radius_half_extent_len.x + h) * span / length(raw);
-    var dh_du: f32;
-    if (uv.x >= 2.0 * du && uv.x <= 1.0 - 2.0 * du) {
-        let hm2 = page_sample(page, uv.x - 2.0 * du, uv.y);
-        let hm1 = page_sample(page, uv.x - du, uv.y);
-        let hp1 = page_sample(page, uv.x + du, uv.y);
-        let hp2 = page_sample(page, uv.x + 2.0 * du, uv.y);
-        dh_du = (-hp2 + 8.0 * hp1 - 8.0 * hm1 + hm2) / (12.0 * du);
-    } else {
-        dh_du = (page_sample(page, u1, uv.y) - page_sample(page, u0, uv.y)) / (u1 - u0);
-    }
-    var dh_dv: f32;
-    if (uv.y >= 2.0 * du && uv.y <= 1.0 - 2.0 * du) {
-        let hm2 = page_sample(page, uv.x, uv.y - 2.0 * du);
-        let hm1 = page_sample(page, uv.x, uv.y - du);
-        let hp1 = page_sample(page, uv.x, uv.y + du);
-        let hp2 = page_sample(page, uv.x, uv.y + 2.0 * du);
-        dh_dv = (-hp2 + 8.0 * hp1 - 8.0 * hm1 + hm2) / (12.0 * du);
-    } else {
-        dh_dv = (page_sample(page, uv.x, v1) - page_sample(page, uv.x, v0)) / (v1 - v0);
-    }
+    let dh_du = (page_sample(page, u1, uv.y) - page_sample(page, u0, uv.y)) / (u1 - u0);
+    let dh_dv = (page_sample(page, uv.x, v1) - page_sample(page, uv.x, v0)) / (v1 - v0);
     let tangent_u = (axis_u - direction * dot(direction, axis_u)) * metric + direction * dh_du;
     let tangent_v = (axis_v - direction * dot(direction, axis_v)) * metric + direction * dh_dv;
     return CbtSurfaceSample(cbt_local_offset(frame, uv, h), normalize(cross(tangent_u, tangent_v)), h);

@@ -283,7 +283,7 @@ impl TileAnchor {
         let relative = sub(self.anchor_body_m, camera_body_m);
         let (anchor_hi, anchor_lo) = split_f64_vec(relative);
         let f = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0];
-        Some(GpuTileFrame {
+        let frame = GpuTileFrame {
             anchor_hi_m: [anchor_hi[0], anchor_hi[1], anchor_hi[2], 0.0],
             anchor_lo_m: [anchor_lo[0], anchor_lo[1], anchor_lo[2], 0.0],
             raw_center: f(self.raw_center),
@@ -296,7 +296,13 @@ impl TileAnchor {
                 self.raw_center_length as f32,
                 0.0,
             ],
-        })
+        };
+        frame
+            .words()
+            .into_iter()
+            .flatten()
+            .all(f32::is_finite)
+            .then_some(frame)
     }
 }
 
@@ -450,6 +456,13 @@ fn scale_vec32(v: [f32; 3], scalar: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_transport_rejects_narrowing_overflow() {
+        let anchor = TileAnchor::new(TileKey::new(4, 10, 512, 512).unwrap(), 6_371_000.0).unwrap();
+        assert!(anchor.to_gpu([1e40, 0.0, 0.0]).is_none());
+        assert!(anchor.to_gpu([1e11, 0.0, 0.0]).is_some());
+    }
 
     const CASES: &[(f64, f64, f64)] = &[
         (6_371_000.0, -11_000.0, 11_000.0), // Earth

@@ -2148,10 +2148,9 @@ fn mesh_pipeline(
 mod tests {
     use super::*;
 
-    /// Numerical mirror of the `cbt_surface_sample` gradient stencils in
-    /// `surface_sample.wgsl`: second-order clamped form (old everywhere)
-    /// versus fourth-order interior form (new). The analytic field has exact
-    /// derivatives, so the test measures the formulas, not a bake.
+    /// Mathematical comparison only, not a production-quality assertion:
+    /// fourth-order stencils require smooth data. Quantized HeightPage GPU
+    /// regressions in render-wgpu demonstrate why production uses secants.
     fn analytic_h(u: f64, v: f64) -> f64 {
         let g =
             |cu: f64, cv: f64, s: f64| -> f64 { ((u - cu) * (u - cu) + (v - cv) * (v - cv)) / s };
@@ -2179,7 +2178,7 @@ mod tests {
     }
 
     #[test]
-    fn fourth_order_interior_beats_second_order() {
+    fn fourth_order_beats_second_order_only_on_smooth_analytic_fixture() {
         let du: f64 = 1.0 / 32.0;
         let mut worst_second = 0.0f64;
         let mut worst_fourth = 0.0f64;
@@ -2207,10 +2206,8 @@ mod tests {
         }
         let mean_second = sum_second / count as f64;
         let mean_fourth = sum_fourth / count as f64;
-        // The field mixes a resolved swell with a near-Nyquist bump, like
-        // real page content: the narrow bump caps the mean win at ~6x, so
-        // the bar is 4x with max never worse. (On purely smooth content the
-        // same stencils differ by 100x+; the mixed field is the honest one.)
+        // This analytic fixture does not model bilinear quantized cells.
+        // Its improvement must not be used as a terrain-quality claim.
         assert!(
             worst_fourth <= worst_second,
             "interior 4th-order max {worst_fourth:.2e} must not exceed 2nd-order {worst_second:.2e}"

@@ -3,7 +3,8 @@
 //! This is the R1 foundation: `Instance → Adapter → Device` without Bevy,
 //! a hardware capability probe feeding the existing
 //! [`thessa_graphics::Capabilities`] resolver input, and the first
-//! frame primitives (clear + readback). No window/surface yet — windowing
+//! frame primitives (clear + readback), plus [`terrain`]'s owned CBT
+//! compute/classification/indirect raster frame. No window/surface yet — windowing
 //! arrives with the platform step (audit R5); everything here runs on
 //! `InstanceDescriptor::new_without_display_handle()`.
 //!
@@ -32,6 +33,7 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod terrain;
 pub mod view;
 
 /// Mesh limits the terrain mesh-shader path needs. Duplicates the bridge

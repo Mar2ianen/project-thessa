@@ -567,11 +567,44 @@ same `TileAnchor::to_gpu(camera_body_m)` origin. The body transform is a
 rotation in this space, never a second absolute translation.
 
 Portable WGSL assemblies and tile anchors now live in `rcbt-core`; the Bevy
-adapter re-exports its old precision path. The normal stencil's analytic
-smooth-field test alone does not establish quality on quantized pages or
-LOD boundaries; production acceptance needs page-level hardware evidence.
-There is no full scene render/presentation loop or renderer FPS result yet.
-Byte roundtrip is not production snapshot publication parity.
+adapter re-exports its old precision path. Tile transport also rejects f32
+narrowing overflow. The fourth-order normal stencil was rejected by an
+actual quantized HeightPage GPU regression: a 100 m step causes ~1.2° of
+false slope two cells before the cliff. Production now uses bounded two-tap
+secants (five bilinear height evaluations including the center rather than
+nine for interior fourth-order). Tests exercise all six cube faces, borders,
+and a planar parent/child LOD seam; this is not full visual acceptance on
+arbitrary game terrain. The analytic smooth-field test is explicitly only a
+mathematical comparison, not a terrain-quality claim.
+
+`terrain::TerrainRenderer` now executes the **same** geometry, classifier and
+raster WGSL as the Bevy adapter, using persistent packed pages, tile-local
+geometry, triangle compaction/history and GPU indirect draw arguments.
+Camera-only frames do not regenerate geometry. `update_pages` validates all
+ordinals, duplicates and stable-slot capacities before publication and
+regenerates only dirty patches, without CPU meshes or readback. Camera
+coordinates are body-fixed in this first consumer; body motion, real material
+residency, full scene/effect integration and presentation remain unported.
+Byte roundtrip is still not production snapshot publication parity.
+
+Run the dependency-independent screenshot/latency harness:
+
+```sh
+cargo run --release -p thessa-render-wgpu --example terrain_frame -- terrain.png
+```
+
+Radeon 880M / RADV, 1280×720, 64 synthetic HeightPages, 129,024 active triangles,
+120 measured frames after 30 warm-up frames (2026-10-15, one run): 0.997 ms
+median, 1.219 ms p95, reciprocal median 1003.4 offscreen frames/s. Timing
+includes camera upload, classification, indirect raster and GPU completion;
+excludes initial setup (92.32 ms) and screenshot readback. Dirty publication
++ geometry + GPU completion measured 0.062 ms median for one patch and
+0.552 ms for all 64. This is **not game FPS**, a Bevy comparison, or a complete
+client replacement. Hardware regressions also check CPU position/height
+parity, unchanged clean geometry, static pixel determinism, nonempty raster,
+unaligned screenshot extent, and looking-away culling.
+
+![Owned CBT frame, synthetic quantized terrain fixture](artifacts/owned-terrain-2026-10-15.png)
 
 Measured on Radeon 880M / RADV, release `batch_slab`, synchronous end-to-end
 packing/upload/dispatch/readback (2026-10-15, one run):

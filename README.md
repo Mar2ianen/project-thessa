@@ -85,6 +85,12 @@ The checked-in vertical slice currently contains:
   world-addressed material sampling independent of geometry LOD. Docs 47–53
   track historical failures and current work; visual acceptance is incomplete.
   Persistent conforming GPU bisector topology remains future work;
+- `thessa-render-wgpu`: owned headless backend and CBT compute → indirect raster
+  passes, camera-relative uniforms and dirty quantized-page updates without
+  Bevy. `cargo run --release -p thessa-render-wgpu --example terrain_frame -- terrain.png`
+  produces a synthetic terrain screenshot and offscreen latency benchmark;
+  it does **not** replace the production client's complete scene/UI/input yet
+  (doc 39, implementation checkpoint);
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,

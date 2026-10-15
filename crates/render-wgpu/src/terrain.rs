@@ -12,8 +12,8 @@ use crate::{
     view::{ViewParams, ViewUniformBlock},
 };
 
-pub const VERTICES_PER_PATCH: u32 = 33 * 33;
-const TRIANGLES_PER_PATCH: u64 = 32 * 32 * 2 + 32 * 8;
+pub const VERTICES_PER_PATCH: u32 = shaders::VERTICES_PER_PATCH as u32;
+const TRIANGLES_PER_PATCH: u64 = shaders::TRIANGLES_PER_PATCH as u64;
 
 /// Borrowed source pages. Quantized heights are uploaded without expansion.
 pub struct TerrainPatch<'a> {

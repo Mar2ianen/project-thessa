@@ -19,7 +19,8 @@ use glam::{DMat4, DVec3, Mat4, Vec3};
 /// Camera-side inputs for one view, f64 SI. No Bevy types.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewParams {
-    /// Camera transform (rotation + translation), metres.
+    /// Affine camera transform (rotation + translation), metres. Translation
+    /// must match `world_position_m` within f64 round-off.
     pub world_from_view: DMat4,
     /// Projection matrix (camera owner's formula).
     pub clip_from_view: DMat4,
@@ -64,8 +65,20 @@ impl ViewUniformBlock {
         // Match the tile anchor contract: shaders operate on offsets from
         // this camera, not planet-sized absolute f32 positions.
         let mut world_from_view = params.world_from_view;
-        world_from_view.w_axis = (world_from_view.w_axis.truncate() - params.world_position_m)
-            .extend(world_from_view.w_axis.w);
+        let origin_error = (world_from_view.w_axis.truncate() - params.world_position_m)
+            .abs()
+            .max_element();
+        let origin_tolerance =
+            16.0 * f64::EPSILON * params.world_position_m.abs().max_element().max(1.0);
+        let affine_error = (world_from_view.row(3) - glam::DVec4::W)
+            .abs()
+            .max_element();
+        if origin_error > origin_tolerance || affine_error > 16.0 * f64::EPSILON {
+            return None;
+        }
+        // The supplied f64 camera position is authoritative. Do not retain
+        // tiny translation residue from an absolute look-at matrix inverse.
+        world_from_view.w_axis = glam::DVec4::W;
         let view_from_world = world_from_view.inverse();
         let clip_from_view = params.clip_from_view;
         let clip_from_world = clip_from_view * view_from_world;
@@ -188,8 +201,8 @@ mod tests {
     #[test]
     fn byte_layout_matches_shader_offsets() {
         let params = ViewParams {
-            world_from_view: translation(100.0, -50.0, 25.0),
-            clip_from_view: DMat4::IDENTITY,
+            world_from_view: DMat4::IDENTITY,
+            clip_from_view: translation(-100.0, 50.0, -25.0),
             world_position_m: DVec3::ZERO,
             exposure: 1.25,
         };
@@ -229,6 +242,21 @@ mod tests {
         assert!(ViewUniformBlock::new(&params).is_none());
         params.clip_from_view = DMat4::IDENTITY;
         params.world_from_view = translation(1e40, 0.0, 0.0);
+        assert!(ViewUniformBlock::new(&params).is_none());
+    }
+
+    #[test]
+    fn rejects_inconsistent_camera_origin_and_non_affine_view() {
+        let mut params = ViewParams {
+            world_from_view: translation(10.0, 0.0, 0.0),
+            clip_from_view: DMat4::IDENTITY,
+            world_position_m: DVec3::ZERO,
+            exposure: 1.0,
+        };
+        assert!(ViewUniformBlock::new(&params).is_none());
+        params.world_position_m = DVec3::new(10.0, 0.0, 0.0);
+        assert!(ViewUniformBlock::new(&params).is_some());
+        params.world_from_view.x_axis.w = 0.1;
         assert!(ViewUniformBlock::new(&params).is_none());
     }
 

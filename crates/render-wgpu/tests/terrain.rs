@@ -76,10 +76,12 @@ fn planar_quantized_pages_match_normals_across_parent_child_lod_seam() {
             .map(|i| {
                 let u = (k.x as f64 + (i % 33) as f64 / 32.0) / side;
                 let v = (k.y as f64 + (i / 33) as f64 / 32.0) / side;
-                1_000.0 * u + 2_000.0 * v
+                // ~500 m / 1000 m relief per parent tile: a real slope,
+                // not a nearly radial normal that passes by accident.
+                500.0 * (u - 0.5) * 1024.0 + 1_000.0 * (v - 0.5) * 1024.0
             })
             .collect::<Vec<_>>();
-        HeightPage::bake(&samples, 33, 0.001).unwrap()
+        HeightPage::bake(&samples, 33, 0.05).unwrap()
     };
     let pages = [make_page(parent), make_page(child)];
     let renderer = TerrainRenderer::new(
@@ -107,7 +109,7 @@ fn planar_quantized_pages_match_normals_across_parent_child_lod_seam() {
             (pn - cn).length() < 1e-4,
             "LOD normal seam at {y}: {pn} vs {cn}"
         );
-        assert!((output[p + 7] - output[c + 7]).abs() < 0.002);
+        assert!((output[p + 7] - output[c + 7]).abs() < 0.05);
     }
 }
 

@@ -6,6 +6,13 @@
 //! three assembled pipelines below mirror the exact concatenation
 //! the bridge historically built inline.
 
+/// Geometry ABI mirrored by the fixed-size portable WGSL kernels. Both
+/// consumers use these capacities; changing the grid also requires WGSL edits.
+pub const GRID_SIZE: usize = 33;
+pub const VERTICES_PER_PATCH: usize = GRID_SIZE * GRID_SIZE;
+/// Surface cells plus four edge skirts, two triangles per cell/segment.
+pub const TRIANGLES_PER_PATCH: usize = (GRID_SIZE - 1) * (GRID_SIZE - 1) * 2 + (GRID_SIZE - 1) * 8;
+
 /// Portable WGSL chunk `precision.wgsl`.
 pub const PRECISION_WGSL: &str = include_str!("shaders/precision.wgsl");
 

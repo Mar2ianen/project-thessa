@@ -653,7 +653,11 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock")
             .as_nanos();
-        let pid_path = std::env::temp_dir().join(format!(
+        // Keep scratch local to this crate/worktree, not the shared TMPDIR
+        // used by concurrent builds and test processes on this machine.
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        std::fs::create_dir_all(&scratch).expect("create embedded fixture scratch directory");
+        let pid_path = scratch.join(format!(
             "thessa-embedded-startup-{}-{stamp}.pid",
             std::process::id()
         ));
@@ -664,7 +668,7 @@ mod tests {
             .args(["-c", script.as_str()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::inherit());
         (command_builder, pid_path)
     }
 
@@ -679,7 +683,8 @@ mod tests {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "startup fixture did not publish its pid"
+                "startup fixture did not publish its pid at {}",
+                pid_path.display()
             );
             std::thread::sleep(Duration::from_millis(1));
         };
@@ -702,7 +707,9 @@ mod tests {
     fn embedded_startup_timeout_reaps_child() {
         let started = std::time::Instant::now();
         let (command, pid_path) = injected_server("exec sleep 30");
-        let result = EmbeddedLink::spawn_command(command, Duration::from_millis(25));
+        // Give the shell a scheduling window under a parallel workspace
+        // run before timeout cleanup can kill it; still far below sleep 30.
+        let result = EmbeddedLink::spawn_command(command, Duration::from_millis(250));
         assert!(result.is_err(), "server without welcome must fail startup");
         assert_startup_child_gone(&pid_path);
         assert!(

@@ -90,8 +90,10 @@ impl ExtractResource<RenderApp> for CbtRenderMaterial {
     }
 }
 
-const GPU_GRID_SIZE: usize = 33;
-const GPU_VERTEX_COUNT_PER_PATCH: usize = GPU_GRID_SIZE * GPU_GRID_SIZE;
+use thessa_rcbt_core::shaders::{
+    GRID_SIZE as GPU_GRID_SIZE, TRIANGLES_PER_PATCH as GPU_TRIANGLE_COUNT_PER_PATCH,
+    VERTICES_PER_PATCH as GPU_VERTEX_COUNT_PER_PATCH,
+};
 
 /// wgpu caps a single dispatch dimension at 65535 workgroups
 /// (`maxComputeWorkgroupsPerDimension`). Both compute passes below
@@ -117,10 +119,6 @@ fn dispatch_extent(workgroups: u32) -> (u32, u32) {
         )
     }
 }
-const GPU_SURFACE_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * (GPU_GRID_SIZE - 1) * 2;
-const GPU_SKIRT_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * 4 * 2;
-const GPU_TRIANGLE_COUNT_PER_PATCH: usize =
-    GPU_SURFACE_TRIANGLE_COUNT_PER_PATCH + GPU_SKIRT_TRIANGLE_COUNT_PER_PATCH;
 // Keep in sync with mesh.wgsl and the classifier's indirect finalizer.
 #[cfg(feature = "mesh-shaders")]
 const MESHLET_VERTEX_COUNT: u32 = 96;

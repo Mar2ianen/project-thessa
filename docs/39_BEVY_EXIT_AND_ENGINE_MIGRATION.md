@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-09-18
+**Updated:** 2026-10-15 (isolated implementation checkpoint; baseline decisions retained)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -562,11 +562,12 @@ not a promise that default device limits support every experimental pipeline.
 `ViewUniformBlock` retains the 464-byte CBT ABI but shader world coordinates
 mean **camera-relative render space**: subtract the camera/render origin in
 f64 before narrowing; upload zero camera position; reject non-finite f32
-matrices as well as singular/non-finite f64 inputs. Tile frames must use the
+matrices as well as singular/non-finite f64 inputs, inconsistent camera origins
+and non-affine camera transforms. Tile frames must use the
 same `TileAnchor::to_gpu(camera_body_m)` origin. The body transform is a
 rotation in this space, never a second absolute translation.
 
-Portable WGSL assemblies and tile anchors now live in `rcbt-core`; the Bevy
+Portable WGSL assemblies, geometry capacities and tile anchors now live in `rcbt-core`; the Bevy
 adapter re-exports its old precision path. Tile transport also rejects f32
 narrowing overflow. The fourth-order normal stencil was rejected by an
 actual quantized HeightPage GPU regression: a 100 m step causes ~1.2° of
@@ -605,6 +606,39 @@ parity, unchanged clean geometry, static pixel determinism, nonempty raster,
 unaligned screenshot extent, and looking-away culling.
 
 ![Owned CBT frame, synthetic quantized terrain fixture](artifacts/owned-terrain-2026-10-15.png)
+
+Normal-stencil screenshot A/B on this smooth fixture (same code at `015aabd`,
+isolated reference worktree changes only the stencil back to fourth order):
+mean absolute RGB difference 0.00174/255, p99 0, max 2; 4,272 of 921,600 pixels
+change. [Fourth-order reference](artifacts/owned-terrain-fourth-order-reference.png)
+and [difference ×16](artifacts/owned-terrain-normal-diff-x16.png).
+This near-equality does not excuse the cliff ringing: the quantized step GPU
+test, not this smooth screenshot, establishes that regression. These A/B
+captures do not establish an FPS gain; ordinary camera frames do not rerun
+geometry and timing variance must not be attributed to the normal stencil.
+
+Three later alternating runs per stencil, 100 dirty-publication samples per
+run after 30 warm-up iterations (same 64-page fixture):
+
+| Dirty upload + geometry + completion | Fourth-order median of run medians | Secant median of run medians |
+| --- | ---: | ---: |
+| 1 page | 0.044 ms | 0.044 ms |
+| 64 pages | 0.507 ms | 0.441 ms |
+
+The 64-page result is ~13% lower in this sample, but ranges overlap
+(0.450–0.560 ms vs 0.436–0.544 ms). Do not extrapolate to game FPS or claim
+a stable universal speedup. Static-frame medians of run medians were
+1.030 ms vs 1.034 ms; one reference run had a 120.791 ms p95 outlier.
+[Raw measurements](artifacts/owned-terrain-normal-ab.json) retain that outlier.
+
+Final local verification: workspace fmt and all-target/all-feature clippy,
+workspace lib/bin and integration tests, then all 25 Bevy-CBT ignored GPU
+tests passed (1,770 successful tests across these invocations). Own backend,
+quantized cliff/LOD, dirty update, pixel/culling, view and slab regressions
+are included. The embedded-server cleanup fixture now keeps PID scratch in
+the crate's `target/test-tmp`, exposes shell stderr and allows 250 ms rather
+than 25 ms for the timeout fixture to start under parallel load; child-exit
+and reap assertions remain intact. No production server behavior changed.
 
 Measured on Radeon 880M / RADV, release `batch_slab`, synchronous end-to-end
 packing/upload/dispatch/readback (2026-10-15, one run):

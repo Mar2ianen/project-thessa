@@ -193,6 +193,12 @@ impl Scene {
             2.0 * 0.45f64.tan() / height as f64,
             now_s,
         )?;
+        if update.material_failed > 0 {
+            eprintln!(
+                "[terrain] {} material worker(s) disconnected; retrying demand",
+                update.material_failed
+            );
+        }
         if update.geometry_changed {
             let patches: Vec<_> = self
                 .stream

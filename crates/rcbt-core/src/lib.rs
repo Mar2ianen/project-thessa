@@ -20,6 +20,7 @@ pub mod compact;
 pub mod lighting;
 pub mod material_cache;
 pub mod material_page;
+pub mod material_source;
 pub mod packed;
 pub mod shaders;
 pub mod tile_anchor;

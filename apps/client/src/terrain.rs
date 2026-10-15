@@ -22,6 +22,7 @@ use thessa_rcbt_core::{
 use thessa_terrain_stream::selection::complete_terrain_cover;
 use thessa_terrain_stream::{
     JobHandle,
+    material::{MaterialDemand, MaterialStream},
     selection::{self, SelectionHistory, SelectionPolicy, SelectionView, tiles_overlap},
 };
 use thessa_worldgen_rocky::{
@@ -51,9 +52,7 @@ pub(super) struct WorldTerrain {
     pub render_origin_m: DVec3,
     cache: BTreeMap<TileKey, CachedTile>,
     jobs: BTreeMap<TileKey, JobHandle<TerrainBuildOutput>>,
-    material_jobs: BTreeMap<TileKey, JobHandle<thessa_bevy_rcbt::CbtMaterialPage>>,
-    material_wanted: Vec<TileKey>,
-    material_selection_epoch: u64,
+    material_stream: MaterialStream,
     wanted: Vec<TileKey>,
     fine_selection: Vec<TileKey>,
     selection_epoch: u64,
@@ -512,9 +511,7 @@ fn setup_terrain(
         render_origin_m: DVec3::ZERO,
         cache: BTreeMap::new(),
         jobs: BTreeMap::new(),
-        material_jobs: BTreeMap::new(),
-        material_wanted: Vec::new(),
-        material_selection_epoch: u64::MAX,
+        material_stream: MaterialStream::new(1024),
         wanted: vec![],
         fine_selection: Vec::new(),
         selection_epoch: 0,
@@ -997,14 +994,6 @@ fn spawn_height_job(
     })
 }
 
-/// Executor seam for material-page builds (same backend as above).
-fn spawn_material_job(
-    field: &Arc<PlanetField>,
-    key: TileKey,
-) -> JobHandle<thessa_bevy_rcbt::CbtMaterialPage> {
-    thessa_terrain_stream::spawn_material_job(field.clone(), key)
-}
-
 /// Presentation stage: advance ready page families independently of
 /// planning-tree convergence. Every published partition still covers the
 /// requested area; takes only the render snapshot borrows it needs.
@@ -1483,6 +1472,7 @@ fn spawn_height_jobs(
 
 /// Refine the existing view selection for material texel coverage, not mesh
 /// curvature. A 128px colour page can require more refinement than its mesh.
+#[cfg(test)]
 fn material_view_selection(base: &[TileKey], view: &FrameView, pixel_angle: f64) -> Vec<TileKey> {
     selection::material_view_selection(
         base,
@@ -1500,17 +1490,17 @@ fn material_view_selection(base: &[TileKey], view: &FrameView, pixel_angle: f64)
 /// Fill a useful regional page before spending a full 128² build on each
 /// close tile. Four levels cover up to 256 descendants; subsequent steps
 /// refine by two levels. This changes residency order, never field accuracy.
+#[cfg(test)]
 fn material_build_dependency(key: TileKey, mut resident: impl FnMut(TileKey) -> bool) -> TileKey {
     selection::material_build_dependency(key, &mut resident)
 }
 
 /// Streaming stage for material pages (GPU path only): poll finished pages,
-/// refresh the wanted set and spawn builds through the
-/// [`spawn_material_job`] executor seam. Height/cover jobs never wait for
+/// refresh the wanted set through the shared material lifecycle. Height/cover jobs never wait for
 /// it; a resident canonical globe map remains the fallback.
 fn run_material_streaming(
     world: &mut WorldTerrain,
-    material_pages: &mut thessa_bevy_rcbt::CbtRenderMaterialPages,
+    material_pages: &mut ResMut<'_, thessa_bevy_rcbt::CbtRenderMaterialPages>,
     gpu_raster: bool,
     view: &FrameView,
     pixel_angle: f64,
@@ -1518,93 +1508,42 @@ fn run_material_streaming(
     if !gpu_raster {
         return;
     }
-    let FrameView {
-        eye,
-        radius,
-        forward_body,
-        ..
-    } = *view;
-    let mut finished = Vec::new();
-    for (key, job) in &world.material_jobs {
-        match job.try_take() {
-            Ok(page) => finished.push((*key, Some(page))),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                eprintln!("[terrain] material job for {key:?} died before delivering");
-                finished.push((*key, None));
-            }
-        }
+    let poll = world.material_stream.poll();
+    if poll.failed > 0 {
+        eprintln!(
+            "[terrain] {} material worker(s) disconnected; retrying demand",
+            poll.failed
+        );
     }
-    let mut ready_material_pages = Vec::with_capacity(finished.len());
-    for (key, maybe_page) in finished {
-        world.material_jobs.remove(&key);
-        let Some(page) = maybe_page else {
-            continue;
-        };
-        // Material refinement is world-addressed and independent of height
-        // LOD: a useful fine colour page need not have a matching mesh/page.
-        // The source cache is bounded by trim_to_budget below, not height keys.
-        if let Some(node) = lod::cbt_node_for_tile(key) {
-            ready_material_pages.push((node.id(), page));
-        }
-    }
-    if !ready_material_pages.is_empty() {
-        material_pages.set_pages(ready_material_pages);
-    }
-    if world.material_selection_epoch != world.selection_epoch {
-        world.material_wanted = material_view_selection(&world.fine_selection, view, pixel_angle);
-        world.material_selection_epoch = world.selection_epoch;
-    }
-    let material_wanted = selection::material_demand(
-        world.material_wanted.iter().copied().chain(
-            world.visible.iter().copied().chain(
-                world
-                    .wanted
-                    .iter()
-                    .copied()
-                    .filter(|key| world.cache.contains_key(key)),
-            ),
-        ),
-        SelectionView {
-            eye,
-            radius,
-            forward: forward_body,
-            stream_origin: DVec3::ZERO,
-            frustum: view.frustum,
+    world.material_stream.reconcile(
+        &world.field,
+        MaterialDemand {
+            selection_epoch: world.selection_epoch,
+            fine: &world.fine_selection,
+            view: SelectionView {
+                eye: view.eye,
+                radius: view.radius,
+                forward: view.forward_body,
+                stream_origin: DVec3::ZERO,
+                frustum: view.frustum,
+            },
+            pixel_angle,
+            height_jobs: world.jobs.len(),
         },
+        world.visible.iter().copied().chain(
+            world
+                .wanted
+                .iter()
+                .copied()
+                .filter(|key| world.cache.contains_key(key)),
+        ),
     );
-    // Guard the mutable borrow: `set_priority(&mut self)` via `ResMut`
-    // marks the resource changed (Bevy `DerefMut`) even when the Vec is
-    // identical, forcing an extract snapshot every frame. The `priority()`
-    // check below borrows shared and leaves the change flag alone.
-    let wanted_ids: Vec<u64> = material_wanted
-        .iter()
-        .filter_map(|key| lod::cbt_node_for_tile(*key).map(|node| node.id()))
-        .collect();
-    if material_pages.priority() != wanted_ids.as_slice() {
-        material_pages.set_priority(wanted_ids);
-    }
-    material_pages.trim_to_budget(1024);
-    for key in material_wanted {
-        let key = material_build_dependency(key, |candidate| {
-            lod::cbt_node_for_tile(candidate)
-                .is_some_and(|node| material_pages.contains_page(node.id()))
-        });
-        let material_budget = if world.jobs.len() < 4 { 4 } else { 2 };
-        if world.material_jobs.len() >= material_budget {
-            break;
-        }
-        let Some(node) = lod::cbt_node_for_tile(key) else {
-            continue;
-        };
-        if material_pages.contains_page(node.id()) || world.material_jobs.contains_key(&key) {
-            continue;
-        }
-        let field = world.field.clone();
-        world
-            .material_jobs
-            .insert(key, spawn_material_job(&field, key));
-    }
+    // Shared borrow first: taking &mut through ResMut marks Bevy changed even
+    // for identical bytes. Only dirty revisions cross this publication bridge.
+    thessa_bevy_rcbt::CbtRenderMaterialPages::publish_if_changed(
+        world.material_stream.source(),
+        material_pages,
+    );
 }
 
 /// CPU-fallback presentation bridge — the only stage that spawns Bevy tile
@@ -1732,13 +1671,12 @@ fn sync_tile_entities(
 }
 
 /// Cache stage: pin the live cover, the demand set and in-flight jobs, then
-/// evict the oldest excess. Page removals flow back to both render-page
-/// snapshots; asset removals stay in this bridge next to `present_cpu_tile`.
+/// evict the oldest excess. Only height-page removals flow to the render
+/// snapshot; material residency is independent. Asset removals stay here.
 #[allow(clippy::too_many_arguments)]
 fn evict_stale_tiles(
     world: &mut WorldTerrain,
     pages: &mut CbtRenderPages,
-    material_pages: &mut thessa_bevy_rcbt::CbtRenderMaterialPages,
     meshes: &mut Assets<Mesh>,
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
@@ -1746,30 +1684,15 @@ fn evict_stale_tiles(
     gpu_raster: bool,
 ) {
     // Warm LRU: a camera turn is not a reason to discard previously built
-    // pages. Keep current cover, current demand and material ancestors pinned;
+    // pages. Keep current height cover, demand and height jobs pinned;
     // evict only the excess, oldest first. GPU pages are much smaller than the
     // CPU mesh/material bundle, so their cache gets a separate entry budget.
-    let material_sources: BTreeSet<_> = world
-        .visible
-        .iter()
-        .filter_map(|key| {
-            let node = lod::cbt_node_for_tile(*key)?;
-            thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
-                material_pages.contains_page(id)
-            })
-            .map(|(id, _)| id)
-        })
-        .collect();
     let protected: BTreeSet<_> = world
         .visible
         .iter()
         .copied()
         .chain(dependencies.iter().copied())
         .chain(world.jobs.keys().copied())
-        .chain(world.material_jobs.keys().copied())
-        .chain(world.cache.keys().copied().filter(|key| {
-            lod::cbt_node_for_tile(*key).is_some_and(|node| material_sources.contains(&node.id()))
-        }))
         .collect();
     let epoch = world.selection_epoch;
     for key in &protected {
@@ -1805,7 +1728,6 @@ fn evict_stale_tiles(
     }
     if !evicted_node_ids.is_empty() {
         pages.remove_pages(evicted_node_ids.iter().copied());
-        material_pages.remove_pages(evicted_node_ids);
     }
 }
 
@@ -1847,7 +1769,7 @@ fn record_terrain_counters(
 ) {
     let counters_started = Instant::now();
     world.counters.terrain_cache_entries = world.cache.len() as u32;
-    world.counters.terrain_material_jobs = world.material_jobs.len() as u32;
+    world.counters.terrain_material_jobs = world.material_stream.pending_count() as u32;
     world.counters.terrain_selection_changes = world.selection_epoch;
     world.counters.terrain_material_missing =
         missing_material_holes(&world.visible, material_pages);
@@ -2133,7 +2055,6 @@ fn update_terrain(
     evict_stale_tiles(
         &mut world,
         &mut cbt.pages,
-        &mut cbt.material_pages,
         &mut meshes,
         &mut images,
         &mut materials,

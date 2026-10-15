@@ -5,6 +5,7 @@
 mod tests;
 use crate::{
     JobHandle,
+    material::{MaterialDemand, MaterialStream},
     selection::{self, SelectionHistory, SelectionPolicy, SelectionView},
 };
 use std::{
@@ -13,8 +14,8 @@ use std::{
 };
 use thessa_rcbt_core::{
     HeightPage,
-    material_cache::resident_material_hierarchy,
     material_page::{CbtMaterialPage, MaterialPages},
+    material_source::MaterialPageStore,
 };
 use thessa_worldgen_rocky::{
     field::PlanetField,
@@ -53,6 +54,7 @@ pub struct StreamUpdate {
     pub selected: bool,
     pub height_ready: usize,
     pub material_ready: usize,
+    pub material_failed: usize,
     pub capacity_rejected: bool,
 }
 
@@ -64,11 +66,8 @@ pub struct TerrainStream {
     wanted: Vec<TileKey>,
     visible: Vec<TileKey>,
     heights: BTreeMap<TileKey, HeightEntry>,
-    materials: MaterialPages,
-    material_wanted: Vec<TileKey>,
-    material_demand: Vec<u64>,
+    materials: MaterialStream,
     height_jobs: BTreeMap<TileKey, JobHandle<Result<HeightPage, String>>>,
-    material_jobs: BTreeMap<TileKey, JobHandle<CbtMaterialPage>>,
     epoch: u64,
     generation: u64,
 }
@@ -89,7 +88,7 @@ impl TerrainStream {
         }
         let visible: Vec<_> = (0..6).map(TileKey::root).collect();
         let mut heights = BTreeMap::new();
-        let mut materials = MaterialPages::new();
+        let mut materials = MaterialPageStore::default();
         for &key in &visible {
             heights.insert(
                 key,
@@ -99,13 +98,10 @@ impl TerrainStream {
                     last_used: 0,
                 },
             );
-            materials.insert(
+            materials.set_page(
                 lod::cbt_node_for_tile(key).unwrap().id(),
-                (
-                    1,
-                    CbtMaterialPage::from_rgba8(lod::build_gpu_material_page(&field, key).rgba)
-                        .ok_or("invalid material page")?,
-                ),
+                CbtMaterialPage::from_rgba8(lod::build_gpu_material_page(&field, key).rgba)
+                    .ok_or("invalid material page")?,
             );
         }
         Ok(Self {
@@ -116,11 +112,11 @@ impl TerrainStream {
             wanted: vec![],
             visible,
             heights,
-            materials,
-            material_wanted: vec![],
-            material_demand: (8..14).collect(),
+            materials: {
+                materials.set_priority((8..14).collect());
+                MaterialStream::with_source(policy.material_cache, materials)
+            },
             height_jobs: BTreeMap::new(),
-            material_jobs: BTreeMap::new(),
             epoch: 0,
             generation: 1,
         })
@@ -136,16 +132,19 @@ impl TerrainStream {
         self.heights.get(&key)
     }
     pub fn materials(&self) -> &MaterialPages {
-        &self.materials
+        self.materials.source().source_pages()
     }
     pub fn material_demand(&self) -> &[u64] {
-        &self.material_demand
+        self.materials.source().priority()
     }
     pub fn pending_jobs(&self) -> (usize, usize) {
-        (self.height_jobs.len(), self.material_jobs.len())
+        (self.height_jobs.len(), self.materials.pending_count())
     }
     pub fn cache_entries(&self) -> (usize, usize) {
-        (self.heights.len(), self.materials.len())
+        (
+            self.heights.len(),
+            self.materials.source().source_pages().len(),
+        )
     }
     pub fn wanted_count(&self) -> usize {
         self.wanted.len()
@@ -194,8 +193,6 @@ impl TerrainStream {
             self.fine = demand.fine;
             self.wanted = demand.wanted;
             self.epoch = self.epoch.saturating_add(1);
-            self.material_wanted =
-                selection::material_view_selection(&self.fine, view, pixel_angle);
             update.selected = true;
         }
         let mut finished = Vec::new();
@@ -222,30 +219,18 @@ impl TerrainStream {
             );
             update.height_ready += 1;
         }
-        let mut finished = Vec::new();
-        for (&key, job) in &self.material_jobs {
-            match job.try_take() {
-                Ok(page) => finished.push((key, Some(page))),
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => finished.push((key, None)),
-            }
-        }
-        for (key, page) in finished {
-            self.material_jobs.remove(&key);
-            let page = page.ok_or("terrain material worker disconnected")?;
-            // Material demand is independent of geometry LOD. Never discard a
-            // useful finer page just because no height page shares its key.
-            let generation = self.next_generation()?;
-            self.materials.insert(
-                lod::cbt_node_for_tile(key).ok_or("invalid tile")?.id(),
-                (generation, page),
-            );
-            update.material_ready += 1;
-            update.materials_changed = true;
-        }
+        let material_revision = self.materials.source().generation();
+        let material_poll = self.materials.poll();
+        update.material_ready = material_poll.ready;
+        update.material_failed = material_poll.failed;
         // Camera-only frames poll the bounded mailboxes but do not rebuild
         // priorities, dependency sets or LRU staging vectors.
-        if !update.selected && update.height_ready == 0 && update.material_ready == 0 {
+        if !update.selected
+            && update.height_ready == 0
+            && update.material_ready == 0
+            && update.material_failed == 0
+            && !self.materials.needs_refinement(self.epoch, pixel_angle)
+        {
             return Ok(update);
         }
         if (update.selected || update.height_ready > 0)
@@ -312,68 +297,23 @@ impl TerrainStream {
                 }),
             );
         }
-        let material_wanted = selection::material_demand(
-            self.material_wanted
-                .iter()
-                .copied()
-                .chain(self.visible.iter().copied())
-                .chain(
-                    self.wanted
-                        .iter()
-                        .copied()
-                        .filter(|key| self.heights.contains_key(key)),
-                ),
-            view,
+        self.materials.reconcile(
+            &self.field,
+            MaterialDemand {
+                selection_epoch: self.epoch,
+                fine: &self.fine,
+                view,
+                pixel_angle,
+                height_jobs: self.height_jobs.len(),
+            },
+            self.visible.iter().copied().chain(
+                self.wanted
+                    .iter()
+                    .copied()
+                    .filter(|key| self.heights.contains_key(key)),
+            ),
         );
-        let ids: Vec<_> = material_wanted
-            .iter()
-            .map(|key| lod::cbt_node_for_tile(*key).unwrap().id())
-            .collect();
-        if ids != self.material_demand {
-            self.material_demand = ids;
-            update.materials_changed = true;
-        }
-        for key in material_wanted {
-            let key = selection::material_build_dependency(key, |key| {
-                self.materials
-                    .contains_key(&lod::cbt_node_for_tile(key).unwrap().id())
-            });
-            let budget = if self.height_jobs.len() < 4 { 4 } else { 2 };
-            if self.material_jobs.len() >= budget {
-                break;
-            }
-            if self
-                .materials
-                .contains_key(&lod::cbt_node_for_tile(key).unwrap().id())
-                || self.material_jobs.contains_key(&key)
-            {
-                continue;
-            }
-            self.material_jobs
-                .insert(key, crate::spawn_material_job(self.field.clone(), key));
-        }
-        let pinned: BTreeSet<_> =
-            resident_material_hierarchy(self.material_demand.iter().copied(), |id| {
-                self.materials.contains_key(&id)
-            })
-            .into_iter()
-            .take(self.policy.material_cache)
-            .collect();
-        let mut cold: Vec<_> = self
-            .materials
-            .iter()
-            .filter(|(id, _)| !pinned.contains(id))
-            .map(|(id, (generation, _))| (*generation, *id))
-            .collect();
-        cold.sort_unstable();
-        for (_, id) in cold.into_iter().take(
-            self.materials
-                .len()
-                .saturating_sub(self.policy.material_cache),
-        ) {
-            self.materials.remove(&id);
-            update.materials_changed = true;
-        }
+        update.materials_changed = self.materials.source().generation() != material_revision;
         Ok(update)
     }
 }

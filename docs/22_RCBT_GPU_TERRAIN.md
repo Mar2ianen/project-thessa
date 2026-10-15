@@ -748,7 +748,11 @@ The current code slice provides:
   per shared snapshot clone versus 565.50 µs for the prior owned `Vec`/`BTreeMap`
   deep-copy shape (~34,200× lower clone cost in this microbenchmark, not a
   whole-frame speedup claim). It measures snapshot cloning, not page encoding,
-  GPU upload, or render preparation;
+  GPU upload, or render preparation. Material source directories/revisions now
+  live in backend-neutral `rcbt-core::material_source::MaterialPageStore`;
+  `CbtRenderMaterialPages` only publishes/extracts the shared snapshot. Both
+  application hosts use `terrain-stream::material::MaterialStream` for jobs and
+  independent source-cache lifetime (doc 39, shared material lifecycle slice);
 - a shipped-asset anchor (`cargo bench -p thessa-worldgen-rocky --bench
   assets`): the live recipe field reproduces `assets/worlds/thessa-v3`
   albedo at RMSE 0.0013 (linear, stride 16), legacy tiles match shipped

@@ -30,7 +30,6 @@ fn asynchronous_publication_keeps_cover_and_reports_exhaustion() {
         .filter(|k| *k != root)
         .chain(children)
         .collect();
-    stream.material_wanted.clear();
     let mut producers = Vec::new();
     for child in children {
         let (tx, rx) = sync_channel(1);
@@ -109,17 +108,49 @@ fn material_completion_is_not_discarded_for_missing_height_key() {
     let page = CbtMaterialPage::from_rgba8(vec![100; 128 * 128 * 4]).unwrap();
     let (tx, rx) = sync_channel(1);
     tx.send(page.clone()).unwrap();
-    stream.material_jobs.insert(key, JobHandle::new(rx));
+    stream.materials.jobs.insert(key, JobHandle::new(rx));
     let update = stream.tick(view(), 0.01, 0.01).unwrap();
     assert!(update.materials_changed);
     assert_eq!(update.material_ready, 1);
-    let generation = stream.materials[&id].0;
+    let generation = stream.materials().get(&id).unwrap().0;
     assert!(generation > 1);
     // Evict/reinsert the same key: its identity cannot reuse a stale generation.
-    stream.materials.remove(&id);
+    stream.materials.source.remove_page(id);
     let (tx, rx) = sync_channel(1);
     tx.send(page).unwrap();
-    stream.material_jobs.insert(key, JobHandle::new(rx));
+    stream.materials.jobs.insert(key, JobHandle::new(rx));
     stream.tick(view(), 0.01, 0.02).unwrap();
-    assert!(stream.materials[&id].0 > generation);
+    assert!(stream.materials()[&id].0 > generation);
+}
+
+#[test]
+fn disconnected_material_worker_is_reported_without_failing_native_frame() {
+    let mut stream = TerrainStream::new(field(), policy()).unwrap();
+    stream.tick(view(), 1.0, 0.0).unwrap();
+    stream.fine.clear();
+    stream.materials = MaterialStream::with_source(6, stream.materials.source().clone());
+    let (tx, rx) = sync_channel(1);
+    drop(tx);
+    stream
+        .materials
+        .jobs
+        .insert(TileKey::root(4), JobHandle::new(rx));
+    let update = stream.tick(view(), 1.0, 0.01).unwrap();
+    assert_eq!(update.material_failed, 1);
+    assert_eq!(update.material_ready, 0);
+    assert!(!update.selected);
+    assert_eq!(stream.materials.pending_count(), 0);
+    assert_eq!(stream.tick(view(), 1.0, 0.02).unwrap().material_failed, 0);
+}
+
+#[test]
+fn stationary_pixel_scale_change_reaches_material_reconcile_without_geometry_change() {
+    let mut stream = TerrainStream::new(field(), policy()).unwrap();
+    stream.tick(view(), 1.0, 0.0).unwrap();
+    let before = stream.material_demand().to_vec();
+    let update = stream.tick(view(), 1e-6, 0.01).unwrap();
+    assert!(!update.selected, "resize is not a new geometry selection");
+    assert!(!update.geometry_changed);
+    assert!(update.materials_changed);
+    assert_ne!(stream.material_demand(), before);
 }

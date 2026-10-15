@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "cbt_vs_large"
 harness = false
+
+[[bench]]
+name = "material_source"
+harness = false

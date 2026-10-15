@@ -1,0 +1,123 @@
+{
+  "date": "2026-10-15",
+  "branch": "feat/terrain-material-lifecycle",
+  "base_commit": "0d2682d9ee32168c2cd2688a22437fa7de18811c",
+  "baseline_binary_sha256": "48b52ccf60193d87b47730ecad88162b725e13876826023e1fe19243c80842cb",
+  "binary_sha256": "c0fb0656ae3bb36ff1afef6fe07cc52786e7cea12b35d79c2d843a2653b8628c",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile and hud feature",
+  "scope": {
+    "mit_core": "rcbt-core::material_source::MaterialPageStore: COW source directory, priority, revisions, hierarchical trimming",
+    "gpl_game_lifecycle": "terrain-stream::material::MaterialStream: completion polling, demand, dependencies, job/cache admission",
+    "consumers": ["production Bevy WorldTerrain", "native TerrainStream"],
+    "bevy_bridge": "shared directory publication/extraction only; unchanged revisions do not set the resource change flag",
+    "height_material_lifetimes": "independent; height-cache eviction no longer deletes matching material sources",
+    "new_dependencies": [],
+    "new_unsafe_code": false,
+    "bevy_runtime_crates_in_native_viewer": [],
+    "wgpu_runtime_versions": ["30.0.1"],
+    "additional_gpu_devices_or_scene_targets": 0
+  },
+  "settings": {
+    "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b",
+    "manual_exposure_ev100": 13.0,
+    "vsync_requested": false
+  },
+  "stationary_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "order": ["baseline-1", "new-1", "new-2", "baseline-2"],
+    "size": [1280, 720],
+    "format": "Rgba8UnormSrgb",
+    "measured_frames_per_run": 600,
+    "warmup_frames_per_run": 30,
+    "prestream_seconds_per_run": 10,
+    "hud": true,
+    "sweep": false,
+    "final_tiles_each_run": 287,
+    "final_drawn_triangles_each_run": 297216,
+    "final_height_cache_entries_each_run": 388,
+    "regenerated_patches_each_run": 387,
+    "measured_selections_each_run": 2,
+    "measured_geometry_publications_each_run": 0,
+    "capacity_rejections_each_run": 0,
+    "pending_height_material_jobs_each_run": [0, 4],
+    "initial_material_upload_bytes_excluded_from_update_counter": 524280,
+    "boundary": "host wall latency: HUD construction + stream selection/poll/publication + camera upload + classify/raster + HUD upload/raster + GPU completion",
+    "excluded": ["CPU scene build", "renderer setup", "10-second pre-stream", "30 warmup frames", "screenshot readback/encoding"],
+    "runs": [
+      {
+        "name": "baseline-1", "median_ms": 2.540, "p95_ms": 3.327, "p99_ms": 4.369, "max_ms": 10.421,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.843, "stream_cpu_p99_ms": 1.039, "stream_cpu_max_ms": 7.632,
+        "total_geometry_publications": 60, "final_material_cache_entries": 255, "material_update_upload_bytes": 21757620
+      },
+      {
+        "name": "new-1", "median_ms": 2.489, "p95_ms": 2.985, "p99_ms": 3.508, "max_ms": 7.198,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.476, "stream_cpu_p99_ms": 0.809, "stream_cpu_max_ms": 4.280,
+        "total_geometry_publications": 60, "final_material_cache_entries": 272, "material_update_upload_bytes": 23243080
+      },
+      {
+        "name": "new-2", "median_ms": 2.563, "p95_ms": 3.045, "p99_ms": 3.465, "max_ms": 9.948,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.497, "stream_cpu_p99_ms": 0.805, "stream_cpu_max_ms": 7.423,
+        "total_geometry_publications": 55, "final_material_cache_entries": 272, "material_update_upload_bytes": 23243080
+      },
+      {
+        "name": "baseline-2", "median_ms": 2.491, "p95_ms": 3.119, "p99_ms": 3.903, "max_ms": 10.384,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.600, "stream_cpu_p99_ms": 0.969, "stream_cpu_max_ms": 7.463,
+        "total_geometry_publications": 58, "final_material_cache_entries": 268, "material_update_upload_bytes": 22893560
+      }
+    ]
+  },
+  "sweep_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --sweep --frames 600 --prestream-seconds 10",
+    "median_ms": 2.531, "p95_ms": 3.898, "p99_ms": 10.413, "max_ms": 13.340,
+    "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 1.034, "stream_cpu_p99_ms": 7.505, "stream_cpu_max_ms": 10.371,
+    "final_tiles": 292, "final_drawn_triangles": 315648,
+    "total_geometry_publications": 103, "regenerated_patches": 778,
+    "final_height_material_cache_entries": [658, 267], "pending_height_material_jobs": [0, 4],
+    "material_update_upload_bytes": 22806180, "capacity_rejections": 0,
+    "measured_selections": 11, "measured_geometry_publications": 50, "final_angle_rad": 3.774,
+    "hud_snapshot_note": "HUD is constructed before the stream tick; its material count can lag the final counter by one frame"
+  },
+  "native_wayland_smoke": {
+    "arguments": "--frames 1200", "hud": true, "compositor": "niri",
+    "presentation_requests": 1200, "elapsed_seconds": 10.232, "requests_per_second": 117.3,
+    "process_exit_code": 0,
+    "final_tiles": 287, "total_geometry_publications": 45, "regenerated_patches": 387,
+    "final_height_material_cache_entries": [388, 224], "pending_height_material_jobs": [0, 4],
+    "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor/VSync policy; not displayed-frame feedback, GPU-only timing or game FPS"
+  },
+  "source_lifecycle_microbenchmark": {
+    "command": "cargo bench -p thessa-rcbt-core --bench material_source",
+    "source_entries": 1024, "priorities": 512,
+    "fixture": "independently allocated synthetic 128x128 material pages with complete mips; page creation is excluded",
+    "unit": "nanoseconds, host Instant harness included",
+    "runs": [
+      {"operation": "shared snapshot clone/drop including priority Vec", "samples": 10000, "median": 60, "p95": 61},
+      {"operation": "satisfied budget check", "samples": 10000, "median": 20, "p95": 20},
+      {"operation": "four completed pages with retained snapshot directory COW", "samples": 1000, "median": 14277, "p95": 14397},
+      {"operation": "four removals/reinsertions with retained snapshot", "samples": 1000, "median": 14416, "p95": 14477}
+    ],
+    "boundary": "source metadata/snapshot work only; no selection, page construction, material encoding, GPU uploads, rendering or frame-speedup claim"
+  },
+  "verification": {
+    "workspace_fmt": "pass", "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_all_target_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests_passed": 1728, "workspace_integration_tests_passed": 43,
+    "ignored_bevy_cbt_hardware_tests_passed": 24, "ignored_viewer_gpu_and_native_exit_tests_passed": 2,
+    "successful_test_total": 1797,
+    "review": "local diff/ownership/API/license review; one material writer per host, no duplicate scheduler/cache owner; old client still builds and its tests pass",
+    "regressions": ["COW/no-op identity", "hierarchy trim and zero budget", "monotonic reinsertion", "revision exhaustion before mutation", "decoded shadow reuse", "regional-to-exact scheduling", "job pressure/deduplication", "disconnected-worker retry", "receiver teardown", "stationary pixel-scale change without geometry reselection", "geometry-independent material residency", "Bevy change detection", "actual GPU dirty/reinsert/fallback raster"]
+  },
+  "captures": [
+    {"path": "owned-material-lifecycle-2026-10-15.png", "size": [1280, 720], "sha256": "4d2ee059bbb36f5f71ab27a80d45135abcda3300823b809e0ae12e6fbfbd8ae0", "meaning": "new-1 stationary offscreen HUD frame"},
+    {"path": "owned-material-lifecycle-sweep-2026-10-15.png", "size": [1280, 720], "sha256": "f4ba57eb4fcc4a21d93fc73d099e633f44adf95956faf3a721d5e0726087b4ae", "meaning": "new sweep final offscreen HUD frame"}
+  ],
+  "limitations": [
+    "Source revisions are local identities: resetting a producer requires resetting its renderer consumer.",
+    "Stationary geometry matches across A/B/B/A, but asynchronous material work differs and clocks/scheduling are not locked. This does not establish a statistically isolated speedup or constant migration overhead.",
+    "GPU/raster tests and captures validate this slice, not complete production scene/effect/UI equivalence.",
+    "Terrain shading, blur/coarse relief and thin dark relief artifacts remain visually unaccepted and are not changed by this lifecycle extraction.",
+    "Remaining WorldTerrain height-cache/asset/ECS lifecycle, moving bodies, production game effects/UI/networking and FastRT acceleration structures are not implemented by this slice."
+  ]
+}

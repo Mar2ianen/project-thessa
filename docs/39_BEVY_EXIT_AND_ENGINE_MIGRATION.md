@@ -935,6 +935,91 @@ and [native window capture](artifacts/owned-egui-window-2026-10-15.png).
 
 ![Shared-device egui migration HUD; terrain visuals remain unaccepted](artifacts/owned-egui-hud-2026-10-15.png)
 
+### Shared material lifecycle continuation (2026-10-15)
+
+The next isolated slice (`feat/terrain-material-lifecycle`, based on the egui
+checkpoint) removes duplicated material ownership from the two hosts:
+
+- MIT `rcbt-core::material_source::MaterialPageStore` owns the immutable
+  `Arc<MaterialPages>` directory, per-page identities, publication revision,
+  ordered source priority and hierarchical budget trimming. Completed batches
+  COW the directory once; mip payloads remain shared. Empty batches, unchanged
+  priorities, missing removals and satisfied budgets preserve revision/directory.
+  Removal and reinsertion cannot reuse a page generation. Revision exhaustion
+  is rejected before mutation, not saturated into an aliased dirty identity.
+- GPL `terrain-stream::material::MaterialStream` owns nonblocking completion
+  polling, refined material demand, regional-ancestor build dependencies,
+  deduplication, job admission and source-cache policy. Both `WorldTerrain`
+  and the native `TerrainStream` use this implementation. Geometry remains
+  independent: no matching height tile is required to accept a material result.
+- The existing 512-demand/refinement and level-17 caps remain. The material job
+  limit is four, reduced to two for new admissions while at least four height
+  jobs are pending; existing jobs are not canceled when pressure changes.
+  Hosts retain the 1024-page default source budget. Polling can transiently add
+  up to four completed pages; reconcile trims before publication. Budget zero
+  starts no jobs. Selection epochs follow the host's accepted/debounced view;
+  changing pixel angle also invalidates refinement (including stationary resize).
+- Worker disconnection frees the job slot, reports a failure count and permits
+  current demand to retry without failing the native frame. Both hosts log it.
+- Bevy's `CbtRenderMaterialPages` is now only a resource/publication wrapper.
+  A revision check through a **shared** `ResMut` borrow occurs before mutable
+  dereference; unchanged frames do not set Bevy's change flag. Render extraction
+  shares the directory. The compact microstore still owns its derived decoded
+  shadow representation, preserving source generations and encoding only dirty
+  pages; it is not moved into the game lifecycle.
+- Height-cache eviction no longer pins height entries merely for material jobs
+  or deletes material pages sharing the same tile ID. The independent material
+  budget/hierarchy decides material eviction; CPU fallback asset removal and
+  height publication remain in their existing Bevy bridge.
+
+The producer/store lifetime must span a renderer cache lifetime: source
+revisions are local monotonic identities, not globally unique across unrelated
+stores. Resetting a source owner requires resetting its renderer consumer too.
+No new dependency, unsafe code, GPU device, readback or intermediate scene
+target is introduced. The canonical field, material bytes, WGSL, graphics
+settings and same-target egui composition are unchanged. This closes the
+**material lifecycle slice**, not all `WorldTerrain` ownership or the production
+Bevy migration. Remaining work includes height-cache/asset/ECS lifecycle,
+moving bodies, full scenes/effects and the production client/UI lifecycle.
+
+Regression coverage includes COW/no-op snapshots, monotonic reinsertion,
+bounded hierarchy trimming, revision exhaustion, regional-to-exact scheduling,
+job pressure/deduplication, disconnected-worker retry, receiver teardown,
+pixel-scale invalidation, geometry-independent residency, Bevy change flags,
+compact shadow reuse, and actual GPU dirty/reinsert/fallback raster output.
+`cargo bench -p thessa-rcbt-core --bench material_source` measures source-only
+snapshot/dirty-batch work at 1024 sources and 512 priorities; it is not a
+whole-renderer or game-FPS benchmark.
+
+Final verification: fmt and all-target/all-feature workspace clippy with Rust
+warnings denied, no-default-feature viewer clippy, **1,728** workspace lib/bin +
+**43** integration + **24** Bevy-CBT ignored GPU + **2** viewer GPU/native-exit
+tests passed (**1,797** total). No dependencies or licenses changed; the native
+runtime still contains one wgpu version and no Bevy. Local diff/ownership review
+confirmed a single material writer per host and a thin Bevy publication boundary.
+
+Radeon 880M stationary A/B/B/A, HUD enabled, 1280×720, 600 measured + 30 warm-up
+frames and 10 seconds pre-stream per run: old release medians **2.540 / 2.491 ms**,
+new release **2.489 / 2.563 ms**. All runs ended with 287 tiles, 297,216 triangles
+and no measured geometry publication or capacity refusal. Material work remains
+asynchronous and clocks/scheduling are not locked; this is not an isolated
+speedup/overhead estimate. The sweep exercised 50 measured geometry publications
+without refusal. The native Wayland window requested 1,200 presentations in
+10.232 seconds and exited cleanly (117.3 requests/s, not displayed/game FPS).
+
+The source-only microbenchmark uses 1024 independently allocated synthetic
+material pages and 512 priorities. Median clone/drop cost including the priority
+Vec was **60 ns**, satisfied-budget check **20 ns** (timer-floor scale), a
+four-page COW update **14.277 µs**, and four removals/reinsertions with a retained
+snapshot **14.416 µs**. Page construction and all renderer work are excluded;
+these measurements are metadata costs, not end-to-end performance claims.
+
+[Raw measurements and validation](artifacts/owned-material-lifecycle-2026-10-15.json),
+[stationary capture](artifacts/owned-material-lifecycle-2026-10-15.png), and
+[sweep capture](artifacts/owned-material-lifecycle-sweep-2026-10-15.png).
+Captures retain the existing unaccepted terrain shading/dark-relief artifacts;
+this slice does not claim visual parity or fix them.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

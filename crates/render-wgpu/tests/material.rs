@@ -1,7 +1,8 @@
 use glam::DVec3;
 use thessa_rcbt_core::{
     HeightPage,
-    material_page::{CbtMaterialPage, MaterialPages},
+    material_page::CbtMaterialPage,
+    material_source::MaterialPageStore,
     tile_anchor::{TileAnchor, TileKey},
 };
 use thessa_render_wgpu::{
@@ -56,8 +57,12 @@ fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots(
     let fallback = render(&renderer);
     let red = CbtMaterialPage::from_rgba8([255, 0, 0, 255].repeat(128 * 128)).unwrap();
     let blue = CbtMaterialPage::from_rgba8([0, 0, 255, 255].repeat(128 * 128)).unwrap();
-    let mut pages = MaterialPages::from([(12, (1, red.clone()))]);
-    let stats = renderer.update_materials(&backend, &[12], &pages).unwrap();
+    let mut source = MaterialPageStore::default();
+    source.set_page(12, red.clone());
+    source.set_priority(vec![12]);
+    let stats = renderer
+        .update_materials(&backend, source.priority(), source.source_pages())
+        .unwrap();
     assert_eq!(
         (stats.pages, stats.bytes, stats.residents),
         (1, red.byte_len(), 1)
@@ -69,15 +74,17 @@ fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots(
         fallback, red_frame,
         "resident parent must affect actual raster"
     );
+    source.set_priority(vec![12, 12]);
     assert_eq!(
         renderer
-            .update_materials(&backend, &[12, 12], &pages)
+            .update_materials(&backend, source.priority(), source.source_pages())
             .unwrap()
             .pages,
         0
     );
     assert_eq!(render(&renderer), red_frame);
     // Invalid IDs and incomplete decoded mips must not mutate previous state.
+    let mut pages = source.source_pages().clone();
     pages.insert(16, (2, blue.clone()));
     assert!(renderer.update_materials(&backend, &[12], &pages).is_err());
     assert_eq!(render(&renderer), red_frame);
@@ -91,10 +98,11 @@ fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots(
     );
     assert!(renderer.update_materials(&backend, &[12], &pages).is_err());
     assert_eq!(render(&renderer), red_frame);
-    pages.insert(12, (3, blue));
+    let old_snapshot = source.clone();
+    source.set_page(12, blue);
     assert_eq!(
         renderer
-            .update_materials(&backend, &[12], &pages)
+            .update_materials(&backend, source.priority(), source.source_pages())
             .unwrap()
             .pages,
         1
@@ -102,18 +110,23 @@ fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots(
     let blue_frame = render(&renderer);
     assert!(blue_frame[mid + 2] > blue_frame[mid] + 30);
     // Removal invalidates the GPU directory even though the layer stays warm.
-    pages.clear();
-    let stats = renderer.update_materials(&backend, &[], &pages).unwrap();
+    source.remove_page(12);
+    source.set_priority(vec![]);
+    let stats = renderer
+        .update_materials(&backend, source.priority(), source.source_pages())
+        .unwrap();
     assert_eq!((stats.pages, stats.residents), (0, 0));
     assert_eq!(render(&renderer), fallback);
-    pages.insert(12, (3, red)); // same generation/payload identity contract required
-    pages.get_mut(&12).unwrap().0 = 4;
+    source.set_page(12, red);
+    source.set_priority(vec![12]);
+    assert!(source.source_pages()[&12].0 > old_snapshot.source_pages()[&12].0);
     assert_eq!(
         renderer
-            .update_materials(&backend, &[12], &pages)
+            .update_materials(&backend, source.priority(), source.source_pages())
             .unwrap()
             .pages,
         1
     );
     assert_eq!(render(&renderer), red_frame);
+    assert_eq!(old_snapshot.source_pages()[&12].1.mips()[0][0], 255);
 }

@@ -1,6 +1,7 @@
 //! Game-specific streaming state/policy shared by native and Bevy hosts.
 //! Extracted game code stays GPL; reusable MIT renderer crates never depend on it.
 #![forbid(unsafe_code)]
+pub mod material;
 pub mod runtime;
 pub mod selection;
 #[cfg(test)]

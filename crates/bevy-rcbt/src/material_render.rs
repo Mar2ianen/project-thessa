@@ -10,8 +10,8 @@ use bevy::render::render_resource::{
     TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
     TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
 };
+use std::collections::BTreeMap;
 use std::time::Instant;
-use std::{collections::BTreeMap, sync::Arc};
 use thessa_graphics::ResolvedMaterialStorage;
 
 /// CPU-only compact residency for the microstore storage path.
@@ -48,8 +48,8 @@ impl MicrostoreResidency {
     /// Encode changed generations once, drop evicted pages, and return
     /// decoded shadow pages for the shared upload path.
     pub fn update(&mut self, pages: &CbtRenderMaterialPages) -> CbtRenderMaterialPages {
-        self.pages.retain(|id, _| pages.pages.contains_key(id));
-        for (id, (generation, page)) in pages.pages.iter() {
+        self.pages.retain(|id, _| pages.contains_page(*id));
+        for (id, (generation, page)) in pages.source_pages() {
             if let Some((g, _, _)) = self.pages.get(id)
                 && *g == *generation
             {
@@ -71,15 +71,7 @@ impl MicrostoreResidency {
             .flat_map(|(_, levels, _)| levels.iter())
             .map(EncodedMaterialLevel::encoded_bytes)
             .sum::<usize>() as u64;
-        let mut shadow = CbtRenderMaterialPages {
-            generation: pages.generation,
-            priority: pages.priority.clone(),
-            pages: Arc::new(BTreeMap::new()),
-        };
-        for (id, (generation, _, page)) in self.pages.iter() {
-            Arc::make_mut(&mut shadow.pages).insert(*id, (*generation, page.clone()));
-        }
-        shadow
+        CbtRenderMaterialPages(pages.map_payloads(|id, _| self.pages[&id].2.clone()))
     }
 }
 
@@ -161,7 +153,7 @@ impl MaterialArray {
         queue: &RenderQueue,
     ) {
         if self.topology_generation == topology.generation()
-            && self.pages_generation == pages.generation
+            && self.pages_generation == pages.generation()
         {
             return;
         }
@@ -172,22 +164,22 @@ impl MaterialArray {
                 u64::from(r[0]) | (u64::from(r[1]) << 32),
             )
         });
-        let sources: Vec<_> = if pages.priority.is_empty() {
+        let sources: Vec<_> = if pages.priority().is_empty() {
             records
                 .iter()
                 .map(|r| u64::from(r[0]) | (u64::from(r[1]) << 32))
                 .collect()
         } else {
-            pages.priority.clone()
+            pages.priority().to_vec()
         };
         let desired: Vec<_> = crate::material_cache::resident_material_hierarchy(sources, |key| {
-            pages.pages.contains_key(&key)
+            pages.contains_page(key)
         })
         .into_iter()
-        .map(|id| (id, pages.pages[&id].0))
+        .map(|id| (id, pages.source_pages()[&id].0))
         .collect();
         for change in self.cache.update_retaining(&desired) {
-            let (_, page) = &pages.pages[&change.node_id];
+            let (_, page) = &pages.source_pages()[&change.node_id];
             for (level, data) in page.mips().iter().enumerate() {
                 let size = MATERIAL_PAGE_SIZE >> level;
                 queue.write_texture(
@@ -220,7 +212,7 @@ impl MaterialArray {
             .extend(crate::material_cache::material_directory(
                 self.cache.iter().filter(|entry| {
                     pages
-                        .pages
+                        .source_pages()
                         .get(&entry.node_id)
                         .is_some_and(|(generation, _)| *generation == entry.generation)
                 }),
@@ -235,7 +227,7 @@ impl MaterialArray {
                     .and_then(|slot| self.cache.entry(slot))
                     .is_some_and(|entry| {
                         pages
-                            .pages
+                            .source_pages()
                             .get(&key)
                             .is_some_and(|(generation, _)| *generation == entry.generation)
                     })
@@ -254,7 +246,7 @@ impl MaterialArray {
         }
         self.slots.write_buffer(device, queue);
         self.topology_generation = topology.generation();
-        self.pages_generation = pages.generation;
+        self.pages_generation = pages.generation();
     }
 }
 
@@ -309,7 +301,7 @@ impl MaterialArray {
         queue: &RenderQueue,
     ) {
         if self.topology_generation == topology.generation()
-            && self.pages_generation == pages.generation
+            && self.pages_generation == pages.generation()
         {
             return;
         }
@@ -395,7 +387,7 @@ mod residency_tests {
         let pages = real_pages(&[11, 22], 0x5EED);
         let mut cache = MicrostoreResidency::default();
         let shadow = cache.update(&pages);
-        assert_eq!(shadow.pages.len(), 2);
+        assert_eq!(shadow.source_pages().len(), 2);
         assert_eq!(cache.pages_encoded, 2);
         let wire_once = cache.wire_bytes;
         assert!(wire_once > 0);
@@ -411,12 +403,12 @@ mod residency_tests {
             cache.decoded_bytes, decoded_once,
             "clean batch must not re-decode residency"
         );
-        assert_eq!(shadow2.pages.len(), 2);
+        assert_eq!(shadow2.source_pages().len(), 2);
         // Evict one page: residency shrinks, shadow follows.
         let mut fewer = pages.clone();
         fewer.remove_page(11);
         let shadow3 = cache.update(&fewer);
-        assert_eq!(shadow3.pages.len(), 1);
+        assert_eq!(shadow3.source_pages().len(), 1);
         assert!(
             cache.wire_bytes < wire_once,
             "eviction must shrink residency"

@@ -84,9 +84,9 @@ pub fn encode_inbox_system(
     mut outbox: ResMut<MicrostoreOutbox>,
 ) {
     for (id, page) in inbox.pages.drain(..) {
-        let mut levels = Vec::with_capacity(page.mips.len());
+        let mut levels = Vec::with_capacity(page.mips().len());
         let (mut w, mut h) = (MATERIAL_PAGE_SIZE, MATERIAL_PAGE_SIZE);
-        for mip in page.mips.iter() {
+        for mip in page.mips().iter() {
             if let Some(encoded) = encode_material_level(mip, w, h, 2.0) {
                 levels.push(encoded);
             }
@@ -164,7 +164,7 @@ mod tests {
         // then a headless Bevy schedule runs the bridge system.
         let rgba = rock_rgba(MATERIAL_PAGE_SIZE, 0x5EED);
         let page = CbtMaterialPage::from_rgba8(rgba).expect("real page builds");
-        assert_eq!(page.mips.len(), 8);
+        assert_eq!(page.mips().len(), 8);
         let mut app = App::new();
         app.add_plugins(CbtPlugin::default());
         app.insert_resource(MicrostoreInbox {

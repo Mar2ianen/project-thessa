@@ -6224,6 +6224,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-terrain-native"
+version = "0.0.1"
+dependencies = [
+ "glam 0.33.7",
+ "png",
+ "rayon",
+ "thessa-atmosphere",
+ "thessa-flight-authority",
+ "thessa-graphics",
+ "thessa-rcbt-core",
+ "thessa-render-wgpu",
+ "thessa-sim-core",
+ "thessa-worldgen-rocky",
+ "toml 0.9.12+spec-1.1.0",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "thessa-trajectory"
 version = "0.0.1"
 dependencies = [

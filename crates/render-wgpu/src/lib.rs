@@ -4,9 +4,11 @@
 //! a hardware capability probe feeding the existing
 //! [`thessa_graphics::Capabilities`] resolver input, and the first
 //! frame primitives (clear + readback), plus [`terrain`]'s owned CBT
-//! compute/classification/indirect raster frame. No window/surface yet — windowing
-//! arrives with the platform step (audit R5); everything here runs on
-//! `InstanceDescriptor::new_without_display_handle()`.
+//! compute/classification/indirect raster frame. Headless bring-up uses
+//! `InstanceDescriptor::new_without_display_handle()`; [`Backend::for_surface`]
+//! also selects a compatible adapter/device for a platform-owned surface.
+//! The native terrain migration viewer owns window lifecycle and presentation;
+//! it is not the complete game/platform replacement.
 //!
 //! Capability semantics (mirror of `resolve_terrain_capabilities`, but
 //! hardware-truth instead of post-negotiation):
@@ -33,6 +35,7 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod material;
 pub mod terrain;
 pub mod view;
 
@@ -94,9 +97,27 @@ impl Backend {
 
     fn bring_up_inner(consent: Option<wgpu::ExperimentalFeatures>) -> Result<Self, BackendError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Self::request(instance, None, consent)
+    }
+
+    /// Stable device selected for a caller-owned window surface. The platform
+    /// supplies the instance/display handle; no window toolkit leaks into this
+    /// backend. Uses the same capability/device path as headless rendering.
+    pub fn for_surface(
+        instance: wgpu::Instance,
+        surface: &wgpu::Surface<'_>,
+    ) -> Result<Self, BackendError> {
+        Self::request(instance, Some(surface), None)
+    }
+
+    fn request(
+        instance: wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        consent: Option<wgpu::ExperimentalFeatures>,
+    ) -> Result<Self, BackendError> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
+            compatible_surface: surface,
             force_fallback_adapter: false,
             // Headless compute: exact adapter limits, no fingerprint bucketing.
             apply_limit_buckets: false,

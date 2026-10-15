@@ -1549,10 +1549,10 @@ fn game_material_mips_decode_on_hardware() {
 
     let rgba = rock_rgba(crate::material_pages::MATERIAL_PAGE_SIZE, 0x9A7E);
     let page = crate::material_pages::CbtMaterialPage::from_rgba8(rgba).expect("real page");
-    assert_eq!(page.mips.len(), 8);
+    assert_eq!(page.mips().len(), 8);
     let mut total_wire = 0usize;
     let mut worst = 0u8;
-    for (level, mip) in page.mips.iter().enumerate() {
+    for (level, mip) in page.mips().iter().enumerate() {
         let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
         assert_eq!(
             mip.len(),
@@ -1604,7 +1604,7 @@ fn microstore_compact_levels_match_gpu_decode() {
     let page = crate::material_pages::CbtMaterialPage::from_rgba8(rgba).expect("real page");
     let mut wire = 0usize;
     let mut worst_vs_orig = 0u8;
-    for (level, mip) in page.mips.iter().enumerate() {
+    for (level, mip) in page.mips().iter().enumerate() {
         let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
         let encoded = encode_material_level(mip, size, size, 2.0).expect("encodes");
         wire += encoded.encoded_bytes();
@@ -1641,7 +1641,7 @@ fn microstore_compact_levels_match_gpu_decode() {
             assert!(o.abs_diff(*d) <= 2, "level {level} byte {i}: {o} vs {d}");
         }
     }
-    let raw: usize = page.mips.iter().map(Vec::len).sum();
+    let raw: usize = page.mips().iter().map(Vec::len).sum();
     eprintln!("compact storage on hardware: {wire} B wire vs {raw} B raw, worst {worst_vs_orig}");
     assert!(wire < raw, "compact must beat raw RGBA");
 }

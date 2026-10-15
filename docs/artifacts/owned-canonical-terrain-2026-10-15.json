@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-15",
+  "branch": "feat/fastrt-stage1",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "scene": "canonical_launch_setup frozen Thessa HIGHLANDS bookmark at EPOCH",
+  "height_tiles": 64,
+  "material_pages_including_ancestors": 85,
+  "material_payload_bytes": 7427300,
+  "drawn_triangles": 48384,
+  "extent": [1280, 720],
+  "offscreen": {
+    "command": "cargo run --release -p thessa-terrain-native -- --headless terrain.png --frames 120",
+    "cpu_scene_build_seconds": 2.03,
+    "warmup_frames": 30,
+    "measured_frames": 120,
+    "median_ms": 1.291,
+    "p95_ms": 1.651,
+    "reciprocal_median_fps": 774.7,
+    "includes": ["camera upload", "GPU classification", "indirect raster", "GPU completion wait"],
+    "excludes": ["CPU startup", "initial geometry/material publication", "screenshot readback"],
+    "gpu_only_timing": false,
+    "game_fps": false
+  },
+  "native_wayland_smoke": {
+    "command": "target/release/thessa-terrain-native --frames 120",
+    "cpu_scene_build_seconds": 2.08,
+    "presentation_requests": 120,
+    "elapsed_seconds": 1.286,
+    "reported_presented_fps": 93.3,
+    "vsync_requested": false,
+    "includes_compositor_and_presentation_pacing": true,
+    "per_frame_display_feedback_verified": false,
+    "game_fps": false
+  },
+  "screenshot": {
+    "path": "owned-canonical-terrain-2026-10-15.png",
+    "sha256": "21b38ec4ed3a3a8c4272d8f6f25a549a37e4afd06e2f87a5f0550c047da73a86"
+  },
+  "verification": {
+    "workspace_fmt": "passed",
+    "workspace_clippy_all_targets_all_features_deny_warnings": "passed",
+    "workspace_lib_bin_and_integration_tests": "passed",
+    "separate_bevy_cbt_render_ignored_hardware_tests_passed": 24,
+    "successful_tests_across_gate_invocations": 1775,
+    "native_normal_runtime_dependency_tree_contains_bevy": false
+  },
+  "limitations": [
+    "one static resident partition, no live game streaming",
+    "coarse geometry and incomplete visual acceptance",
+    "body-fixed camera, no moving celestial bodies",
+    "direct stars only; no atmospheric transport, eclipses, shadows, ocean effects or RT",
+    "manual EV100 from graphics settings, no HDR tonemapping or auto exposure",
+    "no ships, HUD, UI, networking or production client lifecycle",
+    "one measurement run; not a Bevy comparison or synthetic-fixture speedup"
+  ]
+}

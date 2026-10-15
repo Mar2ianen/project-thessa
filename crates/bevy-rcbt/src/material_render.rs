@@ -188,7 +188,7 @@ impl MaterialArray {
         .collect();
         for change in self.cache.update_retaining(&desired) {
             let (_, page) = &pages.pages[&change.node_id];
-            for (level, data) in page.mips.iter().enumerate() {
+            for (level, data) in page.mips().iter().enumerate() {
                 let size = MATERIAL_PAGE_SIZE >> level;
                 queue.write_texture(
                     TexelCopyTextureInfo {
@@ -335,8 +335,8 @@ impl MaterialArray {
         page: &crate::material_pages::CbtMaterialPage,
     ) -> Vec<EncodedMaterialLevel> {
         let (mut w, mut h) = (MATERIAL_PAGE_SIZE, MATERIAL_PAGE_SIZE);
-        let mut levels = Vec::with_capacity(page.mips.len());
-        for mip in page.mips.iter() {
+        let mut levels = Vec::with_capacity(page.mips().len());
+        for mip in page.mips().iter() {
             if let Some(encoded) = encode_material_level(mip, w, h, 2.0) {
                 levels.push(encoded);
             }
@@ -372,7 +372,7 @@ mod residency_tests {
         let decoded = MaterialArray::decode_material_levels(&levels);
         assert_eq!(decoded.len(), 8);
         let mut worst = 0u8;
-        for (level, (orig, back)) in page.mips.iter().zip(decoded.iter()).enumerate() {
+        for (level, (orig, back)) in page.mips().iter().zip(decoded.iter()).enumerate() {
             assert_eq!(orig.len(), back.len(), "level {level} len");
             for (i, (o, d)) in orig.iter().zip(back.iter()).enumerate() {
                 worst = worst.max(o.abs_diff(*d));
@@ -381,12 +381,12 @@ mod residency_tests {
         }
         // Compact residency must beat the raw 87,380 B mip chain.
         let wire: usize = levels.iter().map(EncodedMaterialLevel::encoded_bytes).sum();
-        let raw: usize = page.mips.iter().map(Vec::len).sum();
+        let raw: usize = page.mips().iter().map(Vec::len).sum();
         eprintln!("compact {wire} B vs raw {raw} B, worst drift {worst}");
         assert!(wire < raw, "microstore must beat raw RGBA");
         // Shadow pages keep the exact mip shapes for the shared upload path.
         let rebuilt = CbtMaterialPage::from_decoded_mips(decoded).expect("shape holds");
-        assert_eq!(rebuilt.mips.len(), 8);
+        assert_eq!(rebuilt.mips().len(), 8);
         assert!(CbtMaterialPage::from_decoded_mips(vec![vec![0u8; 3]]).is_none());
     }
 

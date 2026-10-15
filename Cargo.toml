@@ -37,6 +37,7 @@ members = [
     "crates/bevy-rcbt",
     "apps/server",
     "apps/client",
+    "apps/terrain-native",
     "tools/system-baker",
     "tools/vehicle-baker",
     "tools/worldgen-rocky",

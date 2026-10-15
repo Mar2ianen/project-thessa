@@ -553,7 +553,7 @@ sizes rays, boxes and output/readback, checks negotiated device buffer,
 binding and dispatch limits before allocation, and guards logical dispatch
 tails. `pooled_bytes()` exposes actual persistent memory use.
 
-`thessa-render-wgpu` owns headless instance/adapter/device/queue, capability
+`thessa-render-wgpu` owns headless or surface-compatible instance/adapter/device/queue, capability
 probing, explicitly opt-in experimental features, byte roundtrips and clear
 readback. Texture readback uses 256-byte-aligned rows and returns tightly
 packed RGBA8, including non-aligned widths. Hardware probe capabilities are
@@ -584,8 +584,9 @@ geometry, triangle compaction/history and GPU indirect draw arguments.
 Camera-only frames do not regenerate geometry. `update_pages` validates all
 ordinals, duplicates and stable-slot capacities before publication and
 regenerates only dirty patches, without CPU meshes or readback. Camera
-coordinates are body-fixed in this first consumer; body motion, real material
-residency, full scene/effect integration and presentation remain unported.
+coordinates remain body-fixed. Bounded raw material residency, direct stellar
+lighting and native migration-viewer presentation are now available (below);
+body motion, live game streaming and full scene/effect integration remain unported.
 Byte roundtrip is still not production snapshot publication parity.
 
 Run the dependency-independent screenshot/latency harness:
@@ -631,7 +632,7 @@ a stable universal speedup. Static-frame medians of run medians were
 1.030 ms vs 1.034 ms; one reference run had a 120.791 ms p95 outlier.
 [Raw measurements](artifacts/owned-terrain-normal-ab.json) retain that outlier.
 
-Final local verification: workspace fmt and all-target/all-feature clippy,
+Previous checkpoint verification: workspace fmt and all-target/all-feature clippy,
 workspace lib/bin and integration tests, then all 25 Bevy-CBT ignored GPU
 tests passed (1,770 successful tests across these invocations). Own backend,
 quantized cliff/LOD, dirty update, pixel/culling, view and slab regressions
@@ -654,6 +655,101 @@ are batch query timings, **not** game FPS or a before/after latency claim.
 Regression tests cover device-limit planning, non-power-of-two tails,
 changing/shrinking batch shapes, unaligned rows and astronomical camera
 translation invariance.
+
+### Canonical material/presentation slice (2026-10-15)
+
+`rcbt-core::material_page` now owns the immutable `CbtMaterialPage` payload
+and `MaterialPages` source map; `material_cache` owns the existing slot policy,
+ancestor mapping and world-addressed directory. Bevy re-exports the old paths
+and `CbtRenderMaterialPages::source_pages()` borrows the exact neutral snapshot,
+without repacking/cloning pixels. `lighting::SurfaceLighting` owns the shared
+seven-vec4 direct-light prefix, with finite/nonnegative/unit-direction checks.
+
+`TerrainRenderer::with_material_capacity` explicitly bounds raw texture-array
+residency; `update_materials` consumes independent demand and immutable source
+generations. Resident ancestors are protected first under exhaustion; layers
+stay stable across priority changes; warm revisits do not reupload; changed
+generations upload only dirty pages. Removed/stale sources disappear from the
+GPU directory before sampling. Fixed-capacity directory hashing uses the bound
+array's actual length (padding a smaller hash table would be incorrect).
+Invalid cube IDs/incomplete mip chains fail before any publication. The raw
+backend requires all eight mips; compact microstore upload is **not ported**.
+Default construction reserves one material layer; callers choose larger budgets
+explicitly. `update_lighting` validates then uploads direct illumination without
+turning on ocean/cloud/city/RT effects. Material upload counters expose page,
+byte and currently published resident counts.
+
+`apps/terrain-native` is a GPL migration viewer with **no Bevy runtime
+dependency**. It reuses `canonical_launch_setup` (source-checked frozen erosion
+and the game's HIGHLANDS bookmark), the real bounded LOD selector, quantized
+height builder, material builder and ancestor pages. Rayon bakes one static
+resident partition at startup. Ephemeris-derived directions/irradiance and the
+existing atmosphere blackbody/inverse-square helpers supply up to three stars
+at EPOCH; the terrain axes match the launch survey. There is no fixed fake sun.
+Atmospheric transport/eclipses are not represented in this slice. Manual EV100
+and vsync flow through `RequestedGraphics -> ResolvedGraphicsSettings`; the
+viewer explicitly warns that other graphics settings/effects are unported.
+
+The same scene drives offscreen readback and a winit-owned native surface:
+compatible-adapter selection, sRGB format negotiation, resize/depth recreation,
+zero-size suspension, surface-lost recreation, outdated/suboptimal recovery,
+timeout/occlusion skips, close and basic keyboard orbit/zoom. There is no CPU
+frame copy/blit, CPU mesh or Bevy render world. winit is a diagnostic shell,
+**not** a replacement decision for the intended GPUI platform/UI shell.
+
+```sh
+cargo run --release -p thessa-terrain-native
+cargo run --release -p thessa-terrain-native -- --headless terrain.png --frames 120
+```
+
+Window controls: Left/Right orbit; Up/Down zoom; Esc exit. `--frames N` bounds
+either mode for smoke runs. `--graphics PATH` selects settings (default
+`graphics.toml` from the working directory). Only manual exposure and vsync are
+currently consumed. This path intentionally does not claim HDR/tonemapping,
+auto-exposure, atmosphere/clouds/ocean/shadows, RT, ships, HUD/UI, networking,
+live residency/topology changes or moving-body parity with `thessa-client`.
+The screenshot is coarse and lacks the game's effect stack: it demonstrates
+canonical page/material transport, **not visual acceptance or client parity**.
+
+Radeon 880M / RADV, 1280×720, 64 canonical height tiles, 85 material pages
+(7,427,300 payload bytes across eight mips), 48,384 drawn triangles, 120 measured
+frames after 30 warm-up frames: 1.291 ms median / 1.651 ms p95 in one run
+(774.7 reciprocal median offscreen frames/s). Timing is camera upload +
+classification + raster + GPU completion, **not GPU-only timing**; excludes
+startup (2.03 s canonical CPU bake), initial material publication and screenshot
+readback. A native Wayland smoke run presented 120 frames in 1.286 s (93.3
+presentation requests/s, including compositor/presentation pacing; individual
+display feedback was not measured). Neither number
+is game FPS, a Bevy comparison, or an improvement over the different synthetic
+fixture above.
+
+[Raw capture metadata](artifacts/owned-canonical-terrain-2026-10-15.json) records
+the timing boundary and screenshot digest.
+
+![Owned canonical frozen Thessa terrain, static HIGHLANDS snapshot](artifacts/owned-canonical-terrain-2026-10-15.png)
+
+Regression coverage includes raw material pixel changes and ancestor fallback,
+unchanged-generation zero uploads, dirty reupload, atomic invalid publication,
+removal back to fallback, coarse-first exhaustion, warm reuse, stale-generation
+masking, fixed directory hashing, shared linear-light mip parity and checked
+orbit camera uniforms. The original Bevy material/microstore consumers use the
+same payload via re-exports; they have not been removed or silently disabled.
+
+Verification for this slice: workspace fmt, all-target/all-feature clippy,
+workspace lib/bin and integration tests, plus the separate Bevy-CBT `render`
+ignored-test invocation all passed (1,775 successful tests across these runs;
+24 hardware tests in that final invocation). Native material/raster hardware
+regressions ran as ordinary tests. The normal runtime dependency tree for
+`thessa-terrain-native` contains no Bevy crates. The canonical offscreen capture
+and 120-frame native Wayland smoke run also completed successfully.
+
+Next production boundary: extract the existing `WorldTerrain` job/resident-cover
+publication lifecycle into neutral state, then let the owned renderer consume
+its changing topology/pages directly. Do not grow a second independent terrain
+scheduler inside the viewer. Geometry slot allocation/reclamation and history
+invalidation must become bounded before live partition changes are claimed.
+After that, port f64 moving-body/camera transforms and the actual scene/effect
+passes; only remove each Bevy consumer when its production replacement works.
 
 ## 15. FastRT
 

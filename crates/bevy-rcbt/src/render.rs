@@ -1225,9 +1225,15 @@ fn prepare_cbt_gpu_buffers(
             .prepare_storage(&topology, &material_pages, &device, &queue, policy);
     }
     if let Some(material) = material {
-        let values: Vec<_> = std::iter::once(material.ambient_lux)
-            .chain(material.light_directions)
-            .chain(material.light_colors_lux)
+        let lighting = thessa_rcbt_core::lighting::SurfaceLighting {
+            ambient_lux: material.ambient_lux,
+            directions: material.light_directions,
+            colors_lux: material.light_colors_lux,
+        };
+        let values: Vec<_> = lighting
+            .records()
+            .unwrap_or_default()
+            .into_iter()
             .chain({
                 let ocean = material.ocean.unwrap_or_default();
                 let enabled = material.ocean.is_some() && material.roughness.is_some();

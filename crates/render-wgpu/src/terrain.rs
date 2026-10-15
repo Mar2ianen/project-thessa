@@ -2,7 +2,8 @@
 //!
 //! Uses the production portable WGSL, packed HeightPage and TileAnchor ABI;
 //! no Bevy dependency or CPU mesh construction. This first consumer supports
-//! a body-fixed camera and fallback globe material, not the full game scene.
+//! a body-fixed camera, streamed material pages and a fallback globe color,
+//! not the full game scene.
 
 use thessa_rcbt_core::{HeightPage, shaders, tile_anchor::TileAnchor};
 use wgpu::util::DeviceExt;
@@ -24,6 +25,9 @@ pub struct TerrainPatch<'a> {
 /// Persistent GPU terrain working set. Geometry is generated once at upload;
 /// camera-only frames update anchors/view and rerun classification, not geometry.
 pub struct TerrainRenderer {
+    lighting: wgpu::Buffer,
+    materials: crate::material::MaterialArray,
+    node_ids: Vec<u64>,
     anchors: Vec<TileAnchor>,
     frames: wgpu::Buffer,
     view: wgpu::Buffer,
@@ -141,6 +145,17 @@ impl TerrainRenderer {
         patches: &[TerrainPatch<'_>],
         format: wgpu::TextureFormat,
     ) -> Result<Self, BackendError> {
+        Self::with_material_capacity(backend, patches, format, 1)
+    }
+
+    /// Allocate a bounded raw material working set. Capacity is explicit rather
+    /// than an adapter-dependent hidden allocation; each layer holds eight mips.
+    pub fn with_material_capacity(
+        backend: &Backend,
+        patches: &[TerrainPatch<'_>],
+        format: wgpu::TextureFormat,
+        material_layers: u32,
+    ) -> Result<Self, BackendError> {
         let device = &backend.device;
         let fail = |s: &str| BackendError::Device(s.into());
         let Some(first) = patches.first() else {
@@ -182,6 +197,9 @@ impl TerrainRenderer {
         }
         let anchors: Vec<_> = patches.iter().map(|p| p.anchor).collect();
         let frames_data = frame_bytes(&anchors, [0.0; 3])?;
+        let materials =
+            crate::material::MaterialArray::new(backend, material_layers, patches.len())?;
+        let mut node_ids = Vec::with_capacity(patches.len());
         let mut residuals = Vec::with_capacity(residual_bytes as usize);
         let mut page_slots = Vec::with_capacity(patches.len());
         let mut metadata = Vec::with_capacity(patches.len() * 4);
@@ -192,6 +210,7 @@ impl TerrainRenderer {
             for bit in (0..key.level).rev() {
                 id = (id << 2) | u64::from(((key.x >> bit) & 1) * 2 + ((key.y >> bit) & 1));
             }
+            node_ids.push(id);
             leaves.extend([
                 id as u32,
                 (id >> 32) as u32,
@@ -362,11 +381,9 @@ impl TerrainRenderer {
             multiview_mask: None,
             cache: None,
         });
-        // Explicit fallback material only. Full game material residency and
-        // effect settings remain in the production client during migration.
+        // Globe asset loading and effect settings remain in the client.
         let globe = solid_texture(backend, [100, 130, 70, 255], false);
         let roughness = solid_texture(backend, [255; 4], false);
-        let array = solid_texture(backend, [100, 130, 70, 255], true);
         let black = solid_texture(backend, [0; 4], false);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
@@ -381,10 +398,8 @@ impl TerrainRenderer {
             device,
             "cbt-lighting",
             &bytes(light.map(f32::to_bits)),
-            wgpu::BufferUsages::UNIFORM,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
-        let slots = storage(device, count * 16, wgpu::BufferUsages::empty());
-        let directory = storage(device, 16, wgpu::BufferUsages::empty());
         let raster_layout = raster.get_bind_group_layout(0);
         let entries = [
             (0, view.as_entire_binding()),
@@ -399,10 +414,10 @@ impl TerrainRenderer {
             (9, lighting.as_entire_binding()),
             (10, wgpu::BindingResource::TextureView(&roughness)),
             (11, frames.as_entire_binding()),
-            (12, wgpu::BindingResource::TextureView(&array)),
-            (13, wgpu::BindingResource::Sampler(&sampler)),
-            (14, slots.as_entire_binding()),
-            (16, directory.as_entire_binding()),
+            (12, wgpu::BindingResource::TextureView(&materials.view)),
+            (13, wgpu::BindingResource::Sampler(&materials.sampler)),
+            (14, materials.slots.as_entire_binding()),
+            (16, materials.directory.as_entire_binding()),
             (17, wgpu::BindingResource::TextureView(&black)),
             (18, wgpu::BindingResource::TextureView(&black)),
         ]
@@ -415,6 +430,9 @@ impl TerrainRenderer {
             entries: &entries,
         });
         Ok(Self {
+            lighting,
+            materials,
+            node_ids,
             anchors,
             frames,
             view,
@@ -433,6 +451,36 @@ impl TerrainRenderer {
             raster,
             raster_bind,
         })
+    }
+
+    /// Publish a complete material snapshot with independent ordered demand.
+    /// Stable generations/priority reordering do not upload texture pages.
+    pub fn update_materials(
+        &mut self,
+        backend: &Backend,
+        demand: &[u64],
+        pages: &crate::material::MaterialPages,
+    ) -> Result<crate::material::MaterialUpload, BackendError> {
+        self.materials
+            .prepare(backend, &self.node_ids, demand, pages)
+    }
+
+    /// Publish direct multi-source illumination; effects stay disabled. Only
+    /// the shared seven-record lighting prefix changes, with atomic validation.
+    pub fn update_lighting(
+        &self,
+        backend: &Backend,
+        lighting: &thessa_rcbt_core::lighting::SurfaceLighting,
+    ) -> Result<(), BackendError> {
+        let records = lighting
+            .records()
+            .ok_or_else(|| BackendError::Device("invalid terrain lighting".into()))?;
+        backend.queue.write_buffer(
+            &self.lighting,
+            0,
+            &bytes(records.into_iter().flatten().map(f32::to_bits)),
+        );
+        Ok(())
     }
 
     /// Publish changed quantized pages into stable slots and regenerate only

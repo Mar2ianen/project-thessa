@@ -1,0 +1,23 @@
+[package]
+name = "thessa-terrain-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+description = "Bevy-free canonical terrain migration viewer and frame benchmark"
+
+[dependencies]
+thessa-render-wgpu = { path = "../../crates/render-wgpu" }
+thessa-rcbt-core = { path = "../../crates/rcbt-core" }
+thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
+thessa-flight-authority = { path = "../../crates/flight-authority" }
+thessa-sim-core = { path = "../../crates/sim-core" }
+thessa-atmosphere = { path = "../../crates/atmosphere" }
+thessa-graphics = { path = "../../crates/graphics" }
+glam.workspace = true
+rayon.workspace = true
+toml.workspace = true
+wgpu.workspace = true
+png = "0.18"
+winit = "0.30.13"

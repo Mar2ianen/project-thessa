@@ -26,7 +26,7 @@ use thessa_rcbt_core::{
 pub type CbtLeafRecord = [u32; 4];
 
 #[cfg(feature = "render")]
-pub mod material_cache;
+pub use thessa_rcbt_core::material_cache;
 #[cfg(feature = "render")]
 pub mod material_microstore;
 #[cfg(feature = "render")]

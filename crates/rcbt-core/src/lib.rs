@@ -17,6 +17,9 @@ const PAGE_ENCODING_VERSION: u8 = 1;
 
 pub mod bisector_pool;
 pub mod compact;
+pub mod lighting;
+pub mod material_cache;
+pub mod material_page;
 pub mod packed;
 pub mod shaders;
 pub mod tile_anchor;

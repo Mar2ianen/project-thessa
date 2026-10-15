@@ -85,12 +85,21 @@ The checked-in vertical slice currently contains:
   world-addressed material sampling independent of geometry LOD. Docs 47–53
   track historical failures and current work; visual acceptance is incomplete.
   Persistent conforming GPU bisector topology remains future work;
-- `thessa-render-wgpu`: owned headless backend and CBT compute → indirect raster
-  passes, camera-relative uniforms and dirty quantized-page updates without
+- `thessa-render-wgpu`: owned headless/surface-compatible backend and CBT compute → indirect raster
+  passes, camera-relative uniforms, dirty quantized-page updates and bounded
+  material-page residency without
   Bevy. `cargo run --release -p thessa-render-wgpu --example terrain_frame -- terrain.png`
   produces a synthetic terrain screenshot and offscreen latency benchmark;
   it does **not** replace the production client's complete scene/UI/input yet
   (doc 39, implementation checkpoint);
+- `apps/terrain-native`: Bevy-free window/headless migration viewer using the
+  same frozen canonical field, HIGHLANDS bookmark, height/material builders and
+  stellar ephemerides as the game. Run `cargo run --release -p thessa-terrain-native`
+  (Left/Right orbit, Up/Down zoom, Esc exit), or add
+  `-- --headless terrain.png --frames 120` for a screenshot/frame benchmark.
+  Only manual exposure/vsync settings are consumed from `graphics.toml`
+  (`--graphics PATH`); static residency, missing effects/UI/networking and
+  coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,

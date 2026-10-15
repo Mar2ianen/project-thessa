@@ -1,4 +1,4 @@
-//! Fixed-capacity material-page slot assignment for the render adapter.
+//! Backend-neutral fixed-capacity material-page residency and GPU directory ABI.
 //!
 //! A texture-array page layer is a resource with a hard layer limit. The
 //! topology stream can reorder every frame, so assigning layers from the
@@ -49,9 +49,28 @@ pub struct SlotEntry {
 /// Same hash and linear probing as the MATERIAL_SAMPLE_WGSL chunk (rcbt-core shaders); zero IDs are empty.
 pub fn material_directory(entries: impl IntoIterator<Item = SlotEntry>) -> Vec<[u32; 4]> {
     let entries: Vec<_> = entries.into_iter().collect();
-    let size = (entries.len().max(1) * 4).next_power_of_two();
+    let capacity = entries.len().max(1);
+    material_directory_with_capacity(entries, capacity).expect("directory capacity fits entries")
+}
+
+/// Fixed-size directory for persistent GPU bindings. The hash mask must match
+/// the bound array length, so padding a smaller directory is not equivalent.
+/// Returns `None` on size overflow or if entries exceed the slot capacity.
+pub fn material_directory_with_capacity(
+    entries: impl IntoIterator<Item = SlotEntry>,
+    capacity: usize,
+) -> Option<Vec<[u32; 4]>> {
+    let size = capacity
+        .max(1)
+        .checked_mul(4)?
+        .checked_next_power_of_two()?;
     let mut table = vec![[0; 4]; size];
+    let mut count = 0;
     for entry in entries {
+        count += 1;
+        if count > capacity {
+            return None;
+        }
         if entry.node_id == 0 {
             continue;
         }
@@ -65,7 +84,7 @@ pub fn material_directory(entries: impl IntoIterator<Item = SlotEntry>) -> Vec<[
         let depth = 63 - entry.node_id.leading_zeros();
         table[index] = [low, high, entry.slot, depth.saturating_sub(3) / 2];
     }
-    table
+    Some(table)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,6 +340,21 @@ impl SlotCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_directory_hashes_against_the_bound_length() {
+        let entries = [SlotEntry {
+            slot: 2,
+            node_id: 193,
+            generation: 1,
+        }];
+        let table = material_directory_with_capacity(entries, 8).unwrap();
+        assert_eq!(table.len(), 32);
+        let index = (193u32.wrapping_mul(0x9e3779b9) & 31) as usize;
+        assert_eq!(table[index], [193, 0, 2, 2]);
+        assert!(material_directory_with_capacity(entries, 0).is_none());
+        assert!(material_directory_with_capacity([], usize::MAX).is_none());
+    }
 
     #[test]
     fn material_hierarchy_keeps_shared_fallbacks_under_slot_exhaustion() {

@@ -30,6 +30,7 @@ wgpu.workspace = true
 pollster = "0.4"
 thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
 thessa-atmosphere = { path = "../atmosphere" }
+thessa-render-wgpu = { path = "../render-wgpu" }
 glam.workspace = true
 
 [[bench]]
@@ -39,4 +40,8 @@ required-features = ["render"]
 
 [[bench]]
 name = "extraction_snapshots"
+harness = false
+
+[[bench]]
+name = "snapshot_upload"
 harness = false

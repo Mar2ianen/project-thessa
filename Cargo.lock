@@ -5945,6 +5945,7 @@ dependencies = [
  "thessa-microstore-core",
  "thessa-rcbt-core",
  "thessa-rcbt-wgpu",
+ "thessa-render-wgpu",
  "wgpu",
 ]
 

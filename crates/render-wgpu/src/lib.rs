@@ -235,6 +235,71 @@ impl Backend {
         staging.unmap();
         Ok(out)
     }
+
+    /// Upload bytes to a device buffer and read them back. The future
+    /// frame-publish path stages snapshot payloads exactly this way; this
+    /// primitive exists so byte parity is testable today, before any render
+    /// loop consumes it. Empty input returns empty without touching the GPU;
+    /// inputs above 256 MiB are rejected.
+    pub fn roundtrip(&self, bytes: &[u8]) -> Result<Vec<u8>, BackendError> {
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        if bytes.len() as u64 > 1 << 28 {
+            return Err(BackendError::Device(
+                "roundtrip size capped at 256 MiB".into(),
+            ));
+        }
+        // `write_buffer` demands 4-byte alignment: pad the upload, then
+        // truncate the readback to the caller's length.
+        let padded = bytes.len().div_ceil(4) * 4;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("thessa-backend-roundtrip"),
+            size: padded as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("thessa-backend-roundtrip-staging"),
+            size: padded as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut upload = Vec::with_capacity(padded);
+        upload.extend_from_slice(bytes);
+        upload.resize(padded, 0);
+        self.queue.write_buffer(&buffer, 0, &upload);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("thessa-backend-roundtrip-encoder"),
+            });
+        encoder.copy_buffer_to_buffer(&buffer, 0, &staging, 0, padded as u64);
+        self.queue.submit(Some(encoder.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| BackendError::Device(format!("device poll failed: {e:?}")))?;
+        rx.recv()
+            .map_err(|_| BackendError::Device("staging map channel closed".into()))?
+            .map_err(|e| BackendError::Device(format!("staging map failed: {e:?}")))?;
+        let view = staging
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| BackendError::Device(format!("staging map range failed: {e:?}")))?;
+        let mut out = view.to_vec();
+        drop(view);
+        staging.unmap();
+        out.truncate(bytes.len());
+        Ok(out)
+    }
 }
 
 /// Hardware capability probe feeding [`Capabilities`]. Reads the adapter
@@ -343,6 +408,22 @@ mod tests {
                     "clear {color:?} must read back {expected:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn roundtrip_preserves_bytes_including_unaligned() {
+        let Some(backend) = backend() else {
+            return;
+        };
+        assert!(backend.roundtrip(&[]).expect("empty roundtrips").is_empty());
+        // Unaligned sizes plus a 1 MiB pseudo-random payload.
+        let payload: Vec<u8> = (0..1_000_003u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        for len in [1usize, 3, 7, 1000, 1_000_003] {
+            let back = backend.roundtrip(&payload[..len]).expect("roundtrip runs");
+            assert_eq!(back, payload[..len], "byte parity at len {len}");
         }
     }
 

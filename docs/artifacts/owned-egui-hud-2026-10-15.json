@@ -1,0 +1,138 @@
+{
+  "date": "2026-10-15",
+  "branch": "feat/egui-shell-spike",
+  "base_commit": "a58da1859f848b59c98003f1ef85432b66788232",
+  "binary_sha256": "48b52ccf60193d87b47730ecad88162b725e13876826023e1fe19243c80842cb",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile, default hud feature",
+  "integration": {
+    "egui": "0.37.0",
+    "egui_wgpu": "0.37.0",
+    "egui_winit": "0.37.0",
+    "wgpu": "30.0.1",
+    "winit": "0.30.13",
+    "toolkit_license": "MIT OR Apache-2.0",
+    "new_resolved_rust_packages": 33,
+    "new_packages_without_permissive_license_choice": [],
+    "self_cell_license_choice": "Apache-2.0",
+    "bevy_runtime_dependencies": [],
+    "additional_logical_gpu_devices": 0,
+    "same_device_queue_encoder_and_color_target": true,
+    "scene_texture_import_or_copy": false,
+    "runtime_scene_readback": false,
+    "hud_color_load": "LoadOp::Load; sRGB-aware shader; premultiplied-alpha blend; no depth attachment",
+    "font": "existing assets/fonts/NotoSans-Regular.ttf, OFL-1.1",
+    "font_sha256": "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823",
+    "toolkit_default_font_bundle": false,
+    "window_decorations": "requested through winit; appearance follows desktop/compositor policy"
+  },
+  "settings": {
+    "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b",
+    "manual_exposure_ev100": 13.0,
+    "vsync_requested": false,
+    "ui_graphics_edits": "session-only RequestedGraphics -> capability resolution -> renderer/presentation; source TOML is not rewritten"
+  },
+  "offscreen": {
+    "arguments": "--headless IMAGE.png --frames 600 --prestream-seconds 10 [--no-hud|--hud]",
+    "order": ["baseline-1", "hud-1", "hud-2", "baseline-2"],
+    "size": [1280, 720],
+    "format": "Rgba8UnormSrgb",
+    "measured_frames_per_run": 600,
+    "warmup_frames_per_run": 30,
+    "prestream_seconds_per_run": 10,
+    "sweep": false,
+    "final_tiles_each_run": 287,
+    "final_drawn_triangles_each_run": 297216,
+    "final_height_cache_entries_each_run": 388,
+    "regenerated_patches_each_run": 387,
+    "measured_selections_each_run": 2,
+    "measured_geometry_publications_each_run": 0,
+    "capacity_rejections_each_run": 0,
+    "initial_material_upload_bytes_each_run_excluded_from_update_counter": 524280,
+    "boundary": "host wall latency: UI construction when enabled + selection/poll/publication + view upload + terrain classify/raster + optional HUD upload/raster + GPU completion",
+    "excluded": ["CPU scene build", "renderer setup", "pre-stream", "30 warmup frames including initial font atlas work", "screenshot readback/encoding"],
+    "runs": [
+      {
+        "name": "baseline-1", "hud": false,
+        "median_ms": 2.526, "p95_ms": 3.171, "p99_ms": 4.013, "max_ms": 8.319,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.656, "stream_cpu_p99_ms": 0.818, "stream_cpu_max_ms": 5.770,
+        "total_geometry_publications": 58, "final_material_cache_entries": 265,
+        "material_update_upload_bytes": 22631420, "pending_height_material_jobs": [0, 4]
+      },
+      {
+        "name": "hud-1", "hud": true,
+        "median_ms": 2.618, "p95_ms": 3.466, "p99_ms": 4.174, "max_ms": 8.778,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.589, "stream_cpu_p99_ms": 0.811, "stream_cpu_max_ms": 5.585,
+        "total_geometry_publications": 55, "final_material_cache_entries": 260,
+        "material_update_upload_bytes": 22194520, "pending_height_material_jobs": [0, 4]
+      },
+      {
+        "name": "hud-2", "hud": true,
+        "median_ms": 2.757, "p95_ms": 3.922, "p99_ms": 5.072, "max_ms": 8.751,
+        "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.682, "stream_cpu_p99_ms": 0.812, "stream_cpu_max_ms": 5.555,
+        "total_geometry_publications": 53, "final_material_cache_entries": 255,
+        "material_update_upload_bytes": 21757620, "pending_height_material_jobs": [0, 4]
+      },
+      {
+        "name": "baseline-2", "hud": false,
+        "median_ms": 2.661, "p95_ms": 3.546, "p99_ms": 4.302, "max_ms": 10.306,
+        "stream_cpu_median_ms": 0.002, "stream_cpu_p95_ms": 0.905, "stream_cpu_p99_ms": 1.174, "stream_cpu_max_ms": 7.669,
+        "total_geometry_publications": 58, "final_material_cache_entries": 261,
+        "material_update_upload_bytes": 22281900, "pending_height_material_jobs": [0, 4]
+      }
+    ]
+  },
+  "native_wayland_smoke": {
+    "compositor": "niri",
+    "arguments": "--frames 1200",
+    "hud": true,
+    "external_resize_request_logical": [950, 650],
+    "capture_physical_size": [1188, 813],
+    "external_capture_delay_after_mapping_seconds": 3,
+    "presentation_requests": 1200,
+    "elapsed_seconds": 10.058,
+    "presentation_requests_per_second": 119.3,
+    "process_exit_code": 0,
+    "final_tiles": 287,
+    "total_geometry_publications": 44,
+    "regenerated_patches": 387,
+    "final_height_material_cache_entries": [388, 217],
+    "pending_height_material_jobs": [0, 4],
+    "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor, resize and external screenshot; no display feedback or game-FPS claim"
+  },
+  "captures": [
+    {
+      "path": "owned-egui-hud-2026-10-15.png",
+      "size": [1280, 720],
+      "sha256": "5ad94027232c12ddb384559fde8f13255bcb433364fc7729f9aa156b55d6fc18",
+      "meaning": "last hud-1 offscreen frame; native and offscreen paths share widgets and GPU overlay"
+    },
+    {
+      "path": "owned-egui-window-2026-10-15.png",
+      "size": [1188, 813],
+      "sha256": "9da2112b75c79b092e703ca5c66b5b6bde76b651ebf29c0047332f808f4e825f",
+      "meaning": "compositor capture of the PID-verified owned native window after resize, during streaming, before final smoke counters"
+    }
+  ],
+  "verification": {
+    "workspace_fmt": "pass",
+    "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_all_target_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests_passed": 1717,
+    "workspace_integration_tests_passed": 43,
+    "existing_ignored_bevy_cbt_gpu_tests_passed": 24,
+    "new_ignored_viewer_gpu_and_native_exit_tests_passed": 2,
+    "successful_test_total": 1786,
+    "new_regressions": ["Latin/Cyrillic/digit font glyphs", "passive unbounded camera orbit", "pointer capture", "focused-widget keyboard routing", "scene color preserved outside HUD", "target resize and 1.0/1.5 native scaling", "complete HUD recreation", "clean native process exit with and without HUD"],
+    "fixed_during_validation": ["egui 0.37 has no default fonts", "grouped texture deltas require explicit acknowledgement in debug builds", "clipboard worker must be destroyed before winit event loop/display teardown"]
+  },
+  "limitations": [
+    "This is the canonical frozen-world migration viewer, not the full game client or production flight/menu/editor UI.",
+    "Terrain shading/effect parity and thin dark relief artifacts remain unaccepted.",
+    "Zero-copy describes scene composition, not zero UI CPU work or zero font/mesh upload.",
+    "A/B geometry is equal and stationary, but material jobs remain asynchronous; GPU clocks/system scheduling are not locked. These observations do not establish an isolated constant HUD overhead or a speedup.",
+    "Native throughput counts presentation requests, not displayed frames, GPU-only timing or game FPS.",
+    "Multiple native UI viewports and recovery from actual device loss are not implemented by this slice."
+  ]
+}

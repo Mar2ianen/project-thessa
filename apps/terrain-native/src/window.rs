@@ -20,14 +20,31 @@ struct State {
     depth: wgpu::TextureView,
     drawable: bool,
     exposure: f32,
+    #[cfg(feature = "hud")]
+    hud: Option<WindowHud>,
+    submitted_frames: u64,
+    previous_cpu_ms: f64,
+}
+
+#[cfg(feature = "hud")]
+struct WindowHud {
+    gpu: crate::hud::Hud,
+    input: egui_winit::State,
 }
 
 impl State {
-    fn new(event_loop: &ActiveEventLoop, scene: &Scene) -> Result<Self, Box<dyn Error>> {
+    fn new(
+        event_loop: &ActiveEventLoop,
+        scene: &Scene,
+        hud_enabled: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        #[cfg(not(feature = "hud"))]
+        let _ = hud_enabled;
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title("Thessa — owned terrain migration viewer")
+                    .with_decorations(true)
                     .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720)),
             )?,
         );
@@ -59,6 +76,19 @@ impl State {
         surface.configure(&backend.device, &config);
         let renderer = scene.renderer(&backend, config.format)?;
         let depth = depth(&backend, config.width, config.height);
+        #[cfg(feature = "hud")]
+        let hud = hud_enabled.then(|| {
+            let gpu = crate::hud::Hud::new(&backend, config.format);
+            let input = egui_winit::State::new(
+                gpu.context.clone(),
+                egui::ViewportId::ROOT,
+                window.as_ref(),
+                Some(window.scale_factor() as f32),
+                window.theme(),
+                Some(backend.device.limits().max_texture_dimension_2d as usize),
+            );
+            WindowHud { gpu, input }
+        });
         Ok(Self {
             window,
             instance,
@@ -69,6 +99,10 @@ impl State {
             depth,
             drawable: size.width > 0 && size.height > 0,
             exposure,
+            #[cfg(feature = "hud")]
+            hud,
+            submitted_frames: 0,
+            previous_cpu_ms: 0.0,
         })
     }
 
@@ -84,10 +118,12 @@ impl State {
     }
 
     fn draw(&mut self, scene: &mut Scene, now_s: f64) -> Result<bool, Box<dyn Error>> {
+        let cpu_started = Instant::now();
         if !self.drawable {
             return Ok(false);
         }
-        let (frame, reconfigure) = match self.surface.get_current_texture() {
+        #[allow(unused_mut)]
+        let (frame, mut reconfigure) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
@@ -105,6 +141,49 @@ impl State {
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err("surface validation failure".into());
             }
+        };
+        #[cfg(feature = "hud")]
+        let hud_output = if let Some(hud) = &mut self.hud {
+            egui_winit::update_viewport_info(
+                hud.input
+                    .egui_input_mut()
+                    .viewports
+                    .entry(egui::ViewportId::ROOT)
+                    .or_default(),
+                &hud.gpu.context,
+                &self.window,
+                self.submitted_frames == 0,
+            );
+            let mut controls = crate::hud::Controls::from_scene(scene);
+            let before = controls;
+            let mut output = hud.gpu.run(
+                hud.input.take_egui_input(&self.window),
+                &mut controls,
+                &crate::hud::Stats::from_scene(scene, self.submitted_frames, self.previous_cpu_ms),
+            );
+            controls.apply(scene);
+            hud.input
+                .handle_platform_output(&self.window, std::mem::take(&mut output.platform_output));
+            if before.exposure_ev100 != controls.exposure_ev100 || before.vsync != controls.vsync {
+                let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
+                    &scene.requested,
+                    &self.backend.caps,
+                );
+                self.exposure = crate::manual_exposure(resolved.exposure_ev100);
+                let mode = if resolved.vsync {
+                    wgpu::PresentMode::AutoVsync
+                } else {
+                    wgpu::PresentMode::AutoNoVsync
+                };
+                if self.config.present_mode != mode {
+                    self.config.present_mode = mode;
+                    // Configure only after presenting the acquired frame.
+                    reconfigure = true;
+                }
+            }
+            Some(output)
+        } else {
+            None
         };
         scene.tick(
             &self.backend,
@@ -124,9 +203,29 @@ impl State {
             .device
             .create_command_encoder(&Default::default());
         self.renderer.encode(&mut encoder, &color, &self.depth);
+        #[cfg(feature = "hud")]
+        let commands = if let (Some(hud), Some(output)) = (&mut self.hud, hud_output) {
+            hud.gpu.encode(
+                &self.backend,
+                &mut encoder,
+                &color,
+                output,
+                [self.config.width, self.config.height],
+            )
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(feature = "hud"))]
+        let commands = Vec::<wgpu::CommandBuffer>::new();
         self.window.pre_present_notify();
-        self.backend.queue.submit([encoder.finish()]);
+        self.backend.queue.submit(
+            commands
+                .into_iter()
+                .chain(std::iter::once(encoder.finish())),
+        );
         self.backend.queue.present(frame);
+        self.submitted_frames += 1;
+        self.previous_cpu_ms = cpu_started.elapsed().as_secs_f64() * 1000.0;
         if reconfigure {
             self.resize(self.config.width, self.config.height);
         }
@@ -161,6 +260,7 @@ struct App {
     frame_limit: Option<u32>,
     frames: u32,
     started: Option<Instant>,
+    hud_enabled: bool,
 }
 
 impl ApplicationHandler for App {
@@ -168,7 +268,7 @@ impl ApplicationHandler for App {
         if self.state.is_some() {
             return;
         }
-        match State::new(event_loop, &self.scene) {
+        match State::new(event_loop, &self.scene, self.hud_enabled) {
             Ok(state) => {
                 self.state = Some(state);
                 // Selection history survives surface suspension in Scene; its
@@ -187,6 +287,13 @@ impl ApplicationHandler for App {
         self.state = None;
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // egui-winit's clipboard borrows the native display handle. run_app
+        // consumes/destroys EventLoop, while App itself lives beyond it, so
+        // teardown must happen here while the display is still valid.
+        self.state = None;
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let Some(state) = &mut self.state else {
             return;
@@ -194,6 +301,13 @@ impl ApplicationHandler for App {
         if state.window.id() != id {
             return;
         }
+        #[cfg(feature = "hud")]
+        let consumed = state
+            .hud
+            .as_mut()
+            .is_some_and(|hud| hud.input.on_window_event(&state.window, &event).consumed);
+        #[cfg(not(feature = "hud"))]
+        let consumed = false;
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
@@ -206,15 +320,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                match event.physical_key {
-                    PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                    PhysicalKey::Code(KeyCode::ArrowLeft) => self.scene.angle -= 0.05,
-                    PhysicalKey::Code(KeyCode::ArrowRight) => self.scene.angle += 0.05,
-                    PhysicalKey::Code(KeyCode::ArrowUp) => {
-                        self.scene.distance = (self.scene.distance / 1.1).max(1_000.0)
-                    }
-                    PhysicalKey::Code(KeyCode::ArrowDown) => {
-                        self.scene.distance = (self.scene.distance * 1.1).min(200_000.0)
+                match camera_shortcut(event.physical_key, consumed) {
+                    Some(Shortcut::Exit) => event_loop.exit(),
+                    Some(Shortcut::Orbit(delta)) => self.scene.angle += delta,
+                    Some(Shortcut::Zoom(factor)) => {
+                        self.scene.distance =
+                            (self.scene.distance * factor).clamp(1_000.0, 200_000.0)
                     }
                     _ => {}
                 }
@@ -228,9 +339,10 @@ impl ApplicationHandler for App {
                     if self.frame_limit.is_some_and(|n| self.frames >= n) {
                         let seconds = self.started.unwrap().elapsed().as_secs_f64();
                         println!(
-                            "window_presented_frames={} elapsed_s={seconds:.3} presented_fps={:.1} (vsync/compositor included; not GPU-only or game FPS)",
+                            "window_presented_frames={} elapsed_s={seconds:.3} presented_fps={:.1} hud={} (presentation requests, not display feedback; vsync/compositor included; not GPU-only or game FPS)",
                             self.frames,
-                            self.frames as f64 / seconds
+                            self.frames as f64 / seconds,
+                            self.hud_enabled,
                         );
                         println!(
                             "canonical_tiles={} geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} capacity_rejections={}",
@@ -263,7 +375,32 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run(scene: Scene, frame_limit: Option<u32>) -> Result<(), Box<dyn Error>> {
+#[derive(Debug, PartialEq)]
+enum Shortcut {
+    Exit,
+    Orbit(f64),
+    Zoom(f64),
+}
+
+fn camera_shortcut(key: PhysicalKey, consumed: bool) -> Option<Shortcut> {
+    if consumed {
+        return None;
+    }
+    match key {
+        PhysicalKey::Code(KeyCode::Escape) => Some(Shortcut::Exit),
+        PhysicalKey::Code(KeyCode::ArrowLeft) => Some(Shortcut::Orbit(-0.05)),
+        PhysicalKey::Code(KeyCode::ArrowRight) => Some(Shortcut::Orbit(0.05)),
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(Shortcut::Zoom(1.0 / 1.1)),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(Shortcut::Zoom(1.1)),
+        _ => None,
+    }
+}
+
+pub fn run(
+    scene: Scene,
+    frame_limit: Option<u32>,
+    hud_enabled: bool,
+) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let mut app = App {
         scene,
@@ -272,10 +409,37 @@ pub fn run(scene: Scene, frame_limit: Option<u32>) -> Result<(), Box<dyn Error>>
         frame_limit,
         frames: 0,
         started: None,
+        hud_enabled,
     };
     event_loop.run_app(&mut app)?;
     if let Some(error) = app.error {
         return Err(error.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_widgets_block_camera_and_exit_shortcuts() {
+        for (key, expected) in [
+            (KeyCode::Escape, Shortcut::Exit),
+            (KeyCode::ArrowLeft, Shortcut::Orbit(-0.05)),
+            (KeyCode::ArrowRight, Shortcut::Orbit(0.05)),
+            (KeyCode::ArrowUp, Shortcut::Zoom(1.0 / 1.1)),
+            (KeyCode::ArrowDown, Shortcut::Zoom(1.1)),
+        ] {
+            assert_eq!(camera_shortcut(PhysicalKey::Code(key), true), None);
+            assert_eq!(
+                camera_shortcut(PhysicalKey::Code(key), false),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            camera_shortcut(PhysicalKey::Code(KeyCode::KeyA), false),
+            None
+        );
+    }
 }

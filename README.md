@@ -95,14 +95,22 @@ The checked-in vertical slice currently contains:
 - `apps/terrain-native`: Bevy-free window/headless migration viewer using the
   same frozen canonical field, HIGHLANDS bookmark, height/material builders and
   stellar ephemerides as the game. Run `cargo run --release -p thessa-terrain-native`
-  (Left/Right orbit, Up/Down zoom, Esc exit), or add
+   (egui HUD, Left/Right orbit, Up/Down zoom, Esc exit when UI does not capture input), or add
   `-- --headless terrain.png --frames 120` for a screenshot/frame benchmark.
   Live async height/material streaming shares the extracted client selection,
   dependency/priority policies and bounded Rayon executor in GPL
   `thessa-terrain-stream`. Headless `--prestream-seconds 10 --sweep` exercises
-  changing demand rather than a fixed resident snapshot.
-  Only manual exposure/vsync settings are consumed from `graphics.toml`
-  (`--graphics PATH`); missing body motion/effects/UI/networking and
+   changing demand rather than a fixed resident snapshot.
+   The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's
+   existing wgpu 30 device/queue and color target: no scene texture copy,
+   readback or second device. Window decorations are requested through winit;
+   their appearance follows desktop/compositor policy.
+   HUD controls edit camera, manual exposure and VSync; graphics changes are
+   session-only and pass through the shared settings resolver. `--no-hud`
+   omits UI allocation/work; `--no-default-features` excludes egui entirely.
+   Headless captures omit HUD unless `--hud` is explicitly supplied.
+   Only manual exposure/vsync settings are consumed from `graphics.toml`
+   (`--graphics PATH`); missing body motion/effects/production game UI/networking and
   coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 

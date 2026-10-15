@@ -7,6 +7,10 @@ license = "GPL-3.0-or-later"
 publish = false
 description = "Bevy-free canonical terrain migration viewer and frame benchmark"
 
+[features]
+default = ["hud"]
+hud = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
+
 [dependencies]
 thessa-render-wgpu = { path = "../../crates/render-wgpu" }
 thessa-terrain-stream = { path = "../../crates/terrain-stream" }
@@ -22,3 +26,6 @@ toml.workspace = true
 wgpu.workspace = true
 png = "0.18"
 winit = "0.30.13"
+egui = { version = "0.37", default-features = false, optional = true }
+egui-wgpu = { version = "0.37", default-features = false, optional = true }
+egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "wayland", "x11"], optional = true }

@@ -44,6 +44,14 @@ Permissive dependencies are preferred in MIT engine crates. LGPL/AGPL/GPL depend
 
 Current examples:
 
+- `egui`, `egui-wgpu`, `egui-winit` 0.37 (`MIT OR Apache-2.0`): optional
+  default-enabled HUD dependencies of `apps/terrain-native`; no Slint or GPUI
+  dependency/backend fork is introduced. The application remains GPL game code;
+  the reusable renderer remains MIT and has no UI toolkit dependency.
+  All newly resolved toolkit dependencies offer permissive terms; in particular,
+  `self_cell` is used under its Apache-2.0 alternative, not GPL-2.0-only.
+  HUD text reuses `assets/fonts/NotoSans-Regular.ttf` under OFL-1.1; its existing
+  attribution and license in `assets/fonts/` must accompany binary distribution.
 - `nyx-space` (AGPL): validation/reference by default, not an engine runtime dependency;
 - `avian_fdm` (LGPL): reference/spike pending explicit dependency decision.
 - `large_cbt` (AnisB, NO license upstream): vendored OCBT sources under

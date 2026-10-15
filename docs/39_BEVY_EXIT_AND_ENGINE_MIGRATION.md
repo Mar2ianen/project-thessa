@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-15 (isolated implementation checkpoint; baseline decisions retained)
+**Updated:** 2026-10-15 (isolated renderer/streaming checkpoints and winit + egui shell selection)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -57,8 +57,8 @@ This review is based on the current architecture known from the repository snaps
 | Bevy Tasks | Replaceable | No reason to preserve them as an engine dependency. | Rayon becomes the CPU execution engine; Tokio remains for async I/O/network work. |
 | Bevy ECS | Replaceable | Once renderer/tasks/assets leave Bevy, retaining Bevy only for ECS has little value. | Introduce a Thessa ECS/scheduler later in the migration, after subsystem boundaries stabilize. |
 | Bevy Assets | Medium | Useful during bootstrap but should not own runtime engine state. | Introduce engine asset/cache interfaces gradually; bridge to Bevy while needed. |
-| Window/input/platform | High but low priority | Rewriting platform plumbing gives little value. | Replace late with GPUI when sufficiently stable; do not write custom Wayland/X11/Win32 plumbing. |
-| UI/HUD/debug tooling | Medium–high | Currently likely follows the Bevy host. | Future GPUI layer; keep game/simulation state independent from UI entities. |
+| Window/input/platform | High but low priority | Rewriting platform plumbing gives little value. | winit lifecycle/input and system decorations; do not write custom Wayland/X11/Win32 plumbing. |
+| UI/HUD/debug tooling | Medium–high | Production UI still follows the Bevy host. | egui overlay on the owned renderer; keep game/simulation state independent from UI state. |
 
 ### Immediate conclusion
 
@@ -103,7 +103,7 @@ engine subsystems
 backend interfaces
     ├── Vulkan
     ├── wgpu
-    ├── GPUI
+    ├── winit / egui
     └── Bevy bridge (temporary)
 ```
 
@@ -163,7 +163,7 @@ engine/
 ├── assets/
 │
 └── platform/
-    └── gpui/
+    └── winit_egui/
 
 bridges/
 └── bevy/
@@ -695,8 +695,8 @@ The same scene drives offscreen readback and a winit-owned native surface:
 compatible-adapter selection, sRGB format negotiation, resize/depth recreation,
 zero-size suspension, surface-lost recreation, outdated/suboptimal recovery,
 timeout/occlusion skips, close and basic keyboard orbit/zoom. There is no CPU
-frame copy/blit, CPU mesh or Bevy render world. winit is a diagnostic shell,
-**not** a replacement decision for the intended GPUI platform/UI shell.
+frame copy/blit, CPU mesh or Bevy render world. The later egui checkpoint below
+extends this shell; it does not replace the complete production client.
 
 ```sh
 cargo run --release -p thessa-terrain-native
@@ -848,6 +848,92 @@ glue onto the shared lifecycle, port f64 moving-body/camera transforms and the
 actual scene/effect passes. Keep the old client runnable; remove each Bevy
 consumer only after its production replacement works. GPU conforming bisector
 split/merge topology and FastRT acceleration structures remain unimplemented.
+
+### egui shell checkpoint (2026-10-15)
+
+The selected UI integration is **winit + egui**, superseding the GPUI proposal.
+egui, egui-wgpu and egui-winit 0.37 are MIT OR Apache-2.0 and already use the
+workspace's wgpu 30 line. The HUD embeds the game's existing OFL-1.1 Noto Sans
+asset (egui 0.37 has empty default features); Latin/Cyrillic/digit glyph coverage
+is regression-tested to prevent a silently text-less/tofu HUD.
+Slint is not introduced; neither is a GPUI backend
+fork, a renderer downgrade or another logical device. Existing game-specific
+application/streaming crates retain GPL-3.0-or-later; reusable engine crates
+retain MIT. This decision does not relicense existing code.
+
+`apps/terrain-native` enables its optional `hud` feature by default. The window
+requests system/toolkit window decorations (appearance follows compositor policy),
+while egui-winit handles widget input, pointer cursor,
+clipboard, IME output and native scale-factor conversion. Camera shortcuts are
+suppressed when egui consumes the keyboard event; lifecycle/resize/redraw events
+still reach the window handler. This is a single-window integration, not a
+general multi-viewport desktop framework.
+Window/HUD state is released in winit's `exiting` callback, before the consumed
+event loop destroys its native display; egui-winit's clipboard must not outlive
+the display handle it borrows. Suspension also drops/recreates this state.
+
+The HUD reports residency, pending work, publications, regeneration, material
+upload bytes from post-construction updates, capacity refusals and host frame
+wall time (including waits, not GPU timing or game FPS). It provides
+orbit/distance/reset controls and session-only
+manual EV100/VSync edits. Graphics edits update `RequestedGraphics`, resolve
+against the existing backend capabilities, then update exposure/presentation.
+VSync reconfiguration is deferred until the acquired surface frame is presented.
+The source `graphics.toml` is never rewritten.
+
+GPU composition uses the **same device, queue, command encoder and final color
+target** as terrain. The HUD pass uses `LoadOp::Load`, alpha blending and no
+depth attachment. There is no scene texture import, intermediate scene copy,
+GPU-to-CPU readback or second device. egui still builds/tessellates UI on the CPU
+and uploads its own mesh/font resources; this is not a claim of zero CPU work
+or zero upload. The sRGB surface path uses egui's sRGB-aware output shader.
+
+```sh
+cargo run --release -p thessa-terrain-native
+cargo run --release -p thessa-terrain-native -- --no-hud --frames 600
+cargo run --release -p thessa-terrain-native -- --headless terrain-hud.png --hud --frames 600
+cargo run --release -p thessa-terrain-native --no-default-features
+```
+
+`--no-hud` does not create egui CPU/GPU state or run a UI pass;
+`--no-default-features` also removes the UI dependencies. Headless mode remains
+terrain-only by default to preserve its benchmark boundary; explicit `--hud`
+includes UI construction/upload/drawing in frame latency and the capture.
+Readback is confined to captures/tests and excluded from measured frames.
+
+Regression coverage includes passive-widget camera preservation (unbounded
+keyboard orbit must not be clamped by a slider), pointer capture, and an ignored
+hardware test for preserving scene pixels outside the HUD across target resize,
+1.0/1.5 native scaling and complete HUD recreation. Run that hardware test with
+`cargo test -p thessa-terrain-native -- --ignored` on the development GPU.
+The same command runs a native-display regression that launches both HUD and
+terrain-only windows and requires clean process exit, covering the clipboard
+display-lifetime failure found by the Wayland smoke run. CI without a display
+leaves that explicitly ignored test disabled.
+This is a migration HUD, not production flight/menu/editor UI or visual parity.
+
+Verification: workspace fmt; all-target/all-feature workspace clippy and
+no-default-feature viewer clippy with warnings denied; 1,717 workspace lib/bin,
+43 integration, 24 existing ignored Bevy-CBT GPU and two new ignored viewer
+GPU/native-display tests passed (1,786 successful tests). The runtime dependency
+graph contains one wgpu version (30.0.1), no Bevy and no toolkit default font
+bundle. All 33 newly resolved Rust packages offer permissive license choices.
+
+Final stationary A/B/B/A observations on Radeon 880M, 1280×720, 600 measured +
+30 warm-up frames per run and 10 seconds of pre-stream: terrain-only medians
+**2.526 / 2.661 ms**, HUD medians **2.618 / 2.757 ms**. Each ended with 287 tiles,
+297,216 drawn triangles and zero measured geometry publications/refusals.
+Material jobs remain asynchronous and clocks/scheduling are not locked, so this
+is not an isolated constant-overhead estimate or a game-FPS claim. The resized
+native Wayland run requested 1,200 presentations in 10.058 seconds (119.3
+requests/s), captured the owned window at 1188×813 physical pixels and exited
+cleanly. Compositor/resize/capture work is included; displayed-frame feedback is
+not measured.
+
+[Raw measurements, counters and limitations](artifacts/owned-egui-hud-2026-10-15.json)
+and [native window capture](artifacts/owned-egui-window-2026-10-15.png).
+
+![Shared-device egui migration HUD; terrain visuals remain unaccepted](artifacts/owned-egui-hud-2026-10-15.png)
 
 ## 15. FastRT
 
@@ -1067,23 +1153,16 @@ There is little value in owning:
 - DPI handling;
 - focus/input-method integration.
 
-The intended future shell is GPUI once it is sufficiently stable for the project.
+The selected shell is winit + egui. winit owns application/window lifecycle,
+system decorations and native input. egui-winit bridges widget input/focus,
+clipboard, IME and DPI; egui supplies HUD and future editor/debug widgets.
+The terrain migration viewer implements the first single-window slice above.
+Production flight/menu/editor UI remains unported.
 
-GPUI should own:
-
-- application/window lifecycle;
-- input;
-- focus;
-- clipboard;
-- IME;
-- DPI;
-- HUD;
-- editor/debug panels.
-
-GPUI's entity/state model is not the game ECS.
+UI state is not the game ECS.
 
 ```text
-GPUI state != simulation world
+egui state != simulation world
 ```
 
 Platform migration is deliberately late and independent from renderer/ECS migration.
@@ -1176,12 +1255,13 @@ Simulation code must already be independent enough that this is mostly integrati
 
 ### Phase G — Platform shell
 
-When GPUI is sufficiently stable:
+Incrementally replace the production platform integration using the validated
+migration-viewer path:
 
 ```text
 Bevy window/input/UI
         ↓
-GPUI
+winit + egui + owned renderer
 ```
 
 Do not block renderer migration on this.
@@ -1287,5 +1367,5 @@ must not trigger a rewrite of any engine subsystem.
 > Bevy bootstrapped Project Thessa and remains a temporary host while the game stays runnable.  
 > It is no longer the architecture that new engine systems target.  
 > New renderer, procedural, scheduling, RT, temporal and resource work must use Thessa-owned APIs, with Bevy implemented only as a bridge.  
-> Native Vulkan is the reference GPU backend, wgpu is the portability backend, Rayon is the CPU execution backend, and GPUI is the intended future platform/UI shell.  
+> Native Vulkan is the reference GPU backend, wgpu is the portability backend, Rayon is the CPU execution backend, and winit + egui is the selected platform/UI shell.
 > The migration is incremental: replace one subsystem at a time and never create work that must be rewritten merely to remove Bevy.

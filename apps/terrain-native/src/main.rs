@@ -1,6 +1,8 @@
 //! Migration viewer: canonical frozen terrain, owned compute/raster/materials,
-//! winit presentation/input. No Bevy, networking, HUD, or production effect parity.
+//! winit presentation/input and optional egui HUD. No Bevy or full client parity.
 #![forbid(unsafe_code)]
+#[cfg(feature = "hud")]
+mod hud;
 mod scene;
 mod window;
 
@@ -14,6 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut graphics_path = "graphics.toml".to_string();
     let mut prestream_seconds = 3.0;
     let mut sweep = false;
+    let mut hud_override = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
@@ -32,9 +35,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .parse::<f64>()?
             }
             "--sweep" => sweep = true,
+            "--hud" => hud_override = Some(true),
+            "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep]\nWindow: Left/Right orbit; Up/Down zoom; Esc exit.\nHeadless: --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\nLive canonical terrain streaming viewer, not the complete game client.\nOnly manual exposure and vsync settings are consumed; other effects are unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\nLive canonical terrain streaming viewer, not the complete game client.\nOnly manual exposure and vsync settings are consumed; other effects are unported."
                 );
                 return Ok(());
             }
@@ -49,6 +54,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if headless.is_none() && (sweep || prestream_seconds != 3.0) {
         return Err("--sweep and --prestream-seconds require --headless".into());
+    }
+    let hud_enabled = hud_override.unwrap_or(cfg!(feature = "hud") && headless.is_none());
+    if hud_enabled && !cfg!(feature = "hud") {
+        return Err("--hud requires the hud Cargo feature (enabled by default)".into());
     }
     let started = Instant::now();
     let requested =
@@ -65,6 +74,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let backend = Backend::bring_up()?;
         let target = OffscreenTarget::new(&backend, 1280, 720)?;
         let mut renderer = scene.renderer(&backend, OffscreenTarget::FORMAT)?;
+        #[cfg(feature = "hud")]
+        let mut hud = hud_enabled.then(|| hud::Hud::new(&backend, OffscreenTarget::FORMAT));
         let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
             &scene.requested,
             &backend.caps,
@@ -86,12 +97,33 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut streaming_timings = Vec::new();
         let mut measured_selections = 0;
         let mut measured_publications = 0;
+        #[cfg(feature = "hud")]
+        let mut previous_host_ms = 0.0;
         let count = frame_limit.unwrap_or(120);
         for frame in 0..u64::from(count) + 30 {
             let start = Instant::now();
             if sweep {
                 scene.angle = frame as f64 * 0.006;
             }
+            #[cfg(feature = "hud")]
+            let hud_output = hud.as_ref().map(|hud| {
+                let mut controls = hud::Controls::from_scene(&scene);
+                // This path has no platform input. It exercises exactly the
+                // same widgets and GPU overlay as the native window.
+                hud.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 720.0),
+                        )),
+                        time: Some(stream_started.elapsed().as_secs_f64()),
+                        ..Default::default()
+                    },
+                    &mut controls,
+                    &hud::Stats::from_scene(&scene, frame, previous_host_ms),
+                )
+            });
+            let stream_start = Instant::now();
             let update = scene.tick(
                 &backend,
                 &mut renderer,
@@ -100,12 +132,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                 exposure,
                 stream_started.elapsed().as_secs_f64(),
             )?;
-            let stream_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
             renderer.update_view(&backend, &scene.view(1280, 720, exposure))?;
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             renderer.encode(&mut encoder, &target.color, &target.depth);
-            backend.queue.submit([encoder.finish()]);
+            #[cfg(feature = "hud")]
+            let commands = if let (Some(hud), Some(output)) = (&mut hud, hud_output) {
+                hud.encode(&backend, &mut encoder, &target.color, output, [1280, 720])
+            } else {
+                Vec::new()
+            };
+            #[cfg(not(feature = "hud"))]
+            let commands = Vec::<wgpu::CommandBuffer>::new();
+            backend.queue.submit(
+                commands
+                    .into_iter()
+                    .chain(std::iter::once(encoder.finish())),
+            );
             backend.device.poll(wgpu::PollType::wait_indefinitely())?;
+            #[cfg(feature = "hud")]
+            {
+                previous_host_ms = start.elapsed().as_secs_f64() * 1000.0;
+            }
             if frame >= 30 {
                 measured_selections += u64::from(update.selected);
                 measured_publications += u64::from(update.geometry_changed);
@@ -136,7 +184,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             1000.0 / median
         );
         println!(
-            "Live canonical stream, 1280x720 offscreen: selection/poll/publication + camera upload + classify + raster + GPU completion; excludes setup/{prestream_seconds}s pre-stream/30 warmup frames/readback; NOT game FPS. sweep={sweep}"
+            "Live canonical stream, 1280x720 offscreen: selection/poll/publication + camera upload + classify + raster + optional HUD + GPU completion; excludes setup/{prestream_seconds}s pre-stream/30 warmup frames/readback; NOT game FPS. sweep={sweep} hud={hud_enabled}"
         );
         println!(
             "geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} wanted={}",
@@ -158,7 +206,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
-    window::run(scene, frame_limit)
+    window::run(scene, frame_limit, hud_enabled)
 }
 
 /// Same manual-camera convention as the current Bevy PBR host (EV100).

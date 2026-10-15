@@ -1,6 +1,8 @@
 use super::*;
+use crate::JobHandle;
 use crate::tests::{field, view};
 use std::sync::mpsc::sync_channel;
+use thessa_rcbt_core::HeightPage;
 
 fn policy() -> StreamingPolicy {
     StreamingPolicy {
@@ -33,16 +35,26 @@ fn asynchronous_publication_keeps_cover_and_reports_exhaustion() {
     let mut producers = Vec::new();
     for child in children {
         let (tx, rx) = sync_channel(1);
-        stream.height_jobs.insert(child, JobHandle::new(rx));
+        stream.heights.jobs.insert(child, JobHandle::new(rx));
         producers.push(tx);
     }
     let page = || HeightPage::bake(&[100.0; 4], 2, 0.01).unwrap();
     // Deliberately complete out of order; partial siblings cannot replace root.
-    producers[2].send(Ok(page())).unwrap();
+    producers[2]
+        .send(Ok(HeightBuild {
+            page: page(),
+            payload: (),
+        }))
+        .unwrap();
     assert!(!stream.tick(view(), 0.01, 0.01).unwrap().geometry_changed);
     assert_eq!(stream.visible, roots);
     for i in [3, 0, 1] {
-        producers[i].send(Ok(page())).unwrap();
+        producers[i]
+            .send(Ok(HeightBuild {
+                page: page(),
+                payload: (),
+            }))
+            .unwrap();
     }
     let update = stream.tick(view(), 0.01, 0.02).unwrap();
     assert_eq!(update.height_ready, 3);
@@ -51,13 +63,17 @@ fn asynchronous_publication_keeps_cover_and_reports_exhaustion() {
     stream.policy.draw_capacity = 9;
     // A new completion retries the complete partition without a new selection.
     let (tx, rx) = sync_channel(1);
-    tx.send(Ok(page())).unwrap();
-    stream.height_jobs.insert(root, JobHandle::new(rx));
+    tx.send(Ok(HeightBuild {
+        page: page(),
+        payload: (),
+    }))
+    .unwrap();
+    stream.heights.jobs.insert(root, JobHandle::new(rx));
     assert!(stream.tick(view(), 0.01, 0.03).unwrap().geometry_changed);
     assert_eq!(stream.visible.len(), 9);
     assert!(!stream.visible.contains(&root));
     assert!(children.iter().all(|k| stream.visible.contains(k)));
-    assert!(stream.heights[&root].generation > 1);
+    assert!(stream.height(root).unwrap().generation > 1);
     assert!(
         stream
             .visible
@@ -82,7 +98,7 @@ fn hard_height_budget_includes_inflight_results_and_invalid_views_are_rejected()
     let update = stream.tick(view(), 0.01, 0.0).unwrap();
     assert!(update.capacity_rejected);
     assert_eq!(stream.heights.len(), 6);
-    assert!(stream.height_jobs.is_empty());
+    assert_eq!(stream.heights.pending_count(), 0);
     assert!(
         stream
             .visible
@@ -153,4 +169,39 @@ fn stationary_pixel_scale_change_reaches_material_reconcile_without_geometry_cha
     assert!(!update.geometry_changed);
     assert!(update.materials_changed);
     assert_ne!(stream.material_demand(), before);
+}
+
+#[test]
+fn visible_height_edit_republishes_unchanged_cover_and_failed_workers_are_retryable() {
+    let mut stream = TerrainStream::new(field(), policy()).unwrap();
+    stream.tick(view(), 1.0, 0.0).unwrap();
+    let visible = stream.visible.clone();
+    let key = TileKey::root(4);
+    let generation = stream.height(key).unwrap().generation;
+    let (tx, rx) = sync_channel(1);
+    tx.send(Ok(HeightBuild {
+        page: HeightPage::bake(&[700.0; 4], 2, 0.01).unwrap(),
+        payload: (),
+    }))
+    .unwrap();
+    stream.heights.jobs.insert(key, JobHandle::new(rx));
+    let update = stream.tick(view(), 1.0, 0.01).unwrap();
+    assert!(update.geometry_changed);
+    assert!(!update.selected);
+    assert_eq!(stream.visible, visible);
+    assert!(stream.height(key).unwrap().generation > generation);
+    let (tx, rx) = sync_channel(1);
+    drop(tx);
+    stream.heights.jobs.insert(key, JobHandle::new(rx));
+    let update = stream.tick(view(), 1.0, 0.02).unwrap();
+    assert_eq!(update.height_failed, 1);
+    assert!(!update.geometry_changed);
+    assert_eq!(
+        stream.height(key).unwrap().generation,
+        stream
+            .heights
+            .source()
+            .page_version(lod::cbt_node_for_tile(key).unwrap().id())
+            .unwrap()
+    );
 }

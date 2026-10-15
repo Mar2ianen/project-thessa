@@ -6,16 +6,16 @@
 //! stream into Bevy's render world; the render adapter owns page, vertex, and
 //! indirect-draw buffers and no authoritative state crosses that boundary.
 
-use bevy::prelude::{App, Plugin, PostUpdate, ResMut, Resource};
+use bevy::prelude::{App, Deref, DerefMut, Plugin, PostUpdate, ResMut, Resource};
 #[cfg(feature = "render")]
 use bevy::prelude::{Handle, Image};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::sync::Arc;
+#[cfg(test)]
+use thessa_rcbt_core::HeightPage;
+use thessa_rcbt_core::height_source::HeightPageStore;
 use thessa_rcbt_core::{
-    CbtCapabilities, FrameBudget, HeightPage, LeafCandidate, LeafList, Tree, TreeError, Update,
-    UpdatePlan, plan_frame,
+    CbtCapabilities, FrameBudget, LeafCandidate, LeafList, Tree, TreeError, Update, UpdatePlan,
+    plan_frame,
 };
 
 /// Exact render transport record for one committed CBT leaf.
@@ -263,102 +263,16 @@ impl CbtRenderTopology {
 /// CBT leaves. Pages are keyed by the exact heap node id, not by a dense tree
 /// slot, so odd-depth transport leaves and depth-37 game tiles remain
 /// representable without a second topology walk.
-#[derive(Debug, Clone, Default, Resource)]
-pub struct CbtRenderPages {
-    generation: u64,
-    /// Copy-on-write map snapshot. Extraction shares the immutable map; page
-    /// content is independently shared so streamed updates copy the directory
-    /// at most once per batch, not every resident height vector per page.
-    pages: Arc<BTreeMap<u64, (u64, Arc<HeightPage>)>>,
-}
+#[derive(Debug, Clone, Default, Resource, Deref, DerefMut)]
+pub struct CbtRenderPages(pub HeightPageStore);
 
 impl CbtRenderPages {
-    /// Insert or replace the baked page for one CBT leaf.
-    ///
-    /// Content equality gates both generations: an identical re-publish is a
-    /// no-op. Otherwise the global generation advances (the render world
-    /// re-examines residency) and the page's own version advances (stable
-    /// GPU slot caches re-upload only this page's range).
-    pub fn set_page(&mut self, node_id: u64, page: HeightPage) {
-        self.set_pages(std::iter::once((node_id, page)));
-    }
-
-    /// Publish a batch of streamed pages with one copy-on-write directory
-    /// update. A render-world extraction may retain the previous snapshot
-    /// while several worker results arrive during one frame.
-    pub fn set_pages(&mut self, updates: impl IntoIterator<Item = (u64, HeightPage)>) {
-        let mut changed = BTreeMap::new();
-        let mut change_count = 0_u64;
-        for (node_id, page) in updates {
-            let current = changed.get(&node_id).or_else(|| self.pages.get(&node_id));
-            if current
-                .is_some_and(|(_, existing): &(u64, Arc<HeightPage>)| existing.as_ref() == &page)
-            {
-                continue;
-            }
-            let version = current.map_or(1, |(version, _)| version.saturating_add(1));
-            changed.insert(node_id, (version, Arc::new(page)));
-            change_count = change_count.saturating_add(1);
+    /// Preserve Bevy change detection: check through ResMut's shared borrow
+    /// before publishing a dirty backend-neutral snapshot.
+    pub fn publish_if_changed(source: &HeightPageStore, resource: &mut ResMut<'_, Self>) {
+        if source.generation() != resource.generation() {
+            resource.0 = source.clone();
         }
-        if changed.is_empty() {
-            return;
-        }
-        let pages = Arc::make_mut(&mut self.pages);
-        pages.extend(changed);
-        self.generation = self.generation.saturating_add(change_count);
-    }
-
-    /// Remove a page whose CPU-side tile cache was evicted.
-    pub fn remove_page(&mut self, node_id: u64) {
-        self.remove_pages(std::iter::once(node_id));
-    }
-
-    /// Remove multiple evicted pages with at most one directory copy.
-    pub fn remove_pages(&mut self, node_ids: impl IntoIterator<Item = u64>) {
-        let removed: BTreeSet<_> = node_ids
-            .into_iter()
-            .filter(|node_id| self.pages.contains_key(node_id))
-            .collect();
-        if removed.is_empty() {
-            return;
-        }
-        let count = removed.len() as u64;
-        let pages = Arc::make_mut(&mut self.pages);
-        for node_id in removed {
-            pages.remove(&node_id);
-        }
-        self.generation = self.generation.saturating_add(count);
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    pub fn len(&self) -> usize {
-        self.pages.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pages.is_empty()
-    }
-
-    /// Whether the page for an exact CBT leaf is resident in the current
-    /// render-page cache. Terrain adapters use this to keep a coarse
-    /// bootstrap surface behind an incomplete GPU cover.
-    pub fn contains_page(&self, node_id: u64) -> bool {
-        self.pages.contains_key(&node_id)
-    }
-
-    /// Per-page content version. Advances only when `set_page` stores
-    /// different bytes for the same node, so GPU slot caches can upload
-    /// exactly the changed slots instead of rebuilding every page.
-    pub fn page_version(&self, node_id: u64) -> Option<u64> {
-        self.pages.get(&node_id).map(|(version, _)| *version)
-    }
-
-    #[cfg(feature = "render")]
-    pub(crate) fn get(&self, node_id: u64) -> Option<&HeightPage> {
-        self.pages.get(&node_id).map(|(_, page)| page.as_ref())
     }
 }
 
@@ -947,6 +861,32 @@ mod tests {
     }
 
     #[test]
+    fn height_source_publication_preserves_bevy_change_detection() {
+        use bevy::prelude::{DetectChanges, Res, Schedule, World};
+        #[derive(Resource)]
+        struct Source(HeightPageStore);
+        fn publish(source: Res<Source>, mut pages: ResMut<CbtRenderPages>) {
+            CbtRenderPages::publish_if_changed(&source.0, &mut pages);
+        }
+        let mut world = World::new();
+        world.init_resource::<CbtRenderPages>();
+        let mut source = HeightPageStore::default();
+        source.set_page(8, HeightPage::bake(&[10.0; 4], 2, 0.01).unwrap());
+        world.insert_resource(Source(source));
+        let mut schedule = Schedule::default();
+        schedule.add_systems(publish);
+        schedule.run(&mut world);
+        assert!(world.resource_ref::<CbtRenderPages>().is_changed());
+        world.clear_trackers();
+        schedule.run(&mut world);
+        assert!(!world.resource_ref::<CbtRenderPages>().is_changed());
+        world.resource_mut::<Source>().0.remove_page(8);
+        schedule.run(&mut world);
+        assert!(world.resource_ref::<CbtRenderPages>().is_changed());
+        assert!(world.resource::<CbtRenderPages>().is_empty());
+    }
+
+    #[test]
     fn extracted_snapshots_share_payload_and_page_updates_are_copy_on_write() {
         let mut topology = CbtRenderTopology::default();
         assert!(topology.publish_resident_leaves(&[Node::root()]));
@@ -969,19 +909,25 @@ mod tests {
         pages.set_page(17, page.clone());
         pages.set_page(19, page.clone());
         let page_snapshot = pages.clone();
-        assert!(std::sync::Arc::ptr_eq(&pages.pages, &page_snapshot.pages));
+        assert!(std::ptr::eq(
+            pages.source_pages(),
+            page_snapshot.source_pages()
+        ));
         assert!(std::sync::Arc::ptr_eq(
-            &pages.pages[&17].1,
-            &page_snapshot.pages[&17].1
+            &pages.source_pages()[&17].1,
+            &page_snapshot.source_pages()[&17].1
         ));
 
         pages.set_page(17, replacement.clone());
-        assert!(!std::sync::Arc::ptr_eq(&pages.pages, &page_snapshot.pages));
-        assert_eq!(pages.pages[&17].1.as_ref(), &replacement);
-        assert_eq!(page_snapshot.pages[&17].1.as_ref(), &page);
+        assert!(!std::ptr::eq(
+            pages.source_pages(),
+            page_snapshot.source_pages()
+        ));
+        assert_eq!(pages.get(17), Some(&replacement));
+        assert_eq!(page_snapshot.get(17), Some(&page));
         assert!(std::sync::Arc::ptr_eq(
-            &pages.pages[&19].1,
-            &page_snapshot.pages[&19].1
+            &pages.source_pages()[&19].1,
+            &page_snapshot.source_pages()[&19].1
         ));
     }
 

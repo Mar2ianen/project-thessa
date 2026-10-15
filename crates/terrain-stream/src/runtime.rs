@@ -4,30 +4,20 @@
 #[path = "runtime_tests.rs"]
 mod tests;
 use crate::{
-    JobHandle,
+    height::{self, HeightBuild, HeightEntry, HeightPolicy, HeightStream},
     material::{MaterialDemand, MaterialStream},
-    selection::{self, SelectionHistory, SelectionPolicy, SelectionView},
+    selection::{SelectionHistory, SelectionPolicy, SelectionView},
 };
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, mpsc::TryRecvError},
-};
+use std::sync::Arc;
 use thessa_rcbt_core::{
-    HeightPage,
     material_page::{CbtMaterialPage, MaterialPages},
     material_source::MaterialPageStore,
 };
 use thessa_worldgen_rocky::{
     field::PlanetField,
     lod::{self, TileKey},
-    streaming::{lru_evictions, resident_cover},
+    streaming::resident_cover,
 };
-
-pub struct HeightEntry {
-    pub generation: u64,
-    pub page: HeightPage,
-    last_used: u64,
-}
 
 #[derive(Clone, Copy)]
 pub struct StreamingPolicy {
@@ -53,6 +43,7 @@ pub struct StreamUpdate {
     pub materials_changed: bool,
     pub selected: bool,
     pub height_ready: usize,
+    pub height_failed: usize,
     pub material_ready: usize,
     pub material_failed: usize,
     pub capacity_rejected: bool,
@@ -65,11 +56,9 @@ pub struct TerrainStream {
     fine: Vec<TileKey>,
     wanted: Vec<TileKey>,
     visible: Vec<TileKey>,
-    heights: BTreeMap<TileKey, HeightEntry>,
+    heights: HeightStream,
     materials: MaterialStream,
-    height_jobs: BTreeMap<TileKey, JobHandle<Result<HeightPage, String>>>,
     epoch: u64,
-    generation: u64,
 }
 
 impl TerrainStream {
@@ -87,16 +76,19 @@ impl TerrainStream {
             return Err("invalid terrain streaming budgets".into());
         }
         let visible: Vec<_> = (0..6).map(TileKey::root).collect();
-        let mut heights = BTreeMap::new();
+        let mut heights = HeightStream::default();
         let mut materials = MaterialPageStore::default();
         for &key in &visible {
-            heights.insert(
-                key,
-                HeightEntry {
-                    generation: 1,
-                    page: lod::bake_height_page(&field, key, 33, 0.5).map_err(|e| e.to_string())?,
-                    last_used: 0,
-                },
+            heights.insert_batch(
+                0,
+                [(
+                    key,
+                    HeightBuild {
+                        page: height::bake_page(&field, key)?,
+                        payload: (),
+                    },
+                )],
+                |_, ()| (),
             );
             materials.set_page(
                 lod::cbt_node_for_tile(key).unwrap().id(),
@@ -116,9 +108,7 @@ impl TerrainStream {
                 materials.set_priority((8..14).collect());
                 MaterialStream::with_source(policy.material_cache, materials)
             },
-            height_jobs: BTreeMap::new(),
             epoch: 0,
-            generation: 1,
         })
     }
 
@@ -128,8 +118,8 @@ impl TerrainStream {
     pub fn radius_m(&self) -> f64 {
         self.field.params.radius_m
     }
-    pub fn height(&self, key: TileKey) -> Option<&HeightEntry> {
-        self.heights.get(&key)
+    pub fn height(&self, key: TileKey) -> Option<HeightEntry<'_>> {
+        self.heights.height(key)
     }
     pub fn materials(&self) -> &MaterialPages {
         self.materials.source().source_pages()
@@ -138,7 +128,7 @@ impl TerrainStream {
         self.materials.source().priority()
     }
     pub fn pending_jobs(&self) -> (usize, usize) {
-        (self.height_jobs.len(), self.materials.pending_count())
+        (self.heights.pending_count(), self.materials.pending_count())
     }
     pub fn cache_entries(&self) -> (usize, usize) {
         (
@@ -148,14 +138,6 @@ impl TerrainStream {
     }
     pub fn wanted_count(&self) -> usize {
         self.wanted.len()
-    }
-
-    fn next_generation(&mut self) -> Result<u64, String> {
-        self.generation = self
-            .generation
-            .checked_add(1)
-            .ok_or("terrain generation exhausted")?;
-        Ok(self.generation)
     }
 
     pub fn tick(
@@ -195,30 +177,9 @@ impl TerrainStream {
             self.epoch = self.epoch.saturating_add(1);
             update.selected = true;
         }
-        let mut finished = Vec::new();
-        for (&key, job) in &self.height_jobs {
-            match job.try_take() {
-                Ok(result) => finished.push((key, result)),
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    finished.push((key, Err("terrain height worker disconnected".into())))
-                }
-            }
-        }
-        for (key, result) in finished {
-            self.height_jobs.remove(&key);
-            let page = result?;
-            let generation = self.next_generation()?;
-            self.heights.insert(
-                key,
-                HeightEntry {
-                    generation,
-                    page,
-                    last_used: self.epoch,
-                },
-            );
-            update.height_ready += 1;
-        }
+        let height_poll = self.heights.poll_with(self.epoch, |_, ()| ());
+        update.height_ready = height_poll.ready;
+        update.height_failed = height_poll.failed.len();
         let material_revision = self.materials.source().generation();
         let material_poll = self.materials.poll();
         update.material_ready = material_poll.ready;
@@ -227,6 +188,7 @@ impl TerrainStream {
         // priorities, dependency sets or LRU staging vectors.
         if !update.selected
             && update.height_ready == 0
+            && update.height_failed == 0
             && update.material_ready == 0
             && update.material_failed == 0
             && !self.materials.needs_refinement(self.epoch, pixel_angle)
@@ -245,58 +207,25 @@ impl TerrainStream {
                 update.geometry_changed = true;
             }
         }
-        let dependencies = selection::spawn_dependencies(&self.wanted, true, |key| {
-            self.heights.contains_key(&key)
-        });
-        let protected: BTreeSet<_> = self
-            .visible
+        update.geometry_changed |= height_poll
+            .changed
             .iter()
-            .copied()
-            .chain(dependencies.iter().copied())
-            .chain((0..6).map(TileKey::root))
-            .chain(self.height_jobs.keys().copied())
-            .collect();
-        for key in &protected {
-            if let Some(entry) = self.heights.get_mut(key) {
-                entry.last_used = self.epoch;
-            }
-        }
-        let entries: Vec<_> = self
-            .heights
-            .iter()
-            .map(|(key, entry)| (*key, entry.last_used))
-            .collect();
-        // Reserve room for queued results too. Never evict the drawn cover.
-        let reserve = self
-            .policy
-            .height_cache
-            .saturating_sub(self.height_jobs.len() + 8);
-        for key in lru_evictions(&entries, &protected, reserve) {
-            self.heights.remove(&key);
-        }
-        let mut pending: Vec<_> = dependencies
-            .iter()
-            .copied()
-            .filter(|key| !self.heights.contains_key(key) && !self.height_jobs.contains_key(key))
-            .collect();
-        pending.sort_by_cached_key(|key| selection::height_priority(&self.field, view, *key));
-        let available = self
-            .policy
-            .height_cache
-            .saturating_sub(self.heights.len() + self.height_jobs.len());
-        update.capacity_rejected |= !pending.is_empty() && available == 0;
-        for key in pending
-            .into_iter()
-            .take(8usize.saturating_sub(self.height_jobs.len()).min(available))
-        {
-            let field = self.field.clone();
-            self.height_jobs.insert(
-                key,
-                JobHandle::spawn(move || {
-                    lod::bake_height_page(&field, key, 33, 0.5).map_err(|e| e.to_string())
-                }),
-            );
-        }
+            .any(|key| self.visible.contains(key));
+        let admission = self.heights.reconcile(
+            &self.field,
+            view,
+            &self.wanted,
+            self.visible.iter().copied(),
+            self.epoch,
+            HeightPolicy {
+                capacity: self.policy.height_cache,
+                max_jobs: 8,
+                ancestors: true,
+                pin_roots: true,
+            },
+            |key| height::spawn_height_job(self.field.clone(), key),
+        );
+        update.capacity_rejected |= admission.capacity_rejected;
         self.materials.reconcile(
             &self.field,
             MaterialDemand {
@@ -304,7 +233,7 @@ impl TerrainStream {
                 fine: &self.fine,
                 view,
                 pixel_angle,
-                height_jobs: self.height_jobs.len(),
+                height_jobs: self.heights.pending_count(),
             },
             self.visible.iter().copied().chain(
                 self.wanted

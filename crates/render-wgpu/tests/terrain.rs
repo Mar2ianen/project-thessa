@@ -24,6 +24,61 @@ fn backend() -> Option<Backend> {
 }
 
 #[test]
+fn neutral_height_source_dirty_and_reinserted_versions_regenerate_gpu_geometry() {
+    use thessa_rcbt_core::height_source::HeightPageStore;
+    let Some(backend) = backend() else { return };
+    let anchor = anchor(4, 0, 0, 0);
+    let id = 12;
+    let mut source = HeightPageStore::default();
+    source.set_page(id, HeightPage::bake(&[10.0; 4], 2, 0.01).unwrap());
+    let mut renderer = TerrainRenderer::with_capacity(
+        &backend,
+        &[TerrainPatch {
+            anchor,
+            page: source.get(id).unwrap(),
+        }],
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 1,
+            height_grid_size: 2,
+            material_layers: 1,
+        },
+    )
+    .unwrap();
+    let publish = |renderer: &mut TerrainRenderer, source: &HeightPageStore| {
+        renderer
+            .publish_partition(
+                &backend,
+                &[ResidentTerrainPatch {
+                    anchor,
+                    page: source.get(id).unwrap(),
+                    generation: source.page_version(id).unwrap(),
+                }],
+            )
+            .unwrap()
+            .regenerated
+    };
+    assert_eq!(publish(&mut renderer, &source), 1);
+    assert_eq!(publish(&mut renderer, &source), 0);
+    let snapshot = source.clone();
+    source.set_page(id, HeightPage::bake(&[500.0; 4], 2, 0.01).unwrap());
+    assert_eq!(publish(&mut renderer, &source), 1);
+    for vertex in renderer.read_vertices(&backend).unwrap().as_chunks::<8>().0 {
+        assert_eq!(vertex[7], 500.0);
+    }
+    let version = source.page_version(id).unwrap();
+    source.remove_page(id);
+    renderer.publish_partition(&backend, &[]).unwrap();
+    source.set_page(id, HeightPage::bake(&[900.0; 4], 2, 0.01).unwrap());
+    assert!(source.page_version(id).unwrap() > version);
+    assert_eq!(publish(&mut renderer, &source), 1);
+    for vertex in renderer.read_vertices(&backend).unwrap().as_chunks::<8>().0 {
+        assert_eq!(vertex[7], 900.0);
+    }
+    assert_ne!(snapshot.get(id), source.get(id));
+}
+
+#[test]
 fn partition_reuses_slots_rejects_atomically_and_clears_sparse_and_empty_draws() {
     let Some(backend) = backend() else { return };
     let a = anchor(4, 10, 512, 512);

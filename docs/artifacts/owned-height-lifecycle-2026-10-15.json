@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-15",
+  "branch": "feat/terrain-height-lifecycle",
+  "base_commit": "f6c3d777bef5bf491219c1fbde733ed71f0b405c",
+  "baseline_binary_sha256": "c0fb0656ae3bb36ff1afef6fe07cc52786e7cea12b35d79c2d843a2653b8628c",
+  "binary_sha256": "c3a1172e3a142e7b8bb8ec0b69fa15d42880f69c003fda583508316dc3dfe334",
+  "build": "cargo build --release -p thessa-terrain-native; default profile and hud feature",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "scope": {
+    "mit_core": "HeightPageStore: immutable COW height directory and local monotonic revisions",
+    "gpl_game_lifecycle": "HeightStream<Resident, Built>: jobs, residency, LRU, protected cover, bounded admission and retired payloads",
+    "hosts": ["production Bevy WorldTerrain", "native TerrainStream"],
+    "bevy_boundary": "host CPU mesh/image construction, asset conversion/removal and ECS presentation; thin CbtRenderPages extraction resource",
+    "gpu_page_builder": "unchanged canonical 33x33 samples, 0.5 m absolute quantization budget; shared by both hosts",
+    "new_dependencies": [], "new_unsafe_code": false,
+    "native_bevy_runtime_crates": [], "native_wgpu_runtime_versions": ["30.0.1"],
+    "extra_gpu_devices_scene_readbacks_or_intermediate_scene_targets": 0
+  },
+  "settings": {
+    "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b",
+    "manual_exposure_ev100": 13.0, "vsync_requested": false
+  },
+  "stationary_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "order": ["baseline-1", "new-1", "new-2", "baseline-2"],
+    "size": [1280, 720], "format": "Rgba8UnormSrgb", "hud": true,
+    "measured_frames_per_run": 600, "warmup_frames_per_run": 30, "prestream_seconds_per_run": 10,
+    "final_tiles_each_run": 287, "drawn_triangles_each_run": 297216,
+    "height_cache_entries_each_run": 388, "regenerated_patches_each_run": 387,
+    "pending_height_material_jobs_each_run": [0, 4],
+    "measured_selections_each_run": 2, "measured_geometry_publications_each_run": 0,
+    "capacity_rejections_each_run": 0, "initial_material_upload_bytes_excluded_from_update_counter": 524280,
+    "boundary": "host wall latency: HUD construction + selection/poll/publication + camera upload + terrain classify/raster + HUD upload/raster + GPU completion",
+    "excluded": ["canonical CPU scene build", "renderer setup", "pre-stream", "30 warmup frames", "screenshot readback/encoding"],
+    "runs": [
+      {"name": "baseline-1", "median_ms": 2.701, "p95_ms": 3.889, "p99_ms": 4.866, "max_ms": 10.531,
+       "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.785, "stream_cpu_p99_ms": 0.969, "stream_cpu_max_ms": 7.453,
+       "geometry_publications": 55, "material_cache_entries": 275, "material_update_upload_bytes": 23505220},
+      {"name": "new-1", "median_ms": 2.789, "p95_ms": 4.204, "p99_ms": 5.033, "max_ms": 11.354,
+       "stream_cpu_median_ms": 0.003, "stream_cpu_p95_ms": 0.736, "stream_cpu_p99_ms": 0.903, "stream_cpu_max_ms": 7.634,
+       "geometry_publications": 58, "material_cache_entries": 276, "material_update_upload_bytes": 23592600},
+      {"name": "new-2", "median_ms": 2.611, "p95_ms": 3.448, "p99_ms": 4.396, "max_ms": 10.729,
+       "stream_cpu_median_ms": 0.002, "stream_cpu_p95_ms": 0.775, "stream_cpu_p99_ms": 0.850, "stream_cpu_max_ms": 7.918,
+       "geometry_publications": 57, "material_cache_entries": 265, "material_update_upload_bytes": 22631420},
+      {"name": "baseline-2", "median_ms": 2.560, "p95_ms": 3.298, "p99_ms": 3.653, "max_ms": 11.370,
+       "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.649, "stream_cpu_p99_ms": 0.852, "stream_cpu_max_ms": 7.812,
+       "geometry_publications": 55, "material_cache_entries": 273, "material_update_upload_bytes": 23330460}
+    ]
+  },
+  "sweep_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --sweep --frames 600 --prestream-seconds 10",
+    "median_ms": 2.597, "p95_ms": 4.255, "p99_ms": 12.048, "max_ms": 13.329,
+    "stream_cpu_median_ms": 0.002, "stream_cpu_p95_ms": 1.360, "stream_cpu_p99_ms": 9.388, "stream_cpu_max_ms": 10.398,
+    "final_tiles": 286, "final_drawn_triangles": 301824, "wanted_tiles": 292,
+    "geometry_publications": 113, "regenerated_patches": 810,
+    "height_material_cache_entries": [668, 272], "pending_height_material_jobs": [6, 3],
+    "material_update_upload_bytes": 23243080, "capacity_rejections": 0,
+    "measured_selections": 12, "measured_geometry_publications": 55, "final_angle_rad": 3.774,
+    "coverage_note": "asynchronous replacement is still pending; prior coarse coverage is retained, not dropped",
+    "hud_note": "HUD stats are constructed before the stream tick and can differ from final counters by one frame"
+  },
+  "native_wayland_smoke": {
+    "arguments": "--frames 1200", "hud": true, "compositor": "niri",
+    "presentation_requests": 1200, "elapsed_seconds": 10.250, "requests_per_second": 117.1, "exit_code": 0,
+    "final_tiles": 287, "geometry_publications": 44, "regenerated_patches": 387,
+    "height_material_cache_entries": [388, 224], "pending_height_material_jobs": [0, 4], "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor policy; not displayed frames, GPU-only timing or game FPS"
+  },
+  "height_source_microbenchmark": {
+    "command": "cargo bench -p thessa-rcbt-core --bench height_source",
+    "source_entries": 1024, "grid": [33, 33], "residual_payload_bytes": 2230272,
+    "unit": "nanoseconds; Instant harness overhead included",
+    "excluded": ["canonical page baking", "fixture page/vector cloning before each timed sample", "host payload conversion", "selection/LRU/admission", "GPU upload", "geometry generation and rendering"],
+    "runs": [
+      {"operation": "shared snapshot clone/drop", "samples": 10000, "median": 40, "p95": 41},
+      {"operation": "eight equal completed pages", "samples": 1000, "median": 371, "p95": 381},
+      {"operation": "eight dirty completions with retained snapshot", "samples": 1000, "median": 16150, "p95": 16320},
+      {"operation": "eight evictions/reinsertions with retained snapshot", "samples": 1000, "median": 17012, "p95": 17192}
+    ],
+    "note": "dirty samples include directory COW and old snapshot release; no whole-renderer speedup claim"
+  },
+  "verification": {
+    "workspace_fmt": "pass", "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_all_target_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests_passed": 1739, "workspace_integration_tests_passed": 44,
+    "ignored_bevy_cbt_hardware_tests_passed": 24, "ignored_viewer_gpu_and_native_exit_tests_passed": 2,
+    "successful_test_total": 1809,
+    "review": "local ownership/API/license/diff review; one height owner per host, residual vectors stored once, one final Bevy source publication after admission, asset retirement kept in the host",
+    "regressions": ["COW/content no-ops", "monotonic reinsertion", "revision exhaustion", "mixed success/error/disconnection batches", "resident plus pending budget", "protected coverage/root pinning", "deterministic LRU", "one-time replacement/eviction retirement", "receiver teardown", "invalid address before asset conversion", "real Bevy asset retirement", "Bevy change detection", "same-cover dirty height publication", "GPU geometry regeneration from neutral source revisions"]
+  },
+  "captures": [
+    {"path": "owned-height-lifecycle-2026-10-15.png", "size": [1280, 720], "sha256": "1931a25e8495ea12ec718f41fb8ad52962e1157b26176358c47542513d398a82", "meaning": "new-1 stationary offscreen HUD frame"},
+    {"path": "owned-height-lifecycle-sweep-2026-10-15.png", "size": [1280, 720], "sha256": "4a3b01e5db3f31fa6dbae9780184ec47c51ac3de49bdff8ef34175611d8b6361", "meaning": "final sweep offscreen HUD frame"}
+  ],
+  "limitations": [
+    "The native path adds a small TileKey/LRU metadata map and per-page Arc ownership; it does not duplicate height residual vectors.",
+    "Protected external over-budget state is retained/reported, not evicted; hard admission bounds apply to resident plus pending work under the supplied policy, not old extraction snapshots or byte residency.",
+    "New stationary medians were slightly higher in this run. Asynchronous material work differs and clocks/scheduling are not locked; these observations cannot isolate migration overhead or establish a speedup.",
+    "Terrain blur/coarse relief and thin dark relief artifacts remain visually unaccepted; no visual parity claim.",
+    "CPU fallback asset construction and selection/topology/camera/ECS integration remain in the old host. This is not complete production client, moving-body, effects/UI/networking or FastRT acceleration-structure parity."
+  ]
+}

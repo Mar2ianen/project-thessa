@@ -6,24 +6,19 @@ use bevy::{
     math::{DQuat, DVec3},
     mesh::{Indices, PrimitiveTopology},
 };
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, mpsc::TryRecvError},
-    time::Instant,
-};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 use thessa_bevy_rcbt::{
     CbtCloudShadow, CbtFrameInput, CbtNightLights, CbtRenderMaterial, CbtRenderPages,
     CbtRenderState, CbtRenderSurface, CbtRenderTopology, RenderView,
 };
-use thessa_rcbt_core::{
-    CandidateAction, HeightPage, LeafCandidate, Node as CbtNode, Tree, WorkClass,
-};
+use thessa_rcbt_core::{CandidateAction, LeafCandidate, Node as CbtNode, Tree, WorkClass};
 #[cfg(test)]
-use thessa_terrain_stream::selection::complete_terrain_cover;
+use thessa_terrain_stream::selection::{self, complete_terrain_cover};
 use thessa_terrain_stream::{
     JobHandle,
+    height::{HeightBuild, HeightPolicy, HeightStream},
     material::{MaterialDemand, MaterialStream},
-    selection::{self, SelectionHistory, SelectionPolicy, SelectionView, tiles_overlap},
+    selection::{SelectionHistory, SelectionPolicy, SelectionView, tiles_overlap},
 };
 use thessa_worldgen_rocky::{
     field::PlanetField,
@@ -50,8 +45,8 @@ pub(super) struct WorldTerrain {
     pub cache_bytes: u64,
     pub render_center: Option<Vec3>,
     pub render_origin_m: DVec3,
-    cache: BTreeMap<TileKey, CachedTile>,
-    jobs: BTreeMap<TileKey, JobHandle<TerrainBuildOutput>>,
+    heights: HeightStream<CachedTile, TerrainBuildOutput>,
+    height_capacity_rejected: bool,
     material_stream: MaterialStream,
     wanted: Vec<TileKey>,
     fine_selection: Vec<TileKey>,
@@ -63,7 +58,6 @@ pub(super) struct WorldTerrain {
     topology_pending: bool,
 }
 struct CachedTile {
-    last_used: u64,
     mesh: Option<Handle<Mesh>>,
     anchor: DVec3,
     vertices: u64,
@@ -79,7 +73,6 @@ struct CachedTile {
 /// thread — per finished tile the main thread only inserts asset handles.
 struct TerrainBuildOutput {
     mesh: Option<Mesh>,
-    height_page: HeightPage,
     anchor: DVec3,
     vertices: u64,
     triangles: u64,
@@ -509,8 +502,8 @@ fn setup_terrain(
         cache_bytes: 0,
         render_center: None,
         render_origin_m: DVec3::ZERO,
-        cache: BTreeMap::new(),
-        jobs: BTreeMap::new(),
+        heights: HeightStream::default(),
+        height_capacity_rejected: false,
         material_stream: MaterialStream::new(1024),
         wanted: vec![],
         fine_selection: Vec::new(),
@@ -833,26 +826,10 @@ fn ready_terrain_cover(
 // scheduler without untangling a mega-system again.
 //
 
-/// Engine-neutral handoff for one finished height build.
-///
-/// The worker pool produces plain data (`HeightPage` is `rcbt-core`, no Bevy
-/// types); the frame thread only publishes it. The GPU path consumes exactly
-/// this. The CPU fallback converts the sibling mesh/material payload through
-/// `present_cpu_tile` — the single bridge that may touch `Assets`/`Handle`.
-struct TerrainPageReady {
-    key: TileKey,
-    height_page: HeightPage,
-}
-
-/// Convert one completed build into a render-snapshot update.
-fn present_height_page(ready: TerrainPageReady) -> Option<(u64, HeightPage)> {
-    lod::cbt_node_for_tile(ready.key).map(|node| (node.id(), ready.height_page))
-}
-
 /// CPU-fallback half of a finished build: turn pool-built mesh/images into
-/// asset handles and insert the tile record. The record insert runs on both
-/// paths (the GPU path inserts an empty record for residency/cover
-/// tracking); only the `Assets`/`Handle` creation is CPU-path-only. This is
+/// asset handles and return the opaque resident payload. The shared height
+/// lifecycle inserts it on both paths (GPU payloads have no asset handles).
+/// Only the `Assets`/`Handle` creation is CPU-path-only. This is
 /// the only place (besides eviction) allowed to touch
 /// `Assets<Mesh/Image/StandardMaterial>`.
 #[allow(clippy::too_many_arguments)]
@@ -860,15 +837,13 @@ fn present_cpu_tile(
     meshes: &mut Assets<Mesh>,
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
-    world: &mut WorldTerrain,
-    key: TileKey,
     built_mesh: Option<Mesh>,
     built_images: Option<[Image; 3]>,
     anchor: DVec3,
     vertices: u64,
     triangles: u64,
     texture_bytes: u64,
-) {
+) -> CachedTile {
     let (mesh, material, image_handles) = match (built_mesh, built_images) {
         (Some(built_mesh), Some([albedo_image, roughness_image, normal_image])) => {
             let mesh = meshes.add(built_mesh);
@@ -894,20 +869,15 @@ fn present_cpu_tile(
         (None, None) => (None, None, None),
         _ => unreachable!("terrain output mesh/material payload must be paired"),
     };
-    let last_used = world.selection_epoch;
-    world.cache.insert(
-        key,
-        CachedTile {
-            last_used,
-            mesh,
-            anchor,
-            vertices,
-            triangles,
-            texture_bytes,
-            material,
-            images: image_handles,
-        },
-    );
+    CachedTile {
+        mesh,
+        anchor,
+        vertices,
+        triangles,
+        texture_bytes,
+        material,
+        images: image_handles,
+    }
 }
 
 /// Executor seam for CPU tile builds. `TileKey` + shared field in,
@@ -918,7 +888,7 @@ fn spawn_height_job(
     key: TileKey,
     tile_mesh_cells: usize,
     gpu_raster: bool,
-) -> JobHandle<TerrainBuildOutput> {
+) -> JobHandle<Result<HeightBuild<TerrainBuildOutput>, String>> {
     let field = field.clone();
     JobHandle::spawn(move || {
         let start = Instant::now();
@@ -936,8 +906,7 @@ fn spawn_height_job(
             mesh_s,
             material_s,
         ) = if gpu_raster {
-            let page = lod::bake_height_page(&field, key, 33, 0.5)
-                .expect("GPU terrain height page must fit its error budget");
+            let page = thessa_terrain_stream::height::bake_page(&field, key)?;
             (
                 page,
                 DVec3::ZERO,
@@ -981,16 +950,18 @@ fn spawn_height_job(
                 material_s,
             )
         };
-        TerrainBuildOutput {
-            mesh,
-            height_page,
-            anchor,
-            vertices,
-            triangles,
-            texture_bytes,
-            images,
-            seconds: [mesh_s, material_s],
-        }
+        Ok(HeightBuild {
+            page: height_page,
+            payload: TerrainBuildOutput {
+                mesh,
+                anchor,
+                vertices,
+                triangles,
+                texture_bytes,
+                images,
+                seconds: [mesh_s, material_s],
+            },
+        })
     })
 }
 
@@ -1281,7 +1252,7 @@ fn run_tile_selection(
         world.counters.terrain_cache_hits += world
             .wanted
             .iter()
-            .filter(|key| world.cache.contains_key(key))
+            .filter(|key| world.heights.contains_key(key))
             .count() as u64;
         world.selection_epoch = world.selection_epoch.saturating_add(1);
         world.cover_dirty = true;
@@ -1327,55 +1298,20 @@ fn run_tile_selection(
     (selection_changed, detail_bias)
 }
 
-/// Pure demand computation shared by job spawning and cache pinning: the
-/// wanted cover plus cached ancestors (coarse material can cover four
-/// children while fine pages bake). Reads only; callers pass the result on.
-/// Streaming stage: poll finished height builds and publish ready pages.
-///
-/// Finished pool outputs arrive as engine-neutral [`TerrainPageReady`]
-/// handoffs; the CPU payload (if any) crosses the [`present_cpu_tile`]
-/// bridge. Sets `cover_dirty` so presentation re-examines the cover.
+/// Streaming stage: poll finished builds and convert host payloads. The height
+/// snapshot is published once after admission/retirement, not between batches.
 #[allow(clippy::too_many_arguments)]
 fn poll_finished_pages(
     world: &mut WorldTerrain,
-    pages: &mut CbtRenderPages,
     meshes: &mut Assets<Mesh>,
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
     perf: &mut perf::PerfMonitor,
 ) {
     let poll_started = Instant::now();
-    let mut finished = Vec::new();
-    let mut failed = Vec::new();
-    for (key, job) in &world.jobs {
-        match job.try_take() {
-            Ok(result) => finished.push((*key, result)),
-            Err(TryRecvError::Empty) => {}
-            // A dead worker must not wedge its slot: evict loudly. (The
-            // old task handle would have stayed pending forever instead.)
-            Err(TryRecvError::Disconnected) => failed.push(*key),
-        }
-    }
-    if !failed.is_empty() {
-        eprintln!(
-            "[terrain] {} height job(s) died before delivering",
-            failed.len()
-        );
-        for key in failed {
-            world.jobs.remove(&key);
-        }
-    }
-    perf.record_scope(
-        "world.terrain_job_poll",
-        poll_started.elapsed().as_secs_f64(),
-    );
-    let asset_upload_started = Instant::now();
-    let mut ready_height_pages = Vec::with_capacity(finished.len());
-    for (key, output) in finished {
-        world.jobs.remove(&key);
+    let poll = world.heights.poll_with(world.selection_epoch, |_, output| {
         let TerrainBuildOutput {
             mesh: built_mesh,
-            height_page,
             anchor,
             vertices,
             triangles,
@@ -1383,91 +1319,79 @@ fn poll_finished_pages(
             images: built_images,
             seconds,
         } = output;
-        // Render snapshot first (engine-neutral handoff); the CPU fallback
-        // bridge below only runs for the mesh path.
-        if let Some(page) = present_height_page(TerrainPageReady { key, height_page }) {
-            ready_height_pages.push(page);
-        }
         perf.record_scope("world.terrain_meshing", seconds[0]);
         perf.record_scope("world.terrain_materials", seconds[1]);
         present_cpu_tile(
             meshes,
             images,
             materials,
-            world,
-            key,
             built_mesh,
             built_images,
             anchor,
             vertices,
             triangles,
             texture_bytes,
-        );
-        world.counters.terrain_patches_generated += 1;
-        world.cover_dirty = true;
+        )
+    });
+    for (key, error) in &poll.failed {
+        eprintln!("[terrain] height job for {key:?}: {error}; retrying demand");
     }
-    if !ready_height_pages.is_empty() {
-        pages.set_pages(ready_height_pages);
-    }
+    release_height_assets(poll.retired, meshes, images, materials);
+    world.counters.terrain_patches_generated += poll.ready as u32;
+    world.cover_dirty |= poll.ready > 0;
     perf.record_scope(
-        "world.terrain_asset_upload",
-        asset_upload_started.elapsed().as_secs_f64(),
+        "world.terrain_job_poll_and_asset_upload",
+        poll_started.elapsed().as_secs_f64(),
     );
 }
 
 /// Requests stage: order the demand cover and spawn height builds up to the
-/// in-flight budget. Demand comes from [`compute_spawn_dependencies`];
-/// spawning goes through the [`spawn_height_job`] executor seam.
+/// in-flight and cache budgets. Dependencies/LRU/admission belong to the shared
+/// lifecycle; spawning goes through the [`spawn_height_job`] executor seam.
 fn spawn_height_jobs(
     world: &mut WorldTerrain,
-    dependencies: &BTreeSet<TileKey>,
     terrain_mesh_cells: usize,
     gpu_raster: bool,
     view: &FrameView,
-) {
-    let FrameView {
-        eye,
-        radius,
-        forward_body,
-        ..
-    } = *view;
-    let mut pending: Vec<_> = dependencies
-        .iter()
-        .filter(|key| !world.cache.contains_key(key) && !world.jobs.contains_key(key))
-        .copied()
-        .collect();
-    pending.sort_by_cached_key(|key| {
-        selection::height_priority(
-            &world.field,
-            SelectionView {
-                eye,
-                radius,
-                forward: forward_body,
-                stream_origin: DVec3::ZERO,
-                frustum: None,
-            },
-            *key,
-        )
-    });
-    // Eight in flight on an 8-core box: tile builds are CPU-bound
-    // field sampling, and the pool is core-sized.
-    let pending: Vec<_> = pending
-        .into_iter()
-        .take(8_usize.saturating_sub(world.jobs.len()))
-        .collect();
-    for key in pending {
-        let tile_mesh_cells = if gpu_raster {
-            32
-        } else {
-            mesh_cells_for_tile(terrain_mesh_cells, key)
-        };
-        let field = world.field.clone();
-        world.jobs.insert(
-            key,
-            spawn_height_job(&field, key, tile_mesh_cells, gpu_raster),
+) -> Vec<(TileKey, CachedTile)> {
+    let field = world.field.clone();
+    let admission = world.heights.reconcile(
+        &field,
+        SelectionView {
+            eye: view.eye,
+            radius: view.radius,
+            forward: view.forward_body,
+            stream_origin: DVec3::ZERO,
+            frustum: view.frustum,
+        },
+        &world.wanted,
+        world.visible.iter().copied(),
+        world.selection_epoch,
+        HeightPolicy {
+            capacity: if gpu_raster { 1024 } else { 512 },
+            max_jobs: 8,
+            ancestors: gpu_raster,
+            pin_roots: false,
+        },
+        |key| {
+            let tile_mesh_cells = if gpu_raster {
+                32
+            } else {
+                mesh_cells_for_tile(terrain_mesh_cells, key)
+            };
+            spawn_height_job(&field, key, tile_mesh_cells, gpu_raster)
+        },
+    );
+    world.counters.terrain_cache_misses += admission.spawned as u64;
+    if admission.capacity_rejected && !world.height_capacity_rejected {
+        warn!(
+            "terrain height cache capacity exhausted: {} residents + {} pending; retaining current cover",
+            world.heights.len(),
+            world.heights.pending_count()
         );
-        world.counters.terrain_cache_misses += 1;
     }
+    world.height_capacity_rejected = admission.capacity_rejected;
+    admission.retired
 }
 
 /// Refine the existing view selection for material texel coverage, not mesh
@@ -1528,14 +1452,14 @@ fn run_material_streaming(
                 frustum: view.frustum,
             },
             pixel_angle,
-            height_jobs: world.jobs.len(),
+            height_jobs: world.heights.pending_count(),
         },
         world.visible.iter().copied().chain(
             world
                 .wanted
                 .iter()
                 .copied()
-                .filter(|key| world.cache.contains_key(key)),
+                .filter(|key| world.heights.contains_key(key)),
         ),
     );
     // Shared borrow first: taking &mut through ResMut marks Bevy changed even
@@ -1586,7 +1510,7 @@ fn sync_tile_entities(
     let entity_sync_started = Instant::now();
     if !gpu_raster && (selection_changed || world.counters.terrain_patches_generated > 0) {
         let desired = ready_terrain_cover(&world.wanted, &world.visible, |key| {
-            world.cache.contains_key(key)
+            world.heights.contains_key(key)
         });
         if desired != world.visible {
             for (entity, tile, _) in &mut *tiles {
@@ -1595,7 +1519,7 @@ fn sync_tile_entities(
                 }
             }
             for key in desired.difference(&world.visible) {
-                let tile = &world.cache[key];
+                let tile = world.heights.get(key).expect("ready tile");
                 if surface_raster_enabled {
                     continue;
                 }
@@ -1649,7 +1573,7 @@ fn sync_tile_entities(
         };
     }
     for (_, tile, mut transform) in &mut *tiles {
-        if let Some(cached) = world.cache.get(&tile.0) {
+        if let Some(cached) = world.heights.get(&tile.0) {
             transform.translation = (rotation * cached.anchor - origin).as_vec3();
             transform.rotation = rotation.as_quat();
         }
@@ -1670,64 +1594,26 @@ fn sync_tile_entities(
     }
 }
 
-/// Cache stage: pin the live cover, the demand set and in-flight jobs, then
-/// evict the oldest excess. Only height-page removals flow to the render
-/// snapshot; material residency is independent. Asset removals stay here.
-#[allow(clippy::too_many_arguments)]
-fn evict_stale_tiles(
-    world: &mut WorldTerrain,
-    pages: &mut CbtRenderPages,
+/// Host-only retirement bridge. The shared height lifecycle returns each
+/// evicted/replaced payload exactly once; asset ownership never enters its API.
+fn release_height_assets(
+    retired: impl IntoIterator<Item = (TileKey, CachedTile)>,
     meshes: &mut Assets<Mesh>,
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
-    dependencies: &BTreeSet<TileKey>,
-    gpu_raster: bool,
 ) {
-    // Warm LRU: a camera turn is not a reason to discard previously built
-    // pages. Keep current height cover, demand and height jobs pinned;
-    // evict only the excess, oldest first. GPU pages are much smaller than the
-    // CPU mesh/material bundle, so their cache gets a separate entry budget.
-    let protected: BTreeSet<_> = world
-        .visible
-        .iter()
-        .copied()
-        .chain(dependencies.iter().copied())
-        .chain(world.jobs.keys().copied())
-        .collect();
-    let epoch = world.selection_epoch;
-    for key in &protected {
-        if let Some(tile) = world.cache.get_mut(key) {
-            tile.last_used = epoch;
+    for (_, tile) in retired {
+        if let Some(mesh) = tile.mesh {
+            meshes.remove(mesh.id());
         }
-    }
-    let entries: Vec<_> = world
-        .cache
-        .iter()
-        .map(|(key, tile)| (*key, tile.last_used))
-        .collect();
-    let capacity = if gpu_raster { 1024 } else { 512 };
-    let mut evicted_node_ids = Vec::new();
-    for key in thessa_worldgen_rocky::streaming::lru_evictions(&entries, &protected, capacity) {
-        if let Some(tile) = world.cache.remove(&key) {
-            world.counters.terrain_cache_evictions += 1;
-            if let Some(node) = lod::cbt_node_for_tile(key) {
-                evicted_node_ids.push(node.id());
-            }
-            if let Some(mesh) = tile.mesh {
-                meshes.remove(mesh.id());
-            }
-            if let Some(material) = tile.material {
-                materials.remove(material.id());
-            }
-            if let Some(tile_images) = tile.images {
-                for image in tile_images {
-                    images.remove(image.id());
-                }
+        if let Some(material) = tile.material {
+            materials.remove(material.id());
+        }
+        if let Some(tile_images) = tile.images {
+            for image in tile_images {
+                images.remove(image.id());
             }
         }
-    }
-    if !evicted_node_ids.is_empty() {
-        pages.remove_pages(evicted_node_ids.iter().copied());
     }
 }
 
@@ -1768,16 +1654,16 @@ fn record_terrain_counters(
     started: Instant,
 ) {
     let counters_started = Instant::now();
-    world.counters.terrain_cache_entries = world.cache.len() as u32;
+    world.counters.terrain_cache_entries = world.heights.len() as u32;
     world.counters.terrain_material_jobs = world.material_stream.pending_count() as u32;
     world.counters.terrain_selection_changes = world.selection_epoch;
     world.counters.terrain_material_missing =
         missing_material_holes(&world.visible, material_pages);
-    world.counters.assets_loaded = world.cache.len() as u32 * 5;
-    world.counters.assets_pending = world.jobs.len() as u32 * 5;
+    world.counters.assets_loaded = world.heights.len() as u32 * 5;
+    world.counters.assets_pending = world.heights.pending_count() as u32 * 5;
     world.counters.terrain_patches_visible = world.visible.len() as u32;
     world.counters.terrain_patches_wanted = world.wanted.len() as u32;
-    world.counters.terrain_jobs_in_flight = world.jobs.len() as u32;
+    world.counters.terrain_jobs_in_flight = world.heights.pending_count() as u32;
     world.counters.terrain_eye_speed_mps =
         world.selection_history.eye_speed_mps.round().max(0.0) as u32;
     world.counters.terrain_detail_bias_x100 = (detail_bias * 100.0).round() as u32;
@@ -1807,22 +1693,22 @@ fn record_terrain_counters(
     world.counters.streaming_queued = world
         .wanted
         .iter()
-        .filter(|k| !world.cache.contains_key(k))
+        .filter(|k| !world.heights.contains_key(k))
         .count() as u32;
     world.counters.terrain_vertices = world
         .visible
         .iter()
-        .filter_map(|k| world.cache.get(k))
+        .filter_map(|k| world.heights.get(k))
         .map(|t| t.vertices)
         .sum();
     world.counters.terrain_triangles = world
         .visible
         .iter()
-        .filter_map(|k| world.cache.get(k))
+        .filter_map(|k| world.heights.get(k))
         .map(|t| t.triangles)
         .sum();
     world.cache_bytes = world
-        .cache
+        .heights
         .values()
         .map(|t| t.vertices * 48 + t.triangles * 12 + t.texture_bytes)
         .sum::<u64>()
@@ -1832,12 +1718,6 @@ fn record_terrain_counters(
         counters_started.elapsed().as_secs_f64(),
     );
     perf.record_scope("world.streaming", started.elapsed().as_secs_f64());
-}
-
-fn compute_spawn_dependencies(world: &WorldTerrain, gpu_raster: bool) -> BTreeSet<TileKey> {
-    selection::spawn_dependencies(&world.wanted, gpu_raster, |key| {
-        world.cache.contains_key(&key)
-    })
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1975,28 +1855,23 @@ fn update_terrain(
         gpu_raster,
         &view,
     );
-    // Streaming stage: poll finished builds, publish ready pages.
+    // Streaming stage: poll finished builds and convert host asset payloads.
     let stage_started = Instant::now();
     poll_finished_pages(
         &mut world,
-        &mut cbt.pages,
         &mut meshes,
         &mut images,
         &mut materials,
         &mut perf,
     );
     perf.record_scope("world.terrain_poll", stage_started.elapsed().as_secs_f64());
-    // Requests stage: order the demand cover, spawn height builds.
-    // The same demand set pins warm pages in the eviction stage below.
+    // Shared requests/cache stage: pin coverage, retire cold payloads, admit
+    // bounded work, then publish one source snapshot for the final state.
     let stage_started = Instant::now();
-    let dependencies = compute_spawn_dependencies(&world, gpu_raster);
-    spawn_height_jobs(
-        &mut world,
-        &dependencies,
-        terrain_mesh_cells,
-        gpu_raster,
-        &view,
-    );
+    let retired = spawn_height_jobs(&mut world, terrain_mesh_cells, gpu_raster, &view);
+    world.counters.terrain_cache_evictions += retired.len() as u64;
+    release_height_assets(retired, &mut meshes, &mut images, &mut materials);
+    CbtRenderPages::publish_if_changed(world.heights.source(), &mut cbt.pages);
     perf.record_scope("world.terrain_spawn", stage_started.elapsed().as_secs_f64());
     // Material streaming stage (GPU path only).
     let pixel_angle = match &*camera.1 {
@@ -2050,18 +1925,6 @@ fn update_terrain(
         &view,
         &mut perf,
     );
-    // Cache stage: pin the live set, evict the oldest excess.
-    let stage_started = Instant::now();
-    evict_stale_tiles(
-        &mut world,
-        &mut cbt.pages,
-        &mut meshes,
-        &mut images,
-        &mut materials,
-        &dependencies,
-        gpu_raster,
-    );
-    perf.record_scope("world.terrain_evict", stage_started.elapsed().as_secs_f64());
     // Telemetry stage: counters for this frame.
     record_terrain_counters(
         &mut world,
@@ -2470,6 +2333,63 @@ mod streaming_tests {
             TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::RENDER_WORLD,
         )
+    }
+
+    #[test]
+    fn height_payload_replacement_releases_only_retired_bevy_assets() {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut heights = HeightStream::<CachedTile, ()>::default();
+        let key = TileKey::root(4);
+        for height in [10.0, 20.0] {
+            let batch = heights.insert_batch(
+                0,
+                [(
+                    key,
+                    HeightBuild {
+                        page: thessa_rcbt_core::HeightPage::bake(&[height; 4], 2, 0.01).unwrap(),
+                        payload: (),
+                    },
+                )],
+                |_, ()| {
+                    present_cpu_tile(
+                        &mut meshes,
+                        &mut images,
+                        &mut materials,
+                        Some(Mesh::from(Cuboid::default())),
+                        Some([overcast_image(), overcast_image(), overcast_image()]),
+                        DVec3::ZERO,
+                        24,
+                        12,
+                        768,
+                    )
+                },
+            );
+            assert_eq!(batch.ready, 1);
+            release_height_assets(batch.retired, &mut meshes, &mut images, &mut materials);
+            assert_eq!((meshes.len(), materials.len(), images.len()), (1, 1, 3));
+            let tile = heights.get(&key).unwrap();
+            assert!(meshes.get(tile.mesh.as_ref().unwrap()).is_some());
+            assert!(materials.get(tile.material.as_ref().unwrap()).is_some());
+            for handle in tile.images.as_ref().unwrap() {
+                assert!(images.get(handle).is_some());
+            }
+        }
+        // GPU payload presentation creates no hidden fallback assets.
+        let empty = present_cpu_tile(
+            &mut meshes,
+            &mut images,
+            &mut materials,
+            None,
+            None,
+            DVec3::ZERO,
+            0,
+            0,
+            0,
+        );
+        release_height_assets([(key, empty)], &mut meshes, &mut images, &mut materials);
+        assert_eq!((meshes.len(), materials.len(), images.len()), (1, 1, 3));
     }
 
     /// Minimal world for the effect systems: visible planet, sun, overcast

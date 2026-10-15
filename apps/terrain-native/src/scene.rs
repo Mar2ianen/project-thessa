@@ -125,7 +125,7 @@ impl Scene {
             .iter()
             .map(|&key| TerrainPatch {
                 anchor: self.anchor(key),
-                page: &self.stream.height(key).unwrap().page,
+                page: self.stream.height(key).unwrap().page,
             })
             .collect();
         let mut renderer = TerrainRenderer::with_capacity(
@@ -193,6 +193,12 @@ impl Scene {
             2.0 * 0.45f64.tan() / height as f64,
             now_s,
         )?;
+        if update.height_failed > 0 {
+            eprintln!(
+                "[terrain] {} height worker(s) failed; retrying demand",
+                update.height_failed
+            );
+        }
         if update.material_failed > 0 {
             eprintln!(
                 "[terrain] {} material worker(s) disconnected; retrying demand",
@@ -208,7 +214,7 @@ impl Scene {
                     let entry = self.stream.height(key).unwrap();
                     ResidentTerrainPatch {
                         anchor: self.anchor(key),
-                        page: &entry.page,
+                        page: entry.page,
                         generation: entry.generation,
                     }
                 })

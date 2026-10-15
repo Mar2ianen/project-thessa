@@ -753,6 +753,13 @@ The current code slice provides:
   `CbtRenderMaterialPages` only publishes/extracts the shared snapshot. Both
   application hosts use `terrain-stream::material::MaterialStream` for jobs and
   independent source-cache lifetime (doc 39, shared material lifecycle slice);
+- height directories/revisions likewise live in backend-neutral
+  `rcbt-core::height_source::HeightPageStore`; `CbtRenderPages` is a thin resource
+  bridge. Content-equal updates preserve page versions, while eviction/reinsertion
+  uses a fresh producer revision so warm GPU slots cannot alias old heights.
+  `terrain-stream::height::HeightStream` owns shared height jobs, LRU, pinned
+  coverage and bounded admission, returning opaque retired host payloads for
+  asset cleanup. See doc 39's shared height lifecycle continuation;
 - a shipped-asset anchor (`cargo bench -p thessa-worldgen-rocky --bench
   assets`): the live recipe field reproduces `assets/worlds/thessa-v3`
   albedo at RMSE 0.0013 (linear, stride 16), legacy tiles match shipped

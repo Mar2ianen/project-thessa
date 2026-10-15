@@ -1020,6 +1020,109 @@ these measurements are metadata costs, not end-to-end performance claims.
 Captures retain the existing unaccepted terrain shading/dark-relief artifacts;
 this slice does not claim visual parity or fix them.
 
+### Shared height lifecycle continuation (2026-10-15)
+
+`feat/terrain-height-lifecycle` continues from the material-lifecycle checkpoint.
+Both hosts now use the same renderer-free height lifecycle instead of owning
+parallel job maps, residency/LRU records and admission/eviction code:
+
+- MIT `rcbt-core::height_source::HeightPageStore` owns a COW directory of
+  immutable `Arc<HeightPage>` payloads and local monotonic source revisions.
+  Content-equal publication is a no-op; a completed batch copies the directory
+  at most once and shares unchanged residual vectors. A changed page or an
+  eviction/reinsertion receives a fresh producer revision (not a per-ID version
+  reset to one). Revision exhaustion rejects the source batch before mutation.
+  Resetting a producer requires resetting its renderer consumer.
+- GPL `terrain-stream::height::HeightStream<Resident, Built>` owns height jobs,
+  residency, LRU epochs, source publication and bounded admission. Built/resident
+  payloads are opaque generic values: the shared code names no Bevy, wgpu, asset,
+  entity or mesh types. Native payloads are `()`; the old client's host callback
+  converts CPU-built meshes/images into its existing asset handles.
+- Inputs are the accepted tile demand, current drawn cover, selection epoch,
+  `SelectionView`, existing canonical field and explicit `HeightPolicy`.
+  Outputs are completed/failing job counts, dirty tile identities, admission
+  pressure and moved retired payloads. Retirements include **replacements** as
+  well as LRU evictions; the host releases each returned asset bundle once.
+- The current GPU page builder is shared too: unchanged 33x33 canonical field
+  samples and 0.5 m absolute quantization budget. CPU fallback mesh/material
+  builders remain in the Bevy host; GPU jobs still do not build these assets.
+- Policy preserves eight in-flight jobs, 1024 GPU/native cache entries and
+  512 CPU-fallback entries. Admission now counts **resident + pending** results
+  for both clients; it evicts cold pages before spawning, rather than allowing
+  the old client's pending jobs to overrun its cache after completion. The drawn
+  cover, demand dependencies and pending jobs are protected. The native six-root
+  bootstrap stays pinned; the old client keeps its existing backdrop/bootstrap
+  policy. Protected over-budget state is retained/reported, never turned into
+  holes to satisfy a smaller budget. Protected resident pages may temporarily
+  prevent further refinement until capacity is available. Native counters report
+  refusals; the old host logs entry into capacity pressure without per-frame spam.
+- Nonblocking polling drains every ready mailbox even if another build failed
+  or disconnected. Failed slots are released, logged/reported and retryable;
+  the native frame no longer fails merely because one worker disconnected.
+- Bevy's `CbtRenderPages` now only publishes/extracts the neutral snapshot.
+  The shared `ResMut` revision check precedes mutation, avoiding extraction on
+  clean frames. Asset creation/removal stays in `present_cpu_tile` and
+  `release_height_assets`; LRU/admission no longer names `Assets` or `Handle`.
+  The former poll/upload perf scopes are combined as
+  `world.terrain_job_poll_and_asset_upload`; spawn scope includes admission/LRU
+  and host retirement. Counter budgets remain cache entries, not byte limits.
+- Native publication also notices changed **visible page content** when the
+  cover's tile IDs did not change, rather than waiting for another LOD switch.
+  Page versions still prevent unchanged geometry from regenerating on the GPU.
+
+The height source is the sole owner of residual vectors. A separate small
+TileKey map tracks LRU/opaque host payloads; the native path now pays that extra
+metadata/map/Arc overhead to share immutable extraction snapshots, not a second
+copy of every height vector. No new dependency, unsafe code, logical GPU device,
+scene readback or intermediate render target is introduced. Material residency,
+physics, canonical generation, WGSL and shared-target egui composition are
+unchanged. The old client remains supported and runnable.
+
+This closes the **height source/cache/job/admission/retirement slice**, not the
+entire Bevy migration. `WorldTerrain` still integrates selection/topology and
+camera/ECS presentation; CPU fallback asset construction, global client/window
+lifecycle, moving bodies, production game assets/effects/UI/networking and
+FastRT acceleration structures remain outside this slice.
+
+Regression coverage includes COW/content no-ops, monotonic reinsertion, revision
+exhaustion, mixed success/failure batches, bounded admission including pending
+results, protected-cover pressure, root pinning, deterministic LRU, one-time
+replacement/eviction retirement, receiver teardown, invalid-address rejection
+before asset conversion, real Bevy asset retirement, unchanged Bevy change
+flags, same-cover height edits and GPU regeneration from source revisions.
+The source-only benchmark is
+`cargo bench -p thessa-rcbt-core --bench height_source` (1024 33x33 pages).
+
+Final verification: workspace fmt and all-target/all-feature clippy with Rust
+warnings denied, no-default-feature viewer clippy, **1,739** workspace lib/bin +
+**44** integration + **24** Bevy-CBT ignored GPU + **2** viewer GPU/native-exit
+tests passed (**1,809** total). The native runtime still contains no Bevy and
+one wgpu version (30.0.1); no dependency/license changed.
+
+Radeon 880M stationary A/B/B/A with HUD, 1280×720, 600 measured + 30 warm-up
+frames and 10 seconds pre-stream: old medians **2.701 / 2.560 ms**, new
+**2.789 / 2.611 ms**. Geometry matched (287 tiles, 297,216 triangles, no measured
+geometry publications/refusals). New medians were slightly higher; asynchronous
+material work and unlocked clocks/scheduling prevent isolating migration
+overhead or claiming a speedup. Stream CPU medians were 1 µs old / 2–3 µs new.
+The sweep exercised 55 measured geometry publications without refusal, retaining
+coarse coverage while its final six height jobs were pending. The native window
+requested 1,200 presentations in 10.250 seconds and exited cleanly (117.1
+requests/s; not displayed-frame feedback or game FPS).
+
+Source benchmark medians: shared snapshot **40 ns**, eight equal completions
+**371 ns**, eight dirty completions with a retained snapshot **16.150 µs**, and
+eight evictions/reinsertions **17.012 µs**. Fixtures contain 1024 independently
+owned 33x33 residual vectors (~2.23 MB). Baking and per-sample fixture cloning
+are outside the timed region; dirty samples include directory COW and old
+snapshot release. These are source-publication costs, not full lifecycle/GPU
+or whole-renderer performance estimates.
+
+[Raw measurements/validation](artifacts/owned-height-lifecycle-2026-10-15.json),
+[stationary capture](artifacts/owned-height-lifecycle-2026-10-15.png), and
+[sweep capture](artifacts/owned-height-lifecycle-sweep-2026-10-15.png).
+Existing terrain shading/blur/dark-relief artifacts remain unaccepted.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

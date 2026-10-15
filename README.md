@@ -98,10 +98,12 @@ The checked-in vertical slice currently contains:
    (egui HUD, Left/Right orbit, Up/Down zoom, Esc exit when UI does not capture input), or add
   `-- --headless terrain.png --frames 120` for a screenshot/frame benchmark.
   Live async height/material streaming shares the extracted client selection,
-  dependency/priority policies, bounded Rayon executor and material job/cache
-  lifecycle in GPL `thessa-terrain-stream`. Material source snapshots/revisions
-  live in MIT `rcbt-core`; the old client only publishes their shared directory
-  through a Bevy resource. Height eviction no longer removes material pages.
+  dependency/priority policies, bounded Rayon executor and height/material
+  job/cache lifecycles in GPL `thessa-terrain-stream`. Source snapshots/revisions
+  live in MIT `rcbt-core`; the old client publishes their shared directories
+  through thin Bevy resources. Height admission counts pending results against
+  cache capacity and returns retired payloads to the host's asset bridge.
+  Height eviction does not remove material pages.
   Headless `--prestream-seconds 10 --sweep` exercises
    changing demand rather than a fixed resident snapshot.
    The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's

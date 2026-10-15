@@ -38,3 +38,7 @@ harness = false
 [[bench]]
 name = "material_source"
 harness = false
+
+[[bench]]
+name = "height_source"
+harness = false

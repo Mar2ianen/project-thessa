@@ -1,0 +1,19 @@
+[package]
+name = "thessa-render-wgpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Thessa-owned wgpu backend bring-up: headless device, capability probe, frame primitives"
+
+[dependencies]
+thessa-graphics = { path = "../graphics" }
+wgpu.workspace = true
+pollster = "0.4"
+
+[dev-dependencies]
+
+[[bench]]
+name = "clear"
+harness = false

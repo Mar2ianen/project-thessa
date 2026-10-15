@@ -6158,6 +6158,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-render-wgpu"
+version = "0.0.1"
+dependencies = [
+ "pollster",
+ "thessa-graphics",
+ "wgpu",
+]
+
+[[package]]
 name = "thessa-server"
 version = "0.0.1"
 dependencies = [

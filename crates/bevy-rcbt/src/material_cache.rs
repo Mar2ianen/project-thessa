@@ -46,7 +46,7 @@ pub struct SlotEntry {
 }
 
 /// Sparse world-addressed material directory, independent of geometry ordinals.
-/// Same hash and linear probing as material_sample.wgsl; zero IDs are empty.
+/// Same hash and linear probing as the MATERIAL_SAMPLE_WGSL chunk (rcbt-core shaders); zero IDs are empty.
 pub fn material_directory(entries: impl IntoIterator<Item = SlotEntry>) -> Vec<[u32; 4]> {
     let entries: Vec<_> = entries.into_iter().collect();
     let size = (entries.len().max(1) * 4).next_power_of_two();

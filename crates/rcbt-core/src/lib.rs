@@ -18,6 +18,7 @@ const PAGE_ENCODING_VERSION: u8 = 1;
 pub mod bisector_pool;
 pub mod compact;
 pub mod packed;
+pub mod shaders;
 
 pub use bisector_pool::{Bisector, BisectorHandle, BisectorPool, BisectorPoolError};
 

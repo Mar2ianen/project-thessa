@@ -10,6 +10,13 @@ struct Gpu {
 
 impl Gpu {
     fn new() -> Self {
+        Self::with_limits(wgpu::Limits::default())
+    }
+
+    /// Device with explicit limits for tests whose layouts exceed the
+    /// default budget (the mesh-emission layout binds 9 storage buffers;
+    /// default allows 8).
+    fn with_limits(limits: wgpu::Limits) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("GPU regression tests require a wgpu adapter");
@@ -19,6 +26,7 @@ impl Gpu {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("thessa-test-device"),
             required_features: features,
+            required_limits: limits,
             ..Default::default()
         }))
         .unwrap();
@@ -692,7 +700,7 @@ fn gpu_ocean_reflection_is_finite_and_filters_unresolved_waves() {
     let gpu = Gpu::new();
     let shader = format!(
         "{}\n{}",
-        include_str!("ocean.wgsl"),
+        thessa_rcbt_core::shaders::OCEAN_WGSL,
         r#"
 @group(0) @binding(0) var<storage, read_write> result: array<vec4<f32>>;
 @compute @workgroup_size(1)
@@ -780,8 +788,8 @@ fn gpu_tile_transform_keeps_near_camera_precision_after_body_rotation() {
     let output = gpu.buffer(&[0; 4], false);
     let shader = format!(
         "{}\n{}\n{}",
-        include_str!("precision.wgsl"),
-        include_str!("tile_frame.wgsl"),
+        thessa_rcbt_core::shaders::PRECISION_WGSL,
+        thessa_rcbt_core::shaders::TILE_FRAME_WGSL,
         r#"
 @group(0) @binding(0) var<storage, read> frames: array<CbtTileFrame>;
 @group(0) @binding(1) var<uniform> transform: mat4x4<f32>;
@@ -834,7 +842,7 @@ fn gpu_precision_wgsl_ray_intersect_aabb_accuracy() {
     let out_buf = gpu.buffer(&[0; 4], false);
     let shader = format!(
         "{}\n{}",
-        include_str!("precision.wgsl"),
+        thessa_rcbt_core::shaders::PRECISION_WGSL,
         r#"
 @group(0) @binding(0) var<storage, read> aabb: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> ray: array<vec4<f32>>;
@@ -951,11 +959,14 @@ fn check() {
 #[test]
 #[ignore = "requires a wgpu adapter; run with --include-ignored"]
 fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
-    let gpu = Gpu::new();
+    let gpu = Gpu::with_limits(wgpu::Limits {
+        max_storage_buffers_per_shader_stage: 16,
+        ..Default::default()
+    });
     let mut shader = format!(
         "{}\n{}",
         CBT_RASTER_WGSL.split("@fragment").next().unwrap(),
-        include_str!("mesh.wgsl")
+        thessa_rcbt_core::shaders::MESH_WGSL
     );
     // Compute adapters reject the mesh enable directive; the `build_mesh`
     // body under test does not depend on it.
@@ -1400,7 +1411,7 @@ fn gpu_material_directory_uses_world_addresses_on_all_cube_faces() {
     let output = gpu.buffer(&vec![0; entries.len() * 4], false);
     let shader = format!(
         "{}\n{}",
-        include_str!("material_sample.wgsl")
+        thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
             .split("// Gradients")
             .next()
             .unwrap()
@@ -1444,7 +1455,7 @@ fn gpu_material_missing_neighbours_fade_without_erasing_complete_edges() {
     let gpu = Gpu::new();
     let shader = format!(
         "{}\n{}",
-        include_str!("material_sample.wgsl")
+        thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
             .split("// Gradients")
             .next()
             .unwrap()

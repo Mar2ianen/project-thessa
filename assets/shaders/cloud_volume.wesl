@@ -744,8 +744,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
 
             let direct_attenuation = beer_powder(sun_depth);
-            let ms1 = exp(-sun_depth * 0.20) * 0.50;
-            let ms2 = exp(-sun_depth * 0.05) * 0.28;
+            let ms1 = exp(-sun_depth * 0.32) * 0.35;
+            let ms2 = exp(-sun_depth * 0.10) * 0.12;
 
             let up = p / max(length(p), 1e-6);
             let elev = dot(up, sun_dir);
@@ -755,16 +755,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let phase_direct = dual_lobe_phase(cos_theta);
             let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
 
-            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.28;
+            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
             let sun_radiance = tint * (day * sun_scatter * 2.8);
 
             let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
             let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
             let height_occ = smoothstep(0.04, 0.40, h01);
             let core_occ = transmittance * transmittance;
-            let dens_occ = clamp(1.0 - (density / max(6.2 * cloud.params.x, 1e-3)) * 0.35, 0.40, 1.0);
-            let amb_occ = (0.30 + 0.70 * height_occ) * (0.20 + 0.80 * core_occ) * dens_occ;
-            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.55;
+            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
+            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
 
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
@@ -808,26 +807,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // Atmospheric aerial perspective with physically consistent premultiplied radiance:
+    // Atmospheric aerial perspective for distant horizon clouds:
     let r_cam_len = length(ro);
     let up_cam = select(vec3<f32>(0.0, 1.0, 0.0), ro / r_cam_len, r_cam_len > 1e-6);
     let elev_cam = dot(rd, up_cam);
     let march_dist_km = t0 * radius * 0.001;
-    let air_trans = exp(-march_dist_km * 0.006);
-    let haze_mix = clamp((1.0 - air_trans) * (1.0 - smoothstep(0.0, 0.35, elev_cam)), 0.0, 0.95);
-
-    // Dynamic horizon haze color matched to sun elevation and day/night state:
-    let up_sun = dot(up_cam, sun_dir);
-    let day_sky = smoothstep(-0.06, 0.16, up_sun) * sun_vis;
-    let sky_amb_horiz = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day_sky);
-    let tint_horiz = mix(vec3<f32>(1.0, 0.45, 0.18), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.35, up_sun));
-    let haze_color = mix(sky_amb_horiz * 1.5, tint_horiz * 0.8, pow(max(cos_theta, 0.0), 4.0) * 0.25);
-
-    // In AlphaMode::Premultiplied:
-    // Attenuate cloud source radiance by air transmittance and add in-scattered sky light proportional to alpha:
-    let scat_atten = scat * (1.0 - haze_mix);
-    let haze_inscatter = haze_color * (haze_mix * alpha);
-    let out_rgb = scat_atten + haze_inscatter;
+    let haze_amount = 1.0 - exp(-march_dist_km * 0.014);
+    let haze_color = vec3<f32>(0.55, 0.70, 0.92);
+    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.05, 0.35, elev_cam)), 0.0, 0.60);
+    let out_rgb = mix(scat, haze_color * alpha, haze_mix);
 
     return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha);
 }

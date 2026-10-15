@@ -160,9 +160,11 @@ impl Backend {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let row_bytes = width as u64 * 4;
+        let row_stride = row_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("thessa-backend-clear-staging"),
-            size: row_bytes * height as u64,
+            size: row_stride * height as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -205,7 +207,7 @@ impl Backend {
                 buffer: &staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(row_bytes as u32),
+                    bytes_per_row: Some(row_stride as u32),
                     rows_per_image: Some(height),
                 },
             },
@@ -232,7 +234,10 @@ impl Backend {
             .slice(..)
             .get_mapped_range()
             .map_err(|e| BackendError::Device(format!("staging map range failed: {e:?}")))?;
-        let out = view.to_vec();
+        let mut out = Vec::with_capacity((row_bytes * height as u64) as usize);
+        for row in view.chunks_exact(row_stride as usize) {
+            out.extend_from_slice(&row[..row_bytes as usize]);
+        }
         drop(view);
         staging.unmap();
         Ok(out)
@@ -426,6 +431,24 @@ mod tests {
         for len in [1usize, 3, 7, 1000, 1_000_003] {
             let back = backend.roundtrip(&payload[..len]).expect("roundtrip runs");
             assert_eq!(back, payload[..len], "byte parity at len {len}");
+        }
+    }
+
+    #[test]
+    fn clear_unaligned_rows_are_tightly_packed() {
+        let Some(backend) = backend() else { return };
+        for (width, height) in [(1, 1), (1, 9), (63, 3), (65, 7), (257, 2)] {
+            let pixels = backend
+                .clear_readback(width, height, [1.0, 0.0, 0.0, 1.0])
+                .expect("padded texture copy");
+            assert_eq!(pixels.len(), width as usize * height as usize * 4);
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| *p == [255, 0, 0, 255])
+            );
         }
     }
 

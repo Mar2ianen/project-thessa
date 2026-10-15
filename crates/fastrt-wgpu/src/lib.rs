@@ -19,7 +19,8 @@ const SHADER: &str = include_str!("batch_slab.wgsl");
 pub enum SlabError {
     /// wgpu/device/queue/mapping failure with context.
     Device(String),
-    /// `rays * boxes` exceeds the `u32` dispatch domain.
+    /// Pair count exceeds the shader domain or negotiated device's buffer /
+    /// storage binding / one-dimensional dispatch limits. No allocation occurs.
     TooLarge(u64),
 }
 
@@ -27,7 +28,9 @@ impl std::fmt::Display for SlabError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Device(detail) => write!(f, "fastrt-wgpu device failure: {detail}"),
-            Self::TooLarge(pairs) => write!(f, "fastrt-wgpu pair count overflow: {pairs}"),
+            Self::TooLarge(pairs) => {
+                write!(f, "fastrt-wgpu batch exceeds device limits: {pairs} pairs")
+            }
         }
     }
 }
@@ -56,11 +59,10 @@ pub struct BatchSlab {
     pool: Option<Pool>,
 }
 
-/// Device buffers plus their bind group for one pair capacity (power of
-/// two). Dispatch always covers exactly the requested pairs; the shader
-/// guards the tail via `arrayLength`, so over-capacity threads never exist.
+/// Independently grown ray, box, and pair capacities. The shader guards
+/// rounded-up workgroup tails against logical dimensions, not buffer lengths.
 struct Pool {
-    pairs: u64,
+    capacity: Capacity,
     bmin: wgpu::Buffer,
     bmax: wgpu::Buffer,
     org: wgpu::Buffer,
@@ -69,6 +71,45 @@ struct Pool {
     staging: wgpu::Buffer,
     dims: wgpu::Buffer,
     bind: wgpu::BindGroup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Capacity {
+    rays: u64,
+    boxes: u64,
+    pairs: u64,
+}
+
+impl Capacity {
+    fn plan(rays: u64, boxes: u64, limits: &wgpu::Limits) -> Result<Self, SlabError> {
+        let pairs = rays
+            .checked_mul(boxes)
+            .ok_or(SlabError::TooLarge(u64::MAX))?;
+        let max_elements = limits
+            .max_storage_buffer_binding_size
+            .min(limits.max_buffer_size)
+            / 16;
+        if pairs > u32::MAX as u64
+            || pairs > max_elements
+            || pairs.div_ceil(WORKGROUP as u64) > limits.max_compute_workgroups_per_dimension as u64
+            || rays > max_elements
+            || boxes > max_elements
+        {
+            return Err(SlabError::TooLarge(pairs));
+        }
+        // Do not reject a valid request just because power-of-two slack
+        // would exceed a non-power-of-two device limit.
+        let grow = |n: u64| n.max(1).next_power_of_two().min(max_elements);
+        Ok(Self {
+            rays: grow(rays),
+            boxes: grow(boxes),
+            pairs: grow(pairs),
+        })
+    }
+
+    fn bytes(self) -> u64 {
+        32 * (self.rays + self.boxes + self.pairs) + 16
+    }
 }
 
 impl BatchSlab {
@@ -167,12 +208,12 @@ impl BatchSlab {
     fn build_pool(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        capacity_pairs: u64,
+        capacity: Capacity,
     ) -> Pool {
-        let storage = |label: &str, read_only: bool| {
+        let storage = |label: &str, count: u64, read_only: bool| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
-                size: capacity_pairs * 16,
+                size: count * 16,
                 usage: if read_only {
                     wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST
                 } else {
@@ -181,14 +222,14 @@ impl BatchSlab {
                 mapped_at_creation: false,
             })
         };
-        let bmin = storage("fastrt-boxes-min", true);
-        let bmax = storage("fastrt-boxes-max", true);
-        let org = storage("fastrt-rays-org", true);
-        let dir = storage("fastrt-rays-dir", true);
-        let out = storage("fastrt-pairs-out", false);
+        let bmin = storage("fastrt-boxes-min", capacity.boxes, true);
+        let bmax = storage("fastrt-boxes-max", capacity.boxes, true);
+        let org = storage("fastrt-rays-org", capacity.rays, true);
+        let dir = storage("fastrt-rays-dir", capacity.rays, true);
+        let out = storage("fastrt-pairs-out", capacity.pairs, false);
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("fastrt-pairs-staging"),
-            size: capacity_pairs * 16,
+            size: capacity.pairs * 16,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -229,7 +270,7 @@ impl BatchSlab {
             ],
         });
         Pool {
-            pairs: capacity_pairs,
+            capacity,
             bmin,
             bmax,
             org,
@@ -239,6 +280,11 @@ impl BatchSlab {
             dims,
             bind,
         }
+    }
+
+    /// Actual persistent device allocation (including readback and dimensions).
+    pub fn pooled_bytes(&self) -> u64 {
+        self.pool.as_ref().map_or(0, |pool| pool.capacity.bytes())
     }
 
     /// Intersect every ray with every box. Returns ray-major hits
@@ -263,13 +309,15 @@ impl BatchSlab {
             boxes_max.len(),
             "box minima and maxima must pair one to one"
         );
-        let pairs = origins.len() as u64 * boxes_min.len() as u64;
-        if pairs == 0 {
+        if origins.is_empty() || boxes_min.is_empty() {
             return Ok(Vec::new());
         }
-        if pairs > u32::MAX as u64 {
-            return Err(SlabError::TooLarge(pairs));
-        }
+        let mut capacity = Capacity::plan(
+            origins.len() as u64,
+            boxes_min.len() as u64,
+            &self.device.limits(),
+        )?;
+        let pairs = origins.len() as u64 * boxes_min.len() as u64;
         debug_assert_finite(origins, dirs, boxes_min, boxes_max);
 
         let pack = |triples: &[[f32; 3]]| -> Vec<u8> {
@@ -284,8 +332,16 @@ impl BatchSlab {
             }
             v
         };
-        let capacity = pairs.next_power_of_two();
-        if self.pool.as_ref().is_none_or(|pool| pool.pairs < pairs) {
+        if let Some(pool) = &self.pool {
+            capacity.rays = capacity.rays.max(pool.capacity.rays);
+            capacity.boxes = capacity.boxes.max(pool.capacity.boxes);
+            capacity.pairs = capacity.pairs.max(pool.capacity.pairs);
+        }
+        if self
+            .pool
+            .as_ref()
+            .is_none_or(|pool| pool.capacity != capacity)
+        {
             self.pool = Some(Self::build_pool(&self.device, &self.layout, capacity));
         }
         let pool = self.pool.as_ref().expect("pool built above");
@@ -402,6 +458,80 @@ pub fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capacity_plan_bounds_memory_and_device_limits() {
+        let limits = wgpu::Limits::default();
+        let cap = Capacity::plan(16_384, 256, &limits).unwrap();
+        assert_eq!(cap.bytes(), 134_750_224); // ~128.51 MiB, not 384 MiB
+        assert!(Capacity::plan(u64::MAX, 2, &limits).is_err());
+        assert!(Capacity::plan(1, u32::MAX as u64 + 1, &limits).is_err());
+        let binding = wgpu::Limits {
+            max_storage_buffer_binding_size: 1_600,
+            ..limits.clone()
+        };
+        assert_eq!(Capacity::plan(10, 10, &binding).unwrap().pairs, 100);
+        assert!(Capacity::plan(101, 1, &binding).is_err());
+        let buffer = wgpu::Limits {
+            max_buffer_size: 1_600,
+            ..limits.clone()
+        };
+        assert!(Capacity::plan(101, 1, &buffer).is_err());
+        let dispatch = wgpu::Limits {
+            max_compute_workgroups_per_dimension: 1,
+            ..limits
+        };
+        assert!(Capacity::plan(256, 1, &dispatch).is_ok());
+        assert!(Capacity::plan(257, 1, &dispatch).is_err());
+    }
+
+    #[test]
+    fn pooled_batches_resize_by_shape_and_guard_tail() {
+        let Some((device, queue, _)) = try_device() else {
+            return;
+        };
+        let mut backend = BatchSlab::new(device, queue);
+        for (rays, boxes) in [(17, 19), (3, 2), (1, 323), (323, 1), (7, 9)] {
+            let origins = vec![[-1.0, 0.5, 0.5]; rays];
+            let dirs = vec![[1.0, 0.0, 0.0]; rays];
+            let mins = vec![[0.0; 3]; boxes];
+            let maxs = vec![[1.0; 3]; boxes];
+            let hits = backend.intersect(&origins, &dirs, &mins, &maxs).unwrap();
+            assert_eq!(hits.len(), rays * boxes);
+            assert!(hits.iter().all(|h| *h
+                == SlabHit {
+                    t_enter: 1.0,
+                    t_exit: 2.0,
+                    hit: true
+                }));
+            // The first unused pooled element must stay zero: the shader
+            // must not write rounded workgroup tails using stale inputs.
+            let pool = backend.pool.as_ref().unwrap();
+            let offset = (rays * boxes * 16) as u64;
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&pool.out, offset, &pool.staging, 0, 16);
+            backend.queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            pool.staging
+                .slice(..16)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    tx.send(r).unwrap();
+                });
+            backend
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            rx.recv().unwrap().unwrap();
+            let data = pool.staging.slice(..16).get_mapped_range().unwrap();
+            // On growth buffers start zero; after shrinking only logical
+            // output is specified, so inspect the fresh first batch only.
+            if rays == 17 {
+                assert!(data.iter().all(|b| *b == 0));
+            }
+            drop(data);
+            pool.staging.unmap();
+        }
+    }
 
     fn lcg(state: &mut u64) -> f64 {
         // Deterministic 64-bit LCG; regression inputs must not drift.

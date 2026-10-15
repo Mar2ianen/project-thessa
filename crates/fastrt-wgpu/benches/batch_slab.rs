@@ -116,6 +116,10 @@ fn main() {
                 .intersect(&origins, &dirs, &mins, &maxs)
                 .expect("warmup batch runs"),
         );
+        eprintln!(
+            "pooled bytes for {nrays} x {nboxes}: {}",
+            backend.pooled_bytes()
+        );
         let started = Instant::now();
         let mut hits = 0u64;
         for _ in 0..iters {

@@ -6121,6 +6121,7 @@ dependencies = [
 name = "thessa-rcbt-core"
 version = "0.0.1"
 dependencies = [
+ "thessa-fastrt",
  "thessa-rcbt-ffi",
  "thessa-rcbt-large-ffi",
  "thessa-rcbt-ref",

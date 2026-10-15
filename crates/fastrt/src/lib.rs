@@ -89,7 +89,7 @@ impl Bounds3 {
 
 /// Which representation the RT accelerator should build for a candidate.
 /// Names follow `docs/39` §17.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RtClass {
     /// Raster only; no RT representation is built.
     RasterOnly,
@@ -108,8 +108,8 @@ pub enum RtClass {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Candidate {
     /// Opaque caller key (same `u64`-identity style as the microstore and
-    /// residency layers). Keys must be unique within a frame; duplicates
-    /// are classified independently and both reported.
+    /// residency layers). Duplicate keys are classified independently and
+    /// reported in class declaration order, not submission order.
     pub key: u64,
     pub bounds: Bounds3,
     /// Culled before raster: never reaches any representation.
@@ -161,7 +161,8 @@ pub fn classify(candidate: &Candidate, policy: &Policy) -> RtClass {
     RtClass::RtConditional
 }
 
-/// Classify a whole frame. Returns `(key, class)` pairs sorted by key, so
+/// Classify a whole frame. Returns `(key, class)` pairs sorted by key then
+/// class declaration order (including duplicate keys), so
 /// output is identical for identical candidate sets regardless of input
 /// order. Runs in O(n log n) time in the sort; classification itself is a
 /// single linear pass with no allocation besides the output vector.
@@ -170,7 +171,7 @@ pub fn classify_frame(candidates: &[Candidate], policy: &Policy) -> Vec<(u64, Rt
         .iter()
         .map(|candidate| (candidate.key, classify(candidate, policy)))
         .collect();
-    out.sort_by_key(|(key, _)| *key);
+    out.sort_unstable();
     out
 }
 
@@ -296,6 +297,29 @@ mod tests {
         // Same set, shuffled input: identical output.
         let out2 = classify_frame(&[plain, big, hidden], &policy);
         assert_eq!(out, out2);
+    }
+
+    #[test]
+    fn duplicate_keys_have_submission_independent_order() {
+        let policy = Policy::new(50);
+        let mut hidden = candidate(7);
+        hidden.visible = false;
+        let proxy = candidate(7);
+        let mut plain = candidate(7);
+        plain.rt_effects = 0;
+        let expected = vec![
+            (7, RtClass::RasterOnly),
+            (7, RtClass::RtProxy),
+            (7, RtClass::RtProxy),
+            (7, RtClass::Ignore),
+        ];
+        for input in [
+            [hidden, proxy, plain, proxy],
+            [proxy, plain, proxy, hidden],
+            [plain, hidden, proxy, proxy],
+        ] {
+            assert_eq!(classify_frame(&input, &policy), expected);
+        }
     }
 
     #[test]

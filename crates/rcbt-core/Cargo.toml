@@ -8,6 +8,7 @@ publish = false
 description = "Backend-agnostic concurrent binary tree contracts for adaptive terrain"
 
 [dependencies]
+thessa-fastrt = { path = "../fastrt" }
 
 [dev-dependencies]
 thessa-rcbt-ref = { path = "../rcbt-ref" }

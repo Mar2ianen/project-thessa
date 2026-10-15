@@ -543,6 +543,51 @@ Use it for:
 
 ---
 
+## Implementation checkpoint (2026-10-15, `feat/fastrt-stage1`)
+
+This isolated branch is not a replacement of the production Bevy client yet.
+`thessa-fastrt` supplies classification, including deterministic duplicate-key
+ordering by `(key, RtClass declaration order)`. `thessa-fastrt-wgpu` supplies
+Cartesian ray × AABB compute, **not** a BVH/BLAS/TLAS. Its pool independently
+sizes rays, boxes and output/readback, checks negotiated device buffer,
+binding and dispatch limits before allocation, and guards logical dispatch
+tails. `pooled_bytes()` exposes actual persistent memory use.
+
+`thessa-render-wgpu` owns headless instance/adapter/device/queue, capability
+probing, explicitly opt-in experimental features, byte roundtrips and clear
+readback. Texture readback uses 256-byte-aligned rows and returns tightly
+packed RGBA8, including non-aligned widths. Hardware probe capabilities are
+not a promise that default device limits support every experimental pipeline.
+
+`ViewUniformBlock` retains the 464-byte CBT ABI but shader world coordinates
+mean **camera-relative render space**: subtract the camera/render origin in
+f64 before narrowing; upload zero camera position; reject non-finite f32
+matrices as well as singular/non-finite f64 inputs. Tile frames must use the
+same `TileAnchor::to_gpu(camera_body_m)` origin. The body transform is a
+rotation in this space, never a second absolute translation.
+
+Portable WGSL assemblies and tile anchors now live in `rcbt-core`; the Bevy
+adapter re-exports its old precision path. The normal stencil's analytic
+smooth-field test alone does not establish quality on quantized pages or
+LOD boundaries; production acceptance needs page-level hardware evidence.
+There is no full scene render/presentation loop or renderer FPS result yet.
+Byte roundtrip is not production snapshot publication parity.
+
+Measured on Radeon 880M / RADV, release `batch_slab`, synchronous end-to-end
+packing/upload/dispatch/readback (2026-10-15, one run):
+
+| Rays × boxes | Persistent pool | Scalar CPU | GPU end-to-end |
+| --- | ---: | ---: | ---: |
+| 4096 × 256 | 33,693,712 B | 7.46 ms | 3.94 ms |
+| 16384 × 256 | 134,750,224 B | 25.30 ms | 15.89 ms |
+
+For 4,194,304 pairs the old six pair-sized buffers used 402,653,184 B;
+the new pool is 128.51 MiB instead of 384 MiB (~66.5% reduction). These
+are batch query timings, **not** game FPS or a before/after latency claim.
+Regression tests cover device-limit planning, non-power-of-two tails,
+changing/shrinking batch shapes, unaligned rows and astronomical camera
+translation invariance.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

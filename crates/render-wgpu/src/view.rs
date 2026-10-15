@@ -1,11 +1,13 @@
 //! View uniforms for the own render loop (R3 foundation).
 //!
 //! Layout is byte-identical to the `ViewUniforms` prefix the portable CBT
-//! shaders consume (`bevy-rcbt/src/render.rs`, classifier slim mirror and
+//! shaders consume (`thessa_rcbt_core::shaders`, classifier slim mirror and
 //! raster block): seven column-major `mat4x4<f32>` (448 bytes), then
 //! `world_position: vec3<f32>` plus `exposure: f32` (16 bytes) — 464 bytes
-//! total. All math runs in `f64` and narrows once, mirroring the
-//! `clip_from_world` fallback in `draw_cbt_geometry`; the projection
+//! total. Absolute camera translation is removed in `f64` before any
+//! narrowing. Shader "world" means camera-relative render space, matching
+//! `TileAnchor::to_gpu(camera_body_m)`; never upload an absolute body
+//! translation through `render_from_body`. The projection
 //! formula itself stays with the future camera owner, which supplies
 //! `clip_from_view` directly.
 //!
@@ -21,7 +23,8 @@ pub struct ViewParams {
     pub world_from_view: DMat4,
     /// Projection matrix (camera owner's formula).
     pub clip_from_view: DMat4,
-    /// Camera world position in metres, narrowed separately.
+    /// Absolute camera position / render origin in metres. Subtracted in
+    /// f64 from the camera transform; the uploaded camera position is zero.
     pub world_position_m: DVec3,
     /// Photometric exposure multiplier, passed through as-is.
     pub exposure: f32,
@@ -58,7 +61,11 @@ impl ViewUniformBlock {
         {
             return None;
         }
-        let world_from_view = params.world_from_view;
+        // Match the tile anchor contract: shaders operate on offsets from
+        // this camera, not planet-sized absolute f32 positions.
+        let mut world_from_view = params.world_from_view;
+        world_from_view.w_axis = (world_from_view.w_axis.truncate() - params.world_position_m)
+            .extend(world_from_view.w_axis.w);
         let view_from_world = world_from_view.inverse();
         let clip_from_view = params.clip_from_view;
         let clip_from_world = clip_from_view * view_from_world;
@@ -71,18 +78,14 @@ impl ViewUniformBlock {
             return None;
         }
         Some(Self {
-            clip_from_world: narrow(clip_from_world),
-            unjittered_clip_from_world: narrow(clip_from_world),
-            world_from_clip: narrow(world_from_clip),
-            world_from_view: narrow(world_from_view),
-            view_from_world: narrow(view_from_world),
-            clip_from_view: narrow(clip_from_view),
-            view_from_clip: narrow(view_from_clip),
-            world_position: Vec3::new(
-                params.world_position_m.x as f32,
-                params.world_position_m.y as f32,
-                params.world_position_m.z as f32,
-            ),
+            clip_from_world: narrow(clip_from_world)?,
+            unjittered_clip_from_world: narrow(clip_from_world)?,
+            world_from_clip: narrow(world_from_clip)?,
+            world_from_view: narrow(world_from_view)?,
+            view_from_world: narrow(view_from_world)?,
+            clip_from_view: narrow(clip_from_view)?,
+            view_from_clip: narrow(view_from_clip)?,
+            world_position: Vec3::ZERO,
             exposure: params.exposure,
         })
     }
@@ -123,8 +126,9 @@ fn is_finite_mat4(m: &DMat4) -> bool {
     m.to_cols_array().iter().all(|x| x.is_finite())
 }
 
-fn narrow(m: DMat4) -> Mat4 {
-    Mat4::from_cols_array(&m.to_cols_array().map(|x| x as f32))
+fn narrow(m: DMat4) -> Option<Mat4> {
+    let result = Mat4::from_cols_array(&m.to_cols_array().map(|x| x as f32));
+    result.is_finite().then_some(result)
 }
 
 #[cfg(test)]
@@ -146,20 +150,14 @@ mod tests {
             exposure: 1.25,
         };
         let block = ViewUniformBlock::new(&params).expect("invertible view");
-        assert_eq!(
-            block.view_from_world,
-            Mat4::from_translation([-100.0, 50.0, -25.0].into())
-        );
-        assert_eq!(
-            block.world_from_view,
-            Mat4::from_translation([100.0, -50.0, 25.0].into())
-        );
+        assert_eq!(block.view_from_world, Mat4::IDENTITY);
+        assert_eq!(block.world_from_view, Mat4::IDENTITY);
         assert_eq!(block.clip_from_world, block.view_from_world);
         assert_eq!(block.unjittered_clip_from_world, block.clip_from_world);
         assert_eq!(block.world_from_clip, block.world_from_view);
         assert_eq!(block.clip_from_view, Mat4::IDENTITY);
         assert_eq!(block.view_from_clip, Mat4::IDENTITY);
-        assert_eq!(block.world_position, Vec3::new(100.0, -50.0, 25.0));
+        assert_eq!(block.world_position, Vec3::ZERO);
         assert_eq!(block.exposure, 1.25);
     }
 
@@ -192,7 +190,7 @@ mod tests {
         let params = ViewParams {
             world_from_view: translation(100.0, -50.0, 25.0),
             clip_from_view: DMat4::IDENTITY,
-            world_position_m: DVec3::new(100.0, -50.0, 25.0),
+            world_position_m: DVec3::ZERO,
             exposure: 1.25,
         };
         let bytes = ViewUniformBlock::new(&params)
@@ -209,9 +207,50 @@ mod tests {
         assert_eq!(word(52), 50.0);
         assert_eq!(word(56), -25.0);
         // world_position at 448, exposure at 460.
-        assert_eq!(word(448), 100.0);
-        assert_eq!(word(452), -50.0);
-        assert_eq!(word(456), 25.0);
+        assert_eq!(word(448), 0.0);
+        assert_eq!(word(452), 0.0);
+        assert_eq!(word(456), 0.0);
         assert_eq!(word(460), 1.25);
+    }
+
+    #[test]
+    fn rejects_f32_overflow_and_singular_projection() {
+        let mut params = ViewParams {
+            world_from_view: DMat4::IDENTITY,
+            clip_from_view: DMat4::IDENTITY,
+            world_position_m: DVec3::ZERO,
+            exposure: 1.0,
+        };
+        params.clip_from_view.x_axis.x = 1e40;
+        assert!(ViewUniformBlock::new(&params).is_none());
+        params.clip_from_view.x_axis.x = 1e-40; // inverse overflows f32
+        assert!(ViewUniformBlock::new(&params).is_none());
+        params.clip_from_view.x_axis.x = 0.0;
+        assert!(ViewUniformBlock::new(&params).is_none());
+        params.clip_from_view = DMat4::IDENTITY;
+        params.world_from_view = translation(1e40, 0.0, 0.0);
+        assert!(ViewUniformBlock::new(&params).is_none());
+    }
+
+    #[test]
+    fn astronomical_translation_does_not_reach_uniforms() {
+        let rotation = DMat4::from_rotation_y(0.37);
+        let make = |origin: DVec3| {
+            ViewUniformBlock::new(&ViewParams {
+                world_from_view: DMat4::from_translation(origin) * rotation,
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.5, 0.1, 1e7),
+                world_position_m: origin,
+                exposure: 1.0,
+            })
+            .unwrap()
+        };
+        let near = make(DVec3::ZERO);
+        let far = make(DVec3::new(1.5e11, -6.4e6, 1e12));
+        assert_eq!(near.to_bytes(), far.to_bytes());
+        let point = Vec3::new(0.03125, 0.0, -2.0);
+        assert_eq!(
+            near.clip_from_world.project_point3(point),
+            far.clip_from_world.project_point3(point)
+        );
     }
 }

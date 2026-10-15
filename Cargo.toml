@@ -30,6 +30,7 @@ members = [
     "crates/rcbt-ffi",
     "crates/rcbt-large-ffi",
     "crates/rcbt-wgpu",
+    "crates/fastrt",
     "crates/bevy-rcbt",
     "apps/server",
     "apps/client",

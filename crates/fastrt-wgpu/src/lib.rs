@@ -44,13 +44,31 @@ pub struct SlabHit {
     pub hit: bool,
 }
 
-/// Cached compute pipeline for [`BatchSlab::intersect`]. Buffers are built
-/// per call (sizes vary); the module, layout, and pipeline are built once.
+/// Cached compute pipeline for [`BatchSlab::intersect`]. The module,
+/// layout, and pipeline are built once; device buffers and the bind group
+/// live in a capacity pool rebuilt only on growth, so steady-state calls
+/// pay upload + dispatch + readback only.
 pub struct BatchSlab {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    pool: Option<Pool>,
+}
+
+/// Device buffers plus their bind group for one pair capacity (power of
+/// two). Dispatch always covers exactly the requested pairs; the shader
+/// guards the tail via `arrayLength`, so over-capacity threads never exist.
+struct Pool {
+    pairs: u64,
+    bmin: wgpu::Buffer,
+    bmax: wgpu::Buffer,
+    org: wgpu::Buffer,
+    dir: wgpu::Buffer,
+    out: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    dims: wgpu::Buffer,
+    bind: wgpu::BindGroup,
 }
 
 impl BatchSlab {
@@ -112,6 +130,16 @@ impl BatchSlab {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -132,15 +160,94 @@ impl BatchSlab {
             queue,
             pipeline,
             layout,
+            pool: None,
+        }
+    }
+
+    fn build_pool(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        capacity_pairs: u64,
+    ) -> Pool {
+        let storage = |label: &str, read_only: bool| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: capacity_pairs * 16,
+                usage: if read_only {
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST
+                } else {
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC
+                },
+                mapped_at_creation: false,
+            })
+        };
+        let bmin = storage("fastrt-boxes-min", true);
+        let bmax = storage("fastrt-boxes-max", true);
+        let org = storage("fastrt-rays-org", true);
+        let dir = storage("fastrt-rays-dir", true);
+        let out = storage("fastrt-pairs-out", false);
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fastrt-pairs-staging"),
+            size: capacity_pairs * 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dims = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fastrt-batch-dims"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fastrt-batch-slab-bind"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bmin.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: bmax.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: org.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: dir.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: out.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: dims.as_entire_binding(),
+                },
+            ],
+        });
+        Pool {
+            pairs: capacity_pairs,
+            bmin,
+            bmax,
+            org,
+            dir,
+            out,
+            staging,
+            dims,
+            bind,
         }
     }
 
     /// Intersect every ray with every box. Returns ray-major hits
-    /// (`out[ray * boxes + box]`). Upload, dispatch, and synchronous
-    /// readback are all included in the call cost — benches measure this
-    /// end to end, not dispatch alone.
+    /// (`out[ray * boxes + box]`). Buffers persist across calls (grown to
+    /// the next power of two on demand); steady-state cost is upload +
+    /// dispatch + synchronous readback — benches measure this end to end,
+    /// not dispatch alone.
     pub fn intersect(
-        &self,
+        &mut self,
         origins: &[[f32; 3]],
         dirs: &[[f32; 3]],
         boxes_min: &[[f32; 3]],
@@ -177,59 +284,22 @@ impl BatchSlab {
             }
             v
         };
-        let storage = |label: &str, bytes: &[u8]| {
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buffer, 0, bytes);
-            buffer
-        };
-        let bmin = storage("fastrt-boxes-min", &pack(boxes_min));
-        let bmax = storage("fastrt-boxes-max", &pack(boxes_max));
-        let org = storage("fastrt-rays-org", &pack(origins));
-        let dir = storage("fastrt-rays-dir", &pack(dirs));
+        let capacity = pairs.next_power_of_two();
+        if self.pool.as_ref().is_none_or(|pool| pool.pairs < pairs) {
+            self.pool = Some(Self::build_pool(&self.device, &self.layout, capacity));
+        }
+        let pool = self.pool.as_ref().expect("pool built above");
         let out_size = pairs * 16;
-        let out = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("fastrt-pairs-out"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("fastrt-pairs-staging"),
-            size: out_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("fastrt-batch-slab-bind"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: bmin.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: bmax.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: org.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: dir.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: out.as_entire_binding(),
-                },
-            ],
-        });
+        let nrays = origins.len() as u32;
+        let nboxes = boxes_min.len() as u32;
+        let mut dims = [0u8; 16];
+        dims[0..4].copy_from_slice(&nboxes.to_le_bytes());
+        dims[4..8].copy_from_slice(&nrays.to_le_bytes());
+        self.queue.write_buffer(&pool.dims, 0, &dims);
+        self.queue.write_buffer(&pool.bmin, 0, &pack(boxes_min));
+        self.queue.write_buffer(&pool.bmax, 0, &pack(boxes_max));
+        self.queue.write_buffer(&pool.org, 0, &pack(origins));
+        self.queue.write_buffer(&pool.dir, 0, &pack(dirs));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -241,15 +311,15 @@ impl BatchSlab {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(0, &pool.bind, &[]);
             pass.dispatch_workgroups(pairs.div_ceil(WORKGROUP as u64) as u32, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(&out, 0, &staging, 0, out_size);
+        encoder.copy_buffer_to_buffer(&pool.out, 0, &pool.staging, 0, out_size);
         self.queue.submit(Some(encoder.finish()));
 
         let (tx, rx) = std::sync::mpsc::channel();
-        staging
-            .slice(..)
+        pool.staging
+            .slice(..out_size)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result);
             });
@@ -259,13 +329,14 @@ impl BatchSlab {
         rx.recv()
             .map_err(|_| SlabError::Device("staging map channel closed".into()))?
             .map_err(|e| SlabError::Device(format!("staging map failed: {e:?}")))?;
-        let view = staging
-            .slice(..)
+        let view = pool
+            .staging
+            .slice(..out_size)
             .get_mapped_range()
             .map_err(|e| SlabError::Device(format!("staging map range failed: {e:?}")))?;
         let mut hits = Vec::with_capacity(pairs as usize);
         let (quads, _) = view.as_chunks::<16>();
-        for quad in quads {
+        for quad in quads.iter().take(pairs as usize) {
             let word = |i: usize| {
                 f32::from_le_bytes([
                     quad[4 * i],
@@ -281,7 +352,7 @@ impl BatchSlab {
             });
         }
         drop(view);
-        staging.unmap();
+        pool.staging.unmap();
         Ok(hits)
     }
 }
@@ -347,7 +418,7 @@ mod tests {
             return;
         };
         eprintln!("adapter: {name}");
-        let backend = BatchSlab::new(device, queue);
+        let mut backend = BatchSlab::new(device, queue);
         // 512 rays x 64 boxes, all finite, mixed hits/misses/grazes.
         let mut rng = 0xF1571277u64;
         let nrays = 512;
@@ -457,7 +528,7 @@ mod tests {
             eprintln!("SKIP: no GPU adapter for fastrt-wgpu empty test");
             return;
         };
-        let backend = BatchSlab::new(device, queue);
+        let mut backend = BatchSlab::new(device, queue);
         let out = backend
             .intersect(&[], &[], &[[0.0; 3]], &[[1.0; 3]])
             .expect("empty rays return empty");

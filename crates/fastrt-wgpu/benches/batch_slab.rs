@@ -105,7 +105,7 @@ fn main() {
         return;
     };
     eprintln!("adapter: {name}");
-    let backend = BatchSlab::new(device, queue);
+    let mut backend = BatchSlab::new(device, queue);
     for (nrays, nboxes, iters) in [(4_096usize, 256usize, 10usize), (16_384, 256, 5)] {
         let (origins, dirs, mins, maxs) = workload(nrays, nboxes, 0x51A8);
         let pairs = (nrays * nboxes) as f64;

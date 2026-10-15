@@ -16,6 +16,9 @@
 @group(0) @binding(3) var<storage, read> rays_dir: array<vec4<f32>>;
 // Per pair: (t_enter, t_exit, hit, 0.0).
 @group(0) @binding(4) var<storage, read_write> out_hit: array<vec4<f32>>;
+// (nboxes, nrays, 0, 0): input buffers are pooled at power-of-two capacity,
+// so the shader must not derive counts from arrayLength.
+@group(0) @binding(5) var<uniform> dims: vec4<u32>;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -23,7 +26,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (pair >= arrayLength(&out_hit)) {
         return;
     }
-    let nboxes = arrayLength(&boxes_min);
+    let nboxes = dims.x;
     if (nboxes == 0u) {
         return;
     }

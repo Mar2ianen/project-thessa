@@ -1,0 +1,21 @@
+[package]
+name = "thessa-fastrt-wgpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Portable wgpu backend for FastRT batched geometric queries (slab ray-AABB)"
+
+[dependencies]
+thessa-fastrt = { path = "../fastrt" }
+wgpu.workspace = true
+pollster = "0.4"
+
+[dev-dependencies]
+pollster = "0.4"
+thessa-plume-core = { path = "../plume-core" }
+
+[[bench]]
+name = "batch_slab"
+harness = false

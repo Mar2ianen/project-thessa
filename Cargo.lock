@@ -5940,6 +5940,7 @@ dependencies = [
  "naga",
  "pollster",
  "thessa-atmosphere",
+ "thessa-fastrt",
  "thessa-graphics",
  "thessa-microstore-core",
  "thessa-rcbt-core",
@@ -6000,6 +6001,16 @@ dependencies = [
 [[package]]
 name = "thessa-fastrt"
 version = "0.0.1"
+
+[[package]]
+name = "thessa-fastrt-wgpu"
+version = "0.0.1"
+dependencies = [
+ "pollster",
+ "thessa-fastrt",
+ "thessa-plume-core",
+ "wgpu",
+]
 
 [[package]]
 name = "thessa-flight-authority"
@@ -6084,6 +6095,7 @@ dependencies = [
 name = "thessa-plume-core"
 version = "0.0.1"
 dependencies = [
+ "thessa-fastrt",
  "thessa-rcbt-core",
 ]
 

@@ -9,6 +9,7 @@ description = "Backend-neutral rocket-plume semantic field: source, analytic mea
 
 [dependencies]
 thessa-rcbt-core = { path = "../rcbt-core" }
+thessa-fastrt = { path = "../fastrt" }
 
 [[bench]]
 name = "profile"

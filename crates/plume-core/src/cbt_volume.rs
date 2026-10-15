@@ -63,6 +63,42 @@ impl PlumeBound {
         let (min, max) = self.aabb_local_m();
         ray_intersect_slab(min, max, origin, dir)
     }
+
+    /// Native FastRT bounds: same AABB the slab helper consumes, validated
+    /// once into [`thessa_fastrt::Bounds3`]. `None` only on non-finite input.
+    pub fn bounds3(self) -> Option<thessa_fastrt::Bounds3> {
+        let (min, max) = self.aabb_local_m();
+        thessa_fastrt::Bounds3::new(min, max)
+    }
+
+    /// Direct FastRT classification, no conversion layer: an invalid bound
+    /// classifies as [`thessa_fastrt::RtClass::Ignore`] (no accelerator may
+    /// assume it). Triangle counts come from the caller, which owns the
+    /// raster representation this bound describes.
+    pub fn rt_class(
+        self,
+        key: u64,
+        visible: bool,
+        rt_effects: u32,
+        full_tris: u64,
+        proxy_tris: u64,
+        policy: &thessa_fastrt::Policy,
+    ) -> thessa_fastrt::RtClass {
+        match self.bounds3() {
+            Some(bounds) => thessa_fastrt::classify(
+                &thessa_fastrt::Candidate {
+                    key,
+                    bounds,
+                    visible,
+                    rt_effects,
+                    full_tris,
+                    proxy_tris,
+                },
+                policy,
+            ),
+            None => thessa_fastrt::RtClass::Ignore,
+        }
+    }
 }
 
 /// One binary subregion: axial span × radial span (a hollow-cylinder shell
@@ -121,6 +157,38 @@ impl PlumeRegion {
     pub fn ray_intersect_aabb(self, origin: [f64; 3], dir: [f64; 3]) -> Option<(f64, f64)> {
         let (min, max) = self.aabb_local_m();
         ray_intersect_slab(min, max, origin, dir)
+    }
+
+    /// Native FastRT bounds; see [`PlumeBound::bounds3`].
+    pub fn bounds3(self) -> Option<thessa_fastrt::Bounds3> {
+        let (min, max) = self.aabb_local_m();
+        thessa_fastrt::Bounds3::new(min, max)
+    }
+
+    /// Direct FastRT classification; see [`PlumeBound::rt_class`].
+    pub fn rt_class(
+        self,
+        key: u64,
+        visible: bool,
+        rt_effects: u32,
+        full_tris: u64,
+        proxy_tris: u64,
+        policy: &thessa_fastrt::Policy,
+    ) -> thessa_fastrt::RtClass {
+        match self.bounds3() {
+            Some(bounds) => thessa_fastrt::classify(
+                &thessa_fastrt::Candidate {
+                    key,
+                    bounds,
+                    visible,
+                    rt_effects,
+                    full_tris,
+                    proxy_tris,
+                },
+                policy,
+            ),
+            None => thessa_fastrt::RtClass::Ignore,
+        }
     }
 }
 
@@ -273,6 +341,49 @@ mod tests {
         };
         assert!(bound.is_degenerate());
         assert_eq!(region_for_node(bound, Node::root()), None);
+    }
+
+    #[test]
+    fn native_fastrt_bounds_match_tuple_aabb() {
+        let bound = PlumeBound {
+            length_m: 25.0,
+            max_radius_m: 3.0,
+        };
+        let (min, max) = bound.aabb_local_m();
+        let b3 = bound.bounds3().expect("finite plume bound");
+        assert_eq!(b3.min(), min);
+        assert_eq!(b3.max(), max);
+        assert!(b3.contains_point([0.0, 0.0, 12.0]));
+        let region = PlumeRegion::root(bound);
+        let (rmin, rmax) = region.aabb_local_m();
+        let r3 = region.bounds3().expect("finite region");
+        assert_eq!((r3.min(), r3.max()), (rmin, rmax));
+    }
+
+    #[test]
+    fn native_fastrt_class_follows_policy_without_adapter() {
+        use thessa_fastrt::{Policy, RtClass};
+        let bound = live_bound();
+        let policy = Policy::new(1_000_000);
+        // Small full cost: whole representation.
+        assert_eq!(
+            bound.rt_class(1, true, 0b1, 500, 0, &policy),
+            RtClass::RtFull
+        );
+        // Over budget with a proxy: proxy.
+        assert_eq!(
+            bound.rt_class(1, true, 0b1, 2_000_000, 64, &policy),
+            RtClass::RtProxy
+        );
+        // Culled or effect-free: out before cost is even read.
+        assert_eq!(
+            bound.rt_class(1, false, 0b1, 500, 0, &policy),
+            RtClass::Ignore
+        );
+        assert_eq!(
+            bound.rt_class(1, true, 0, 500, 0, &policy),
+            RtClass::RasterOnly
+        );
     }
 
     #[test]

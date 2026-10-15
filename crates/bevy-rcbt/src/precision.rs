@@ -105,6 +105,21 @@ pub struct GpuTileFrame {
     pub radius_half_extent_len: [f32; 4],
 }
 
+/// Classification request for one tile: height range plus the policy
+/// inputs [`thessa_fastrt::classify`] needs. Bundles
+/// [`TileAnchor::rt_class`] arguments so the call stays readable
+/// (and under the argument-count lint).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileRtRequest {
+    pub key: u64,
+    pub min_height_m: f64,
+    pub max_height_m: f64,
+    pub visible: bool,
+    pub rt_effects: u32,
+    pub full_tris: u64,
+    pub proxy_tris: u64,
+}
+
 impl TileAnchor {
     /// Compute the f64 anchor and normalized-cube frame for a tile.
     pub fn new(tile: TileKey, radius_m: f64) -> Option<Self> {
@@ -163,6 +178,43 @@ impl TileAnchor {
             }
         }
         (min, max)
+    }
+
+    /// Native FastRT bounds over a height range: the same 9-point projection
+    /// the tuple AABB consumes, validated once into
+    /// [`thessa_fastrt::Bounds3`]. `None` only on non-finite input.
+    pub fn bounds3_body_m(
+        &self,
+        min_height_m: f64,
+        max_height_m: f64,
+    ) -> Option<thessa_fastrt::Bounds3> {
+        let (min, max) = self.aabb_body_m(min_height_m, max_height_m);
+        thessa_fastrt::Bounds3::new(min, max)
+    }
+
+    /// Direct FastRT classification, no conversion layer: an invalid bound
+    /// classifies as [`thessa_fastrt::RtClass::Ignore`]. Triangle counts come
+    /// from the caller, which owns the raster representation of this tile.
+    pub fn rt_class(
+        &self,
+        request: &TileRtRequest,
+        policy: &thessa_fastrt::Policy,
+    ) -> thessa_fastrt::RtClass {
+        let bounds = self.bounds3_body_m(request.min_height_m, request.max_height_m);
+        match bounds {
+            Some(bounds) => thessa_fastrt::classify(
+                &thessa_fastrt::Candidate {
+                    key: request.key,
+                    bounds,
+                    visible: request.visible,
+                    rt_effects: request.rt_effects,
+                    full_tris: request.full_tris,
+                    proxy_tris: request.proxy_tris,
+                },
+                policy,
+            ),
+            None => thessa_fastrt::RtClass::Ignore,
+        }
     }
 
     /// Axis-Aligned Bounding Box (AABB) in camera-relative coordinates:
@@ -404,6 +456,39 @@ mod tests {
         (1_737_400.0, -9_000.0, 11_000.0),  // Moon
         (3_200_000.0, -8_000.0, 12_000.0),  // Thessa
     ];
+
+    #[test]
+    fn native_fastrt_bounds_match_tuple_aabb_and_classify() {
+        use thessa_fastrt::{Policy, RtClass};
+        let tile = TileKey::new(0, 3, 1, 2).unwrap();
+        let frame = TileAnchor::new(tile, 3_200_000.0).unwrap();
+        let (min, max) = frame.aabb_body_m(-500.0, 8000.0);
+        let b3 = frame.bounds3_body_m(-500.0, 8000.0).expect("finite tile");
+        assert_eq!((b3.min(), b3.max()), (min, max));
+        assert!(b3.contains_point(frame.anchor_body_m));
+        let policy = Policy::new(10_000);
+        let request = |visible: bool, full_tris: u64, proxy_tris: u64| TileRtRequest {
+            key: 5,
+            min_height_m: -500.0,
+            max_height_m: 8000.0,
+            visible,
+            rt_effects: 0b1,
+            full_tris,
+            proxy_tris,
+        };
+        assert_eq!(
+            frame.rt_class(&request(true, 2_000, 0), &policy),
+            RtClass::RtFull
+        );
+        assert_eq!(
+            frame.rt_class(&request(true, 200_000, 512), &policy),
+            RtClass::RtProxy
+        );
+        assert_eq!(
+            frame.rt_class(&request(false, 2_000, 0), &policy),
+            RtClass::Ignore
+        );
+    }
 
     fn max_error(a: [f32; 3], b: [f64; 3]) -> f64 {
         a.into_iter()

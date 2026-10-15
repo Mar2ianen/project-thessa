@@ -1,0 +1,11 @@
+[package]
+name = "thessa-wgpu-exp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Isolated unsafe consent for wgpu experimental device features"
+
+[dependencies]
+wgpu.workspace = true

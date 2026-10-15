@@ -19,13 +19,12 @@
 //!   single source of truth until the terrain mesh path moves off the
 //!   bridge, at which point the constants hoist here.
 //!
-//! Device negotiation: bring-up requests stable features only, so no
-//! `unsafe` experimental-feature consent lives in this step (the crate is
-//! `forbid(unsafe_code)`). The probe below reads the adapter — hardware
-//! truth — and experimental-gated device negotiation happens later,
-//! per-pipeline, where the consent and its justification are documented.
-//! Limits stay default in this step; per-pipeline limit negotiation arrives
-//! with the pipeline cache.
+//! Device negotiation: [`Backend::bring_up`] requests stable features only,
+//! so no `unsafe` experimental-feature consent lives in the default path
+//! (this crate is `forbid(unsafe_code)`). The consent itself is isolated in
+//! `thessa-wgpu-exp`; [`Backend::bring_up_experimental`] negotiates exactly
+//! the adapter-exposed interesting subset through it. Limits stay default in
+//! this step; per-pipeline limit negotiation arrives with the pipeline cache.
 
 #![forbid(unsafe_code)]
 
@@ -75,7 +74,21 @@ pub struct Backend {
 impl Backend {
     /// Headless bring-up on the high-performance adapter. Succeeds anywhere
     /// a wgpu adapter exists; returns [`BackendError::NoAdapter`] otherwise.
+    /// Stable features only — see [`Backend::bring_up_experimental`] for the
+    /// negotiated path.
     pub fn bring_up() -> Result<Self, BackendError> {
+        Self::bring_up_inner(None)
+    }
+
+    /// Bring-up negotiating the adapter-exposed experimental subset (mesh
+    /// shaders, ray query) through the isolated consent in
+    /// `thessa-wgpu-exp`. Hardware truth and device state agree afterwards
+    /// by construction; use it for paths that build mesh/RT pipelines.
+    pub fn bring_up_experimental() -> Result<Self, BackendError> {
+        Self::bring_up_inner(Some(thessa_wgpu_exp::experimental_consent()))
+    }
+
+    fn bring_up_inner(consent: Option<wgpu::ExperimentalFeatures>) -> Result<Self, BackendError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -86,13 +99,19 @@ impl Backend {
         }))
         .map_err(|_| BackendError::NoAdapter)?;
         let info = adapter.get_info();
+        let (features, experimental) = match consent {
+            Some(token) => (thessa_wgpu_exp::supported_experimental(&adapter), token),
+            // Stable-only: experimental consent is never taken implicitly.
+            None => (
+                wgpu::Features::empty(),
+                wgpu::ExperimentalFeatures::disabled(),
+            ),
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("thessa-render-backend"),
-            // Stable only: experimental consent (mesh/ray-query) is taken
-            // per-pipeline later, never implicitly at bring-up.
-            required_features: wgpu::Features::empty(),
+            required_features: features,
             required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            experimental_features: experimental,
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
         }))
@@ -275,6 +294,30 @@ mod tests {
             backend.caps.terrain_mesh_supported,
             backend.caps.ray_query_supported,
             backend.caps.is_discrete_gpu
+        );
+    }
+
+    #[test]
+    fn experimental_bring_up_carries_probed_bits() {
+        let Some(stable) = backend() else {
+            return;
+        };
+        let experimental = match Backend::bring_up_experimental() {
+            Ok(backend) => backend,
+            Err(BackendError::NoAdapter) => {
+                eprintln!("SKIP: no GPU adapter for experimental bring-up test");
+                return;
+            }
+            Err(other) => panic!("experimental bring-up failed: {other}"),
+        };
+        // Same adapter class: capabilities agree across both paths.
+        assert_eq!(experimental.caps, stable.caps);
+        // The negotiated device carries exactly the adapter-exposed
+        // interesting subset — consent path verified on real hardware.
+        let want = thessa_wgpu_exp::supported_experimental(&experimental.adapter);
+        assert!(
+            experimental.device.features().contains(want),
+            "experimental device must carry {want:?}"
         );
     }
 

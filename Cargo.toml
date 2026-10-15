@@ -33,6 +33,7 @@ members = [
     "crates/fastrt",
     "crates/fastrt-wgpu",
     "crates/render-wgpu",
+    "crates/wgpu-exp",
     "crates/bevy-rcbt",
     "apps/server",
     "apps/client",

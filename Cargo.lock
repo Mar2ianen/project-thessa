@@ -6163,6 +6163,7 @@ version = "0.0.1"
 dependencies = [
  "pollster",
  "thessa-graphics",
+ "thessa-wgpu-exp",
  "wgpu",
 ]
 
@@ -6250,6 +6251,13 @@ dependencies = [
  "serde_json",
  "thessa-aero-core",
  "thessa-propulsion",
+]
+
+[[package]]
+name = "thessa-wgpu-exp"
+version = "0.0.1"
+dependencies = [
+ "wgpu",
 ]
 
 [[package]]

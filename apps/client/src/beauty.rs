@@ -1166,12 +1166,30 @@ pub(crate) fn resolve_effective_cloud_backend(
     }
 }
 
+pub(crate) fn cloud_debug_mode_env() -> Option<f32> {
+    static DEBUG_MODE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    *DEBUG_MODE.get_or_init(|| match std::env::var("THESSA_CLOUD_DEBUG").as_deref() {
+        Ok("coverage") | Ok("bake") | Ok("2") => Some(2.0),
+        Ok("density") | Ok("tau") | Ok("optical_depth") | Ok("3") => Some(3.0),
+        Ok("lighting") | Ok("shading") | Ok("4") => Some(4.0),
+        Ok("mask") | Ok("5") => Some(5.0),
+        Ok("steps") | Ok("early_out") | Ok("step_count") | Ok("6") => Some(6.0),
+        Ok("slice") | Ok("slice_prod") | Ok("raw_density") | Ok("7") => Some(7.0),
+        Ok("slice_detail") | Ok("raw_detail") | Ok("8") => Some(8.0),
+        _ => None,
+    })
+}
+
 pub(crate) fn effective_cloud_backend(r: &ResolvedGraphicsSettings) -> EffectiveCloudBackend {
     resolve_effective_cloud_backend(r.cloud_integrator, cloud_backend_override_env())
 }
 
 pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {
-    effective_cloud_backend(r).as_f32()
+    if let Some(debug) = cloud_debug_mode_env() {
+        debug
+    } else {
+        effective_cloud_backend(r).as_f32()
+    }
 }
 
 /// Equatorial breeze advecting the shader detail: ~15 m/s over a ~20 000 km

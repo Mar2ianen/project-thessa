@@ -194,6 +194,7 @@ fn curl_warp3d(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(w1 - w2, w2 - w0, w0 - w1);
 }
 
+
 // C^1 Smooth cubic billow lobe:
 // Flat derivative at the peak (db/dn = 0), zero creases, zero lattice edge visibility:
 fn billow_cubic(p: vec3<f32>) -> f32 {
@@ -208,7 +209,7 @@ const BILLOW_MEAN: f32 = 0.933;
 // step approaches each octave's Nyquist limit (lambda / 2), suppressing sub-step aliasing while
 // maintaining expectation prior to downstream nonlinear density shaping.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
-    // Octave periods: ~14.0 km (b0, Nyquist 7.0 km), ~6.2 km (b1, Nyquist 3.1 km), ~2.8 km (b2, Nyquist 1.4 km)
+    // Octave periods: ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
     let w0 = smoothstep(7.0, 2.5, step_km);
     var b0 = BILLOW_MEAN;
     if (w0 > 0.01) {
@@ -234,7 +235,7 @@ fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
 
 // Sub-kilometer organic wispy turbulence bandlimited to ray step:
 fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
-    let w = smoothstep(1.5, 0.3, step_km);
+    let w = smoothstep(2.0, 0.4, step_km);
     if (w <= 0.01) {
         return 0.50; // Neutral midpoint when unresolved
     }
@@ -246,10 +247,17 @@ fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
     return mix(0.50, n0 * 0.70 + n1 * 0.30, w);
 }
 
-// Jorge Jimenez's Interleaved Gradient Noise (Call of Duty):
-// Optimal high-frequency isotropic noise with zero directional bias or diagonal bands
+// 2D isotropic quasi-blue noise dither (plastic constant R2 dispersion):
+// Eliminates directional diagonal striping and stippling on static single-frame raymarch edges:
+fn dither2d(pos: vec2<f32>) -> f32 {
+    let p = fract(pos * vec2<f32>(0.754877666, 0.56984029));
+    let q = fract(vec2<f32>(p.y * 13.17, p.x * 19.31) + dot(p, p + 31.416));
+    return fract(p.x + p.y + q.x * 0.5);
+}
+
+// Interleaved Gradient Noise kept for compatibility:
 fn ign(pos: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(pos.x * 0.06711056 + pos.y * 0.00583715));
+    return dither2d(pos);
 }
 
 // Floored float modulus (WGSL has no `mod` builtin, and `%` truncates
@@ -382,8 +390,10 @@ fn slab_density(
             b1_s = mix(BILLOW_MEAN, billow_cubic(p1_s_rot), w1_s);
         }
         let cauli_s = b0_s * 0.51 + b1_s * 0.49;
-        let billow_lift_s = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01));
+        let detail_amp = max(cloud.params.w / 1.6, 0.05);
+        let billow_lift_s = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01)) * detail_amp;
         let shape_s = macro_s * (1.0 - billow_lift_s) + cauli_s * billow_lift_s;
+
         let cov_s = clamp(base * mix(0.88, 1.12, weather.x), 0.0, 1.0);
         let cov_eff_s = clamp(cov_s * hgrad * 1.25, 0.0, 1.0);
         let thresh_s = clamp(1.0 - cov_eff_s, 0.05, 0.92);
@@ -418,12 +428,10 @@ fn slab_density(
     }
     let macro_perlin = p0 * 0.70 + p1 * 0.30;
 
-    // 2. Hierarchical 3-octave cauliflower billow field with irrational rotations:
+    // 2. Hierarchical 3-octave cauliflower billow field:
     let cauli = cauliflower_fbm(p_w, step_km);
 
     // 3. Convective cauliflower sculpting (modulated by cloud.params.w DETAIL_AMP):
-    // Solid flat macro foundation at the base; buoyant cauliflower plumes bubbling upward.
-    // Normalized by 1.6 baseline constant so default CLOUD_DETAIL_AMP yields 1.0 multiplier:
     let detail_amp = max(cloud.params.w / 1.6, 0.05);
     let billow_lift = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01)) * detail_amp;
     let shape_body = macro_perlin * (1.0 - billow_lift) + cauli * billow_lift;
@@ -442,15 +450,14 @@ fn slab_density(
 
     let base_cloud = (shape_body - threshold) / max(1.0 - threshold, 0.04);
 
-    // 5. Edge-only Schneider erosion (bandlimited to step_km, modulated by detail_amp):
-    // Crucial: erosion is suppressed at the condensation base (h01 < 0.12) to preserve a razor-flat horizontal shelf!
+    // 5. Edge wisps erosion:
     let wisps = edge_wisps(p_w, step_km);
-    let edge_factor = 1.0 - clamp(base_cloud, 0.0, 1.0);
     let base_erosion = smoothstep(0.09, 0.28, h01);
-    let erosion = (1.0 - wisps) * (0.35 * base_erosion * edge_factor * detail_amp);
-    let final_shape = max(base_cloud - erosion, 0.0);
+    let edge_factor = 1.0 - clamp(base_cloud, 0.0, 1.0);
+    let edge_erosion = (1.0 - wisps) * (0.35 * base_erosion * edge_factor * detail_amp);
+    let final_shape = max(base_cloud - edge_erosion, 0.0);
 
-    // 6. C^1 Continuous boundary power curve (crisp droplet boundary):
+    // 6. C^1 Continuous boundary power curve:
     let rel_d = clamp(final_shape, 0.0, 1.0);
     let d = smoothstep(0.0, 0.12, rel_d) * pow(rel_d, 1.1) * 6.2 * cloud.params.x;
     return d;
@@ -570,10 +577,44 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let w_exit = weather_at(ro + rd * t1, drift);
     var transmittance = 1.0;
     var scat = vec3<f32>(0.0);
+    var unsaturated_tau: f32 = 0.0;
+    var steps_taken: f32 = 0.0;
 
     let radius_km = radius * 0.001;
     let p0_deck = quat_rotate(cloud.deck_to_local, ro + rd * t0) * radius_km;
-    let use_pathtrace = (cloud.shape.w >= 0.5);
+
+    // Diagnostic Mode 2: Coverage Bake
+    if (cloud.shape.w >= 1.5 && cloud.shape.w < 2.5) {
+        let uv = deck_uv(ro + rd * t0) + WIND_SHEAR * 0.5;
+        let base = base_at_uv(uv);
+        return vec4<f32>(vec3<f32>(base), 1.0);
+    }
+
+    // Diagnostic Mode 7: Production-LOD Ray-Chord Midpoint Density Slice (evaluated at actual march step_km)
+    if (cloud.shape.w >= 6.5 && cloud.shape.w < 7.5) {
+        let t_mid = (t0 + t1) * 0.5;
+        let p_mid = ro + rd * t_mid;
+        let w_mid = mix(w_entry, w_exit, 0.5);
+        let weather_mid = vec3<f32>(w_mid.x, 0.0, w_mid.y);
+        let dt = chord / f32(steps);
+        let step_km = dt * radius_km;
+        let d_raw = slab_density(p_mid, drift, weather_mid, step_km, true);
+        let d_norm = clamp(d_raw / max(6.2 * cloud.params.x, 1e-3), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(d_norm), 1.0);
+    }
+
+    // Diagnostic Mode 8: High-Detail (1.0 km) Ray-Chord Midpoint Density Slice
+    if (cloud.shape.w >= 7.5) {
+        let t_mid = (t0 + t1) * 0.5;
+        let p_mid = ro + rd * t_mid;
+        let w_mid = mix(w_entry, w_exit, 0.5);
+        let weather_mid = vec3<f32>(w_mid.x, 0.0, w_mid.y);
+        let d_raw = slab_density(p_mid, drift, weather_mid, 1.0, true);
+        let d_norm = clamp(d_raw / max(6.2 * cloud.params.x, 1e-3), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(d_norm), 1.0);
+    }
+
+    let use_pathtrace = (cloud.shape.w >= 0.5 && cloud.shape.w < 1.5);
 
     if (use_pathtrace) {
         // ====================================================================
@@ -586,7 +627,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let step_km = dt * radius_km;
         var rng_seed = u32(in.position.x) * 1973u + u32(in.position.y) * 9277u + u32(fract(dot(p0_deck, vec3<f32>(17.1, 31.7, 53.3))) * 100000.0);
 
-        let dither = ign(in.position.xy);
+        let dither_raw = dither2d(in.position.xy);
+        let dither = (dither_raw - 0.5) * 0.22 + 0.5;
         for (var step = 0; step < CLOUD_MARCH_MAX; step += 1) {
             let t_sample = t0 + (f32(step) + dither) * dt;
             if (t_sample >= t1) {
@@ -663,7 +705,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // ====================================================================
         let dt = chord / f32(steps);
         let step_km = dt * radius_km;
-        let dither = ign(in.position.xy);
+        let dither_raw = dither2d(in.position.xy);
+        let dither = (dither_raw - 0.5) * 0.65 + 0.5;
+
+        let is_diag_tau = (cloud.shape.w >= 2.5 && cloud.shape.w < 3.5);
 
         for (var i = 0; i < CLOUD_MARCH_MAX; i += 1) {
             let t_current = t0 + (f32(i) + dither) * dt;
@@ -677,26 +722,34 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let weather = vec3<f32>(w2.x, 0.0, w2.y);
 
             let density = slab_density(p, drift, weather, step_km, true);
+            steps_taken += 1.0;
             if (density <= 0.001) {
                 continue;
             }
 
+            let step_ext = density * ext * dt;
+            unsaturated_tau += step_ext;
+
             let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
 
-            // Sun self-shadowing: sample along sun direction with micro-shadow tap for crisp crevices
-            let shadow_d0 = 180.0 * inv_radius * shadow_span;
-            let shadow_d1 = 650.0 * inv_radius * shadow_span;
-            let shadow_d2 = 1800.0 * inv_radius * shadow_span;
+            // Adaptive step-scaled sun shadow taps:
+            let d0_km = max(step_km * 0.35, 0.40) * shadow_span;
+            let d1_km = max(step_km * 1.10, 1.20) * shadow_span;
+            let d2_km = max(step_km * 2.60, 3.00) * shadow_span;
+            let shadow_d0 = d0_km * 1000.0 * inv_radius;
+            let shadow_d1 = d1_km * 1000.0 * inv_radius;
+            let shadow_d2 = d2_km * 1000.0 * inv_radius;
 
-            let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, 0.80, false);
-            let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, 2.20, false);
-            let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, 5.00, false);
+            let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, max(d0_km * 0.8, 0.80), false);
+            let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, max(d1_km * 0.8, 2.20), false);
+            let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, max(d2_km * 0.8, 5.00), false);
 
-            let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
+            let s_local = density / max(6.2 * cloud.params.x, 1e-3);
+            let sun_depth = (s_local * 0.25 + s0 * 0.45 + s1 * 0.75 + s2 * 1.15) * 1.6;
 
             let direct_attenuation = beer_powder(sun_depth);
-            let ms1 = exp(-sun_depth * 0.32) * 0.35;
-            let ms2 = exp(-sun_depth * 0.10) * 0.12;
+            let ms1 = exp(-sun_depth * 0.20) * 0.55;
+            let ms2 = exp(-sun_depth * 0.07) * 0.25;
 
             let up = p / max(length(p), 1e-6);
             let elev = dot(up, sun_dir);
@@ -706,23 +759,24 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let phase_direct = dual_lobe_phase(cos_theta);
             let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
 
-            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
+            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.25;
             let sun_radiance = tint * (day * sun_scatter * 2.8);
 
-            let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
-            let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
+            let sky_amb = vec3<f32>(0.38, 0.56, 0.90) * (0.08 + 0.92 * day);
+            let ground_amb = vec3<f32>(0.18, 0.22, 0.18) * (0.08 + 0.92 * day);
             let height_occ = smoothstep(0.04, 0.40, h01);
             let core_occ = transmittance * transmittance;
-            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
-            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
+            let dens_occ = clamp(1.0 - s_local * 0.45, 0.35, 1.0);
+            let amb_occ = (0.28 + 0.72 * height_occ) * (0.20 + 0.80 * core_occ) * dens_occ;
+            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.50;
 
-            let step_ext = density * ext * dt;
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
             scat += transmittance * point_light * (1.0 - step_trans);
             transmittance *= step_trans;
 
-            if (transmittance < 0.01) {
+            // In diagnostic Mode 3, bypass early-out to accumulate the entire unsaturated column optical depth:
+            if (!is_diag_tau && transmittance < 0.01) {
                 transmittance = 0.0;
                 break;
             }
@@ -730,6 +784,30 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
+
+    // Diagnostic Mode 3: Unsaturated Integrated Optical Depth (tau = sum sigma_ext * dt)
+    if (cloud.shape.w >= 2.5 && cloud.shape.w < 3.5) {
+        let norm_vis = clamp(unsaturated_tau / 16.0, 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(norm_vis), 1.0);
+    }
+
+    // Diagnostic Mode 4: Shading / In-Scattered Lighting
+    if (cloud.shape.w >= 3.5 && cloud.shape.w < 4.5) {
+        return vec4<f32>(scat, 1.0);
+    }
+
+    // Diagnostic Mode 5: Cloud-Only Mask
+    if (cloud.shape.w >= 4.5 && cloud.shape.w < 5.5) {
+        let mask = select(0.0, 1.0, alpha > 0.005);
+        return vec4<f32>(vec3<f32>(mask), 1.0);
+    }
+
+    // Diagnostic Mode 6: March Step Count / Early-Out Heatmap
+    if (cloud.shape.w >= 5.5 && cloud.shape.w < 6.5) {
+        let step_ratio = clamp(steps_taken / f32(steps), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(step_ratio), 1.0);
+    }
+
     if (alpha < 0.001) {
         discard;
     }
@@ -739,9 +817,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let up_cam = select(vec3<f32>(0.0, 1.0, 0.0), ro / r_cam_len, r_cam_len > 1e-6);
     let elev_cam = dot(rd, up_cam);
     let march_dist_km = t0 * radius * 0.001;
-    let haze_amount = 1.0 - exp(-march_dist_km * 0.014);
-    let haze_color = vec3<f32>(0.55, 0.70, 0.92);
-    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.05, 0.35, elev_cam)), 0.0, 0.60);
+    let haze_amount = 1.0 - exp(-march_dist_km * 0.012);
+    let haze_color = vec3<f32>(0.50, 0.68, 0.92);
+    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.05, 0.22, elev_cam)), 0.0, 0.45);
     let out_rgb = mix(scat, haze_color * alpha, haze_mix);
 
     return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha);

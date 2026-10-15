@@ -32,7 +32,7 @@ pub mod material_microstore;
 #[cfg(feature = "render")]
 mod material_pages;
 #[cfg(feature = "render")]
-pub mod precision;
+pub use thessa_rcbt_core::tile_anchor as precision;
 #[cfg(feature = "render")]
 mod presentation;
 #[cfg(feature = "render")]

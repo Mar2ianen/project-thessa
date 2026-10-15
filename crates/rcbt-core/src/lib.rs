@@ -19,6 +19,7 @@ pub mod bisector_pool;
 pub mod compact;
 pub mod packed;
 pub mod shaders;
+pub mod tile_anchor;
 
 pub use bisector_pool::{Bisector, BisectorHandle, BisectorPool, BisectorPoolError};
 

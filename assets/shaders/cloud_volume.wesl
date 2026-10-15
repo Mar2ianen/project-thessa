@@ -232,18 +232,26 @@ fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
     return b0 * 0.40 + b1 * 0.38 + b2 * 0.22;
 }
 
-// Sub-kilometer organic wispy turbulence bandlimited to ray step:
+// Sub-kilometer convective cauliflower billow turbulence bandlimited to ray step:
+// Sculpted with C^1 cellular billow domes (peak derivative strictly 0, crevice derivative strictly 0):
 fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
-    let w = smoothstep(1.5, 0.3, step_km);
+    let w = smoothstep(2.2, 0.4, step_km);
     if (w <= 0.01) {
         return 0.50; // Neutral midpoint when unresolved
     }
     let q = p * 0.38 + vec3<f32>(2.31, 7.14, 4.43);
     let warp = curl_warp3d(q * 0.8) * 0.45;
-    let n0 = perlin3d(q + warp) * 0.50 + 0.50;
+    let n0 = perlin3d(q + warp);
+    let s0 = clamp(1.0 - abs(n0) / 0.42, 0.0, 1.0);
+    let dome0 = s0 * s0 * (3.0 - 2.0 * s0);
+
     let q2 = ROT_OCTAVE_2 * (q + warp) * 1.85 + vec3<f32>(4.17, 9.31, 1.73);
-    let n1 = perlin3d(q2) * 0.50 + 0.50;
-    return mix(0.50, n0 * 0.70 + n1 * 0.30, w);
+    let n1 = perlin3d(q2);
+    let s1 = clamp(1.0 - abs(n1) / 0.42, 0.0, 1.0);
+    let dome1 = s1 * s1 * (3.0 - 2.0 * s1);
+
+    let detail = dome0 * 0.65 + dome1 * 0.35;
+    return mix(0.50, detail, w);
 }
 
 // 2D isotropic quasi-blue noise dither (plastic constant R2 dispersion):
@@ -681,13 +689,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let ms_eval = exp(-sun_depth * 0.28) * (0.35 + 0.65 * bounce_accept);
 
-            let sun_scatter = direct_atten * (0.85 + 4.2 * phase_direct) + ms_eval * 1.15;
+            let diffuse_sun = direct_atten * 1.5;
+            let sun_scatter = direct_atten * (0.85 + 4.2 * phase_direct) + diffuse_sun + ms_eval * 1.15;
             let sun_radiance = tint * (day * sun_scatter * 2.8);
 
             let h01 = clamp((length(p_sample) - bot) / thick, 0.0, 1.0);
             let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
             let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
-            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * 0.40;
+            let crevice_ao = exp(-s0 * 2.8);
+            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * (0.25 + 0.75 * crevice_ao) * 0.40;
 
             let in_scatter = sun_radiance + ambient_radiance;
             scat += transmittance * in_scatter * (1.0 - step_trans);
@@ -744,8 +754,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
 
             let direct_attenuation = beer_powder(sun_depth);
-            let ms1 = exp(-sun_depth * 0.32) * 0.35;
-            let ms2 = exp(-sun_depth * 0.10) * 0.12;
+            let ms1 = exp(-sun_depth * 0.35) * 0.35;
+            let ms2 = exp(-sun_depth * 0.22) * 0.10;
 
             let up = p / max(length(p), 1e-6);
             let elev = dot(up, sun_dir);
@@ -755,15 +765,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let phase_direct = dual_lobe_phase(cos_theta);
             let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
 
-            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
+            let diffuse_sun = direct_attenuation * 1.5;
+            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + diffuse_sun + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
             let sun_radiance = tint * (day * sun_scatter * 2.8);
 
             let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
             let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
             let height_occ = smoothstep(0.04, 0.40, h01);
             let core_occ = transmittance * transmittance;
-            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
-            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
+            let crevice_ao = exp(-s0 * 2.8);
+            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ) * (0.25 + 0.75 * crevice_ao);
+            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.40;
 
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
@@ -812,9 +824,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let up_cam = select(vec3<f32>(0.0, 1.0, 0.0), ro / r_cam_len, r_cam_len > 1e-6);
     let elev_cam = dot(rd, up_cam);
     let march_dist_km = t0 * radius * 0.001;
-    let haze_amount = 1.0 - exp(-march_dist_km * 0.014);
-    let haze_color = vec3<f32>(0.55, 0.70, 0.92);
-    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.05, 0.35, elev_cam)), 0.0, 0.60);
+    let haze_amount = 1.0 - exp(-march_dist_km * 0.012);
+    let haze_color = vec3<f32>(0.50, 0.68, 0.92);
+    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.05, 0.22, elev_cam)), 0.0, 0.45);
     let out_rgb = mix(scat, haze_color * alpha, haze_mix);
 
     return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha);

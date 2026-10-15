@@ -27,6 +27,11 @@ Intended for:
 - game-specific rules/progression/content code;
 - game UI tied to Project Thessa gameplay.
 
+`crates/terrain-stream` is GPL-3.0-or-later: it contains the game client's
+terrain selection/streaming policy, extracted without relicensing it. The MIT
+`rcbt-core` and `render-wgpu` crates do not depend on it; the GPL client/viewer
+combine that policy with the reusable renderer.
+
 GPL game code may link/use MIT engine crates. MIT engine crates must not depend on GPL game crates.
 
 ### Assets

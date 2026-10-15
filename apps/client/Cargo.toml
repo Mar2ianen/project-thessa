@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
+thessa-terrain-stream = { path = "../../crates/terrain-stream" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-flight-authority = { path = "../../crates/flight-authority" }

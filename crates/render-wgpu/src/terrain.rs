@@ -5,6 +5,7 @@
 //! a body-fixed camera, streamed material pages and a fallback globe color,
 //! not the full game scene.
 
+use thessa_rcbt_core::material_cache::SlotCache;
 use thessa_rcbt_core::{HeightPage, shaders, tile_anchor::TileAnchor};
 use wgpu::util::DeviceExt;
 
@@ -22,9 +23,38 @@ pub struct TerrainPatch<'a> {
     pub page: &'a HeightPage,
 }
 
-/// Persistent GPU terrain working set. Geometry is generated once at upload;
+/// Stable source identity; generations change whenever a page's bytes change.
+pub struct ResidentTerrainPatch<'a> {
+    pub anchor: TileAnchor,
+    pub page: &'a HeightPage,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TerrainCapacity {
+    pub patches: u32,
+    pub height_grid_size: u32,
+    pub material_layers: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TerrainPublication {
+    pub active: usize,
+    pub regenerated: usize,
+    pub retained: usize,
+    pub dispatch_slots: usize,
+}
+
+/// Persistent GPU terrain working set. Geometry is generated at publication;
 /// camera-only frames update anchors/view and rerun classification, not geometry.
 pub struct TerrainRenderer {
+    residency: SlotCache,
+    manual_updates: Vec<bool>,
+    active_extent: usize,
+    camera: [f64; 3],
+    body_radius_m: f64,
+    leaves: wgpu::Buffer,
+    history: wgpu::Buffer,
     lighting: wgpu::Buffer,
     materials: crate::material::MaterialArray,
     node_ids: Vec<u64>,
@@ -156,13 +186,55 @@ impl TerrainRenderer {
         format: wgpu::TextureFormat,
         material_layers: u32,
     ) -> Result<Self, BackendError> {
+        Self::allocate(
+            backend,
+            patches,
+            format,
+            material_layers,
+            patches.len(),
+            None,
+        )
+    }
+
+    /// Allocate a reusable geometry pool; unused slots are not dispatched.
+    /// Height slots have a fixed maximum grid capacity and never grow in-frame.
+    pub fn with_capacity(
+        backend: &Backend,
+        patches: &[TerrainPatch<'_>],
+        format: wgpu::TextureFormat,
+        capacity: TerrainCapacity,
+    ) -> Result<Self, BackendError> {
+        if capacity.height_grid_size < 2 || capacity.height_grid_size > 4096 {
+            return Err(BackendError::Device(
+                "invalid terrain height slot grid".into(),
+            ));
+        }
+        let page_bytes = (u64::from(capacity.height_grid_size).pow(2) * 2).div_ceil(4) * 4;
+        Self::allocate(
+            backend,
+            patches,
+            format,
+            capacity.material_layers,
+            capacity.patches as usize,
+            Some(page_bytes),
+        )
+    }
+
+    fn allocate(
+        backend: &Backend,
+        patches: &[TerrainPatch<'_>],
+        format: wgpu::TextureFormat,
+        material_layers: u32,
+        capacity: usize,
+        page_capacity: Option<u64>,
+    ) -> Result<Self, BackendError> {
         let device = &backend.device;
         let fail = |s: &str| BackendError::Device(s.into());
         let Some(first) = patches.first() else {
             return Err(fail("terrain needs at least one patch"));
         };
         let radius = first.anchor.radius_m;
-        let count = patches.len() as u64;
+        let count = capacity as u64;
         let limits = device.limits();
         let max_storage = limits
             .max_storage_buffer_binding_size
@@ -173,13 +245,21 @@ impl TerrainRenderer {
         let triangle_bytes = count
             .checked_mul(TRIANGLES_PER_PATCH * 16)
             .ok_or_else(|| fail("terrain size overflow"))?;
-        let residual_bytes = patches
-            .iter()
-            .try_fold(0u64, |sum, p| {
+        let residual_bytes = if let Some(size) = page_capacity {
+            count.checked_mul(size)
+        } else {
+            patches.iter().try_fold(0u64, |sum, p| {
                 sum.checked_add((p.page.residuals().len() as u64).div_ceil(2) * 4)
             })
-            .ok_or_else(|| fail("terrain residual size overflow"))?;
-        if count > u32::MAX as u64 / VERTICES_PER_PATCH as u64
+        }
+        .ok_or_else(|| fail("terrain residual size overflow"))?;
+        if capacity < patches.len()
+            || capacity == 0
+            || patches.iter().any(|p| {
+                page_capacity
+                    .is_some_and(|size| (p.page.residuals().len() as u64).div_ceil(2) * 4 > size)
+            })
+            || count > u32::MAX as u64 / VERTICES_PER_PATCH as u64
             || count > limits.max_compute_workgroups_per_dimension as u64
             || (count * VERTICES_PER_PATCH as u64).div_ceil(64)
                 > limits.max_compute_workgroups_per_dimension as u64
@@ -189,27 +269,24 @@ impl TerrainRenderer {
             || limits.max_storage_buffers_per_shader_stage < 8
             || patches
                 .iter()
-                .any(|p| p.anchor.radius_m != radius || p.anchor.tile.level > 30)
+                .any(|p| p.anchor.radius_m != radius || tile_node_id(&p.anchor).is_none())
         {
             return Err(fail(
                 "terrain working set exceeds device limits or mixes body radii",
             ));
         }
-        let anchors: Vec<_> = patches.iter().map(|p| p.anchor).collect();
+        let mut anchors: Vec<_> = patches.iter().map(|p| p.anchor).collect();
+        anchors.resize(capacity, first.anchor);
         let frames_data = frame_bytes(&anchors, [0.0; 3])?;
-        let materials =
-            crate::material::MaterialArray::new(backend, material_layers, patches.len())?;
-        let mut node_ids = Vec::with_capacity(patches.len());
+        let materials = crate::material::MaterialArray::new(backend, material_layers, capacity)?;
+        let mut node_ids = Vec::with_capacity(capacity);
         let mut residuals = Vec::with_capacity(residual_bytes as usize);
         let mut page_slots = Vec::with_capacity(patches.len());
         let mut metadata = Vec::with_capacity(patches.len() * 4);
         let mut leaves = Vec::with_capacity(patches.len() * 4);
         for (ordinal, p) in patches.iter().enumerate() {
             let key = p.anchor.tile;
-            let mut id = 8 + u64::from(key.face);
-            for bit in (0..key.level).rev() {
-                id = (id << 2) | u64::from(((key.x >> bit) & 1) * 2 + ((key.y >> bit) & 1));
-            }
+            let id = tile_node_id(&p.anchor).ok_or_else(|| fail("invalid terrain tile"))?;
             node_ids.push(id);
             leaves.extend([
                 id as u32,
@@ -225,13 +302,35 @@ impl TerrainRenderer {
             ]);
             page_slots.push((
                 residuals.len() as u64,
-                (p.page.residuals().len() as u64).div_ceil(2) * 4,
+                page_capacity.unwrap_or((p.page.residuals().len() as u64).div_ceil(2) * 4),
             ));
             residuals.extend(p.page.residual_bytes());
             residuals.resize(residuals.len().div_ceil(4) * 4, 0);
+            if let Some(size) = page_capacity {
+                residuals.resize((page_slots[ordinal].0 + size) as usize, 0);
+            }
         }
+        let distinct: std::collections::BTreeSet<_> = node_ids.iter().copied().collect();
+        if distinct.len() != patches.len() {
+            return Err(fail("duplicate terrain tile"));
+        }
+        let mut residency = SlotCache::new(capacity).map_err(|e| fail(&e.to_string()))?;
+        residency.update(&node_ids.iter().map(|id| (*id, 0)).collect::<Vec<_>>());
+        for _ in patches.len()..capacity {
+            let size = page_capacity.expect("spare capacity needs bounded height slots");
+            page_slots.push((residuals.len() as u64, size));
+            residuals.resize(residuals.len() + size as usize, 0);
+        }
+        node_ids.resize(capacity, 0);
+        leaves.resize(capacity * 4, 0);
+        metadata.resize(capacity * 4, 0);
         let ro = wgpu::BufferUsages::STORAGE;
-        let leaves = upload(device, "cbt-leaves", &bytes(leaves), ro);
+        let leaves = upload(
+            device,
+            "cbt-leaves",
+            &bytes(leaves),
+            ro | wgpu::BufferUsages::COPY_DST,
+        );
         let metadata = upload(
             device,
             "cbt-pages",
@@ -253,10 +352,10 @@ impl TerrainRenderer {
         let vertices = storage(device, vertex_bytes, wgpu::BufferUsages::COPY_SRC);
         let patch_records = storage(device, count * 16, wgpu::BufferUsages::empty());
         let params_data = bytes([
-            count as u32,
+            patches.len() as u32,
             VERTICES_PER_PATCH,
             (radius as f32).to_bits(),
-            count as u32,
+            patches.len() as u32,
         ]);
         let params = upload(
             device,
@@ -267,7 +366,7 @@ impl TerrainRenderer {
         let dirty = upload(
             device,
             "cbt-initial-dirty",
-            &bytes(0..count as u32),
+            &bytes((0..capacity as u32).map(|i| if (i as usize) < patches.len() { i } else { 0 })),
             ro | wgpu::BufferUsages::COPY_DST,
         );
         let geometry_layout = buffer_layout(device, 8, &[5], &[1, 4]);
@@ -300,7 +399,11 @@ impl TerrainRenderer {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&geometry);
             pass.set_bind_group(0, &geometry_bind, &[]);
-            pass.dispatch_workgroups((count as u32 * VERTICES_PER_PATCH).div_ceil(64), 1, 1);
+            pass.dispatch_workgroups(
+                (patches.len() as u32 * VERTICES_PER_PATCH).div_ceil(64),
+                1,
+                1,
+            );
         }
         backend.queue.submit([encoder.finish()]);
         let view = upload(
@@ -322,7 +425,7 @@ impl TerrainRenderer {
             32,
             wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC,
         );
-        let history = storage(device, count * 16, wgpu::BufferUsages::empty());
+        let history = storage(device, count * 16, wgpu::BufferUsages::COPY_DST);
         let classify_layout = buffer_layout(device, 11, &[5, 6, 7], &[2, 3, 4, 10]);
         let classify_bind = bind_buffers(
             device,
@@ -430,6 +533,13 @@ impl TerrainRenderer {
             entries: &entries,
         });
         Ok(Self {
+            residency,
+            manual_updates: vec![false; capacity],
+            active_extent: patches.len(),
+            camera: [0.0; 3],
+            body_radius_m: radius,
+            leaves,
+            history,
             lighting,
             materials,
             node_ids,
@@ -483,12 +593,130 @@ impl TerrainRenderer {
         Ok(())
     }
 
+    /// Replace the active partition atomically after CPU validation. Retained
+    /// tiles keep slots/history; reuse clears history and inactive metadata.
+    /// No pipelines/buffers are recreated, no clean geometry is regenerated.
+    pub fn publish_partition(
+        &mut self,
+        backend: &Backend,
+        patches: &[ResidentTerrainPatch<'_>],
+    ) -> Result<TerrainPublication, BackendError> {
+        let fail =
+            || BackendError::Device("invalid, duplicate or over-capacity terrain partition".into());
+        if patches.len() > self.anchors.len() {
+            return Err(fail());
+        }
+        let mut requested = Vec::with_capacity(patches.len());
+        let mut sources = std::collections::BTreeMap::new();
+        for (index, patch) in patches.iter().enumerate() {
+            if patch.anchor.radius_m != self.body_radius_m {
+                return Err(fail());
+            }
+            let id = tile_node_id(&patch.anchor).ok_or_else(fail)?;
+            if sources.insert(id, index).is_some() {
+                return Err(fail());
+            }
+            requested.push((id, patch.generation));
+        }
+        // Distinct IDs can still overlap when one names another's ancestor.
+        for &(id, _) in &requested {
+            let mut parent = id >> 2;
+            while parent >= 8 {
+                if sources.contains_key(&parent) {
+                    return Err(fail());
+                }
+                parent >>= 2;
+            }
+        }
+        let mut residency = self.residency.clone();
+        let changes = residency.update(&requested);
+        let changed: std::collections::BTreeSet<_> = changes.iter().map(|c| c.slot).collect();
+        let mut anchors = self.anchors.clone();
+        let mut ids = vec![0; self.node_ids.len()];
+        let mut leaves = vec![[0; 4]; self.node_ids.len()];
+        let mut dirty = Vec::new();
+        let mut reset = Vec::new();
+        let mut retained = 0;
+        for entry in residency.iter() {
+            let patch = &patches[sources[&entry.node_id]];
+            let slot = entry.slot as usize;
+            let size = (patch.page.residuals().len() as u64).div_ceil(2) * 4;
+            if size > self.page_slots[slot].1 {
+                return Err(fail());
+            }
+            let frame = patch.anchor.to_gpu(self.camera).ok_or_else(fail)?;
+            let old_frame = anchors[slot].to_gpu(self.camera).ok_or_else(fail)?;
+            let reuse = self.node_ids[slot] != entry.node_id;
+            if reuse {
+                reset.push(slot);
+            } else {
+                retained += 1;
+            }
+            if changed.contains(&entry.slot)
+                || reuse
+                || self.manual_updates[slot]
+                || frame != old_frame
+            {
+                dirty.push((entry.slot, patch.page));
+                if !reuse {
+                    reset.push(slot);
+                }
+            }
+            anchors[slot] = patch.anchor;
+            ids[slot] = entry.node_id;
+            leaves[slot] = [
+                entry.node_id as u32,
+                (entry.node_id >> 32) as u32,
+                3 + 2 * u32::from(patch.anchor.tile.level),
+                entry.slot,
+            ];
+        }
+        let active_extent = ids.iter().rposition(|id| *id != 0).map_or(0, |i| i + 1);
+        let frames = frame_bytes(&anchors[..active_extent], self.camera)?;
+        // From here all fallible validation has completed. Queue ordering keeps
+        // the previous submitted draw intact and the next draw wholly new.
+        for (slot, (&old, &new)) in self.node_ids.iter().zip(&ids).enumerate() {
+            if old != 0 && new == 0 {
+                backend
+                    .queue
+                    .write_buffer(&self.metadata, slot as u64 * 16, &[0; 16]);
+            }
+        }
+        for slot in reset {
+            backend
+                .queue
+                .write_buffer(&self.history, slot as u64 * 16, &[0; 16]);
+        }
+        backend
+            .queue
+            .write_buffer(&self.leaves, 0, &bytes(leaves.into_iter().flatten()));
+        if !frames.is_empty() {
+            backend.queue.write_buffer(&self.frames, 0, &frames);
+        }
+        self.anchors = anchors;
+        self.node_ids = ids;
+        self.residency = residency;
+        self.active_extent = active_extent;
+        self.upload_pages(backend, &dirty);
+        self.manual_updates.fill(false);
+        Ok(TerrainPublication {
+            active: patches.len(),
+            regenerated: dirty.len(),
+            retained,
+            dispatch_slots: active_extent,
+        })
+    }
+
+    pub fn slot(&self, node_id: u64) -> Option<u32> {
+        self.residency.slot(node_id)
+    }
+
     /// Publish changed quantized pages into stable slots and regenerate only
     /// their GPU patches. Reuses pipelines/buffers; no CPU mesh or readback.
     /// Updates must have unique valid ordinals and fit the original slot.
     /// All updates are validated before any GPU mutation.
     pub fn update_pages(
-        &self,
+        &mut self,
         backend: &Backend,
         updates: &[(u32, &HeightPage)],
     ) -> Result<(), BackendError> {
@@ -502,7 +730,8 @@ impl TerrainRenderer {
                 self.page_slots
                     .get(*i as usize)
                     .is_none_or(|(_, capacity)| {
-                        (page.residuals().len() as u64).div_ceil(2) * 4 > *capacity
+                        self.node_ids[*i as usize] == 0
+                            || (page.residuals().len() as u64).div_ceil(2) * 4 > *capacity
                     })
             })
         {
@@ -510,6 +739,14 @@ impl TerrainRenderer {
                 "invalid/duplicate terrain ordinal or page exceeds stable slot".into(),
             ));
         }
+        for &(slot, _) in updates {
+            self.manual_updates[slot as usize] = true;
+        }
+        self.upload_pages(backend, updates);
+        Ok(())
+    }
+
+    fn upload_pages(&self, backend: &Backend, updates: &[(u32, &HeightPage)]) {
         for (i, page) in updates {
             let (offset, _) = self.page_slots[*i as usize];
             let mut data = page.residual_bytes();
@@ -526,17 +763,24 @@ impl TerrainRenderer {
                 ]),
             );
         }
-        backend.queue.write_buffer(&self.dirty, 0, &bytes(ordinals));
+        if !updates.is_empty() {
+            backend
+                .queue
+                .write_buffer(&self.dirty, 0, &bytes(updates.iter().map(|(i, _)| *i)));
+        }
         backend.queue.write_buffer(
             &self.params,
             0,
             &bytes([
-                self.anchors.len() as u32,
+                self.active_extent as u32,
                 VERTICES_PER_PATCH,
                 self.radius.to_bits(),
                 updates.len() as u32,
             ]),
         );
+        if updates.is_empty() {
+            return;
+        }
         let mut encoder = backend.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -549,17 +793,24 @@ impl TerrainRenderer {
             );
         }
         backend.queue.submit([encoder.finish()]);
-        Ok(())
     }
 
     /// Update body-fixed camera uniforms. Tile anchors and shader world space
     /// share exactly this f64 camera origin. No terrain regeneration/readback.
-    pub fn update_view(&self, backend: &Backend, params: &ViewParams) -> Result<(), BackendError> {
+    pub fn update_view(
+        &mut self,
+        backend: &Backend,
+        params: &ViewParams,
+    ) -> Result<(), BackendError> {
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
-        let frames = frame_bytes(&self.anchors, params.world_position_m.to_array())?;
+        let camera = params.world_position_m.to_array();
+        let frames = frame_bytes(&self.anchors[..self.active_extent], camera)?;
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
-        backend.queue.write_buffer(&self.frames, 0, &frames);
+        if !frames.is_empty() {
+            backend.queue.write_buffer(&self.frames, 0, &frames);
+        }
+        self.camera = camera;
         Ok(())
     }
 
@@ -576,7 +827,13 @@ impl TerrainRenderer {
             pass.set_bind_group(0, &self.classify_bind, &[]);
             for (i, pipeline) in self.classify.iter().enumerate() {
                 pass.set_pipeline(pipeline);
-                pass.dispatch_workgroups(if i == 1 { self.anchors.len() as u32 } else { 1 }, 1, 1);
+                if i != 1 || self.active_extent > 0 {
+                    pass.dispatch_workgroups(
+                        if i == 1 { self.active_extent as u32 } else { 1 },
+                        1,
+                        1,
+                    );
+                }
             }
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -642,6 +899,19 @@ fn frame_bytes(anchors: &[TileAnchor], camera: [f64; 3]) -> Result<Vec<u8>, Back
         out.extend(bytes(frame.words().into_iter().flatten().map(f32::to_bits)));
     }
     Ok(out)
+}
+
+fn tile_node_id(anchor: &TileAnchor) -> Option<u64> {
+    let key = anchor.tile;
+    thessa_rcbt_core::tile_anchor::TileKey::new(key.face, key.level, key.x, key.y)?;
+    if key.level > thessa_rcbt_core::tile_anchor::GPU_STABLE_LEVEL_MAX {
+        return None;
+    }
+    let mut id = 8 + u64::from(key.face);
+    for bit in (0..key.level).rev() {
+        id = (id << 2) | u64::from(((key.x >> bit) & 1) * 2 + ((key.y >> bit) & 1));
+    }
+    Some(id)
 }
 
 fn solid_texture(backend: &Backend, rgba: [u8; 4], array: bool) -> wgpu::TextureView {

@@ -5983,6 +5983,7 @@ dependencies = [
  "thessa-protocol",
  "thessa-rcbt-core",
  "thessa-sim-core",
+ "thessa-terrain-stream",
  "thessa-worldgen-rocky",
  "toml 0.9.12+spec-1.1.0",
  "wgpu",
@@ -6236,10 +6237,21 @@ dependencies = [
  "thessa-rcbt-core",
  "thessa-render-wgpu",
  "thessa-sim-core",
+ "thessa-terrain-stream",
  "thessa-worldgen-rocky",
  "toml 0.9.12+spec-1.1.0",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "thessa-terrain-stream"
+version = "0.0.1"
+dependencies = [
+ "glam 0.33.7",
+ "rayon",
+ "thessa-rcbt-core",
+ "thessa-worldgen-rocky",
 ]
 
 [[package]]

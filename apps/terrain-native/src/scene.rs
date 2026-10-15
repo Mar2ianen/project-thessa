@@ -1,26 +1,25 @@
 //! A real canonical-field resident partition, shared by window/headless paths.
-//! This is a bounded static streaming snapshot, not the networked game client.
+//! Shared live terrain streaming policy; not the networked game client.
 use glam::DVec3;
-use rayon::prelude::*;
-use thessa_rcbt_core::{
-    HeightPage,
-    material_page::{CbtMaterialPage, MaterialPages},
-    tile_anchor::{TileAnchor, TileKey},
-};
+use thessa_rcbt_core::tile_anchor::{TileAnchor, TileKey};
 use thessa_render_wgpu::{
     Backend, BackendError,
-    terrain::{TerrainPatch, TerrainRenderer},
+    terrain::{ResidentTerrainPatch, TerrainCapacity, TerrainPatch, TerrainRenderer},
     view::ViewParams,
 };
-use thessa_worldgen_rocky::lod;
+use thessa_terrain_stream::{
+    runtime::{StreamUpdate, StreamingPolicy, TerrainStream},
+    selection::SelectionView,
+};
 
 pub struct Scene {
     pub requested: thessa_graphics::RequestedGraphics,
     pub lighting: thessa_rcbt_core::lighting::SurfaceLighting,
-    pub anchors: Vec<TileAnchor>,
-    pub heights: Vec<HeightPage>,
-    pub materials: MaterialPages,
-    pub demand: Vec<u64>,
+    pub stream: TerrainStream,
+    pub publications: u64,
+    pub regenerated: u64,
+    pub material_upload_bytes: u64,
+    pub capacity_rejections: u64,
     pub center: DVec3,
     pub up: DVec3,
     pub east: DVec3,
@@ -93,75 +92,20 @@ impl Scene {
         let up = DVec3::from(sites[1]); // same HIGHLANDS bookmark as the shipped client
         let center = up * (field.params.radius_m + field.height_m(up.to_array(), 32.0).max(0.0));
         let east = DVec3::Y.cross(up).normalize();
-        let eye = center + up * 30_000.0 - east.cross(up) * 30_000.0;
-        let tiles =
-            lod::select_tiles_with_height(eye.to_array(), field.params.radius_m, 12, 64, |d| {
-                field.height_m(d, 500.0).max(0.0)
-            });
-        let built: Vec<_> = tiles
-            .par_iter()
-            .map(|&key| {
-                let height =
-                    lod::bake_height_page(&field, key, 33, 0.5).map_err(|e| e.to_string())?;
-                let material =
-                    CbtMaterialPage::from_rgba8(lod::build_gpu_material_page(&field, key).rgba)
-                        .ok_or("invalid material shape")?;
-                let anchor = TileAnchor::new(
-                    TileKey::new(key.face, key.level, key.x, key.y).ok_or("invalid tile")?,
-                    field.params.radius_m,
-                )
-                .ok_or("invalid anchor")?;
-                let id = lod::cbt_node_for_tile(key).ok_or("invalid CBT node")?.id();
-                Ok((anchor, height, id, material))
-            })
-            .collect::<Result<_, String>>()?;
-        let mut anchors = Vec::new();
-        let mut heights = Vec::new();
-        let mut materials = MaterialPages::new();
-        let mut demand = Vec::new();
-        for (anchor, height, id, material) in built {
-            anchors.push(anchor);
-            heights.push(height);
-            demand.push(id);
-            materials.insert(id, (1, material));
-        }
-        // The production shader feathers missing neighbours into common coarse
-        // pages. Supply the resident ancestors too, rather than exposing the
-        // diagnostic globe color at every mixed-LOD tile boundary.
-        let mut ancestors = std::collections::BTreeSet::new();
-        for &id in &demand {
-            let mut parent = id >> 2;
-            while parent >= 8 {
-                if !materials.contains_key(&parent) {
-                    ancestors.insert(parent);
-                }
-                parent >>= 2;
-            }
-        }
-        let coarse: Vec<_> = ancestors
-            .into_par_iter()
-            .map(|id| {
-                let node = thessa_rcbt_core::Node::from_heap_id(id).map_err(|e| e.to_string())?;
-                let key = lod::tile_for_cbt_node(node).ok_or("invalid material ancestor")?;
-                let page =
-                    CbtMaterialPage::from_rgba8(lod::build_gpu_material_page(&field, key).rgba)
-                        .ok_or("invalid material shape")?;
-                Ok((id, (1, page)))
-            })
-            .collect::<Result<_, String>>()?;
-        materials.extend(coarse);
+        let stream = TerrainStream::new(field, StreamingPolicy::default())?;
         eprintln!(
             "canonical frozen Thessa: {} resident tiles; highlands={:?}",
-            anchors.len(),
+            stream.visible().len(),
             center
         );
         Ok(Self {
             requested,
             lighting,
-            anchors,
-            heights,
-            materials,
-            demand,
+            stream,
+            publications: 0,
+            regenerated: 0,
+            material_upload_bytes: 0,
+            capacity_rejections: 0,
             center,
             up,
             east,
@@ -176,18 +120,29 @@ impl Scene {
         format: wgpu::TextureFormat,
     ) -> Result<TerrainRenderer, BackendError> {
         let patches: Vec<_> = self
-            .anchors
+            .stream
+            .visible()
             .iter()
-            .zip(&self.heights)
-            .map(|(&anchor, page)| TerrainPatch { anchor, page })
+            .map(|&key| TerrainPatch {
+                anchor: self.anchor(key),
+                page: &self.stream.height(key).unwrap().page,
+            })
             .collect();
-        let mut renderer = TerrainRenderer::with_material_capacity(
+        let mut renderer = TerrainRenderer::with_capacity(
             backend,
             &patches,
             format,
-            self.materials.len() as u32,
+            TerrainCapacity {
+                patches: 1024,
+                height_grid_size: 33,
+                material_layers: backend.device.limits().max_texture_array_layers.min(256),
+            },
         )?;
-        let stats = renderer.update_materials(backend, &self.demand, &self.materials)?;
+        let stats = renderer.update_materials(
+            backend,
+            self.stream.material_demand(),
+            self.stream.materials(),
+        )?;
         renderer.update_lighting(backend, &self.lighting)?;
         eprintln!(
             "material publication: {} pages, {} bytes",
@@ -196,22 +151,116 @@ impl Scene {
         Ok(renderer)
     }
 
-    pub fn view(&self, width: u32, height: u32, exposure: f32) -> ViewParams {
-        let north = self.east.cross(self.up);
-        let tangent = north * self.angle.cos() + self.east * self.angle.sin();
-        let eye = self.center + (self.up - tangent) * self.distance;
-        ViewParams {
-            world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, self.center, north)
-                .inverse(),
-            clip_from_view: glam::dcamera::rh::proj::directx::perspective(
-                0.9,
-                width as f64 / height as f64,
-                1.0,
-                1e8,
-            ),
-            world_position_m: eye,
-            exposure,
+    fn anchor(&self, key: thessa_worldgen_rocky::lod::TileKey) -> TileAnchor {
+        TileAnchor::new(
+            TileKey::new(key.face, key.level, key.x, key.y).unwrap(),
+            self.stream_radius(),
+        )
+        .unwrap()
+    }
+
+    fn stream_radius(&self) -> f64 {
+        self.stream.radius_m()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick(
+        &mut self,
+        backend: &Backend,
+        renderer: &mut TerrainRenderer,
+        width: u32,
+        height: u32,
+        exposure: f32,
+        now_s: f64,
+    ) -> Result<StreamUpdate, Box<dyn std::error::Error>> {
+        let camera = self.view(width, height, exposure);
+        let forward = camera
+            .world_from_view
+            .transform_vector3(DVec3::NEG_Z)
+            .normalize();
+        let half_angle = 0.45f64.max((0.45f64.tan() * width as f64 / height as f64).atan()) + 0.6;
+        let update = self.stream.tick(
+            SelectionView {
+                eye: camera.world_position_m,
+                stream_origin: self.center,
+                forward,
+                radius: self.stream_radius(),
+                frustum: Some(thessa_worldgen_rocky::lod::SelectionFrustum {
+                    forward: forward.to_array(),
+                    cos_limit: half_angle.cos().clamp(-1.0, 1.0),
+                }),
+            },
+            2.0 * 0.45f64.tan() / height as f64,
+            now_s,
+        )?;
+        if update.geometry_changed {
+            let patches: Vec<_> = self
+                .stream
+                .visible()
+                .iter()
+                .map(|&key| {
+                    let entry = self.stream.height(key).unwrap();
+                    ResidentTerrainPatch {
+                        anchor: self.anchor(key),
+                        page: &entry.page,
+                        generation: entry.generation,
+                    }
+                })
+                .collect();
+            let stats = renderer.publish_partition(backend, &patches)?;
+            self.publications += 1;
+            self.regenerated += stats.regenerated as u64;
         }
+        if update.materials_changed || update.geometry_changed {
+            let stats = renderer.update_materials(
+                backend,
+                self.stream.material_demand(),
+                self.stream.materials(),
+            )?;
+            self.material_upload_bytes += stats.bytes as u64;
+        }
+        self.capacity_rejections += u64::from(update.capacity_rejected);
+        Ok(update)
+    }
+
+    pub fn view(&self, width: u32, height: u32, exposure: f32) -> ViewParams {
+        orbit_view(
+            self.center,
+            self.up,
+            self.east,
+            self.distance,
+            self.angle,
+            width,
+            height,
+            exposure,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn orbit_view(
+    center: DVec3,
+    up: DVec3,
+    east: DVec3,
+    distance: f64,
+    angle: f64,
+    width: u32,
+    height: u32,
+    exposure: f32,
+) -> ViewParams {
+    let north = east.cross(up);
+    let tangent = north * angle.cos() + east * angle.sin();
+    let eye = center + (up - tangent) * distance;
+    ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, north).inverse(),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+            0.9,
+            width as f64 / height as f64,
+            1.0,
+            1e8,
+        ),
+        world_position_m: eye,
+        exposure,
     }
 }
 
@@ -221,24 +270,19 @@ mod tests {
 
     #[test]
     fn orbit_views_keep_checked_camera_relative_abi() {
-        let mut scene = Scene {
-            requested: Default::default(),
-            lighting: Default::default(),
-            anchors: vec![],
-            heights: vec![],
-            materials: MaterialPages::new(),
-            demand: vec![],
-            center: DVec3::Z * 3_200_000.0,
-            up: DVec3::Z,
-            east: DVec3::X,
-            distance: 30_000.0,
-            angle: 0.0,
-        };
+        let center = DVec3::Z * 3_200_000.0;
         for distance in [1_000.0, 30_000.0, 200_000.0] {
             for step in 0..32 {
-                scene.distance = distance;
-                scene.angle = step as f64 * std::f64::consts::TAU / 32.0;
-                let view = scene.view(1280, 720, 1.0);
+                let view = orbit_view(
+                    center,
+                    DVec3::Z,
+                    DVec3::X,
+                    distance,
+                    step as f64 * std::f64::consts::TAU / 32.0,
+                    1280,
+                    720,
+                    1.0,
+                );
                 assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
                 assert!(
                     (view.world_from_view.w_axis.truncate() - view.world_position_m).length()

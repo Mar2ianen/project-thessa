@@ -9,6 +9,7 @@ description = "Bevy-free canonical terrain migration viewer and frame benchmark"
 
 [dependencies]
 thessa-render-wgpu = { path = "../../crates/render-wgpu" }
+thessa-terrain-stream = { path = "../../crates/terrain-stream" }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 thessa-flight-authority = { path = "../../crates/flight-authority" }

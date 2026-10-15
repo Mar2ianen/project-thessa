@@ -586,7 +586,7 @@ ordinals, duplicates and stable-slot capacities before publication and
 regenerates only dirty patches, without CPU meshes or readback. Camera
 coordinates remain body-fixed. Bounded raw material residency, direct stellar
 lighting and native migration-viewer presentation are now available (below);
-body motion, live game streaming and full scene/effect integration remain unported.
+body motion, networked game-world streaming and full scene/effect integration remain unported.
 Byte roundtrip is still not production snapshot publication parity.
 
 Run the dependency-independent screenshot/latency harness:
@@ -682,8 +682,9 @@ byte and currently published resident counts.
 `apps/terrain-native` is a GPL migration viewer with **no Bevy runtime
 dependency**. It reuses `canonical_launch_setup` (source-checked frozen erosion
 and the game's HIGHLANDS bookmark), the real bounded LOD selector, quantized
-height builder, material builder and ancestor pages. Rayon bakes one static
-resident partition at startup. Ephemeris-derived directions/irradiance and the
+height builder, material builder and ancestor pages. The initial material slice
+baked one static resident partition; the live-streaming continuation below
+replaces that startup snapshot. Ephemeris-derived directions/irradiance and the
 existing atmosphere blackbody/inverse-square helpers supply up to three stars
 at EPOCH; the terrain axes match the launch survey. There is no fixed fake sun.
 Atmospheric transport/eclipses are not represented in this slice. Manual EV100
@@ -707,11 +708,12 @@ either mode for smoke runs. `--graphics PATH` selects settings (default
 `graphics.toml` from the working directory). Only manual exposure and vsync are
 currently consumed. This path intentionally does not claim HDR/tonemapping,
 auto-exposure, atmosphere/clouds/ocean/shadows, RT, ships, HUD/UI, networking,
-live residency/topology changes or moving-body parity with `thessa-client`.
+moving-body parity with `thessa-client`.
 The screenshot is coarse and lacks the game's effect stack: it demonstrates
 canonical page/material transport, **not visual acceptance or client parity**.
 
-Radeon 880M / RADV, 1280×720, 64 canonical height tiles, 85 material pages
+Historical static-slice measurement (not the current live workload): Radeon
+880M / RADV, 1280×720, 64 canonical height tiles, 85 material pages
 (7,427,300 payload bytes across eight mips), 48,384 drawn triangles, 120 measured
 frames after 30 warm-up frames: 1.291 ms median / 1.651 ms p95 in one run
 (774.7 reciprocal median offscreen frames/s). Timing is camera upload +
@@ -735,7 +737,7 @@ masking, fixed directory hashing, shared linear-light mip parity and checked
 orbit camera uniforms. The original Bevy material/microstore consumers use the
 same payload via re-exports; they have not been removed or silently disabled.
 
-Verification for this slice: workspace fmt, all-target/all-feature clippy,
+Historical verification for the material slice: workspace fmt, all-target/all-feature clippy,
 workspace lib/bin and integration tests, plus the separate Bevy-CBT `render`
 ignored-test invocation all passed (1,775 successful tests across these runs;
 24 hardware tests in that final invocation). Native material/raster hardware
@@ -743,13 +745,109 @@ regressions ran as ordinary tests. The normal runtime dependency tree for
 `thessa-terrain-native` contains no Bevy crates. The canonical offscreen capture
 and 120-frame native Wayland smoke run also completed successfully.
 
-Next production boundary: extract the existing `WorldTerrain` job/resident-cover
-publication lifecycle into neutral state, then let the owned renderer consume
-its changing topology/pages directly. Do not grow a second independent terrain
-scheduler inside the viewer. Geometry slot allocation/reclamation and history
-invalidation must become bounded before live partition changes are claimed.
-After that, port f64 moving-body/camera transforms and the actual scene/effect
-passes; only remove each Bevy consumer when its production replacement works.
+### Live terrain streaming continuation (2026-10-15)
+
+`crates/terrain-stream` (GPL game code, no renderer/ECS dependencies) now owns
+the extracted two-tier selector, motion trigger/debounce, velocity bias,
+fine-selection hysteresis, complete-cover construction, ancestor dependencies,
+height priority, material refinement/dependency/priority rules, capacity-one
+mailboxes and Rayon executor. **Both** `thessa-client` and the native viewer
+consume those policies/executor. The existing `worldgen-rocky::streaming`
+resident-cover and deterministic LRU functions remain the shared cover policy.
+No selector or terrain scheduler lives in the native application's scene code.
+The Bevy client still owns its mesh fallback, cache/assets, topology-planning
+and resource-publication glue; complete `WorldTerrain` lifecycle extraction is
+not finished. The new renderer-free runtime does not yet replace that glue.
+
+The native runtime synchronously bootstraps six height/material roots, then
+polls at most eight height and four material builds without waiting for them.
+Only quantized heights are built for GPU geometry, not CPU meshes. Camera-only
+frames poll bounded mailboxes without rebuilding dependencies/LRU priorities.
+Coverage uses ready families or cached ancestors/previous finer cover while
+replacements load. Height-cache admission counts both residents and in-flight
+results against 1,024 entries and protects the drawn cover and bootstrap roots.
+If exhausted, refinement stalls and is counted rather than evicting drawn
+pages or allocating without bounds. Material sources retain at most 1,024 pages
+after each tick (up to four completed pages transiently before eviction).
+Material generations are monotonic across rebuild/eviction; material refinement
+is independent of matching height keys. The old client's material completion
+path no longer discards finer pages just because no height page shares the key;
+its existing source-budget trimming still applies. The GPU array reserves at most 256 raw
+layers, with the shared coarse-ancestor-first fallback under exhaustion.
+These are diagnostic viewer budgets, not newly supported `graphics.toml`
+quality tiers or a replacement for production graphics capability resolution.
+
+`TerrainRenderer::with_capacity` reserves a fixed geometry/page pool;
+`publish_partition` validates IDs/ancestor overlap, frames, radii, duplicates,
+capacity and assigned height-slot sizes **before** mutation. It reuses the
+existing core `SlotCache`, retaining slots across reorder, reclaiming removed
+slots, zeroing inactive metadata and invalidating history on dirty/reused slots.
+Only dirty/new slots regenerate geometry; pipelines and buffers stay alive.
+Sparse interior holes and an empty partition cannot retain old indirect draws.
+Source generations identify unchanged bytes; direct `update_pages` invalidates
+that shortcut. `update_pages` and `update_view` now take mutable renderer access
+because they maintain publication/camera state. Initial construction still
+requires at least one patch; subsequent partitions may be empty.
+
+Headless `--prestream-seconds N` (default 3) controls excluded initial streaming;
+it is a time budget, **not** a convergence guarantee. `--sweep` advances the
+diagnostic orbit by 0.006 rad per frame (including 30 excluded warm-up frames).
+Both options require headless mode. Measurement includes selection, mailbox
+polling, publication/dirty uploads, camera upload, classify/raster and GPU
+completion; p50/p95/p99/max are reported, with CPU streaming timings separately.
+Screenshot readback,
+CPU/bootstrap/GPU setup, pre-stream and warm-up are excluded. This is neither
+GPU-only timing nor game FPS, and asynchronous completion changes capture
+residency between runs. Publication/regeneration counts, upload bytes (excluding
+the six initial material pages), cache sizes, pending work and capacity refusals
+are printed cumulatively since bootstrap (including pre-stream/warm-up), with
+measured-window selection/publication counts separately. A moving camera sweep
+is not a moving-body/networked-game test.
+The window's stream clock survives surface suspension/recreation with its
+selection history; a recreated surface must not reset selection debounce time.
+
+Regression coverage adds out-of-order family completion, capacity refusal,
+hard height-cache admission, extracted-selector equivalence/debounce, material
+refinement area/budget, and hardware slot reorder/reclamation, dirty-only work,
+invalid-publication atomicity, sparse/empty draw removal and source-generation
+invalidation after direct page edits.
+
+Sequential release captures on Radeon 880M / RADV (1280×720, 10 s pre-stream,
+30 warm-up + 1,200 measured frames each):
+
+| Workload | Median | p95 | p99 | Maximum | Final geometry |
+|---|---:|---:|---:|---:|---|
+| Stationary camera, live material stream | 2.740 ms | 4.907 ms | 8.683 ms | 24.217 ms | 287 tiles, 297,216 drawn triangles |
+| Moving camera, live height/material stream | 2.563 ms | 3.717 ms | 9.203 ms | 14.151 ms | 292 tiles, 313,344 drawn triangles |
+
+The sweep published 75 geometry partitions during measurement (132 including
+pre-stream/warm-up), with 1,180 regenerated patches total and no capacity
+refusals. Its CPU streaming p95/p99/max were 1.077/6.371/11.046 ms; stationary
+CPU max was 16.062 ms. Selection/publication hitches remain work to do, not
+something the median hides. Material work was still pending at capture end.
+The window smoke requested 600 presentations in 5.074 s (118.3/s including
+compositor pacing, vsync requested off); display feedback was not measured.
+These are not game FPS or a performance comparison against the earlier
+64-tile snapshot/Bevy/large_cbt: workload and rendered detail differ.
+
+[Capture metadata](artifacts/owned-streaming-terrain-2026-10-15.json) includes
+source/binary identity, timing boundaries, counters and screenshot digests.
+[Sweep frame](artifacts/owned-streaming-sweep-2026-10-15.png). Shading and thin
+dark edge artifacts at sharp relief remain unaccepted; effects are still absent.
+
+![Live-streamed canonical terrain, not visual acceptance](artifacts/owned-streaming-terrain-2026-10-15.png)
+
+Verification: workspace fmt; all-target/all-feature clippy with Rust warnings
+denied; 1,715 workspace lib/bin + 43 integration + 24 separate Bevy-CBT ignored
+hardware tests passed (1,782 total). Owned slot/raster regressions run as ordinary
+hardware tests. Runtime dependency inspection still finds no Bevy in the native
+viewer. Headless stationary/sweep captures and the native window smoke passed.
+
+Next production boundary: move the remaining `WorldTerrain` cache/publication
+glue onto the shared lifecycle, port f64 moving-body/camera transforms and the
+actual scene/effect passes. Keep the old client runnable; remove each Bevy
+consumer only after its production replacement works. GPU conforming bisector
+split/merge topology and FastRT acceleration structures remain unimplemented.
 
 ## 15. FastRT
 

@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect::<Vec<_>>();
     let start = Instant::now();
-    let renderer = TerrainRenderer::new(&backend, &patches, OffscreenTarget::FORMAT)?;
+    let mut renderer = TerrainRenderer::new(&backend, &patches, OffscreenTarget::FORMAT)?;
     backend.device.poll(wgpu::PollType::wait_indefinitely())?;
     let setup_ms = start.elapsed().as_secs_f64() * 1000.0;
     let target = OffscreenTarget::new(&backend, width, height)?;

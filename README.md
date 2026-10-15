@@ -87,7 +87,7 @@ The checked-in vertical slice currently contains:
   Persistent conforming GPU bisector topology remains future work;
 - `thessa-render-wgpu`: owned headless/surface-compatible backend and CBT compute → indirect raster
   passes, camera-relative uniforms, dirty quantized-page updates and bounded
-  material-page residency without
+  material-page residency and bounded reusable geometry slots without
   Bevy. `cargo run --release -p thessa-render-wgpu --example terrain_frame -- terrain.png`
   produces a synthetic terrain screenshot and offscreen latency benchmark;
   it does **not** replace the production client's complete scene/UI/input yet
@@ -97,8 +97,12 @@ The checked-in vertical slice currently contains:
   stellar ephemerides as the game. Run `cargo run --release -p thessa-terrain-native`
   (Left/Right orbit, Up/Down zoom, Esc exit), or add
   `-- --headless terrain.png --frames 120` for a screenshot/frame benchmark.
+  Live async height/material streaming shares the extracted client selection,
+  dependency/priority policies and bounded Rayon executor in GPL
+  `thessa-terrain-stream`. Headless `--prestream-seconds 10 --sweep` exercises
+  changing demand rather than a fixed resident snapshot.
   Only manual exposure/vsync settings are consumed from `graphics.toml`
-  (`--graphics PATH`); static residency, missing effects/UI/networking and
+  (`--graphics PATH`); missing body motion/effects/UI/networking and
   coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 

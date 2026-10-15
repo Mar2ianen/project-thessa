@@ -1,0 +1,14 @@
+[package]
+name = "thessa-terrain-stream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+description = "Game terrain streaming policy extracted from the client; no renderer or ECS"
+
+[dependencies]
+thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
+thessa-rcbt-core = { path = "../rcbt-core" }
+glam.workspace = true
+rayon.workspace = true

@@ -83,7 +83,7 @@ impl State {
         self.depth = depth(&self.backend, width, height);
     }
 
-    fn draw(&mut self, scene: &Scene) -> Result<bool, Box<dyn Error>> {
+    fn draw(&mut self, scene: &mut Scene, now_s: f64) -> Result<bool, Box<dyn Error>> {
         if !self.drawable {
             return Ok(false);
         }
@@ -106,6 +106,14 @@ impl State {
                 return Err("surface validation failure".into());
             }
         };
+        scene.tick(
+            &self.backend,
+            &mut self.renderer,
+            self.config.width,
+            self.config.height,
+            self.exposure,
+            now_s,
+        )?;
         self.renderer.update_view(
             &self.backend,
             &scene.view(self.config.width, self.config.height, self.exposure),
@@ -163,7 +171,10 @@ impl ApplicationHandler for App {
         match State::new(event_loop, &self.scene) {
             Ok(state) => {
                 self.state = Some(state);
-                self.started = Some(Instant::now());
+                // Selection history survives surface suspension in Scene; its
+                // monotonic clock must survive too, or debounce can stall
+                // demand until a reset clock catches the previous timestamp.
+                self.started.get_or_insert_with(Instant::now);
             }
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -208,7 +219,10 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
             }
-            WindowEvent::RedrawRequested => match state.draw(&self.scene) {
+            WindowEvent::RedrawRequested => match state.draw(
+                &mut self.scene,
+                self.started.unwrap().elapsed().as_secs_f64(),
+            ) {
                 Ok(true) => {
                     self.frames += 1;
                     if self.frame_limit.is_some_and(|n| self.frames >= n) {
@@ -217,6 +231,15 @@ impl ApplicationHandler for App {
                             "window_presented_frames={} elapsed_s={seconds:.3} presented_fps={:.1} (vsync/compositor included; not GPU-only or game FPS)",
                             self.frames,
                             self.frames as f64 / seconds
+                        );
+                        println!(
+                            "canonical_tiles={} geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} capacity_rejections={}",
+                            self.scene.stream.visible().len(),
+                            self.scene.publications,
+                            self.scene.regenerated,
+                            self.scene.stream.cache_entries(),
+                            self.scene.stream.pending_jobs(),
+                            self.scene.capacity_rejections
                         );
                         event_loop.exit();
                     }

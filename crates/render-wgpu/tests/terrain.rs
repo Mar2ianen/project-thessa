@@ -5,7 +5,10 @@ use thessa_rcbt_core::{
 };
 use thessa_render_wgpu::{
     Backend, BackendError,
-    terrain::{OffscreenTarget, TerrainPatch, TerrainRenderer, VERTICES_PER_PATCH},
+    terrain::{
+        OffscreenTarget, ResidentTerrainPatch, TerrainCapacity, TerrainPatch, TerrainRenderer,
+        VERTICES_PER_PATCH,
+    },
     view::ViewParams,
 };
 
@@ -18,6 +21,169 @@ fn backend() -> Option<Backend> {
         }
         Err(e) => panic!("{e}"),
     }
+}
+
+#[test]
+fn partition_reuses_slots_rejects_atomically_and_clears_sparse_and_empty_draws() {
+    let Some(backend) = backend() else { return };
+    let a = anchor(4, 10, 512, 512);
+    let b = anchor(4, 10, 513, 512);
+    let c = anchor(4, 10, 514, 512);
+    let id = |a: TileAnchor| {
+        let mut id = 8 + u64::from(a.tile.face);
+        for bit in (0..a.tile.level).rev() {
+            id = (id << 2) | u64::from(((a.tile.x >> bit) & 1) * 2 + ((a.tile.y >> bit) & 1));
+        }
+        id
+    };
+    let page = HeightPage::bake(&[100.0; 4], 2, 0.01).unwrap();
+    let high = HeightPage::bake(&[500.0; 4], 2, 0.01).unwrap();
+    let too_big = HeightPage::bake(&[0.0; 16], 4, 0.01).unwrap();
+    let resident = |anchor, generation| ResidentTerrainPatch {
+        anchor,
+        page: &page,
+        generation,
+    };
+    let mut renderer = TerrainRenderer::with_capacity(
+        &backend,
+        &[
+            TerrainPatch {
+                anchor: a,
+                page: &page,
+            },
+            TerrainPatch {
+                anchor: b,
+                page: &page,
+            },
+        ],
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 3,
+            height_grid_size: 3,
+            material_layers: 1,
+        },
+    )
+    .unwrap();
+    let before = renderer.read_vertices(&backend).unwrap();
+    let stats = renderer
+        .publish_partition(&backend, &[resident(b, 0), resident(a, 0)])
+        .unwrap();
+    assert_eq!((stats.active, stats.regenerated, stats.retained), (2, 0, 2));
+    assert_eq!(renderer.slot(id(a)), Some(0));
+    assert_eq!(renderer.slot(id(b)), Some(1));
+    assert_eq!(renderer.read_vertices(&backend).unwrap(), before);
+    for invalid in [
+        vec![resident(a, 1), resident(a, 1)],
+        vec![resident(a, 1), resident(anchor(4, 0, 0, 0), 1)],
+        vec![
+            ResidentTerrainPatch {
+                anchor: a,
+                page: &high,
+                generation: 1,
+            },
+            ResidentTerrainPatch {
+                anchor: c,
+                page: &too_big,
+                generation: 1,
+            },
+        ],
+        vec![
+            resident(a, 0),
+            resident(b, 0),
+            resident(c, 0),
+            resident(anchor(0, 0, 0, 0), 0),
+        ],
+    ] {
+        assert!(renderer.publish_partition(&backend, &invalid).is_err());
+        assert_eq!(renderer.slot(id(a)), Some(0));
+        assert_eq!(renderer.slot(id(c)), None);
+        assert_eq!(renderer.read_vertices(&backend).unwrap(), before);
+    }
+    let center = DVec3::from(b.anchor_body_m);
+    let eye = center + DVec3::from(b.normal) * 40_000.0;
+    renderer
+        .update_view(
+            &backend,
+            &ViewParams {
+                world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, DVec3::Y)
+                    .inverse(),
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.0, 1.0, 1e6),
+                world_position_m: eye,
+                exposure: 1.0,
+            },
+        )
+        .unwrap();
+    let target = OffscreenTarget::new(&backend, 257, 257).unwrap();
+    let draw = |renderer: &TerrainRenderer| {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        renderer.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        renderer.read_draw(&backend).unwrap()[0]
+    };
+    assert_eq!(draw(&renderer), 2 * 2304 * 3);
+    let stats = renderer
+        .publish_partition(&backend, &[resident(b, 0)])
+        .unwrap();
+    assert_eq!((stats.regenerated, stats.dispatch_slots), (0, 2));
+    assert_eq!(
+        draw(&renderer),
+        2304 * 3,
+        "inactive interior slot must not draw"
+    );
+    assert!(renderer.update_pages(&backend, &[(0, &high)]).is_err());
+    let stats = renderer
+        .publish_partition(
+            &backend,
+            &[
+                resident(b, 0),
+                ResidentTerrainPatch {
+                    anchor: c,
+                    page: &high,
+                    generation: 1,
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!((stats.regenerated, stats.retained), (1, 1));
+    assert_eq!(renderer.slot(id(c)), Some(0));
+    let output = renderer.read_vertices(&backend).unwrap();
+    for vertex in output[..VERTICES_PER_PATCH as usize * 8].as_chunks::<8>().0 {
+        assert_eq!(vertex[7], 500.0);
+    }
+    let center_normal = Vec3::from_slice(&output[(16 * 33 + 16) * 8 + 4..][..3]);
+    assert!(
+        (center_normal - DVec3::from(c.normal).as_vec3()).length() < 1e-5,
+        "reused slot must generate the new tile, not its previous anchor"
+    );
+    renderer.update_pages(&backend, &[(0, &page)]).unwrap();
+    assert_eq!(
+        renderer
+            .publish_partition(
+                &backend,
+                &[
+                    resident(b, 0),
+                    ResidentTerrainPatch {
+                        anchor: c,
+                        page: &high,
+                        generation: 1
+                    }
+                ]
+            )
+            .unwrap()
+            .regenerated,
+        1,
+        "manual update invalidates the source-generation shortcut"
+    );
+    renderer.publish_partition(&backend, &[]).unwrap();
+    assert_eq!(draw(&renderer), 0);
+    assert_eq!(
+        renderer
+            .publish_partition(&backend, &[resident(a, 0)])
+            .unwrap()
+            .regenerated,
+        1
+    );
+    assert_eq!(draw(&renderer), 2304 * 3);
 }
 
 fn anchor(face: u8, level: u8, x: u32, y: u32) -> TileAnchor {
@@ -118,7 +284,7 @@ fn owned_geometry_matches_cpu_height_and_raster_is_not_clear() {
     let Some(backend) = backend() else { return };
     let a = anchor(4, 10, 512, 512);
     let page = HeightPage::bake(&[120.0, 123.0, 121.0, 125.0], 2, 0.001).unwrap();
-    let renderer = TerrainRenderer::new(
+    let mut renderer = TerrainRenderer::new(
         &backend,
         &[TerrainPatch {
             anchor: a,
@@ -149,13 +315,13 @@ fn owned_geometry_matches_cpu_height_and_raster_is_not_clear() {
     };
     renderer.update_view(&backend, &params).unwrap();
     let target = OffscreenTarget::new(&backend, 257, 257).unwrap();
-    let render = || {
+    let render = |renderer: &TerrainRenderer| {
         let mut encoder = backend.device.create_command_encoder(&Default::default());
         renderer.encode(&mut encoder, &target.color, &target.depth);
         backend.queue.submit([encoder.finish()]);
         target.read_rgba8(&backend).unwrap()
     };
-    let pixels = render();
+    let pixels = render(&renderer);
     let background = &pixels[..4];
     let changed = pixels
         .as_chunks::<4>()
@@ -167,13 +333,17 @@ fn owned_geometry_matches_cpu_height_and_raster_is_not_clear() {
     let draw = renderer.read_draw(&backend).unwrap();
     assert_eq!(draw[0], 2304 * 3);
     assert_eq!(draw[1..4], [1, 0, 0]);
-    assert_eq!(render(), pixels, "static frame must be pixel deterministic");
+    assert_eq!(
+        render(&renderer),
+        pixels,
+        "static frame must be pixel deterministic"
+    );
     // Looking away must zero the GPU-generated indirect draw.
     let mut away = params;
     away.world_from_view =
         glam::dcamera::rh::view::look_to_mat4(eye, (eye - center).normalize(), DVec3::Y).inverse();
     renderer.update_view(&backend, &away).unwrap();
-    render();
+    render(&renderer);
     assert_eq!(renderer.read_draw(&backend).unwrap()[0], 0);
 }
 
@@ -189,7 +359,7 @@ fn owned_dirty_page_updates_preserve_clean_geometry_and_validate_atomically() {
             page: &page,
         })
         .collect::<Vec<_>>();
-    let renderer = TerrainRenderer::new(&backend, &patches, OffscreenTarget::FORMAT).unwrap();
+    let mut renderer = TerrainRenderer::new(&backend, &patches, OffscreenTarget::FORMAT).unwrap();
     let before = renderer.read_vertices(&backend).unwrap();
     assert!(
         renderer

@@ -8,10 +8,7 @@ use bevy::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{
-        Arc,
-        mpsc::{Receiver, TryRecvError, sync_channel},
-    },
+    sync::{Arc, mpsc::TryRecvError},
     time::Instant,
 };
 use thessa_bevy_rcbt::{
@@ -20,6 +17,12 @@ use thessa_bevy_rcbt::{
 };
 use thessa_rcbt_core::{
     CandidateAction, HeightPage, LeafCandidate, Node as CbtNode, Tree, WorkClass,
+};
+#[cfg(test)]
+use thessa_terrain_stream::selection::complete_terrain_cover;
+use thessa_terrain_stream::{
+    JobHandle,
+    selection::{self, SelectionHistory, SelectionPolicy, SelectionView, tiles_overlap},
 };
 use thessa_worldgen_rocky::{
     field::PlanetField,
@@ -56,17 +59,9 @@ pub(super) struct WorldTerrain {
     selection_epoch: u64,
     cover_dirty: bool,
     visible: BTreeSet<TileKey>,
-    selection_at: f64,
+    selection_history: SelectionHistory,
     /// A bounded CBT plan may take several PostUpdate frames to converge.
     topology_pending: bool,
-    /// Selection-frame eye (body frame) and camera forward driving the
-    /// movement trigger and the velocity LOD bias below.
-    selected_eye: DVec3,
-    selected_stream_origin: DVec3,
-    selected_forward: DVec3,
-    selected_valid: bool,
-    /// Smoothed eye speed (m/s) for the velocity detail bias.
-    eye_speed_mps: f64,
 }
 struct CachedTile {
     last_used: u64,
@@ -525,13 +520,8 @@ fn setup_terrain(
         selection_epoch: 0,
         cover_dirty: true,
         visible: BTreeSet::new(),
-        selection_at: -1.0,
+        selection_history: SelectionHistory::default(),
         topology_pending: false,
-        selected_eye: DVec3::ZERO,
-        selected_stream_origin: DVec3::ZERO,
-        selected_forward: DVec3::NEG_Z,
-        selected_valid: false,
-        eye_speed_mps: 0.0,
     });
     commands
         .spawn((
@@ -726,47 +716,6 @@ fn mesh_cells_for_tile(base: usize, key: TileKey) -> usize {
         12 => base,
         _ => (base * 2).min(64),
     }
-}
-
-// Keep existing coverage until every overlapping replacement is ready. New
-// disjoint tiles can appear immediately; no parent/child meshes overlap.
-fn tiles_overlap(a: TileKey, b: TileKey) -> bool {
-    let (parent, child) = if a.level <= b.level { (a, b) } else { (b, a) };
-    let shift = child.level - parent.level;
-    parent.face == child.face && parent.x == child.x >> shift && parent.y == child.y >> shift
-}
-
-/// Partition the union of both LOD selections into complete, disjoint tiles.
-/// Dropping a coarse tile after finding one fine descendant loses the rest
-/// of its area. Split it along the refinement path and retain every sibling.
-fn complete_terrain_cover(wanted: &[TileKey]) -> Vec<TileKey> {
-    fn visit(key: TileKey, wanted: &[TileKey], cover: &mut Vec<TileKey>) {
-        if wanted
-            .iter()
-            .any(|fine| fine.level > key.level && tiles_overlap(key, *fine))
-        {
-            for child in key.children() {
-                visit(child, wanted, cover);
-            }
-        } else {
-            cover.push(key);
-        }
-    }
-    let roots: BTreeSet<_> = wanted
-        .iter()
-        .copied()
-        .filter(|key| {
-            !wanted
-                .iter()
-                .any(|other| other.level < key.level && tiles_overlap(*key, *other))
-        })
-        .collect();
-    let mut cover = Vec::new();
-    for root in roots {
-        visit(root, wanted, &mut cover);
-    }
-    cover.sort();
-    cover
 }
 
 fn node_is_prefix(prefix: CbtNode, node: CbtNode) -> bool {
@@ -964,30 +913,6 @@ fn present_cpu_tile(
     );
 }
 
-/// Finished-job handle: the pool owns the worker, the frame thread only
-/// polls. Rayon + bounded (capacity-1) channel: polling is non-blocking via
-/// `try_recv`, completion order follows the job map (deterministic
-/// presentation order — only completion *timing* may vary run to run), and
-/// a dead worker surfaces as `Disconnected` instead of a stuck task.
-/// The mutex exists only because Bevy resources must be `Sync`
-/// (`std Receiver` is `Send` but not `Sync`); it is never contended —
-/// workers send once, the frame thread polls once per frame.
-struct JobHandle<T> {
-    rx: std::sync::Mutex<Receiver<T>>,
-}
-
-impl<T> JobHandle<T> {
-    fn new(rx: Receiver<T>) -> Self {
-        Self {
-            rx: std::sync::Mutex::new(rx),
-        }
-    }
-
-    fn try_take(&self) -> Result<T, TryRecvError> {
-        self.rx.lock().expect("terrain job mailbox").try_recv()
-    }
-}
-
 /// Executor seam for CPU tile builds. `TileKey` + shared field in,
 /// [`TerrainBuildOutput`] out through the bounded channel; selection and
 /// presentation never name the backend.
@@ -997,9 +922,8 @@ fn spawn_height_job(
     tile_mesh_cells: usize,
     gpu_raster: bool,
 ) -> JobHandle<TerrainBuildOutput> {
-    let (tx, rx) = sync_channel(1);
     let field = field.clone();
-    rayon::spawn(move || {
+    JobHandle::spawn(move || {
         let start = Instant::now();
         // The direct GPU path needs only the quantized height page.
         // Do not build CPU positions, normals, skirts, or material
@@ -1060,7 +984,7 @@ fn spawn_height_job(
                 material_s,
             )
         };
-        let built = TerrainBuildOutput {
+        TerrainBuildOutput {
             mesh,
             height_page,
             anchor,
@@ -1069,12 +993,8 @@ fn spawn_height_job(
             texture_bytes,
             images,
             seconds: [mesh_s, material_s],
-        };
-        // The receiver is dropped on eviction: a late result is discarded,
-        // never applied.
-        let _ = tx.send(built);
-    });
-    JobHandle::new(rx)
+        }
+    })
 }
 
 /// Executor seam for material-page builds (same backend as above).
@@ -1082,15 +1002,7 @@ fn spawn_material_job(
     field: &Arc<PlanetField>,
     key: TileKey,
 ) -> JobHandle<thessa_bevy_rcbt::CbtMaterialPage> {
-    let (tx, rx) = sync_channel(1);
-    let field = field.clone();
-    rayon::spawn(move || {
-        let page = lod::build_gpu_material_page(&field, key);
-        let built = thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba)
-            .expect("fixed material page layout");
-        let _ = tx.send(built);
-    });
-    JobHandle::new(rx)
+    thessa_terrain_stream::spawn_material_job(field.clone(), key)
 }
 
 /// Presentation stage: advance ready page families independently of
@@ -1356,92 +1268,35 @@ fn run_tile_selection(
         forward_body,
         frustum,
     } = *view;
-    // Movement trigger (standard streaming practice): fast flight covers
-    // hundreds of metres per selection period, so a pure timer always lags
-    // behind the view. Reselect when the eye moved >300 m or the view swung
-    // >~7°, besides the slower 0.75 s safety timer. The movement trigger
-    // handles a fast craft; the timer is only a guard for a stationary camera
-    // and must not run the full selection walk three times per second.
-    // Streaming pressure follows translation of the focus (craft or survey
-    // centre). Orbiting/zooming a camera must not degrade the material LOD.
-    let stream_origin = rotation.inverse() * origin;
-    let mut moved = !world.selected_valid;
-    if world.selected_valid {
-        let dt = (now_s - world.selection_at).max(1e-3);
-        let eye_speed = (stream_origin - world.selected_stream_origin).length() / dt;
-        // Smoothed: single-frame hitches must not whip the LOD bias.
-        world.eye_speed_mps += (eye_speed - world.eye_speed_mps).clamp(-2000.0, 2000.0) * 0.25;
-        let swing = (forward_body.normalize_or_zero() - world.selected_forward).length();
-        moved = (eye - world.selected_eye).length() > 300.0 || swing > 0.12;
-    }
-    // Velocity detail bias (Outerra/Unreal-style): don't chase detail the
-    // viewer crosses within one selection period. Hover keeps full 1/48°
-    // refinement; 430 m/s cruise relaxes ~5x toward the far rule. Past
-    // ~3 km/s the tile demand at full depth (≈970 new tiles/s at 500 m,
-    // measured) outruns worker throughput (~200/s) by 5x, so the curve
-    // keeps climbing to the LOD-internal cap of 32: at 3.7 km/s demand
-    // drops to ≈174/s (500 m) and ≈10/s (5 km). This is a streaming budget
-    // tradeoff; the renderer does not currently apply motion blur.
-    let detail_bias = (1.0 + world.eye_speed_mps.max(0.0) / 100.0).clamp(1.0, 32.0);
     let selection_started = Instant::now();
-    let mut selection_changed = false;
-    if now_s - world.selection_at > 0.75 || moved || world.wanted.is_empty() {
-        // Camera demand must not wait behind an obsolete worker queue.
-        // Coalesce input changes to at most ~7 selections/s; workers finish
-        // into the warm cache while free slots follow the newest request.
-        if now_s - world.selection_at >= 0.15 || world.wanted.is_empty() {
-            // Two-tier selection: a coarse horizon cover WITHOUT frustum
-            // culling (L7, ~96 tiles) guarantees no holes ever — frustum
-            // swings between selections used to cull visible regions faster
-            // than the margin allowed, popping whole blocks. The frustum
-            // set (L17, ~224) refines the view cone on top; overlap is
-            // intended (cover logic shows the finest ready tile).
-            // The cache below stays bounded (visible + wanted only).
-            let mut wanted = lod::select_tiles_with_height_and_frustum(
-                eye.to_array(),
-                radius,
-                7,
-                96,
-                |dir| world.field.height_m(dir, 32.0),
-                None,
-                detail_bias,
-            );
-            let fine = lod::select_tiles_with_history(
-                eye.to_array(),
-                radius,
-                17,
-                288,
-                |dir| world.field.height_m(dir, 32.0),
-                frustum,
-                detail_bias,
-                &world.fine_selection,
-            );
-            world.fine_selection = fine.clone();
-            wanted.extend(fine);
-            wanted.sort();
-            wanted.dedup();
-            // GPU draws exact leaves; fill coarse siblings before requesting
-            // pages so the render tree and page cache describe the same cover.
-            world.wanted = if gpu_raster {
-                complete_terrain_cover(&wanted)
-            } else {
-                wanted
-            };
-            world.counters.terrain_cache_hits += world
-                .wanted
-                .iter()
-                .filter(|key| world.cache.contains_key(key))
-                .count() as u64;
-            world.selection_epoch = world.selection_epoch.saturating_add(1);
-            world.cover_dirty = true;
-            world.selection_at = now_s;
-            world.selected_eye = eye;
-            world.selected_stream_origin = stream_origin;
-            world.selected_forward = forward_body.normalize_or_zero();
-            world.selected_valid = true;
-            world.topology_pending = true;
-            selection_changed = true;
-        }
+    let selected = world.selection_history.update(
+        &world.field,
+        SelectionView {
+            eye,
+            stream_origin: rotation.inverse() * origin,
+            forward: forward_body,
+            radius,
+            frustum,
+        },
+        now_s,
+        &world.fine_selection,
+        world.wanted.is_empty(),
+        gpu_raster,
+        SelectionPolicy::default(),
+    );
+    let selection_changed = selected.is_some();
+    let detail_bias = world.selection_history.detail_bias();
+    if let Some(demand) = selected {
+        world.fine_selection = demand.fine;
+        world.wanted = demand.wanted;
+        world.counters.terrain_cache_hits += world
+            .wanted
+            .iter()
+            .filter(|key| world.cache.contains_key(key))
+            .count() as u64;
+        world.selection_epoch = world.selection_epoch.saturating_add(1);
+        world.cover_dirty = true;
+        world.topology_pending = true;
     }
     perf.record_scope(
         "world.terrain_selection",
@@ -1593,28 +1448,16 @@ fn spawn_height_jobs(
         .copied()
         .collect();
     pending.sort_by_cached_key(|key| {
-        fn priority(
-            field: &thessa_worldgen_rocky::field::PlanetField,
-            eye: DVec3,
-            radius: f64,
-            key: TileKey,
-        ) -> f64 {
-            let dir = key.direction(0.5, 0.5);
-            let surface = radius + field.height_m(dir, 32.0).max(0.0);
-            let dist = (eye - DVec3::from_array(dir.map(|v| v * surface)))
-                .length()
-                .max(1.0);
-            key.span_m(radius) / dist
-        }
-        // Positive finite priorities: integer bit order matches float order.
-        // Coarse cover sorts before everything (level is the major key).
-        (
-            key.level.min(8),
-            ((DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye)
-                .normalize_or_zero()
-                .dot(forward_body)
-                < -0.15),
-            std::cmp::Reverse(priority(&world.field, eye, radius, *key).to_bits()),
+        selection::height_priority(
+            &world.field,
+            SelectionView {
+                eye,
+                radius,
+                forward: forward_body,
+                stream_origin: DVec3::ZERO,
+                frustum: None,
+            },
+            *key,
         )
     });
     // Eight in flight on an 8-core box: tile builds are CPU-bound
@@ -1641,73 +1484,24 @@ fn spawn_height_jobs(
 /// Refine the existing view selection for material texel coverage, not mesh
 /// curvature. A 128px colour page can require more refinement than its mesh.
 fn material_view_selection(base: &[TileKey], view: &FrameView, pixel_angle: f64) -> Vec<TileKey> {
-    let mut cover: BTreeSet<_> = base.iter().copied().collect();
-    let error = |key: TileKey| {
-        let center = DVec3::from_array(key.direction(0.5, 0.5)) * view.radius;
-        let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
-        key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
-    };
-    // Cheap broad-phase before the expensive scoring: skip splitting tiles
-    // outside the selection frustum (or clearly behind the camera). Scoring
-    // for surviving tiles is unchanged; culled tiles simply stay coarse and
-    // fall back to resident ancestors or the globe map.
-    let split_candidate = |key: &TileKey| {
-        if key.level >= 17 {
-            return false;
-        }
-        let Some(frustum) = &view.frustum else {
-            return true;
-        };
-        let center = DVec3::from_array(key.direction(0.5, 0.5)) * view.radius;
-        let delta = center - view.eye;
-        let dist = delta.length();
-        if dist <= 0.0 {
-            return true;
-        }
-        let cos = (delta / dist).dot(DVec3::from_array(frustum.forward));
-        // Tile angular radius margin: a tile straddling the frustum edge
-        // still refines instead of popping at the screen border.
-        let margin = (key.span_m(view.radius) / dist).clamp(0.0, 0.5);
-        cos >= frustum.cos_limit - margin
-    };
-    while cover.len() + 3 <= 512 {
-        let candidate = cover
-            .iter()
-            .copied()
-            .filter(split_candidate)
-            .max_by(|a, b| error(*a).total_cmp(&error(*b)));
-        let Some(key) = candidate.filter(|key| error(*key) > 1.0) else {
-            break;
-        };
-        cover.remove(&key);
-        cover.extend(key.children());
-    }
-    let mut pages: Vec<_> = cover.into_iter().collect();
-    pages.sort_by(|a, b| error(*b).total_cmp(&error(*a)).then(a.cmp(b)));
-    pages
+    selection::material_view_selection(
+        base,
+        SelectionView {
+            eye: view.eye,
+            stream_origin: DVec3::ZERO,
+            forward: view.forward_body,
+            radius: view.radius,
+            frustum: view.frustum,
+        },
+        pixel_angle,
+    )
 }
 
 /// Fill a useful regional page before spending a full 128² build on each
 /// close tile. Four levels cover up to 256 descendants; subsequent steps
 /// refine by two levels. This changes residency order, never field accuracy.
 fn material_build_dependency(key: TileKey, mut resident: impl FnMut(TileKey) -> bool) -> TileKey {
-    if resident(key) {
-        return key;
-    }
-    let mut ancestor = key.parent();
-    let mut next_level = key.level.saturating_sub(4);
-    while let Some(candidate) = ancestor {
-        if resident(candidate) {
-            next_level = key.level.min(candidate.level + 2);
-            break;
-        }
-        ancestor = candidate.parent();
-    }
-    let mut next = key;
-    while next.level > next_level {
-        next = next.parent().expect("material ancestor");
-    }
-    next
+    selection::material_build_dependency(key, &mut resident)
 }
 
 /// Streaming stage for material pages (GPU path only): poll finished pages,
@@ -1747,13 +1541,9 @@ fn run_material_streaming(
         let Some(page) = maybe_page else {
             continue;
         };
-        // Drop pages whose height tile was evicted while the material baked:
-        // publishing them would retain material residency for geometry that
-        // can no longer draw, growing the directory without user-visible
-        // benefit.
-        if !world.cache.contains_key(&key) {
-            continue;
-        }
+        // Material refinement is world-addressed and independent of height
+        // LOD: a useful fine colour page need not have a matching mesh/page.
+        // The source cache is bounded by trim_to_budget below, not height keys.
         if let Some(node) = lod::cbt_node_for_tile(key) {
             ready_material_pages.push((node.id(), page));
         }
@@ -1765,11 +1555,8 @@ fn run_material_streaming(
         world.material_wanted = material_view_selection(&world.fine_selection, view, pixel_angle);
         world.material_selection_epoch = world.selection_epoch;
     }
-    let mut material_wanted: Vec<_> = world
-        .material_wanted
-        .iter()
-        .copied()
-        .chain(
+    let material_wanted = selection::material_demand(
+        world.material_wanted.iter().copied().chain(
             world.visible.iter().copied().chain(
                 world
                     .wanted
@@ -1777,20 +1564,15 @@ fn run_material_streaming(
                     .copied()
                     .filter(|key| world.cache.contains_key(key)),
             ),
-        )
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    material_wanted.sort_by_cached_key(|key| {
-        let delta = DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye;
-        (
-            delta.normalize_or_zero().dot(forward_body) < -0.15,
-            delta.length_squared().to_bits(),
-            std::cmp::Reverse(key.level),
-            *key,
-        )
-    });
-    material_wanted.truncate(512);
+        ),
+        SelectionView {
+            eye,
+            radius,
+            forward: forward_body,
+            stream_origin: DVec3::ZERO,
+            frustum: view.frustum,
+        },
+    );
     // Guard the mutable borrow: `set_priority(&mut self)` via `ResMut`
     // marks the resource changed (Bevy `DerefMut`) even when the Vec is
     // identical, forcing an extract snapshot every frame. The `priority()`
@@ -2074,7 +1856,8 @@ fn record_terrain_counters(
     world.counters.terrain_patches_visible = world.visible.len() as u32;
     world.counters.terrain_patches_wanted = world.wanted.len() as u32;
     world.counters.terrain_jobs_in_flight = world.jobs.len() as u32;
-    world.counters.terrain_eye_speed_mps = world.eye_speed_mps.round().max(0.0) as u32;
+    world.counters.terrain_eye_speed_mps =
+        world.selection_history.eye_speed_mps.round().max(0.0) as u32;
     world.counters.terrain_detail_bias_x100 = (detail_bias * 100.0).round() as u32;
     let mut visible_lod_histogram = [0_u32; 18];
     for key in &world.visible {
@@ -2130,20 +1913,9 @@ fn record_terrain_counters(
 }
 
 fn compute_spawn_dependencies(world: &WorldTerrain, gpu_raster: bool) -> BTreeSet<TileKey> {
-    let mut dependencies: BTreeSet<_> = world.wanted.iter().copied().collect();
-    if gpu_raster {
-        for key in &world.wanted {
-            let mut ancestor = key.parent();
-            while let Some(parent) = ancestor {
-                dependencies.insert(parent);
-                if world.cache.contains_key(&parent) {
-                    break;
-                }
-                ancestor = parent.parent();
-            }
-        }
-    }
-    dependencies
+    selection::spawn_dependencies(&world.wanted, gpu_raster, |key| {
+        world.cache.contains_key(&key)
+    })
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]

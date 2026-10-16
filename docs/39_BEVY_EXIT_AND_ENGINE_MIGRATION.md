@@ -1674,6 +1674,102 @@ or equal-workload performance parity; audio and networking were not validated.
 
 ![Same flight in chase framing, following craft attitude](artifacts/owned-camera-flight-chase-2026-10-16.png)
 
+### Owned flight-input continuation (2026-10-16)
+
+The next slice wires player flight control into the native live authority
+without changing the solver. GPL `flight-authority::input` owns the existing
+pilot intent policy with glam-only math and no device/clock/ECS handles:
+`WASDQE` stick mapping (`S-W, D-A, E-Q`), 0.55/s throttle slew with `0..=1`
+clamping, cut/full presets, engine toggle and the 0.25 precision factor.
+Invalid demands fail closed. The old pilot keeps its split intent-vs-server-
+acknowledgement fields and adopts the shared mapping/slew/precision
+functions; the native viewer bundles intent in `FlightInput` and pushes it
+into its local authority every rendered frame (throttle slew, throttle/engine
+copy, scaled stick). The compatibility starter arms full legacy throttle with
+the engine on, so both clients inherit the same initial intent.
+
+Native mapping: `WASDQE` stick from the held set (rebuilt every frame, repeats
+never stick an axis), `Shift`/`Ctrl` slew, `X`/`Z` cut/fill, `Space` engine,
+`C` cycles the control law (`Navball -> Rate -> Direct -> MouseAim`, the same
+shared cycle the old client's mode HUD owns), `T` SAS, `CapsLock` precision.
+Headless `--throttle 0..=1` and `--engine-on` preset intent deterministically
+(rejected without `--flight`, before assets/GPU load); headless frames hold no
+keys, so default runs reproduce the previous trajectory exactly. The HUD
+mirrors throttle/engine/precision/SAS plus a one-shot law-cycle button and a
+stick readout in live mode only. Telemetry reports `throttle/engine/
+control_mode/sas` alongside authority/presentation time. RCS, landing gear,
+chute and other part commands still cross only the old client's wire; flyby
+assist, mouse-aim and the mode HUD stay old-client-only.
+
+```sh
+cargo run --release -p thessa-terrain-native -- --flight
+cargo run --release -p thessa-terrain-native -- --flight --throttle 0.5 --headless input.png --hud --frames 600 --prestream-seconds 10
+cargo bench -p thessa-flight-authority --bench input
+```
+
+Regressions pin the shipped stick table (including opposite cancellation),
+slew factors/clamps/convergence, presets/toggles, invalid-demand preservation,
+the old client's Bevy-key wiring, intent staging vs authority adoption,
+mode cycling, SAS control, telemetry keys and CLI misuse. A 600-step
+regression holds the pushed trajectory exactly equal to direct production
+authority advancement while a cut-throttle/engine glide diverges past the
+100 m pinned bound, proving the input path drives the solver instead of
+shadowing it.
+No new unsafe code, external dependencies, devices, scene readback or
+intermediate scene targets.
+
+**Validation and measurements.** On the Radeon 880M, the terrain-only 1280×720
+HUD A/B/B/A run (600 measured + 30 warm-up frames, 10 s pre-stream) measured
+baseline **2.563 / 2.686 ms** and new **2.551 / 2.597 ms** medians. Every run
+ended at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications or capacity refusals; the input slice does not touch the survey
+path, so this A/B stays an equal workload. Overlapping medians establish
+neither a speedup nor an isolated adapter tax. The preserved baseline
+executable is the exact `77ee5d4` build from the static-mesh checkpoint.
+
+Default, chase and explicit-preset live runs all reached **10.5 s** completed
+authority/presentation time with identical final relative coordinates and no
+stopped flight: default **3.242 ms**, chase **2.803 ms**, `--throttle 1
+--engine-on` **3.051 ms** medians. The preset run reproduces the inherited
+starter demand bit-for-bit (identical coordinates), proving the preset path
+is transparent rather than a second demand source. All runs report
+`throttle=1.000 engine=true control_mode=Navball sas=true` and submit one
+mesh instance / two draws / 78,465 mesh triangles / 640 frame upload bytes
+(42 / 38 / 45 measured terrain publications, zero refusals). These include
+full local physics demand with the owned input push, streaming, rendering,
+HUD and GPU completion, **not** isolated input cost or game FPS; camera cover
+differs between runs, so do not compare medians as an equal scene.
+
+The input microbenchmark measured **30 ns** median per stick+slew step and
+**8.967 µs** for 1,024 (1,000 samples each; p95 **40 ns / 8.977 µs**), plus
+482.358 µs per 100k bundled pushes ending at full throttle. This covers intent
+math and timer/barriers only. Native Wayland smoke requested **1,200**
+presentations in **10.100 s** (**118.8 requests/s**, not display/game FPS),
+exited 0, and finished at **10.092 s** completed simulation with a **0.000329 s**
+backlog, no flight stop and no refusals. Window clamping does not promise
+real-time simulation; this run does **not** establish 1× realtime throughput.
+
+Captures and machine-readable methodology/results are recorded in
+`artifacts/owned-flight-input-2026-10-16.json`.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, **1,774** workspace lib/bin + **52**
+integration + **24** Bevy-CBT hardware + **4** native GPU + **4** native-window
+tests = **1,858 successful tests**. Native-window regressions exercise
+terrain-only HUD/no-HUD teardown, live-flight HUD/no-HUD advance, chase
+advance with `chase=true`, and a full-thrust preset run reaching the authority
+with `throttle=1.000 engine=true`. Local review covered input ownership,
+factor exactness, preset transparency, staging/adoption separation, survey
+preservation, gesture/held-key boundaries and GPL/MIT separation (no game
+logic moved into MIT crates, no new crate). The debug legacy Bevy pilot also
+ran **unpaused**, saved a flight screenshot and exited 0 using the existing
+local fallback (embedded server executable absent); not an audio/network
+test or equal-scene parity proof.
+
+![Native live COAST flight with the owned input panel](artifacts/owned-input-flight-2026-10-16.png)
+
+![Full-thrust climb on owned intent, same completed time](artifacts/owned-input-full-2026-10-16.png)
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

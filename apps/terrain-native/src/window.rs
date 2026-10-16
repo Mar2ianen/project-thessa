@@ -1,6 +1,6 @@
 //! Toolkit-owned native window. Surface loss/resize never rebuilds terrain.
 use crate::scene::Scene;
-use std::{error::Error, sync::Arc, time::Instant};
+use std::{collections::HashSet, error::Error, sync::Arc, time::Instant};
 use thessa_render_wgpu::{Backend, terrain::TerrainRenderer};
 use winit::{
     application::ApplicationHandler,
@@ -122,7 +122,13 @@ impl State {
         self.depth = depth(&self.backend, width, height);
     }
 
-    fn draw(&mut self, scene: &mut Scene, now_s: f64) -> Result<bool, Box<dyn Error>> {
+    fn draw(
+        &mut self,
+        scene: &mut Scene,
+        now_s: f64,
+        throttle_up: bool,
+        throttle_down: bool,
+    ) -> Result<bool, Box<dyn Error>> {
         let cpu_started = Instant::now();
         if !self.drawable {
             return Ok(false);
@@ -152,6 +158,7 @@ impl State {
                 .last_flight_wall_s
                 .replace(now_s)
                 .map_or(0.0, |last| (now_s - last).clamp(0.0, 0.1));
+            scene.push_live_input(elapsed, throttle_up, throttle_down);
             scene.advance_flight(elapsed, Some(std::time::Duration::from_millis(8)))?;
         }
         #[cfg(feature = "hud")]
@@ -290,6 +297,7 @@ struct App {
     right_consumed: bool,
     middle_consumed: bool,
     last_cursor: Option<(f64, f64)>,
+    held: HashSet<KeyCode>,
 }
 
 impl ApplicationHandler for App {
@@ -348,39 +356,57 @@ impl ApplicationHandler for App {
                     state.resize(size.width, size.height);
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                let vehicle = self.scene.vehicle_preview();
-                match camera_shortcut(event.physical_key, consumed) {
-                    Some(Shortcut::Exit) => event_loop.exit(),
-                    Some(Shortcut::Orbit(delta)) => {
-                        if vehicle {
-                            self.scene.camera.orbit_yaw(delta as f32);
-                        } else {
-                            self.scene.angle += delta;
-                        }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    if event.state == ElementState::Pressed {
+                        self.held.insert(code);
+                    } else {
+                        self.held.remove(&code);
                     }
-                    Some(Shortcut::Zoom(factor)) => {
-                        if vehicle {
-                            self.scene.camera.zoom_by_factor(factor as f32);
-                        } else {
-                            let (min, max, _) = self.scene.camera_distance_limits();
-                            self.scene.distance = (self.scene.distance * factor).clamp(min, max);
+                }
+                if event.state == ElementState::Pressed {
+                    let vehicle = self.scene.vehicle_preview();
+                    match camera_shortcut(event.physical_key, consumed) {
+                        Some(Shortcut::Exit) => event_loop.exit(),
+                        Some(Shortcut::Orbit(delta)) => {
+                            if vehicle {
+                                self.scene.camera.orbit_yaw(delta as f32);
+                            } else {
+                                self.scene.angle += delta;
+                            }
                         }
-                    }
-                    Some(Shortcut::ToggleChase) => {
-                        if vehicle {
-                            self.scene.camera.toggle_chase();
+                        Some(Shortcut::Zoom(factor)) => {
+                            if vehicle {
+                                self.scene.camera.zoom_by_factor(factor as f32);
+                            } else {
+                                let (min, max, _) = self.scene.camera_distance_limits();
+                                self.scene.distance =
+                                    (self.scene.distance * factor).clamp(min, max);
+                            }
                         }
-                    }
-                    Some(Shortcut::ResetView) => {
-                        if vehicle {
-                            self.scene.camera.reset();
-                        } else {
-                            self.scene.angle = 0.0;
-                            self.scene.distance = 30_000.0;
+                        // Repeats keep orbiting/zooming while held but never
+                        // re-fire toggles or resets.
+                        Some(Shortcut::ToggleChase) => {
+                            if vehicle && !event.repeat {
+                                self.scene.camera.toggle_chase();
+                            }
                         }
+                        Some(Shortcut::ResetView) if !event.repeat => {
+                            if vehicle {
+                                self.scene.camera.reset();
+                            } else {
+                                self.scene.angle = 0.0;
+                                self.scene.distance = 30_000.0;
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                    apply_discrete_flight_input(
+                        &mut self.scene,
+                        event.physical_key,
+                        event.repeat,
+                        consumed,
+                    );
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -435,41 +461,49 @@ impl ApplicationHandler for App {
                     self.scene.camera.zoom(wheel_lines(delta));
                 }
             }
-            WindowEvent::RedrawRequested => match state.draw(
-                &mut self.scene,
-                self.started.unwrap().elapsed().as_secs_f64(),
-            ) {
-                Ok(true) => {
-                    self.frames += 1;
-                    if self.frame_limit.is_some_and(|n| self.frames >= n) {
-                        let seconds = self.started.unwrap().elapsed().as_secs_f64();
-                        println!(
-                            "window_presented_frames={} elapsed_s={seconds:.3} presented_fps={:.1} hud={} (presentation requests, not display feedback; vsync/compositor included; not GPU-only or game FPS)",
-                            self.frames,
-                            self.frames as f64 / seconds,
-                            self.hud_enabled,
-                        );
-                        println!(
-                            "canonical_tiles={} geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} capacity_rejections={}",
-                            self.scene.stream.visible().len(),
-                            self.scene.publications,
-                            self.scene.regenerated,
-                            self.scene.stream.cache_entries(),
-                            self.scene.stream.pending_jobs(),
-                            self.scene.capacity_rejections
-                        );
-                        if let Some(status) = self.scene.flight_telemetry() {
-                            println!("{status}");
+            WindowEvent::RedrawRequested => {
+                let (keys, throttle_up, throttle_down) = held_flight_keys(&self.held);
+                if self.scene.live_flight() {
+                    self.scene.input.keys = keys;
+                }
+                match state.draw(
+                    &mut self.scene,
+                    self.started.unwrap().elapsed().as_secs_f64(),
+                    throttle_up,
+                    throttle_down,
+                ) {
+                    Ok(true) => {
+                        self.frames += 1;
+                        if self.frame_limit.is_some_and(|n| self.frames >= n) {
+                            let seconds = self.started.unwrap().elapsed().as_secs_f64();
+                            println!(
+                                "window_presented_frames={} elapsed_s={seconds:.3} presented_fps={:.1} hud={} (presentation requests, not display feedback; vsync/compositor included; not GPU-only or game FPS)",
+                                self.frames,
+                                self.frames as f64 / seconds,
+                                self.hud_enabled,
+                            );
+                            println!(
+                                "canonical_tiles={} geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} capacity_rejections={}",
+                                self.scene.stream.visible().len(),
+                                self.scene.publications,
+                                self.scene.regenerated,
+                                self.scene.stream.cache_entries(),
+                                self.scene.stream.pending_jobs(),
+                                self.scene.capacity_rejections
+                            );
+                            if let Some(status) = self.scene.flight_telemetry() {
+                                println!("{status}");
+                            }
+                            event_loop.exit();
                         }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        self.error = Some(e.to_string());
                         event_loop.exit();
                     }
                 }
-                Ok(false) => {}
-                Err(e) => {
-                    self.error = Some(e.to_string());
-                    event_loop.exit();
-                }
-            },
+            }
             _ => {}
         }
     }
@@ -481,6 +515,46 @@ impl ApplicationHandler for App {
             state.window.request_redraw();
         }
     }
+}
+
+/// Discrete flight inputs sharing factors with the old pilot. Repeats never
+/// re-fire presets or toggles; slew and stick read the held set every frame
+/// instead. Free function so the event arm can borrow the scene while the
+/// window state is already borrowed.
+fn apply_discrete_flight_input(scene: &mut Scene, key: PhysicalKey, repeat: bool, consumed: bool) {
+    if consumed || repeat || !scene.live_flight() {
+        return;
+    }
+    match key {
+        PhysicalKey::Code(KeyCode::KeyX) => scene.input.cut(),
+        PhysicalKey::Code(KeyCode::KeyZ) => scene.input.full(),
+        PhysicalKey::Code(KeyCode::Space) => scene.input.toggle_engine(),
+        PhysicalKey::Code(KeyCode::KeyC) => scene.cycle_control_mode(),
+        PhysicalKey::Code(KeyCode::KeyT) => scene.toggle_sas(),
+        PhysicalKey::Code(KeyCode::CapsLock) => scene.input.toggle_precision(),
+        _ => {}
+    }
+}
+
+/// Held stick/throttle keys sampled every frame. Built fresh from the held
+/// set so a lost release cannot wedge an axis on.
+fn held_flight_keys(
+    held: &HashSet<KeyCode>,
+) -> (thessa_flight_authority::input::StickKeys, bool, bool) {
+    use thessa_flight_authority::input::StickKeys;
+    let held = |code| held.contains(&code);
+    (
+        StickKeys {
+            nose_up: held(KeyCode::KeyS),
+            nose_down: held(KeyCode::KeyW),
+            yaw_right: held(KeyCode::KeyD),
+            yaw_left: held(KeyCode::KeyA),
+            roll_right: held(KeyCode::KeyE),
+            roll_left: held(KeyCode::KeyQ),
+        },
+        held(KeyCode::ShiftLeft) || held(KeyCode::ShiftRight),
+        held(KeyCode::ControlLeft) || held(KeyCode::ControlRight),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -555,6 +629,7 @@ pub fn run(
         right_consumed: false,
         middle_consumed: false,
         last_cursor: None,
+        held: HashSet::new(),
     };
     event_loop.run_app(&mut app)?;
     if let Some(error) = app.error {

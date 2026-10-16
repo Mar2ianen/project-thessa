@@ -1,0 +1,100 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/owned-flight-input",
+  "base_commit": "2b5a525",
+  "baseline_binary_sha256": "a4476e58b8f3ef86b48ec41f082bcaa75c63d7df9410fc23f2d2e01e45011f89",
+  "binary_sha256": "020adb1f462e26ba5c0d3b57e561d66385c14dfb6cc7d5e1d1994fa4c9164e21",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile and hud feature",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "settings": {"graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b", "exposure_ev100": 13, "vsync": false},
+  "ownership": {
+    "gpl": "flight-authority::input shared intent policy (stick mapping, throttle slew/presets, engine toggle, precision); old pilot adopts free functions, native viewer bundles FlightInput and pushes it into its local authority",
+    "mit": "existing render-core frames/instances and render-wgpu terrain/mesh/device/queue unchanged; no game logic moved into MIT crates",
+    "asset": "North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt",
+    "new_external_dependency_versions": [], "new_unsafe_code": false, "new_crates": [],
+    "native_bevy_runtime_crates": [], "native_wgpu_versions": ["30.0.1"],
+    "extra_gpu_devices_scene_readbacks_or_intermediate_scene_targets": 0,
+    "readback_boundary": "existing optional final captures and hardware test assertions read back; no runtime per-frame scene readback"
+  },
+  "input_contract": {
+    "shared_policy": "WASDQE stick (S-W, D-A, E-Q), 0.55/s throttle slew clamped 0..=1, cut/full presets, engine toggle, 0.25 precision factor; invalid demands fail closed",
+    "starter_state": "compatibility X-15 arms full legacy throttle with engine on; both clients inherit throttle=1.0/engine=true, so default native runs reproduce the previous trajectory exactly",
+    "native_mapping": "held WASDQE stick rebuilt per frame, Shift/Ctrl slew, X/Z cut/full, Space engine, C cycles Navball->Rate->Direct->MouseAim, T SAS, CapsLock precision; repeats never re-fire presets/toggles; HUD mirrors throttle/engine/precision/SAS plus one-shot law cycle and stick readout in live mode only",
+    "headless": "--throttle 0..=1 and --engine-on preset intent deterministically (rejected without --flight before assets/GPU); no held keys, so explicit presets reproduce the equivalent starter demand bit-for-bit",
+    "advance_boundary": "push runs every rendered frame before the budgeted advance; control law comes from the owned mode (default Navball); stopped flights keep accepting intent like the old client while the advance still stops",
+    "excluded": "RCS/gear/chute part commands, flyby assist, mouse-aim and the mode HUD stay old-client-only"
+  },
+  "stationary_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "order": ["baseline-1", "new-1", "new-2", "baseline-2"],
+    "size": [1280, 720], "hud": true,
+    "measured_frames_per_run": 600, "warmup_frames_per_run": 30, "prestream_seconds_per_run": 10,
+    "final_tiles_each_run": 287, "terrain_triangles_each_run": 297216,
+    "measured_geometry_publications_each_run": 0, "capacity_rejections_each_run": 0,
+    "runs": [
+      {"name": "baseline-1", "median_ms": 2.563, "p95_ms": 3.324, "p99_ms": 3.807, "max_ms": 10.342, "material_update_upload_bytes": 23330460},
+      {"name": "new-1", "median_ms": 2.551, "p95_ms": 3.159, "p99_ms": 3.622, "max_ms": 10.909, "material_update_upload_bytes": 23068320},
+      {"name": "new-2", "median_ms": 2.597, "p95_ms": 3.311, "p99_ms": 3.919, "max_ms": 10.633, "material_update_upload_bytes": 23330460},
+      {"name": "baseline-2", "median_ms": 2.686, "p95_ms": 3.216, "p99_ms": 4.513, "max_ms": 8.175, "material_update_upload_bytes": 23243080}
+    ],
+    "boundary": "host presentation/streaming/camera/classify/raster/HUD/upload/GPU-completion latency; excludes setup, pre-stream, warm-up and capture readback",
+    "conclusion": "overlapping medians on the untouched survey path; no speedup claimed, no adapter tax isolated"
+  },
+  "live_offscreen": {
+    "size": [1280, 720], "hud": true,
+    "requested_elapsed_per_frame_s": 0.016666666666666666,
+    "measured_frames": 600, "warmup_frames": 30, "prestream_seconds": 10,
+    "prestream_physics_frozen": true, "warmup_advances_physics": true, "wall_work_budget": null,
+    "completed_authority_and_presentation_time_s": 10.5,
+    "identical_final_relative_position_m": [-2847029.6640625, 759068.1640593708, 1250706.967514596],
+    "final_backlog_s": 0, "flight_stopped": false,
+    "telemetry": "throttle=1.000 engine=true control_mode=Navball sas=true",
+    "mesh_instances": 1, "mesh_draw_calls": 2, "mesh_triangles": 78465, "mesh_frame_upload_bytes": 640,
+    "runs": [
+      {"name": "flight", "arguments": "--flight", "median_ms": 3.242, "p95_ms": 4.95, "p99_ms": 9.716, "max_ms": 11.326, "final_tiles": 374, "terrain_triangles": 410112, "measured_selections": 9, "measured_geometry_publications": 42, "capacity_rejections": 0, "final_pending_jobs": [0, 4]},
+      {"name": "flight-chase", "arguments": "--flight --chase", "median_ms": 2.803, "p95_ms": 4.341, "p99_ms": 8.554, "max_ms": 12.272, "final_tiles": 374, "terrain_triangles": 375552, "measured_selections": 9, "measured_geometry_publications": 38, "capacity_rejections": 0, "final_pending_jobs": [0, 4]},
+      {"name": "flight-full", "arguments": "--flight --throttle 1 --engine-on", "median_ms": 3.051, "p95_ms": 4.956, "p99_ms": 10.339, "max_ms": 13.314, "final_tiles": 374, "terrain_triangles": 410112, "measured_selections": 9, "measured_geometry_publications": 45, "capacity_rejections": 0, "final_pending_jobs": [0, 4], "note": "explicit presets reproduce the inherited starter demand bit-for-bit: identical final coordinates to the default run, proving the preset path is transparent"}
+    ],
+    "boundary": "full existing local physics demand incl. owned input push + presentation/streaming/terrain/mesh/HUD/uploads/GPU completion; excludes setup, pre-stream, warm-up and final readback; not isolated input/renderer cost or game FPS",
+    "comparison_boundary": "different camera cover between orbit/chase; not equal-scene runs and not Bevy parity; trajectory (not pixels) is the cross-mode identity"
+  },
+  "input_microbenchmark": {
+    "command": "cargo bench -p thessa-flight-authority --bench input",
+    "samples_each": 1000,
+    "runs": [{"inputs": 1, "median_ns": 30, "p95_ns": 40}, {"inputs": 1024, "median_ns": 8967, "p95_ns": 8977}],
+    "bundled_push_100k_ns": 482358,
+    "boundary": "stick mapping + slew math and timer/barriers; no devices, authority stepping, ephemeris, assets, streaming, GPU work or waits"
+  },
+  "verification": {
+    "fmt": "pass", "workspace_all_target_all_feature_clippy_deny_warnings": "pass", "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1774, "workspace_integration_tests": 52,
+    "ignored_bevy_cbt_hardware_tests": 24, "ignored_native_gpu_tests": 4,
+    "ignored_native_window_tests": 4, "successful_total": 1858,
+    "new_regressions": "shared stick table/cancellation, slew factors/clamps/convergence, presets/toggles/precision, invalid-demand no-op, old-client Bevy-key wiring, intent staging vs authority adoption, mode cycling, SAS control, 600-step pushed-vs-direct trajectory identity with cut-glide divergence, telemetry keys, --throttle/--engine-on/help CLI validation, full-thrust preset window lifecycle",
+    "review": "local input ownership, factor exactness, preset transparency, survey workload preservation, held-key/discrete boundaries and GPL/MIT separation",
+    "logs": "/tmp/opencode/owned-input-{clippy,lib,integration,nohud,bench,bevy-gpu,native-gpu,window-test,build,legacy-build,legacy-smoke}.log and owned-input-measure-*.log plus owned-input-wayland.log"
+  },
+  "native_wayland_smoke": {
+    "arguments": "--flight --frames 1200", "hud": true,
+    "elapsed_demand_clamp_s": 0.1, "cooperative_work_budget_ms": 8,
+    "presentation_requests": 1200, "presentation_elapsed_s": 10.1,
+    "requests_per_second": 118.8, "process_elapsed_s": 11.55, "exit_code": 0,
+    "completed_authority_and_presentation_time_s": 10.091666666666667,
+    "final_backlog_s": 0.00032942033333375684, "flight_stopped": false,
+    "telemetry": "throttle=1.000 engine=true control_mode=Navball sas=true",
+    "final_tiles": 374, "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor policy, not display feedback, GPU-only time or game FPS"
+  },
+  "captures": [
+    {"path": "owned-input-new-1-2026-10-16.png", "size": [1280, 720], "sha256": "ef32a7f8009d23410ff0645e0759fd1d46dc65618bf3b2123eb29dbce19ee5bd", "meaning": "normal terrain-only new-1 HUD regression frame"},
+    {"path": "owned-input-flight-2026-10-16.png", "size": [1280, 720], "sha256": "2710e7946e5e5e1e26b62f0f793c87ccfe2fb11b9b6eaa0222a13a8c440f34f1", "meaning": "actual local authority at 10.5s with the owned input panel (100% throttle, engine ON, ATTITUDE HOLD, centered stick)"},
+    {"path": "owned-input-flight-full-2026-10-16.png", "size": [1280, 720], "sha256": "deb9ff2e5f95b18350cdb3b827f1dbe754eb39e9f727f13adf5ecf49d15a99a1", "meaning": "explicit --throttle 1 --engine-on presets; identical trajectory to the inherited starter demand"},
+    {"path": "owned-input-bevy-pilot-2026-10-16.png", "size": [1270, 1588], "sha256": "ef6b27e66898f7bc514d8e0065c87664afda786c6dc5d5f67351c8340217a1e1", "meaning": "legacy unpaused local-fallback pilot on shared input factors; different camera/time/game controls/effects, not equal-scene parity"}
+  ],
+  "limitations": [
+    "Local diagnostic flight host only: no native network/fleet receive loop, prediction/reconciliation, part commands (RCS/gear/chute), flyby/mouse-aim assists, production flight UI or full client lifecycle replacement.",
+    "Survey/map camera still legacy; materials remain base-color/Lambert without PBR/shadows/atmosphere parity.",
+    "Captures are not visual acceptance or equal-scene Bevy parity.",
+    "No device-loss recovery, persistent conforming GPU bisector topology or FastRT acceleration structures are established by this slice."
+  ]
+}

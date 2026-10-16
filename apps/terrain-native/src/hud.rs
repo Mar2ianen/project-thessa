@@ -9,6 +9,11 @@ pub struct Controls {
     pub reset_camera: bool,
     pub angle: f64,
     pub distance: f64,
+    pub throttle: f64,
+    pub engine: bool,
+    pub precision: bool,
+    pub sas: bool,
+    pub cycle_mode: bool,
     pub exposure_ev100: f32,
     pub vsync: bool,
 }
@@ -25,6 +30,11 @@ impl Controls {
             } else {
                 scene.distance
             },
+            throttle: scene.input.throttle,
+            engine: scene.input.engine_active,
+            precision: scene.input.precision,
+            sas: scene.sas_enabled(),
+            cycle_mode: false,
             exposure_ev100: scene.requested.renderer.exposure_ev100,
             vsync: scene.requested.renderer.vsync,
         }
@@ -50,6 +60,15 @@ impl Controls {
         } else {
             scene.distance = self.distance;
         }
+        if scene.live_flight() {
+            scene.input.set_throttle(self.throttle);
+            scene.input.engine_active = self.engine;
+            scene.input.precision = self.precision;
+            scene.set_sas(self.sas);
+            if self.cycle_mode {
+                scene.cycle_control_mode();
+            }
+        }
         scene.requested.renderer.exposure_ev100 = self.exposure_ev100;
         scene.requested.renderer.vsync = self.vsync;
     }
@@ -60,6 +79,10 @@ pub struct Stats {
     pub live_flight: bool,
     pub flight_stopped: bool,
     pub chase: bool,
+    pub throttle: f64,
+    pub engine: bool,
+    pub control_mode: Option<thessa_flight_authority::ControlMode>,
+    pub stick: [f64; 3],
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
     pub sim_time_s: f64,
@@ -79,6 +102,10 @@ impl Stats {
             live_flight: scene.live_flight(),
             flight_stopped: scene.flight_stopped(),
             chase: scene.camera.chase(),
+            throttle: scene.input.throttle,
+            engine: scene.input.engine_active,
+            control_mode: scene.live_flight().then_some(scene.control_mode),
+            stick: scene.input.stick_scaled().to_array(),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
@@ -250,6 +277,34 @@ fn widgets(
                 ));
                 ui.small("Host wall time, not GPU timing or game FPS.");
                 ui.separator();
+                if stats.live_flight {
+                    ui.label(format!(
+                        "Input: throttle {:.0}% · engine {} · {} · stick ({:+.1}, {:+.1}, {:+.1})",
+                        stats.throttle * 100.0,
+                        if stats.engine { "ON" } else { "OFF" },
+                        stats
+                            .control_mode
+                            .map(|mode| mode.label())
+                            .unwrap_or("—"),
+                        stats.stick[0],
+                        stats.stick[1],
+                        stats.stick[2],
+                    ));
+                    ui.add(
+                        egui::Slider::new(&mut controls.throttle, 0.0..=1.0).text("Throttle"),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut controls.engine, "Engine");
+                        ui.checkbox(&mut controls.precision, "Precision");
+                        ui.checkbox(&mut controls.sas, "SAS");
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Cycle control law").clicked() {
+                            controls.cycle_mode = true;
+                        }
+                        ui.small("WASDQE stick · Shift/Ctrl slew · X/Z presets · Space engine · C law · T SAS");
+                    });
+                }
                 if controls.vehicle_preview {
                     ui.checkbox(&mut controls.chase, "Chase camera (follow craft attitude)");
                 } else {
@@ -311,6 +366,11 @@ mod tests {
             reset_camera: false,
             angle: 8.0,
             distance: 30_000.0,
+            throttle: 0.0,
+            engine: false,
+            precision: false,
+            sas: true,
+            cycle_mode: false,
             exposure_ev100: 13.0,
             vsync: false,
         }

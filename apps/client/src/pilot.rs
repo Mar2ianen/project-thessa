@@ -28,6 +28,7 @@ const HUD_AMBER: Color = Color::srgb(0.98, 0.72, 0.26);
 // and the imported X-15 mesh in the same unit system.
 const PILOT_START_ALTITUDE_M: f64 = 500.0;
 use thessa_flight_authority::camera::FlightCamera;
+use thessa_flight_authority::input::{StickKeys, apply_precision, slew_throttle, stick_input};
 use thessa_flight_authority::presentation::{
     FlightPose, X15_AUTHORED_LENGTH_M, X15_SOURCE_LENGTH_M,
     craft_visual_orientation as render_orientation, x15_asset_to_craft_rotation,
@@ -1297,11 +1298,14 @@ fn pilot_camera_transform(
 
 fn keyboard_control_input(keys: &ButtonInput<KeyCode>) -> DVec3 {
     // Stick forward (W) lowers the nose; right (D) yaws right.
-    DVec3::new(
-        (keys.pressed(KeyCode::KeyS) as i8 - keys.pressed(KeyCode::KeyW) as i8) as f64,
-        (keys.pressed(KeyCode::KeyD) as i8 - keys.pressed(KeyCode::KeyA) as i8) as f64,
-        (keys.pressed(KeyCode::KeyE) as i8 - keys.pressed(KeyCode::KeyQ) as i8) as f64,
-    )
+    stick_input(StickKeys {
+        nose_up: keys.pressed(KeyCode::KeyS),
+        nose_down: keys.pressed(KeyCode::KeyW),
+        yaw_right: keys.pressed(KeyCode::KeyD),
+        yaw_left: keys.pressed(KeyCode::KeyA),
+        roll_right: keys.pressed(KeyCode::KeyE),
+        roll_left: keys.pressed(KeyCode::KeyQ),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1567,7 +1571,7 @@ fn pilot_input(
         runtime.control_input = if clock.paused || !window.focused || state.show_help {
             DVec3::ZERO
         } else {
-            command_input * if state.precision_controls { 0.25 } else { 1.0 }
+            apply_precision(command_input, state.precision_controls)
         };
 
         let dt = time.delta_secs_f64().min(0.1);
@@ -1586,9 +1590,8 @@ fn pilot_input(
             };
             runtime.input_throttle = (runtime.input_throttle + slew * dt * 0.55).clamp(0.0, 1.0);
         } else {
-            runtime.input_throttle = (runtime.input_throttle
-                + (throttle_up as i8 - throttle_down as i8) as f64 * dt * 0.55)
-                .clamp(0.0, 1.0);
+            runtime.input_throttle =
+                slew_throttle(runtime.input_throttle, dt, throttle_up, throttle_down);
         }
         if keys.just_pressed(KeyCode::KeyX) {
             runtime.input_throttle = 0.0;
@@ -2036,6 +2039,30 @@ fn format_scalar(value: Option<f64>, precision: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_stick_wiring_matches_the_shared_table() {
+        use bevy::input::ButtonInput;
+        let press = |keys: &[KeyCode]| {
+            let mut input = ButtonInput::<KeyCode>::default();
+            for key in keys {
+                input.press(*key);
+            }
+            keyboard_control_input(&input)
+        };
+        assert_eq!(press(&[]), DVec3::ZERO);
+        assert_eq!(press(&[KeyCode::KeyW]), DVec3::NEG_X);
+        assert_eq!(press(&[KeyCode::KeyS]), DVec3::X);
+        assert_eq!(press(&[KeyCode::KeyD]), DVec3::Y);
+        assert_eq!(press(&[KeyCode::KeyA]), DVec3::NEG_Y);
+        assert_eq!(press(&[KeyCode::KeyE]), DVec3::Z);
+        assert_eq!(press(&[KeyCode::KeyQ]), DVec3::NEG_Z);
+        assert_eq!(press(&[KeyCode::KeyW, KeyCode::KeyS]), DVec3::ZERO);
+        assert_eq!(
+            press(&[KeyCode::KeyS, KeyCode::KeyD, KeyCode::KeyQ]),
+            DVec3::new(1.0, 1.0, -1.0)
+        );
+    }
 
     #[test]
     fn failed_presentation_snapshot_preserves_the_complete_prior_pose_without_touching_authority() {

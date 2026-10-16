@@ -27,6 +27,10 @@ name = "camera"
 harness = false
 
 [[bench]]
+name = "input"
+harness = false
+
+[[bench]]
 name = "retractable_wheels"
 harness = false
 

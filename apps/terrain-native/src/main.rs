@@ -23,6 +23,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut vehicle_preview = false;
     let mut live_flight = false;
     let mut chase = false;
+    let mut throttle_preset = None;
+    let mut engine_on = false;
     let mut flight_step = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -45,6 +47,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--vehicle-preview" => vehicle_preview = true,
             "--flight" => live_flight = true,
             "--chase" => chase = true,
+            "--throttle" => {
+                throttle_preset = Some(
+                    args.next()
+                        .ok_or("--throttle requires a 0..=1 fraction")?
+                        .parse::<f64>()?,
+                )
+            }
+            "--engine-on" => engine_on = true,
             "--flight-step" => {
                 flight_step = Some(
                     args.next()
@@ -74,6 +84,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
                 );
+                println!(
+                    "--throttle FRACTION (0..=1, requires --flight) presets the owned throttle intent before the first frame; deterministic in window and headless. --engine-on (requires --flight) arms the engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, CapsLock precision (shared factors with the old pilot; RCS/gear/chute part commands are not ported yet)."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -87,6 +100,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if chase && !live_flight && !vehicle_preview {
         return Err("--chase requires --flight or --vehicle-preview".into());
+    }
+    if throttle_preset.is_some() && !live_flight {
+        return Err("--throttle requires --flight".into());
+    }
+    if engine_on && !live_flight {
+        return Err("--engine-on requires --flight".into());
+    }
+    if let Some(throttle) = throttle_preset
+        && (!throttle.is_finite() || !(0.0..=1.0).contains(&throttle))
+    {
+        return Err("--throttle must be finite and within 0..=1".into());
     }
     if flight_step.is_some() && (!live_flight || headless.is_none()) {
         return Err("--flight-step requires --flight and --headless".into());
@@ -131,6 +155,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if chase {
         scene.camera.set_chase(true);
     }
+    if let Some(throttle) = throttle_preset {
+        scene.input.throttle = throttle;
+    }
+    if engine_on {
+        scene.input.engine_active = true;
+    }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",
         started.elapsed().as_secs_f64()
@@ -169,6 +199,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         for frame in 0..u64::from(count) + 30 {
             let start = Instant::now();
             if live_flight {
+                scene.push_live_input(flight_step, false, false);
                 scene.advance_flight(flight_step, None)?;
             } else {
                 scene.set_presentation_time(thessa_sim_core::SimTime(

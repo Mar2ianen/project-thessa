@@ -16,6 +16,7 @@ pub mod bake;
 pub mod camera;
 pub mod contact;
 pub(crate) mod control;
+pub mod input;
 pub mod launch_site;
 pub mod mode;
 pub mod presentation;

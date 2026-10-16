@@ -114,14 +114,25 @@ The checked-in vertical slice currently contains:
   optional chase framing). The old pilot now converts the same neutral
   mesh/material source instead of loading this model through Bevy `WorldAsset`.
   The native draw loads the existing terrain color/depth targets before HUD;
-  its base-color/Lambert shader is **not** PBR parity, and there is still no
-  live flight-input/network/game-UI parity. Preview requires epoch time and no
+  its base-color/Lambert shader is **not** PBR parity. Live flight-input
+  intents (stick/throttle/engine/precision/control-law/SAS) are owned in
+  `--flight`; network, part commands and remaining game UI are still missing.
+  Preview requires epoch time and no
   time stepping. Reusable source descriptors/decoding live in MIT `render-core`
   / `render-assets`; game asset calibration remains GPL. X-15 by cmoreau is
   CC BY 4.0 (see its asset license).
   `--flight` instead starts the existing local `FlightAuthority` at the canonical
   COAST launch and tracks its live pose with the owned pilot camera (Navball
-  attitude hold, no flight-input/network/game-UI parity). `--chase` selects the
+  attitude hold by default, no network/game-UI parity). The compatibility
+  starter arms full legacy throttle with the engine on, exactly like the old
+  client inherits. Owned GPL `flight-authority::input` shares stick mapping,
+  throttle slew/presets, engine toggle and precision factors with the old
+  pilot: `--throttle 0.5` presets the intent deterministically, `--engine-on`
+  arms the engine, window `WASDQE` flies the stick, `Shift`/`Ctrl` slew the
+  throttle, `X`/`Z` cut/fill, `Space` toggles the engine, `C` cycles the
+  control law, `T` toggles SAS and `CapsLock` scales precision; the HUD mirrors
+  the same panel. RCS/gear/chute part commands are not ported yet.
+  `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
   chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.
   Window elapsed demand uses the

@@ -24,6 +24,20 @@ fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
         (vec!["--flight", "--sim-time", "1"], "--flight requires"),
         (vec!["--flight", "--vehicle-preview"], "--flight requires"),
         (vec!["--chase"], "--chase requires"),
+        (vec!["--throttle", "0.5"], "--throttle requires"),
+        (vec!["--engine-on"], "--engine-on requires"),
+        (
+            vec!["--flight", "--headless", "unused.png", "--throttle", "NaN"],
+            "--throttle must be finite",
+        ),
+        (
+            vec!["--flight", "--headless", "unused.png", "--throttle", "2"],
+            "--throttle must be finite",
+        ),
+        (
+            vec!["--flight", "--headless", "unused.png", "--throttle", "-0.5"],
+            "--throttle must be finite",
+        ),
         (vec!["--flight-step", "0.01", "--chase"], "--chase requires"),
         (vec!["--flight-step", "0.01"], "--flight-step requires"),
         (
@@ -104,6 +118,9 @@ fn help_exposes_presentation_sampling_and_warmup_boundary() {
         "--flight-step",
         "--chase",
         "chase camera",
+        "--throttle",
+        "--engine-on",
+        "WASDQE",
         "COAST",
         "30 warmup frames",
         "not server warp",

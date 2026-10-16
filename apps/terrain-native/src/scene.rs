@@ -23,6 +23,13 @@ pub struct Scene {
     /// Owned pilot camera (vehicle/preview view only). The terrain-only
     /// survey view keeps its legacy angle orbit until the map view migrates.
     pub camera: thessa_flight_authority::camera::FlightCamera,
+    /// Owned live flight-input intent (throttle/engine/stick/precision).
+    /// Applied to the authority on every rendered frame; headless runs stay
+    /// deterministic because no keys are held there.
+    pub input: thessa_flight_authority::input::FlightInput,
+    /// Assist mode selecting the server-side control law. Cycled with `C` in
+    /// the window; the old client owns the same cycle through its HUD modes.
+    pub control_mode: thessa_flight_authority::ControlMode,
     pub requested: thessa_graphics::RequestedGraphics,
     pub stream: TerrainStream,
     pub publications: u64,
@@ -77,6 +84,8 @@ impl Scene {
             launch_site: sites[0],
             vehicle: None,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
+            input: thessa_flight_authority::input::FlightInput::default(),
+            control_mode: thessa_flight_authority::ControlMode::Navball,
             requested,
             stream,
             publications: 0,
@@ -167,6 +176,10 @@ impl Scene {
             return Err(error);
         }
         self.camera = thessa_flight_authority::camera::FlightCamera::pilot_default();
+        self.input =
+            thessa_flight_authority::input::FlightInput::new(flight.throttle, flight.engine_active)
+                .unwrap_or_default();
+        self.control_mode = thessa_flight_authority::ControlMode::Navball;
         self.flight = Some(flight);
         eprintln!(
             "Live local flight: canonical COAST launch; existing FlightAuthority, Navball attitude hold; no flight-input/network/UI parity"
@@ -236,7 +249,7 @@ impl Scene {
         }
         if let Err(error) = flight.advance_with_budget(
             self.celestial.ephemeris(),
-            thessa_flight_authority::ControlMode::Navball,
+            self.control_mode,
             elapsed_s,
             budget,
         ) {
@@ -256,12 +269,55 @@ impl Scene {
     }
 
     pub fn flight_telemetry(&self) -> Option<String> {
-        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase()))
+        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled))
     }
     pub fn flight_stopped(&self) -> bool {
         self.flight
             .as_ref()
             .is_some_and(|flight| flight.flight_error.is_some())
+    }
+
+    /// Push the owned input intent into the authority: throttle slew plus the
+    /// throttle/engine/stick copy. Runs on every rendered frame in both window
+    /// and headless modes; with no held keys and default presets the authority
+    /// sees exactly its previous demand, keeping headless runs deterministic.
+    /// Inputs stay live even after a flight error, like the old client; the
+    /// advance itself still stops on error.
+    pub fn push_live_input(&mut self, dt_s: f64, throttle_up: bool, throttle_down: bool) {
+        let Some(flight) = &mut self.flight else {
+            return;
+        };
+        self.input.slew(dt_s, throttle_up, throttle_down);
+        flight.throttle = self.input.throttle;
+        flight.engine_active = self.input.engine_active;
+        flight.control_input = self.input.stick_scaled();
+    }
+
+    /// Cycle the assist control law (`Navball -> Rate -> Direct -> MouseAim`).
+    /// Window `C` key and HUD button share this; the old client owns the same
+    /// cycle through its mode HUD.
+    pub fn cycle_control_mode(&mut self) {
+        self.control_mode = self.control_mode.next();
+    }
+
+    pub fn toggle_sas(&mut self) {
+        if let Some(flight) = &mut self.flight {
+            flight.sas_enabled = !flight.sas_enabled;
+        }
+    }
+
+    #[cfg(feature = "hud")]
+    pub fn sas_enabled(&self) -> bool {
+        self.flight
+            .as_ref()
+            .is_some_and(|flight| flight.sas_enabled)
+    }
+
+    #[cfg(feature = "hud")]
+    pub fn set_sas(&mut self, enabled: bool) {
+        if let Some(flight) = &mut self.flight {
+            flight.sas_enabled = enabled;
+        }
     }
 
     pub fn mesh_renderer(
@@ -787,6 +843,136 @@ mod tests {
         assert!(scene.camera.chase(), "reset preserves the chase selection");
         assert_eq!(scene.camera.distance_m(), 32.0);
         assert_eq!(scene.camera.pan(), glam::Vec2::ZERO);
+    }
+
+    #[test]
+    fn live_input_push_copies_intent_and_slews_with_shared_factors() {
+        use thessa_flight_authority::input::StickKeys;
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.push_live_input(0.1, true, false);
+        assert_eq!(scene.input.throttle, 0.0, "no flight: no-op");
+        scene.enable_live_flight().unwrap();
+        // The compatibility starter arms full legacy propulsion, like the old
+        // client inherits; the owned intent starts from that authority state.
+        assert_eq!(scene.input.throttle, 1.0);
+        assert!(scene.input.engine_active);
+        assert_eq!(
+            scene.control_mode,
+            thessa_flight_authority::ControlMode::Navball
+        );
+        assert!(scene.flight.as_ref().unwrap().sas_enabled);
+
+        scene.input.keys = StickKeys {
+            nose_up: true,
+            yaw_right: true,
+            ..StickKeys::default()
+        };
+        scene.push_live_input(0.1, false, true);
+        assert!((scene.input.throttle - (1.0 - 0.055)).abs() < 1e-12);
+        let flight = scene.flight.as_ref().unwrap();
+        assert_eq!(flight.throttle, scene.input.throttle);
+        assert_eq!(flight.control_input, DVec3::new(1.0, 1.0, 0.0));
+        scene.input.toggle_precision();
+        scene.push_live_input(0.0, false, false);
+        assert_eq!(
+            scene.flight.as_ref().unwrap().control_input,
+            DVec3::new(0.25, 0.25, 0.0)
+        );
+
+        scene.input.cut();
+        scene.input.toggle_engine();
+        scene.cycle_control_mode();
+        scene.toggle_sas();
+        scene.push_live_input(f64::NAN, true, true);
+        assert_eq!(scene.input.throttle, 0.0);
+        let flight = scene.flight.as_ref().unwrap();
+        assert_eq!(flight.throttle, 0.0);
+        assert!(!flight.engine_active);
+        assert_eq!(
+            scene.control_mode,
+            thessa_flight_authority::ControlMode::Rate
+        );
+        assert!(!scene.flight.as_ref().unwrap().sas_enabled);
+        scene.input.full();
+        scene.toggle_sas();
+        assert_eq!(
+            scene.input.throttle, 1.0,
+            "full stages intent until the next push"
+        );
+        assert_eq!(
+            scene.flight.as_ref().unwrap().throttle,
+            0.0,
+            "authority keeps the previous demand until pushed"
+        );
+        scene.push_live_input(0.0, false, false);
+        assert_eq!(scene.flight.as_ref().unwrap().throttle, 1.0);
+        assert!(scene.flight.as_ref().unwrap().sas_enabled);
+
+        scene.input.set_throttle(2.0);
+        assert_eq!(scene.input.throttle, 1.0);
+        scene.input.set_throttle(f64::NAN);
+        assert_eq!(scene.input.throttle, 1.0);
+        let telemetry = scene.flight_telemetry().unwrap();
+        for key in [
+            "throttle=1.000",
+            "engine=false",
+            "control_mode=Rate",
+            "sas=true",
+        ] {
+            assert!(telemetry.contains(key), "missing {key} in {telemetry}");
+        }
+    }
+
+    #[test]
+    fn full_thrust_with_engine_outflies_the_glide_like_direct_authority() {
+        use thessa_flight_authority::ControlMode;
+        let mut scene = Scene::load(Default::default()).unwrap();
+        let mut reference = scene.celestial.initial_flight().unwrap();
+        reference.initialize_world_site(
+            scene.stream.field().clone(),
+            scene.launch_site,
+            scene.celestial.ephemeris(),
+        );
+        scene.enable_live_flight().unwrap();
+        for _ in 0..600 {
+            reference
+                .advance(
+                    scene.celestial.ephemeris(),
+                    ControlMode::Navball,
+                    1.0 / 60.0,
+                )
+                .unwrap();
+            scene.push_live_input(1.0 / 60.0, false, false);
+            scene.advance_flight(1.0 / 60.0, None).unwrap();
+            assert_eq!(
+                scene.flight.as_ref().unwrap().relative_position_m,
+                reference.relative_position_m
+            );
+        }
+        // Cutting the throttle + engine on the same starter state glides far
+        // from the full-thrust trajectory above: same 60 steps, same frames,
+        // different energy. The full reference is the direct production
+        // authority, so equal thrust + different glide proves the input path
+        // drives the solver instead of shadowing it.
+        let thrust = reference.relative_position_m;
+        let mut glide = scene.celestial.initial_flight().unwrap();
+        glide.initialize_world_site(
+            scene.stream.field().clone(),
+            scene.launch_site,
+            scene.celestial.ephemeris(),
+        );
+        glide.throttle = 0.0;
+        glide.engine_active = false;
+        for _ in 0..600 {
+            glide
+                .advance(
+                    scene.celestial.ephemeris(),
+                    ControlMode::Navball,
+                    1.0 / 60.0,
+                )
+                .unwrap();
+        }
+        assert!((glide.relative_position_m - thrust).length() > 100.0);
     }
 
     #[test]

@@ -2765,6 +2765,19 @@ recorded in `artifacts/native-primary-mesh-wire-2026-10-16.json`. The tests are
 deterministic provenance/geometry checks, not a blind subjective review or a
 complete native/Bevy visual-parity claim.
 
+### Receiver transaction correction (2026-10-17)
+
+`GeometryReceiver::accept` now stages both descriptor and mesh candidates,
+reconstructs and validates the prospective matching epoch, and only then
+commits dependency slots and the delivered-revision marker. Every `Err` leaves
+all three fields unchanged; no whole receiver or mesh payload is cloned on the
+production path. Regression tests assert exact state retention after unknown
+mesh references and final application validation failures, then accept a
+corrected packet at the same revision. The inverse descriptor-first case also
+rejects an insufficient mesh dependency without reserving its epoch. Successful
+unmatched packets remain bounded pending dependencies, not errors; genuine
+already-accepted revision reuse remains forbidden. No wire format changed.
+
 ### Native surface-lighting and shadow continuation (2026-10-17)
 
 Branch `feat/native-surface-lighting`, baseline `3443689`. This supersedes the

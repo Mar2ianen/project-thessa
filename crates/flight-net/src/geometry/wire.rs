@@ -194,6 +194,11 @@ impl GeometryReceiver {
         &mut self,
         envelope: &thessa_protocol::Envelope,
     ) -> Result<Option<Arc<FleetGeometry>>, String> {
+        // Stage both transport kinds. Matching-epoch reconstruction below can
+        // still reject references/contacts after decoding; no receiver state
+        // (including pending dependencies) may change on any error.
+        let mut incoming_meshes = None;
+        let mut incoming_descriptor = None;
         match envelope.kind {
             thessa_protocol::kind::FLEET_MESHES => {
                 let incoming: MeshCatalogue =
@@ -237,7 +242,7 @@ impl GeometryReceiver {
                         return Ok(None);
                     }
                 }
-                self.meshes = Some(incoming);
+                incoming_meshes = Some(incoming);
             }
             thessa_protocol::kind::FLEET_GEOMETRY => {
                 let incoming: GeometryDescriptor =
@@ -257,15 +262,36 @@ impl GeometryReceiver {
                         return Ok(None);
                     }
                 }
-                self.descriptor = Some(incoming);
+                incoming_descriptor = Some(incoming);
             }
             _ => return Err("not a geometry publication kind".into()),
         }
-        let (Some(meshes), Some(descriptor)) = (&self.meshes, &self.descriptor) else {
+        let geometry = Self::resolve(
+            incoming_meshes.as_ref().or(self.meshes.as_ref()),
+            incoming_descriptor.as_ref().or(self.descriptor.as_ref()),
+            self.delivered_revision,
+        )?;
+        if let Some(meshes) = incoming_meshes {
+            self.meshes = Some(meshes);
+        }
+        if let Some(descriptor) = incoming_descriptor {
+            self.descriptor = Some(descriptor);
+        }
+        if let Some(geometry) = &geometry {
+            self.delivered_revision = geometry.revision;
+        }
+        Ok(geometry)
+    }
+
+    fn resolve(
+        meshes: Option<&MeshCatalogue>,
+        descriptor: Option<&GeometryDescriptor>,
+        delivered_revision: u64,
+    ) -> Result<Option<Arc<FleetGeometry>>, String> {
+        let (Some(meshes), Some(descriptor)) = (meshes, descriptor) else {
             return Ok(None);
         };
-        if meshes.revision != descriptor.mesh_revision
-            || descriptor.revision == self.delivered_revision
+        if meshes.revision != descriptor.mesh_revision || descriptor.revision == delivered_revision
         {
             return Ok(None);
         }
@@ -320,7 +346,6 @@ impl GeometryReceiver {
             vehicles,
         };
         geometry.validate()?;
-        self.delivered_revision = descriptor.revision;
         Ok(Some(Arc::new(geometry)))
     }
 }
@@ -508,6 +533,97 @@ mod tests {
                     &crate::encode_frame(thessa_protocol::kind::FLEET_GEOMETRY, &bad).unwrap()
                 ))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn rejected_descriptor_is_atomic_and_corrected_same_revision_can_be_delivered() {
+        let a = GeometryPublication::new(catalogue(1), None).unwrap();
+        let b = GeometryPublication::new(catalogue(2), Some(&a)).unwrap();
+        let mut receiver = GeometryReceiver::default();
+        receiver.accept(&envelope(&a.mesh_frame)).unwrap();
+        let first = receiver.accept(&envelope(&a.frame)).unwrap().unwrap();
+        let before = (
+            receiver.meshes.clone(),
+            receiver.descriptor.clone(),
+            receiver.delivered_revision,
+        );
+        let mut bad: GeometryDescriptor = crate::decode_payload(&envelope(&b.frame)).unwrap();
+        let AppearanceReference::Available(parts) = &mut bad.vehicles[0].render else {
+            unreachable!()
+        };
+        parts[0].mesh = 999;
+        assert!(
+            receiver
+                .accept(&envelope(
+                    &crate::encode_frame(thessa_protocol::kind::FLEET_GEOMETRY, &bad).unwrap()
+                ))
+                .unwrap_err()
+                .contains("unknown mesh ID")
+        );
+        assert_eq!(
+            (
+                receiver.meshes.clone(),
+                receiver.descriptor.clone(),
+                receiver.delivered_revision
+            ),
+            before
+        );
+        // Also reject final application-level validation without poisoning state.
+        let mut bad: GeometryDescriptor = crate::decode_payload(&envelope(&b.frame)).unwrap();
+        bad.vehicles[0].vehicle_id = bad.vehicles[1].vehicle_id;
+        assert!(
+            receiver
+                .accept(&envelope(
+                    &crate::encode_frame(thessa_protocol::kind::FLEET_GEOMETRY, &bad).unwrap()
+                ))
+                .is_err()
+        );
+        assert_eq!(
+            (
+                receiver.meshes.clone(),
+                receiver.descriptor.clone(),
+                receiver.delivered_revision
+            ),
+            before
+        );
+        let second = receiver.accept(&envelope(&b.frame)).unwrap().unwrap();
+        assert_eq!(*second, b.geometry);
+        assert!(Arc::ptr_eq(mesh(&first), mesh(&second)));
+        assert!(receiver.accept(&envelope(&b.frame)).unwrap().is_none());
+    }
+
+    #[test]
+    fn rejected_matching_mesh_dependency_is_atomic_in_descriptor_first_order() {
+        let a = GeometryPublication::new(catalogue(1), None).unwrap();
+        let mut receiver = GeometryReceiver::default();
+        receiver.accept(&envelope(&a.frame)).unwrap();
+        let before = (
+            receiver.meshes.clone(),
+            receiver.descriptor.clone(),
+            receiver.delivered_revision,
+        );
+        let mut bad: MeshCatalogue = crate::decode_payload(&envelope(&a.mesh_frame)).unwrap();
+        bad.meshes.clear(); // Valid payload in isolation, invalid for pending IDs.
+        assert!(
+            receiver
+                .accept(&envelope(
+                    &crate::encode_frame(thessa_protocol::kind::FLEET_MESHES, &bad).unwrap()
+                ))
+                .unwrap_err()
+                .contains("unknown mesh ID")
+        );
+        assert_eq!(
+            (
+                receiver.meshes.clone(),
+                receiver.descriptor.clone(),
+                receiver.delivered_revision
+            ),
+            before
+        );
+        assert_eq!(
+            *receiver.accept(&envelope(&a.mesh_frame)).unwrap().unwrap(),
+            a.geometry
         );
     }
 }

@@ -107,6 +107,9 @@ draws nothing. PRIMARY is independent of the fleet-quality setting. Snapshot
 interpolation does not blend different PRIMARY COM revisions (fleet-only changes
 retain interpolation), and both mesh paths use the current rotating body frame.
 General incremental GPU residency remains absent.
+Geometry receiver rejection is now transactional for both packet kinds:
+failed reconstruction cannot poison descriptor/mesh revisions or the delivered
+marker; corrected same-revision retries are covered by state-retention tests.
 Native opaque lighting now consumes resolved material/reflection settings and
 the existing shadow settings: shared GGX with linear metallic/roughness, normal
 and AO maps, plus a three-source cascaded terrain/mesh shadow atlas (48 MiB at

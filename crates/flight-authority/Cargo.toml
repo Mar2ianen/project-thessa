@@ -23,6 +23,10 @@ name = "presentation"
 harness = false
 
 [[bench]]
+name = "camera"
+harness = false
+
+[[bench]]
 name = "retractable_wheels"
 harness = false
 

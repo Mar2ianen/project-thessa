@@ -13,6 +13,7 @@
 //! green.
 
 pub mod bake;
+pub mod camera;
 pub mod contact;
 pub(crate) mod control;
 pub mod launch_site;

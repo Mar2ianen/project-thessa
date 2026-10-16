@@ -23,6 +23,8 @@ fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
         (vec!["--sim-step", "1"], "require --headless"),
         (vec!["--flight", "--sim-time", "1"], "--flight requires"),
         (vec!["--flight", "--vehicle-preview"], "--flight requires"),
+        (vec!["--chase"], "--chase requires"),
+        (vec!["--flight-step", "0.01", "--chase"], "--chase requires"),
         (vec!["--flight-step", "0.01"], "--flight-step requires"),
         (
             vec!["--flight", "--flight-step", "0.01"],
@@ -100,6 +102,8 @@ fn help_exposes_presentation_sampling_and_warmup_boundary() {
         "--sim-step",
         "--flight",
         "--flight-step",
+        "--chase",
+        "chase camera",
         "COAST",
         "30 warmup frames",
         "not server warp",

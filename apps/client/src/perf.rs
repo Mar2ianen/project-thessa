@@ -348,8 +348,9 @@ fn perf_autobench(
     // Reproducible disocclusion/orbit regression with the craft held on screen.
     if std::env::var_os("THESSA_AUTOBENCH_CAMERA_ORBIT").is_some() {
         let phase = (boot.elapsed().as_secs_f32() - AUTOBENCH_WARMUP_S as f32).max(0.0);
-        pilot.pilot_camera_orbit =
-            Quat::from_rotation_y(phase * 0.6) * Quat::from_rotation_x(-0.18);
+        pilot
+            .camera
+            .set_orbit(Quat::from_rotation_y(phase * 0.6) * Quat::from_rotation_x(-0.18));
     }
     if std::env::var_os("THESSA_AUTOBENCH_CAMERA_SWEEP").is_some() {
         let t = (boot.elapsed().as_secs_f32() - AUTOBENCH_WARMUP_S as f32).max(0.0);
@@ -369,7 +370,7 @@ fn perf_autobench(
             1.4
         };
         let orbit = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-0.65);
-        pilot.pilot_camera_orbit = orbit;
+        pilot.camera.set_orbit(orbit);
         survey.orbit = orbit;
     }
     const SHOTS: [f64; 8] = [11.0, 14.0, 19.0, 22.0, 27.0, 30.0, 35.0, 39.0];

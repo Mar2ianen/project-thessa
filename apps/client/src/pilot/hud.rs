@@ -270,7 +270,7 @@ fn action_active(
         Action::Pause => clock.paused,
         Action::Help => state.show_help,
         Action::Telemetry => state.show_telemetry,
-        Action::Camera => state.pilot_camera_chase,
+        Action::Camera => state.camera.chase(),
         Action::Precision => state.precision_controls,
         Action::Mode => state.show_modes,
         Action::SetMode(mode) => state.control_mode == mode,
@@ -348,7 +348,7 @@ pub(super) fn pilot_hud_buttons(
                 Action::Pause => clock.paused = !clock.paused,
                 Action::Help => state.show_help = !state.show_help,
                 Action::Telemetry => state.show_telemetry = !state.show_telemetry,
-                Action::Camera => state.pilot_camera_chase = !state.pilot_camera_chase,
+                Action::Camera => state.camera.toggle_chase(),
                 Action::Precision => state.precision_controls = !state.precision_controls,
                 Action::ThrottleUp => {
                     runtime.input_throttle = (runtime.input_throttle + 0.1).min(1.0);

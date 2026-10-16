@@ -110,16 +110,21 @@ The checked-in vertical slice currently contains:
   `--sim-step 120` samples motion per rendered frame (including warm-up), not
   authoritative simulation warp. See doc 39 for the spin-model boundary.
   `--vehicle-preview` displays the shared X-15 GLB at the initial flight-state
-  pose, with an 8–180 m orbit camera. The old pilot now converts the same neutral
+  pose through the owned pilot camera (quaternion orbit, 8–180 m zoom, pan,
+  optional chase framing). The old pilot now converts the same neutral
   mesh/material source instead of loading this model through Bevy `WorldAsset`.
   The native draw loads the existing terrain color/depth targets before HUD;
-  its base-color/Lambert shader is **not** PBR parity or live flight/controller
-  migration. Preview requires epoch time and no time stepping. Reusable source
-  descriptors/decoding live in MIT `render-core` / `render-assets`; game asset
-  calibration remains GPL. X-15 by cmoreau is CC BY 4.0 (see its asset license).
+  its base-color/Lambert shader is **not** PBR parity, and there is still no
+  live flight-input/network/game-UI parity. Preview requires epoch time and no
+  time stepping. Reusable source descriptors/decoding live in MIT `render-core`
+  / `render-assets`; game asset calibration remains GPL. X-15 by cmoreau is
+  CC BY 4.0 (see its asset license).
   `--flight` instead starts the existing local `FlightAuthority` at the canonical
-  COAST launch and tracks its live pose with the orbit camera (Navball attitude
-  hold, no flight-input/network/game-UI parity). Window elapsed demand uses the
+  COAST launch and tracks its live pose with the owned pilot camera (Navball
+  attitude hold, no flight-input/network/game-UI parity). `--chase` selects the
+  chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
+  chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.
+  Window elapsed demand uses the
   old local client's 0.1 s clamp/8 ms work budget. Headless `--flight-step 0.016666666666666666`
   requests elapsed simulation time per frame, including warm-up; pre-stream is
   frozen. Body spin, direct lights, mesh and camera publish at the authority's

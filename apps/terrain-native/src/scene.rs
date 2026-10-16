@@ -20,6 +20,9 @@ pub struct Scene {
         thessa_render_core::mesh::MeshAsset,
         thessa_render_core::mesh::MeshInstance,
     )>,
+    /// Owned pilot camera (vehicle/preview view only). The terrain-only
+    /// survey view keeps its legacy angle orbit until the map view migrates.
+    pub camera: thessa_flight_authority::camera::FlightCamera,
     pub requested: thessa_graphics::RequestedGraphics,
     pub stream: TerrainStream,
     pub publications: u64,
@@ -73,6 +76,7 @@ impl Scene {
             flight: None,
             launch_site: sites[0],
             vehicle: None,
+            camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
             requested,
             stream,
             publications: 0,
@@ -133,7 +137,7 @@ impl Scene {
             .cross(self.up)
             .try_normalize()
             .unwrap_or_else(|| self.up.any_orthonormal_vector());
-        self.distance = 32.0;
+        self.camera = thessa_flight_authority::camera::FlightCamera::pilot_default();
         self.vehicle = Some((source, instance));
         Ok(())
     }
@@ -162,7 +166,7 @@ impl Scene {
             self.vehicle = None;
             return Err(error);
         }
-        self.distance = 32.0;
+        self.camera = thessa_flight_authority::camera::FlightCamera::pilot_default();
         self.flight = Some(flight);
         eprintln!(
             "Live local flight: canonical COAST launch; existing FlightAuthority, Navball attitude hold; no flight-input/network/UI parity"
@@ -252,7 +256,7 @@ impl Scene {
     }
 
     pub fn flight_telemetry(&self) -> Option<String> {
-        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error))
+        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase()))
     }
     pub fn flight_stopped(&self) -> bool {
         self.flight
@@ -451,6 +455,15 @@ impl Scene {
     }
 
     pub fn view(&self, width: u32, height: u32, exposure: f32) -> ViewParams {
+        if self.vehicle.is_some()
+            && let Some(view) = self.vehicle_view(width, height, exposure)
+        {
+            return view;
+        }
+        self.survey_view(width, height, exposure)
+    }
+
+    fn survey_view(&self, width: u32, height: u32, exposure: f32) -> ViewParams {
         let frame = self.sample.frame;
         let render_view = orbit_view(
             frame.body_to_render_point(self.center),
@@ -463,6 +476,53 @@ impl Scene {
             exposure,
         );
         frame.view_in_body(&render_view)
+    }
+
+    /// Owned pilot-camera framing of the vehicle, staged in body space. The
+    /// craft orientation is recovered from the published mesh instance so the
+    /// camera always agrees with the rendered mesh. A degenerate frame falls
+    /// back to a finite elevated view; physics state is never touched here.
+    fn vehicle_view(&self, width: u32, height: u32, exposure: f32) -> Option<ViewParams> {
+        use thessa_flight_authority::presentation::x15_asset_to_craft_rotation;
+        let (_, instance) = self.vehicle.as_ref()?;
+        let asset = x15_asset_to_craft_rotation().as_dquat().conjugate();
+        let craft = (instance.rotation * asset).normalize();
+        let up_body = self.center.try_normalize()?;
+        let orientation = glam::Quat::from_xyzw(
+            craft.x as f32,
+            craft.y as f32,
+            craft.z as f32,
+            craft.w as f32,
+        );
+        let local_up = glam::Vec3::new(up_body.x as f32, up_body.y as f32, up_body.z as f32);
+        let (eye, look_target, up) =
+            self.camera
+                .offsets(orientation, local_up)
+                .unwrap_or_else(|| {
+                    // Finite elevated fallback with an orthogonal reference axis; the
+                    // primary path above is total for the validated pipeline.
+                    let east =
+                        glam::Vec3::new(self.east.x as f32, self.east.y as f32, self.east.z as f32);
+                    (local_up * self.camera.distance_m(), glam::Vec3::ZERO, east)
+                });
+        let to_body = |v: glam::Vec3| DVec3::new(v.x as f64, v.y as f64, v.z as f64);
+        let eye_m = self.center + to_body(eye);
+        let target_m = self.center + to_body(look_target);
+        let up_m = to_body(up);
+        if !eye_m.is_finite() || !target_m.is_finite() || !up_m.is_finite() {
+            return None;
+        }
+        Some(ViewParams {
+            world_from_view: glam::dcamera::rh::view::look_at_mat4(eye_m, target_m, up_m).inverse(),
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                0.9,
+                width as f64 / height as f64,
+                1.0,
+                1e8,
+            ),
+            world_position_m: eye_m,
+            exposure,
+        })
     }
 }
 
@@ -664,6 +724,9 @@ mod tests {
         }
         let after = render(&mut scene, &mut terrain, &mut mesh);
         assert_ne!(before, after);
+        scene.camera.set_chase(true);
+        let chase = render(&mut scene, &mut terrain, &mut mesh);
+        assert_ne!(after, chase, "chase framing must change the shared view");
         assert_eq!(mesh.draw_stats().instances, 1);
         assert_eq!(mesh.draw_stats().triangles, 78465);
         assert!(!scene.lighting_dirty);
@@ -682,15 +745,82 @@ mod tests {
                 .is_some()
         );
         assert_eq!(scene.up, DVec3::Y);
-        for distance in [8.0, 32.0, 180.0] {
-            scene.distance = distance;
-            for angle in [0.0, 0.5, 1.5, 3.0, 4.5, 6.0] {
-                scene.angle = angle;
-                assert!(
-                    thessa_render_wgpu::view::ViewUniformBlock::new(&scene.view(1280, 720, 1.0))
-                        .is_some()
-                );
+        assert!(!scene.camera.chase());
+        assert_eq!(scene.camera.distance_m(), 32.0);
+        for chase in [false, true] {
+            scene.camera.set_chase(chase);
+            for distance in [8.0, 32.0, 180.0] {
+                scene.camera.set_distance_m(distance);
+                for yaw in [0.0, 0.5, 1.5, 3.0, 4.5, 6.0] {
+                    scene.camera.orbit_yaw(yaw);
+                    let view = scene.view(1280, 720, 1.0);
+                    assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
+                    assert!(view.world_position_m.is_finite());
+                }
             }
+            scene.camera.reset();
+        }
+    }
+
+    #[test]
+    fn survey_view_ignores_shared_camera_while_vehicle_view_tracks_it() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        let before = scene.view(1280, 720, 1.0).world_position_m;
+        scene.camera.set_chase(true);
+        scene.camera.orbit_yaw(1.2);
+        scene.camera.zoom_by_factor(2.0);
+        scene.camera.pan_by(50.0, -30.0);
+        assert_eq!(scene.view(1280, 720, 1.0).world_position_m, before);
+
+        scene.enable_vehicle_preview().unwrap();
+        scene.camera.reset();
+        scene.camera.set_chase(false);
+        let orbit_eye = scene.view(1280, 720, 1.0).world_position_m;
+        assert!(((orbit_eye - scene.center).length() - 32.0).abs() < 1e-3);
+        scene.camera.orbit_yaw(0.7);
+        let yawed = scene.view(1280, 720, 1.0).world_position_m;
+        assert!((yawed - orbit_eye).length() > 0.5);
+        scene.camera.set_chase(true);
+        let chase_eye = scene.view(1280, 720, 1.0).world_position_m;
+        assert!((chase_eye - yawed).length() > 0.5);
+        scene.camera.reset();
+        assert!(scene.camera.chase(), "reset preserves the chase selection");
+        assert_eq!(scene.camera.distance_m(), 32.0);
+        assert_eq!(scene.camera.pan(), glam::Vec2::ZERO);
+    }
+
+    #[test]
+    fn camera_gestures_never_touch_flight_physics() {
+        use thessa_flight_authority::{ControlMode, presentation::FlightPose};
+        let mut scene = Scene::load(Default::default()).unwrap();
+        let mut reference = scene.celestial.initial_flight().unwrap();
+        reference.initialize_world_site(
+            scene.stream.field().clone(),
+            scene.launch_site,
+            scene.celestial.ephemeris(),
+        );
+        scene.enable_live_flight().unwrap();
+        for step in 0..10 {
+            scene.camera.orbit_yaw(0.05 * (step as f32 + 1.0));
+            scene.camera.zoom_by_factor(1.01);
+            scene.camera.pan_by(3.0, -2.0);
+            if step == 5 {
+                scene.camera.toggle_chase();
+            }
+            reference
+                .advance(
+                    scene.celestial.ephemeris(),
+                    ControlMode::Navball,
+                    1.0 / 60.0,
+                )
+                .unwrap();
+            scene.advance_flight(1.0 / 60.0, None).unwrap();
+            let flight = scene.flight.as_ref().unwrap();
+            assert_eq!(flight.relative_position_m, reference.relative_position_m);
+            assert_eq!(flight.flight_time_s, reference.flight_time_s);
+            let pose = FlightPose::from_authority(&reference).unwrap();
+            assert_eq!(scene.sample.time, pose.time());
+            assert!(scene.view(1280, 720, 1.0).world_position_m.is_finite());
         }
     }
 

@@ -5,6 +5,8 @@ use thessa_render_wgpu::Backend;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
     pub vehicle_preview: bool,
+    pub chase: bool,
+    pub reset_camera: bool,
     pub angle: f64,
     pub distance: f64,
     pub exposure_ev100: f32,
@@ -15,8 +17,14 @@ impl Controls {
     pub fn from_scene(scene: &crate::scene::Scene) -> Self {
         Self {
             vehicle_preview: scene.vehicle_preview(),
+            chase: scene.camera.chase(),
+            reset_camera: false,
             angle: scene.angle,
-            distance: scene.distance,
+            distance: if scene.vehicle_preview() {
+                f64::from(scene.camera.distance_m())
+            } else {
+                scene.distance
+            },
             exposure_ev100: scene.requested.renderer.exposure_ev100,
             vsync: scene.requested.renderer.vsync,
         }
@@ -24,8 +32,24 @@ impl Controls {
 
     /// Graphics edits remain requests and must go through capability resolution.
     pub fn apply(self, scene: &mut crate::scene::Scene) {
+        scene.camera.set_chase(self.chase);
+        if self.reset_camera {
+            if scene.vehicle_preview() {
+                scene.camera.reset();
+            } else {
+                scene.angle = 0.0;
+                scene.distance = 30_000.0;
+            }
+            scene.requested.renderer.exposure_ev100 = self.exposure_ev100;
+            scene.requested.renderer.vsync = self.vsync;
+            return;
+        }
         scene.angle = self.angle;
-        scene.distance = self.distance;
+        if scene.vehicle_preview() {
+            scene.camera.set_distance_m(self.distance as f32);
+        } else {
+            scene.distance = self.distance;
+        }
         scene.requested.renderer.exposure_ev100 = self.exposure_ev100;
         scene.requested.renderer.vsync = self.vsync;
     }
@@ -35,6 +59,7 @@ impl Controls {
 pub struct Stats {
     pub live_flight: bool,
     pub flight_stopped: bool,
+    pub chase: bool,
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
     pub sim_time_s: f64,
@@ -53,6 +78,7 @@ impl Stats {
             submitted_frames: frames,
             live_flight: scene.live_flight(),
             flight_stopped: scene.flight_stopped(),
+            chase: scene.camera.chase(),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
@@ -195,6 +221,8 @@ fn widgets(
                         },
                         if stats.flight_stopped {
                             "Local flight stopped (last valid presentation)"
+                        } else if stats.chase {
+                            "Local flight · COAST · Navball hold · chase"
                         } else {
                             "Local flight · COAST · Navball hold"
                         },
@@ -222,14 +250,18 @@ fn widgets(
                 ));
                 ui.small("Host wall time, not GPU timing or game FPS.");
                 ui.separator();
-                ui.add(
-                    egui::Slider::new(
-                        &mut controls.angle,
-                        -std::f64::consts::PI..=std::f64::consts::PI,
-                    )
-                    .clamping(egui::SliderClamping::Edits)
-                    .text("Orbit / rad"),
-                );
+                if controls.vehicle_preview {
+                    ui.checkbox(&mut controls.chase, "Chase camera (follow craft attitude)");
+                } else {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut controls.angle,
+                            -std::f64::consts::PI..=std::f64::consts::PI,
+                        )
+                        .clamping(egui::SliderClamping::Edits)
+                        .text("Orbit / rad"),
+                    );
+                }
                 ui.add(
                     egui::Slider::new(
                         &mut controls.distance,
@@ -243,12 +275,13 @@ fn widgets(
                     .text("Distance / m"),
                 );
                 if ui.button("Reset camera").clicked() {
-                    controls.angle = 0.0;
-                    controls.distance = if controls.vehicle_preview {
-                        32.0
+                    controls.reset_camera = true;
+                    if controls.vehicle_preview {
+                        controls.chase = false;
                     } else {
-                        30_000.0
-                    };
+                        controls.angle = 0.0;
+                        controls.distance = 30_000.0;
+                    }
                 }
                 ui.add(
                     egui::Slider::new(&mut controls.exposure_ev100, 1.0..=20.0)
@@ -274,6 +307,8 @@ mod tests {
     fn controls() -> Controls {
         Controls {
             vehicle_preview: false,
+            chase: false,
+            reset_camera: false,
             angle: 8.0,
             distance: 30_000.0,
             exposure_ev100: 13.0,
@@ -282,10 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn passive_vehicle_hud_preserves_close_camera_distance() {
-        let mut controls = controls();
-        controls.vehicle_preview = true;
-        controls.distance = 32.0;
+    fn vehicle_hud_reset_restores_shared_camera_and_preserves_survey() {
         let context = context();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -294,9 +326,16 @@ mod tests {
             )),
             ..Default::default()
         };
+        // Vehicle preview: the orbit slider is hidden (the shared quaternion
+        // orbit has no single-angle widget) and reset restores the owned
+        // pilot camera instead of touching survey state.
+        let mut controls = controls();
+        controls.vehicle_preview = true;
+        controls.distance = 32.0;
         widgets(&context, input, &mut controls, &Stats::default(), "test")
             .drop_without_applying_deltas();
         assert_eq!(controls.distance, 32.0);
+        assert!(!controls.reset_camera);
     }
 
     fn input(width: u32, height: u32, scale: f32) -> egui::RawInput {

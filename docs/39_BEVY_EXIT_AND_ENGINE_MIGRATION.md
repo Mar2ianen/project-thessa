@@ -1559,6 +1559,121 @@ or equal-workload performance parity; audio and networking were not validated.
 
 ![Same completed flight time, swept tracking orbit camera](artifacts/live-flight-flight-sweep-2026-10-16.png)
 
+### Owned pilot-camera continuation (2026-10-16)
+
+The next slice migrates the flight camera controller without touching physics.
+GPL `flight-authority::camera::FlightCamera` owns the existing pilot camera
+policy with glam-only math and no Bevy/wgpu/clock/ECS handles: quaternion
+orbit (no polar clamp), chase framing that follows craft attitude, camera-axis
+pan, exponential scroll zoom and reset. Gesture factors, limits, clamps and the
+eye/target/up basis are extracted unchanged from the shipped pilot; overflow
+and degenerate frames fail closed (previous view kept, no NaNs) instead of
+poisoning the camera. Hosts own gestures, frame placement and look-at
+construction, so the same offsets drive Bevy `Transform` in the old client and
+body-space `ViewParams` in the native viewer.
+
+The old pilot stores the shared controller in `PilotHudState` and converts its
+offsets through the unchanged look-at; mouse drags, wheel, `V` chase toggle
+and <code>Backquote</code> reset keep their legacy factors and gating. Autobench
+camera orbits and the HUD camera button use the same setters. The native
+vehicle/preview view recovers the body-frame craft orientation from the
+published mesh instance (so the camera always agrees with the rendered mesh),
+stages eye/target/up in body space and builds the same perspective the survey
+view uses. The terrain-only survey view is deliberately untouched: it mirrors
+the old map/survey camera, and changing its framing would invalidate the
+terrain-only A/B workload comparison. Camera gestures verifiably never touch
+`FlightAuthority`: a dedicated regression advances the live trajectory with
+the camera orbiting/zooming/panning/chasing and still matches direct
+authority advancement exactly.
+
+Native input mapping: arrows yaw/zoom the active camera, `V` toggles chase in
+vehicle mode, <code>Backquote</code> resets the active camera, right-drag orbits
+and middle-drag pans from presses outside the HUD, wheel zooms when the HUD
+does not consume it. The HUD shows the chase checkbox and distance slider in
+vehicle mode (the single-angle orbit slider belongs to the survey view only)
+and a one-shot camera reset. Headless `--chase` selects chase framing for
+`--flight`/`--vehicle-preview`; `--sweep` yaws the shared orbit in vehicle
+mode and the survey angle otherwise. These are validation controls, not a new
+graphics effect or warp system.
+
+```sh
+cargo run --release -p thessa-terrain-native -- --flight
+cargo run --release -p thessa-terrain-native -- --flight --chase --headless flight-chase.png --hud --frames 600 --prestream-seconds 10
+cargo bench -p thessa-flight-authority --bench camera
+```
+
+Regressions pin the shipped defaults/factors/clamps, invalid-demand
+no-op preservation, bit-exact offsets against a verbatim copy of the legacy
+math across orientations/frames/states, the ported chase-framing layout, polar
+pole traversal without clamping, survey-view independence from the shared
+camera, gesture/physics separation and finite degenerate fallbacks. Hardware
+tests render the actual advancing model in both orbit and chase framing into
+the existing terrain color/depth targets. CLI misuse (`--chase` without a
+vehicle mode) is rejected before loading assets/GPU. No new unsafe code,
+external dependencies, devices, scene readback or intermediate scene targets.
+
+**Validation and measurements.** On the Radeon 880M, the terrain-only 1280×720
+HUD A/B/B/A run (600 measured + 30 warm-up frames, 10 s pre-stream) measured
+baseline **2.523 / 2.698 ms** and new **2.707 / 2.647 ms** medians. Every run
+ended at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications or capacity refusals; the survey framing is untouched, so this
+A/B stays an equal workload. These overlapping measurements include async
+material work and unlocked clocks; they establish neither a speedup nor an
+isolated adapter tax. The preserved baseline executable is the exact `77ee5d4`
+build from the static-mesh checkpoint.
+
+Live local-flight runs reached **10.5 s** completed authority/presentation
+time with identical final relative coordinates in all three camera modes and
+no stopped flight: orbit **3.247 ms**, chase **2.802 ms** and yaw-sweep
+**2.958 ms** medians (600 measured + 30 warm-up frames, HUD, 10 s frozen
+pre-stream). They include full local physics demand, streaming, rendering,
+HUD and GPU completion, **not** isolated renderer/camera cost or game FPS.
+Terrain detail differs between runs (410,112 / 375,552 / 368,640 triangles;
+42 / 34 / 79 measured geometry publications, zero refusals), so do not compare
+these medians as an equal scene or subtract them to isolate camera cost. All
+runs submitted one mesh instance / two draws / 78,465 mesh triangles / 640
+frame upload bytes. The frozen preview measured **3.061 ms** with 349 tiles /
+426,240 triangles. Its default orbit azimuth faces the unlit broadside at the
+polar-night site: the framing is verified broadside-centered at 32 m
+(`cos(view, nose) = 0` in the regression geometry), and a yawed diagnostic
+shows the fully lit side. No ambient/fill light is manufactured; this is the
+pre-existing direct-only lighting boundary, not a camera regression.
+
+The shared-controller microbenchmark measured **120 ns** median per
+eye/target/up computation and **36.669 µs** for 1,024 (1,000 samples each;
+p95 **130 ns / 76.813 µs**), covering basis/orbit/pan math and timer/barriers
+only. The checked-pose bench is unchanged (**90 ns / 21.971 µs** medians).
+Native Wayland chase smoke requested **1,200** presentations in **10.159 s**
+(**118.1 requests/s**, not display/game FPS), exited 0, and finished at
+**10.142 s** completed simulation with **0.007690 s** backlog, no flight stop
+and no refusals. Window elapsed clamping and cooperative scheduling do not
+promise real-time simulation; this run does **not** establish 1× realtime
+throughput.
+
+Captures and machine-readable methodology/results are recorded in
+`artifacts/owned-flight-camera-2026-10-16.json`.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, **1,768** workspace lib/bin + **52**
+integration + **24** Bevy-CBT hardware + **4** native GPU + **3** native-window
+tests = **1,851 successful tests**. Native GPU live-flight coverage renders both
+orbit and chase framing of the advancing model into the existing terrain
+color/depth targets. Native-window regressions exercise terrain-only HUD/no-HUD
+teardown, live-flight HUD/no-HUD advance with equal
+authority/presentation time and no stopped flight, and chase advance with
+`chase=true` telemetry. Local review covered camera/pose ownership, bit-exact
+framing migration, fail-closed invalid/degenerate handling, gesture/physics
+separation, survey-workload preservation, host clock/gesture boundaries and
+GPL/MIT separation (no game logic moved into MIT crates, no new crate).
+The debug legacy Bevy pilot also ran **unpaused**, saved a flight screenshot
+and exited 0 using the existing local fallback (embedded server executable
+absent). Its different camera, game UI, effects and elapsed time are not visual
+or equal-workload performance parity; audio and networking were not validated.
+
+![Native live COAST flight through the owned pilot camera](artifacts/owned-camera-flight-2026-10-16.png)
+
+![Same flight in chase framing, following craft attitude](artifacts/owned-camera-flight-chase-2026-10-16.png)
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

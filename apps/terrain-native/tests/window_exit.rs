@@ -24,6 +24,26 @@ fn hud_and_terrain_only_windows_exit_cleanly() {
 
 #[test]
 #[ignore = "requires a native Wayland/X11 display and wgpu adapter"]
+fn live_flight_chase_windows_advance_and_exit() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
+        .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .args(["--flight", "--chase", "--hud", "--frames", "16"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "--chase: {:?}\nstdout: {stdout}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(stdout.contains("window_presented_frames=16"));
+    assert!(stdout.contains("stopped=false"));
+    assert!(stdout.contains("chase=true"));
+}
+
+#[test]
+#[ignore = "requires a native Wayland/X11 display and wgpu adapter"]
 fn live_flight_windows_advance_and_exit_with_or_without_hud() {
     for hud in ["--hud", "--no-hud"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))

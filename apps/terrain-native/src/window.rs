@@ -4,7 +4,7 @@ use std::{error::Error, sync::Arc, time::Instant};
 use thessa_render_wgpu::{Backend, terrain::TerrainRenderer};
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
@@ -285,6 +285,11 @@ struct App {
     frames: u32,
     started: Option<Instant>,
     hud_enabled: bool,
+    right_held: bool,
+    middle_held: bool,
+    right_consumed: bool,
+    middle_consumed: bool,
+    last_cursor: Option<(f64, f64)>,
 }
 
 impl ApplicationHandler for App {
@@ -344,14 +349,90 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                let vehicle = self.scene.vehicle_preview();
                 match camera_shortcut(event.physical_key, consumed) {
                     Some(Shortcut::Exit) => event_loop.exit(),
-                    Some(Shortcut::Orbit(delta)) => self.scene.angle += delta,
+                    Some(Shortcut::Orbit(delta)) => {
+                        if vehicle {
+                            self.scene.camera.orbit_yaw(delta as f32);
+                        } else {
+                            self.scene.angle += delta;
+                        }
+                    }
                     Some(Shortcut::Zoom(factor)) => {
-                        let (min, max, _) = self.scene.camera_distance_limits();
-                        self.scene.distance = (self.scene.distance * factor).clamp(min, max)
+                        if vehicle {
+                            self.scene.camera.zoom_by_factor(factor as f32);
+                        } else {
+                            let (min, max, _) = self.scene.camera_distance_limits();
+                            self.scene.distance = (self.scene.distance * factor).clamp(min, max);
+                        }
+                    }
+                    Some(Shortcut::ToggleChase) => {
+                        if vehicle {
+                            self.scene.camera.toggle_chase();
+                        }
+                    }
+                    Some(Shortcut::ResetView) => {
+                        if vehicle {
+                            self.scene.camera.reset();
+                        } else {
+                            self.scene.angle = 0.0;
+                            self.scene.distance = 30_000.0;
+                        }
                     }
                     _ => {}
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                match button {
+                    MouseButton::Right => {
+                        self.right_held = pressed;
+                        if pressed {
+                            self.right_consumed = consumed;
+                        }
+                    }
+                    MouseButton::Middle => {
+                        self.middle_held = pressed;
+                        if pressed {
+                            self.middle_consumed = consumed;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let (x, y) = (position.x, position.y);
+                if let Some((last_x, last_y)) = self.last_cursor {
+                    let (dx, dy) = ((x - last_x) as f32, (y - last_y) as f32);
+                    if drag_delta(
+                        self.right_held,
+                        self.right_consumed,
+                        self.scene.vehicle_preview(),
+                        dx,
+                        dy,
+                    )
+                    .is_some()
+                    {
+                        self.scene.camera.drag_orbit(dx, dy);
+                    }
+                    if drag_delta(
+                        self.middle_held,
+                        self.middle_consumed,
+                        self.scene.vehicle_preview(),
+                        dx,
+                        dy,
+                    )
+                    .is_some()
+                    {
+                        self.scene.camera.pan_by(dx, dy);
+                    }
+                }
+                self.last_cursor = Some((x, y));
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if !consumed && self.scene.vehicle_preview() {
+                    self.scene.camera.zoom(wheel_lines(delta));
                 }
             }
             WindowEvent::RedrawRequested => match state.draw(
@@ -402,11 +483,18 @@ impl ApplicationHandler for App {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Shortcut {
     Exit,
+    /// Yaw step in radians: survey angle in terrain mode, shared-controller
+    /// yaw in vehicle mode.
     Orbit(f64),
+    /// Multiplicative zoom factor for the active camera.
     Zoom(f64),
+    /// Vehicle-only chase toggle (matches the old pilot `V` key).
+    ToggleChase,
+    /// Restore the active camera default (matches `Backquote` in the pilot).
+    ResetView,
 }
 
 fn camera_shortcut(key: PhysicalKey, consumed: bool) -> Option<Shortcut> {
@@ -419,7 +507,32 @@ fn camera_shortcut(key: PhysicalKey, consumed: bool) -> Option<Shortcut> {
         PhysicalKey::Code(KeyCode::ArrowRight) => Some(Shortcut::Orbit(0.05)),
         PhysicalKey::Code(KeyCode::ArrowUp) => Some(Shortcut::Zoom(1.0 / 1.1)),
         PhysicalKey::Code(KeyCode::ArrowDown) => Some(Shortcut::Zoom(1.1)),
+        PhysicalKey::Code(KeyCode::KeyV) => Some(Shortcut::ToggleChase),
+        PhysicalKey::Code(KeyCode::Backquote) => Some(Shortcut::ResetView),
         _ => None,
+    }
+}
+
+/// Pure drag gate: a drag orbits/pans only while its button is held from a
+/// press outside the UI and a vehicle camera is active.
+fn drag_delta(
+    held: bool,
+    press_consumed: bool,
+    vehicle: bool,
+    dx: f32,
+    dy: f32,
+) -> Option<(f32, f32)> {
+    if held && !press_consumed && vehicle && (dx != 0.0 || dy != 0.0) {
+        Some((dx, dy))
+    } else {
+        None
+    }
+}
+
+fn wheel_lines(delta: MouseScrollDelta) -> f32 {
+    match delta {
+        MouseScrollDelta::LineDelta(_, lines) => lines,
+        MouseScrollDelta::PixelDelta(position) => position.y as f32 / 16.0,
     }
 }
 
@@ -437,6 +550,11 @@ pub fn run(
         frames: 0,
         started: None,
         hud_enabled,
+        right_held: false,
+        middle_held: false,
+        right_consumed: false,
+        middle_consumed: false,
+        last_cursor: None,
     };
     event_loop.run_app(&mut app)?;
     if let Some(error) = app.error {
@@ -457,6 +575,8 @@ mod tests {
             (KeyCode::ArrowRight, Shortcut::Orbit(0.05)),
             (KeyCode::ArrowUp, Shortcut::Zoom(1.0 / 1.1)),
             (KeyCode::ArrowDown, Shortcut::Zoom(1.1)),
+            (KeyCode::KeyV, Shortcut::ToggleChase),
+            (KeyCode::Backquote, Shortcut::ResetView),
         ] {
             assert_eq!(camera_shortcut(PhysicalKey::Code(key), true), None);
             assert_eq!(
@@ -467,6 +587,22 @@ mod tests {
         assert_eq!(
             camera_shortcut(PhysicalKey::Code(KeyCode::KeyA), false),
             None
+        );
+    }
+
+    #[test]
+    fn drag_and_wheel_gestures_stay_out_of_survey_and_ui() {
+        assert_eq!(drag_delta(true, false, true, 3.0, -2.0), Some((3.0, -2.0)));
+        assert_eq!(drag_delta(true, false, true, 0.0, 0.0), None);
+        assert_eq!(drag_delta(false, false, true, 3.0, 0.0), None);
+        assert_eq!(drag_delta(true, true, true, 3.0, 0.0), None);
+        assert_eq!(drag_delta(true, false, false, 3.0, 0.0), None);
+        assert_eq!(wheel_lines(MouseScrollDelta::LineDelta(0.0, 2.0)), 2.0);
+        assert!(
+            !wheel_lines(MouseScrollDelta::PixelDelta(
+                winit::dpi::PhysicalPosition::new(0.0, f64::NAN)
+            ))
+            .is_finite()
         );
     }
 }

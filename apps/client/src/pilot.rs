@@ -9,7 +9,7 @@ use std::path::Path;
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
-    math::{DQuat, DVec3, Mat3},
+    math::{DQuat, DVec3},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     ui::FocusPolicy,
 };
@@ -27,9 +27,7 @@ const HUD_AMBER: Color = Color::srgb(0.98, 0.72, 0.26);
 // system map's readability curve, this scene keeps the body's authored radius
 // and the imported X-15 mesh in the same unit system.
 const PILOT_START_ALTITUDE_M: f64 = 500.0;
-const PILOT_CAMERA_DEFAULT_DISTANCE_M: f32 = 32.0;
-const PILOT_CAMERA_MIN_DISTANCE_M: f32 = 8.0;
-const PILOT_CAMERA_MAX_DISTANCE_M: f32 = 180.0;
+use thessa_flight_authority::camera::FlightCamera;
 use thessa_flight_authority::presentation::{
     FlightPose, X15_AUTHORED_LENGTH_M, X15_SOURCE_LENGTH_M,
     craft_visual_orientation as render_orientation, x15_asset_to_craft_rotation,
@@ -473,13 +471,10 @@ pub(super) struct PilotHudState {
     pointer_over_ui: bool,
     show_help: bool,
     show_telemetry: bool,
-    pub(super) pilot_camera_orbit: Quat,
-    pilot_camera_chase: bool,
+    pub(super) camera: FlightCamera,
     ui_hidden: bool,
     precision_controls: bool,
     sas_inverted: bool,
-    pilot_camera_distance: f32,
-    pilot_camera_pan: Vec2,
     /// Desired direction hand-off for the Mouse Aim flight-assist layer.
     pub(super) desired_direction: Vec3,
 }
@@ -497,13 +492,10 @@ impl Default for PilotHudState {
             pointer_over_ui: false,
             show_help: false,
             show_telemetry: false,
-            pilot_camera_orbit: Quat::from_rotation_x(-0.18),
-            pilot_camera_chase: false,
+            camera: FlightCamera::pilot_default(),
             ui_hidden: false,
             precision_controls: false,
             sas_inverted: false,
-            pilot_camera_distance: PILOT_CAMERA_DEFAULT_DISTANCE_M,
-            pilot_camera_pan: Vec2::ZERO,
             desired_direction: -Vec3::Z,
         }
     }
@@ -511,7 +503,7 @@ impl Default for PilotHudState {
 
 impl PilotHudState {
     pub(super) fn audio_camera_distance_m(&self) -> f64 {
-        f64::from(self.pilot_camera_distance)
+        f64::from(self.camera.distance_m())
     }
 
     pub(super) fn audio_warning_active(&self, warning: &str) -> bool {
@@ -520,8 +512,8 @@ impl PilotHudState {
 
     pub(super) fn set_benchmark_chase_view(&mut self) {
         self.view_mode = ClientViewMode::Pilot;
-        self.pilot_camera_chase = true;
-        self.pilot_camera_orbit = Quat::from_rotation_x(-0.65);
+        self.camera.set_chase(true);
+        self.camera.set_orbit(Quat::from_rotation_x(-0.65));
     }
 }
 
@@ -588,7 +580,7 @@ fn engage_flyby(
     runtime.sas_enabled = true;
     runtime.input_engine_active = true;
     runtime.engine_active = true;
-    state.pilot_camera_chase = true;
+    state.camera.set_chase(true);
 }
 
 /// Pitch stick for the flyby: control_input.x > 0 is stick-back = nose up
@@ -956,10 +948,11 @@ fn update_pilot_preview(
                 + runtime.planet_radius_m * 2.0) as f32;
         }
         **camera = pilot_camera_transform(
-            &state,
+            &state.camera,
             runtime.render_orientation,
             pilot_render_offset(runtime.render_relative_position_m).normalize(),
-        );
+        )
+        .unwrap_or(**camera);
     }
     for (mut transform, mut visibility) in &mut preview {
         *visibility = if active {
@@ -1292,36 +1285,14 @@ pub(super) fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
 }
 
 fn pilot_camera_transform(
-    state: &PilotHudState,
+    camera: &FlightCamera,
     craft_orientation: Quat,
     local_up: Vec3,
-) -> Transform {
-    // Quaternion orbit has no polar clamp and retains camera-up through
-    // vertical crossings. Panning uses camera axes, not fixed world axes.
-    let forward = craft_orientation * Vec3::Y;
-    let basis = if state.pilot_camera_chase {
-        // NOTE: parenthesize the negation! `-craft_orientation * v` negates
-        // the QUATERNION (unary minus binds tighter), and -q is the same
-        // rotation as q — the sign silently vanishes and the basis becomes
-        // a reflection that from_mat3 turns into a garbage orientation
-        // (measured: sky instead of planet in chase view).
-        Quat::from_mat3(&Mat3::from_cols(
-            -(craft_orientation * Vec3::X),
-            -(craft_orientation * Vec3::Z),
-            -forward,
-        ))
-    } else {
-        let north = (Vec3::Y - local_up * local_up.y)
-            .try_normalize()
-            .unwrap_or(Vec3::Z);
-        let east = north.cross(local_up).normalize();
-        Quat::from_mat3(&Mat3::from_cols(east, local_up, -north))
-    };
-    let orbit = basis * state.pilot_camera_orbit;
-    let up = orbit * Vec3::Y;
-    let target = orbit * Vec3::new(state.pilot_camera_pan.x, state.pilot_camera_pan.y, 0.0);
-    Transform::from_translation(target + orbit * Vec3::Z * state.pilot_camera_distance)
-        .looking_at(target - up * (state.pilot_camera_distance * 0.12), up)
+) -> Option<Transform> {
+    // Shared owned controller; frame placement stays host-side. A degenerate
+    // frame preserves the previous camera instead of publishing NaNs.
+    let (eye, look_target, up) = camera.offsets(craft_orientation, local_up)?;
+    Some(Transform::from_translation(eye).looking_at(look_target, up))
 }
 
 fn keyboard_control_input(keys: &ButtonInput<KeyCode>) -> DVec3 {
@@ -1478,29 +1449,19 @@ fn pilot_input(
         }
         let mouse_delta = mouse_motion.delta;
         if mouse_buttons.pressed(MouseButton::Right) {
-            state.pilot_camera_orbit = (state.pilot_camera_orbit
-                * Quat::from_rotation_y(-mouse_delta.x * 0.005)
-                * Quat::from_rotation_x(-mouse_delta.y * 0.005))
-            .normalize();
+            state.camera.drag_orbit(mouse_delta.x, mouse_delta.y);
         }
         if mouse_buttons.pressed(MouseButton::Middle) {
-            let pan_scale = state.pilot_camera_distance * 0.0018;
-            state.pilot_camera_pan += Vec2::new(-mouse_delta.x, mouse_delta.y) * pan_scale;
-            state.pilot_camera_pan = state
-                .pilot_camera_pan
-                .clamp(Vec2::splat(-4.0), Vec2::splat(4.0));
+            state.camera.pan_by(mouse_delta.x, mouse_delta.y);
         }
         if scroll != 0.0 && !state.show_help && !state.pointer_over_ui {
-            state.pilot_camera_distance = (state.pilot_camera_distance * (-scroll * 0.09).exp())
-                .clamp(PILOT_CAMERA_MIN_DISTANCE_M, PILOT_CAMERA_MAX_DISTANCE_M);
+            state.camera.zoom(scroll);
         }
         if keys.just_pressed(KeyCode::Backquote) {
-            state.pilot_camera_orbit = Quat::from_rotation_x(-0.18);
-            state.pilot_camera_distance = PILOT_CAMERA_DEFAULT_DISTANCE_M;
-            state.pilot_camera_pan = Vec2::ZERO;
+            state.camera.reset();
         }
         if keys.just_pressed(KeyCode::KeyV) {
-            state.pilot_camera_chase = !state.pilot_camera_chase;
+            state.camera.toggle_chase();
         }
         if keys.just_pressed(KeyCode::CapsLock) {
             state.precision_controls = !state.precision_controls;
@@ -2190,11 +2151,15 @@ mod tests {
         // this fails, the chase camera — not streaming, materials, or
         // shells — hides the world.
         let hud = PilotHudState {
-            pilot_camera_chase: true,
+            camera: {
+                let mut camera = FlightCamera::pilot_default();
+                camera.set_chase(true);
+                camera
+            },
             ..PilotHudState::default()
         };
         let craft_orientation = Quat::IDENTITY;
-        let camera = pilot_camera_transform(&hud, craft_orientation, Vec3::NEG_Z);
+        let camera = pilot_camera_transform(&hud.camera, craft_orientation, Vec3::NEG_Z).unwrap();
         assert!(camera.translation.is_finite());
         assert!(camera.rotation.is_finite() && camera.rotation.is_normalized());
         // Camera looks along its -Z; up must stay world-up (no 180 roll).
@@ -2238,11 +2203,15 @@ mod tests {
         flight.initialize_world_site(field, sites[0], &ephemeris);
         flight.sync_view();
         let hud = PilotHudState {
-            pilot_camera_chase: true,
+            camera: {
+                let mut camera = FlightCamera::pilot_default();
+                camera.set_chase(true);
+                camera
+            },
             ..PilotHudState::default()
         };
         let up = pilot_render_offset(flight.render_relative_position_m).normalize();
-        let camera = pilot_camera_transform(&hud, flight.render_orientation, up);
+        let camera = pilot_camera_transform(&hud.camera, flight.render_orientation, up).unwrap();
         let cam_forward = (camera.rotation * Vec3::NEG_Z).normalize();
         let cam_up = (camera.rotation * Vec3::Y).normalize();
         // Camera near the craft (32 m setting), finite, unrolled.
@@ -2577,15 +2546,21 @@ mod tests {
     fn pilot_camera_orbits_through_both_poles_without_clamping_or_singularities() {
         let mut hud = PilotHudState::default();
         for degrees in 0..=720 {
-            hud.pilot_camera_orbit = Quat::from_rotation_x((degrees as f32).to_radians());
-            let camera = pilot_camera_transform(&hud, Quat::IDENTITY, Vec3::Y);
+            hud.camera
+                .set_orbit(Quat::from_rotation_x((degrees as f32).to_radians()));
+            let camera = pilot_camera_transform(&hud.camera, Quat::IDENTITY, Vec3::Y).unwrap();
             assert!(camera.rotation.is_finite());
-            assert!((camera.translation.length() - hud.pilot_camera_distance).abs() < 1.0e-4);
+            assert!((camera.translation.length() - hud.camera.distance_m()).abs() < 1.0e-4);
         }
-        hud.pilot_camera_orbit = Quat::IDENTITY;
-        let first = pilot_camera_transform(&hud, Quat::IDENTITY, Vec3::Y).translation;
-        hud.pilot_camera_orbit = Quat::from_rotation_x(std::f32::consts::PI);
-        let opposite = pilot_camera_transform(&hud, Quat::IDENTITY, Vec3::Y).translation;
+        hud.camera.set_orbit(Quat::IDENTITY);
+        let first = pilot_camera_transform(&hud.camera, Quat::IDENTITY, Vec3::Y)
+            .unwrap()
+            .translation;
+        hud.camera
+            .set_orbit(Quat::from_rotation_x(std::f32::consts::PI));
+        let opposite = pilot_camera_transform(&hud.camera, Quat::IDENTITY, Vec3::Y)
+            .unwrap()
+            .translation;
         assert!(first.dot(opposite) < 0.0);
     }
 

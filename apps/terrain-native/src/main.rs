@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sim_step = 0.0_f64;
     let mut vehicle_preview = false;
     let mut live_flight = false;
+    let mut chase = false;
     let mut flight_step = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -43,6 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--sweep" => sweep = true,
             "--vehicle-preview" => vehicle_preview = true,
             "--flight" => live_flight = true,
+            "--chase" => chase = true,
             "--flight-step" => {
                 flight_step = Some(
                     args.next()
@@ -69,6 +71,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "--flight runs the existing local FlightAuthority from canonical COAST launch with Navball attitude hold and tracking orbit camera. No flight-input/network/controller-UI parity. Requires --sim-time 0 --sim-step 0, incompatible with --vehicle-preview.\nHeadless --flight-step SECONDS (default 1/60, finite 0<step<=0.1) requests simulation elapsed per frame, including 30 warmup frames; pre-stream stays frozen. Window uses elapsed wall demand clamped to 0.1s and the old local client's 8ms work budget; no new physics dt or warp."
                 );
+                println!(
+                    "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -79,6 +84,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if live_flight && (vehicle_preview || sim_time != 0.0 || sim_step != 0.0) {
         return Err("--flight requires --sim-time 0 --sim-step 0 and no --vehicle-preview".into());
+    }
+    if chase && !live_flight && !vehicle_preview {
+        return Err("--chase requires --flight or --vehicle-preview".into());
     }
     if flight_step.is_some() && (!live_flight || headless.is_none()) {
         return Err("--flight-step requires --flight and --headless".into());
@@ -119,6 +127,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if live_flight {
         scene.enable_live_flight()?;
+    }
+    if chase {
+        scene.camera.set_chase(true);
     }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",
@@ -165,7 +176,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ))?;
             }
             if sweep {
-                scene.angle = frame as f64 * 0.006;
+                if scene.vehicle_preview() {
+                    scene.camera.orbit_yaw(0.006);
+                } else {
+                    scene.angle = frame as f64 * 0.006;
+                }
             }
             #[cfg(feature = "hud")]
             let hud_output = hud.as_ref().map(|hud| {

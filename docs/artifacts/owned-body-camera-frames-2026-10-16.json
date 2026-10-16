@@ -1,0 +1,115 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/body-camera-frames",
+  "base_commit": "5a1c01eb5a48d30e7ea42b2661c99f6edb9489eb",
+  "baseline_binary_sha256": "c3a1172e3a142e7b8bb8ec0b69fa15d42880f69c003fda583508316dc3dfe334",
+  "binary_sha256": "a6ed4b699321c7f6357163196260f0b5d707d3e8f708b80e361deb3970b798f5",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile and hud feature",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "settings": {"graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b", "exposure_ev100": 13.0, "vsync": false},
+  "ownership": {
+    "mit": "render-core::BodyFrame and ViewParams; glam only, no backend/game handles, unsafe forbidden",
+    "gpl": "existing flight period/axis convention remains in flight-authority::presentation; native app samples baked ephemeris and direct stellar lighting",
+    "bevy_consumer": "terrain CPU/GPU body transforms, post-clearance camera/forward and stream-origin selection",
+    "native_consumer": "origin-local render camera mapped to body frame; time-consistent body-fixed direct light directions",
+    "new_external_dependencies": [], "new_internal_crates": ["thessa-render-core (MIT)"],
+    "new_unsafe_code": false, "native_bevy_runtime_crates": [], "native_wgpu_versions": ["30.0.1"],
+    "extra_gpu_devices_scene_readbacks_or_intermediate_scene_targets": 0,
+    "spin_boundary": "unchanged uniform flight spin: explicit period, else tidal-lock design period, else 80h; not exact libration/tilt/prime-meridian parity with gravity harmonics"
+  },
+  "stationary_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "order": ["baseline-1", "new-1", "new-2", "baseline-2"],
+    "size": [1280, 720], "format": "Rgba8UnormSrgb", "hud": true,
+    "measured_frames_per_run": 600, "warmup_frames_per_run": 30, "prestream_seconds_per_run": 10,
+    "final_tiles_each_run": 287, "drawn_triangles_each_run": 297216,
+    "height_cache_entries_each_run": 388, "regenerated_patches_each_run": 387,
+    "pending_height_material_jobs_each_run": [0, 4], "measured_selections_each_run": 2,
+    "measured_geometry_publications_each_run": 0, "capacity_rejections_each_run": 0,
+    "boundary": "host wall latency: presentation sample check + optional HUD construction + selection/poll/publication + camera upload + classify/raster + HUD upload/raster + GPU completion",
+    "excluded": ["CPU scene build", "renderer setup", "pre-stream", "30 warm-up frames", "capture readback/encoding"],
+    "new_hud_difference": "adds presentation-time telemetry row; A/B does not isolate frame arithmetic alone",
+    "runs": [
+      {"name": "baseline-1", "median_ms": 2.577, "p95_ms": 3.066, "p99_ms": 3.545, "max_ms": 7.939,
+       "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.456, "stream_cpu_p99_ms": 0.813, "stream_cpu_max_ms": 4.975,
+       "geometry_publications": 58, "material_cache_entries": 273, "material_update_upload_bytes": 23330460},
+      {"name": "new-1", "median_ms": 2.633, "p95_ms": 3.369, "p99_ms": 3.976, "max_ms": 10.867,
+       "stream_cpu_median_ms": 0.002, "stream_cpu_p95_ms": 0.627, "stream_cpu_p99_ms": 0.846, "stream_cpu_max_ms": 7.543,
+       "geometry_publications": 55, "material_cache_entries": 273, "material_update_upload_bytes": 23330460},
+      {"name": "new-2", "median_ms": 2.640, "p95_ms": 3.361, "p99_ms": 3.903, "max_ms": 10.860,
+       "stream_cpu_median_ms": 0.002, "stream_cpu_p95_ms": 0.750, "stream_cpu_p99_ms": 0.938, "stream_cpu_max_ms": 7.302,
+       "geometry_publications": 54, "material_cache_entries": 275, "material_update_upload_bytes": 23505220},
+      {"name": "baseline-2", "median_ms": 2.547, "p95_ms": 3.015, "p99_ms": 3.416, "max_ms": 10.544,
+       "stream_cpu_median_ms": 0.001, "stream_cpu_p95_ms": 0.473, "stream_cpu_p99_ms": 0.581, "stream_cpu_max_ms": 7.565,
+       "geometry_publications": 58, "material_cache_entries": 270, "material_update_upload_bytes": 23068320}
+    ]
+  },
+  "moving_body_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10 --sim-step 120",
+    "start_sim_time_s": 0, "final_sim_time_s": 75480, "sample_step_s": 120,
+    "final_body_inertial_m": [4821194429395.419, 3426629001.047043, 17412031.06509885],
+    "epoch_body_inertial_m": [4821999347551.93, 110131819.3678849, 192216.48109312652],
+    "median_ms": 2.709, "p95_ms": 3.449, "p99_ms": 4.495, "max_ms": 11.200,
+    "stream_cpu_median_ms": 0.005, "stream_cpu_p95_ms": 0.599, "stream_cpu_p99_ms": 0.850, "stream_cpu_max_ms": 7.926,
+    "final_tiles": 287, "drawn_triangles": 297216, "height_material_cache_entries": [388, 276], "pending_height_material_jobs": [0, 4],
+    "geometry_publications": 57, "regenerated_patches": 387, "material_update_upload_bytes": 23592600,
+    "measured_selections": 2, "measured_geometry_publications": 0, "capacity_rejections": 0,
+    "note": "body-attached camera keeps the same terrain cover while sampled body translation/spin and direct illumination change; dark image is not missing coverage"
+  },
+  "moving_body_camera_sweep": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10 --sweep --sim-time 72000 --sim-step -60",
+    "start_sim_time_s": 72000, "final_sim_time_s": 34260, "sample_step_s": -60,
+    "final_body_inertial_m": [4821752627691.46, 1782379972.3977032, 8299813.413526554],
+    "median_ms": 2.593, "p95_ms": 4.078, "p99_ms": 8.835, "max_ms": 13.383,
+    "stream_cpu_median_ms": 0.005, "stream_cpu_p95_ms": 1.085, "stream_cpu_p99_ms": 5.803, "stream_cpu_max_ms": 10.304,
+    "final_tiles": 292, "drawn_triangles": 322560, "height_material_cache_entries": [654, 265], "pending_height_material_jobs": [0, 4],
+    "geometry_publications": 112, "regenerated_patches": 778, "material_update_upload_bytes": 22631420,
+    "measured_selections": 11, "measured_geometry_publications": 55, "capacity_rejections": 0, "final_angle_rad": 3.774
+  },
+  "native_wayland_smoke": {
+    "arguments": "--frames 1200 --sim-time 72000", "hud": true, "compositor": "niri",
+    "presentation_requests": 1200, "elapsed_s": 10.793, "requests_per_second": 111.2, "exit_code": 0,
+    "final_tiles": 287, "geometry_publications": 44, "regenerated_patches": 387,
+    "height_material_cache_entries": [388, 236], "pending_height_material_jobs": [0, 4], "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor policy, not display feedback, GPU-only timing or game FPS"
+  },
+  "legacy_bevy_smoke": {
+    "build": "cargo build -p thessa-client (debug)",
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=surface THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6",
+    "exit_code": 0, "timeout_s": 90, "render_path": "gpu_mesh", "surface_bookmark": "COAST", "capture_size": [1270, 1588],
+    "log": "/tmp/opencode/body-frame-bevy-smoke.log",
+    "limitations": "embedded server binary was unavailable, so existing local-simulation fallback ran; ALSA/JACK emitted device diagnostics; not an audio/network test, visual parity result or performance comparison"
+  },
+  "core_transform_benchmark": {
+    "command": "cargo bench -p thessa-render-core --bench frames", "samples_each": 10000, "units": "nanoseconds",
+    "runs": [
+      {"operation": "1024 body-to-render points (shared frame)", "median": 2685, "p95": 5690},
+      {"operation": "1024 body-to-render points (direct arithmetic)", "median": 3477, "p95": 3487},
+      {"operation": "one render-to-body camera", "median": 30, "p95": 40}
+    ],
+    "excluded": ["ephemeris and stellar sampling", "selection/streaming", "GPU transfer and rendering"],
+    "note": "timer/compiler barriers included; short camera sample near timer-floor scale. Different barrier shapes/compiler choices prevent a standalone speedup or universal zero-overhead claim."
+  },
+  "verification": {
+    "fmt": "pass", "workspace_all_target_all_feature_clippy_deny_warnings": "pass", "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1748, "workspace_integration_tests": 47, "ignored_bevy_cbt_hardware_tests": 24,
+    "ignored_native_gpu_window_tests": 3, "successful_total": 1822,
+    "review": "local ownership/API/license/numerical review; no GPL-to-MIT transfer; one sample publishes body pose and lights; backend camera ABI unchanged; Bevy selection reads the final post-clearance camera",
+    "gpu_invariance": "eight moving-body/origin poses at astronomical coordinates yield identical non-clear raster and draw count; unchanged vertex data and zero regenerated patches",
+    "gpu_sample_publication": "isolated native pose/light stage changes rendered illumination without changing height geometry; full streaming loop verified by motion/sweep captures",
+    "logs": "/tmp/opencode/body-frame-closed-*.log"
+  },
+  "captures": [
+    {"path": "owned-body-camera-frames-2026-10-16.png", "size": [1280, 720], "sha256": "f682dca1b23acaa40f43f54fe13833314645470de531d957a07dbe904d095a33", "meaning": "new-1 stationary epoch HUD frame"},
+    {"path": "owned-body-camera-motion-2026-10-16.png", "size": [1280, 720], "sha256": "b1818ebbea87dd9359228cf9e712997d076b326beead4a6272b79b0675b020f0", "meaning": "sampled motion, time 75480s; unported atmosphere/ambient/shadows leave a very dark direct-lit view"},
+    {"path": "owned-body-camera-sweep-2026-10-16.png", "size": [1280, 720], "sha256": "ddf81f8c4381a9d5976c97c51663161e4b3eecbf4a7d64c0c5edace8f7ca4fb4", "meaning": "camera sweep with sampled rewind, time 34260s"},
+    {"path": "owned-body-camera-bevy-smoke-2026-10-16.png", "size": [1270, 1588], "sha256": "4663deca25741721de9138fbf8125ae5a35d49bf8e77abcb9bee433ac0ee5ef7", "meaning": "legacy debug Bevy local-simulation COAST smoke, not an equivalent native scene or quality claim"}
+  ],
+  "limitations": [
+    "New stationary medians were higher; additional HUD telemetry, asynchronous material work and unlocked clocks/scheduling prevent isolating a frame-mapping tax or asserting a speedup.",
+    "Uniform flight spin does not implement gravity-harmonic tilt/prime-meridian frames or exact tidal-lock libration; no physical laws or authoritative clock changed.",
+    "Old survey/controller/ECS pose inputs retain f32 local offsets/rotations; body/rebase geometry is f64, not a full controller port.",
+    "No multi-object scene, spacecraft/station rendering, production effects/UI/network lifecycle or FastRT acceleration-structure parity claim.",
+    "Shading blur/coarse relief/thin dark artifacts remain visually unaccepted. Motion illumination has no atmosphere/eclipses/shadows or full night-side rendering."
+  ]
+}

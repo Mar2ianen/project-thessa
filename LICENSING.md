@@ -16,6 +16,12 @@ Intended for:
 - reusable protocol primitives if they remain game-agnostic;
 - reusable developer tools.
 
+`crates/render-core` is MIT: it contains only backend-neutral f64 rigid-frame
+geometry and camera inputs (glam math, no game content, spin model or policy).
+The existing flight terrain spin/axis convention remains GPL in
+`flight-authority::presentation`; the GPL native viewer samples it alongside
+baked ephemerides and combines it with the reusable presentation geometry.
+
 Goal: simulation technology is independently reusable/auditable without inheriting the game's copyleft.
 
 ### GPL-3.0-or-later — game code

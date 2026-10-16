@@ -1123,6 +1123,153 @@ or whole-renderer performance estimates.
 [sweep capture](artifacts/owned-height-lifecycle-sweep-2026-10-15.png).
 Existing terrain shading/blur/dark-relief artifacts remain unaccepted.
 
+### Body/camera frame continuation (2026-10-16)
+
+`feat/body-camera-frames` continues from `5a1c01e` (height lifecycle).
+
+**Ownership and API.** MIT `thessa-render-core` owns only reusable presentation
+geometry: `BodyFrame` and `ViewParams`, with glam as its only dependency and
+unsafe forbidden. It does not own simulation state, celestial attitudes,
+projection policy, wall time, assets, ECS, Bevy, wgpu or a GPU device. The old
+`render-wgpu::view::ViewParams` path re-exports the neutral type; the existing
+464-byte WGSL uniform ABI remains in the wgpu consumer without layout changes.
+No GPL code/content is moved into MIT. The pre-existing flight period selection
+is shared in GPL `flight-authority::presentation`; it retains the exact period
+preference (explicit rotation period, tidally locked design period, otherwise
+80 hours) and x/z/-y axes.
+
+`BodyFrame::new(body_position_m, body_to_world, render_origin_m)` validates finite
+positions, subtraction and a unit quaternion (squared-length tolerance 1e-12).
+It subtracts the body and render origin in f64 **before** rotation/narrowing.
+Point mapping includes translation; direction mapping does not.
+`view_in_body` maps an origin-local render camera into the body's coordinates,
+preserving projection/exposure. Inputs must use the same presentation sample;
+an absolute astronomical camera must not be passed as an origin-local camera.
+The wgpu consumer still validates affine/invertible/finite camera/projection
+matrices and compatible camera origins before uploading anything.
+
+**Both hosts.** Bevy terrain now uses this frame for CPU tile placement, GPU
+body-transform publication, clearance mapping, and camera/forward/stream-origin
+selection. Bevy `Transform` is still a local presentation consumer, never an
+authoritative astronomical position. Reading the final camera now happens
+**after** clearance edits, fixing the previous pilot path's pre-clamp selection
+eye. The controller, survey UI, interpolation owner and ECS scheduling remain
+in the old host; this slice does not claim to have ported them.
+
+The native viewer keeps its existing body-attached orbit camera. Its render
+camera is expressed relative to the reference body's current origin, using a
+sample of baked translation and the same uniform terrain spin as flight.
+Camera/selection and stellar directions are transformed through the same body
+frame; light displacement/distance uses ephemerides sampled at the same time.
+The absolute camera is never formed by adding a metre-scale offset to the
+astronomical body position. Changed sample lighting is uploaded through the
+existing direct-light buffer only; unchanged times do no ephemeris/light work.
+A failed sample preserves the prior complete pose/lighting. Body motion alone
+does not dirty height pages or regenerate geometry.
+
+**Presentation controls, not a second simulation clock.** Defaults still use
+`SimTime::EPOCH`. `--sim-time SECONDS` selects a frozen sample in either host
+mode. Headless `--sim-step SECONDS_PER_FRAME` adds a deterministic time offset
+per rendered frame, including the 30 excluded warm-up frames. Pre-stream uses
+the initial sample. Signed time/steps are allowed for diagnostic rewind; all
+sample times must be finite. Streaming debounce still uses host elapsed time;
+it is not physics time. No wall-time-driven physics, server warp policy or
+authoritative state changes are introduced. The HUD and final headless log
+report presentation time; logs also report the body's inertial position.
+
+```sh
+# Frozen later pose with the normal window/HUD:
+cargo run --release -p thessa-terrain-native -- --sim-time 72000
+# Sample baked motion/lighting across the run, keeping the camera body-attached:
+cargo run --release -p thessa-terrain-native -- --headless moving-body.png --hud --frames 600 --prestream-seconds 10 --sim-step 120
+```
+
+**Numerical boundary.** This does not recover detail already lost in absolute
+input coordinates: at 2e12 m a binary64 component has ~0.244 mm ULP. Common
+translations at the canonical ~4.82e12 m body position have ~0.977 mm component
+ULP; the same origin-attached policy avoids adding camera offsets there. Common
+translations with representable offsets cancel exactly in the core regression;
+the native body-attached origin avoids absolute offset addition altogether.
+Moving-frame tests pin round-trip camera error below 4 nm around a 3.2 Mm body
+for normal composed unit rotations. The maximum accepted quaternion length
+error can contribute micrometre-scale error at that radius; it is not a global
+nanometre guarantee. Final GPU geometry still uses the existing f64 tile-camera
+subtraction and hi/lo f32 transport; existing height quantization is unchanged.
+
+**Scope limits.** The attitude is the flight runtime's existing **uniform-spin
+approximation**, not a new exact tidal-lock/libration, axial-tilt, pole-precession
+or prime-meridian model. Gravity harmonics retain their separate existing frame.
+Direct terrain lighting still omits eclipses, atmosphere and shadows. The
+sampled body is a frame/light source, not a newly rendered planet object.
+Multiple moving scene objects, authoritative interpolation/networking, flight
+camera/controller migration, game assets/effects/UI, device recovery and FastRT
+acceleration structures remain unfinished. No additional device, scene readback
+or intermediate color target is introduced; captures/tests alone read back.
+The old survey's local orbit offsets and ECS camera rotation are still f32;
+this is extraction of their body/rebase boundary, not replacement of every
+camera calculation with f64.
+
+Regression coverage includes a hand-computable quarter-turn, representable
+astronomical common translations, 100 moving-origin/rotation camera round trips,
+invalid/overflow poses and the tolerated quaternion-roundoff envelope; period
+precedence and axis handedness; final post-clearance Bevy camera selection;
+time-consistent canonical pose/lights and failed/unchanged sample handling; and
+CLI finite-time/headless validation. A real GPU fixture compares identical
+non-clear raster output across eight moving-body/origin samples, verifies the
+draw count and unchanged vertex buffer, and checks that the same height
+partition regenerates zero patches. A native GPU regression isolates pose/light
+publication, verifies a changed lit image, and checks unchanged height geometry.
+Full-loop sampled motion is additionally exercised by the captures below.
+
+The reusable transform benchmark is
+`cargo bench -p thessa-render-core --bench frames`: 1024 point transforms versus
+direct quaternion/translation arithmetic, plus one origin-local camera mapping.
+It excludes ephemeris/stellar sampling, selection/streaming, GPU transfers and
+rendering; compiler barriers and the timer are part of the harness.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with Rust
+warnings denied, no-default-feature viewer clippy, **1,748** workspace lib/bin +
+**47** integration + **24** Bevy-CBT hardware + **3** native GPU/window tests
+(**1,822** successful tests). The native runtime contains no Bevy and still has
+one wgpu version (30.0.1). No external dependency, unsafe code, device or render
+target was added; the new internal core crate is MIT and depends only on glam.
+
+Radeon 880M stationary A/B/B/A with HUD, 1280×720, 600 measured + 30 warm-up
+frames, 10 seconds pre-stream: old medians **2.577 / 2.547 ms**, new
+**2.633 / 2.640 ms**. All ended at 287 tiles / 297,216 triangles with zero
+measured geometry publications/refusals. New medians were higher; the HUD gained
+a telemetry row, and material scheduling/clocks differ, so these runs neither
+isolate mapping overhead nor establish a speedup. Microbenchmark medians were
+**2.685 µs** for 1024 shared point transforms (direct arithmetic **3.477 µs**)
+and **30 ns** for one camera mapping. Compiler-barrier shapes differ; the short
+camera sample is near timer-floor scale, not proof of universally free adapters.
+
+With `--sim-step 120`, the complete native loop sampled body motion through
+**75,480 s** while keeping the body-attached 287-tile cover and doing **zero**
+measured geometry publications; illumination changed with the sample. The
+combined camera sweep/rewind (`--sim-time 72000 --sim-step -60 --sweep`) exercised
+**55** measured publications with no refusal and ended at 34,260 s. A later-pose
+native Wayland window requested 1,200 presentations in 10.793 seconds and exited
+0 (**111.2 requests/s**, not displayed frames or game FPS).
+
+The old Bevy client was also built and launched in surface-survey mode with its
+existing unattended screenshot/exit path (`THESSA_AUTOBENCH=1`,
+`THESSA_AUTOBENCH_VIEW=surface`, `THESSA_SCREENSHOT_AT_S=6`). It rendered a
+COAST frame via `gpu_mesh`, saved a screenshot and exited 0. The embedded server
+binary was absent, so it used the existing local-simulation fallback; ALSA/JACK
+reported device diagnostics. This smoke does not validate networking/audio,
+equal-scene visual quality or compare performance.
+
+[Measurements/validation](artifacts/owned-body-camera-frames-2026-10-16.json),
+[epoch capture](artifacts/owned-body-camera-frames-2026-10-16.png),
+[moving-body capture](artifacts/owned-body-camera-motion-2026-10-16.png), and
+[sweep/rewind capture](artifacts/owned-body-camera-sweep-2026-10-16.png).
+The [legacy Bevy smoke](artifacts/owned-body-camera-bevy-smoke-2026-10-16.png)
+is a separate scene/window, not a side-by-side parity comparison.
+The moving sample is deliberately shown without manufactured ambient light;
+its very dark direct-lit terrain is not missing coverage or a claim of complete
+night-side rendering. Existing visual artifacts remain unaccepted.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

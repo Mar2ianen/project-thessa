@@ -6263,6 +6263,7 @@ dependencies = [
  "thessa-plume-core",
  "thessa-protocol",
  "thessa-rcbt-core",
+ "thessa-render-core",
  "thessa-sim-core",
  "thessa-terrain-stream",
  "thessa-worldgen-rocky",
@@ -6442,6 +6443,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-render-core"
+version = "0.0.1"
+dependencies = [
+ "glam 0.33.7",
+]
+
+[[package]]
 name = "thessa-render-wgpu"
 version = "0.0.1"
 dependencies = [
@@ -6450,6 +6458,7 @@ dependencies = [
  "pollster",
  "thessa-graphics",
  "thessa-rcbt-core",
+ "thessa-render-core",
  "thessa-wgpu-exp",
  "wgpu",
 ]
@@ -6519,6 +6528,7 @@ dependencies = [
  "thessa-flight-authority",
  "thessa-graphics",
  "thessa-rcbt-core",
+ "thessa-render-core",
  "thessa-render-wgpu",
  "thessa-sim-core",
  "thessa-terrain-stream",

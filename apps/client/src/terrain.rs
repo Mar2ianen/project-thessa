@@ -12,6 +12,7 @@ use thessa_bevy_rcbt::{
     CbtRenderState, CbtRenderSurface, CbtRenderTopology, RenderView,
 };
 use thessa_rcbt_core::{CandidateAction, LeafCandidate, Node as CbtNode, Tree, WorkClass};
+use thessa_render_core::BodyFrame;
 #[cfg(test)]
 use thessa_terrain_stream::selection::{self, complete_terrain_cover};
 use thessa_terrain_stream::{
@@ -1048,8 +1049,7 @@ fn teardown_inactive_surface(
 /// streaming; the returned view feeds the selection stage.
 #[derive(Debug, Clone, Copy)]
 struct FrameView {
-    origin: DVec3,
-    rotation: DQuat,
+    frame: BodyFrame,
     eye: DVec3,
     forward_body: DVec3,
     frustum: Option<lod::SelectionFrustum>,
@@ -1082,7 +1082,7 @@ fn update_frame_camera(
 ) -> FrameView {
     let radius = world.field.params.radius_m;
     surface.set_radius_m(radius as f32);
-    let (origin, rotation, eye) = if survey.active {
+    let (origin, rotation) = if survey.active {
         let (dir, label) = survey.sites[survey.site];
         let spin = DQuat::from_rotation_y(runtime.render_spin());
         let up = spin * DVec3::from_array(dir);
@@ -1117,24 +1117,20 @@ fn update_frame_camera(
         for mut text in readout {
             text.0 = format!("THESSA  /  {label}     {:.1} km", survey.distance / 1000.0);
         }
-        (center, spin, spin.inverse() * (center + offset.as_dvec3()))
+        (center, spin)
     } else {
         for mut text in readout {
             text.0.clear();
         }
         let origin = runtime.render_terrain_origin_m();
         let spin = DQuat::from_rotation_y(runtime.render_spin());
-        (
-            origin,
-            spin,
-            spin.inverse() * (origin + camera.0.translation.as_dvec3()),
-        )
+        (origin, spin)
     };
-    surface.set_render_from_body_f64(
-        bevy::math::DMat4::from_rotation_translation(rotation, -origin).to_cols_array(),
-    );
+    let frame =
+        BodyFrame::new(DVec3::ZERO, rotation, origin).expect("finite interpolated terrain pose");
+    surface.set_render_from_body_f64(frame.render_from_body().to_cols_array());
     for (mut transform, mut visibility) in backdrop {
-        transform.translation = (-origin).as_vec3();
+        transform.translation = frame.body_to_render_point(DVec3::ZERO).as_vec3();
         transform.rotation = rotation.as_quat() * SPHERE_POLE_TO_WORLD_UP;
         transform.scale = Vec3::splat((radius - 16000.0) as f32);
         // GPU terrain uses the closed sphere while the requested cover is
@@ -1154,7 +1150,7 @@ fn update_frame_camera(
         };
     }
     if !survey.active {
-        let globe_eye = rotation.inverse() * (origin + camera.0.translation.as_dvec3());
+        let globe_eye = frame.render_to_body_point(camera.0.translation.as_dvec3());
         let minimum = radius
             + world
                 .field
@@ -1162,18 +1158,33 @@ fn update_frame_camera(
                 .max(0.0)
             + 3.0;
         if globe_eye.length() < minimum {
-            camera.0.translation = (rotation * globe_eye.normalize() * minimum - origin).as_vec3();
+            camera.0.translation = frame
+                .body_to_render_point(globe_eye.normalize() * minimum)
+                .as_vec3();
             let up = camera.0.up();
             *camera.0 = camera.0.looking_at(Vec3::ZERO, up);
         }
     }
     world.render_center = Some((-origin).as_vec3());
     world.render_origin_m = origin;
+    frame_view(frame, &camera.0, &camera.1, radius)
+}
+
+/// Read the final host pose only after clearance/rebase edits. Selection and
+/// CPU/GPU placement share one body frame rather than keeping a pre-clamp eye.
+fn frame_view(
+    frame: BodyFrame,
+    camera: &Transform,
+    projection: &Projection,
+    radius: f64,
+) -> FrameView {
+    let eye = frame.render_to_body_point(camera.translation.as_dvec3());
+    let forward_body = frame.render_to_body_direction((camera.rotation * Vec3::NEG_Z).as_dvec3());
     // View frustum in the body-fixed field frame, for selection culling:
     // from 5 km the horizon cone admits a 500 km disc that would eat any
     // tile budget before the nadir refines. Non-perspective projections
     // skip culling (full cover, no holes).
-    let frustum = if let Projection::Perspective(p) = &*camera.1 {
+    let frustum = if let Projection::Perspective(p) = projection {
         let half_v = p.fov * 0.5;
         let half_h = (half_v.tan() * p.aspect_ratio).atan();
         // Wide swing margin: the cone must cover the frame CORNERS, not the
@@ -1181,7 +1192,6 @@ fn update_frame_camera(
         // camera (nadir is ~90° off-axis) and the pilot view never refines
         // past the coarse cover. Behind-camera tiles are still culled.
         let half_angle = f64::from(half_v.max(half_h)) + 0.6;
-        let forward_body = rotation.inverse() * (camera.0.rotation * Vec3::NEG_Z).as_dvec3();
         Some(lod::SelectionFrustum {
             forward: forward_body.to_array(),
             cos_limit: half_angle.cos().clamp(-1.0, 1.0),
@@ -1189,12 +1199,8 @@ fn update_frame_camera(
     } else {
         None
     };
-    // Camera-frame forward for the frustum and the movement trigger.
-    let forward_render = (camera.0.rotation * Vec3::NEG_Z).as_dvec3();
-    let forward_body = rotation.inverse() * forward_render;
     FrameView {
-        origin,
-        rotation,
+        frame,
         eye,
         forward_body,
         frustum,
@@ -1221,8 +1227,7 @@ fn run_tile_selection(
     view: &FrameView,
 ) -> (bool, f64) {
     let FrameView {
-        origin,
-        rotation,
+        frame,
         eye,
         radius,
         forward_body,
@@ -1233,7 +1238,7 @@ fn run_tile_selection(
         &world.field,
         SelectionView {
             eye,
-            stream_origin: rotation.inverse() * origin,
+            stream_origin: frame.render_to_body_point(DVec3::ZERO),
             forward: forward_body,
             radius,
             frustum,
@@ -1504,9 +1509,7 @@ fn sync_tile_entities(
     view: &FrameView,
     perf: &mut perf::PerfMonitor,
 ) {
-    let FrameView {
-        origin, rotation, ..
-    } = *view;
+    let frame = view.frame;
     let entity_sync_started = Instant::now();
     if !gpu_raster && (selection_changed || world.counters.terrain_patches_generated > 0) {
         let desired = ready_terrain_cover(&world.wanted, &world.visible, |key| {
@@ -1530,8 +1533,8 @@ fn sync_tile_entities(
                     SurfaceTile(*key),
                     Mesh3d(mesh.clone()),
                     MeshMaterial3d(material.clone()),
-                    Transform::from_translation((rotation * tile.anchor - origin).as_vec3())
-                        .with_rotation(rotation.as_quat()),
+                    Transform::from_translation(frame.body_to_render_point(tile.anchor).as_vec3())
+                        .with_rotation(frame.rotation().as_quat()),
                     Name::new(format!("Thessa tile {key:?}")),
                 ));
                 // Shared sky probe at spawn (atomic with creation: no
@@ -1574,8 +1577,8 @@ fn sync_tile_entities(
     }
     for (_, tile, mut transform) in &mut *tiles {
         if let Some(cached) = world.heights.get(&tile.0) {
-            transform.translation = (rotation * cached.anchor - origin).as_vec3();
-            transform.rotation = rotation.as_quat();
+            transform.translation = frame.body_to_render_point(cached.anchor).as_vec3();
+            transform.rotation = frame.rotation().as_quat();
         }
     }
     perf.record_scope(
@@ -2196,6 +2199,31 @@ mod streaming_tests {
     }
 
     #[test]
+    fn terrain_frame_reads_final_rebased_camera_after_clearance_edits() {
+        let radius = 3_200_000.0;
+        let spin = DQuat::from_rotation_y(0.37);
+        let origin = spin * (DVec3::Z * radius);
+        let frame = BodyFrame::new(DVec3::ZERO, spin, origin).unwrap();
+        let mut camera = Transform::from_translation(Vec3::new(0.0, 0.0, -10.0));
+        let projection = Projection::Perspective(PerspectiveProjection::default());
+        let before = frame_view(frame, &camera, &projection, radius);
+        // The clearance stage changes host-local translation before selection.
+        let clamped = DVec3::Z * (radius + 3.0);
+        camera.translation = frame.body_to_render_point(clamped).as_vec3();
+        camera.rotation = spin.as_quat();
+        let after = frame_view(frame, &camera, &projection, radius);
+        assert!((after.eye - clamped).length() < 1e-6);
+        assert!((before.eye - after.eye).length() > 5.0);
+        assert!((after.forward_body - DVec3::NEG_Z).length() < 1e-7);
+        assert_eq!(
+            after.frustum.unwrap().forward,
+            after.forward_body.to_array()
+        );
+        let from_matrix = frame.render_from_body().transform_point3(clamped);
+        assert!((from_matrix - frame.body_to_render_point(clamped)).length() < 1e-8);
+    }
+
+    #[test]
     fn material_demand_refines_coarse_geometry_without_changing_its_cover() {
         let base = [TileKey {
             face: 0,
@@ -2205,8 +2233,7 @@ mod streaming_tests {
         }];
         let radius = 3_200_000.;
         let view = FrameView {
-            origin: DVec3::ZERO,
-            rotation: DQuat::IDENTITY,
+            frame: BodyFrame::new(DVec3::ZERO, DQuat::IDENTITY, DVec3::ZERO).unwrap(),
             eye: DVec3::from_array(base[0].direction(0.5, 0.5)) * (radius + 2000.),
             forward_body: DVec3::NEG_X,
             frustum: None,

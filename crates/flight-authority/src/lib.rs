@@ -17,6 +17,7 @@ pub mod contact;
 pub(crate) mod control;
 pub mod launch_site;
 pub mod mode;
+pub mod presentation;
 pub mod runtime;
 
 pub use thessa_flight_control::{

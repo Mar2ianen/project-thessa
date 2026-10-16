@@ -35,7 +35,7 @@ struct WindowHud {
 impl State {
     fn new(
         event_loop: &ActiveEventLoop,
-        scene: &Scene,
+        scene: &mut Scene,
         hud_enabled: bool,
     ) -> Result<Self, Box<dyn Error>> {
         #[cfg(not(feature = "hud"))]
@@ -268,7 +268,7 @@ impl ApplicationHandler for App {
         if self.state.is_some() {
             return;
         }
-        match State::new(event_loop, &self.scene, self.hud_enabled) {
+        match State::new(event_loop, &mut self.scene, self.hud_enabled) {
             Ok(state) => {
                 self.state = Some(state);
                 // Selection history survives surface suspension in Scene; its

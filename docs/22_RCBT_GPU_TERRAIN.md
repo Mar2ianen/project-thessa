@@ -760,6 +760,13 @@ The current code slice provides:
   `terrain-stream::height::HeightStream` owns shared height jobs, LRU, pinned
   coverage and bounded admission, returning opaque retired host payloads for
   asset cleanup. See doc 39's shared height lifecycle continuation;
+- both clients use MIT `render-core::BodyFrame` for f64 body/render camera
+  conversion. Terrain geometry and direct-light directions remain body-fixed in
+  the native renderer; the origin-local render camera is transformed once at
+  the semantic boundary before tile-camera subtraction. The viewer can sample
+  baked body translation and the existing flight terrain spin at explicit
+  `SimTime` values without regenerating unchanged height geometry. This is not
+  a new attitude/physics model or a port of the full moving-object scene;
 - a shipped-asset anchor (`cargo bench -p thessa-worldgen-rocky --bench
   assets`): the live recipe field reproduces `assets/worlds/thessa-v3`
   albedo at RMSE 0.0013 (linear, stride 16), legacy tiles match shipped

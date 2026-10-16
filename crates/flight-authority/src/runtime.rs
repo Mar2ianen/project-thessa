@@ -688,10 +688,7 @@ impl FlightAuthority {
             None => AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, gravity),
         }
         .map_err(|error| format!("{} atmosphere is invalid: {error}", body.name))?;
-        let rotation_period_s = body
-            .rotation_period_s
-            .or_else(|| body.tidal_lock.then_some(body.design_period_s).flatten())
-            .unwrap_or(80.0 * 3_600.0);
+        let rotation_period_s = crate::presentation::terrain_rotation_period_s(body);
         atmosphere.body_rotation_rad_s =
             DVec3::new(0.0, 0.0, std::f64::consts::TAU / rotation_period_s);
 

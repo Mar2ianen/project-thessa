@@ -1,5 +1,6 @@
 //! A real canonical-field resident partition, shared by window/headless paths.
 //! Shared live terrain streaming policy; not the networked game client.
+use crate::celestial::{CelestialPresentation, Sample};
 use glam::DVec3;
 use thessa_rcbt_core::tile_anchor::{TileAnchor, TileKey};
 use thessa_render_wgpu::{
@@ -14,7 +15,6 @@ use thessa_terrain_stream::{
 
 pub struct Scene {
     pub requested: thessa_graphics::RequestedGraphics,
-    pub lighting: thessa_rcbt_core::lighting::SurfaceLighting,
     pub stream: TerrainStream,
     pub publications: u64,
     pub regenerated: u64,
@@ -25,6 +25,9 @@ pub struct Scene {
     pub east: DVec3,
     pub distance: f64,
     pub angle: f64,
+    celestial: CelestialPresentation,
+    pub sample: Sample,
+    lighting_dirty: bool,
 }
 
 impl Scene {
@@ -36,71 +39,22 @@ impl Scene {
         let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
             toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
                 .map_err(|e| e.to_string())?;
-        let planet = ephemeris
-            .body_state(
-                ephemeris
-                    .body_id(&recipe.planet.id)
-                    .ok_or("missing terrain body")?,
-                thessa_sim_core::SimTime::EPOCH,
-            )
-            .map_err(|e| e.to_string())?;
-        let mut stars = Vec::new();
-        for star in &system.star {
-            let state = ephemeris
-                .body_state(
-                    ephemeris.body_id(&star.id).ok_or("missing star")?,
-                    thessa_sim_core::SimTime::EPOCH,
-                )
-                .map_err(|e| e.to_string())?;
-            let delta = state.position_inertial - planet.position_inertial;
-            let direction = delta.normalize();
-            // Same inertial -> terrain axes as the launch bookmark scan; at
-            // EPOCH the body's render spin is zero. No fabricated local sun.
-            let body_direction = [
-                direction.x as f32,
-                direction.z as f32,
-                -direction.y as f32,
-                0.0,
-            ];
-            let lux = thessa_atmosphere::irradiance_at_distance(
-                star.luminosity_solar * 3.828e26,
-                delta.length(),
-            ) * 93.0;
-            let tint = thessa_atmosphere::blackbody_rgb(star.temperature_k);
-            stars.push((
-                lux,
-                body_direction,
-                [
-                    (tint[0] * lux) as f32,
-                    (tint[1] * lux) as f32,
-                    (tint[2] * lux) as f32,
-                    0.0,
-                ],
-            ));
-        }
-        stars.sort_by(|a, b| b.0.total_cmp(&a.0));
-        if stars.len() > 3 {
-            return Err(
-                "terrain shader currently supports at most three direct stellar sources".into(),
-            );
-        }
-        let mut lighting = thessa_rcbt_core::lighting::SurfaceLighting::default();
-        for (index, (_, direction, color)) in stars.into_iter().enumerate() {
-            lighting.directions[index] = direction;
-            lighting.colors_lux[index] = color;
-        }
+        let body = ephemeris
+            .body_id(&recipe.planet.id)
+            .ok_or("missing terrain body")?;
+        let celestial = CelestialPresentation::new(&system, ephemeris, body)?;
+        let sample = celestial.sample(thessa_sim_core::SimTime::EPOCH)?;
         let up = DVec3::from(sites[1]); // same HIGHLANDS bookmark as the shipped client
         let center = up * (field.params.radius_m + field.height_m(up.to_array(), 32.0).max(0.0));
         let east = DVec3::Y.cross(up).normalize();
         let stream = TerrainStream::new(field, StreamingPolicy::default())?;
         eprintln!(
-            "canonical frozen Thessa: {} resident tiles; highlands={:?}",
+            "canonical Thessa: {} resident tiles; highlands={:?}",
             stream.visible().len(),
             center
         );
         Ok(Self {
             requested,
-            lighting,
             stream,
             publications: 0,
             regenerated: 0,
@@ -111,11 +65,39 @@ impl Scene {
             east,
             distance: 30_000.0,
             angle: 0.0,
+            celestial,
+            sample,
+            lighting_dirty: false,
         })
     }
 
+    /// Explicit presentation sampling, separate from wall-time streaming
+    /// debounce. An unchanged SimTime performs no ephemeris or lighting work.
+    /// Stage the full sample before mutation so failure preserves the old frame.
+    pub fn set_presentation_time(&mut self, time: thessa_sim_core::SimTime) -> Result<(), String> {
+        if time == self.sample.time {
+            return Ok(());
+        }
+        let sample = self.celestial.sample(time)?;
+        self.lighting_dirty |= self.sample.lighting != sample.lighting;
+        self.sample = sample;
+        Ok(())
+    }
+
+    fn publish_presentation(
+        &mut self,
+        backend: &Backend,
+        renderer: &mut TerrainRenderer,
+    ) -> Result<(), BackendError> {
+        if self.lighting_dirty {
+            renderer.update_lighting(backend, &self.sample.lighting)?;
+            self.lighting_dirty = false;
+        }
+        Ok(())
+    }
+
     pub fn renderer(
-        &self,
+        &mut self,
         backend: &Backend,
         format: wgpu::TextureFormat,
     ) -> Result<TerrainRenderer, BackendError> {
@@ -143,7 +125,8 @@ impl Scene {
             self.stream.material_demand(),
             self.stream.materials(),
         )?;
-        renderer.update_lighting(backend, &self.lighting)?;
+        renderer.update_lighting(backend, &self.sample.lighting)?;
+        self.lighting_dirty = false;
         eprintln!(
             "material publication: {} pages, {} bytes",
             stats.pages, stats.bytes
@@ -173,6 +156,7 @@ impl Scene {
         exposure: f32,
         now_s: f64,
     ) -> Result<StreamUpdate, Box<dyn std::error::Error>> {
+        self.publish_presentation(backend, renderer)?;
         let camera = self.view(width, height, exposure);
         let forward = camera
             .world_from_view
@@ -236,16 +220,18 @@ impl Scene {
     }
 
     pub fn view(&self, width: u32, height: u32, exposure: f32) -> ViewParams {
-        orbit_view(
-            self.center,
-            self.up,
-            self.east,
+        let frame = self.sample.frame;
+        let render_view = orbit_view(
+            frame.body_to_render_point(self.center),
+            frame.body_to_render_direction(self.up),
+            frame.body_to_render_direction(self.east),
             self.distance,
             self.angle,
             width,
             height,
             exposure,
-        )
+        );
+        frame.view_in_body(&render_view)
     }
 }
 
@@ -279,6 +265,80 @@ fn orbit_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a wgpu adapter"]
+    fn sampled_motion_updates_gpu_lighting_without_rebuilding_height_geometry() {
+        let backend = Backend::bring_up().unwrap();
+        let mut scene = Scene::load(thessa_graphics::RequestedGraphics::default()).unwrap();
+        let target = thessa_render_wgpu::terrain::OffscreenTarget::new(&backend, 257, 257).unwrap();
+        let mut renderer = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        let geometry = renderer.read_vertices(&backend).unwrap();
+        let exposure = crate::manual_exposure(13.0);
+        let render = |scene: &Scene, renderer: &mut TerrainRenderer| {
+            renderer
+                .update_view(&backend, &scene.view(257, 257, exposure))
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            renderer.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()
+        };
+        let before = render(&scene, &mut renderer);
+        scene
+            .set_presentation_time(thessa_sim_core::SimTime(72_000.0))
+            .unwrap();
+        // Isolate the pose/light publication stage: initial terrain selection
+        // itself can legitimately remove out-of-view bootstrap roots.
+        scene.publish_presentation(&backend, &mut renderer).unwrap();
+        assert!(!scene.lighting_dirty);
+        assert_eq!(renderer.read_vertices(&backend).unwrap(), geometry);
+        let after = render(&scene, &mut renderer);
+        assert_ne!(
+            before, after,
+            "new sample lighting never reached the terrain GPU pass"
+        );
+    }
+
+    #[test]
+    fn moving_celestial_samples_keep_body_attached_camera_and_failed_sample_preserves_state() {
+        let mut scene = Scene::load(thessa_graphics::RequestedGraphics::default()).unwrap();
+        let epoch = scene.view(1280, 720, 1.0);
+        let initial_lighting = scene.sample.lighting;
+        for time in [1.0, 72_000.0, 144_000.0, -72_000.0] {
+            scene
+                .set_presentation_time(thessa_sim_core::SimTime(time))
+                .unwrap();
+            let view = scene.view(1280, 720, 1.0);
+            assert!((view.world_position_m - epoch.world_position_m).length() < 1e-8);
+            assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
+            let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
+            let original_forward = epoch.world_from_view.transform_vector3(DVec3::NEG_Z);
+            assert!((forward - original_forward).length() < 1e-12);
+        }
+        assert_ne!(scene.sample.lighting, initial_lighting);
+        let before = scene.sample;
+        let lighting = scene.sample.lighting;
+        assert!(
+            scene
+                .set_presentation_time(thessa_sim_core::SimTime(f64::NAN))
+                .is_err()
+        );
+        assert_eq!(scene.sample.time, before.time);
+        assert_eq!(scene.sample.frame, before.frame);
+        assert_eq!(scene.sample.lighting, lighting);
+        scene.lighting_dirty = false;
+        scene.set_presentation_time(before.time).unwrap();
+        assert!(
+            !scene.lighting_dirty,
+            "same-time samples must be free of dirty work"
+        );
+    }
 
     #[test]
     fn orbit_views_keep_checked_camera_relative_abi() {

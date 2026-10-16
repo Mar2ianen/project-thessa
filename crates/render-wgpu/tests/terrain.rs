@@ -24,6 +24,83 @@ fn backend() -> Option<Backend> {
 }
 
 #[test]
+fn moving_body_and_origin_preserve_camera_relative_gpu_output_without_geometry_rebuilds() {
+    use glam::DQuat;
+    use thessa_render_core::BodyFrame;
+    let Some(backend) = backend() else { return };
+    let anchor = anchor(4, 10, 512, 512);
+    let center = DVec3::from(anchor.anchor_body_m);
+    let eye = center + DVec3::from(anchor.normal) * 20_000.0;
+    let body_view = ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, DVec3::Y).inverse(),
+        world_position_m: eye,
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.0, 1.0, 1e6),
+        exposure: 1.0,
+    };
+    let page = HeightPage::bake(&[120.0, 123.0, 121.0, 125.0], 2, 0.001).unwrap();
+    let mut renderer = TerrainRenderer::new(
+        &backend,
+        &[TerrainPatch {
+            anchor,
+            page: &page,
+        }],
+        OffscreenTarget::FORMAT,
+    )
+    .unwrap();
+    let geometry = renderer.read_vertices(&backend).unwrap();
+    let target = OffscreenTarget::new(&backend, 257, 257).unwrap();
+    let mut reference = None;
+    for step in 0..8 {
+        let rotation = DQuat::from_rotation_y(step as f64 * 0.37);
+        let body = DVec3::new(1.5e11 + step as f64 * 1e8, -1e12, 2e12);
+        let frame = BodyFrame::new(body, rotation, body + DVec3::new(128.0, -64.0, 256.0)).unwrap();
+        let render_view = ViewParams {
+            world_from_view: frame.render_from_body() * body_view.world_from_view,
+            world_position_m: frame.body_to_render_point(eye),
+            ..body_view
+        };
+        let view = frame.view_in_body(&render_view);
+        assert!((view.world_position_m - eye).length() < 4e-9);
+        renderer.update_view(&backend, &view).unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        renderer.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        let pixels = target.read_rgba8(&backend).unwrap();
+        assert_eq!(renderer.read_draw(&backend).unwrap()[0], 2304 * 3);
+        if let Some(expected) = &reference {
+            assert_eq!(
+                &pixels, expected,
+                "body motion leaked into body-attached camera"
+            );
+        } else {
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p.as_slice() != &pixels[..4])
+                    .count()
+                    > 10_000
+            );
+            reference = Some(pixels);
+        }
+        assert_eq!(renderer.read_vertices(&backend).unwrap(), geometry);
+        // Rotation/translation changes are camera work, not a height upload.
+        let retained = renderer
+            .publish_partition(
+                &backend,
+                &[ResidentTerrainPatch {
+                    anchor,
+                    page: &page,
+                    generation: 0,
+                }],
+            )
+            .unwrap();
+        assert_eq!(retained.regenerated, 0);
+    }
+}
+
+#[test]
 fn neutral_height_source_dirty_and_reinserted_versions_regenerate_gpu_geometry() {
     use thessa_rcbt_core::height_source::HeightPageStore;
     let Some(backend) = backend() else { return };

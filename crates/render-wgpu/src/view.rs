@@ -14,22 +14,11 @@
 //! A non-invertible `world_from_view` yields `None` instead of a poisoned
 //! block — the frame must fall back or skip, never upload NaN.
 
-use glam::{DMat4, DVec3, Mat4, Vec3};
-
-/// Camera-side inputs for one view, f64 SI. No Bevy types.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ViewParams {
-    /// Affine camera transform (rotation + translation), metres. Translation
-    /// must match `world_position_m` within f64 round-off.
-    pub world_from_view: DMat4,
-    /// Projection matrix (camera owner's formula).
-    pub clip_from_view: DMat4,
-    /// Absolute camera position / render origin in metres. Subtracted in
-    /// f64 from the camera transform; the uploaded camera position is zero.
-    pub world_position_m: DVec3,
-    /// Photometric exposure multiplier, passed through as-is.
-    pub exposure: f32,
-}
+#[cfg(test)]
+use glam::DVec3;
+use glam::{DMat4, Mat4, Vec3};
+/// Compatibility re-export. The semantic camera input has no backend dependency.
+pub use thessa_render_core::ViewParams;
 
 /// The 464-byte block the CBT shaders bind. Field order matches the WGSL
 /// `ViewUniforms` struct exactly; see module docs.

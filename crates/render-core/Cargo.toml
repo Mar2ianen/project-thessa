@@ -1,0 +1,15 @@
+[package]
+name = "thessa-render-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Backend-neutral f64 presentation frames and camera inputs"
+
+[dependencies]
+glam.workspace = true
+
+[[bench]]
+name = "frames"
+harness = false

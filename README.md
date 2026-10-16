@@ -104,6 +104,11 @@ The checked-in vertical slice currently contains:
   through thin Bevy resources. Height admission counts pending results against
   cache capacity and returns retired payloads to the host's asset bridge.
   Height eviction does not remove material pages.
+  Backend-neutral f64 body/camera frames now live in MIT `thessa-render-core`
+  and are consumed by both clients. The native viewer defaults to the frozen
+  epoch; `--sim-time 72000` samples a different celestial pose, and headless
+  `--sim-step 120` samples motion per rendered frame (including warm-up), not
+  authoritative simulation warp. See doc 39 for the spin-model boundary.
   Headless `--prestream-seconds 10 --sweep` exercises
    changing demand rather than a fixed resident snapshot.
    The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's

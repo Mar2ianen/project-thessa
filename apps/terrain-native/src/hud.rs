@@ -33,6 +33,7 @@ impl Controls {
 pub struct Stats {
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
+    pub sim_time_s: f64,
     pub tiles: usize,
     pub cache: (usize, usize),
     pub pending: (usize, usize),
@@ -47,6 +48,7 @@ impl Stats {
         Self {
             submitted_frames: frames,
             previous_cpu_ms: cpu_ms,
+            sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
             cache: scene.stream.cache_entries(),
             pending: scene.stream.pending_jobs(),
@@ -177,6 +179,7 @@ fn widgets(
             .show(context, |ui| {
                 ui.label("Owned renderer · shared-device egui HUD");
                 ui.small(adapter);
+                ui.label(format!("Presentation time: {:.3} s", stats.sim_time_s));
                 ui.separator();
                 ui.label(format!("Resident terrain: {} tiles", stats.tiles));
                 ui.label(format!(

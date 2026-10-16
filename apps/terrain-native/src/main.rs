@@ -1,6 +1,7 @@
-//! Migration viewer: canonical frozen terrain, owned compute/raster/materials,
+//! Migration viewer: canonical terrain, owned compute/raster/materials,
 //! winit presentation/input and optional egui HUD. No Bevy or full client parity.
 #![forbid(unsafe_code)]
+mod celestial;
 #[cfg(feature = "hud")]
 mod hud;
 mod scene;
@@ -17,6 +18,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut prestream_seconds = 3.0;
     let mut sweep = false;
     let mut hud_override = None;
+    let mut sim_time = 0.0_f64;
+    let mut sim_step = 0.0_f64;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
@@ -35,11 +38,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .parse::<f64>()?
             }
             "--sweep" => sweep = true,
+            "--sim-time" => sim_time = args.next().ok_or("--sim-time requires seconds")?.parse()?,
+            "--sim-step" => {
+                sim_step = args
+                    .next()
+                    .ok_or("--sim-step requires seconds per frame")?
+                    .parse()?
+            }
             "--hud" => hud_override = Some(true),
             "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\nLive canonical terrain streaming viewer, not the complete game client.\nOnly manual exposure and vsync settings are consumed; other effects are unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nOnly manual exposure and vsync settings are consumed; other effects are unported."
                 );
                 return Ok(());
             }
@@ -52,8 +62,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !prestream_seconds.is_finite() || !(0.0..=3600.0).contains(&prestream_seconds) {
         return Err("--prestream-seconds must be finite and within 0..=3600".into());
     }
-    if headless.is_none() && (sweep || prestream_seconds != 3.0) {
-        return Err("--sweep and --prestream-seconds require --headless".into());
+    if !sim_time.is_finite()
+        || !sim_step.is_finite()
+        || !(sim_time + sim_step * (f64::from(frame_limit.unwrap_or(120)) + 29.0)).is_finite()
+    {
+        return Err("presentation sample times must be finite".into());
+    }
+    if headless.is_none() && (sweep || prestream_seconds != 3.0 || sim_step != 0.0) {
+        return Err("--sweep, --prestream-seconds and --sim-step require --headless".into());
     }
     let hud_enabled = hud_override.unwrap_or(cfg!(feature = "hud") && headless.is_none());
     if hud_enabled && !cfg!(feature = "hud") {
@@ -66,6 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "migration viewer consumes manual exposure/vsync only; atmosphere, shadows, HDR/tonemapping, RT, automatic exposure and other effects are unported"
     );
     let mut scene = scene::Scene::load(requested)?;
+    scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",
         started.elapsed().as_secs_f64()
@@ -102,6 +119,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let count = frame_limit.unwrap_or(120);
         for frame in 0..u64::from(count) + 30 {
             let start = Instant::now();
+            scene.set_presentation_time(thessa_sim_core::SimTime(
+                sim_time + sim_step * frame as f64,
+            ))?;
             if sweep {
                 scene.angle = frame as f64 * 0.006;
             }
@@ -203,6 +223,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             scene.material_upload_bytes,
             scene.capacity_rejections,
             scene.angle
+        );
+        println!(
+            "presentation_sim_time_s={} sim_step_s={sim_step} body_inertial_m={:?}",
+            scene.sample.time.0, scene.sample.position_inertial_m
         );
         return Ok(());
     }

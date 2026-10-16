@@ -12,6 +12,7 @@ default = ["hud"]
 hud = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
 
 [dependencies]
+thessa-render-core = { path = "../../crates/render-core" }
 thessa-render-wgpu = { path = "../../crates/render-wgpu" }
 thessa-terrain-stream = { path = "../../crates/terrain-stream" }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }

@@ -244,18 +244,28 @@ Source comparison uses Arc identity before value comparison, with no periodic
 mesh buffer copy/encode. No paths, loaders, textures or full definitions arrive.
 
 Native combines admitted appearance and the compatibility PRIMARY source on
-catalogue change in the existing renderer/device/targets/pipeline/pass. Static
+render-layout change in the existing renderer/device/targets/pipeline/pass. Static
 source replacement currently reuploads PRIMARY as well as admitted shells;
 it does not claim an incremental GPU residency/asset registry. Ordinary frames
 update only matrices/view/lighting and per-primitive instance ranges. A second
 two-pose presentation history exists only for available world meshes, not
 physics or authoritative prediction. It samples inertial linear positions and
 slerped attitudes at PRIMARY's scene epoch, subtracting the ephemeris there;
-without a bracket/exact sample it withholds that world mesh. Geometry revisions
-reset histories. Observer rows still show their own authoritative times.
+without a bracket/exact sample it withholds that world mesh. Render-layout changes
+reset histories; label/contact-only changes and common part-origin translations
+preserve them. For an unchanged layout, snapshots are transformed to the retained
+publication's body frame before interpolation. The first part identifies the
+common translation; its offset is not used as an interpolation origin, avoiding
+an artificial change to the arc of a rotating body. Mesh/normal/index or part
+rotation/relative-position changes rebuild the combined source, including PRIMARY.
+Relative-position equality permits a 1 nm subtraction envelope against the
+retained publication, never the preceding packet, so errors cannot accumulate.
+Narrowing reserves that envelope within the existing 1 mm local vertex budget.
+Observer rows still show their own authoritative times.
 Changing a part origin, including a resource-driven COM shift, revises the whole
 catalogue even when shared vertex buffers are unchanged; an incremental network
-mesh dictionary and efficient active-fleet source updates remain future work.
+mesh dictionary and general incremental GPU residency remain future work. COM-only
+translations no longer cause GPU source replacement, but still retransmit meshes.
 Stale/revision-mismatched membership withholds draws, never invents despawn.
 
 `renderer.fleet_meshes=false` allocates/uploads no fleet GPU source or track

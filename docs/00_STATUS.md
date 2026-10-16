@@ -93,7 +93,10 @@ adoption and read-only fleet observations are implemented on the migration
 branch, including revision-matched authoritative contact geometry and an
 inspector wireframe. Bounded retained body shells now render with a neutral
 finish in the existing opaque pass when their samples cover PRIMARY's render
-epoch; missing/stale geometry and out-of-bracket clocks withhold draws rather
+epoch; common COM translations reuse GPU sources and interpolation histories
+in their publication frame. Shape/relative-pose changes still rebuild the combined
+source; network catalogues still retransmit complete meshes on COM changes.
+Missing/stale geometry and out-of-bracket clocks withhold draws rather
 than substitute a model or extrapolate. Full authored appearance/materials,
 PRIMARY model replacement and prediction/reconciliation remain unported.
 The shared link now caps complete pending command packets at the protocol's

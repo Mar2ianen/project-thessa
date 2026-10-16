@@ -1,5 +1,6 @@
 //! Game-side source/epoch selection for the existing single opaque mesh pass.
 use super::*;
+use std::sync::Arc;
 use std::{collections::BTreeMap, ops::Range};
 use thessa_flight_authority::presentation::{FlightPose, inertial_to_render_axes};
 use thessa_flight_net::geometry::{FleetGeometry, RenderAppearance};
@@ -76,10 +77,13 @@ pub struct SceneMeshes {
     enabled: bool,
     min_pixels: f32,
     revision: u64,
+    // Retain the publication, not the latest packet, so the layout tolerance
+    // cannot accumulate drift across revisions. Payload storage is Arc-shared.
+    source_geometry: Option<Arc<FleetGeometry>>,
     observed_updates: u64,
     tracks: BTreeMap<VehicleId, Track>,
     primary_primitives: usize,
-    radii: BTreeMap<VehicleId, (f64, Range<usize>)>,
+    radii: BTreeMap<VehicleId, (f64, Range<usize>, DVec3)>,
     instances: Vec<MeshInstance>,
     ranges: Vec<Range<u32>>,
     pub source_publications: u64,
@@ -87,12 +91,58 @@ pub struct SceneMeshes {
     pub size_culled: usize,
 }
 
-/// Flatten part transforms once per catalogue, never once per frame. Meshes
-/// remain actual retained sources, with an explicitly neutral untextured finish.
+// Compare against the retained GPU source, not each preceding packet: small
+// errors never accumulate across updates. COM recentering changes all origins
+// equally; the 1 nm subtraction envelope is far below the 1 mm mesh budget.
+const RENDER_ORIGIN_ERROR_M: f64 = 1e-9;
+
+fn same_render_layout(before: &FleetGeometry, after: &FleetGeometry) -> bool {
+    before.vehicles.len() == after.vehicles.len()
+        && before.vehicles.iter().zip(&after.vehicles).all(|(a, b)| {
+            a.vehicle_id == b.vehicle_id
+                && match (&a.render, &b.render) {
+                    (RenderAppearance::Available(a), RenderAppearance::Available(b)) => {
+                        let anchor_a = a.parts[0].position_body_m;
+                        let anchor_b = b.parts[0].position_body_m;
+                        a.parts.len() == b.parts.len()
+                            && a.parts.iter().zip(&b.parts).all(|(a, b)| {
+                                ((a.position_body_m - anchor_a) - (b.position_body_m - anchor_b))
+                                    .length()
+                                    <= RENDER_ORIGIN_ERROR_M
+                                    && a.orientation_mesh_to_body == b.orientation_mesh_to_body
+                                    && (Arc::ptr_eq(&a.mesh, &b.mesh) || a.mesh == b.mesh)
+                            })
+                    }
+                    (RenderAppearance::Available(_), _) | (_, RenderAppearance::Available(_)) => {
+                        false
+                    }
+                    _ => true,
+                }
+        })
+}
+
+fn render_root(
+    pose: FlightPose,
+    geometry: &thessa_sim_core::RenderGeometry,
+    published_anchor: DVec3,
+) -> Option<FlightPose> {
+    let rotation = pose.orientation_body_to_inertial();
+    FlightPose::new(
+        pose.time(),
+        pose.relative_position_m()
+            + rotation * (geometry.parts.first()?.position_body_m - published_anchor),
+        rotation,
+    )
+}
+
+/// Flatten transforms in the publication's body frame. The first part's origin
+/// identifies later common translations, but isn't the interpolation origin:
+/// tracking an offset part would change the circular arc of a rotating body.
+/// Meshes remain actual retained sources, with a neutral untextured finish.
 fn append_catalogue(
     source: &mut MeshAsset,
     catalogue: &FleetGeometry,
-    radii: &mut BTreeMap<VehicleId, (f64, Range<usize>)>,
+    radii: &mut BTreeMap<VehicleId, (f64, Range<usize>, DVec3)>,
 ) -> Result<(), BackendError> {
     let material = source.materials.len();
     source.materials.push(Material {
@@ -106,12 +156,15 @@ fn append_catalogue(
         };
         let mut radius: f64 = 0.0;
         let start = source.primitives.len();
+        let anchor = geometry.parts[0].position_body_m;
         for part in &geometry.parts {
             let mut vertices = Vec::with_capacity(part.mesh.positions.len());
             for (position, normal) in part.mesh.positions.iter().zip(&part.mesh.normals) {
                 let position = part.position_body_m + part.orientation_mesh_to_body * *position;
                 let narrow = position.as_vec3();
-                if !narrow.is_finite() || (narrow.as_dvec3() - position).length() > 0.001 {
+                if !narrow.is_finite()
+                    || (narrow.as_dvec3() - position).length() > 0.001 - RENDER_ORIGIN_ERROR_M
+                {
                     return Err(BackendError::Device(
                         "fleet vertex exceeds 1 mm narrowing envelope".into(),
                     ));
@@ -131,7 +184,14 @@ fn append_catalogue(
                 material,
             });
         }
-        radii.insert(vehicle.vehicle_id, (radius, start..source.primitives.len()));
+        radii.insert(
+            vehicle.vehicle_id,
+            (
+                radius + RENDER_ORIGIN_ERROR_M,
+                start..source.primitives.len(),
+                anchor,
+            ),
+        );
     }
     Ok(())
 }
@@ -153,6 +213,7 @@ impl SceneMeshes {
             enabled: resolved.fleet_meshes,
             min_pixels: resolved.fleet_min_pixels,
             revision: 0,
+            source_geometry: None,
             observed_updates: 0,
             tracks: BTreeMap::new(),
             primary_primitives: source.primitives.len(),
@@ -204,42 +265,61 @@ impl SceneMeshes {
         if let Some(catalogue) = matched
             && catalogue.revision != self.revision
         {
-            let mut radii = BTreeMap::new();
-            // Empty catalogues don't re-upload PRIMARY; removal does retire the
-            // old fleet source. All resources use the same existing device.
-            if catalogue
-                .vehicles
-                .iter()
-                .any(|v| matches!(v.render, RenderAppearance::Available(_)))
-                || !self.radii.is_empty()
-            {
-                let mut source = primary.clone();
-                append_catalogue(&mut source, catalogue, &mut radii)?;
-                let inner = MeshRenderer::new(backend, &source, self.format, 64)?;
-                self.inner = inner;
-                self.source_publications += 1;
+            let changed = self
+                .source_geometry
+                .as_deref()
+                .is_none_or(|before| !same_render_layout(before, catalogue));
+            if changed {
+                let mut radii = BTreeMap::new();
+                // Empty catalogues don't re-upload PRIMARY; removal does retire the
+                // old fleet source. All resources use the same existing device.
+                if catalogue
+                    .vehicles
+                    .iter()
+                    .any(|v| matches!(v.render, RenderAppearance::Available(_)))
+                    || !self.radii.is_empty()
+                {
+                    let mut source = primary.clone();
+                    append_catalogue(&mut source, catalogue, &mut radii)?;
+                    let inner = MeshRenderer::new(backend, &source, self.format, 64)?;
+                    self.inner = inner;
+                    self.source_publications += 1;
+                }
+                self.tracks.clear();
+                self.observed_updates = 0;
+                self.radii = radii;
+                let primitive_count = self.primary_primitives
+                    + self.radii.values().map(|(_, r, _)| r.len()).sum::<usize>();
+                self.ranges.resize(primitive_count, 0..0);
+                self.source_geometry = observer.and_then(|o| o.geometry.clone());
             }
             self.revision = catalogue.revision;
-            self.tracks.clear();
-            self.observed_updates = 0;
-            self.radii = radii;
-            let primitive_count =
-                self.primary_primitives + self.radii.values().map(|(_, r)| r.len()).sum::<usize>();
-            self.ranges.resize(primitive_count, 0..0);
         }
         if let Some(observer) = observer
             && !self.radii.is_empty()
             && observer.updates != self.observed_updates
+            && let Some(catalogue) = matched
         {
             self.tracks
                 .retain(|id, _| observer.rows.iter().any(|r| r.vehicle_id == *id));
-            for row in &observer.rows {
+            // Adoption already checked identical, sorted membership for the
+            // matched revision. Walk it once, not an ID cross-product scan.
+            for (row, geometry) in observer.rows.iter().zip(&catalogue.vehicles) {
+                let RenderAppearance::Available(geometry) = &geometry.render else {
+                    continue;
+                };
+                let Some((_, _, anchor)) = self.radii.get(&row.vehicle_id) else {
+                    continue;
+                };
+                let Some(pose) = render_root(row.pose, geometry, *anchor) else {
+                    continue;
+                };
                 self.tracks
                     .entry(row.vehicle_id)
-                    .and_modify(|track| track.push(row.pose))
+                    .and_modify(|track| track.push(pose))
                     .or_insert(Track {
                         previous: None,
-                        latest: row.pose,
+                        latest: pose,
                     });
             }
             self.observed_updates = observer.updates;
@@ -252,7 +332,7 @@ impl SceneMeshes {
         self.size_culled = 0;
         if observer.is_some_and(|o| !o.stale) && matched.is_some() {
             let body = scene.flight.as_ref().expect("server flight").reference_body;
-            for (id, (radius, primitives)) in &self.radii {
+            for (id, (radius, primitives, _)) in &self.radii {
                 let Some(instance) = self
                     .tracks
                     .get(id)
@@ -301,6 +381,183 @@ mod tests {
             normals: vec![DVec3::Z; 3],
             indices: vec![0, 1, 2],
         })
+    }
+
+    fn layout() -> FleetGeometry {
+        use thessa_flight_net::geometry::{ContactGeometry, FleetVehicleGeometry};
+        FleetGeometry {
+            revision: 1,
+            vehicles: vec![FleetVehicleGeometry {
+                vehicle_id: VehicleId::new(1),
+                display_name: "shell".into(),
+                contact: ContactGeometry::Absent,
+                render: RenderAppearance::Available(RenderGeometry {
+                    parts: [DVec3::new(2.0, -3.0, 4.0), DVec3::new(6.0, 7.0, 8.0)]
+                        .into_iter()
+                        .map(|position_body_m| RenderPart {
+                            name: "part".into(),
+                            assembly_body: None,
+                            position_body_m,
+                            orientation_mesh_to_body: DQuat::from_rotation_z(0.3),
+                            mesh: triangle(),
+                        })
+                        .collect(),
+                }),
+            }],
+        }
+    }
+
+    fn render_parts(catalogue: &mut FleetGeometry) -> &mut Vec<RenderPart> {
+        let RenderAppearance::Available(geometry) = &mut catalogue.vehicles[0].render else {
+            unreachable!()
+        };
+        &mut geometry.parts
+    }
+
+    #[test]
+    fn layout_reuses_common_translations_but_not_deformation_or_source_changes() {
+        let before = layout();
+        before.validate().unwrap();
+        let mut shifted = before.clone();
+        shifted.revision += 1;
+        shifted.vehicles[0].display_name = "renamed".into();
+        for part in render_parts(&mut shifted) {
+            part.position_body_m -= DVec3::new(0.125, -0.25, 0.5);
+            part.name = "renamed part".into();
+            // Network decoding allocates new Arcs; equal payloads still reuse
+            // the GPU publication, not just in-process pointer-equal sources.
+            part.mesh = Arc::new((*part.mesh).clone());
+        }
+        assert!(same_render_layout(&before, &shifted));
+        let mut changed = shifted.clone();
+        render_parts(&mut changed)[1].position_body_m.x += 0.001;
+        assert!(!same_render_layout(&before, &changed));
+        let mut changed = shifted.clone();
+        render_parts(&mut changed)[0].orientation_mesh_to_body = DQuat::IDENTITY;
+        assert!(!same_render_layout(&before, &changed));
+        for field in 0..3 {
+            let mut changed = shifted.clone();
+            let mesh = Arc::make_mut(&mut render_parts(&mut changed)[0].mesh);
+            match field {
+                0 => mesh.positions[0].x += 0.01,
+                1 => mesh.normals[0] = DVec3::Y,
+                _ => mesh.indices.swap(0, 1),
+            }
+            assert!(!same_render_layout(&before, &changed));
+        }
+        let mut changed = shifted.clone();
+        render_parts(&mut changed).pop();
+        assert!(!same_render_layout(&before, &changed));
+        let mut changed = shifted.clone();
+        changed.vehicles[0].vehicle_id = VehicleId::new(2);
+        assert!(!same_render_layout(&before, &changed));
+        for unavailable in [RenderAppearance::Absent, RenderAppearance::OmittedBudget] {
+            let mut changed = shifted.clone();
+            changed.vehicles[0].render = unavailable;
+            assert!(!same_render_layout(&before, &changed));
+        }
+        assert!(!same_render_layout(
+            &before,
+            &FleetGeometry {
+                revision: 2,
+                vehicles: vec![]
+            }
+        ));
+    }
+
+    #[test]
+    fn layout_error_is_bounded_against_the_publication_not_previous_packet() {
+        let before = layout();
+        let mut previous = before.clone();
+        for step in 1..=8 {
+            let mut changed = before.clone();
+            render_parts(&mut changed)[1].position_body_m.x +=
+                f64::from(step) * RENDER_ORIGIN_ERROR_M * 0.25;
+            assert!(same_render_layout(&previous, &changed));
+            if step >= 5 {
+                assert!(!same_render_layout(&before, &changed));
+            }
+            previous = changed;
+        }
+    }
+
+    #[test]
+    fn rotating_world_root_keeps_bracket_across_com_recentering() {
+        let system: thessa_sim_core::SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = system.bake().unwrap();
+        let body = ephemeris.body_id("thessa").unwrap();
+        let mut catalogue = layout();
+        let RenderAppearance::Available(geometry) = &mut catalogue.vehicles[0].render else {
+            unreachable!()
+        };
+        let a = SimTime(1234.0);
+        let b = SimTime(1234.1);
+        let origin = DVec3::new(3e12, -2e12, 1e12);
+        let pose = |time, point, rotation| {
+            FlightPose::new(
+                time,
+                point - ephemeris.body_state(body, time).unwrap().position_inertial,
+                rotation,
+            )
+            .unwrap()
+        };
+        let first = pose(a, origin, DQuat::from_rotation_y(0.7));
+        let last = pose(
+            b,
+            origin + DVec3::new(4.0, 2.0, 1.0),
+            DQuat::from_rotation_y(1.1),
+        );
+        let anchor = geometry.parts[0].position_body_m;
+        // The reference is the existing body-origin interpolation, not an
+        // interpolated part-origin chord. Pure rotation must remain unchanged.
+        let mut reference = Track {
+            previous: None,
+            latest: first,
+        };
+        reference.push(last);
+        let mut recentered = Track {
+            previous: None,
+            latest: render_root(first, geometry, anchor).unwrap(),
+        };
+        let shift = DVec3::new(0.125, -0.25, 0.5);
+        for part in &mut geometry.parts {
+            part.position_body_m -= shift;
+        }
+        let shifted_pose = FlightPose::new(
+            last.time(),
+            last.relative_position_m() + last.orientation_body_to_inertial() * shift,
+            last.orientation_body_to_inertial(),
+        )
+        .unwrap();
+        recentered.push(render_root(shifted_pose, geometry, anchor).unwrap());
+        for step in 0..=10 {
+            let time = SimTime(a.0 + (b.0 - a.0) * f64::from(step) / 10.0);
+            let expected = reference.at(time, &ephemeris, body).unwrap();
+            let actual = recentered.at(time, &ephemeris, body).unwrap();
+            assert!((expected.position_m - actual.position_m).length() < 0.001);
+            assert!((expected.rotation * DVec3::X - actual.rotation * DVec3::X).length() < 1e-12);
+        }
+        assert!(
+            recentered
+                .at(SimTime(b.0 + 0.01), &ephemeris, body)
+                .is_none()
+        );
+        // New sources keep their publication's body frame, not a part origin.
+        let expected = geometry.parts[0].position_body_m
+            + geometry.parts[0].orientation_mesh_to_body * geometry.parts[0].mesh.positions[0];
+        let mut source = MeshAsset {
+            primitives: vec![],
+            materials: vec![],
+            textures: vec![],
+            images: vec![],
+        };
+        append_catalogue(&mut source, &catalogue, &mut BTreeMap::new()).unwrap();
+        assert!(
+            (glam::Vec3::from(source.primitives[0].vertices[0].position).as_dvec3() - expected)
+                .length()
+                < 0.001
+        );
     }
 
     #[test]
@@ -445,6 +702,70 @@ mod tests {
             "different shapes must render on their own sides: {left}/{right}"
         );
         assert_eq!(image, render(&scene, &mut meshes, 320, 240));
+        let shift = DVec3::new(0.125, -0.25, 0.5);
+        let fleet = &mut scene.remote.as_mut().unwrap().fleet;
+        let mut shifted = (**fleet.geometry.as_ref().unwrap()).clone();
+        shifted.revision = 2;
+        for vehicle in &mut shifted.vehicles {
+            let RenderAppearance::Available(geometry) = &mut vehicle.render else {
+                unreachable!()
+            };
+            for part in &mut geometry.parts {
+                part.position_body_m -= shift;
+            }
+        }
+        for row in &mut fleet.rows {
+            row.pose = FlightPose::new(
+                SimTime(0.1),
+                row.pose.relative_position_m() + row.pose.orientation_body_to_inertial() * shift,
+                row.pose.orientation_body_to_inertial(),
+            )
+            .unwrap();
+        }
+        fleet.geometry = Some(Arc::new(shifted));
+        fleet.updates += 1;
+        // Independently coalesced catalogue/pose slots may disagree briefly;
+        // don't consume these poses under the wrong render frame.
+        scene.sample.time = SimTime(0.1);
+        let unmatched = render(&scene, &mut meshes, 320, 240);
+        assert!(
+            unmatched
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[..3] == [0, 0, 0])
+        );
+        scene.remote.as_mut().unwrap().fleet.geometry_revision = 2;
+        assert_eq!(
+            image,
+            render(&scene, &mut meshes, 320, 240),
+            "COM origin change must not move any rendered surface"
+        );
+        assert_eq!(
+            meshes.source_publications, 1,
+            "COM shift updates matrices, not GPU source buffers"
+        );
+        scene.sample.time = SimTime(0.05);
+        assert_eq!(
+            image,
+            render(&scene, &mut meshes, 320, 240),
+            "COM-only revisions preserve the world-space bracket"
+        );
+        assert_eq!(meshes.epoch_withheld, 0);
+        assert!(meshes.tracks.values().all(|track| track.previous.is_some()));
+        // Synthetic renderer-level reset for the existing out-of-bracket case.
+        scene.sample.time = SimTime(0.0);
+        let fleet = &mut scene.remote.as_mut().unwrap().fleet;
+        for row in &mut fleet.rows {
+            row.pose = FlightPose::new(
+                SimTime(0.0),
+                row.pose.relative_position_m(),
+                row.pose.orientation_body_to_inertial(),
+            )
+            .unwrap();
+        }
+        fleet.updates += 1;
+        assert_eq!(image, render(&scene, &mut meshes, 320, 240));
         let before = meshes.draw_stats();
         assert!(
             meshes
@@ -497,7 +818,7 @@ mod tests {
             })
             .collect();
         fleet.geometry = Some(Arc::new(FleetGeometry {
-            revision: 2,
+            revision: 3,
             vehicles: (1..64)
                 .map(|id| {
                     let mut g = geometry.clone();
@@ -506,7 +827,7 @@ mod tests {
                 })
                 .collect(),
         }));
-        fleet.geometry_revision = 2;
+        fleet.geometry_revision = 3;
         fleet.updates += 1;
         let target = OffscreenTarget::new(&backend, 320, 240).unwrap();
         let mut times = Vec::new();
@@ -535,6 +856,126 @@ mod tests {
             "fleet_target_workload secondaries=63 primitives=64 synthetic_overlapping_triangles resolution=320x240 samples=100 warmup=10 update_submit_gpu_completion_median_us={:.3}; no readback, source upload excluded, not physical fleet or production FPS",
             times[50]
         );
+        // Full admitted vertex/part workload. Repeated triangles intentionally
+        // hold visibility constant; this is upload/selection work, not a fleet
+        // scene or an aesthetic comparison. Fresh Arcs model decoded packets.
+        let mut full = layout();
+        let part = render_parts(&mut full)[0].clone();
+        let positions = triangle().positions.clone();
+        *render_parts(&mut full) = (0..8)
+            .map(|i| {
+                let mut part = part.clone();
+                part.position_body_m = DVec3::new(f64::from(i) * 0.01, 0.0, 0.0);
+                part.orientation_mesh_to_body = DQuat::IDENTITY;
+                part.mesh = Arc::new(RenderMesh {
+                    positions: (0..128).map(|i| positions[i % 3]).collect(),
+                    normals: vec![DVec3::Z; 128],
+                    indices: (0..510).map(|i| i % 3).collect(),
+                });
+                part
+            })
+            .collect();
+        full.vehicles = (1..64)
+            .map(|id| {
+                let mut vehicle = full.vehicles[0].clone();
+                vehicle.vehicle_id = VehicleId::new(id);
+                vehicle
+            })
+            .collect();
+        full.revision = 4;
+        full.validate().unwrap();
+        let fleet = &mut scene.remote.as_mut().unwrap().fleet;
+        fleet.geometry = Some(Arc::new(full.clone()));
+        fleet.geometry_revision = full.revision;
+        fleet.updates += 1;
+        scene
+            .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+            .unwrap();
+        assert_eq!(meshes.draw_stats().draw_calls, 505);
+        let first_full = render(&scene, &mut meshes, 320, 240);
+        let mut timings = [Vec::new(), Vec::new()];
+        let mut revision = 4;
+        for force_rebuild in [false, true, true, false] {
+            let publications = meshes.source_publications;
+            for sample in 0..13 {
+                revision += 1;
+                let shift = DVec3::new(revision as f64 * 0.125, -0.25, 0.5);
+                let mut packet = full.clone();
+                packet.revision = revision;
+                for vehicle in &mut packet.vehicles {
+                    let RenderAppearance::Available(geometry) = &mut vehicle.render else {
+                        unreachable!()
+                    };
+                    for part in &mut geometry.parts {
+                        part.position_body_m -= shift;
+                        part.mesh = Arc::new((*part.mesh).clone());
+                    }
+                }
+                packet.validate().unwrap();
+                let fleet = &mut scene.remote.as_mut().unwrap().fleet;
+                fleet.geometry = Some(Arc::new(packet));
+                fleet.geometry_revision = revision;
+                fleet.updates += 1;
+                for row in &mut fleet.rows {
+                    row.pose = FlightPose::new(
+                        template.pose.time(),
+                        template.pose.relative_position_m()
+                            + template.pose.orientation_body_to_inertial() * shift,
+                        template.pose.orientation_body_to_inertial(),
+                    )
+                    .unwrap();
+                }
+                if force_rebuild {
+                    meshes.source_geometry = None;
+                }
+                let start = std::time::Instant::now();
+                scene
+                    .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+                    .unwrap();
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                clear(&mut encoder, &target);
+                meshes.encode(&mut encoder, &target.color, &target.depth);
+                backend.queue.submit([encoder.finish()]);
+                backend
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .unwrap();
+                if sample >= 3 {
+                    timings[usize::from(force_rebuild)].push(start.elapsed().as_secs_f64() * 1e6);
+                }
+                assert_eq!(meshes.draw_stats().instances, 64);
+                assert_eq!(meshes.draw_stats().draw_calls, 505);
+            }
+            assert_eq!(
+                meshes.source_publications - publications,
+                if force_rebuild { 13 } else { 0 }
+            );
+            assert_eq!(
+                first_full,
+                render(&scene, &mut meshes, 320, 240),
+                "COM reuse/rebuild must produce identical pixels"
+            );
+        }
+        for times in &mut timings {
+            times.sort_by(f64::total_cmp);
+        }
+        eprintln!(
+            "fleet_com_workload secondaries=63 parts_each=8 vertices_each=1024 indices_each=4080 resolution=320x240 ABBA samples_each=20 warmup_per_block=3 reuse_median_us={:.3} forced_source_rebuild_median_us={:.3}; fresh decoded-equivalent payloads, includes layout scan/update/clear/submit/GPU completion, excludes packet preparation/readback; forced invalidation is a diagnostic alternative, not an exact prior executable or production FPS",
+            timings[0][10], timings[1][10]
+        );
+        // Explicit membership removal retires the retained source and tracks.
+        let fleet = &mut scene.remote.as_mut().unwrap().fleet;
+        fleet.geometry = Some(Arc::new(FleetGeometry {
+            revision: revision + 1,
+            vehicles: vec![],
+        }));
+        fleet.geometry_revision = revision + 1;
+        fleet.rows.clear();
+        fleet.updates += 1;
+        let publications = meshes.source_publications;
+        assert_eq!(empty, render(&scene, &mut meshes, 320, 240));
+        assert_eq!(meshes.source_publications, publications + 1);
+        assert!(meshes.radii.is_empty() && meshes.tracks.is_empty());
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-tmp/fleet-world-oracle.png");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

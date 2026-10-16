@@ -2496,6 +2496,10 @@ consumer and stacked workspace gates follow in the next slice.
 
 ### Bounded native fleet body rendering (2026-10-16)
 
+The implementation/measurements in this subsection describe `2d26db0`. The
+following COM-stable publication subsection supersedes its GPU rebuild/history
+behavior for common translations; the dated measurements remain unchanged.
+
 The third stacked continuation connects retained appearance to the existing
 on-change catalogue and opaque mesh consumer. This supersedes the earlier
 contact-only/world-mesh gaps **only for bounded retained body shells**, not full
@@ -2618,6 +2622,70 @@ publications each. Different wall-time epochs/workloads and concurrent server
 CPU prevent an isolated HUD/network-cost comparison. The rebuilt legacy Bevy
 pilot also linked to the real v9 server and captured/exited without local
 fallback; audio remains unverified due to device warnings.
+
+### COM-stable native GPU publications (2026-10-16)
+
+The `feat/native-render-origin` continuation retains a catalogue Arc with the
+GPU publication. On a matched revision, native compares IDs, part counts,
+orientations, mesh/normal/index payloads and **relative** part origins. Labels
+and contacts do not determine GPU layout. Arc identity accelerates in-process
+comparison; independently decoded but equal payloads also reuse the source.
+This retains one bounded decoded catalogue publication, potentially older than
+the observer's latest catalogue; it is an Arc retention, not a deep mesh copy or
+an unbounded revision cache.
+True layout changes still rebuild the combined source, reupload PRIMARY and
+reset tracks. Explicit empty membership retires sources/history; stale or
+revision-mismatched observations still withhold draws, and disabled remains free
+of fleet GPU source/history work.
+
+For common translations, each incoming body pose is transformed to the body
+frame retained at source publication: `root = observed_position + rotation *
+(current_first_part_origin - published_first_part_origin)`. Source vertices stay
+in that publication's body frame. This preserves the existing inertial-linear /
+attitude-slerp interpolation, including across a COM-only revision; interpolating
+the first part's offset position instead would incorrectly replace rotation arcs
+with chords. No physics state, clock, wire layout, device, pass or target changes.
+The **1 nm** relative-layout subtraction allowance is always measured against the
+retained publication, not successive packets, preventing accumulated drift. The
+f64→f32 local vertex check reserves that allowance inside **1 mm**; culling radii
+include it. The large-coordinate CPU oracle checks the COM correction to <1 mm
+at `3e12 m`, including intermediate epochs and changed attitudes.
+
+This is not a network mesh dictionary or a general incremental GPU asset cache:
+every COM change still revises/retransmits the full wire-v9 catalogue. Per-part
+relative pose changes, splits/membership changes and actual mesh changes retain
+the full combined-source replacement path. Custom PRIMARY appearance and authored
+materials remain unimplemented.
+
+Reproduction and measured checks are recorded in
+`artifacts/native-render-origin-2026-10-16.json`. The deterministic hardware oracle
+checks identical pixels before/after a COM shift and inside a retained bracket,
+temporary revision mismatch, independent decoded-equivalent buffers, source
+retirement and disabled behavior. A 63-member / 8-part / 1,024-vertex / 4,080-index
+per-member workload compares reuse against forced source invalidation in ABBA
+order. It is a synthetic overlapping-triangle diagnostic, not a physical fleet,
+blind subjective review, exact old executable or production FPS comparison.
+The debug-profile diagnostic measured **4,236.468 / 95,544.766 μs** median for
+reuse / forced rebuild (20 measured samples per mode, three warmups per block),
+including layout scan, update, test clear, submit and GPU completion but excluding
+packet construction/decoding and readback. Reuse made **zero** source publications
+over 26 COM revisions; forced invalidation made 26. The original two-triangle
+oracle PNG remains byte-identical to the archived image.
+The same optimized test measured **3,091.306 / 13,349.746 μs** for reuse / forced
+rebuild; the 63-small-triangle steady-source case was **111.618 μs**. These are
+scoped local diagnostics, not production frame-time or network-efficiency claims.
+
+Checks passed: **1,826** workspace lib/bin + **53** integration + **24** Bevy-CBT
+GPU + **1** additional mesh-shader GPU + **7** native ignored (five GPU, one
+real-server CPU, one framed CLI/GPU) + **5** window tests = **1,916** distinct Rust
+gate tests. Formatting, workspace all-target/all-feature clippy, no-default native
+clippy, native/server builds, five QA tests and the 12-crate architecture guard
+passed. Hardware tests actually ran on Radeon 880M / RADV Vulkan; these are local
+checks, not a remote CI result or new legacy visual/audio acceptance.
+One later workspace rerun hit the existing fleet-silence fixture's five-second
+receive deadline. Its focused retry and another complete default-thread workspace
+run passed without changing the fixture or product code. The failure/retry logs
+remain recorded in the artifact; hardware/window gates needed no retry.
 
 ## 15. FastRT
 

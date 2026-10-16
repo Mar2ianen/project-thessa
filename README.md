@@ -186,8 +186,11 @@ The checked-in vertical slice currently contains:
      4,096 indices per secondary). Native draws available shells with a neutral
      finish through the existing opaque mesh pass, only when a secondary's
      samples bracket PRIMARY's presentation epoch; no extrapolation masks clock
-     debt. Stale/revision-mismatched observations withhold world draws. Authored
-     materials, full designs, PRIMARY model replacement, prediction/reconciliation
+      debt. Stale/revision-mismatched observations withhold world draws.
+      COM-only translations reuse the existing GPU source and interpolation
+      history in the original publication frame; the wire still sends the full
+      changed catalogue. Shape/relative-pose changes rebuild the combined source.
+      Authored materials, full designs, PRIMARY model replacement, prediction/reconciliation
      and reconnect remain unimplemented. v7/v8 peers fail version checking.
      `VehicleDefinition` also supports optional renderer-neutral retained meshes
      with explicit assembly-body ownership. Splits partition/recenter their poses

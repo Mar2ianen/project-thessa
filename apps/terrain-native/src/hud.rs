@@ -111,6 +111,7 @@ pub struct Stats {
     pub control_mode: Option<thessa_flight_authority::ControlMode>,
     pub stick: [f64; 3],
     pub parts: (bool, bool, bool, bool),
+    pub data: Option<crate::scene::FlightData>,
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
     pub sim_time_s: f64,
@@ -135,6 +136,7 @@ impl Stats {
             control_mode: scene.live_flight().then_some(scene.control_mode),
             stick: scene.input.stick_scaled().to_array(),
             parts: scene.part_states().unwrap_or((true, true, true, false)),
+            data: scene.flight_data(),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
@@ -307,6 +309,15 @@ fn widgets(
                 ui.small("Host wall time, not GPU timing or game FPS.");
                 ui.separator();
                 if stats.live_flight {
+                    if let Some(data) = stats.data {
+                        ui.label(format!(
+                            "Speed {:.1} m/s · Alt {:.0} m (AGL {:.0} m) · V/S {:+.1} m/s",
+                            data.surface_speed_mps,
+                            data.altitude_datum_m,
+                            data.altitude_agl_m,
+                            data.vertical_speed_mps,
+                        ));
+                    }
                     ui.label(format!(
                         "Input: throttle {:.0}% · engine {} · {} · stick ({:+.1}, {:+.1}, {:+.1})",
                         stats.throttle * 100.0,

@@ -1,0 +1,99 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/owned-flight-data",
+  "base_commit": "fe30ca3",
+  "baseline_binary_sha256": "a4476e58b8f3ef86b48ec41f082bcaa75c63d7df9410fc23f2d2e01e45011f89",
+  "binary_sha256": "63907294d4a031c126b0a0a7da2d9bc3efc898458a9af2ab22ecc7cd89fd64d4",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile and hud feature",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "settings": {"graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b", "exposure_ev100": 13, "vsync": false},
+  "ownership": {
+    "gpl": "native Scene::flight_data readout through the shared local_air_kinematics and the old-client AGL ground formula; old-client instruments untouched",
+    "mit": "existing render-core frames/instances and render-wgpu terrain/mesh/device/queue unchanged; no game logic moved into MIT crates",
+    "asset": "North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt",
+    "new_external_dependency_versions": [], "new_unsafe_code": false, "new_crates": [],
+    "native_bevy_runtime_crates": [], "native_wgpu_versions": ["30.0.1"],
+    "extra_gpu_devices_scene_readbacks_or_intermediate_scene_targets": 0,
+    "readback_boundary": "existing optional final captures and hardware test assertions read back; no runtime per-frame scene readback"
+  },
+  "data_contract": {
+    "sampling": "shared local_air_kinematics(atmosphere, state, reference body_state, radius) at the completed authority time; surface speed, vertical speed, datum altitude",
+    "ground": "verbatim old-client AGL formula (render-axes origin, spin-undo, same height_m call); a raw-inertial-direction iteration read the wrong terrain by ~140m and is pinned against by regression",
+    "scope": "reference-body readout only; no dominant-body display switching",
+    "failure_boundary": "None without live flight or on failed ephemeris/atmosphere sample; hosts keep the previous readout, telemetry falls back to NaN fields",
+    "telemetry": "spd/vspeed/alt/agl keys appended to the flight status line",
+    "excluded": "dominant-body display, air data beyond shared kinematics, alerts/phases, autopilot blocks"
+  },
+  "stationary_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "order": ["baseline-1", "new-1", "new-2", "baseline-2"],
+    "size": [1280, 720], "hud": true,
+    "measured_frames_per_run": 600, "warmup_frames_per_run": 30, "prestream_seconds_per_run": 10,
+    "final_tiles_each_run": 287, "terrain_triangles_each_run": 297216,
+    "measured_geometry_publications_each_run": 0, "capacity_rejections_each_run": 0,
+    "runs": [
+      {"name": "baseline-1", "median_ms": 2.51, "p95_ms": 2.934, "p99_ms": 3.519, "max_ms": 10.777, "material_update_upload_bytes": 23330460},
+      {"name": "new-1", "median_ms": 2.542, "p95_ms": 3.075, "p99_ms": 3.653, "max_ms": 9.996, "material_update_upload_bytes": 23243080},
+      {"name": "new-2", "median_ms": 2.588, "p95_ms": 3.274, "p99_ms": 3.524, "max_ms": 10.391, "material_update_upload_bytes": 22893560},
+      {"name": "baseline-2", "median_ms": 2.569, "p95_ms": 3.093, "p99_ms": 3.454, "max_ms": 7.922, "material_update_upload_bytes": 21845000}
+    ],
+    "boundary": "host presentation/streaming/camera/classify/raster/HUD/upload/GPU-completion latency; excludes setup, pre-stream, warm-up and capture readback",
+    "conclusion": "overlapping medians on the untouched survey path; no speedup claimed, no adapter tax isolated"
+  },
+  "live_offscreen": {
+    "size": [1280, 720], "hud": true,
+    "requested_elapsed_per_frame_s": 0.016666666666666666,
+    "measured_frames": 600, "warmup_frames": 30, "prestream_seconds": 10,
+    "prestream_physics_frozen": true, "warmup_advances_physics": true, "wall_work_budget": null,
+    "completed_authority_and_presentation_time_s": 10.5,
+    "identical_final_relative_position_m": [-2847029.6640625, 759068.1640593708, 1250706.967514596],
+    "final_backlog_s": 0, "flight_stopped": false,
+    "telemetry": "throttle=1.000 engine=true control_mode=Navball sas=true rcs=true wheels=true gear=true chutes=false spd=372.2 vspeed=+49.3 alt=942 agl=848",
+    "launch_data": {"agl_m": 500.0, "surface_speed_mps_range": [150, 250], "vertical_speed_mps_range": [-10, 10]},
+    "mesh_instances": 1, "mesh_draw_calls": 2, "mesh_triangles": 78465, "mesh_frame_upload_bytes": 640,
+    "runs": [
+      {"name": "flight", "arguments": "--flight", "median_ms": 3.092, "p95_ms": 5.022, "p99_ms": 12.014, "max_ms": 12.803, "final_tiles": 374, "terrain_triangles": 410112, "measured_selections": 9, "measured_geometry_publications": 45, "capacity_rejections": 0, "final_pending_jobs": [0, 4]},
+      {"name": "flight-chase", "arguments": "--flight --chase", "median_ms": 2.83, "p95_ms": 4.784, "p99_ms": 11.146, "max_ms": 13.239, "final_tiles": 374, "terrain_triangles": 375552, "measured_selections": 9, "measured_geometry_publications": 36, "capacity_rejections": 0, "final_pending_jobs": [0, 4]}
+    ],
+    "boundary": "full existing local physics demand + per-frame kinematics/height sampling + presentation/streaming/terrain/mesh/HUD/uploads/GPU completion; excludes setup, pre-stream, warm-up and final readback; not isolated sampling cost or game FPS",
+    "comparison_boundary": "different camera cover between orbit/chase; not equal-scene runs and not Bevy parity; trajectory (not pixels) is the identity"
+  },
+  "verification": {
+    "fmt": "pass", "workspace_all_target_all_feature_clippy_deny_warnings": "pass", "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "agent_qa_unittests": "pass (5 tests)", "architecture_check": "pass (12 guarded foundational crates)",
+    "workspace_lib_bin_tests": 1778, "workspace_integration_tests": 52,
+    "ignored_bevy_cbt_hardware_tests": 24, "ignored_native_gpu_tests": 4,
+    "ignored_native_window_tests": 4, "successful_total": 1862,
+    "new_regressions": "500m launch AGL, ~180m/s launch energy, climb under 600 full-thrust steps, None-without-flight, telemetry keys",
+    "review": "kinematics reuse, verbatim ground formula, reference-body scope, fail-closed sampling, GPL/MIT separation",
+    "logs": "/tmp/opencode/owned-data-{final-clippy,final-lib,final-integration,final-bevy-gpu,final-native-gpu,final-window-test,final-nohud,qa,build,legacy-build,legacy-smoke}.log and owned-data-measure-*.log plus owned-data-wayland.log"
+  },
+  "native_wayland_smoke": {
+    "arguments": "--flight --frames 1200", "hud": true,
+    "elapsed_demand_clamp_s": 0.1, "cooperative_work_budget_ms": 8,
+    "presentation_requests": 1200, "presentation_elapsed_s": 10.116,
+    "requests_per_second": 118.6, "process_elapsed_s": 11.582, "exit_code": 0,
+    "completed_authority_and_presentation_time_s": 10.108333333333333,
+    "final_backlog_s": 0.001539808666667539, "flight_stopped": false,
+    "telemetry": "throttle=1.000 engine=true control_mode=Navball sas=true rcs=true wheels=true gear=true chutes=false spd=367.6 vspeed=+48.6 alt=923 agl=830",
+    "final_tiles": 374, "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor policy, not display feedback, GPU-only time or game FPS"
+  },
+  "legacy_bevy_smoke": {
+    "build": "cargo build -p thessa-client (debug)",
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0, "capture_size": [1270, 1588],
+    "limitations": "embedded server executable absent: existing local fallback; old-client instruments untouched; different camera/time/game controls/effects, not audio/network validation or equal-scene parity"
+  },
+  "captures": [
+    {"path": "owned-data-new-1-2026-10-16.png", "size": [1280, 720], "sha256": "de46b78df2f8434a4a08044e3eb2216f23fc6691b304081805f5f5daa7afc22c", "meaning": "normal terrain-only new-1 HUD regression frame"},
+    {"path": "owned-data-flight-2026-10-16.png", "size": [1280, 720], "sha256": "0c25c16ca33a41026a106fe27119c02cbc63126d8b310d8f2d569b3d148f48a4", "meaning": "actual local authority at 10.5s with speed/datum/AGL/vertical readout (372.2m/s, 942m, 848m, +49.3m/s)"},
+    {"path": "owned-data-bevy-pilot-2026-10-16.png", "size": [1270, 1588], "sha256": "1225878e34d3a1be76cc2dd13ea2c7942b71b6e223498039dd4c96a1c271c532", "meaning": "legacy unpaused local-fallback pilot, instruments untouched; not equal-scene parity"}
+  ],
+  "limitations": [
+    "Read-only reference-body instruments: no dominant-body display, air-data panel, alerts/phases, autopilot blocks or production navball.",
+    "Survey/map camera still legacy; materials remain base-color/Lambert without PBR/shadows/atmosphere parity.",
+    "Captures are not visual acceptance or equal-scene Bevy parity.",
+    "No device-loss recovery, persistent conforming GPU bisector topology or FastRT acceleration structures are established by this slice."
+  ]
+}

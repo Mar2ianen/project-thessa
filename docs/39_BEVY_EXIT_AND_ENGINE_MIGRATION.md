@@ -1838,6 +1838,68 @@ equal-scene parity proof.
 
 ![Native live COAST flight with the systems panel](artifacts/owned-parts-flight-2026-10-16.png)
 
+### Owned flight-data continuation (2026-10-16)
+
+The next slice gives the native live view its first production instruments
+without touching the solver: surface speed, vertical speed, datum altitude
+and AGL altitude, read from the existing authority state every frame. The
+sampling reuses the shared `local_air_kinematics` the old client's HUD
+consumes, and the ground lookup mirrors the old client's AGL formula
+verbatim (render-axes origin, spin-undo, same height call) — an early
+iteration sampling the raw inertial direction read the wrong terrain by
+~140 m and is pinned against by regression. Readout is reference-body only;
+the old client's dominant-body display switching near other worlds stays
+out of scope and is documented, not reimplemented. Failures (no flight,
+failed ephemeris/atmosphere sample) yield `None` and keep the previous
+readout instead of NaNs. Telemetry gains `spd/vspeed/alt/agl` keys.
+
+Regressions pin the 500 m launch AGL, the ~180 m/s launch energy, climb
+under full thrust over 600 steps, the `None`-without-flight boundary and
+telemetry keys. Old-client instruments are untouched. No new unsafe code,
+external dependencies, devices, scene readback, intermediate scene targets,
+CLI surface or benchmarks (sampling reuses solver-owned kinematics; per-frame
+cost is one ephemeris sample plus one field height query).
+
+**Validation and measurements.** On the Radeon 880M, the terrain-only 1280×720
+HUD A/B/B/A run (600 measured + 30 warm-up frames, 10 s pre-stream) measured
+baseline **2.510 / 2.569 ms** and new **2.542 / 2.588 ms** medians. Every run
+ended at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications or capacity refusals; sampling runs in live mode only, so this
+A/B stays an equal workload. Overlapping medians establish neither a speedup
+nor an isolated adapter tax. The preserved baseline executable is the exact
+`77ee5d4` build from the static-mesh checkpoint.
+
+Orbit and chase live runs reached **10.5 s** completed authority/presentation
+time with identical final relative coordinates and no stopped flight (**3.092 /
+2.830 ms** medians), reporting `spd=372.2 vspeed=+49.3 alt=942 agl=848` at the
+completed time. These include full local physics demand, per-frame kinematics
+plus one field height query, streaming, rendering, the extended HUD and GPU
+completion, **not** isolated sampling cost or game FPS; camera cover differs,
+so do not compare medians as an equal scene. Both runs submitted one mesh
+instance / two draws / 78,465 mesh triangles / 640 frame upload bytes (45 /
+36 measured terrain publications, zero refusals). Native Wayland smoke
+requested **1,200** presentations in **10.116 s** (**118.6 requests/s**, not
+display/game FPS), exited 0, and finished at **10.108 s** completed simulation
+with a **0.001540 s** backlog, no flight stop and no refusals. Window clamping
+does not promise real-time simulation; this run does **not** establish 1×
+realtime throughput.
+
+Captures and machine-readable methodology/results are recorded in
+`artifacts/owned-flight-data-2026-10-16.json`.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, agent QA unit tests (5 passed) and
+the architecture boundary check (12 guarded crates), **1,778** workspace
+lib/bin + **52** integration + **24** Bevy-CBT hardware + **4** native GPU +
+**4** native-window tests = **1,862 successful tests**. Local review covered
+kinematics reuse, the verbatim ground formula, reference-body scope,
+fail-closed sampling and GPL/MIT separation (no new crate, no game logic
+moved). The debug legacy Bevy pilot also ran **unpaused**, saved a flight
+screenshot and exited 0 using the existing local fallback; not an
+audio/network test or equal-scene parity proof.
+
+![Native live COAST flight with speed/altitude readout](artifacts/owned-data-flight-2026-10-16.png)
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

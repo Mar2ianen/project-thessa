@@ -1,7 +1,7 @@
 //! A real canonical-field resident partition, shared by window/headless paths.
 //! Shared live terrain streaming policy; not the networked game client.
 use crate::celestial::{CelestialPresentation, Sample};
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 use thessa_rcbt_core::tile_anchor::{TileAnchor, TileKey};
 use thessa_render_wgpu::{
     Backend, BackendError,
@@ -58,7 +58,64 @@ pub enum PartToggle {
     Parachutes,
 }
 
+/// Read-only live flight data for the production-HUD path. Reference body
+/// only: unlike the old client's display-body switching near other worlds,
+/// the native viewer always reads relative to the flown reference body.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlightData {
+    pub surface_speed_mps: f64,
+    pub vertical_speed_mps: f64,
+    pub altitude_datum_m: f64,
+    pub altitude_agl_m: f64,
+}
+
 impl Scene {
+    /// Sample surface speed, vertical speed and datum/AGL altitude from the
+    /// existing authority state through the shared kinematics (the same
+    /// function the old client's HUD consumes). `None` without live flight
+    /// or on a failed ephemeris/atmosphere sample; hosts keep their previous
+    /// readout in that case.
+    pub fn flight_data(&self) -> Option<FlightData> {
+        let flight = self.flight.as_ref()?;
+        let time = thessa_sim_core::SimTime(flight.flight_time_s);
+        let body_state = self
+            .celestial
+            .ephemeris()
+            .body_state(flight.reference_body, time)
+            .ok()?;
+        let kinematics = thessa_flight_authority::local_air_kinematics(
+            flight.atmosphere,
+            flight.state,
+            body_state,
+            flight.planet_radius_m,
+        )
+        .ok()?;
+        let surface_speed_mps = kinematics.surface_velocity_inertial_mps.length();
+        let vertical_speed_mps = kinematics
+            .surface_velocity_inertial_mps
+            .dot(kinematics.radial_up);
+        let altitude_datum_m = kinematics.altitude_m.max(0.0);
+        // Ground lookup mirrors the old client's AGL readout verbatim
+        // (render-axes origin, spin-undo, same height call): the field frame
+        // needs the mapped direction, not the raw inertial one.
+        let origin = DVec3::new(
+            flight.relative_position_m.x,
+            flight.relative_position_m.z,
+            -flight.relative_position_m.y,
+        );
+        let body_dir = DQuat::from_rotation_y(-flight.terrain_spin()) * origin.normalize();
+        let ground = self
+            .stream
+            .field()
+            .height_m(body_dir.to_array(), 32.0)
+            .max(0.0);
+        Some(FlightData {
+            surface_speed_mps,
+            vertical_speed_mps,
+            altitude_datum_m,
+            altitude_agl_m: (altitude_datum_m - ground).max(0.0),
+        })
+    }
     pub fn vehicle_preview(&self) -> bool {
         self.vehicle.is_some()
     }
@@ -281,7 +338,9 @@ impl Scene {
     }
 
     pub fn flight_telemetry(&self) -> Option<String> {
-        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed))
+        self.flight.as_ref().map(|flight|{
+            let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN });
+            format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }
     pub fn flight_stopped(&self) -> bool {
         self.flight
@@ -1090,6 +1149,29 @@ mod tests {
         let states = scene.part_states();
         controls.apply(&mut scene);
         assert_eq!(scene.part_states(), states);
+    }
+
+    #[test]
+    fn flight_data_reports_launch_energy_and_climbs_under_thrust() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        assert_eq!(scene.flight_data(), None);
+        scene.enable_live_flight().unwrap();
+        let data = scene.flight_data().unwrap();
+        assert!((data.altitude_agl_m - 500.0).abs() < 1.0);
+        assert!((150.0..250.0).contains(&data.surface_speed_mps));
+        assert!((-10.0..10.0).contains(&data.vertical_speed_mps));
+        assert!(data.altitude_datum_m > data.altitude_agl_m);
+        for _ in 0..600 {
+            scene.push_live_input(1.0 / 60.0, false, false);
+            scene.advance_flight(1.0 / 60.0, None).unwrap();
+        }
+        let later = scene.flight_data().unwrap();
+        assert!(later.altitude_datum_m > data.altitude_datum_m + 100.0);
+        assert!(later.surface_speed_mps > data.surface_speed_mps);
+        let telemetry = scene.flight_telemetry().unwrap();
+        for key in ["spd=", "vspeed=", "alt=", "agl="] {
+            assert!(telemetry.contains(key), "missing {key} in {telemetry}");
+        }
     }
 
     #[test]

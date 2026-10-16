@@ -133,7 +133,11 @@ The checked-in vertical slice currently contains:
   control law, `T` toggles SAS and `CapsLock` scales precision; the HUD mirrors
   the same panel plus installed-system toggles (`R` RCS, `Y` wheels, `G` gear,
   `P` chutes) applied as the explicit part commands the old pilot sends.
-  Server forwarding, assists and the mode HUD are not ported yet.
+  The live HUD also reads speed, datum/AGL altitude and vertical speed from
+  the same shared kinematics the old client's instruments consume
+  (reference-body readout; the old client's dominant-body display switching
+  stays out of scope). Server forwarding, assists and the mode HUD are not
+  ported yet.
   `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
   chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.

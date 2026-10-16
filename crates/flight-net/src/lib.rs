@@ -3,7 +3,8 @@
 //! The server owns the flight state; clients send [`ClientInput`] and apply
 //! [`Snapshot`]. Vectors are plain `[f64; 3]` arrays so the wire format does
 //! not couple to any math crate version. Framing and versioning come from
-//! `thessa-protocol`; this crate only owns the game payload registry.
+//! `thessa-protocol`; this crate owns the game payload registry and native
+//! embedded-server transport, without a client engine or renderer dependency.
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -415,6 +416,8 @@ pub struct Snapshot {
     pub flight_error: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod embedded;
 pub mod presentation;
 
 /// Encode a game message into a framed byte stream chunk.

@@ -2028,6 +2028,64 @@ blind preference comparison.
 
 ![Native shared survey framing at HIGHLANDS](artifacts/owned-survey-highlands-2026-10-16.png)
 
+### Owned embedded-server transport continuation (2026-10-16)
+
+The old client's stdio child link moves into GPL
+`flight-net::embedded::EmbeddedLink`, preserving its framing/handshake,
+reader-owned receive timestamps, two-arrival latest-wins inbox, generation
+delivery, presentation interpolation clock, ordered input mailbox and
+startup/drop cleanup. The Bevy host now owns only a resource newtype; no
+second transport, task scheduler or interpolation implementation is added.
+Game transport stays GPL and no reusable MIT renderer crate acquires game or
+network policy. The module is native-only (not exported on wasm32).
+
+`spawn` retains sibling `thessa-server` discovery; `spawn_server` accepts an
+explicit executable path without a shell or extra arguments. Hosts still
+choose fallback policy. The wire version/payloads and server are unchanged.
+The moved input mailbox keeps the existing cap of 64 pending legacy edge
+commands (Stage/Engine/Part/Reset); it does not newly establish a total bound
+for arbitrary queued fleet/autopilot command variants. Extending that policy
+and surfacing remote disconnects remain follow-up work, not transport parity
+claims introduced by this extraction.
+
+The nine existing interpolation/inbox/mailbox/startup regressions move with
+their owner and replace Bevy math imports with the same workspace glam. A new
+Unix framed-Welcome fixture verifies successful handshake followed by child
+kill/reap on drop (startup timeout/early-exit reap tests remain). Scratch stays
+under the owning crate's `target/test-tmp`, never the shared system temp tree.
+
+`cargo run -p thessa-flight-net --example embedded_probe -- PATH_TO_THESSA_SERVER`
+is a headless smoke against the real server executable: it receives nine
+snapshots, sends validated throttle-cut/engine-off intent, requires server
+acknowledgement and advancing time/tick, checks finite interpolated state and
+drops the link. This is a protocol/lifecycle probe, not a new gameplay host,
+render benchmark, native viewer snapshot adoption or fleet/prediction support.
+Native viewer networking remains explicitly unported.
+
+Source comparison against `ed57dc2` confirms the inbox/mailbox/child guards,
+handshake worker threads and send/snapshot accessors are unchanged after
+crate-path qualification, removal of the Bevy Resource derive and formatting.
+The explicit executable-path wrapper and successful-handshake lifecycle test
+are the only transport additions. No performance improvement is claimed for
+moving the owner; the resource adapter has no extra worker, queue or allocation.
+
+All gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied (including a final rerun after tightening the probe's time-advance
+assertion), no-default-feature viewer clippy, **1,789** workspace lib/bin +
+**52** integration + **24** Bevy-CBT hardware + **4** native GPU + **4**
+native-window tests = **1,873 Rust tests**, five agent-QA tests and the
+12-crate architecture check. Hardware suites ran on Radeon 880M / RADV STRIX1.
+The real-server probe received ticks 5→132 and simulation time 0.041667→1.1 s
+and acknowledged throttle cut/engine off. Its 1.414 s startup/handshake
+included 1.296 s of server launch-site setup; these are smoke diagnostics,
+not isolated network latency or a benchmark win.
+
+The debug Bevy pilot also captured and exited cleanly, **unpaused and linked
+to the real server**, with remote stepping logged through 10 s / 1,200 ticks
+(no local fallback). ALSA/JACK warnings leave audio unverified. Reproduction,
+checks, binary/capture hashes and limitations are in
+`artifacts/owned-embedded-link-2026-10-16.json`.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

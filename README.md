@@ -155,7 +155,12 @@ The checked-in vertical slice currently contains:
   requests elapsed simulation time per frame, including warm-up; pre-stream is
   frozen. Body spin, direct lights, mesh and camera publish at the authority's
   actual completed time. Checked GPL `FlightPose` inputs are shared with the old
-  pilot; its existing network interpolation arithmetic now lives in `flight-net`.
+   pilot; its existing network interpolation arithmetic now lives in `flight-net`.
+   The native child-process stdio link also lives in GPL `flight-net::embedded`;
+   the old client retains only its Bevy resource adapter. A headless protocol
+   smoke is available with `cargo run -p thessa-flight-net --example embedded_probe -- PATH_TO_THESSA_SERVER`
+   after building `thessa-server`. This does not yet wire server snapshots into
+   the native viewer or implement fleet presentation/prediction.
   Headless `--prestream-seconds 10 --sweep` exercises
    changing demand rather than a fixed resident snapshot.
    The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's

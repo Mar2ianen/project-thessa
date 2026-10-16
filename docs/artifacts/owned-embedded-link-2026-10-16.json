@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/owned-embedded-link",
+  "base_commit": "ed57dc2",
+  "ownership": {
+    "gpl": "native stdio EmbeddedLink moved from apps/client to flight-net::embedded; Bevy client retains Resource/Deref newtype only",
+    "mit_renderer_changes": false,
+    "new_dependencies_crates_or_unsafe": false,
+    "native_viewer_network_adoption": false,
+    "wire_changes": false,
+    "extra_workers_queues_or_allocations_in_resource_adapter": 0
+  },
+  "source_review": {
+    "reference": "ed57dc2:apps/client/src/embedded.rs",
+    "compared_regions": ["struct ReceivedSnapshot through child lifecycle guards", "spawn_command handshake and worker threads", "send_input/latest_snapshot/interpolated_snapshot"],
+    "normalization": "thessa_flight_net:: -> crate::; remove Bevy Resource derive; ignore formatting whitespace",
+    "result": "compared transport core unchanged",
+    "additions": "explicit executable-path spawn_server wrapper; Unix successful framed-Welcome/drop-reap test; headless real-server probe"
+  },
+  "real_server_probe": {
+    "build": ["cargo build -p thessa-server", "cargo run -p thessa-flight-net --example embedded_probe -- /home/chechulin/Projects/project-thessa-fastrt/target/debug/thessa-server"],
+    "profile": "debug",
+    "probe_binary_sha256": "a56f385553fe316c81a12f5538ae48e1292a541c13ba239923c42c707b395c35",
+    "server_binary_sha256": "960a0234b704755fbbb129f9be42d86dbc66d6cc1137dd718c9229154027c650",
+    "exit_code": 0,
+    "handshake_including_process_and_world_startup_ms": 1413.532,
+    "server_launch_site_setup_s": 1.296,
+    "snapshots_received": 9,
+    "first_tick": 5,
+    "last_tick": 132,
+    "first_sim_time_s": 0.041666666666666664,
+    "last_sim_time_s": 1.1,
+    "input": "validated PRIMARY vehicle throttle=0 engine_active=false, Navball/SAS, warp=1/unpaused",
+    "input_acknowledged": true,
+    "finite_interpolated_state_checked": true,
+    "link_dropped": true,
+    "elapsed_s": 2.479,
+    "boundary": "functional stdio/authority acknowledgement/lifecycle smoke, not a benchmark, isolated handshake latency, renderer cost or game FPS"
+  },
+  "legacy_bevy_smoke": {
+    "build": "cargo build -p thessa-client (debug)",
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0,
+    "actual_server_link": true,
+    "local_fallback": false,
+    "log_evidence": ["[client] embedded server linked; flight steps remotely", "[server] pilot owner assigned: local#1", "[server] status ... sim_s=10 steps=1200"],
+    "capture": "owned-link-bevy-pilot-2026-10-16.png",
+    "capture_size": [1270, 1588],
+    "capture_sha256": "ee2fb9f776121a3d868f1804f1426a0e8e0611fc1c93225f2f5cb252dac8ed47",
+    "limitations": "ALSA/JACK device warnings: audio not verified; startup/screenshot wall-time is not a fixed simulation epoch; not native visual parity or blind visual acceptance"
+  },
+  "verification": {
+    "fmt": "pass",
+    "workspace_all_target_all_feature_clippy_deny_warnings": "pass; rerun after final stricter probe time assertion",
+    "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1789,
+    "workspace_integration_tests": 52,
+    "bevy_cbt_hardware_tests": 24,
+    "native_gpu_tests": 4,
+    "native_window_tests": 4,
+    "successful_rust_tests": 1873,
+    "moved_transport_tests": 9,
+    "new_transport_tests": 1,
+    "new_test": "successful framed-Welcome handshake followed by child drop; kill -0 and Linux /proc assert child gone/reaped",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "agent_qa_unittests": 5,
+    "architecture_guarded_crates": 12,
+    "logs": "/tmp/opencode/owned-link-{unit,client,clippy,final-clippy,lib,integration,nohud,bevy-gpu,native-gpu,window-test,qa,legacy-build,legacy-smoke,probe-final,server-build}.log"
+  },
+  "limitations": [
+    "Native viewer snapshot adoption, fleet rendering, prediction/reconciliation and external TCP client support remain unported.",
+    "Existing mailbox caps 64 pending legacy Stage/Engine/Part/Reset events, not arbitrary queued fleet/autopilot variants; no new total-bound claim.",
+    "Remote disconnect surfacing/worker joins and stricter handshake/snapshot validation are not improved by this source-owner extraction.",
+    "No performance improvement or visual acceptance claim; render algorithms, graphics capability/fallback policy and device ownership are unchanged."
+  ]
+}

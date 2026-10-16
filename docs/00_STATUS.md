@@ -86,6 +86,10 @@ clients (quaternion orbit/free look/zoom/reset and native bookmark selection).
 Native survey framing is now 5 km by default rather than 30 km; prior terrain
 timings are not an equal-workload comparison. The celestial map camera remains
 in the unported remainder above.
+The owned native embedded-server transport now lives in GPL `flight-net`
+(stdio handshake, receive timestamps/inbox, input mailbox and child cleanup);
+the old client keeps only a Bevy resource wrapper. Native viewer snapshot
+adoption, fleet rendering and prediction/reconciliation remain unported.
 
 ## Autopilot and roadmap
 

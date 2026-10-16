@@ -1092,7 +1092,7 @@ pub(super) const DOCK_SCENE_EXIT_M: f64 = 10_000.0;
 pub(super) const JOINTED_SCENE_DEBT_CAP_S: f64 = 0.25;
 pub(super) const JOINTED_SCENE_DT_S: f64 = 1.0 / 120.0;
 /// Upper bound on authoritative vehicles (primary plus spawned clusters).
-pub(super) const MAX_FLEET_VEHICLES: usize = 64;
+pub(super) const MAX_FLEET_VEHICLES: usize = thessa_flight_net::MAX_FLEET_VEHICLES;
 /// Solver body config for dock-partner sync: full CCD, never sleep, so a
 /// jointed pair cannot freeze mid-protocol.
 pub(super) const DOCK_BODY_CONFIG: DynamicBodyConfig = DynamicBodyConfig {
@@ -1226,7 +1226,9 @@ impl Sim {
                 )
                 .map_err(|error| error.to_string())?
         };
-        if self.fleet.len() + definitions.len() - 1 > MAX_FLEET_VEHICLES {
+        // Existing total = PRIMARY + secondaries; splitting replaces one
+        // vehicle with `definitions.len()` clusters, keeping one under its ID.
+        if self.fleet.len() + definitions.len() > MAX_FLEET_VEHICLES {
             return Err("fleet is full".into());
         }
         let keep_index = definitions

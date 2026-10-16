@@ -2086,6 +2086,85 @@ fn separate_spawns_a_secondary_with_conserved_mass_and_fleet_snapshot() {
 }
 
 #[test]
+fn fleet_broadcast_is_complete_including_transition_to_empty() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }]),
+    );
+    let mailbox = Arc::new(OutboundMailbox::new());
+    driver.subscribers.push(("pilot".into(), mailbox.clone()));
+    let decode = |frame: OutboundFrame| {
+        let bytes = FrameDecoder::new().push(frame.as_ref()).unwrap().remove(0);
+        thessa_flight_net::decode_frame(&bytes).unwrap()
+    };
+    driver.broadcast_snapshot();
+    assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
+    let fleet = decode(mailbox.try_next().unwrap());
+    assert_eq!(fleet.kind, kind::FLEET_SNAPSHOT);
+    let fleet: FleetSnapshot = thessa_flight_net::decode_payload(&fleet).unwrap();
+    fleet.validate_membership().unwrap();
+    assert_eq!(fleet.vehicles.len(), 1);
+    assert_eq!(fleet.vehicles[0].snapshot.state, driver.sim.fleet[&1].state);
+    driver.sim.fleet.clear(); // Exercise membership publication, not a new despawn policy.
+    driver.broadcast_snapshot();
+    assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
+    let fleet: FleetSnapshot =
+        thessa_flight_net::decode_payload(&decode(mailbox.try_next().unwrap())).unwrap();
+    assert!(
+        fleet.vehicles.is_empty(),
+        "silence cannot clear a client registry"
+    );
+    assert!(mailbox.try_next().is_none());
+}
+
+#[test]
+fn fleet_capacity_counts_primary_and_rejects_split_before_mutation() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    let vehicle = separable_assembly_vehicle();
+    for id in 1..crate::sim::MAX_FLEET_VEHICLES as u32 - 1 {
+        let authority = FlightAuthority::new_with_vehicle(
+            &driver.sim.ephemeris,
+            driver.sim.authority.reference_body,
+            vehicle.clone(),
+        )
+        .unwrap();
+        driver.sim.fleet.insert(id, authority);
+    }
+    let separate = input(vec![Command::Separate {
+        vehicle_id: VehicleId::PRIMARY,
+        link_name: "stack".into(),
+    }]);
+    driver.sim.apply_input("pilot", &separate);
+    assert_eq!(driver.sim.fleet.len() + 1, crate::sim::MAX_FLEET_VEHICLES);
+    driver.sim.fleet_snapshot().validate_membership().unwrap();
+    install_separable_vehicle(&mut driver.sim);
+    let source_mass = driver.sim.authority.vehicle.mass_properties.mass_kg;
+    driver.sim.apply_input("pilot", &separate);
+    assert_eq!(driver.sim.fleet.len() + 1, crate::sim::MAX_FLEET_VEHICLES);
+    assert_eq!(
+        driver.sim.authority.vehicle.mass_properties.mass_kg,
+        source_mass
+    );
+    assert!(
+        driver
+            .sim
+            .authority
+            .wake_notice
+            .as_deref()
+            .unwrap()
+            .contains("fleet is full")
+    );
+}
+
+#[test]
 fn dock_and_undock_reject_unknown_vehicles_ports_and_sessions() {
     let (mut driver, _) = test_driver();
     driver.sim.register("pilot");

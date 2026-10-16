@@ -16,30 +16,30 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::presentation::interpolate_snapshot;
-use crate::{ClientInput, Snapshot};
+use crate::{ClientInput, FleetSnapshot, Snapshot};
 use thessa_protocol::{FrameDecoder, kind};
 
-struct ReceivedSnapshot {
-    snapshot: Snapshot,
+struct ReceivedSnapshot<T = Snapshot> {
+    snapshot: T,
     received_at: std::time::Instant,
     generation: u64,
 }
 
-struct SnapshotInbox {
-    queue: Arc<Mutex<VecDeque<ReceivedSnapshot>>>,
-    previous: Option<ReceivedSnapshot>,
-    latest: Option<ReceivedSnapshot>,
+struct SnapshotInbox<T = Snapshot> {
+    queue: Arc<Mutex<VecDeque<ReceivedSnapshot<T>>>>,
+    previous: Option<ReceivedSnapshot<T>>,
+    latest: Option<ReceivedSnapshot<T>>,
     next_generation: u64,
     delivered_generation: u64,
 }
 
 #[derive(Clone)]
-struct SnapshotInboxWriter {
-    queue: Arc<Mutex<VecDeque<ReceivedSnapshot>>>,
+struct SnapshotInboxWriter<T = Snapshot> {
+    queue: Arc<Mutex<VecDeque<ReceivedSnapshot<T>>>>,
 }
 
-impl SnapshotInbox {
-    fn new() -> (Self, SnapshotInboxWriter) {
+impl<T: Clone> SnapshotInbox<T> {
+    fn new() -> (Self, SnapshotInboxWriter<T>) {
         let queue = Arc::new(Mutex::new(VecDeque::with_capacity(2)));
         (
             Self {
@@ -72,7 +72,7 @@ impl SnapshotInbox {
         }
     }
 
-    fn latest(&mut self) -> Option<Snapshot> {
+    fn latest(&mut self) -> Option<T> {
         self.drain();
         let received = self.latest.as_ref()?;
         if received.generation == self.delivered_generation {
@@ -82,6 +82,12 @@ impl SnapshotInbox {
         Some(received.snapshot.clone())
     }
 
+    fn age(&self) -> Option<Duration> {
+        Some(self.latest.as_ref()?.received_at.elapsed())
+    }
+}
+
+impl SnapshotInbox<Snapshot> {
     /// Interpolate one wall-frame behind the newest received snapshot. The
     /// authoritative state is still returned by `latest`; this copy is only
     /// for presentation, so a future prediction can never become server truth.
@@ -107,10 +113,10 @@ impl SnapshotInbox {
     }
 }
 
-impl SnapshotInboxWriter {
+impl<T> SnapshotInboxWriter<T> {
     /// Non-blocking latest-wins ingress. At most the two newest
     /// receive-timestamped snapshots are retained for interpolation.
-    fn push(&self, received: ReceivedSnapshot) -> bool {
+    fn push(&self, received: ReceivedSnapshot<T>) -> bool {
         let Ok(mut queue) = self.queue.try_lock() else {
             return false;
         };
@@ -224,6 +230,7 @@ fn merge_commands(
 /// Live link to an embedded server child. Dropping kills the child.
 pub struct EmbeddedLink {
     snapshots: std::sync::Mutex<SnapshotInbox>,
+    fleets: std::sync::Mutex<SnapshotInbox<FleetSnapshot>>,
     inputs: std::sync::Arc<InputMailbox>,
     child: Child,
 }
@@ -298,6 +305,7 @@ impl EmbeddedLink {
         let mut startup = StartupChild::new(child);
 
         let (snapshots, snapshots_writer) = SnapshotInbox::new();
+        let (fleets, fleets_writer) = SnapshotInbox::new();
         let (welcomed_tx, welcomed_rx) = channel::<()>();
         let inputs = std::sync::Arc::new(InputMailbox {
             pending: std::sync::Mutex::new(None),
@@ -316,7 +324,7 @@ impl EmbeddedLink {
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0u8; 65536];
             let mut welcomed = false;
-            loop {
+            'read: loop {
                 match child_out.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => match decoder.push(&buffer[..n]) {
@@ -329,6 +337,26 @@ impl EmbeddedLink {
                                     if envelope.kind == kind::WELCOME {
                                         welcomed = true;
                                         let _ = welcomed_tx.send(());
+                                    }
+                                    continue;
+                                }
+                                if envelope.kind == kind::FLEET_SNAPSHOT {
+                                    match crate::decode_payload::<FleetSnapshot>(&envelope) {
+                                        Ok(fleet) => {
+                                            if let Err(error) = fleet.validate_membership() {
+                                                eprintln!("[client] invalid fleet: {error}");
+                                                break 'read;
+                                            }
+                                            fleets_writer.push(ReceivedSnapshot {
+                                                snapshot: fleet,
+                                                received_at: std::time::Instant::now(),
+                                                generation: 0,
+                                            });
+                                        }
+                                        Err(error) => {
+                                            eprintln!("[client] invalid fleet payload: {error}");
+                                            break 'read;
+                                        }
                                     }
                                     continue;
                                 }
@@ -401,6 +429,7 @@ impl EmbeddedLink {
 
         Ok(Self {
             snapshots: std::sync::Mutex::new(snapshots),
+            fleets: std::sync::Mutex::new(fleets),
             inputs,
             child,
         })
@@ -441,15 +470,20 @@ impl EmbeddedLink {
     /// Age of the newest drained snapshot using the reader's receive timestamp,
     /// not host polling or simulation time. Call `latest_snapshot` first to drain.
     pub fn snapshot_age(&self) -> Option<Duration> {
-        Some(
-            self.snapshots
-                .lock()
-                .ok()?
-                .latest
-                .as_ref()?
-                .received_at
-                .elapsed(),
-        )
+        self.snapshots.lock().ok()?.age()
+    }
+
+    /// Complete fleet membership, once per arrival; independent of PRIMARY's
+    /// generation. Empty is explicit removal, `None` means no new packet.
+    /// Same reader and bounded two-arrival inbox as PRIMARY, no extra worker.
+    pub fn latest_fleet_snapshot(&self) -> Option<FleetSnapshot> {
+        self.fleets.lock().ok()?.latest()
+    }
+
+    /// Reader age of the newest drained fleet packet; not PRIMARY's age and
+    /// not a guarantee of per-vehicle progress. Drain with latest_fleet_snapshot.
+    pub fn fleet_snapshot_age(&self) -> Option<Duration> {
+        self.fleets.lock().ok()?.age()
     }
 
     /// Presentation-only pose between the two newest authoritative snapshots.
@@ -506,6 +540,110 @@ mod tests {
             gear_down: false,
             parachutes_armed: false,
             commands,
+        }
+    }
+
+    fn fleet(ids: impl IntoIterator<Item = u32>) -> FleetSnapshot {
+        FleetSnapshot {
+            vehicles: ids
+                .into_iter()
+                .map(|id| crate::FleetVehicleSnapshot {
+                    vehicle_id: thessa_sim_core::VehicleId::new(id),
+                    snapshot: snapshot(DVec3::X, 0.0, 1.0),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn fleet_membership_bound_ids_and_empty_generation_are_explicit() {
+        for invalid in [fleet([0]), fleet([1, 1]), fleet([2, 1]), fleet(1..=64)] {
+            assert!(invalid.validate_membership().is_err());
+        }
+        fleet(1..64).validate_membership().unwrap();
+        let (mut inbox, writer) = SnapshotInbox::<FleetSnapshot>::new();
+        assert!(inbox.latest().is_none());
+        assert!(inbox.age().is_none());
+        for ids in [vec![1, 2], vec![]] {
+            let sample = fleet(ids);
+            sample.validate_membership().unwrap();
+            assert!(writer.push(ReceivedSnapshot {
+                snapshot: sample.clone(),
+                received_at: std::time::Instant::now() - Duration::from_millis(100),
+                generation: 0
+            }));
+            assert_eq!(inbox.latest(), Some(sample));
+            assert!(inbox.latest().is_none());
+            assert!(inbox.age().unwrap() >= Duration::from_millis(100));
+        }
+        // Flood stays bounded by the same two-arrival mechanism as PRIMARY.
+        for id in 1..100 {
+            writer.push(ReceivedSnapshot {
+                snapshot: fleet([id]),
+                received_at: std::time::Instant::now(),
+                generation: 0,
+            });
+        }
+        inbox.drain();
+        assert_eq!(
+            inbox.previous.as_ref().unwrap().snapshot.vehicles[0]
+                .vehicle_id
+                .0,
+            98
+        );
+        assert_eq!(
+            inbox.latest.as_ref().unwrap().snapshot.vehicles[0]
+                .vehicle_id
+                .0,
+            99
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_reader_demultiplexes_fleet_without_consuming_primary_generation() {
+        let primary = snapshot(DVec3::Y, 0.0, 3.0);
+        let fleet = fleet([1, 7]);
+        let wire: String = crate::encode_snapshot(&primary)
+            .unwrap()
+            .into_iter()
+            .chain(crate::encode_fleet_snapshot(&fleet).unwrap())
+            .map(|byte| format!("\\{byte:03o}"))
+            .collect();
+        let (command, pid) = welcomed_server(&format!("printf '{wire}'; exec sleep 30"));
+        let link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let received = loop {
+            if let Some(fleet) = link.latest_fleet_snapshot() {
+                break fleet;
+            }
+            assert!(!link.is_closed());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert_eq!(received, fleet);
+        assert_eq!(link.latest_snapshot(), Some(primary));
+        assert!(link.latest_snapshot().is_none());
+        assert!(link.latest_fleet_snapshot().is_none());
+        assert!(link.fleet_snapshot_age().is_some());
+        drop(link);
+        assert_startup_child_gone(&pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_fleet_membership_closes_the_shared_link() {
+        for wire in [
+            crate::encode_fleet_snapshot(&fleet([1, 1])).unwrap(),
+            crate::encode_frame(kind::FLEET_SNAPSHOT, &()).unwrap(),
+        ] {
+            let bytes: String = wire.iter().map(|byte| format!("\\{byte:03o}")).collect();
+            let (command, pid) = welcomed_server(&format!("printf '{bytes}'; exec sleep 30"));
+            let link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+            wait_closed(&link);
+            assert!(link.latest_fleet_snapshot().is_none());
+            drop(link);
+            assert_startup_child_gone(&pid);
         }
     }
 

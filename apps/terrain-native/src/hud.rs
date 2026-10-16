@@ -102,6 +102,7 @@ impl Controls {
 
 #[derive(Default)]
 pub struct Stats {
+    pub fleet: Option<crate::scene::FleetObserver>,
     pub live_flight: bool,
     pub server_snapshots: Option<u64>,
     pub flight_stopped: bool,
@@ -132,6 +133,7 @@ impl Stats {
             submitted_frames: frames,
             live_flight: scene.live_flight(),
             server_snapshots: scene.server_snapshot_count(),
+            fleet: scene.fleet_observer().cloned(),
             flight_stopped: scene.flight_stopped(),
             chase: scene.camera.chase(),
             throttle: scene.input.throttle,
@@ -476,6 +478,32 @@ fn widgets(
                     "Migration viewer, not the complete game client.",
                 );
             });
+        if let Some(fleet) = &stats.fleet {
+            egui::Window::new("Fleet | authoritative observer")
+                .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
+                .default_width(330.0)
+                .resizable(false)
+                .show(context, |ui| {
+                    ui.small("Additional vehicles · no meshes or prediction yet");
+                    if stats.flight_stopped {
+                        ui.colored_label(egui::Color32::RED, "Frozen: server session stopped");
+                    } else if fleet.updates == 0 {
+                        ui.label("Membership not received (not an empty fleet)");
+                    } else if fleet.stale {
+                        ui.colored_label(egui::Color32::YELLOW, "Stale membership: rows withheld, not despawned");
+                    } else {
+                        ui.label(format!("{} secondaries · {} updates · receive age {:.3} s", fleet.rows.len(), fleet.updates, fleet.age_s.unwrap_or(0.0)));
+                        ui.small("Each row uses its own sim time/reference-body frame.");
+                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            for row in &fleet.rows {
+                                ui.separator();
+                                ui.label(format!("{} · tick {} · t={:.3} s{}", row.vehicle_id, row.tick, row.pose.time().0, if row.stopped { " · stopped" } else { "" }));
+                                ui.small(format!("Reference radius {:.3} km", row.pose.relative_position_m().length() / 1000.0));
+                            }
+                        });
+                    }
+                });
+        }
     })
 }
 
@@ -649,67 +677,89 @@ mod tests {
     fn shared_device_hud_loads_existing_color_across_resize_dpi_and_recreation() {
         let backend = Backend::bring_up().expect("hardware HUD regression needs an adapter");
         // Recreate the complete egui context/renderer as window suspension does.
-        for _ in 0..2 {
-            let mut hud = Hud::new(&backend, OffscreenTarget::FORMAT);
-            for (width, height, scale) in [(800, 600, 1.0), (1280, 900, 1.5), (960, 720, 1.0)] {
-                let target = OffscreenTarget::new(&backend, width, height).unwrap();
-                let mut encoder = backend.device.create_command_encoder(&Default::default());
-                {
-                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &target.color,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.04,
-                                    g: 0.1,
-                                    b: 0.2,
-                                    a: 1.0,
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    });
-                }
-                backend.queue.submit([encoder.finish()]);
-                let before = target.read_rgba8(&backend).unwrap();
-                let mut controls = controls();
-                for _ in 0..3 {
-                    let output = hud.run(
-                        input(width, height, scale),
-                        &mut controls,
-                        &Stats::default(),
-                    );
-                    assert_eq!(output.pixels_per_point, scale);
+        for fleet in [false, true] {
+            for _ in 0..2 {
+                let mut hud = Hud::new(&backend, OffscreenTarget::FORMAT);
+                for (width, height, scale) in [(800, 600, 1.0), (1280, 900, 1.5), (960, 720, 1.0)] {
+                    let target = OffscreenTarget::new(&backend, width, height).unwrap();
                     let mut encoder = backend.device.create_command_encoder(&Default::default());
-                    let mut commands = hud.encode(
-                        &backend,
-                        &mut encoder,
-                        &target.color,
-                        output,
-                        [width, height],
+                    {
+                        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &target.color,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                                        r: 0.04,
+                                        g: 0.1,
+                                        b: 0.2,
+                                        a: 1.0,
+                                    }),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        });
+                    }
+                    backend.queue.submit([encoder.finish()]);
+                    let before = target.read_rgba8(&backend).unwrap();
+                    let mut controls = controls();
+                    for _ in 0..3 {
+                        let output = hud.run(
+                            input(width, height, scale),
+                            &mut controls,
+                            &Stats {
+                                fleet: fleet.then(crate::scene::FleetObserver::default),
+                                ..Default::default()
+                            },
+                        );
+                        assert_eq!(output.pixels_per_point, scale);
+                        let mut encoder =
+                            backend.device.create_command_encoder(&Default::default());
+                        let mut commands = hud.encode(
+                            &backend,
+                            &mut encoder,
+                            &target.color,
+                            output,
+                            [width, height],
+                        );
+                        commands.push(encoder.finish());
+                        backend.queue.submit(commands);
+                    }
+                    let after = target.read_rgba8(&backend).unwrap();
+                    assert!(
+                        before
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .zip(after.as_chunks::<4>().0.iter())
+                            .filter(|(a, b)| a != b)
+                            .count()
+                            > 500
                     );
-                    commands.push(encoder.finish());
-                    backend.queue.submit(commands);
-                }
-                let after = target.read_rgba8(&backend).unwrap();
-                assert!(
-                    before
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .zip(after.as_chunks::<4>().0.iter())
-                        .filter(|(a, b)| a != b)
-                        .count()
-                        > 500
-                );
-                // An accidental Clear/DontCare, incorrect target or fullscreen
-                // blit would destroy the terrain outside the overlay.
-                for y in 0..height {
-                    let offset = ((y * width + width - 1) * 4) as usize;
-                    assert_eq!(&before[offset..offset + 4], &after[offset..offset + 4]);
+                    // An accidental Clear/DontCare, incorrect target or fullscreen
+                    // blit would destroy the terrain outside the overlay.
+                    // The right-anchored inspector legitimately casts a shadow
+                    // near the top/right edge. Keep the original full-column
+                    // oracle without it; with it, test a 32x32 lower-right patch
+                    // outside BOTH windows and shadows, without a color tolerance.
+                    let ys = if fleet {
+                        height - 32..height
+                    } else {
+                        0..height
+                    };
+                    let xs = if fleet {
+                        width - 32..width
+                    } else {
+                        width - 1..width
+                    };
+                    for y in ys {
+                        for x in xs.clone() {
+                            let offset = ((y * width + x) * 4) as usize;
+                            assert_eq!(&before[offset..offset + 4], &after[offset..offset + 4]);
+                        }
+                    }
                 }
             }
         }

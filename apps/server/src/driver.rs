@@ -49,9 +49,8 @@ impl Driver {
             }
             accepted
         });
-        if self.sim.fleet.is_empty() {
-            return;
-        }
+        // Complete membership includes empty: silence cannot acknowledge that
+        // all secondaries disappeared, nor distinguish an old peer from empty.
         let fleet = self.sim.fleet_snapshot();
         let frame = match thessa_flight_net::encode_fleet_snapshot(&fleet) {
             Ok(frame) => frame,

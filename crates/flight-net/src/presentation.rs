@@ -6,6 +6,40 @@ use thessa_flight_authority::{
 };
 use thessa_sim_core::{BakedEphemeris, SimTime, VehicleId, WorldTick};
 
+/// A checked non-primary observation at its own authoritative sample time.
+/// No vehicle design, renderer proxy, prediction or cross-vehicle clock is
+/// invented from a lean fleet payload.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FleetPose {
+    pub vehicle_id: VehicleId,
+    pub tick: u64,
+    pub pose: FlightPose,
+    pub stopped: bool,
+}
+
+/// Validate a complete fleet transaction before a host replaces membership.
+/// Every pose subtracts the caller's reference ephemeris at its own wire time;
+/// fleet samples need not share PRIMARY's time (secondary debt can differ).
+pub fn fleet_poses(
+    fleet: &crate::FleetSnapshot,
+    ephemeris: &BakedEphemeris,
+    reference: thessa_sim_core::BodyId,
+) -> Result<Vec<FleetPose>, String> {
+    fleet.validate_membership()?;
+    fleet
+        .vehicles
+        .iter()
+        .map(|vehicle| {
+            Ok(FleetPose {
+                vehicle_id: vehicle.vehicle_id,
+                tick: vehicle.snapshot.tick,
+                pose: checked_snapshot_pose(&vehicle.snapshot, ephemeris, reference)?,
+                stopped: vehicle.snapshot.flight_error.is_some(),
+            })
+        })
+        .collect()
+}
+
 /// Checked pose from a wire sample, subtracting the reference at that sample's
 /// own time. It never adopts interpolation into authoritative client state.
 pub fn snapshot_pose(

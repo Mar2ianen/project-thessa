@@ -2231,6 +2231,101 @@ reconnect and joined-worker shutdown; PBR/effects/production UI and device-loss
 recovery also remain unported. This does not establish full Bevy displacement,
 visual parity, blind aesthetic acceptance or a renderer/network speedup.
 
+### Native fleet-observer continuation (2026-10-16)
+
+This slice adds **read-only fleet observations, not fleet mesh rendering or
+prediction**. The old Bevy client had no fleet consumer to extract. Native now
+consumes the server's existing `FLEET_SNAPSHOT` kind through the same GPL
+`EmbeddedLink` reader; no second transport, worker or physics path is added.
+The existing receive-timestamp/generation/two-arrival inbox is generalized for
+both payload types, retaining the PRIMARY interpolation algorithm unchanged.
+Fleet and PRIMARY generations and receive ages remain independent.
+Per kind, retention is bounded by two pending ingress packets plus the drained
+previous/latest history, not by an unbounded per-ID history or event queue.
+
+Fleet membership is complete, sorted and unique, with no PRIMARY entry and at
+most 63 secondaries. The 64-vehicle total cap moves to the shared wire-policy
+constant; the server's split admission fixes an off-by-one that formerly counted
+only secondaries despite documenting a total including PRIMARY. A rejected split
+leaves vehicle mass/topology and membership unchanged (rejection telemetry is
+still published). No payload field, message kind or protocol version
+changes. The server now broadcasts empty membership too: suppressing empty
+packets would leave an observer unable to distinguish no vehicles from no data.
+Outbound slots are independently latest-wins, not an atomic PRIMARY/fleet pair.
+
+`flight-net::presentation::fleet_poses` checks the entire membership and every
+consumed pose/telemetry value before the native host replaces its registry.
+Persistent IDs cannot rewind tick or simulation time. Births/removals are explicit
+set changes, without cross-ID blending or extrapolation. Each pose subtracts the
+chosen reference ephemeris at its **own** sample time: secondary authority debt
+can differ from PRIMARY. The inspector shows that time, tick, reference-body
+radius and stopped status. It does not present a mixed-time primary-to-secondary
+distance as a simultaneous physical separation. Resource state/control intent
+and the primary mesh/body/light/camera publication are untouched by fleet updates.
+
+The native HUD distinguishes no packet yet, fresh explicit empty membership,
+stale membership and a stopped session. Fleet silence uses its own reader age
+and the existing native snapshot timeout; stale rows are withheld while
+last-known membership is retained, without stopping a still-live PRIMARY or
+inventing despawn. Invalid fleet payload/membership closes the shared link;
+invalid/backwards consumed poses use the existing native freeze/no-fallback path.
+The cap bounds retained member count, not arbitrary nested wire strings or all
+transient decoder allocations; existing frame-byte limits still apply.
+
+No vehicle design, model key or reference-body identifier is present in these
+lean per-vehicle snapshots. The observer therefore adds no duplicate X-15s,
+fabricated proxy geometry, GPU resources/passes or secondary simulation. Its
+HUD works on the existing shared device/target, is absent outside server mode,
+and copies at most 63 checked small observations for a HUD frame. With HUD
+disabled that UI copy/window work is absent. The Bevy host still ignores fleet
+observations; transport retention remains bounded even if never drained there.
+
+Regression coverage includes independent demultiplexed generations/receive ages,
+capacity and sorted-ID checks, malformed payload closure, empty transitions,
+reader flood bounds, per-vehicle ephemeris times, atomic malformed/backwards
+rejection, ID birth/removal and PRIMARY/input isolation, stale fleet alongside
+fresh PRIMARY, and physical server separation followed by complete mailbox
+publication. A real default server verifies **empty** fleet reception. The
+multi-vehicle screenshot uses a framed synthetic peer through the actual native
+CLI/link/HUD; it is not a real separation replay or acknowledgement/physics test.
+Evidence is recorded in `artifacts/native-fleet-observer-2026-10-16.json`.
+
+Local gates passed: fmt, all-workspace/all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, **1,805** workspace lib/bin + **53**
+integration + **24** Bevy-CBT GPU + **1** mesh-shader GPU + **4** native GPU +
+**1** real-server CPU + **1** 63-member fixture CLI/GPU + **5** native-window
+tests = **1,894 Rust tests**, five agent-QA tests and the 12-crate architecture
+check. GPU suites ran on Radeon 880M / RADV STRIX1. The HUD GPU regression keeps
+its original full-right-column preservation oracle without the inspector and
+checks an exact untouched lower-right patch with the right-anchored inspector,
+whose shadow legitimately reaches part of that edge. It uses no pixel tolerance.
+
+The debug 63-member fixture frame is deliberately **not** a physics/terrain
+acceptance frame: synthetic PRIMARY placement reaches AGL zero and its camera
+intersects terrain occlusion. It tests the bounded observer table, own-time
+readouts and absence of fabricated secondary meshes. Real-server captures below
+are separate from that fixture and must not be treated as a matched replay.
+
+Release local-flight A/B/B/A against exact `8c614da` measured medians
+**3.207 / 3.235 / 3.283 / 3.205 ms** (1280×720, HUD, 600 measured + 30 warmup
+frames, 10 s pre-stream). Final trajectory and geometry remain identical at
+10.5 s. New medians are about **0.9–2.4% higher** in this small sample, with
+asynchronous publication/tail variation; no speedup, zero-overhead or isolated
+adapter-cost claim is made. Actual-server HUD/no-HUD runs measured **3.180 /
+2.800 ms**, adopting **31 / 29** fleet updates with explicit empty membership,
+without stale data, stops, closed links or capacity rejections. Their different
+completed wall-time epochs and geometry preclude a matched inspector-cost
+comparison; child CPU work is concurrent. The old Bevy pilot also captured and
+exited cleanly while linked to the actual server through 12 s / 1,441 ticks;
+audio remains unverified due to device warnings.
+
+![Actual default server, native authoritative observer confirms empty fleet](artifacts/native-fleet-remote-hud-2026-10-16.png)
+
+Still missing: design/resource replication, real multi-vehicle visual replay,
+fleet mesh rendering/common render epoch, remote interpolation policy,
+prediction/reconciliation and the other migration gaps above. No whole-client
+replacement, visual acceptance or speedup is established by this slice.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

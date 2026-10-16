@@ -33,6 +33,8 @@ pub struct Welcome {
 /// These caps run before domain validation so a hostile peer cannot burn
 /// the driver thread with one frame.
 pub const MAX_COMMANDS_PER_INPUT: usize = 64;
+/// Existing authoritative fleet capacity, including the dedicated PRIMARY.
+pub const MAX_FLEET_VEHICLES: usize = 64;
 pub const MAX_MANEUVER_NODES: usize = 16;
 pub const MAX_BURN_SEGMENTS: usize = 64;
 pub const MAX_GRAPH_NODES: usize = 256;
@@ -539,6 +541,27 @@ pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, CodecError> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FleetSnapshot {
     pub vehicles: Vec<FleetVehicleSnapshot>,
+}
+
+impl FleetSnapshot {
+    /// Complete non-primary membership, in strictly ascending stable-ID order.
+    /// Empty means an explicitly empty fleet, not a missing/stale packet.
+    /// Kinematics/ephemeris validation belongs to the presentation consumer.
+    pub fn validate_membership(&self) -> Result<(), String> {
+        if self.vehicles.len() >= MAX_FLEET_VEHICLES
+            || self
+                .vehicles
+                .first()
+                .is_some_and(|v| v.vehicle_id.is_primary())
+            || self
+                .vehicles
+                .windows(2)
+                .any(|pair| pair[0].vehicle_id >= pair[1].vehicle_id)
+        {
+            return Err("invalid fleet capacity or non-primary ID ordering".into());
+        }
+        Ok(())
+    }
 }
 
 /// One non-primary vehicle snapshot on the wire.

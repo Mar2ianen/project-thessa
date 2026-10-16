@@ -195,6 +195,19 @@ latest-wins slot while reliable welcome/control frames stay ordered. One
 encoded snapshot frame is Arc-shared across subscriber mailboxes; socket
 writers consume the shared bytes without a per-client payload copy.
 
+`FleetSnapshot` carries complete non-primary membership in ascending stable-ID
+order on its own existing message kind. The server publishes it even when
+empty; silence cannot acknowledge removal. The shared capacity is 64 vehicles
+including PRIMARY (at most 63 secondaries), checked before a split mutates
+authority. Primary and fleet outbound slots are independently latest-wins,
+not an atomic common-epoch scene packet. Secondary simulation debt can differ.
+The native embedded link demultiplexes both kinds with one reader and the same
+bounded two-arrival inbox mechanism. Its read-only fleet inspector validates
+each pose at that vehicle's own time; stale fleet observations are withheld,
+not inferred to have despawned. The lean wire data lacks vehicle-design/model
+identity and complete resource state, so this is not fleet mesh rendering or
+prediction/reconciliation. The old Bevy host still ignores fleet observations.
+
 The current protocol is designed for a local/server prototype. Production
 prediction, interpolation policy for remote craft, authentication, persistence,
 and fleet replication tiers are future work.

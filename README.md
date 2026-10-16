@@ -172,7 +172,13 @@ The checked-in vertical slice currently contains:
     falling back to local physics. Before the first snapshot the pose is static
     and instruments are omitted. Presets are queued before GPU startup/pre-stream.
     Server headless runs use wall time (including
-    setup/pre-stream), not `--flight-step`. No fleet/prediction/reconnect support yet.
+    setup/pre-stream), not `--flight-step`. The shared reader also receives complete
+    fleet membership (including explicit empty packets); a native read-only
+    inspector shows stable IDs, ticks, each vehicle's own sample time and
+    reference-body distance. Missing/stale packets are not treated as despawn.
+    At most 63 secondaries fit alongside PRIMARY; invalid membership/poses stop
+    the session. Fleet model identity is not on the wire: no invented X-15
+    copies, fleet meshes, prediction/reconciliation or reconnect support yet.
    Its input mailbox counts all commands (including state votes and fleet/
    autopilot events) against the protocol's 64-command packet limit; observed
    pipe/encode failure or overflow closes the link and refuses further input.
@@ -188,7 +194,7 @@ The checked-in vertical slice currently contains:
    omits UI allocation/work; `--no-default-features` excludes egui entirely.
    Headless captures omit HUD unless `--hud` is explicitly supplied.
    Only manual exposure/vsync settings are consumed from `graphics.toml`
-    (`--graphics PATH`); missing fleets/effects/production game UI/external networking and
+    (`--graphics PATH`); missing fleet rendering/effects/production game UI/external networking and
   coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 

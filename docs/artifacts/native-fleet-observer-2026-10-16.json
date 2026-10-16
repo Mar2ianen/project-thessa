@@ -1,0 +1,153 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/native-fleet-observer",
+  "base_commit": "8c614da",
+  "scope": {
+    "implemented": "shared embedded fleet demultiplexing and bounded complete membership; validated native authoritative observer with independent age/per-vehicle times and read-only HUD",
+    "not_implemented": "fleet meshes, design/resource replication, common render epoch, remote interpolation, prediction/reconciliation",
+    "old_bevy_fleet_consumer": false,
+    "new_crates_external_dependencies_or_unsafe": false,
+    "extra_reader_threads_gpu_devices_scene_passes_or_runtime_readbacks": 0,
+    "wire_schema_kind_or_version_changed": false
+  },
+  "contract": {
+    "transport": "one existing reader dispatches PRIMARY/FLEET_SNAPSHOT; same generic inbox, at most two pending ingress packets plus drained previous/latest history per kind; independent generations and reader receive ages; PRIMARY interpolation unchanged",
+    "membership": "complete, strictly ascending unique non-primary IDs; empty packet clears membership; missing packet does not",
+    "capacity": "64 total including PRIMARY, 63 secondaries; post-decode membership validation before retention; existing frame-byte limit still applies",
+    "server_changes": "broadcast empty membership as well as nonempty; share cap constant and correct split admission's off-by-one that previously allowed 64 secondaries despite documenting 64 total",
+    "rejection": "capacity failure leaves vehicle mass/topology/membership unchanged; rejection telemetry is published",
+    "time": "every checked pose subtracts the chosen reference ephemeris at that vehicle's own sample time; no simultaneous PRIMARY/fleet packet or primary-to-secondary distance is inferred",
+    "native_transaction": "validate whole fleet before replacing registry; continuing IDs cannot rewind tick/time; births/removals change the explicit set without blending or extrapolation",
+    "stale": "independent fleet reader age uses the native timeout; withhold stale rows but retain last-known membership; fresh PRIMARY can continue; frozen session is labeled separately",
+    "invalid": "malformed fleet payload/membership closes shared link; invalid/backwards consumed kinematics stop native with the existing freeze/no-fallback policy",
+    "ui": "stable ID, tick, own simulation time, reference-body radius and stopped status; no packet/fresh empty/stale/stopped are distinct; absent outside server mode, no UI clone/window work with --no-hud",
+    "limits": "count bound is not a bound on all transient decoder allocations or arbitrary nested wire strings; retained generations are bounded; not full hostile-server validation or per-vehicle progress detection"
+  },
+  "reproduction": {
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "build": "cargo build --release -p thessa-terrain-native -p thessa-server; cargo build -p thessa-terrain-native -p thessa-server -p thessa-client",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Mesa 26.2.4-arch1.1, Vulkan",
+    "baseline": "preserved exact 8c614da release target/fleet-baseline-viewer, SHA-256 8d5e2d04addb2ae24e07bbd781b90eaa652cf0f912c067139cb6c523dcd7e355; server also preserved as target/fleet-baseline-server",
+    "local_measurement": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10 --flight; A/B/B/A; 1280x720, 30 warmup frames, requested elapsed 1/60 s",
+    "measurement_boundary": "host simulation/input/streaming/uploads/classify/raster/HUD/GPU completion; excludes setup/prestream/warmup/final readback; not isolated GPU or game FPS; server wall-time runs are different workloads",
+    "fixture_capture": "cargo test -p thessa-terrain-native --bin thessa-terrain-native fleet_inspector_capture -- --ignored --nocapture; requires a built sibling native viewer; 63-member framed synthetic peer through real CLI/link/HUD, not authoritative separation replay or input acknowledgement",
+    "scratch": "apps/terrain-native/target/test-tmp; crates/flight-net/target/test-tmp"
+  },
+  "regressions": [
+    "Shared inbox generation, original PRIMARY interpolation and reader-time behavior retained; fleet flooding retains two arrivals",
+    "Fleet/PRIMARY demultiplex independently through one actual child/reader; invalid ordering/duplicate IDs/PRIMARY membership/oversize fail; malformed fleet payload closes shared link",
+    "Physical server separation publishes the real secondary state through the outbound mailbox; subsequent explicit empty membership clears the old set",
+    "Full-cap admission includes PRIMARY and rejects the next split without changing vehicle mass or fleet membership",
+    "Whole-fleet pose validation and backwards-time rejection are transactional; own-time ephemeris subtraction error <1e-8 m; ID birth/removal and PRIMARY/input isolation",
+    "A continuously fresh PRIMARY stream does not reset fleet age or turn fleet silence into despawn",
+    "Actual default server acknowledges input and publishes empty fleets; native window receives multiple fleet updates",
+    "63-member synthetic peer reaches actual native headless CLI and HUD; all secondaries remain observations, not invented render meshes"
+  ],
+  "binaries": {
+    "release_viewer_sha256": "94132f4655391d82f5bcbb22fa117781febe22ed87a29a2c613e8500f975a263",
+    "release_server_sha256": "5e930f7fc1327f18d813e302660065f5a4bb5599c7694307ee392777455d32e3",
+    "debug_native_viewer_sha256": "5b37d1d2ec713f5de44bbd598afb0bda28f279679336a291bcffcb4cdc5d577e",
+    "debug_bevy_viewer_sha256": "2553a987b2714f8c3b6ef83c92f3b26aa1b2be3fb6bf57c7d1594199a4e1a321",
+    "debug_server_sha256": "6c7706b5a717a7ec47a297ea11330ac819459cc0bf564eb38134f196ad517d16",
+    "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b"
+  },
+  "verification": {
+    "fmt": "pass",
+    "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1805,
+    "workspace_integration_tests": 53,
+    "bevy_cbt_hardware_tests": 24,
+    "additional_mesh_shader_hardware_test": 1,
+    "native_gpu_tests": 4,
+    "native_real_server_cpu_test": 1,
+    "native_framed_fixture_cli_gpu_test": 1,
+    "native_window_tests": 5,
+    "successful_rust_tests": 1894,
+    "agent_qa_unittests": 5,
+    "architecture_guarded_crates": 12,
+    "logs": "/tmp/opencode/fleet-{lib,integration,clippy,nohud,native-gpu,window-test,bevy-gpu,mesh-gpu,qa,architecture,host-build,build,legacy-smoke}.log",
+    "gpu_oracle_note": "Initial attempt to apply the old full-right-column preservation oracle to a right-anchored inspector failed by one blue-channel value where its shadow legitimately reaches the edge. The original no-inspector full-column oracle is retained; inspector cases additionally verify an exact unchanged 32x32 lower-right patch outside both windows/shadows across resize/DPI/recreation. No pixel tolerance or production rendering change was used to mask the failure.",
+    "not_run": "existing ignored sim-core/flight-authority wall-clock profiling diagnostics; no new physical integration algorithm"
+  },
+  "real_server_smoke": {
+    "profile": "debug",
+    "primary_snapshots_adopted": 5,
+    "fleet_updates_adopted": 5,
+    "secondaries": 0,
+    "fleet_stale": false,
+    "last_primary_tick": 108,
+    "primary_authority_s": 0.9,
+    "primary_presentation_s": 0.9,
+    "throttle_cut_engine_off_acknowledged": true,
+    "local_steps": 0,
+    "stopped": false,
+    "scope": "actual default server verifies explicit empty fleet plus existing PRIMARY input adoption; not a nonempty fleet replay or network performance benchmark"
+  },
+  "synthetic_fixture_capture": {
+    "capture": "native-fleet-inspector-2026-10-16.png",
+    "size": [1280, 720],
+    "sha256": "1a4b4982fd1287a6fbf32aa375897075ca28ebed9e9c7a0947bc4f049757dd42",
+    "profile": "debug native viewer",
+    "secondaries": 63,
+    "fleet_updates_adopted": 14,
+    "primary_sim_s": 6.0,
+    "secondary_sample_times_s": "4 + vehicle_id / 32 (IDs 1..63), vehicle 7 marked stopped",
+    "actual_cli_transport_and_hud": true,
+    "physical_authority_or_input_acknowledgement_test": false,
+    "rendering_boundary": "Fixture PRIMARY follows a synthetic position, not physics, reaches AGL=0 and puts the camera amid terrain occlusion. This image validates observer text/transport/capacity only, not terrain visibility or visual acceptance. No secondary meshes are drawn. Real-server release captures are recorded separately."
+  },
+  "measurements": {
+    "order": ["baseline-local-1", "local-1", "local-2", "baseline-local-2", "remote-hud", "remote-nohud"],
+    "logs": "/tmp/opencode/fleet-measure-NAME.log",
+    "local_final_each": {
+      "authority_and_presentation_s": 10.5,
+      "relative_position_m": [-2847029.6640625, 759068.1640593708, 1250706.967514596],
+      "backlog_s": 0,
+      "stopped": false,
+      "terrain_tiles": 374,
+      "terrain_triangles": 410112,
+      "mesh_instances": 1,
+      "mesh_draw_calls": 2,
+      "mesh_triangles": 78465,
+      "mesh_frame_upload_bytes": 640,
+      "capacity_rejections": 0
+    },
+    "local_runs": [
+      {"name": "baseline-local-1", "median_ms": 3.207, "p95_ms": 5.268, "p99_ms": 10.574, "max_ms": 12.895, "measured_publications": 44},
+      {"name": "local-1", "median_ms": 3.235, "p95_ms": 5.522, "p99_ms": 9.044, "max_ms": 14.394, "measured_publications": 44},
+      {"name": "local-2", "median_ms": 3.283, "p95_ms": 5.181, "p99_ms": 8.566, "max_ms": 13.199, "measured_publications": 46},
+      {"name": "baseline-local-2", "median_ms": 3.205, "p95_ms": 5.441, "p99_ms": 8.873, "max_ms": 12.285, "measured_publications": 44}
+    ],
+    "local_conclusion": "identical final trajectory and geometry; new medians about 0.9-2.4% higher in this four-run sample with async publication/tail variance; no speedup, zero-overhead or isolated-adapter-cost claim",
+    "server_runs": [
+      {"name": "remote-hud", "median_ms": 3.180, "p95_ms": 4.941, "p99_ms": 5.855, "max_ms": 10.423, "primary_snapshots_adopted": 31, "fleet_updates_adopted": 31, "secondaries": 0, "fleet_stale": false, "last_tick": 1492, "authority_s": 12.433333333333334, "presentation_s": 12.393856902203451, "terrain_triangles": 417024, "capacity_rejections": 0, "local_steps": 0, "stopped": false, "link_closed": false},
+      {"name": "remote-nohud", "median_ms": 2.800, "p95_ms": 3.639, "p99_ms": 4.623, "max_ms": 11.466, "primary_snapshots_adopted": 29, "fleet_updates_adopted": 29, "secondaries": 0, "fleet_stale": false, "last_tick": 1450, "authority_s": 12.083333333333334, "presentation_s": 12.083333333333334, "terrain_triangles": 414720, "capacity_rejections": 0, "local_steps": 0, "stopped": false, "link_closed": false}
+    ],
+    "server_boundary": "actual default server with zero secondaries; HUD/no-HUD end at different wall-time epochs and geometry, so these are not an isolated inspector-cost or matched-scene speed comparison; child CPU work concurrent"
+  },
+  "legacy_bevy_smoke": {
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0,
+    "actual_server_link": true,
+    "local_fallback": false,
+    "last_logged_server_status": "sim_s=12 steps=1441; reqwarp=x1 effwarp=x1",
+    "capture": "native-fleet-bevy-pilot-2026-10-16.png",
+    "size": [1270, 1588],
+    "sha256": "44e8d64347f8487577f7dabca20b3d207cab85ff02826614505189c92479ba92",
+    "limitations": "audio device warnings, audio unverified; not a matched native/Bevy epoch, resolution, material or effects comparison"
+  },
+  "release_captures": [
+    {"path": "native-fleet-local-1-2026-10-16.png", "size": [1280, 720], "sha256": "7f69f4914034b7127026f8a8c68ba4ad3633ff893c81188ff2bd5cc486cb70e7"},
+    {"path": "native-fleet-remote-hud-2026-10-16.png", "size": [1280, 720], "sha256": "19a6fdb77ab8fbb2d90d33f5789c7f5d537ef165d237365c5ba4f374b60c6db0"},
+    {"path": "native-fleet-remote-nohud-2026-10-16.png", "size": [1280, 720], "sha256": "da45ce012df95dbd9b98f525fb0da19f315318bd5e246ab0c4bbd88973e52777"}
+  ],
+  "limitations": [
+    "No real-server nonempty fleet visual replay: default compatibility X-15 has no separable assembly. Nonempty transport/HUD coverage uses explicit fixtures; physical separation/state conservation is covered in server tests.",
+    "No design/model/reference-body identity or complete resources on this lean wire payload; observer uses PRIMARY's chosen reference body at each secondary's own time.",
+    "Outbound PRIMARY/fleet slots may coalesce independently; no paired-scene guarantee. Stagnant simulation time is valid while paused, so receive freshness alone is not proof of physical progress.",
+    "ID history is retained for current membership only; a removed/reintroduced ID is a new observation, not a persisted identity ledger.",
+    "Existing terrain seams/LOD, native flat sky/material/effects/UI parity, persistent GPU bisector topology, FastRT structures and platform recovery remain unresolved.",
+    "Captures are implementer diagnostics, not blind subjective acceptance, matched native/Bevy scenes or a whole-client replacement claim."
+  ]
+}

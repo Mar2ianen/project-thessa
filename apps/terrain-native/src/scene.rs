@@ -60,6 +60,17 @@ struct RemoteFlight {
     timeout: std::time::Duration,
     snapshots: u64,
     last_tick: Option<u64>,
+    fleet: FleetObserver,
+}
+
+/// Bounded latest authoritative observations, not render instances. The wire
+/// carries no design identity and secondary clocks may differ from PRIMARY.
+#[derive(Default, Clone)]
+pub struct FleetObserver {
+    pub rows: Vec<thessa_flight_net::presentation::FleetPose>,
+    pub updates: u64,
+    pub age_s: Option<f64>,
+    pub stale: bool,
 }
 
 /// Installed-subsystem selector sharing keys with the old pilot
@@ -333,6 +344,7 @@ impl Scene {
             timeout,
             snapshots: 0,
             last_tick: None,
+            fleet: FleetObserver::default(),
         });
         eprintln!(
             "Server flight: canonical COAST; shared stdio link and receive-time interpolation; no local physics stepping or fallback"
@@ -342,6 +354,46 @@ impl Scene {
 
     pub fn server_flight(&self) -> bool {
         self.remote.is_some()
+    }
+
+    #[cfg(feature = "hud")]
+    pub fn fleet_observer(&self) -> Option<&FleetObserver> {
+        self.remote.as_ref().map(|remote| &remote.fleet)
+    }
+
+    fn accept_fleet_snapshot(
+        &mut self,
+        fleet: &thessa_flight_net::FleetSnapshot,
+    ) -> Result<(), String> {
+        let reference = self
+            .flight
+            .as_ref()
+            .ok_or("missing flight replica")?
+            .reference_body;
+        let rows = thessa_flight_net::presentation::fleet_poses(
+            fleet,
+            self.celestial.ephemeris(),
+            reference,
+        )?;
+        let remote = self.remote.as_mut().ok_or("missing server host")?;
+        for row in &rows {
+            if let Ok(index) = remote
+                .fleet
+                .rows
+                .binary_search_by_key(&row.vehicle_id, |old| old.vehicle_id)
+            {
+                let old = remote.fleet.rows[index];
+                if row.tick < old.tick || row.pose.time().0 < old.pose.time().0 {
+                    return Err("fleet vehicle tick/time moved backwards".into());
+                }
+            }
+        }
+        // Commit complete membership only after every row is checked. Do not
+        // blend births with another ID, infer despawn from silence or touch
+        // PRIMARY intent/replica/presentation.
+        remote.fleet.rows = rows;
+        remote.fleet.updates += 1;
+        Ok(())
     }
 
     #[cfg(any(feature = "hud", test))]
@@ -418,12 +470,19 @@ impl Scene {
         }
         let latest = link.latest_snapshot();
         let display = link.interpolated_snapshot();
+        let fleet = link.latest_fleet_snapshot();
+        let age = link.fleet_snapshot_age();
+        remote.fleet.age_s = age.map(|age| age.as_secs_f64());
+        remote.fleet.stale = age.is_some_and(|age| age > remote.timeout);
         if link
             .snapshot_age()
             .unwrap_or_else(|| remote.started.elapsed())
             > remote.timeout
         {
             return Err("embedded server snapshot deadline exceeded".into());
+        }
+        if let Some(fleet) = fleet {
+            self.accept_fleet_snapshot(&fleet)?;
         }
         if let Some(snapshot) = latest {
             self.accept_server_snapshot(&snapshot)?;
@@ -536,7 +595,7 @@ impl Scene {
 
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
-            let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed())));
+            let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale));
             let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN });
             format!("{source} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }

@@ -42,8 +42,90 @@ fn replica() -> Scene {
         timeout: Duration::from_secs(5),
         snapshots: 0,
         last_tick: None,
+        fleet: FleetObserver::default(),
     });
     scene
+}
+
+fn fleet(scene: &Scene, ids_and_times: &[(u32, f64)]) -> thessa_flight_net::FleetSnapshot {
+    thessa_flight_net::FleetSnapshot {
+        vehicles: ids_and_times
+            .iter()
+            .map(|&(id, time)| thessa_flight_net::FleetVehicleSnapshot {
+                vehicle_id: thessa_sim_core::VehicleId::new(id),
+                snapshot: snapshot(scene, time),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn fleet_membership_is_atomic_and_each_vehicle_keeps_its_own_reference_time() {
+    let mut scene = replica();
+    let before = (scene.center, scene.sample, scene.input.throttle);
+    let samples = fleet(&scene, &[(1, 5.0), (4, 7.5)]);
+    scene.accept_fleet_snapshot(&samples).unwrap();
+    let rows = &scene.remote.as_ref().unwrap().fleet.rows;
+    for (row, wire) in rows.iter().zip(&samples.vehicles) {
+        assert_eq!(row.vehicle_id, wire.vehicle_id);
+        assert_eq!(row.pose.time().0, wire.snapshot.flight_time_s);
+        let reference = scene
+            .celestial
+            .ephemeris()
+            .body_state(
+                scene.flight.as_ref().unwrap().reference_body,
+                row.pose.time(),
+            )
+            .unwrap();
+        assert!(
+            (row.pose.relative_position_m()
+                - (wire.snapshot.state.position_inertial_m - reference.position_inertial))
+                .length()
+                < 1e-8
+        );
+    }
+    let previous = rows.clone();
+    let mut malformed = fleet(&scene, &[(1, 6.0), (4, 8.0)]);
+    malformed.vehicles[1].snapshot.state.velocity_inertial_mps = DVec3::NAN;
+    assert!(scene.accept_fleet_snapshot(&malformed).is_err());
+    assert_eq!(scene.remote.as_ref().unwrap().fleet.rows, previous);
+    assert!(
+        scene
+            .accept_fleet_snapshot(&fleet(&scene, &[(1, 4.0)]))
+            .is_err()
+    );
+    assert!(
+        scene
+            .accept_fleet_snapshot(&fleet(&scene, &[(4, 8.0), (1, 6.0)]))
+            .is_err()
+    );
+    assert_eq!(scene.remote.as_ref().unwrap().fleet.updates, 1);
+    scene
+        .accept_fleet_snapshot(&fleet(&scene, &[(4, 9.0), (8, 1.0)]))
+        .unwrap();
+    assert_eq!(
+        scene
+            .remote
+            .as_ref()
+            .unwrap()
+            .fleet
+            .rows
+            .iter()
+            .map(|row| row.vehicle_id.0)
+            .collect::<Vec<_>>(),
+        vec![4, 8]
+    );
+    scene.accept_fleet_snapshot(&fleet(&scene, &[])).unwrap();
+    assert!(scene.remote.as_ref().unwrap().fleet.rows.is_empty());
+    assert_eq!(scene.center, before.0);
+    assert_eq!(scene.sample.time, before.1.time);
+    assert_eq!(scene.sample.frame, before.1.frame);
+    assert_eq!(scene.input.throttle, before.2);
+    assert_eq!(scene.flight.as_ref().unwrap().flight_time_s, 0.0);
+    assert!(
+        scene.vehicle.is_some(),
+        "fleet updates cannot despawn PRIMARY"
+    );
 }
 
 #[test]
@@ -252,6 +334,7 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
         timeout: Duration::from_secs(5),
         snapshots: 0,
         last_tick: None,
+        fleet: FleetObserver::default(),
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.server_snapshot_count() == Some(0) {
@@ -283,6 +366,64 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
             .unwrap()
             .contains("deadline")
     );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn fleet_silence_does_not_reuse_primary_age_or_infer_despawn() {
+    let mut scene = Scene::load(Default::default()).unwrap();
+    scene.setup_flight().unwrap();
+    let wire_fleet = fleet(&scene, &[(1, 5.0)]);
+    let primary = snapshot(&scene, 6.0);
+    let bytes = |wire: Vec<u8>| {
+        wire.iter()
+            .map(|byte| format!("\\{byte:03o}"))
+            .collect::<String>()
+    };
+    let path = peer(&format!(
+        "printf '{}'; while :; do printf '{}'; sleep 0.01; done",
+        bytes(thessa_flight_net::encode_fleet_snapshot(&wire_fleet).unwrap()),
+        bytes(thessa_flight_net::encode_snapshot(&primary).unwrap())
+    ));
+    let link =
+        thessa_flight_net::embedded::EmbeddedLink::spawn_server(&path, Duration::from_secs(5))
+            .unwrap();
+    scene.remote = Some(RemoteFlight {
+        link: Some(link),
+        commands: Vec::new(),
+        started: Instant::now(),
+        timeout: Duration::from_secs(5),
+        snapshots: 0,
+        last_tick: None,
+        fleet: FleetObserver::default(),
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while scene.remote.as_ref().unwrap().fleet.updates == 0
+        || scene.server_snapshot_count() == Some(0)
+    {
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(!scene.flight_stopped());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    scene.remote.as_mut().unwrap().timeout = Duration::from_millis(250);
+    while !scene.remote.as_ref().unwrap().fleet.stale {
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(!scene.flight_stopped(), "{:?}", scene.flight_telemetry());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let remote = scene.remote.as_ref().unwrap();
+    assert_eq!(
+        remote.fleet.rows.len(),
+        1,
+        "keep last-known membership, hide it as stale in HUD"
+    );
+    assert_eq!(remote.fleet.updates, 1);
+    assert!(remote.snapshots > 1);
+    assert!(remote.fleet.age_s.unwrap() >= 0.25);
+    scene.stop_server_flight("test peer completed".into());
     std::fs::remove_file(path).unwrap();
 }
 
@@ -344,7 +485,10 @@ fn real_server_adoption_advances_and_acknowledges_input_without_local_steps() {
     scene.input.cut();
     scene.input.engine_active = false;
     let deadline = Instant::now() + Duration::from_secs(10);
-    while scene.server_snapshot_count().unwrap() < 5 || scene.sample.time.0 <= 0.1 {
+    while scene.server_snapshot_count().unwrap() < 5
+        || scene.sample.time.0 <= 0.1
+        || scene.remote.as_ref().unwrap().fleet.updates < 2
+    {
         scene.push_live_input(0.0, false, false);
         scene.advance_flight(f64::NAN, None).unwrap();
         assert!(!scene.flight_stopped(), "{:?}", scene.flight_telemetry());
@@ -354,9 +498,72 @@ fn real_server_adoption_advances_and_acknowledges_input_without_local_steps() {
     let flight = scene.flight.as_ref().unwrap();
     assert_eq!(flight.throttle, 0.0);
     assert!(!flight.engine_active);
+    assert!(scene.remote.as_ref().unwrap().fleet.rows.is_empty());
+    assert!(!scene.remote.as_ref().unwrap().fleet.stale);
     assert_eq!(flight.accumulator_s, 0.0);
     assert!(scene.sample.time.0 <= flight.flight_time_s);
     assert!(scene.flight_data().is_some());
     assert!(scene.view(1280, 720, 1.0).world_position_m.is_finite());
     eprintln!("{}", scene.flight_telemetry().unwrap());
+}
+
+#[test]
+#[cfg(all(unix, feature = "hud"))]
+#[ignore = "requires a built sibling native viewer and wgpu adapter; framed fixture, not physical fleet replay"]
+fn fleet_inspector_capture_through_actual_native_cli_and_shared_link() {
+    let mut scene = Scene::load(Default::default()).unwrap();
+    scene.setup_flight().unwrap();
+    let primary = snapshot(&scene, 6.0);
+    let members: Vec<_> = (1..thessa_flight_net::MAX_FLEET_VEHICLES as u32)
+        .map(|id| (id, 4.0 + f64::from(id) / 32.0))
+        .collect();
+    let mut samples = fleet(&scene, &members);
+    samples.vehicles[6].snapshot.flight_error = Some("fixture stopped secondary".into());
+    let wire: String = thessa_flight_net::encode_snapshot(&primary)
+        .unwrap()
+        .into_iter()
+        .chain(thessa_flight_net::encode_fleet_snapshot(&samples).unwrap())
+        .map(|byte| format!("\\{byte:03o}"))
+        .collect();
+    let path = peer(&format!("while :; do printf '{wire}'; sleep 0.05; done"));
+    let viewer = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(format!(
+            "thessa-terrain-native{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+    let capture = path.with_extension("png");
+    let output = std::process::Command::new(viewer)
+        .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .args(["--server-flight", "--server"])
+        .arg(&path)
+        .args(["--headless"])
+        .arg(&capture)
+        .args(["--hud", "--frames", "60", "--prestream-seconds", "2"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "fleet_last_known=63",
+        "fleet_stale=false",
+        "stopped=false",
+        "local_steps=0",
+    ] {
+        assert!(stdout.contains(expected), "{stdout}");
+    }
+    assert!(capture.exists());
+    eprintln!(
+        "Fleet inspector framed-fixture capture (not a physical fleet replay): {}\n{stdout}",
+        capture.display()
+    );
+    std::fs::remove_file(path).unwrap();
 }

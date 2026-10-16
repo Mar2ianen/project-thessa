@@ -79,7 +79,7 @@ impl OutboundMailbox {
     }
 
     /// Latest-wins fleet snapshot slot, drained right after the primary
-    /// snapshot. Empty for single-vehicle operation.
+    /// snapshot. Includes explicit empty membership in single-vehicle operation.
     pub(super) fn replace_fleet_snapshot(&self, frame: Arc<Vec<u8>>) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;

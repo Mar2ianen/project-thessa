@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-15 (isolated renderer/streaming checkpoints and winit + egui shell selection)
+**Updated:** 2026-10-16 (owned presentation/controls/transport and native PRIMARY server-flight checkpoints)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -2133,6 +2133,103 @@ win is claimed. The unpaused debug Bevy pilot stayed linked to the actual
 server, captured and exited cleanly, with remote status logged through
 10 s / 1,201 ticks; audio remains unverified due to device warnings. Evidence,
 reproduction and hashes are in `artifacts/embedded-link-bounds-2026-10-16.json`.
+
+### Native PRIMARY server-flight continuation (2026-10-16)
+
+This slice supersedes the native snapshot-adoption gap in the preceding dated
+checkpoints. `apps/terrain-native --server-flight` now hosts the same GPL
+`flight-net::embedded::EmbeddedLink` as the legacy pilot. `--server PATH`
+optionally selects the executable; otherwise it must be beside the viewer.
+This is an explicit alternative to local `--flight`, not an automatic fallback
+or an external TCP client. The existing server, wire format and renderer are
+unchanged; no extra GPU device, scene pass, intermediate target or runtime
+readback is introduced.
+
+`flight-net::presentation` now owns the old pilot's replica-adoption and PRIMARY
+input-construction arithmetic. Both clients consume it; the Bevy adapter retains
+its HUD clock/votes, server timing counters and render wrappers. Before replica
+mutation, the shared contract checks the sample-time ephemeris, finite rigid
+kinematics, unit quaternion, throttle range and finite nonnegative timing/warp
+metadata. Parachute telemetry retains the existing checked authority-adoption
+contract. Native additionally refuses backwards tick/time; the old host still
+permits its existing reset flow. This is not full hostile-server validation or
+replication of fuel/electrical/structural inventories from the lean snapshot.
+
+Three state domains remain separate:
+
+- **Replica:** newest authoritative snapshot, used for input ticks and
+  speed/altitude/navball readouts. Recomputing existing display loads does not
+  advance physics, actuators, resources or the scheduler.
+- **Presentation:** existing receive-time interpolation, without extrapolation.
+  Its own time drives the mesh, reference-body frame, terrain spin, lights and
+  camera in one checked publication; it cannot overwrite the replica.
+- **Intent:** throttle/engine, stick, control mode, SAS and subsystem demands.
+  Delayed acknowledgements cannot erase throttle/engine intent. Ordered part
+  commands use the existing bounded mailbox; checkboxes indicate demands, not
+  individual remote command acknowledgements. Acceptance means queued only.
+
+Native fixes its current server policy at unpaused 1x PRIMARY flight. Local and
+server modes share COAST setup, the same X-15 source and input/camera/HUD paths.
+Until the first accepted snapshot, the canonical constructor pose is static,
+the HUD reports waiting, and no authoritative instrument readout is shown.
+`--throttle`, `--engine-on` and `--chase` work in both modes. Server presets are
+queued before GPU startup/pre-stream, not deferred to the first draw. Headless
+server flight uses real server wall time, including setup/pre-stream, not a fixed
+simulation demand or `--flight-step`; captures are not deterministic-epoch
+local/server A/B pairs.
+
+`--server-timeout SECONDS` (default 5, finite `0<seconds<=60`) bounds handshake
+and snapshot silence. The shared link exposes the reader-timestamp age of the
+newest drained sample. A missing first snapshot, stale received snapshots, observed
+pipe failure, invalid/backwards samples, command overflow or server flight
+error stops the native session, kills/reaps its owned child and preserves the
+last complete visual publication. The server-mode guard remains set, so later
+frames cannot accidentally enter local physics. This deadline is native-host
+policy, not a transport heartbeat, reconnect mechanism or deadline newly added
+to the old Bevy host. Hidden/minimized windows poll again on their next draw.
+
+Regression coverage includes separation of intent/replica/interpolated time,
+coherent body/light/mesh/camera publication (position-frame round trip below
+`1e-8 m`), malformed/backwards rejection before replica mutation, live-pipe
+silence before/after a snapshot, stdout loss, retained server-mode guard,
+ordered bounded part events and CLI conflicts. A real-server CPU smoke and
+native-window smoke also exercise actual snapshot adoption and throttle
+acknowledgement. Verification results and captures are recorded in
+`artifacts/native-server-flight-2026-10-16.json`.
+
+Local verification passed: fmt, workspace all-target/all-feature clippy with
+warnings denied, no-default-feature viewer clippy, **1,798** workspace lib/bin +
+**53** integration + **24** Bevy-CBT GPU + **1** additional mesh-shader GPU +
+**4** native GPU + **1** real-server CPU + **5** native-window tests =
+**1,886 Rust tests**, five agent-QA tests and the 12-crate architecture check.
+Hardware suites ran on Radeon 880M / RADV STRIX1 (Mesa 26.2.4). The real-server
+CPU smoke adopted five snapshots through tick 120 / 1 s, acknowledged throttle
+cut/engine off and retained zero local backlog. The unpaused Bevy pilot captured
+and exited while linked to the actual server (logged through 12 s / 1,441 ticks),
+without local fallback; audio remains unverified due to device warnings.
+
+Final release captures/measurements use 1280×720, HUD, 600 measured frames,
+30 warmup frames and 10 s pre-stream. Local A/B/B/A against the preserved
+`ed57dc2` survey release measured medians **3.071 / 3.130 / 3.229 / 3.349 ms**,
+with identical final trajectory at 10.5 s and identical final geometry. These
+overlapping ranges and async publication variance establish no speedup or
+isolated adapter-cost bound. The real-server orbit/chase runs measured
+**3.294 / 2.759 ms**, adopting **34 / 30** snapshots through **12.383 / 12.083 s**
+with no stop, closed link or capacity rejection. Their different cameras,
+trajectories and wall-time epochs make them **different workloads**, not a
+local/server overhead comparison. Child CPU work is concurrent, not included
+as isolated server/network cost. Earlier exploratory measurements before the
+waiting-HUD/early-preset correction are discarded.
+
+![Native PRIMARY server-backed COAST flight, diagnostic orbit capture](artifacts/native-server-remote-orbit-2026-10-16.png)
+
+![Native PRIMARY server-backed COAST flight, diagnostic chase capture](artifacts/native-server-remote-chase-2026-10-16.png)
+
+Remaining scope: fleet presentation, prediction/reconciliation, celestial map
+camera, richer replicated resources/Welcome validation, external networking,
+reconnect and joined-worker shutdown; PBR/effects/production UI and device-loss
+recovery also remain unported. This does not establish full Bevy displacement,
+visual parity, blind aesthetic acceptance or a renderer/network speedup.
 
 ## 15. FastRT
 

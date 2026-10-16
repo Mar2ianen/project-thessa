@@ -116,7 +116,7 @@ The checked-in vertical slice currently contains:
   The native draw loads the existing terrain color/depth targets before HUD;
   its base-color/Lambert shader is **not** PBR parity. Live flight-input
   intents (stick/throttle/engine/precision/control-law/SAS) are owned in
-   `--flight`; networking and remaining game UI are still missing.
+   local `--flight` and `--server-flight`; remaining production game UI is missing.
   Preview requires epoch time and no
   time stepping. Reusable source descriptors/decoding live in MIT `render-core`
   / `render-assets`; game asset calibration remains GPL. X-15 by cmoreau is
@@ -159,8 +159,20 @@ The checked-in vertical slice currently contains:
    The native child-process stdio link also lives in GPL `flight-net::embedded`;
    the old client retains only its Bevy resource adapter. A headless protocol
    smoke is available with `cargo run -p thessa-flight-net --example embedded_probe -- PATH_TO_THESSA_SERVER`
-   after building `thessa-server`. This does not yet wire server snapshots into
-   the native viewer or implement fleet presentation/prediction.
+    after building `thessa-server`. Native `--server-flight` now adopts PRIMARY
+    snapshots through that same link instead of stepping locally; `--server PATH`
+    selects a server executable (default: sibling `thessa-server`). It is exclusive
+    with local `--flight` and preview; throttle/chase/HUD controls work in either
+    flight mode. Scene/body/light time uses receive-time interpolation, while
+    instruments use the newest authoritative sample and throttle/engine intent
+    remains separate from acknowledgement. Ordered part commands are forwarded;
+    subsystem checkboxes show demands, not confirmed server state. Snapshot silence
+    (`--server-timeout 5`, also the handshake deadline), pipe failure or rejected
+    input freezes the last complete scene and kills/reaps the owned server, never
+    falling back to local physics. Before the first snapshot the pose is static
+    and instruments are omitted. Presets are queued before GPU startup/pre-stream.
+    Server headless runs use wall time (including
+    setup/pre-stream), not `--flight-step`. No fleet/prediction/reconnect support yet.
    Its input mailbox counts all commands (including state votes and fleet/
    autopilot events) against the protocol's 64-command packet limit; observed
    pipe/encode failure or overflow closes the link and refuses further input.
@@ -176,7 +188,7 @@ The checked-in vertical slice currently contains:
    omits UI allocation/work; `--no-default-features` excludes egui entirely.
    Headless captures omit HUD unless `--hud` is explicitly supplied.
    Only manual exposure/vsync settings are consumed from `graphics.toml`
-   (`--graphics PATH`); missing live object motion/effects/production game UI/networking and
+    (`--graphics PATH`); missing fleets/effects/production game UI/external networking and
   coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 

@@ -22,6 +22,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sim_step = 0.0_f64;
     let mut vehicle_preview = false;
     let mut live_flight = false;
+    let mut server_flight = false;
+    let mut server_path = None;
+    let mut server_timeout = 5.0_f64;
     let mut chase = false;
     let mut survey_site = None;
     let mut throttle_preset = None;
@@ -47,6 +50,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--sweep" => sweep = true,
             "--vehicle-preview" => vehicle_preview = true,
             "--flight" => live_flight = true,
+            "--server-flight" => server_flight = true,
+            "--server" => {
+                server_path = Some(std::path::PathBuf::from(
+                    args.next().ok_or("--server requires an executable path")?,
+                ))
+            }
+            "--server-timeout" => {
+                server_timeout = args
+                    .next()
+                    .ok_or("--server-timeout requires seconds")?
+                    .parse()?
+            }
             "--chase" => chase = true,
             "--site" => {
                 survey_site = Some(
@@ -87,16 +102,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
                 println!(
-                    "--flight runs the existing local FlightAuthority from canonical COAST launch with Navball attitude hold and tracking orbit camera. No flight-input/network/controller-UI parity. Requires --sim-time 0 --sim-step 0, incompatible with --vehicle-preview.\nHeadless --flight-step SECONDS (default 1/60, finite 0<step<=0.1) requests simulation elapsed per frame, including 30 warmup frames; pre-stream stays frozen. Window uses elapsed wall demand clamped to 0.1s and the old local client's 8ms work budget; no new physics dt or warp."
+                    "--flight runs the existing local FlightAuthority from canonical COAST launch with Navball attitude hold and tracking orbit camera. No complete controller-UI parity. Requires --sim-time 0 --sim-step 0, incompatible with --vehicle-preview.\nHeadless --flight-step SECONDS (default 1/60, finite 0<step<=0.1) requests simulation elapsed per frame, including 30 warmup frames; pre-stream stays frozen. Window uses elapsed wall demand clamped to 0.1s and the old local client's 8ms work budget; no new physics dt or warp."
                 );
                 println!(
-                    "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
+                    "--server-flight flies PRIMARY on the shared embedded stdio server (mutually exclusive with --flight/--vehicle-preview). --server PATH selects the executable; default: thessa-server beside the viewer. --server-timeout SECONDS (default 5, 0<seconds<=60) bounds handshake and snapshot silence. No local physics or fallback; a failed session freezes the last complete presentation. Scene time is receive-time interpolated; instruments show the newest authoritative sample. Server mode uses wall time, including headless runs; --flight-step is local-only."
                 );
                 println!(
-                    "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with --flight or --vehicle-preview. Shared quaternion orbit/free look, distance 80..2000000m (default/reset 5000m). Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                    "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight, --server-flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
                 );
                 println!(
-                    "--throttle FRACTION (0..=1, requires --flight) presets the owned throttle intent before the first frame; deterministic in window and headless. --engine-on (requires --flight) arms the engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, CapsLock precision (shared factors with the old pilot; RCS/gear/chute part commands are not ported yet)."
+                    "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. Shared quaternion orbit/free look, distance 80..2000000m (default/reset 5000m). Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                );
+                println!(
+                    "--throttle FRACTION (0..=1, requires --flight or --server-flight) presets throttle intent before the first frame. --engine-on arms engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, CapsLock precision; R/Y/G/P toggle RCS/wheels/gear/chutes. Server input acceptance means queued, not acknowledged; systems checkboxes show demands."
                 );
                 return Ok(());
             }
@@ -106,33 +124,50 @@ fn main() -> Result<(), Box<dyn Error>> {
     if frame_limit == Some(0) {
         return Err("--frames must be non-zero".into());
     }
-    if live_flight && (vehicle_preview || sim_time != 0.0 || sim_step != 0.0) {
-        return Err("--flight requires --sim-time 0 --sim-step 0 and no --vehicle-preview".into());
+    if server_flight && live_flight {
+        return Err("--server-flight and --flight are mutually exclusive".into());
     }
+    if !server_timeout.is_finite() || server_timeout <= 0.0 || server_timeout > 60.0 {
+        return Err("--server-timeout must be finite and within 0<seconds<=60".into());
+    }
+    if !server_flight && (server_path.is_some() || server_timeout != 5.0) {
+        return Err("--server and --server-timeout require --server-flight".into());
+    }
+    if (live_flight || server_flight) && (vehicle_preview || sim_time != 0.0 || sim_step != 0.0) {
+        let mode = if server_flight {
+            "--server-flight"
+        } else {
+            "--flight"
+        };
+        return Err(
+            format!("{mode} requires --sim-time 0 --sim-step 0 and no --vehicle-preview").into(),
+        );
+    }
+    let live_flight = live_flight || server_flight;
     if chase && !live_flight && !vehicle_preview {
-        return Err("--chase requires --flight or --vehicle-preview".into());
+        return Err("--chase requires --flight, --server-flight or --vehicle-preview".into());
     }
     if survey_site.is_some_and(|site| site >= thessa_flight_authority::SURVEY_SITE_LABELS.len()) {
         return Err("--site requires 0, 1 or 2".into());
     }
     if survey_site.is_some() && (live_flight || vehicle_preview) {
         return Err(
-            "--site is survey-only; incompatible with --flight or --vehicle-preview".into(),
+            "--site is survey-only; incompatible with flight modes or --vehicle-preview".into(),
         );
     }
     if throttle_preset.is_some() && !live_flight {
-        return Err("--throttle requires --flight".into());
+        return Err("--throttle requires --flight or --server-flight".into());
     }
     if engine_on && !live_flight {
-        return Err("--engine-on requires --flight".into());
+        return Err("--engine-on requires --flight or --server-flight".into());
     }
     if let Some(throttle) = throttle_preset
         && (!throttle.is_finite() || !(0.0..=1.0).contains(&throttle))
     {
         return Err("--throttle must be finite and within 0..=1".into());
     }
-    if flight_step.is_some() && (!live_flight || headless.is_none()) {
-        return Err("--flight-step requires --flight and --headless".into());
+    if flight_step.is_some() && (!live_flight || server_flight || headless.is_none()) {
+        return Err("--flight-step requires local --flight and --headless".into());
     }
     let flight_step = flight_step.unwrap_or(1.0 / 60.0);
     if !flight_step.is_finite() || flight_step <= 0.0 || flight_step > 0.1 {
@@ -171,7 +206,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if vehicle_preview {
         scene.enable_vehicle_preview()?;
     }
-    if live_flight {
+    if server_flight {
+        scene.enable_server_flight(
+            server_path.as_deref(),
+            std::time::Duration::from_secs_f64(server_timeout),
+        )?;
+    } else if live_flight {
         scene.enable_live_flight()?;
     }
     if chase {
@@ -182,6 +222,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if engine_on {
         scene.input.engine_active = true;
+    }
+    if server_flight {
+        // Queue presets before GPU startup/pre-stream; otherwise the already
+        // running child would keep constructor throttle until the first draw.
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None)?;
     }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",
@@ -218,11 +264,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         #[cfg(feature = "hud")]
         let mut previous_host_ms = 0.0;
         let count = frame_limit.unwrap_or(120);
+        let mut last_flight_frame = Instant::now();
         for frame in 0..u64::from(count) + 30 {
             let start = Instant::now();
             if live_flight {
-                scene.push_live_input(flight_step, false, false);
-                scene.advance_flight(flight_step, None)?;
+                let elapsed = if server_flight {
+                    start
+                        .duration_since(last_flight_frame)
+                        .as_secs_f64()
+                        .min(0.1)
+                } else {
+                    flight_step
+                };
+                last_flight_frame = start;
+                scene.push_live_input(elapsed, false, false);
+                scene.advance_flight(elapsed, None)?;
             } else {
                 scene.set_presentation_time(thessa_sim_core::SimTime(
                     sim_time + sim_step * frame as f64,
@@ -353,9 +409,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
         if let Some(status) = scene.flight_telemetry() {
-            println!(
-                "flight_step_s={flight_step} {status}; full local physics advance included in frame timings, not isolated renderer cost"
-            );
+            if server_flight {
+                println!(
+                    "{status}; server runs in wall time; snapshot adoption/presentation included in frame timings; child CPU work is concurrent, not isolated renderer/network cost"
+                );
+            } else {
+                println!(
+                    "flight_step_s={flight_step} {status}; full local physics advance included in frame timings, not isolated renderer cost"
+                );
+            }
         }
         return Ok(());
     }

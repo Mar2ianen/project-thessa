@@ -1,0 +1,141 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/native-server-flight",
+  "base_commit": "91d7d27",
+  "ownership": {
+    "gpl": "flight-net owns shared replica adoption/PRIMARY input construction and existing stdio transport; native scene owns host deadline/input/presentation publication; Bevy retains its Resource/HUD wrappers",
+    "mit_renderer_changes": false,
+    "new_crates_or_external_dependencies": false,
+    "extra_gpu_devices_scene_passes_copies_or_runtime_readbacks": 0,
+    "physics_solver_or_wire_changes": false
+  },
+  "contract": {
+    "entry": "--server-flight [--server EXECUTABLE] [--server-timeout SECONDS]; incompatible with local --flight, preview, site and manual presentation time",
+    "authority": "newest validated Snapshot into a client replica; no local integration, resource/scheduler stepping or extrapolation",
+    "presentation": "existing reader-receive-time interpolation; coherent mesh/body/terrain spin/light/camera publication at the interpolated sample time",
+    "instruments": "newest authoritative sample; omitted until the first accepted server snapshot; initial canonical pose stays static while waiting",
+    "intent": "throttle/engine intent separate from acknowledgements; SAS/stick/control mode/part demands retained; ordered part events bounded with two warp/pause votes reserved",
+    "startup_presets": "queued before GPU startup/pre-stream; not a guarantee that the server was paused before input arrival",
+    "server_policy": "PRIMARY vehicle, unpaused 1x; server headless runs in wall time including setup/pre-stream, not --flight-step",
+    "failure": "invalid/backwards sample, command rejection/overflow, observed pipe failure, server flight error or snapshot silence stops the session and kills/reaps its owned child; last complete visual publication retained; server-mode guard prevents local fallback",
+    "deadline": "native host policy: default 5 seconds, finite 0<seconds<=60 for CLI; handshake timeout and reader-timestamp snapshot silence; minimized windows poll on next draw",
+    "acceptance_is_not_acknowledgement": true,
+    "snapshot_validation_boundary": "kinematics, ephemeris, unit quaternion, throttle and consumed scalar telemetry; parachute loads retain existing checked adoption; not full hostile-server validation or complete resource replication"
+  },
+  "binaries": {
+    "profile": "default release with hud feature",
+    "viewer_sha256": "8d5e2d04addb2ae24e07bbd781b90eaa652cf0f912c067139cb6c523dcd7e355",
+    "server_sha256": "49a25c9b34922a14707fa0c6ce85446d8a6339b258ec08172c8c5725144d8cdd",
+    "baseline_viewer_sha256": "93a25fea6647094fcc1e41593e8259e8c816cbc42dfaffee821a37a512572804",
+    "baseline_scope": "preserved ed57dc2 survey release; subsequent transport-only ancestors did not change its local flight path; local-only A/B, not server cost isolation",
+    "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b"
+  },
+  "reproduction": {
+    "build": "cargo build --release -p thessa-terrain-native -p thessa-server",
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Mesa 26.2.4-arch1.1, Vulkan",
+    "frame_arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10, plus --flight or --server-flight --throttle 0 [--chase]",
+    "boundary": "1280x720; 600 measured + 30 warmup frames; host input/adoption/presentation/streaming/uploads/classify/raster/HUD/GPU completion; excludes setup/prestream/warmup/final readback; server CPU is concurrent; not GPU-only, isolated network latency or game FPS"
+  },
+  "regressions": [
+    "Separate newest replica, client intent and interpolated presentation; frame round-trip error <1e-8 m; body/light/camera use display time",
+    "Malformed/backwards snapshots reject before replica mutation; no visual publication on rejection",
+    "Live-pipe silence before and after a received snapshot, reader-age rather than polling age, stdout loss, and retained no-fallback guard",
+    "Ordered part commands survive acknowledgement, share the protocol bound and stop explicitly on overflow",
+    "CLI conflicts and nonfinite bounds reject before scene setup",
+    "Actual server adoption and throttle-cut/engine-off acknowledgement with NaN local elapsed to prove the local stepping branch is not entered",
+    "Actual native server-backed window lifecycle, plus existing local/survey/GPU regressions"
+  ],
+  "measurements": {
+    "logs": "/tmp/opencode/native-server-measure-{baseline-local-1,local-1,local-2,baseline-local-2,remote-orbit,remote-chase}.log",
+    "final_run_policy": "six sequential runs after builds and GPU/window tests completed; earlier exploratory runs before the waiting-HUD/early-preset correction are discarded",
+    "local_order": ["baseline-local-1", "local-1", "local-2", "baseline-local-2"],
+    "local_final_each": {
+      "authority_and_presentation_s": 10.5,
+      "relative_position_m": [-2847029.6640625, 759068.1640593708, 1250706.967514596],
+      "backlog_s": 0,
+      "stopped": false,
+      "terrain_tiles": 374,
+      "terrain_triangles": 410112,
+      "mesh_instances": 1,
+      "mesh_draw_calls": 2,
+      "mesh_triangles": 78465,
+      "mesh_frame_upload_bytes": 640,
+      "capacity_rejections": 0
+    },
+    "local_runs": [
+      {"name": "baseline-local-1", "median_ms": 3.071, "p95_ms": 4.315, "p99_ms": 8.874, "max_ms": 10.231, "measured_publications": 44},
+      {"name": "local-1", "median_ms": 3.130, "p95_ms": 5.069, "p99_ms": 8.862, "max_ms": 13.042, "measured_publications": 43},
+      {"name": "local-2", "median_ms": 3.229, "p95_ms": 5.071, "p99_ms": 10.567, "max_ms": 13.454, "measured_publications": 44},
+      {"name": "baseline-local-2", "median_ms": 3.349, "p95_ms": 4.931, "p99_ms": 9.277, "max_ms": 10.296, "measured_publications": 43}
+    ],
+    "local_conclusion": "identical final local trajectory/geometry; overlapping median ranges, asynchronous streaming and run-order drift; no speedup or isolated adapter-overhead claim",
+    "server_runs": [
+      {"name": "remote-orbit", "median_ms": 3.294, "p95_ms": 4.151, "p99_ms": 5.033, "max_ms": 9.966, "snapshots_adopted": 34, "last_tick": 1486, "authority_s": 12.383333333333333, "presentation_s": 12.383333333333333, "terrain_tiles": 374, "terrain_triangles": 423936, "measured_publications": 5, "material_upload_bytes": 29097540, "capacity_rejections": 0, "local_steps": 0, "throttle": 0.0, "engine": true, "stopped": false, "link_closed": false},
+      {"name": "remote-chase", "median_ms": 2.759, "p95_ms": 3.516, "p99_ms": 4.452, "max_ms": 12.091, "snapshots_adopted": 30, "last_tick": 1450, "authority_s": 12.083333333333334, "presentation_s": 12.083333333333334, "terrain_tiles": 374, "terrain_triangles": 391680, "measured_publications": 5, "material_upload_bytes": 29709200, "capacity_rejections": 0, "local_steps": 0, "throttle": 0.0, "engine": true, "stopped": false, "link_closed": false}
+    ],
+    "server_boundary": "different camera/trajectory/completed epoch from local runs and from each other; includes host adoption/presentation, child CPU concurrent; not an equal-workload local/server cost comparison or camera speedup"
+  },
+  "captures": [
+    {"path": "native-server-local-1-2026-10-16.png", "size": [1280, 720], "sha256": "5ed93f04321de08bfbd2df8f4974568d95ee2d4ac7723eafb4dc527633727081"},
+    {"path": "native-server-remote-orbit-2026-10-16.png", "size": [1280, 720], "sha256": "d6cfe7bfde2cc3d07208878abbb6c23e7817e7c44362e40fce6cc53bdb93983b"},
+    {"path": "native-server-remote-chase-2026-10-16.png", "size": [1280, 720], "sha256": "a460a2a71da609a0115c6aae0a019df22b82de1319f854493ca0e198067d9cf2"}
+  ],
+  "verification": {
+    "fmt": "pass: cargo fmt --all -- --check",
+    "workspace_clippy": "pass: cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "viewer_no_hud_clippy": "pass: cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+    "workspace_lib_bin_tests": 1798,
+    "workspace_integration_tests": 53,
+    "bevy_cbt_hardware_tests": 24,
+    "additional_mesh_shader_hardware_test": 1,
+    "native_gpu_tests": 4,
+    "native_actual_server_cpu_test": 1,
+    "native_window_tests": 5,
+    "successful_rust_tests": 1886,
+    "agent_qa_unittests": 5,
+    "architecture_guarded_crates": 12,
+    "hardware_commands": [
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+      "cargo test -p thessa-bevy-rcbt --all-features --lib gpu_mesh_emission -- --ignored --nocapture",
+      "cargo test -p thessa-terrain-native --bin thessa-terrain-native -- --ignored --nocapture",
+      "cargo test -p thessa-terrain-native --test window_exit -- --ignored --test-threads=1"
+    ],
+    "logs": "/tmp/opencode/native-server-{lib,integration,clippy,nohud,bevy-gpu,mesh-gpu,native-gpu,window-test,qa,architecture,build,host-build,legacy-smoke}.log",
+    "not_run": "existing ignored sim-core and flight-authority wall-clock profiling diagnostics; no new physics or scheduling algorithm"
+  },
+  "real_server_cpu_smoke": {
+    "server_profile": "debug",
+    "server_sha256": "5b25e97cbcbc0e949eed9554513caca64c8dbb5bcda4c5165e2f0d8f16789415",
+    "snapshots_adopted": 5,
+    "last_tick": 120,
+    "authoritative_sim_s": 1.0,
+    "presentation_sim_s": 1.0,
+    "backlog_s": 0.0,
+    "throttle_cut_engine_off_acknowledged": true,
+    "local_elapsed_argument": "NaN: server guard bypasses local elapsed validation/stepping; regression requires advancing server snapshots",
+    "stopped": false,
+    "boundary": "functional smoke; concurrent GPU tests/world startup included, not isolated network latency or throughput"
+  },
+  "legacy_bevy_smoke": {
+    "viewer_profile": "debug",
+    "viewer_sha256": "ee7a99e41ed084c5a3d78d0caec98d1ed85751154204947339e52e69602dcbd5",
+    "server_sha256": "5b25e97cbcbc0e949eed9554513caca64c8dbb5bcda4c5165e2f0d8f16789415",
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0,
+    "actual_server_link": true,
+    "local_fallback": false,
+    "last_logged_server_status": "sim_s=12 steps=1441; reqwarp=x1 effwarp=x1",
+    "capture": "native-server-bevy-pilot-2026-10-16.png",
+    "capture_size": [1270, 1588],
+    "capture_sha256": "e888a70f0c9c82f327fe29491e06c093ba97f4a450027046242ef8822efa63e2",
+    "limitations": "audio device warnings leave audio unverified; wall-time capture is not a fixed epoch or an equal-scene native/Bevy comparison"
+  },
+  "limitations": [
+    "No fleet presentation, prediction/reconciliation, external TCP client, reconnect or joined-worker shutdown guarantee.",
+    "Lean Snapshot does not replicate complete resource/structural/electrical state; display loads retain old-pilot approximations.",
+    "Server captures have wall-time-dependent epochs and are not matched deterministic local/server image pairs.",
+    "Terrain seams/LOD defects, flat sky, PBR/effects/UI parity, conforming persistent GPU bisector topology, FastRT acceleration structures and device-loss recovery remain unresolved.",
+    "Captures are implementer diagnostics, not independent blind subjective preference, visual acceptance or complete Bevy displacement."
+  ]
+}

@@ -103,6 +103,7 @@ impl Controls {
 #[derive(Default)]
 pub struct Stats {
     pub live_flight: bool,
+    pub server_snapshots: Option<u64>,
     pub flight_stopped: bool,
     pub chase: bool,
     pub throttle: f64,
@@ -130,6 +131,7 @@ impl Stats {
         Self {
             submitted_frames: frames,
             live_flight: scene.live_flight(),
+            server_snapshots: scene.server_snapshot_count(),
             flight_stopped: scene.flight_stopped(),
             chase: scene.camera.chase(),
             throttle: scene.input.throttle,
@@ -324,17 +326,22 @@ fn widgets(
                     ui.colored_label(
                         if stats.flight_stopped {
                             egui::Color32::RED
+                        } else if stats.server_snapshots == Some(0) {
+                            egui::Color32::YELLOW
                         } else {
                             egui::Color32::LIGHT_GREEN
                         },
-                        if stats.flight_stopped {
-                            "Local flight stopped (last valid presentation)"
-                        } else if stats.chase {
-                            "Local flight · COAST · Navball hold · chase"
-                        } else {
-                            "Local flight · COAST · Navball hold"
-                        },
+                        if stats.server_snapshots.is_some() {
+                            if stats.flight_stopped { "Server flight stopped (last valid presentation)" }
+                            else if stats.server_snapshots == Some(0) { "Waiting for first server snapshot (no local stepping)" }
+                            else { "Server flight · PRIMARY · COAST (no local stepping)" }
+                        } else if stats.flight_stopped { "Local flight stopped (last valid presentation)" }
+                        else if stats.chase { "Local flight · COAST · chase" }
+                        else { "Local flight · COAST" },
                     );
+                    if let Some(count) = stats.server_snapshots {
+                        ui.small(format!("Server snapshots: {count} · readout = newest acknowledgement; scene = interpolated"));
+                    }
                 }
                 ui.separator();
                 ui.label(format!("Resident terrain: {} tiles", stats.tiles));

@@ -3,8 +3,7 @@
 //!
 //! Layout mirrors the server: one reader thread owns the stdout pipe end
 //! to end (Welcome gate first, then snapshots), one writer thread owns
-//! stdin. The handshake runs on the calling thread with a timeout so a
-//! missing or skewed server degrades to local simulation.
+//! stdin. The handshake runs on the calling thread with a timeout.
 //! The host chooses whether to fall back. This transport neither steps a
 //! local authority nor adopts wire state into simulation/render state.
 
@@ -269,8 +268,8 @@ impl Drop for StartupChild {
 
 impl EmbeddedLink {
     /// Spawn the server next to the client binary, shake hands, return.
-    /// Any failure (missing binary, timeout, version skew) is an `Err`
-    /// so the caller falls back to local simulation.
+    /// Any failure (missing binary, timeout, version skew) is an `Err`;
+    /// fallback or fail-fast behavior belongs to the caller.
     pub fn spawn(handshake_timeout: Duration) -> Result<Self, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let server = exe.with_file_name(format!("thessa-server{}", std::env::consts::EXE_SUFFIX));
@@ -437,6 +436,20 @@ impl EmbeddedLink {
     /// Drain snapshots, keeping the newest. `None` when nothing arrived.
     pub fn latest_snapshot(&self) -> Option<Snapshot> {
         self.snapshots.lock().ok()?.latest()
+    }
+
+    /// Age of the newest drained snapshot using the reader's receive timestamp,
+    /// not host polling or simulation time. Call `latest_snapshot` first to drain.
+    pub fn snapshot_age(&self) -> Option<Duration> {
+        Some(
+            self.snapshots
+                .lock()
+                .ok()?
+                .latest
+                .as_ref()?
+                .received_at
+                .elapsed(),
+        )
     }
 
     /// Presentation-only pose between the two newest authoritative snapshots.

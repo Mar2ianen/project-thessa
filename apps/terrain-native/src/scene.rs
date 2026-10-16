@@ -1,5 +1,5 @@
 //! A real canonical-field resident partition, shared by window/headless paths.
-//! Shared live terrain streaming policy; not the networked game client.
+//! Shared terrain streaming and local/server PRIMARY-vehicle presentation.
 use crate::celestial::{CelestialPresentation, Sample};
 use glam::{DQuat, DVec3};
 use thessa_rcbt_core::tile_anchor::{TileAnchor, TileKey};
@@ -15,6 +15,7 @@ use thessa_terrain_stream::{
 
 pub struct Scene {
     flight: Option<thessa_flight_authority::FlightAuthority>,
+    remote: Option<RemoteFlight>,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -51,10 +52,20 @@ pub struct Scene {
     lighting_dirty: bool,
 }
 
+/// Native stdio host state, not a second simulation or interpolation inbox.
+struct RemoteFlight {
+    link: Option<thessa_flight_net::embedded::EmbeddedLink>,
+    commands: Vec<thessa_flight_net::Command>,
+    started: std::time::Instant,
+    timeout: std::time::Duration,
+    snapshots: u64,
+    last_tick: Option<u64>,
+}
+
 /// Installed-subsystem selector sharing keys with the old pilot
 /// (`R` RCS, `Y` reaction wheels, `G` gear, `P` parachutes). The old client
-/// forwards the same commands to the server; the local viewer applies them
-/// to its own authority only.
+/// forwards the same commands to the server. Native server mode retains their
+/// order; local mode applies them to its own authority only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartToggle {
     Rcs,
@@ -81,9 +92,16 @@ impl Scene {
     /// Sample surface speed, vertical speed and datum/AGL altitude from the
     /// existing authority state through the shared kinematics (the same
     /// function the old client's HUD consumes). `None` without live flight
-    /// or on a failed ephemeris/atmosphere sample; hosts keep their previous
-    /// readout in that case.
+    /// or on a failed ephemeris/atmosphere sample; the HUD omits that readout.
+    /// Server telemetry reads the newest replica, not the interpolated pose.
     pub fn flight_data(&self) -> Option<FlightData> {
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|remote| remote.snapshots == 0)
+        {
+            return None;
+        }
         let flight = self.flight.as_ref()?;
         let time = thessa_sim_core::SimTime(flight.flight_time_s);
         let body_state = self
@@ -150,6 +168,7 @@ impl Scene {
         let stream = TerrainStream::new(field, StreamingPolicy::default())?;
         let mut scene = Self {
             flight: None,
+            remote: None,
             launch_site: sites[0].0,
             vehicle: None,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
@@ -254,9 +273,8 @@ impl Scene {
         self.flight.is_some()
     }
 
-    /// Canonical production launch setup and fixed-step authority, not a new
-    /// physics clock/controller. No network or player-flight-input host yet.
-    pub fn enable_live_flight(&mut self) -> Result<(), String> {
+    /// Canonical launch assets/replica, shared by local and server hosts.
+    fn setup_flight(&mut self) -> Result<(), String> {
         if self.vehicle.is_some() || self.sample.time != thessa_sim_core::SimTime::EPOCH {
             return Err("live flight requires an empty epoch vehicle scene".into());
         }
@@ -280,9 +298,155 @@ impl Scene {
                 .unwrap_or_default();
         self.control_mode = thessa_flight_authority::ControlMode::Navball;
         self.flight = Some(flight);
+        Ok(())
+    }
+
+    pub fn enable_live_flight(&mut self) -> Result<(), String> {
+        self.setup_flight()?;
         eprintln!(
-            "Live local flight: canonical COAST launch; existing FlightAuthority, Navball attitude hold; no flight-input/network/UI parity"
+            "Live local flight: canonical COAST launch; existing FlightAuthority; no network/complete UI parity"
         );
+        Ok(())
+    }
+
+    /// Explicit server mode: failures never fall back to a local integrator.
+    pub fn enable_server_flight(
+        &mut self,
+        server: Option<&std::path::Path>,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        if timeout.is_zero() {
+            return Err("server timeout must be nonzero".into());
+        }
+        if self.vehicle.is_some() || self.sample.time != thessa_sim_core::SimTime::EPOCH {
+            return Err("server flight requires an empty epoch vehicle scene".into());
+        }
+        let link = match server {
+            Some(path) => thessa_flight_net::embedded::EmbeddedLink::spawn_server(path, timeout)?,
+            None => thessa_flight_net::embedded::EmbeddedLink::spawn(timeout)?,
+        };
+        self.setup_flight()?;
+        self.remote = Some(RemoteFlight {
+            link: Some(link),
+            commands: Vec::new(),
+            started: std::time::Instant::now(),
+            timeout,
+            snapshots: 0,
+            last_tick: None,
+        });
+        eprintln!(
+            "Server flight: canonical COAST; shared stdio link and receive-time interpolation; no local physics stepping or fallback"
+        );
+        Ok(())
+    }
+
+    pub fn server_flight(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    #[cfg(any(feature = "hud", test))]
+    pub fn server_snapshot_count(&self) -> Option<u64> {
+        self.remote.as_ref().map(|remote| remote.snapshots)
+    }
+
+    fn stop_server_flight(&mut self, error: String) {
+        if let Some(remote) = &mut self.remote {
+            remote.link.take(); // Kill/reap our child, retaining the server-mode guard.
+        }
+        if let Some(flight) = &mut self.flight {
+            flight.flight_error = Some(error.clone());
+        }
+        eprintln!(
+            "Native server flight stopped: {error}; preserving last complete visual sample; no local fallback"
+        );
+    }
+
+    fn accept_server_snapshot(
+        &mut self,
+        snapshot: &thessa_flight_net::Snapshot,
+    ) -> Result<(), String> {
+        let flight = self.flight.as_mut().ok_or("missing flight replica")?;
+        let remote = self.remote.as_mut().ok_or("missing server host")?;
+        if remote.last_tick.is_some_and(|tick| {
+            snapshot.tick < tick || snapshot.flight_time_s < flight.flight_time_s
+        }) {
+            return Err("server snapshot tick/time moved backwards".into());
+        }
+        thessa_flight_net::presentation::adopt_snapshot(
+            flight,
+            self.celestial.ephemeris(),
+            self.control_mode,
+            snapshot,
+        )?;
+        remote.last_tick = Some(snapshot.tick);
+        remote.snapshots += 1;
+        Ok(())
+    }
+
+    fn poll_server_flight(&mut self) -> Result<(), String> {
+        if let Err(error) = self.poll_server_inner() {
+            self.stop_server_flight(error);
+        }
+        Ok(())
+    }
+
+    fn poll_server_inner(&mut self) -> Result<(), String> {
+        use thessa_flight_net::{
+            Command,
+            presentation::{checked_snapshot_pose, input_for_server},
+        };
+        let remote = self.remote.as_mut().ok_or("missing server host")?;
+        let Some(link) = &remote.link else {
+            return Ok(());
+        };
+        let flight = self.flight.as_ref().ok_or("missing flight replica")?;
+        let mut commands = vec![
+            Command::SetWarp { factor: 1.0 },
+            Command::Pause { paused: false },
+        ];
+        commands.append(&mut remote.commands);
+        let input = input_for_server(
+            flight,
+            self.control_mode,
+            self.input.throttle,
+            self.input.engine_active,
+            commands,
+        );
+        input.validate()?;
+        if !link.send_input(&input) || link.is_closed() {
+            return Err("embedded server link lost".into());
+        }
+        let latest = link.latest_snapshot();
+        let display = link.interpolated_snapshot();
+        if link
+            .snapshot_age()
+            .unwrap_or_else(|| remote.started.elapsed())
+            > remote.timeout
+        {
+            return Err("embedded server snapshot deadline exceeded".into());
+        }
+        if let Some(snapshot) = latest {
+            self.accept_server_snapshot(&snapshot)?;
+        }
+        if let Some(snapshot) = display {
+            let flight = self.flight.as_ref().ok_or("missing flight replica")?;
+            if snapshot.flight_time_s > flight.flight_time_s {
+                return Err("presentation sample is ahead of server truth".into());
+            }
+            let pose = checked_snapshot_pose(
+                &snapshot,
+                self.celestial.ephemeris(),
+                flight.reference_body,
+            )?;
+            self.publish_vehicle_pose(pose)?;
+        }
+        if self.flight_stopped() {
+            return Err(self
+                .flight
+                .as_ref()
+                .and_then(|flight| flight.flight_error.clone())
+                .unwrap_or_else(|| "server flight failed".into()));
+        }
         Ok(())
     }
 
@@ -337,6 +501,9 @@ impl Scene {
         elapsed_s: f64,
         budget: Option<std::time::Duration>,
     ) -> Result<(), String> {
+        if self.server_flight() {
+            return self.poll_server_flight();
+        }
         let Some(flight) = &mut self.flight else {
             return Ok(());
         };
@@ -369,8 +536,9 @@ impl Scene {
 
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
+            let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed())));
             let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN });
-            format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
+            format!("{source} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }
     pub fn flight_stopped(&self) -> bool {
         self.flight
@@ -389,8 +557,10 @@ impl Scene {
             return;
         };
         self.input.slew(dt_s, throttle_up, throttle_down);
-        flight.throttle = self.input.throttle;
-        flight.engine_active = self.input.engine_active;
+        if self.remote.is_none() {
+            flight.throttle = self.input.throttle;
+            flight.engine_active = self.input.engine_active;
+        }
         flight.control_input = self.input.stick_scaled();
     }
 
@@ -470,6 +640,21 @@ impl Scene {
             flight.accumulator_s = 0.0;
             flight.flight_error = Some(error.to_string());
             eprintln!("Native flight stopped: {error}; preserving last complete visual sample");
+            return;
+        }
+        if let Some(remote) = &mut self.remote
+            && remote.link.is_some()
+        {
+            // Reserve the two warp/pause votes emitted by poll_server_inner.
+            if remote.commands.len() + 2 >= thessa_flight_net::MAX_COMMANDS_PER_INPUT {
+                self.stop_server_flight(
+                    "server command queue overflow; restart the session".into(),
+                );
+            } else {
+                remote
+                    .commands
+                    .push(thessa_flight_net::Command::Part { command });
+            }
         }
     }
 
@@ -777,6 +962,10 @@ impl Scene {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "scene_server_tests.rs"]
+mod server_tests;
 
 /// Total degenerate fallback for failed survey/vehicle views: an elevated
 /// view with a re-orthogonalized reference axis. Never NaNs; the primary

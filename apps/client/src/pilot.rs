@@ -15,9 +15,7 @@ use bevy::{
 };
 
 use thessa_flight_net::{ClientInput, Command, ManeuverNodeCommand, Snapshot};
-use thessa_sim_core::{
-    BakedEphemeris, BodyId, OnRailsCache, SimTime, VehicleId, VehiclePartCommand, WorldTick,
-};
+use thessa_sim_core::{BakedEphemeris, BodyId, OnRailsCache, SimTime, VehiclePartCommand};
 
 const HUD_TEXT: Color = Color::srgb(0.91, 0.95, 0.98);
 const HUD_MUTED: Color = Color::srgb(0.60, 0.69, 0.76);
@@ -41,7 +39,7 @@ pub(super) enum ClientViewMode {
 
 use thessa_flight_authority::{BakeQueue, BakedRails, RailsBakeRequest};
 pub(super) use thessa_flight_authority::{
-    COAST_DENSITY_KG_M3, ControlMode, FlightAuthority, FlightRegime, X15_STALL_ANGLE_DEG,
+    ControlMode, FlightAuthority, FlightRegime, X15_STALL_ANGLE_DEG,
     conventional_angle_of_attack_deg, local_air_kinematics,
 };
 
@@ -166,12 +164,9 @@ impl PilotFlightRuntime {
     /// `authority` stays on the newest validated snapshot for input ticks and
     /// prediction; a visual sample can never advance server state.
     pub(super) fn sync_render_snapshot(&mut self, ephemeris: &BakedEphemeris, snapshot: &Snapshot) {
-        if let Some(pose) = FlightPose::from_inertial(
-            ephemeris,
-            self.reference_body,
-            SimTime(snapshot.flight_time_s),
-            &snapshot.state,
-        ) {
+        if let Some(pose) =
+            thessa_flight_net::presentation::snapshot_pose(snapshot, ephemeris, self.reference_body)
+        {
             self.publish_pose(pose);
         }
     }
@@ -1033,38 +1028,18 @@ fn adopt_snapshot(
     mode: ControlMode,
     snapshot: &Snapshot,
 ) {
-    runtime.state = snapshot.state;
-    runtime.flight_time_s = snapshot.flight_time_s;
-    runtime.world_tick = WorldTick(snapshot.tick);
-    runtime.accumulator_s = 0.0;
-    runtime.throttle = snapshot.throttle;
-    runtime.engine_active = snapshot.engine_active;
-    runtime.steps_this_frame = snapshot.steps_this_frame;
-    runtime.rails_advanced_this_frame = snapshot.rails_advanced_s;
+    if let Err(error) = thessa_flight_net::presentation::adopt_snapshot(
+        &mut runtime.authority,
+        ephemeris,
+        mode,
+        snapshot,
+    ) {
+        runtime.flight_error = Some(error);
+        return;
+    }
     runtime.server_compute_s = snapshot.server_compute_s;
     runtime.server_wall_s = snapshot.server_wall_s;
     runtime.server_effective_warp = snapshot.effective_warp;
-    runtime.reaction_wheel_torque_body_nm =
-        DVec3::from_array(snapshot.reaction_wheel_torque_body_nm);
-    runtime.adopt_parachute_telemetry(&snapshot.parachutes);
-    runtime.wake_notice = snapshot.wake_notice.clone();
-    runtime.flight_error = snapshot.flight_error.clone();
-    let time = SimTime(snapshot.flight_time_s);
-    let Ok(body_state) = ephemeris.body_state(runtime.reference_body, time) else {
-        return;
-    };
-    runtime.relative_position_m = runtime.state.position_inertial_m - body_state.position_inertial;
-    runtime.regime = match runtime
-        .atmosphere
-        .sample((runtime.relative_position_m.length() - runtime.planet_radius_m).max(0.0))
-    {
-        Ok(sample) if sample.density_kg_m3 < COAST_DENSITY_KG_M3 => FlightRegime::Coast,
-        _ => FlightRegime::Aero,
-    };
-    if let Ok((gravity, forces)) = runtime.display_loads(ephemeris, time, mode) {
-        runtime.last_gravity_acceleration_inertial_mps2 = gravity;
-        runtime.last_forces = Some(forces);
-    }
     runtime.sync_view();
 }
 /// Build one server-bound input from live client state. Single
@@ -1076,7 +1051,6 @@ fn client_input_for_server(
     clock: &SimulationClock,
     extra_commands: Vec<Command>,
 ) -> ClientInput {
-    let target = runtime.sas_target_orientation;
     let mut commands = vec![
         Command::SetWarp {
             factor: clock.multiplier,
@@ -1086,21 +1060,13 @@ fn client_input_for_server(
         },
     ];
     commands.extend(extra_commands);
-    ClientInput {
-        tick: runtime.world_tick.0,
-        vehicle_id: VehicleId::PRIMARY,
-        control_input: runtime.control_input.to_array(),
-        control_mode: state.control_mode,
-        sas_target_xyzw: [target.x, target.y, target.z, target.w],
-        throttle: runtime.input_throttle,
-        engine_active: runtime.input_engine_active,
-        sas_enabled: runtime.sas_enabled,
-        rcs_enabled: runtime.rcs_enabled,
-        reaction_wheels_enabled: runtime.reaction_wheels_enabled,
-        gear_down: runtime.gear_down,
-        parachutes_armed: runtime.parachutes_armed,
+    thessa_flight_net::presentation::input_for_server(
+        &runtime.authority,
+        state.control_mode,
+        runtime.input_throttle,
+        runtime.input_engine_active,
         commands,
-    }
+    )
 }
 
 fn simulate_pilot_flight(

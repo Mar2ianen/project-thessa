@@ -3,6 +3,54 @@
 #![cfg(feature = "hud")]
 
 #[test]
+#[ignore = "requires a native display, wgpu adapter and built sibling thessa-server"]
+fn server_flight_window_adopts_snapshots_and_exits_cleanly() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
+        .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .args([
+            "--server-flight",
+            "--chase",
+            "--throttle",
+            "0",
+            "--hud",
+            "--frames",
+            "90",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "window_presented_frames=90",
+        "source=server",
+        "local_steps=0",
+        "stopped=false",
+        "throttle=0.000",
+        "link_closed=false",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected}: {stdout}");
+    }
+    let number = |key: &str| {
+        stdout
+            .split_once(key)
+            .unwrap()
+            .1
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap()
+    };
+    assert!(number("received_snapshots=") > 1.0);
+    assert!(number("authority_time_s=") > 0.0);
+    assert!(number("presentation_time_s=") <= number("authority_time_s="));
+}
+
+#[test]
 #[ignore = "requires a native Wayland/X11 display and wgpu adapter"]
 fn hud_and_terrain_only_windows_exit_cleanly() {
     for hud in ["--hud", "--no-hud"] {

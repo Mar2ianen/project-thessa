@@ -1,4 +1,5 @@
 /target/
+/apps/terrain-native/target/
 /tools/worldgen-rocky/target/
 /perf-*.csv
 /perf-*.json

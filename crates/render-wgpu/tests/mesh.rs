@@ -18,6 +18,9 @@ fn source() -> MeshAsset {
         }],
         materials: vec![Material {
             base_texture: Some(0),
+            // This oracle isolates diffuse sRGB sampling. glTF's material
+            // default is a metal, which has no diffuse term with reflection off.
+            metallic: 0.0,
             double_sided: true,
             ..Default::default()
         }],

@@ -275,7 +275,7 @@ impl Scene {
         let pose = FlightPose::from_authority(&flight).ok_or("invalid initial flight pose")?;
         let instance = Self::mesh_instance(pose, self.sample.frame)?;
         eprintln!(
-            "X15 initial flight-state preview: {} primitives, {} vertices, {} triangles; CC BY 4.0 cmoreau; opaque native base-color/Lambert shading (not PBR parity)",
+            "X15 initial flight-state preview: {} primitives, {} vertices, {} triangles; CC BY 4.0 cmoreau; native opaque material path (not complete PBR parity)",
             source.primitives.len(),
             source
                 .primitives
@@ -826,6 +826,7 @@ impl Scene {
         }
     }
 
+    #[cfg(test)]
     pub fn mesh_renderer(
         &self,
         backend: &Backend,
@@ -834,6 +835,17 @@ impl Scene {
         self.vehicle
             .as_ref()
             .map(|(source, _)| SceneMeshes::new(self, backend, source, format))
+            .transpose()
+    }
+    pub fn mesh_renderer_with_shadows(
+        &self,
+        backend: &Backend,
+        format: wgpu::TextureFormat,
+        shadows: Option<&thessa_render_wgpu::shadows::ShadowAtlas>,
+    ) -> Result<Option<SceneMeshes>, BackendError> {
+        self.vehicle
+            .as_ref()
+            .map(|(source, _)| SceneMeshes::with_shadows(self, backend, source, format, shadows))
             .transpose()
     }
     pub fn update_mesh(
@@ -895,7 +907,11 @@ impl Scene {
                 page: self.stream.height(key).unwrap().page,
             })
             .collect();
-        let mut renderer = TerrainRenderer::with_capacity(
+        let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
+            &self.requested,
+            &backend.caps,
+        );
+        let mut renderer = TerrainRenderer::with_capacity_and_lighting(
             backend,
             &patches,
             format,
@@ -904,6 +920,7 @@ impl Scene {
                 height_grid_size: 33,
                 material_layers: backend.device.limits().max_texture_array_layers.min(256),
             },
+            Some(&resolved),
         )?;
         let stats = renderer.update_materials(
             backend,

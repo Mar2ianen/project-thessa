@@ -114,7 +114,10 @@ The checked-in vertical slice currently contains:
   optional chase framing). The old pilot now converts the same neutral
   mesh/material source instead of loading this model through Bevy `WorldAsset`.
   The native draw loads the existing terrain color/depth targets before HUD;
-  its base-color/Lambert shader is **not** PBR parity. Live flight-input
+   its configurable opaque path now supports shared GGX stellar/environment
+   reflection, normal/metallic-roughness/AO maps and a memory-bounded three-star
+   cascade shadow atlas shared with terrain. This is **not** complete PBR,
+   atmosphere or scene-object reflection parity (doc 39, surface-lighting checkpoint). Live flight-input
   intents (stick/throttle/engine/precision/control-law/SAS) are owned in
    local `--flight` and `--server-flight`; remaining production game UI is missing.
   Preview requires epoch time and no

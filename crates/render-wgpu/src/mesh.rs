@@ -24,6 +24,8 @@ pub struct MeshDrawStats {
     pub frame_upload_bytes: usize,
 }
 pub struct MeshRenderer {
+    shadow_receiver: Option<wgpu::BindGroup>,
+    shadow_caster: Option<wgpu::BindGroup>,
     pipeline: wgpu::RenderPipeline,
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
@@ -41,6 +43,77 @@ fn fail(s: &str) -> BackendError {
 }
 fn words(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
     values.into_iter().flat_map(f32::to_le_bytes).collect()
+}
+
+fn material_texture(
+    backend: &Backend,
+    source: &MeshAsset,
+    id: Option<usize>,
+    fallback: [u8; 4],
+    srgb: bool,
+    cache: &mut std::collections::BTreeMap<(Option<usize>, [u8; 4], bool), wgpu::TextureView>,
+) -> (wgpu::TextureView, wgpu::Sampler) {
+    let t = id.map(|i| source.textures[i]);
+    let image = t.map(|t| t.image);
+    let texture = cache
+        .entry((image, fallback, srgb))
+        .or_insert_with(|| {
+            let (width, height, pixels) = image.map_or((1, 1, fallback.as_slice()), |i| {
+                let i = &source.images[i];
+                (i.width, i.height, i.rgba8.as_slice())
+            });
+            let texture = backend.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("mesh-material-texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: if srgb {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                },
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            backend.queue.write_texture(
+                texture.as_image_copy(),
+                pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                texture.size(),
+            );
+            texture.create_view(&Default::default())
+        })
+        .clone();
+    let wrap = |w| match w {
+        Wrap::Clamp => wgpu::AddressMode::ClampToEdge,
+        Wrap::Mirror => wgpu::AddressMode::MirrorRepeat,
+        Wrap::Repeat => wgpu::AddressMode::Repeat,
+    };
+    let sampler = backend.device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wrap(t.map_or(Wrap::Repeat, |t| t.wrap[0])),
+        address_mode_v: wrap(t.map_or(Wrap::Repeat, |t| t.wrap[1])),
+        mag_filter: if t.is_none_or(|t| t.linear) {
+            wgpu::FilterMode::Linear
+        } else {
+            wgpu::FilterMode::Nearest
+        },
+        min_filter: if t.is_none_or(|t| t.min_linear) {
+            wgpu::FilterMode::Linear
+        } else {
+            wgpu::FilterMode::Nearest
+        },
+        ..Default::default()
+    });
+    (texture, sampler)
 }
 impl MeshRenderer {
     pub fn draw_stats(&self) -> MeshDrawStats {
@@ -61,6 +134,26 @@ impl MeshRenderer {
         source: &MeshAsset,
         format: wgpu::TextureFormat,
         capacity: usize,
+    ) -> Result<Self, BackendError> {
+        Self::with_surface_settings(
+            backend,
+            source,
+            format,
+            capacity,
+            thessa_graphics::Quality::Low,
+            false,
+            None,
+        )
+    }
+
+    pub fn with_surface_settings(
+        backend: &Backend,
+        source: &MeshAsset,
+        format: wgpu::TextureFormat,
+        capacity: usize,
+        quality: thessa_graphics::Quality,
+        reflections: bool,
+        shadows: Option<&crate::shadows::ShadowAtlas>,
     ) -> Result<Self, BackendError> {
         source.validate().map_err(fail)?;
         let device = &backend.device;
@@ -102,7 +195,18 @@ impl MeshRenderer {
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("owned-mesh"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("mesh.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}\n{}",
+                    thessa_rcbt_core::shaders::OCEAN_WGSL,
+                    shadows.map_or_else(
+                        || crate::shadows::NO_SHADOWS.into(),
+                        |_| crate::shadows::receiver_shader(2)
+                    ),
+                    include_str!("mesh.wgsl")
+                )
+                .into(),
+            ),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("owned-mesh"),
@@ -163,68 +267,59 @@ impl MeshRenderer {
         let mut textures = std::collections::BTreeMap::new();
         let mut materials = Vec::new();
         for material in &source.materials {
-            let (image_id, width, height, pixels) = if let Some(t) = material.base_texture {
-                let i = &source.images[source.textures[t].image];
-                (
-                    Some(source.textures[t].image),
-                    i.width,
-                    i.height,
-                    i.rgba8.as_slice(),
-                )
-            } else {
-                (None, 1, 1, [255u8; 4].as_slice())
-            };
-            let texture = textures.entry(image_id).or_insert_with(|| {
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("mesh-albedo-srgb"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                backend.queue.write_texture(
-                    texture.as_image_copy(),
-                    pixels,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(width * 4),
-                        rows_per_image: Some(height),
-                    },
-                    texture.size(),
-                );
-                texture.create_view(&Default::default())
-            });
-            let wrap = |w| match w {
-                Wrap::Clamp => wgpu::AddressMode::ClampToEdge,
-                Wrap::Mirror => wgpu::AddressMode::MirrorRepeat,
-                Wrap::Repeat => wgpu::AddressMode::Repeat,
-            };
-            let t = material.base_texture.map(|i| source.textures[i]);
-            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wrap(t.map_or(Wrap::Repeat, |t| t.wrap[0])),
-                address_mode_v: wrap(t.map_or(Wrap::Repeat, |t| t.wrap[1])),
-                mag_filter: if t.is_none_or(|t| t.linear) {
-                    wgpu::FilterMode::Linear
-                } else {
-                    wgpu::FilterMode::Nearest
-                },
-                min_filter: if t.is_none_or(|t| t.min_linear) {
-                    wgpu::FilterMode::Linear
-                } else {
-                    wgpu::FilterMode::Nearest
-                },
-                ..Default::default()
-            });
+            let (texture, sampler) = material_texture(
+                backend,
+                source,
+                material.base_texture,
+                [255; 4],
+                true,
+                &mut textures,
+            );
+            let use_maps = quality == thessa_graphics::Quality::High;
+            let (mr, mr_sampler) = material_texture(
+                backend,
+                source,
+                use_maps
+                    .then_some(material.metallic_roughness_texture)
+                    .flatten(),
+                [255; 4],
+                false,
+                &mut textures,
+            );
+            let (normal, normal_sampler) = material_texture(
+                backend,
+                source,
+                use_maps.then_some(material.normal_texture).flatten(),
+                [128, 128, 255, 255],
+                false,
+                &mut textures,
+            );
+            let (ao, ao_sampler) = material_texture(
+                backend,
+                source,
+                use_maps.then_some(material.occlusion_texture).flatten(),
+                [255; 4],
+                false,
+                &mut textures,
+            );
             let mut data = words(material.base_color);
             data.extend(u32::from(material.double_sided).to_le_bytes());
-            data.extend([0; 12]);
+            data.extend(
+                (match quality {
+                    thessa_graphics::Quality::Low => 0u32,
+                    thessa_graphics::Quality::Medium => 1,
+                    thessa_graphics::Quality::High => 2,
+                })
+                .to_le_bytes(),
+            );
+            data.extend(u32::from(reflections).to_le_bytes());
+            data.extend(u32::from(use_maps && material.normal_texture.is_some()).to_le_bytes());
+            data.extend(words([
+                material.metallic,
+                material.roughness,
+                material.normal_scale,
+                material.occlusion_strength,
+            ]));
             let params = buffer(&data, wgpu::BufferUsages::UNIFORM);
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("mesh-material"),
@@ -236,11 +331,35 @@ impl MeshRenderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(texture),
+                        resource: wgpu::BindingResource::TextureView(&texture),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&mr),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&mr_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&normal),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Sampler(&normal_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(&ao),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::Sampler(&ao_sampler),
                     },
                 ],
             }));
@@ -269,6 +388,20 @@ impl MeshRenderer {
             })
             .collect();
         Ok(Self {
+            shadow_receiver: shadows
+                .map(|s| s.receiver(backend, &pipeline.get_bind_group_layout(2))),
+            shadow_caster: shadows.map(|s| {
+                backend
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("mesh-shadow-source"),
+                        layout: &s.mesh_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: instances.as_entire_binding(),
+                        }],
+                    })
+            }),
             ranges: vec![0..0; primitives.len()],
             pipeline,
             global,
@@ -387,11 +520,34 @@ impl MeshRenderer {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.global, &[]);
+        if let Some(receiver) = &self.shadow_receiver {
+            pass.set_bind_group(2, receiver, &[]);
+        }
         for (p, range) in self.primitives.iter().zip(&self.ranges) {
             if range.is_empty() {
                 continue;
             }
             pass.set_bind_group(1, &self.materials[p.material], &[]);
+            pass.set_vertex_buffer(0, p.vertices.slice(..));
+            pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..p.count, 0, range.clone());
+        }
+    }
+
+    pub(crate) fn cast_shadow(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        atlas: &crate::shadows::ShadowAtlas,
+    ) {
+        let Some(bind) = &self.shadow_caster else {
+            return;
+        };
+        pass.set_pipeline(&atlas.mesh_pipeline);
+        pass.set_bind_group(1, bind, &[]);
+        for (p, range) in self.primitives.iter().zip(&self.ranges) {
+            if range.is_empty() {
+                continue;
+            }
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..p.count, 0, range.clone());

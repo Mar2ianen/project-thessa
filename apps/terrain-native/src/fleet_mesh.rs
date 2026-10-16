@@ -72,6 +72,9 @@ impl Track {
 
 /// Bounds are game wire/graphics policy, not a second GPU backend or pass.
 pub struct SceneMeshes {
+    shadows: Option<thessa_render_wgpu::shadows::ShadowAtlas>,
+    surface_quality: thessa_graphics::Quality,
+    reflections: bool,
     inner: Option<MeshRenderer>,
     format: wgpu::TextureFormat,
     enabled: bool,
@@ -224,21 +227,43 @@ fn append_catalogue(
 }
 
 impl SceneMeshes {
+    #[cfg(test)]
     pub fn new(
         scene: &Scene,
         backend: &Backend,
         source: &MeshAsset,
         format: wgpu::TextureFormat,
     ) -> Result<Self, BackendError> {
+        Self::with_shadows(scene, backend, source, format, None)
+    }
+
+    pub fn with_shadows(
+        scene: &Scene,
+        backend: &Backend,
+        source: &MeshAsset,
+        format: wgpu::TextureFormat,
+        shadows: Option<&thessa_render_wgpu::shadows::ShadowAtlas>,
+    ) -> Result<Self, BackendError> {
         let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
             &scene.requested,
             &backend.caps,
         );
         Ok(Self {
+            shadows: shadows.cloned(),
+            surface_quality: resolved.surface_quality,
+            reflections: resolved.specular_reflections,
             inner: if scene.server_flight() {
                 None
             } else {
-                Some(MeshRenderer::new(backend, source, format, 1)?)
+                Some(MeshRenderer::with_surface_settings(
+                    backend,
+                    source,
+                    format,
+                    1,
+                    resolved.surface_quality,
+                    resolved.specular_reflections,
+                    shadows,
+                )?)
             },
             format,
             enabled: resolved.fleet_meshes,
@@ -267,6 +292,9 @@ impl SceneMeshes {
             },
             MeshRenderer::draw_stats,
         )
+    }
+    pub fn opaque(&self) -> Option<&MeshRenderer> {
+        self.inner.as_ref()
     }
     pub fn encode(
         &self,
@@ -339,7 +367,15 @@ impl SceneMeshes {
                 let inner = if source.primitives.is_empty() {
                     None
                 } else {
-                    Some(MeshRenderer::new(backend, &source, self.format, 64)?)
+                    Some(MeshRenderer::with_surface_settings(
+                        backend,
+                        &source,
+                        self.format,
+                        64,
+                        self.surface_quality,
+                        self.reflections,
+                        self.shadows.as_ref(),
+                    )?)
                 };
                 if self.inner.is_some() || inner.is_some() {
                     self.source_publications += 1;
@@ -457,7 +493,11 @@ impl SceneMeshes {
                 let distance = (instance.position_m - view.world_position_m).length();
                 let pixels = radius * f64::from(height) * view.clip_from_view.y_axis.y.abs()
                     / (distance - radius).max(1e-6);
-                if pixels < f64::from(self.min_pixels) {
+                let potential_caster = self
+                    .shadows
+                    .as_ref()
+                    .is_some_and(|s| distance - radius <= s.caster_distance_m());
+                if pixels < f64::from(self.min_pixels) && !potential_caster {
                     self.size_culled += 1;
                     continue;
                 }

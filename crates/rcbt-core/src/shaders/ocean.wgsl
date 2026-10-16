@@ -136,13 +136,13 @@ fn ocean_sky_radiance(
 // One bounded-cost GGX directional reflection.  `sun_illuminance` is the
 // directional illuminance of a sun disk, so the result is BRDF * NdotL * E
 // and remains compatible with the existing linear HDR lighting accumulator.
-fn ocean_sun_reflection(
+fn surface_sun_reflection(
     normal: vec3<f32>,
     view: vec3<f32>,
     sun: vec3<f32>,
     sun_illuminance: vec3<f32>,
     roughness: f32,
-    f0: f32,
+    f0: vec3<f32>,
 ) -> vec3<f32> {
     let n_dot_v = max(dot(normal, view), 0.0);
     let n_dot_l = max(dot(normal, sun), 0.0);
@@ -163,10 +163,15 @@ fn ocean_sun_reflection(
     let k = (perceptual_roughness + 1.0) * (perceptual_roughness + 1.0) * 0.125;
     let visibility_v = n_dot_v / max(n_dot_v * (1.0 - k) + k, OCEAN_EPSILON);
     let visibility_l = n_dot_l / max(n_dot_l * (1.0 - k) + k, OCEAN_EPSILON);
-    let fresnel = ocean_schlick(f0, h_dot_v);
+    let fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - h_dot_v, 5.0);
     let brdf_times_cosine = fresnel * distribution * visibility_v * visibility_l * n_dot_l
         / max(4.0 * n_dot_v * n_dot_l, OCEAN_EPSILON);
     return sun_illuminance * brdf_times_cosine;
+}
+
+fn ocean_sun_reflection(normal: vec3<f32>, view: vec3<f32>, sun: vec3<f32>,
+    illuminance: vec3<f32>, roughness: f32, f0: f32) -> vec3<f32> {
+    return surface_sun_reflection(normal, view, sun, illuminance, roughness, vec3(f0));
 }
 
 // Cheap reflected ocean contribution for a direct raster fragment shader.

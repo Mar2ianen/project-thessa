@@ -20,6 +20,9 @@ version = 1
 preset = "high" # low | medium | high | ultra | custom (auto-shown when values diverge)
 
 [renderer]
+surface_quality = "high" # native: low F0 approximation; medium GGX; high normal/MR/AO maps
+specular_reflections = true # material/stellar and ambient-environment reflection; not scene ray tracing
+shadow_memory_mib = 64 # native 3-star cascade atlas cap; reduces resolution, never geometry
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
 terrain = "gpu_auto" # cpu | gpu_indexed | gpu_auto | gpu_mesh; mesh -> indexed fallback

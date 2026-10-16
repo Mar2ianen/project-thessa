@@ -77,7 +77,8 @@ impl State {
         let exposure = crate::manual_exposure(resolved.exposure_ev100);
         surface.configure(&backend.device, &config);
         let renderer = scene.renderer(&backend, config.format)?;
-        let mesh_renderer = scene.mesh_renderer(&backend, config.format)?;
+        let mesh_renderer =
+            scene.mesh_renderer_with_shadows(&backend, config.format, renderer.shadows())?;
         let depth = depth(&backend, config.width, config.height);
         #[cfg(feature = "hud")]
         let hud = hud_enabled.then(|| {
@@ -216,6 +217,13 @@ impl State {
             &self.backend,
             &scene.view(self.config.width, self.config.height, self.exposure),
         )?;
+        self.renderer.update_shadows(
+            &self.backend,
+            scene
+                .view(self.config.width, self.config.height, self.exposure)
+                .world_position_m,
+            &scene.sample.lighting,
+        )?;
         if let Some(mesh) = &mut self.mesh_renderer {
             scene.update_mesh(
                 &self.backend,
@@ -230,6 +238,12 @@ impl State {
             .backend
             .device
             .create_command_encoder(&Default::default());
+        self.renderer.encode_shadows(
+            &mut encoder,
+            self.mesh_renderer
+                .as_ref()
+                .and_then(crate::scene::SceneMeshes::opaque),
+        );
         self.renderer.encode(&mut encoder, &color, &self.depth);
         if let Some(mesh) = &self.mesh_renderer {
             mesh.encode(&mut encoder, &color, &self.depth);
@@ -497,6 +511,11 @@ impl ApplicationHandler for App {
                             if let Some(status) = self.scene.flight_telemetry() {
                                 println!("{status}");
                             }
+                            println!(
+                                "shadow_atlas_bytes={} shadow_passes={}",
+                                state.renderer.shadows().map_or(0, |s| s.storage_bytes()),
+                                state.renderer.shadows().map_or(0, |s| s.active_passes())
+                            );
                             event_loop.exit();
                         }
                     }

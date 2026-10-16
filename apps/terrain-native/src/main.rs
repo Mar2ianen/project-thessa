@@ -198,7 +198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     eprintln!(
-        "migration viewer consumes manual exposure/vsync and retained fleet mesh enable/quality; atmosphere, shadows, HDR/tonemapping, RT, automatic exposure and other effects are unported"
+        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material quality/specular reflections and shared raster shadows; atmosphere, scene-object reflections, HDR/tonemapping, RT, automatic exposure and other effects are unported"
     );
     let mut scene = scene::Scene::load(requested)?;
     if let Some(site) = survey_site {
@@ -239,7 +239,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let backend = Backend::bring_up()?;
         let target = OffscreenTarget::new(&backend, 1280, 720)?;
         let mut renderer = scene.renderer(&backend, OffscreenTarget::FORMAT)?;
-        let mut mesh_renderer = scene.mesh_renderer(&backend, OffscreenTarget::FORMAT)?;
+        let mut mesh_renderer = scene.mesh_renderer_with_shadows(
+            &backend,
+            OffscreenTarget::FORMAT,
+            renderer.shadows(),
+        )?;
         #[cfg(feature = "hud")]
         let mut hud = hud_enabled.then(|| hud::Hud::new(&backend, OffscreenTarget::FORMAT));
         let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
@@ -324,10 +328,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
             let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
             renderer.update_view(&backend, &scene.view(1280, 720, exposure))?;
+            renderer.update_shadows(
+                &backend,
+                scene.view(1280, 720, exposure).world_position_m,
+                &scene.sample.lighting,
+            )?;
             if let Some(mesh) = &mut mesh_renderer {
                 scene.update_mesh(&backend, mesh, 1280, 720, exposure)?;
             }
             let mut encoder = backend.device.create_command_encoder(&Default::default());
+            renderer.encode_shadows(
+                &mut encoder,
+                mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
+            );
             renderer.encode(&mut encoder, &target.color, &target.depth);
             if let Some(mesh) = &mesh_renderer {
                 mesh.encode(&mut encoder, &target.color, &target.depth);
@@ -414,6 +427,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 mesh.source_publications, mesh.epoch_withheld, mesh.size_culled
             );
         }
+        println!(
+            "shadow_atlas_bytes={} shadow_passes={} material_quality={:?} specular_reflections={}; raster geometry shadows, no scene-object reflection tracing",
+            renderer.shadows().map_or(0, |s| s.storage_bytes()),
+            renderer.shadows().map_or(0, |s| s.active_passes()),
+            resolved.surface_quality,
+            resolved.specular_reflections
+        );
         if let Some(status) = scene.flight_telemetry() {
             if server_flight {
                 println!(

@@ -107,6 +107,15 @@ draws nothing. PRIMARY is independent of the fleet-quality setting. Snapshot
 interpolation does not blend different PRIMARY COM revisions (fleet-only changes
 retain interpolation), and both mesh paths use the current rotating body frame.
 General incremental GPU residency remains absent.
+Native opaque lighting now consumes resolved material/reflection settings and
+the existing shadow settings: shared GGX with linear metallic/roughness, normal
+and AO maps, plus a three-source cascaded terrain/mesh shadow atlas (48 MiB at
+the default 64 MiB budget). Disabled shadows allocate no atlas or shadow
+pipelines. See doc 39's surface-lighting checkpoint for GPU tests, fixed-source cost and
+remaining limitations. This is not full replacement: atmospheric indirect
+light, scene-object reflections, HDR/tonemapping, mip chains and complete
+material/Bevy parity remain absent. Shadows only see retained scene geometry;
+off-cover terrain residency and production shadow-quality acceptance are pending.
 The shared link now caps complete pending command packets at the protocol's
 64-command limit (all variants and state votes), and worker pipe/encode
 failures close the input side visibly. Stalled-peer heartbeat/reconnect and

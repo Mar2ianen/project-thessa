@@ -37,6 +37,7 @@ use thessa_graphics::Capabilities;
 
 pub mod material;
 pub mod mesh;
+pub mod shadows;
 pub mod terrain;
 pub mod view;
 

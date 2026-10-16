@@ -153,6 +153,14 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RendererSettings {
+    /// Native material quality: Low approximates diffuse/ambient Fresnel by F0.
+    #[serde(default)]
+    pub surface_quality: Quality,
+    #[serde(default = "default_true")]
+    pub specular_reflections: bool,
+    /// Maximum native depth-atlas storage across three lights and all cascades.
+    #[serde(default = "default_shadow_memory")]
+    pub shadow_memory_mib: u32,
     /// Native retained fleet meshes; no effect on authoritative simulation.
     #[serde(default = "default_true")]
     pub fleet_meshes: bool,
@@ -193,6 +201,10 @@ fn default_exposure() -> f32 {
     13.0
 }
 
+fn default_shadow_memory() -> u32 {
+    64
+}
+
 fn default_resolution_scale() -> f32 {
     1.0
 }
@@ -204,6 +216,9 @@ fn default_terrain_mesh_cells() -> u32 {
 impl Default for RendererSettings {
     fn default() -> Self {
         Self {
+            surface_quality: Quality::High,
+            specular_reflections: true,
+            shadow_memory_mib: default_shadow_memory(),
             fleet_meshes: true,
             fleet_quality: Quality::High,
             backend: BackendRequest::Auto,
@@ -798,6 +813,7 @@ impl RequestedGraphics {
         self.renderer.bloom = false;
         match preset {
             Preset::Low => {
+                self.renderer.surface_quality = Quality::Low;
                 self.renderer.fleet_quality = Quality::Low;
                 self.renderer.resolution_scale = 0.75;
                 self.renderer.ray_tracing = RayTracingRequest::Off;
@@ -827,6 +843,7 @@ impl RequestedGraphics {
                 self.upper_atmosphere.aurora_lighting = false;
             }
             Preset::Medium => {
+                self.renderer.surface_quality = Quality::Medium;
                 self.renderer.fleet_quality = Quality::Medium;
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
@@ -854,6 +871,7 @@ impl RequestedGraphics {
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
             }
             Preset::High => {
+                self.renderer.surface_quality = Quality::High;
                 self.renderer.fleet_quality = Quality::High;
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
@@ -883,6 +901,7 @@ impl RequestedGraphics {
                 self.upper_atmosphere.aurora_animate = true;
             }
             Preset::Ultra => {
+                self.renderer.surface_quality = Quality::High;
                 self.renderer.fleet_quality = Quality::High;
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;

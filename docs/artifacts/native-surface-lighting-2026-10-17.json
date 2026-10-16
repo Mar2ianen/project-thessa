@@ -1,0 +1,106 @@
+{
+  "date": "2026-10-17",
+  "branch": "feat/native-surface-lighting",
+  "base_commit": "3443689",
+  "scope": {
+    "implemented": "Native opaque material quality with shared GGX stellar/isotropic-environment reflection and high-tier normal/MR/AO maps; shared three-source cascaded raster shadows from retained terrain and mesh buffers; requested/resolved settings, atlas memory budget and telemetry",
+    "complete_bevy_replacement": false,
+    "not_implemented": "scene-object reflections/SSR/ray tracing, atmospheric indirect light/clouds/eclipses, HDR/tonemapping/automatic exposure, mip chains, full authored material parity, alpha/transparent casters, shadow-specific terrain residency, light-volume compaction or shadow LOD",
+    "ownership": "MIT render-core projection math and render-wgpu GPU resources; GPL native scene/policy remains separate; existing shared rcbt-core ocean kernel generalized to RGB F0 with scalar compatibility wrapper",
+    "new_runtime_dependencies_unsafe_devices_queues_scene_copies_readbacks": false,
+    "new_gpu_work": "one depth render pass per active source/cascade; no pass or atlas/pipeline allocation when shadows.enabled=false"
+  },
+  "contracts": {
+    "lighting": "existing three-slot linear-lux celestial SurfaceLighting; camera-relative f64-to-f32 transport; source-specific visibility multiplies direct diffuse and stellar specular only",
+    "materials": "sRGB base texture; linear G roughness/B metallic and R occlusion; derivative tangent normal frame; AO attenuates indirect only; metals gain no substitute diffuse when reflections are disabled",
+    "quality": "Low keeps factor-only source reflections and approximates diffuse/ambient Fresnel by F0; Medium uses view-angle Fresnel with factors; High also uploads authored normal/MR/AO maps",
+    "environment": "explicit existing isotropic ambient_lux/PI; native celestial ambient is currently zero; no fabricated sky light",
+    "shadow_covers": "1..4 concentric covers per source; radii=distance*40^((i+1)/count-1); f64 texel snapping, finite light-space caster reach; outer 10% blends to next cover or unshadowed",
+    "shadow_geometry": "existing full resident 33x33 terrain grids, not camera-culled active triangle stream; existing mesh vertex/index/instance buffers; inactive terrain slots do not cast; conservative nearby fleet caster retention",
+    "shadow_memory": "default 64 MiB cap halves native resolution across 3*cascades Depth32Float layers; default resolves requested 4096 to native 1024: 50331648 bytes / 48 MiB",
+    "shadow_quality": "Low one comparison; Medium 3x3 PCF; High 5x5 PCF; adapter texture dimensions and array layers checked",
+    "disabled": "shadows.enabled=false: no atlas, shadow pipelines, passes, frame uploads or receiver bindings; specular_reflections=false: no specular contribution and no added reflection passes/resources",
+    "settings": "graphics.toml + requested/resolved graphics + GUI descriptors + capture metadata; material/shadow settings require renderer recreation/restart",
+    "legacy": "shared raster uses named surface hook defaults with no shadows; native substitutes only the whole hook block, not BRDF/statements; no runtime Bevy dependency added to native"
+  },
+  "reproduction": {
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan; same development machine as baseline",
+    "audio": "Native has no audio subsystem. Workspace tests and any legacy app runs use ALSA_CONFIG_PATH=target/render-batch/silent-alsa.conf, inaccessible PULSE_SERVER and PIPEWIRE_REMOTE=thessa-test-no-audio; no system audio settings changed",
+    "gpu_oracles": "cargo test -p thessa-render-wgpu --test surface_lighting",
+    "fixed_source_cost": "cargo test --release -p thessa-render-wgpu --test surface_lighting fixed_source_shadow_frame_cost -- --ignored --nocapture",
+    "preview": "thessa-terrain-native --vehicle-preview --headless docs/artifacts/native-surface-lighting-2026-10-17.png --frames 120 --prestream-seconds 3",
+    "terrain": "thessa-terrain-native --sim-time 72000 --headless docs/artifacts/native-surface-terrain-2026-10-17.png --frames 120 --prestream-seconds 3",
+    "retained_replay": "thessa-terrain-native --server-flight --server apps/server/target/test-tmp/baked-render-peer.py --headless target/render-batch/native-surface-retained.png --hud --frames 60 --prestream-seconds 2; peer is the previously generated v10 real-authority separation fixture",
+    "disabled_controls": "Same preview with --graphics target/render-batch/surface-no-shadows.toml or surface-disabled.toml; minimal v1 config, renderer.surface_quality=high, specular_reflections=true/false, shadows.enabled=false",
+    "logs": "/tmp/opencode/native-lighting-{fmt,lib,integration,clippy,nohud,bevy-gpu,mesh-shader,native-gpu,window,gpu-oracle,fixed-bench,release,preview,terrain,no-shadows,disabled,retained,legacy-build,legacy-build-retry,legacy-silent-smoke,qa,architecture}.log"
+  },
+  "verification": {
+    "fmt": "pass: cargo fmt --all -- --check",
+    "clippy": "pass: cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "no_default_clippy": "pass: cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+    "workspace_lib_bin_tests": 1836,
+    "workspace_integration_tests": 57,
+    "bevy_cbt_gpu_tests": 24,
+    "mesh_shader_gpu_test": 1,
+    "native_ignored_gpu_server_tests": 8,
+    "native_window_tests": 5,
+    "distinct_successful_rust_gate_tests": 1931,
+    "additional_release_fixed_source_gpu_diagnostic": 1,
+    "agent_qa_tests": 5,
+    "architecture_guarded_crates": 12,
+    "commands": [
+      "cargo test --workspace --lib --bins",
+      "cargo test --workspace --test '*'",
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+      "cargo test -p thessa-bevy-rcbt --features mesh-shaders --lib gpu_mesh_emission_initializes_every_vertex_and_primitive -- --ignored",
+      "cargo test -p thessa-terrain-native --bin thessa-terrain-native -- --ignored --test-threads=1",
+      "cargo test -p thessa-terrain-native --test window_exit -- --ignored --test-threads=1",
+      "python3 tools/agent-qa/check_architecture.py",
+      "python3 -m unittest discover -s tools/agent-qa/tests -v"
+    ],
+    "native_server_release_build": "pass",
+    "legacy_debug_build": "pass after the initial 300-second build timeout; incremental retry completed",
+    "legacy_silent_runtime_smoke": "pass, exit 0, process-local ALSA null and invalid Pulse/PipeWire endpoints; no audio-quality acceptance claimed",
+    "execution_notes": "Compile/clippy feedback was fixed before final gates. A later diffuse texture oracle exposed its implicit glTF-default metal after Low metal energy handling was corrected; the diffuse-only fixture now explicitly declares metallic=0, and the complete integration gate passed again. Fixed-source timing was rerun after the Low refinement. Captures/live-stream diagnostics were taken at the unchanged High path. Hardware work ran on the real development adapter, sequentially; no remote CI or blind subjective review result is claimed",
+    "not_run": "unrelated ignored long CPU physics profiles; full production-client/effect parity acceptance; WAN/network reconnect or other-platform runtime checks"
+  },
+  "gpu_oracles": {
+    "tests": 4,
+    "cases": "Independent colored-source occlusion; mesh and resident-terrain casters; retired terrain stops casting; disabled allocates no atlas; 3e12 m origin; GGX normal incidence; linear MR channels; tangent-space normal and zero scale; degenerate UV fallback; ambient-only AO; metal reflection-disable and Low reflection preservation",
+    "numeric_bounds": "Normal-incidence GGX within two sRGB codes of analytic RGB=(1,.5,.25); projection narrowing under 3 mm in projection space for the tested 24 km interval at 3e12 m origin, not a universal world-space shadow error bound",
+    "subjective_or_full_parity_acceptance": false
+  },
+  "fixed_source_measurement": {
+    "resolution": [1280, 720],
+    "terrain_patches": 1024,
+    "mesh_instances": 64,
+    "mesh_primitive": "two-triangle opaque quad per instance",
+    "lights": 3,
+    "warmup_frames": 30,
+    "measured_frames": 120,
+    "shadows_disabled": {"median_ms": 0.870, "p95_ms": 1.045, "atlas_bytes": 0, "passes": 0},
+    "shadows_enabled": {"median_ms": 22.349, "p95_ms": 22.955, "atlas_bytes": 50331648, "passes": 12},
+    "boundary": "Release fixed sources, no streaming/source publication/readback/compilation in timer; CPU encode/submit plus GPU completion, not isolated GPU timestamps or production FPS. Exposes substantial unoptimized all-resident-grid shadow cost; no performance-win claim"
+  },
+  "live_stream_measurements": {
+    "preview": {"median_ms": 15.587, "p95_ms": 17.691, "final_terrain_tiles": 349, "terrain_triangles": 426240, "mesh_triangles": 78465, "atlas_bytes": 50331648, "passes": 12},
+    "preview_no_shadows": {"median_ms": 2.852, "p95_ms": 4.104, "atlas_bytes": 0, "passes": 0},
+    "preview_no_shadows_or_specular": {"median_ms": 2.238, "p95_ms": 3.064, "atlas_bytes": 0, "passes": 0},
+    "terrain_72000s": {"median_ms": 14.352, "p95_ms": 15.639, "final_terrain_tiles": 370, "terrain_triangles": 366336},
+    "retained_primary_fleet": {"median_ms": 13.999, "p95_ms": 14.796, "mesh_triangles": 640, "mesh_instances": 2, "mesh_draws": 2, "primary_appearance": "retained", "source_publications": 1, "epoch_withheld": 0},
+    "boundary": "Live async material populations differ between runs. Complete native frame + GPU completion; not a controlled shadow-isolated comparison, game FPS or network throughput claim"
+  },
+  "captures": [
+    "native-surface-lighting-2026-10-17.png",
+    "native-surface-terrain-2026-10-17.png"
+  ],
+  "known_limits": [
+    "Dark captures without atmospheric indirect light; no invented ambient added",
+    "No claim of blind subjective preference or visual parity",
+    "Only retained terrain casts; off-cover/unresident occluders are absent",
+    "Every retained full grid casts into every active cover; no light-space compaction/shadow LOD",
+    "Finite shadow reach/fade, map discretization and configured metre-scale bias are not calibrated for every small craft",
+    "Wire, authority, physics, GPU topology and libcbt/large_cbt parity are unchanged"
+  ]
+}

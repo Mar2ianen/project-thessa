@@ -48,6 +48,9 @@ pub struct TerrainPublication {
 /// Persistent GPU terrain working set. Geometry is generated at publication;
 /// camera-only frames update anchors/view and rerun classification, not geometry.
 pub struct TerrainRenderer {
+    shadows: Option<crate::shadows::ShadowAtlas>,
+    shadow_receiver: Option<wgpu::BindGroup>,
+    shadow_caster: Option<wgpu::BindGroup>,
     residency: SlotCache,
     manual_updates: Vec<bool>,
     active_extent: usize,
@@ -193,6 +196,7 @@ impl TerrainRenderer {
             material_layers,
             patches.len(),
             None,
+            None,
         )
     }
 
@@ -203,6 +207,16 @@ impl TerrainRenderer {
         patches: &[TerrainPatch<'_>],
         format: wgpu::TextureFormat,
         capacity: TerrainCapacity,
+    ) -> Result<Self, BackendError> {
+        Self::with_capacity_and_lighting(backend, patches, format, capacity, None)
+    }
+
+    pub fn with_capacity_and_lighting(
+        backend: &Backend,
+        patches: &[TerrainPatch<'_>],
+        format: wgpu::TextureFormat,
+        capacity: TerrainCapacity,
+        settings: Option<&thessa_graphics::ResolvedGraphicsSettings>,
     ) -> Result<Self, BackendError> {
         if capacity.height_grid_size < 2 || capacity.height_grid_size > 4096 {
             return Err(BackendError::Device(
@@ -217,6 +231,7 @@ impl TerrainRenderer {
             capacity.material_layers,
             capacity.patches as usize,
             Some(page_bytes),
+            settings,
         )
     }
 
@@ -227,8 +242,14 @@ impl TerrainRenderer {
         material_layers: u32,
         capacity: usize,
         page_capacity: Option<u64>,
+        settings: Option<&thessa_graphics::ResolvedGraphicsSettings>,
     ) -> Result<Self, BackendError> {
         let device = &backend.device;
+        let shadows = if let Some(settings) = settings {
+            crate::shadows::ShadowAtlas::new(backend, settings)?
+        } else {
+            None
+        };
         let fail = |s: &str| BackendError::Device(s.into());
         let Some(first) = patches.first() else {
             return Err(fail("terrain needs at least one patch"));
@@ -446,9 +467,25 @@ impl TerrainRenderer {
         });
         let classify = ["reset_active", "classify_active", "finalize_active"]
             .map(|entry| pipeline(device, &module, &layout, entry));
+        let reflections = settings.is_none_or(|s| s.specular_reflections);
+        let hooks = format!(
+            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}"
+        );
+        let raster_source =
+            shaders::CBT_RASTER_WGSL.replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cbt-raster"),
-            source: wgpu::ShaderSource::Wgsl(shaders::CBT_RASTER_WGSL.into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    shadows.as_ref().map_or_else(
+                        || crate::shadows::NO_SHADOWS.into(),
+                        |_| crate::shadows::receiver_shader(1)
+                    ),
+                    raster_source
+                )
+                .into(),
+            ),
         });
         let raster = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("cbt-raster"),
@@ -533,6 +570,34 @@ impl TerrainRenderer {
             entries: &entries,
         });
         Ok(Self {
+            shadow_receiver: shadows
+                .as_ref()
+                .map(|s| s.receiver(backend, &raster.get_bind_group_layout(1))),
+            shadow_caster: shadows.as_ref().map(|s| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("terrain-shadow-source"),
+                    layout: &s.terrain_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: vertices.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: frames.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: metadata.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: transform.as_entire_binding(),
+                        },
+                    ],
+                })
+            }),
+            shadows,
             residency,
             manual_updates: vec![false; capacity],
             active_extent: patches.len(),
@@ -591,6 +656,45 @@ impl TerrainRenderer {
             &bytes(records.into_iter().flatten().map(f32::to_bits)),
         );
         Ok(())
+    }
+
+    pub fn shadows(&self) -> Option<&crate::shadows::ShadowAtlas> {
+        self.shadows.as_ref()
+    }
+
+    pub fn update_shadows(
+        &mut self,
+        backend: &Backend,
+        camera: glam::DVec3,
+        lights: &thessa_rcbt_core::lighting::SurfaceLighting,
+    ) -> Result<(), BackendError> {
+        if let Some(shadows) = &mut self.shadows {
+            shadows.update(backend, camera, lights)?;
+        }
+        Ok(())
+    }
+
+    pub fn encode_shadows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        meshes: Option<&crate::mesh::MeshRenderer>,
+    ) {
+        if let Some(shadows) = &self.shadows {
+            shadows.encode(encoder, self, meshes);
+        }
+    }
+
+    pub(crate) fn cast_shadow(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        atlas: &crate::shadows::ShadowAtlas,
+    ) {
+        let Some(bind) = &self.shadow_caster else {
+            return;
+        };
+        pass.set_pipeline(&atlas.terrain_pipeline);
+        pass.set_bind_group(1, bind, &[]);
+        pass.draw(0..self.active_extent as u32 * 6144, 0..1);
     }
 
     /// Replace the active partition atomically after CPU validation. Retained
@@ -866,6 +970,9 @@ impl TerrainRenderer {
         });
         pass.set_pipeline(&self.raster);
         pass.set_bind_group(0, &self.raster_bind, &[]);
+        if let Some(receiver) = &self.shadow_receiver {
+            pass.set_bind_group(1, receiver, &[]);
+        }
         pass.draw_indirect(&self.draw, 0);
     }
 

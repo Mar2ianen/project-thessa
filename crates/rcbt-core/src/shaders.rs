@@ -328,10 +328,15 @@ fn finalize_active(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#
 );
 
+/// Named shader hook block; adapters can substitute their surface visibility
+/// and reflection policy without rewriting shared shading expressions.
+pub const RASTER_SURFACE_HOOKS_WGSL: &str = include_str!("shaders/raster_surface_hooks.wgsl");
+
 /// Procedural direct raster consumer for the generated GPU geometry. It uses
 /// one indirect draw with a linear triangle vertex stream, matching the draw
 /// submission shape of large_cbt while retaining the current page format.
 pub const CBT_RASTER_WGSL: &str = concat!(
+    include_str!("shaders/raster_surface_hooks.wgsl"),
     include_str!("shaders/precision.wgsl"),
     include_str!("shaders/tile_frame.wgsl"),
     include_str!("shaders/ocean.wgsl"),
@@ -491,7 +496,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let direction = normalize(input.body_direction);
     var direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
-        direct += lighting.colors_lux[i].rgb * max(dot(normal, lighting.directions[i].xyz), 0.0);
+        if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
+            direct += lighting.colors_lux[i].rgb * max(dot(normal, lighting.directions[i].xyz), 0.0)
+                * cbt_shadow_visibility(input.render_position, normal, i);
+        }
     }
     // Cloud-deck shadows dim the direct sun only; skylight and ambient stay.
     // The deck bake is what the shell impostors show, sampled in shell-local
@@ -564,19 +572,20 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // this adds neither a lighting pipeline nor a hidden geometry prepass.
     let eye = ocean_safe_normalize(view.world_position - input.render_position, normal);
     var radiance = diffuse;
-    if (water_material < 1.0) {
+    if (cbt_specular_enabled() && water_material < 1.0) {
         let land_fresnel = ocean_schlick(0.04, max(dot(normal, eye), 0.0));
         var land_reflection = vec3(0.0);
         for (var i = 0u; i < 3u; i = i + 1u) {
             if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
                 land_reflection += ocean_sun_reflection(normal, eye, lighting.directions[i].xyz,
-                    lighting.colors_lux[i].rgb, roughness, 0.04);
+                    lighting.colors_lux[i].rgb, roughness, 0.04)
+                    * cbt_shadow_visibility(input.render_position, normal, i);
             }
         }
         radiance = mix(diffuse, diffuse * (1.0 - land_fresnel) + land_reflection,
             1.0 - water_material);
     }
-    if (water > 0.0) {
+    if (cbt_specular_enabled() && water > 0.0) {
         let rotation = mat3x3<f32>(render_from_body[0].xyz, render_from_body[1].xyz, render_from_body[2].xyz);
         let up = normalize(rotation * direction);
         let wave_normal = ocean_wave_normal(direction, normal, rotation,
@@ -588,7 +597,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         for (var i = 0u; i < 3u; i = i + 1u) {
             let light = lighting.directions[i].xyz;
             reflection += ocean_sun_reflection(wave_normal, eye, light,
-                lighting.colors_lux[i].rgb, max(roughness, 0.16), f0);
+                lighting.colors_lux[i].rgb, max(roughness, 0.16), f0)
+                * cbt_shadow_visibility(input.render_position, normal, i);
             sky_illuminance += lighting.colors_lux[i].rgb
                 * max(dot(up, light), 0.0) * lighting.ocean_appearance.y;
         }

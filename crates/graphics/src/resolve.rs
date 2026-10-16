@@ -151,6 +151,10 @@ impl Capabilities {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    pub surface_quality: Quality,
+    pub specular_reflections: bool,
+    pub native_shadow_map_size: u32,
+    pub shadow_filter_radius: u32,
     pub fleet_meshes: bool,
     /// Screen-size culling fallback, not a change to physical geometry.
     pub fleet_min_pixels: f32,
@@ -300,8 +304,31 @@ impl ResolvedGraphicsSettings {
                 }
             }
         };
+        let mut native_shadow_map_size = requested
+            .shadows
+            .map_size
+            .clamp(512, 8192)
+            .next_power_of_two();
+        let layers = 3 * requested.shadows.cascades.clamp(1, 4);
+        let budget = u64::from(requested.renderer.shadow_memory_mib.clamp(4, 2048)) * 1024 * 1024;
+        while u64::from(native_shadow_map_size).pow(2) * u64::from(layers) * 4 > budget {
+            native_shadow_map_size /= 2;
+        }
+        if requested.shadows.enabled && native_shadow_map_size < requested.shadows.map_size {
+            notes.push(format!(
+                "native shadow atlas memory budget resolves map size to {native_shadow_map_size}"
+            ));
+        }
         Self {
             preset_label: requested.effective_preset_label().to_string(),
+            native_shadow_map_size,
+            shadow_filter_radius: match requested.shadows.quality {
+                Quality::Low => 0,
+                Quality::Medium => 1,
+                Quality::High => 2,
+            },
+            surface_quality: requested.renderer.surface_quality,
+            specular_reflections: requested.renderer.specular_reflections,
             backend: ResolvedBackend { name: backend_name },
             terrain,
             terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
@@ -492,6 +519,22 @@ impl ResolvedGraphicsSettings {
     /// Flat string map for perf capture metadata (`resolved` section).
     pub fn as_meta_map(&self) -> BTreeMap<String, String> {
         let mut map = BTreeMap::new();
+        map.insert(
+            "surface_quality".into(),
+            format!("{:?}", self.surface_quality).to_lowercase(),
+        );
+        map.insert(
+            "specular_reflections".into(),
+            self.specular_reflections.to_string(),
+        );
+        map.insert(
+            "native_shadow_map_size".into(),
+            self.native_shadow_map_size.to_string(),
+        );
+        map.insert(
+            "shadow_filter_radius".into(),
+            self.shadow_filter_radius.to_string(),
+        );
         map.insert("fleet_meshes".into(), self.fleet_meshes.to_string());
         map.insert("fleet_min_pixels".into(), self.fleet_min_pixels.to_string());
         map.insert("auto_exposure".into(), self.auto_exposure.to_string());
@@ -687,6 +730,41 @@ mod tests {
         let meta = resolved.as_meta_map();
         assert_eq!(meta["shadows"], "true");
         assert_eq!(meta["shadow_cascades"], "4");
+    }
+
+    #[test]
+    fn native_surface_tiers_and_atlas_memory_budget_are_explicit_and_round_trip() {
+        let mut requested = RequestedGraphics::default();
+        for (preset, quality, filter) in [
+            (crate::Preset::Low, Quality::Low, 0),
+            (crate::Preset::Medium, Quality::Medium, 1),
+            (crate::Preset::High, Quality::High, 2),
+        ] {
+            requested.apply_preset(preset);
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+            assert_eq!(resolved.surface_quality, quality);
+            assert_eq!(resolved.shadow_filter_radius, filter);
+        }
+        requested.renderer.specular_reflections = false;
+        requested.renderer.shadow_memory_mib = 4;
+        requested.shadows.map_size = 8192;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert!(!resolved.specular_reflections);
+        assert!(
+            u64::from(resolved.native_shadow_map_size).pow(2)
+                * 3
+                * u64::from(resolved.shadow_cascades)
+                * 4
+                <= 4 * 1024 * 1024
+        );
+        assert!(resolved.notes.iter().any(|n| n.contains("memory budget")));
+        assert_eq!(
+            RequestedGraphics::from_toml(&toml::to_string(&requested).unwrap()).unwrap(),
+            requested
+        );
+        assert_eq!(resolved.as_meta_map()["specular_reflections"], "false");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-16 (owned presentation/controls/transport and native PRIMARY server-flight checkpoints)
+**Updated:** 2026-10-17 (native opaque material lighting and shared terrain/mesh raster shadows)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -2764,6 +2764,112 @@ Verification, replay/capture commands, measurements and remaining scope are
 recorded in `artifacts/native-primary-mesh-wire-2026-10-16.json`. The tests are
 deterministic provenance/geometry checks, not a blind subjective review or a
 complete native/Bevy visual-parity claim.
+
+### Native surface-lighting and shadow continuation (2026-10-17)
+
+Branch `feat/native-surface-lighting`, baseline `3443689`. This supersedes the
+diffuse-only native mesh limitations in the dated static-mesh checkpoint; it
+does **not** declare the production client replaced. No Bevy dependencies,
+new device/queue, scene copies or runtime readbacks were added.
+
+**State and integration.** Backend-neutral `render-core::shadow` builds f64,
+texel-snapped, camera-relative directional covers. `render-wgpu` owns a single
+Depth32Float array shared by the existing terrain and opaque mesh consumers.
+Each active stellar source gets 1–4 concentric covers. Radii follow
+`distance * 40^((i+1)/count - 1)`; the outer radius is the configured distance.
+Casters use finite light-space depth cover with reach based on that distance.
+The outer 10% of each cover blends toward the next cover (or unshadowed beyond
+the last). Per-source visibility affects direct diffuse and stellar specular,
+not ambient light. Terrain casters use the existing full resident 33×33 vertex
+grid, independent of the camera-culled triangle list, and inactive slots do
+not cast. Mesh casters consume the existing vertex/index/instance buffers.
+Fleet angular-size culling conservatively retains potential nearby casters;
+fleet disable still disables only secondaries, never PRIMARY.
+
+The native window and headless paths update this atlas after camera/instance
+uploads and encode it before the normal terrain/opaque/HUD draws. The normal
+terrain shader uses a named surface-hook block; the legacy default hooks are
+unshadowed and preserve the existing Bevy path. No BRDF or statement text is
+rewritten in the native adapter. Engine crates remain MIT, scene/asset/quality
+policy integration remains GPL; no new dependency or unsafe code was added.
+
+**Materials and reflection boundary.** The existing ocean GGX/Smith kernel
+now accepts RGB Fresnel F0; its scalar ocean wrapper preserves legacy callers.
+Native opaque meshes consume base color, metallic/roughness factors, sRGB base
+textures, linear G/B metallic-roughness maps, derivative tangent-space normals
+(including mirrored/degenerate UV handling), and R-channel ambient occlusion.
+AO attenuates indirect lighting only. Metals do not acquire a fake diffuse
+term when specular reflection is disabled. The environment fallback is the
+explicit existing isotropic `ambient_lux / PI`; native celestial presentation
+currently supplies zero ambient. This is directional-source and ambient
+reflection, **not** SSR, scene-object reflection, a sky cubemap or ray tracing.
+
+**Requested → resolved → consumers.** All controls are in `graphics.toml` and
+the typed settings/GUI descriptors, with resolved capture metadata:
+
+| Setting | Behavior |
+| --- | --- |
+| `renderer.surface_quality = "low"` | Factor-only material with F0 diffuse/ambient Fresnel approximation; retains stellar reflection and metallic energy partition. |
+| `"medium"` | GGX material factors and isotropic environment; no normal/MR/AO maps uploaded. |
+| `"high"` | GGX plus authored normal, metallic-roughness and AO maps. |
+| `renderer.specular_reflections = false` | No stellar/environment specular contribution for native terrain or meshes; no extra reflection pass/resources. |
+| `shadows.enabled = false` | No atlas, shadow pipelines, passes, frame uploads or shadow receiver bindings. |
+| `shadows.quality` | Low: one comparison per lookup; Medium: 3×3 PCF; High: 5×5 PCF. |
+| `shadows.cascades`, `max_distance_m`, `map_size`, `normal_bias_m` | Shared existing cascade/bias intent, now consumed by native raster shadows. |
+| `renderer.shadow_memory_mib` | Default 64 MiB. Resolution is halved until all three sources/cascades fit; default resolves 4096 requested to 1024 native, 48 MiB. |
+
+Presets expand surface quality to Low/Medium/High/High. The atlas uses portable
+depth sampling/render attachments, not ray-query/subgroup/vendor capabilities.
+Device texture limits also bound atlas dimensions; malformed public resolved
+inputs fail before allocation. Resolution changes accuracy, not scene physics.
+Telemetry reports actual atlas bytes, active shadow passes and material mode.
+These settings require native renderer recreation (restart), not live UI edits.
+
+**Verification and cost.** Four deterministic GPU tests cover independent
+colored-source occlusion, mesh and terrain casters, retired geometry, disabled
+allocation, astronomical origins, GGX normal-incidence output (≤2 sRGB codes),
+linear MR channels, tangent normals, zero-strength and degenerate-UV fallback,
+and AO isolation. Projection narrowing is bounded by 3 mm in projection-space
+over the tested 24 km interval at a 3×10¹² m origin; this is not a universal
+world-space shadow error bound.
+
+`cargo test --release -p thessa-render-wgpu --test surface_lighting
+fixed_source_shadow_frame_cost -- --ignored --nocapture` measures fixed 1024
+terrain patches and 64 quad instances, 1280×720, 30 warm-up + 120 frames on the
+Radeon 880M/RADV Vulkan adapter. It includes CPU encode/submit and GPU completion:
+
+| Same source/quality | Median | p95 | Atlas / passes |
+| --- | ---: | ---: | --- |
+| Shadows disabled | 0.870 ms | 1.045 ms | 0 / 0 |
+| Default three-source, four-cover shadows | 22.349 ms | 22.955 ms | 48 MiB / 12 |
+
+This exposes a substantial remaining cost, **not** a performance win or game
+FPS claim. The first implementation casts every retained grid into every
+active cover; light-volume compaction and measured shadow LOD are future work.
+An actual live-stream X-15 preview measured 15.587 ms median / 17.691 ms p95,
+349 final terrain tiles plus 78,465 mesh triangles; the disabled-shadow run
+measured 2.852 / 4.104 ms. Live async material populations differed, so those
+numbers are diagnostics, not a controlled isolated shadow-cost comparison.
+Full commands, gates, captures and limits are in
+[`artifacts/native-surface-lighting-2026-10-17.json`](artifacts/native-surface-lighting-2026-10-17.json).
+Final gates passed: fmt, workspace all-target/all-feature clippy, native
+no-default clippy, **1,836** workspace lib/bin + **57** integration + **24**
+Bevy-CBT GPU + **1** mesh-shader GPU + **8** native ignored GPU/server + **5**
+native-window tests (**1,931** distinct Rust gate tests), the additional
+release fixed-source diagnostic, five agent-QA tests and the architecture
+guard. Rebuilt legacy debug client also completed its process-local muted
+runtime smoke successfully. No remote CI result is claimed.
+
+**Still missing.** Off-cover/unresident terrain cannot cast; no shadow-specific
+stream demand exists. There is no alpha-masked/transparent caster path, contact
+shadows, temporal denoising, HDR/tonemapping, atmosphere/cloud transport or
+occlusion, eclipses, scene-object reflection, directional sky IBL, mip chains,
+emissive/local-light materials or complete authored material/Bevy parity.
+The existing metre-scale terrain bias is configurable but not automatically
+calibrated for every small craft. Captures can be very dark without physically
+modeled atmospheric indirect light; no invented ambient was added to disguise
+that gap. Deterministic checks are not blind aesthetic or production-quality
+acceptance. The legacy client stays runnable during this partial migration.
 
 ## 15. FastRT
 

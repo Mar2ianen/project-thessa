@@ -21,6 +21,47 @@ fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
             "presentation sample times must be finite",
         ),
         (vec!["--sim-step", "1"], "require --headless"),
+        (vec!["--flight", "--sim-time", "1"], "--flight requires"),
+        (vec!["--flight", "--vehicle-preview"], "--flight requires"),
+        (vec!["--flight-step", "0.01"], "--flight-step requires"),
+        (
+            vec!["--flight", "--flight-step", "0.01"],
+            "--flight-step requires",
+        ),
+        (
+            vec![
+                "--flight",
+                "--headless",
+                "unused.png",
+                "--flight-step",
+                "NaN",
+            ],
+            "--flight-step must be finite",
+        ),
+        (
+            vec!["--flight", "--headless", "unused.png", "--flight-step", "0"],
+            "--flight-step must be finite",
+        ),
+        (
+            vec![
+                "--flight",
+                "--headless",
+                "unused.png",
+                "--flight-step",
+                "-1",
+            ],
+            "--flight-step must be finite",
+        ),
+        (
+            vec![
+                "--flight",
+                "--headless",
+                "unused.png",
+                "--flight-step",
+                "0.2",
+            ],
+            "--flight-step must be finite",
+        ),
         (
             vec!["--vehicle-preview", "--sim-time", "1"],
             "--vehicle-preview requires epoch",
@@ -57,6 +98,9 @@ fn help_exposes_presentation_sampling_and_warmup_boundary() {
     for phrase in [
         "--sim-time",
         "--sim-step",
+        "--flight",
+        "--flight-step",
+        "COAST",
         "30 warmup frames",
         "not server warp",
     ] {

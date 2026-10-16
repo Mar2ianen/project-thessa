@@ -33,6 +33,8 @@ impl Controls {
 
 #[derive(Default)]
 pub struct Stats {
+    pub live_flight: bool,
+    pub flight_stopped: bool,
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
     pub sim_time_s: f64,
@@ -49,6 +51,8 @@ impl Stats {
     pub fn from_scene(scene: &crate::scene::Scene, frames: u64, cpu_ms: f64) -> Self {
         Self {
             submitted_frames: frames,
+            live_flight: scene.live_flight(),
+            flight_stopped: scene.flight_stopped(),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
@@ -182,6 +186,20 @@ fn widgets(
                 ui.label("Owned renderer · shared-device egui HUD");
                 ui.small(adapter);
                 ui.label(format!("Presentation time: {:.3} s", stats.sim_time_s));
+                if stats.live_flight {
+                    ui.colored_label(
+                        if stats.flight_stopped {
+                            egui::Color32::RED
+                        } else {
+                            egui::Color32::LIGHT_GREEN
+                        },
+                        if stats.flight_stopped {
+                            "Local flight stopped (last valid presentation)"
+                        } else {
+                            "Local flight · COAST · Navball hold"
+                        },
+                    );
+                }
                 ui.separator();
                 ui.label(format!("Resident terrain: {} tiles", stats.tiles));
                 ui.label(format!(

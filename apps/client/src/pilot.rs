@@ -31,8 +31,8 @@ const PILOT_CAMERA_DEFAULT_DISTANCE_M: f32 = 32.0;
 const PILOT_CAMERA_MIN_DISTANCE_M: f32 = 8.0;
 const PILOT_CAMERA_MAX_DISTANCE_M: f32 = 180.0;
 use thessa_flight_authority::presentation::{
-    X15_AUTHORED_LENGTH_M, X15_SOURCE_LENGTH_M, craft_visual_orientation as render_orientation,
-    x15_asset_to_craft_rotation,
+    FlightPose, X15_AUTHORED_LENGTH_M, X15_SOURCE_LENGTH_M,
+    craft_visual_orientation as render_orientation, x15_asset_to_craft_rotation,
 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClientViewMode {
@@ -115,9 +115,15 @@ impl PilotFlightRuntime {
     /// Refresh render-view state after an advance. Stepping never reads
     /// these; they exist so the frame loop pays the conversion once.
     pub(super) fn sync_view(&mut self) {
-        self.render_orientation = render_orientation(self.state.orientation_body_to_inertial);
-        self.render_relative_position_m = self.relative_position_m;
-        self.render_time_s = self.flight_time_s;
+        if let Some(pose) = FlightPose::from_authority(&self.authority) {
+            self.publish_pose(pose);
+        }
+    }
+
+    fn publish_pose(&mut self, pose: FlightPose) {
+        self.render_orientation = pose.visual_orientation();
+        self.render_relative_position_m = pose.relative_position_m();
+        self.render_time_s = pose.time().0;
     }
 
     pub(super) fn initialize_circular_orbit_benchmark(
@@ -161,12 +167,13 @@ impl PilotFlightRuntime {
     /// `authority` stays on the newest validated snapshot for input ticks and
     /// prediction; a visual sample can never advance server state.
     pub(super) fn sync_render_snapshot(&mut self, ephemeris: &BakedEphemeris, snapshot: &Snapshot) {
-        self.render_orientation = render_orientation(snapshot.state.orientation_body_to_inertial);
-        self.render_time_s = snapshot.flight_time_s;
-        if let Ok(body) = ephemeris.body_state(self.reference_body, SimTime(snapshot.flight_time_s))
-        {
-            self.render_relative_position_m =
-                snapshot.state.position_inertial_m - body.position_inertial;
+        if let Some(pose) = FlightPose::from_inertial(
+            ephemeris,
+            self.reference_body,
+            SimTime(snapshot.flight_time_s),
+            &snapshot.state,
+        ) {
+            self.publish_pose(pose);
         }
     }
 
@@ -2068,6 +2075,67 @@ fn format_scalar(value: Option<f64>, precision: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_presentation_snapshot_preserves_the_complete_prior_pose_without_touching_authority() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let body = ephemeris.body_id("thessa").unwrap();
+        let mut flight = PilotFlightRuntime::new(&ephemeris, body).unwrap();
+        let original_state = flight.state;
+        let mut snapshot = Snapshot {
+            tick: 10,
+            flight_time_s: 10.0,
+            state: flight.state,
+            throttle: 0.0,
+            engine_active: false,
+            paused: false,
+            effective_warp: 1.0,
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            steps_this_frame: 0,
+            rails_advanced_s: 0.0,
+            reaction_wheel_torque_body_nm: [0.0; 3],
+            parachutes: vec![],
+            wake_notice: None,
+            flight_error: None,
+        };
+        snapshot.state.position_inertial_m = ephemeris
+            .body_state(body, SimTime(10.0))
+            .unwrap()
+            .position_inertial
+            + DVec3::X * 3_200_500.0;
+        snapshot.state.orientation_body_to_inertial = DQuat::from_rotation_z(0.7);
+        flight.sync_render_snapshot(&ephemeris, &snapshot);
+        let valid = (
+            flight.render_time_s,
+            flight.render_relative_position_m,
+            flight.render_orientation,
+        );
+        assert_eq!(valid.0, 10.0);
+        assert_eq!(valid.1, DVec3::X * 3_200_500.0);
+        snapshot.flight_time_s = f64::NAN;
+        snapshot.state.orientation_body_to_inertial = DQuat::IDENTITY;
+        flight.sync_render_snapshot(&ephemeris, &snapshot);
+        assert_eq!(
+            (
+                flight.render_time_s,
+                flight.render_relative_position_m,
+                flight.render_orientation
+            ),
+            valid
+        );
+        assert_eq!(
+            flight.state.position_inertial_m,
+            original_state.position_inertial_m
+        );
+        assert_eq!(
+            flight.state.orientation_body_to_inertial,
+            original_state.orientation_body_to_inertial
+        );
+        assert_eq!(flight.flight_time_s, 0.0);
+    }
 
     /// Input mapping + render transform direction: WASD must move the GLB
     /// nose the expected way. Stays client-side (keyboard mapping and the

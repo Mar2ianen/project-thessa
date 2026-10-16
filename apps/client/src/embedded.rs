@@ -14,6 +14,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use thessa_flight_net::presentation::interpolate_snapshot;
 use thessa_flight_net::{ClientInput, Snapshot};
 use thessa_protocol::{FrameDecoder, kind};
 
@@ -118,31 +119,6 @@ impl SnapshotInboxWriter {
         queue.push_back(received);
         true
     }
-}
-
-fn interpolate_snapshot(previous: &Snapshot, latest: &Snapshot, alpha: f64) -> Snapshot {
-    let alpha = alpha.clamp(0.0, 1.0);
-    let mut snapshot = latest.clone();
-    snapshot.flight_time_s =
-        previous.flight_time_s + (latest.flight_time_s - previous.flight_time_s) * alpha;
-    snapshot.state.position_inertial_m = previous
-        .state
-        .position_inertial_m
-        .lerp(latest.state.position_inertial_m, alpha);
-    snapshot.state.velocity_inertial_mps = previous
-        .state
-        .velocity_inertial_mps
-        .lerp(latest.state.velocity_inertial_mps, alpha);
-    snapshot.state.orientation_body_to_inertial = previous
-        .state
-        .orientation_body_to_inertial
-        .slerp(latest.state.orientation_body_to_inertial, alpha)
-        .normalize();
-    snapshot.state.angular_velocity_body_rps = previous
-        .state
-        .angular_velocity_body_rps
-        .lerp(latest.state.angular_velocity_body_rps, alpha);
-    snapshot
 }
 
 struct InputMailbox {

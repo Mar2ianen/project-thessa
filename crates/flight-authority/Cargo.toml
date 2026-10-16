@@ -19,6 +19,10 @@ toml.workspace = true
 toml.workspace = true
 
 [[bench]]
+name = "presentation"
+harness = false
+
+[[bench]]
 name = "retractable_wheels"
 harness = false
 

@@ -1209,6 +1209,10 @@ The old survey's local orbit offsets and ECS camera rotation are still f32;
 this is extraction of their body/rebase boundary, not replacement of every
 camera calculation with f64.
 
+The live-flight continuation below supersedes this checkpoint's local moving-
+vehicle limitation; native networking and production controller migration
+remain open.
+
 Regression coverage includes a hand-computable quarter-turn, representable
 astronomical common translations, 100 moving-origin/rotation camera round trips,
 invalid/overflow poses and the tolerated quaternion-roundoff envelope; period
@@ -1335,6 +1339,9 @@ snapshot interpolation, input/network lifecycle and controller/UI migration
 remain unfinished. Do not describe this snapshot as a complete moving-object
 production consumer.
 
+The live-flight continuation below adds a separate `--flight` mode and shared
+pose/interpolation inputs without changing this frozen preview's contract.
+
 Regressions pin the shipped geometry/image/material inventory, nested nonuniform
 and mirrored node transforms, image/sampler/color-space roles, file/resource
 budgets, invalid byte ranges/component types/indices and external-URI rejection.
@@ -1411,6 +1418,146 @@ artifacts are not repaired by this asset slice.
 [initial X-15 preview](artifacts/owned-mesh-x15-2026-10-16.png),
 [camera-sweep preview](artifacts/owned-mesh-x15-sweep-2026-10-16.png), and
 [legacy pilot smoke](artifacts/owned-mesh-bevy-pilot-2026-10-16.png).
+
+### Live flight-presentation continuation (2026-10-16)
+
+The next slice adds an actual moving-vehicle consumer without introducing a
+second integrator. GPL `flight-authority::presentation::FlightPose` is a checked
+immutable visual sample: `SimTime`, f64 reference-body-relative inertial
+position and unit authoritative attitude. Local hosts copy the authority's
+existing precise relative coordinate. Network hosts subtract baked body
+translation at the snapshot's **own** time, retaining the existing absolute
+wire-position precision limit rather than pretending to recover lost bits.
+Conversion into the existing pilot visual basis is shared game policy; no
+clock, queue, ECS or renderer handle enters this semantic input.
+
+The old pilot publishes both local and interpolated-network poses through this
+contract. Failed ephemeris/pose conversion now preserves the **complete** prior
+position/attitude/time instead of updating attitude/time while retaining an old
+position. This never adopts a presentation sample into authority. Existing
+snapshot interpolation arithmetic moves unchanged to GPL
+`flight-net::presentation::interpolate_snapshot`: clamped position/velocity/
+angular-velocity lerp, normalized shortest-path attitude slerp and interpolated
+time, with all other metadata copied from the latest snapshot. The old receive
+timestamp/inbox/one-interval delay owner stays in the embedded link. There is
+no new interpolation queue, extrapolation, prediction or wire-format change.
+
+Native `--flight` initializes the **same** `FlightAuthority::new` plus
+`initialize_world_site` COAST setup used by the old client's PostStartup path.
+It shares the canonical immutable `Arc<PlanetField>` already owned by the
+terrain stream; no duplicate field generation or second terrain/physics source
+is introduced. `advance_with_budget` uses the existing fixed-step equations,
+resources, aero, thermal/contact and Navball attitude-hold control. This is a
+local diagnostic flight host, not a second solver or a multiplayer authority.
+There are no new flight-input controls, controller/UI port or autopilot mode.
+`--vehicle-preview` keeps its previous frozen north-pole constructor snapshot.
+
+The completed authority time stages one celestial/body-frame/light sample,
+one rigid mesh instance and the tracking orbit-camera center/basis. Body-space
+mesh rotation includes the inverse sampled body spin, not only translation.
+All values publish together after validation. Renderer/stream selection sees
+the same body-local camera and light frame as the mesh. An unchanged completed
+time skips pose/ephemeris/light publication; an invalid demand changes neither
+authority nor presentation. A physics error stops further demand, clears engine/
+manual command/backlog like the old host and retains the last complete visual
+sample; it is not an authoritative rollback. Final logs report authority and
+presentation time, position, step/backlog and stop status. HUD distinguishes live
+flight and a stopped last-valid view; it does not mutate flight commands.
+
+Window mode feeds elapsed demand through the old local client's **0.1 s clamp
+and 8 ms cooperative work budget**, at 1× requested time. Suspended surface
+recreation resets the elapsed baseline; long drawing gaps do not create an
+unbounded catch-up queue. This is not the server's shared warp policy. Headless
+mode requests deterministic elapsed time per rendered frame, default **1/60 s**,
+including the 30 warm-up frames, with no wall work budget. `--flight-step` is
+headless-only, requires `--flight`, and must be finite with `0 < step <= 0.1 s`.
+Pre-stream remains frozen at launch; physics only advances in rendered frames.
+The authority owns the actual lattice time and remainder, not the frame count
+or requested elapsed total. `--sim-time` / `--sim-step` must remain zero in live
+flight; `--flight` and `--vehicle-preview` are mutually exclusive. These are
+validation controls, not a new configurable graphics effect or warp system.
+
+Local presentation deliberately follows the latest completed local state,
+matching the old client's `sync_view`; it does **not** apply network delay or
+invent another smoothing scheme. The shared network interpolation is still
+consumed by the old embedded path, not a claim of native network transport.
+Live remote snapshots, fleets, prediction/reconciliation, camera/controller
+migration, player inputs, production UI and the remaining client lifecycle
+remain unfinished. The orbit camera, simple base-color/Lambert material,
+inherited asset calibration and unported atmosphere/shadows remain unchanged.
+
+```sh
+cargo run --release -p thessa-terrain-native -- --flight
+cargo run --release -p thessa-terrain-native -- --flight --headless flight.png --hud --frames 600 --prestream-seconds 10
+cargo run --release -p thessa-terrain-native -- --flight --flight-step 0.008333333333333333 --headless flight-120.png --frames 1200
+cargo bench -p thessa-flight-authority --bench presentation
+```
+
+Regressions compare the native canonical live host against direct production
+authority advancement, checking exact completed time/relative position/attitude,
+nonstatic motion, source-geometry retention, shared sample/light/body/camera
+publication and rejection atomicity. Unit tests pin relative-coordinate
+preservation, the millimetre-scale absolute-source error envelope at canonical
+astronomical positions, sample-time ephemeris subtraction, invalid samples,
+interpolation metadata/endpoint/clamp/antipodal-quaternion behavior and the old
+pilot's complete-pose failure regression. CLI misuse is rejected before loading
+assets/GPU. Hardware tests draw the actual advancing model into the existing
+terrain color/depth targets, alongside the previously tested generic moving
+rigid-instance path. No new unsafe code, external dependencies, device, scene
+readback or intermediate scene target is required.
+
+**Validation and measurements.** On the Radeon 880M, the terrain-only 1280×720
+HUD A/B/B/A run (600 measured + 30 warm-up frames, 10 s pre-stream) measured
+baseline **2.581 / 2.684 ms** and new **2.646 / 2.636 ms** medians. Every run
+ended at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications or capacity refusals. These overlapping measurements include async
+material work and unlocked clocks; they establish neither a speedup nor an
+isolated adapter tax. The preserved baseline executable is the exact `77ee5d4`
+build previously recorded in the static-mesh checkpoint.
+
+The live local-flight and live-plus-camera-sweep captures measured **3.066 /
+3.176 ms** medians, reaching **10.5 s** completed authority/presentation time
+with identical final relative coordinates and no stopped flight. They include
+full local physics demand, streaming, rendering, HUD and GPU completion, **not**
+isolated renderer time or game FPS. Camera movement and terrain detail differ
+from terrain-only and frozen-preview workloads; do not subtract these numbers
+to infer physics/mesh cost or compare them as an equal scene to Bevy. Both runs
+submitted one mesh instance / two draws / 78,465 mesh triangles / 640 frame
+upload bytes. Their 62 / 83 measured terrain geometry publications had zero
+capacity refusals. The sweep ended with 8 height / 3 material jobs pending,
+so its final cover was still converging rather than proof of completed residency.
+
+The checked-pose microbenchmark measured **90 ns** median for one pose and
+**21.410 µs** for 1,024 poses (1,000 samples each; p95 **101 ns / 45.676 µs**).
+This covers validation/axis/visual-basis conversion and timer/barriers only,
+excluding physics, ephemeris, assets, streaming, GPU upload/render and waits.
+Native Wayland live-flight smoke requested **1,200** presentations in **27.066 s**
+(**44.3 requests/s**, not display/game FPS), exited 0, and finished at **12.4 s**
+completed simulation with **0.002792447 s** backlog and no flight stop/refusal.
+Window elapsed clamping and cooperative scheduling do not promise real-time
+simulation; this run does **not** establish 1× realtime throughput. No new
+investigation or optimization of that host scheduling/performance is claimed.
+
+Captures and machine-readable methodology/results are recorded in
+`artifacts/live-flight-presentation-2026-10-16.json`.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, **1,758** workspace lib/bin + **52**
+integration + **24** Bevy-CBT hardware + **4** native GPU + **2** native-window
+tests = **1,840 successful tests**. Native-window regressions exercise both
+HUD/terrain-only and live-flight HUD/no-HUD teardown; live tests require
+positive and equal authority/presentation time with no stopped flight.
+Local review covered authority/presentation ownership, sample atomicity,
+sample-time precision, body-space rotation, source-Arc reuse, host clock
+boundaries, the unchanged network receive policy and GPL/MIT separation.
+The debug legacy Bevy pilot also ran **unpaused**, saved a flight screenshot
+and exited 0 using the existing local fallback (embedded server executable
+absent). Its different camera, game UI, effects and elapsed time are not visual
+or equal-workload performance parity; audio and networking were not validated.
+
+![Native live COAST flight at 10.5 s, shared authority pose](artifacts/live-flight-flight-2026-10-16.png)
+
+![Same completed flight time, swept tracking orbit camera](artifacts/live-flight-flight-sweep-2026-10-16.png)
 
 ## 15. FastRT
 

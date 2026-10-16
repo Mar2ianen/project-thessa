@@ -29,6 +29,10 @@ the source/license links in `assets/models/north_american_x-15_plane.LICENSE.txt
 The existing flight terrain spin/axis convention remains GPL in
 `flight-authority::presentation`; the GPL native viewer samples it alongside
 baked ephemerides and combines it with the reusable presentation geometry.
+Checked `flight-authority::presentation::FlightPose` and the old embedded
+client's extracted `flight-net::presentation` snapshot interpolation remain
+GPL game code. No game mapping or interpolation policy is moved into MIT
+render libraries. Hosts still own receive clocks, inboxes and physics demand.
 
 Goal: simulation technology is independently reusable/auditable without inheriting the game's copyleft.
 

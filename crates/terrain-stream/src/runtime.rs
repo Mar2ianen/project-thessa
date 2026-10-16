@@ -62,6 +62,11 @@ pub struct TerrainStream {
 }
 
 impl TerrainStream {
+    /// Immutable canonical source shared with physics/other host consumers;
+    /// taking an Arc clone does not duplicate terrain or transfer cache policy.
+    pub fn field(&self) -> &Arc<PlanetField> {
+        &self.field
+    }
     /// Synchronous six-root bootstrap guarantees a complete cover before the
     /// first frame. All later fine pages are built asynchronously without meshes.
     pub fn new(field: Arc<PlanetField>, policy: StreamingPolicy) -> Result<Self, String> {

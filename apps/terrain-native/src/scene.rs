@@ -14,6 +14,8 @@ use thessa_terrain_stream::{
 };
 
 pub struct Scene {
+    flight: Option<thessa_flight_authority::FlightAuthority>,
+    launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
         thessa_render_core::mesh::MeshInstance,
@@ -68,6 +70,8 @@ impl Scene {
             center
         );
         Ok(Self {
+            flight: None,
+            launch_site: sites[0],
             vehicle: None,
             requested,
             stream,
@@ -86,31 +90,27 @@ impl Scene {
         })
     }
 
+    fn vehicle_source() -> Result<thessa_render_core::mesh::MeshAsset, String> {
+        thessa_render_assets::decode_glb(
+            include_bytes!("../../../assets/models/north_american_x-15_plane.glb"),
+            Default::default(),
+        )
+    }
+
     /// Diagnostic preview of the exact initial flight state. No second flight
     /// integrator or decorative position/attitude animation is introduced.
     pub fn enable_vehicle_preview(&mut self) -> Result<(), String> {
         use thessa_flight_authority::presentation::*;
+        if self.vehicle.is_some() {
+            return Err("vehicle scene already enabled".into());
+        }
         if self.sample.time != thessa_sim_core::SimTime::EPOCH {
             return Err("vehicle preview requires epoch pose".into());
         }
-        let source = thessa_render_assets::decode_glb(
-            include_bytes!("../../../assets/models/north_american_x-15_plane.glb"),
-            Default::default(),
-        )?;
+        let source = Self::vehicle_source()?;
         let flight = self.celestial.initial_flight()?;
-        let instance = thessa_render_core::mesh::MeshInstance {
-            position_m: self
-                .sample
-                .frame
-                .render_to_body_point(inertial_to_render_axes(flight.relative_position_m)),
-            rotation: (craft_visual_orientation(flight.state.orientation_body_to_inertial)
-                * x15_asset_to_craft_rotation())
-            // The compatibility visual basis is f32; restore a unit f64
-            // quaternion before passing the checked rigid-pose contract.
-            .as_dquat()
-            .normalize(),
-            scale: f64::from(X15_AUTHORED_LENGTH_M / X15_SOURCE_LENGTH_M),
-        };
+        let pose = FlightPose::from_authority(&flight).ok_or("invalid initial flight pose")?;
+        let instance = Self::mesh_instance(pose, self.sample.frame)?;
         eprintln!(
             "X15 initial flight-state preview: {} primitives, {} vertices, {} triangles; CC BY 4.0 cmoreau; opaque native base-color/Lambert shading (not PBR parity)",
             source.primitives.len(),
@@ -136,6 +136,128 @@ impl Scene {
         self.distance = 32.0;
         self.vehicle = Some((source, instance));
         Ok(())
+    }
+
+    pub fn live_flight(&self) -> bool {
+        self.flight.is_some()
+    }
+
+    /// Canonical production launch setup and fixed-step authority, not a new
+    /// physics clock/controller. No network or player-flight-input host yet.
+    pub fn enable_live_flight(&mut self) -> Result<(), String> {
+        if self.vehicle.is_some() || self.sample.time != thessa_sim_core::SimTime::EPOCH {
+            return Err("live flight requires an empty epoch vehicle scene".into());
+        }
+        let source = Self::vehicle_source()?;
+        let mut flight = self.celestial.initial_flight()?;
+        flight.initialize_world_site(
+            self.stream.field().clone(),
+            self.launch_site,
+            self.celestial.ephemeris(),
+        );
+        let pose = thessa_flight_authority::presentation::FlightPose::from_authority(&flight)
+            .ok_or("invalid canonical flight pose")?;
+        self.vehicle = Some((source, Self::mesh_instance(pose, self.sample.frame)?));
+        if let Err(error) = self.publish_vehicle_pose(pose) {
+            self.vehicle = None;
+            return Err(error);
+        }
+        self.distance = 32.0;
+        self.flight = Some(flight);
+        eprintln!(
+            "Live local flight: canonical COAST launch; existing FlightAuthority, Navball attitude hold; no flight-input/network/UI parity"
+        );
+        Ok(())
+    }
+
+    fn mesh_instance(
+        pose: thessa_flight_authority::presentation::FlightPose,
+        frame: thessa_render_core::BodyFrame,
+    ) -> Result<thessa_render_core::mesh::MeshInstance, String> {
+        use thessa_flight_authority::presentation::*;
+        let instance = thessa_render_core::mesh::MeshInstance {
+            position_m: frame.render_to_body_point(pose.render_position_m()),
+            rotation: (frame.rotation().conjugate()
+                * (pose.visual_orientation() * x15_asset_to_craft_rotation())
+                    .as_dquat()
+                    .normalize())
+            .normalize(),
+            scale: f64::from(X15_AUTHORED_LENGTH_M / X15_SOURCE_LENGTH_M),
+        };
+        instance
+            .camera_relative_matrix(instance.position_m)
+            .ok_or("invalid body-local flight mesh pose")?;
+        Ok(instance)
+    }
+
+    /// Stage body/light/mesh/camera together. Physics authority is never read
+    /// back from these visual values, and a failed sample leaves them intact.
+    fn publish_vehicle_pose(
+        &mut self,
+        pose: thessa_flight_authority::presentation::FlightPose,
+    ) -> Result<(), String> {
+        let sample = self.celestial.sample(pose.time())?;
+        let instance = Self::mesh_instance(pose, sample.frame)?;
+        let up = instance
+            .position_m
+            .try_normalize()
+            .ok_or("invalid flight camera center")?;
+        let east = DVec3::Y
+            .cross(up)
+            .try_normalize()
+            .unwrap_or_else(|| up.any_orthonormal_vector());
+        let vehicle = self.vehicle.as_mut().ok_or("missing vehicle source")?;
+        vehicle.1 = instance;
+        self.center = instance.position_m;
+        self.up = up;
+        self.east = east;
+        self.lighting_dirty |= self.sample.lighting != sample.lighting;
+        self.sample = sample;
+        Ok(())
+    }
+
+    pub fn advance_flight(
+        &mut self,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+    ) -> Result<(), String> {
+        let Some(flight) = &mut self.flight else {
+            return Ok(());
+        };
+        if !elapsed_s.is_finite() || !(0.0..=0.1).contains(&elapsed_s) {
+            return Err("flight elapsed must be finite and within 0..=0.1s".into());
+        }
+        if flight.flight_error.is_some() || elapsed_s == 0.0 {
+            return Ok(());
+        }
+        if let Err(error) = flight.advance_with_budget(
+            self.celestial.ephemeris(),
+            thessa_flight_authority::ControlMode::Navball,
+            elapsed_s,
+            budget,
+        ) {
+            flight.engine_active = false;
+            flight.control_input = DVec3::ZERO;
+            flight.accumulator_s = 0.0;
+            flight.flight_error = Some(error.to_string());
+            eprintln!("Native flight stopped: {error}; preserving last complete visual sample");
+            return Ok(());
+        }
+        let pose = thessa_flight_authority::presentation::FlightPose::from_authority(flight)
+            .ok_or("invalid advanced flight pose")?;
+        if pose.time() != self.sample.time {
+            self.publish_vehicle_pose(pose)?;
+        }
+        Ok(())
+    }
+
+    pub fn flight_telemetry(&self) -> Option<String> {
+        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error))
+    }
+    pub fn flight_stopped(&self) -> bool {
+        self.flight
+            .as_ref()
+            .is_some_and(|flight| flight.flight_error.is_some())
     }
 
     pub fn mesh_renderer(
@@ -175,6 +297,9 @@ impl Scene {
     /// debounce. An unchanged SimTime performs no ephemeris or lighting work.
     /// Stage the full sample before mutation so failure preserves the old frame.
     pub fn set_presentation_time(&mut self, time: thessa_sim_core::SimTime) -> Result<(), String> {
+        if self.live_flight() {
+            return Err("live presentation time is owned by FlightAuthority".into());
+        }
         if self.vehicle.is_some() && time != thessa_sim_core::SimTime::EPOCH {
             return Err(
                 "vehicle preview is an initial flight-state snapshot, not sampled celestial motion"
@@ -371,6 +496,180 @@ fn orbit_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DQuat;
+
+    #[test]
+    fn live_canonical_flight_matches_direct_authority_and_publishes_one_complete_sample() {
+        use thessa_flight_authority::{ControlMode, presentation::FlightPose};
+        let mut scene = Scene::load(Default::default()).unwrap();
+        let mut reference = scene.celestial.initial_flight().unwrap();
+        reference.initialize_world_site(
+            scene.stream.field().clone(),
+            scene.launch_site,
+            scene.celestial.ephemeris(),
+        );
+        scene.enable_live_flight().unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            scene
+                .flight
+                .as_ref()
+                .unwrap()
+                .terrain_field
+                .as_ref()
+                .unwrap(),
+            scene.stream.field()
+        ));
+        let initial = scene.center;
+        let vertices = scene.vehicle.as_ref().unwrap().0.primitives[0]
+            .vertices
+            .as_ptr();
+        for _ in 0..60 {
+            reference
+                .advance(
+                    scene.celestial.ephemeris(),
+                    ControlMode::Navball,
+                    1.0 / 60.0,
+                )
+                .unwrap();
+            scene.advance_flight(1.0 / 60.0, None).unwrap();
+            let flight = scene.flight.as_ref().unwrap();
+            assert_eq!(flight.relative_position_m, reference.relative_position_m);
+            assert_eq!(
+                flight.state.orientation_body_to_inertial,
+                reference.state.orientation_body_to_inertial
+            );
+            assert_eq!(flight.flight_time_s, reference.flight_time_s);
+            assert_eq!(scene.sample.time.0, reference.flight_time_s);
+            let pose = FlightPose::from_authority(&reference).unwrap();
+            assert!(
+                (scene.sample.frame.body_to_render_point(scene.center) - pose.render_position_m())
+                    .length()
+                    < 1e-8
+            );
+            let instance = scene.vehicle.as_ref().unwrap().1;
+            let expected = (pose.visual_orientation()
+                * thessa_flight_authority::presentation::x15_asset_to_craft_rotation())
+            .as_dquat()
+            .normalize();
+            assert!(
+                (scene.sample.frame.rotation() * instance.rotation)
+                    .dot(expected)
+                    .abs()
+                    > 1.0 - 1e-12
+            );
+            assert!(
+                thessa_render_wgpu::view::ViewUniformBlock::new(&scene.view(1280, 720, 1.0))
+                    .is_some()
+            );
+        }
+        assert!((scene.center - initial).length() > 100.0);
+        let mut finer = scene.celestial.initial_flight().unwrap();
+        finer.initialize_world_site(
+            scene.stream.field().clone(),
+            scene.launch_site,
+            scene.celestial.ephemeris(),
+        );
+        for _ in 0..120 {
+            finer
+                .advance(
+                    scene.celestial.ephemeris(),
+                    ControlMode::Navball,
+                    1.0 / 120.0,
+                )
+                .unwrap();
+        }
+        assert_eq!(finer.flight_time_s, reference.flight_time_s);
+        assert_eq!(finer.relative_position_m, reference.relative_position_m);
+        assert_eq!(
+            finer.state.orientation_body_to_inertial,
+            reference.state.orientation_body_to_inertial
+        );
+        assert_eq!(
+            scene.vehicle.as_ref().unwrap().0.primitives[0]
+                .vertices
+                .as_ptr(),
+            vertices
+        );
+        let before = (
+            scene.sample,
+            scene.center,
+            scene.vehicle.as_ref().unwrap().1.position_m,
+        );
+        let authority_time = scene.flight.as_ref().unwrap().flight_time_s;
+        assert!(scene.advance_flight(f64::NAN, None).is_err());
+        assert!(scene.advance_flight(1.0, None).is_err());
+        assert!(
+            scene
+                .set_presentation_time(thessa_sim_core::SimTime(50.0))
+                .is_err()
+        );
+        assert_eq!(scene.flight.as_ref().unwrap().flight_time_s, authority_time);
+        let invalid =
+            FlightPose::new(thessa_sim_core::SimTime(1e308), DVec3::X, DQuat::IDENTITY).unwrap();
+        assert!(scene.publish_vehicle_pose(invalid).is_err());
+        assert_eq!(scene.sample.time, before.0.time);
+        assert_eq!(scene.sample.frame, before.0.frame);
+        assert_eq!(scene.sample.lighting, before.0.lighting);
+        assert_eq!(scene.center, before.1);
+        assert_eq!(scene.vehicle.as_ref().unwrap().1.position_m, before.2);
+        scene.flight.as_mut().unwrap().state.velocity_inertial_mps = DVec3::NAN;
+        scene.advance_flight(1.0 / 60.0, None).unwrap();
+        assert!(scene.flight_stopped());
+        assert_eq!(scene.sample.time, before.0.time);
+        assert_eq!(scene.center, before.1);
+        scene.advance_flight(0.1, None).unwrap();
+        assert_eq!(scene.sample.time, before.0.time);
+    }
+
+    #[test]
+    #[ignore = "requires a wgpu adapter"]
+    fn live_authority_updates_shared_mesh_terrain_lights_and_tracking_camera_on_gpu() {
+        let backend = Backend::bring_up().unwrap();
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        let target = thessa_render_wgpu::terrain::OffscreenTarget::new(&backend, 257, 257).unwrap();
+        let mut terrain = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        let mut mesh = scene
+            .mesh_renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap()
+            .unwrap();
+        let render = |scene: &mut Scene,
+                      terrain: &mut TerrainRenderer,
+                      mesh: &mut thessa_render_wgpu::mesh::MeshRenderer| {
+            scene.publish_presentation(&backend, terrain).unwrap();
+            let exposure = crate::manual_exposure(13.0);
+            terrain
+                .update_view(&backend, &scene.view(257, 257, exposure))
+                .unwrap();
+            scene
+                .update_mesh(&backend, mesh, 257, 257, exposure)
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            terrain.encode(&mut encoder, &target.color, &target.depth);
+            mesh.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()
+        };
+        let before = render(&mut scene, &mut terrain, &mut mesh);
+        for _ in 0..60 {
+            scene.advance_flight(1.0 / 60.0, None).unwrap();
+        }
+        let after = render(&mut scene, &mut terrain, &mut mesh);
+        assert_ne!(before, after);
+        assert_eq!(mesh.draw_stats().instances, 1);
+        assert_eq!(mesh.draw_stats().triangles, 78465);
+        assert!(!scene.lighting_dirty);
+        assert!(scene.sample.time.0 > 0.9);
+        assert!(!scene.flight_stopped());
+    }
 
     #[test]
     fn initial_flight_snapshot_keeps_valid_close_polar_camera_and_unit_instance() {

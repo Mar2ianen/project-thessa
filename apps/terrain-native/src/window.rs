@@ -25,6 +25,7 @@ struct State {
     hud: Option<WindowHud>,
     submitted_frames: u64,
     previous_cpu_ms: f64,
+    last_flight_wall_s: Option<f64>,
 }
 
 #[cfg(feature = "hud")]
@@ -106,6 +107,7 @@ impl State {
             hud,
             submitted_frames: 0,
             previous_cpu_ms: 0.0,
+            last_flight_wall_s: None,
         })
     }
 
@@ -145,6 +147,13 @@ impl State {
                 return Err("surface validation failure".into());
             }
         };
+        if scene.live_flight() {
+            let elapsed = self
+                .last_flight_wall_s
+                .replace(now_s)
+                .map_or(0.0, |last| (now_s - last).clamp(0.0, 0.1));
+            scene.advance_flight(elapsed, Some(std::time::Duration::from_millis(8)))?;
+        }
         #[cfg(feature = "hud")]
         let hud_output = if let Some(hud) = &mut self.hud {
             egui_winit::update_viewport_info(
@@ -368,6 +377,9 @@ impl ApplicationHandler for App {
                             self.scene.stream.pending_jobs(),
                             self.scene.capacity_rejections
                         );
+                        if let Some(status) = self.scene.flight_telemetry() {
+                            println!("{status}");
+                        }
                         event_loop.exit();
                     }
                 }

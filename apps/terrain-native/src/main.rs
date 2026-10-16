@@ -21,6 +21,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sim_time = 0.0_f64;
     let mut sim_step = 0.0_f64;
     let mut vehicle_preview = false;
+    let mut live_flight = false;
+    let mut flight_step = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
@@ -40,6 +42,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--sweep" => sweep = true,
             "--vehicle-preview" => vehicle_preview = true,
+            "--flight" => live_flight = true,
+            "--flight-step" => {
+                flight_step = Some(
+                    args.next()
+                        .ok_or("--flight-step requires seconds per frame")?
+                        .parse::<f64>()?,
+                )
+            }
             "--sim-time" => sim_time = args.next().ok_or("--sim-time requires seconds")?.parse()?,
             "--sim-step" => {
                 sim_step = args
@@ -56,6 +66,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
+                println!(
+                    "--flight runs the existing local FlightAuthority from canonical COAST launch with Navball attitude hold and tracking orbit camera. No flight-input/network/controller-UI parity. Requires --sim-time 0 --sim-step 0, incompatible with --vehicle-preview.\nHeadless --flight-step SECONDS (default 1/60, finite 0<step<=0.1) requests simulation elapsed per frame, including 30 warmup frames; pre-stream stays frozen. Window uses elapsed wall demand clamped to 0.1s and the old local client's 8ms work budget; no new physics dt or warp."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -63,6 +76,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if frame_limit == Some(0) {
         return Err("--frames must be non-zero".into());
+    }
+    if live_flight && (vehicle_preview || sim_time != 0.0 || sim_step != 0.0) {
+        return Err("--flight requires --sim-time 0 --sim-step 0 and no --vehicle-preview".into());
+    }
+    if flight_step.is_some() && (!live_flight || headless.is_none()) {
+        return Err("--flight-step requires --flight and --headless".into());
+    }
+    let flight_step = flight_step.unwrap_or(1.0 / 60.0);
+    if !flight_step.is_finite() || flight_step <= 0.0 || flight_step > 0.1 {
+        return Err("--flight-step must be finite and within 0<step<=0.1".into());
     }
     if vehicle_preview && (sim_time != 0.0 || sim_step != 0.0) {
         return Err("--vehicle-preview requires epoch --sim-time 0 and --sim-step 0".into());
@@ -93,6 +116,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
     if vehicle_preview {
         scene.enable_vehicle_preview()?;
+    }
+    if live_flight {
+        scene.enable_live_flight()?;
     }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",
@@ -131,9 +157,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let count = frame_limit.unwrap_or(120);
         for frame in 0..u64::from(count) + 30 {
             let start = Instant::now();
-            scene.set_presentation_time(thessa_sim_core::SimTime(
-                sim_time + sim_step * frame as f64,
-            ))?;
+            if live_flight {
+                scene.advance_flight(flight_step, None)?;
+            } else {
+                scene.set_presentation_time(thessa_sim_core::SimTime(
+                    sim_time + sim_step * frame as f64,
+                ))?;
+            }
             if sweep {
                 scene.angle = frame as f64 * 0.006;
             }
@@ -248,8 +278,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         if let Some(mesh) = &mesh_renderer {
             println!(
-                "mesh_submitted={:?}; drawn_triangles above counts terrain only; initial flight-state snapshot, not live flight",
+                "mesh_submitted={:?}; drawn_triangles above counts terrain only; live_flight={live_flight}",
                 mesh.draw_stats()
+            );
+        }
+        if let Some(status) = scene.flight_telemetry() {
+            println!(
+                "flight_step_s={flight_step} {status}; full local physics advance included in frame timings, not isolated renderer cost"
             );
         }
         return Ok(());

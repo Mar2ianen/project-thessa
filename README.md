@@ -117,6 +117,14 @@ The checked-in vertical slice currently contains:
   migration. Preview requires epoch time and no time stepping. Reusable source
   descriptors/decoding live in MIT `render-core` / `render-assets`; game asset
   calibration remains GPL. X-15 by cmoreau is CC BY 4.0 (see its asset license).
+  `--flight` instead starts the existing local `FlightAuthority` at the canonical
+  COAST launch and tracks its live pose with the orbit camera (Navball attitude
+  hold, no flight-input/network/game-UI parity). Window elapsed demand uses the
+  old local client's 0.1 s clamp/8 ms work budget. Headless `--flight-step 0.016666666666666666`
+  requests elapsed simulation time per frame, including warm-up; pre-stream is
+  frozen. Body spin, direct lights, mesh and camera publish at the authority's
+  actual completed time. Checked GPL `FlightPose` inputs are shared with the old
+  pilot; its existing network interpolation arithmetic now lives in `flight-net`.
   Headless `--prestream-seconds 10 --sweep` exercises
    changing demand rather than a fixed resident snapshot.
    The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's

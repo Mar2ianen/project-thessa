@@ -415,6 +415,8 @@ pub struct Snapshot {
     pub flight_error: Option<String>,
 }
 
+pub mod presentation;
+
 /// Encode a game message into a framed byte stream chunk.
 pub fn encode_frame(kind: u32, message: &impl Serialize) -> Result<Vec<u8>, CodecError> {
     let envelope = thessa_protocol::encode_envelope(kind, message)?;
@@ -941,6 +943,63 @@ mod tests {
         assert_eq!(envelope.kind, kind::SNAPSHOT);
         let back: Snapshot = decode_payload(&envelope).expect("payload");
         assert_eq!(back, snapshot);
+    }
+
+    #[test]
+    fn shared_presentation_interpolation_retains_metadata_inputs_and_clamps_without_extrapolation()
+    {
+        let mut previous = sample_snapshot();
+        let mut latest = previous.clone();
+        previous.flight_time_s = 10.0;
+        latest.flight_time_s = 20.0;
+        latest.tick += 10;
+        previous.state.position_inertial_m = glam::DVec3::ZERO;
+        latest.state.position_inertial_m = glam::DVec3::new(10.0, 20.0, 30.0);
+        previous.state.velocity_inertial_mps = glam::DVec3::X * 10.0;
+        latest.state.velocity_inertial_mps = glam::DVec3::Y * 20.0;
+        previous.state.angular_velocity_body_rps = glam::DVec3::Z;
+        latest.state.angular_velocity_body_rps = glam::DVec3::X * 3.0;
+        previous.state.orientation_body_to_inertial = glam::DQuat::IDENTITY;
+        latest.state.orientation_body_to_inertial = -glam::DQuat::from_rotation_z(1.0);
+        latest.engine_active = !previous.engine_active;
+        latest.server_compute_s += 7.0;
+        let original_previous = previous.clone();
+        let original_latest = latest.clone();
+        for alpha in [-1.0_f64, 0.0, 0.5, 1.0, 2.0] {
+            let result = presentation::interpolate_snapshot(&previous, &latest, alpha);
+            let mut expected_metadata = latest.clone();
+            expected_metadata.state = result.state;
+            expected_metadata.flight_time_s = result.flight_time_s;
+            assert_eq!(result, expected_metadata);
+            let clamped = alpha.clamp(0.0, 1.0);
+            assert_eq!(result.flight_time_s, 10.0 + 10.0 * clamped);
+            assert_eq!(
+                result.state.position_inertial_m,
+                latest.state.position_inertial_m * clamped
+            );
+            assert!(
+                (result.state.orientation_body_to_inertial.length_squared() - 1.0).abs() < 1e-12
+            );
+        }
+        let middle = presentation::interpolate_snapshot(&previous, &latest, 0.5);
+        assert_eq!(
+            middle.state.velocity_inertial_mps,
+            glam::DVec3::new(5.0, 10.0, 0.0)
+        );
+        assert_eq!(
+            middle.state.angular_velocity_body_rps,
+            glam::DVec3::new(1.5, 0.0, 0.5)
+        );
+        assert!(
+            middle
+                .state
+                .orientation_body_to_inertial
+                .dot(glam::DQuat::from_rotation_z(0.5))
+                .abs()
+                > 1.0 - 1e-12
+        );
+        assert_eq!(previous, original_previous);
+        assert_eq!(latest, original_latest);
     }
 
     #[test]

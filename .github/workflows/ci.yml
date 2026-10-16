@@ -84,6 +84,12 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Validate agent QA tools
+        run: python3 -m unittest discover -s tools/agent-qa/tests -v
+
+      - name: Check simulation architecture boundaries
+        run: python3 tools/agent-qa/check_architecture.py
+
   release-simulation:
     name: Release simulation checks
     runs-on: ubuntu-latest

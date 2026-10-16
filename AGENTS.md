@@ -302,3 +302,29 @@ A feature is not done without:
 - permissive dependencies are preferred for engine crates; a copyleft dependency in an engine crate requires an ADR analyzing redistribution/linking boundaries;
 - generated code and asset licenses remain explicit;
 - see `LICENSING.md`.
+
+## 14. Agent workflow and scope-aware commits
+
+- Use `[ai] ` in a commit subject only if its entire purpose and retained changes
+  are agent instructions, agent tests, harnesses, prompts, or workflow tooling.
+  The prefix marks scope, **not authorship**. Product code, physics, graphics,
+  and ordinary product CI commits use normal subjects even when an agent wrote them.
+  Split mixed-scope commits where practical.
+- Prefer an existing mechanism, small extension, standard-library solution,
+  or deletion over introducing another subsystem or abstraction. Minimize the
+  **complete** diff rather than an individual function; do not skip numerical
+  error bounds, causal modeling, tests, diagnostics, fallbacks, or performance
+  evidence for the sake of fewer lines.
+- Record which checks actually ran, the reproducible scenario and baseline,
+  hardware/backend when relevant, known gaps, and what was deliberately omitted.
+  Never claim green CI, visual parity, or a benchmark win without its evidence.
+- For visual changes, distinguish deterministic scene/oracle tests from
+  **blind subjective preference**. Keep origin labels hidden from the reviewer,
+  keep answer keys separate, permit ties and invalid comparisons, and evaluate
+  physically correct behavior independently of aesthetic appeal.
+- Parallel agents own separate worktrees/paths. Shared manifests and boundary
+  integrations have one owner at a time. Prefer running test/replay jobs on the
+  second machine to paying for simultaneous model sessions.
+- Read `docs/55_AGENT_QUALITY_CONTROL.md` for the workflow, executable
+  architecture gate, and blind frame-comparison harness. Future native
+  headless control and performance budgets remain proposals until implemented.

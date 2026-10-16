@@ -337,3 +337,12 @@ Read [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md) before
 changing simulation code. Physics changes should include a known-case test,
 an error envelope against a decision-relevant scale, and a benchmark when the
 change affects a hot path.
+
+## Agent quality infrastructure
+
+The agent development guide and blind visual A/B workflow are documented in
+[agent quality control](docs/55_AGENT_QUALITY_CONTROL.md). Their executable
+architecture check and visual-arena tools live under
+[`tools/agent-qa/`](tools/agent-qa/README.md). The current arena works on
+supplied PNG frames; native headless capture and automated model judging are
+planned, not implemented.

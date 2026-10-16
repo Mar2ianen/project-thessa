@@ -7,6 +7,135 @@ use thessa_sim_core::{
 };
 
 #[test]
+fn retained_body_meshes_follow_assembly_pose_com_and_physical_split() {
+    use std::sync::Arc;
+    let source = include_str!("../../../data/vehicles/example_assembly.toml");
+    let asset: VehicleAsset = toml::from_str(source).unwrap();
+    let assembled = compile_assembly(
+        &asset.procedural_bodies,
+        &asset_schema::resolve_assembly_links(&asset.assembly.links).unwrap(),
+    )
+    .unwrap();
+    let vehicle = asset.bake().unwrap();
+    let mut without: VehicleAsset = toml::from_str(source).unwrap();
+    without.body_render.enabled = false;
+    let physical = without.bake().unwrap();
+    let mut stripped = vehicle.clone();
+    stripped.render_geometry = Default::default();
+    assert_eq!(
+        physical, stripped,
+        "appearance sampling must change no physical output"
+    );
+    assert_eq!(vehicle.render_geometry.parts.len(), 2);
+    let parts = &vehicle.render_geometry.parts;
+    // Mesh origins and physical body COMs have the same final recenter. The
+    // difference between any two retained origins eliminates that common shift.
+    assert!(
+        ((parts[1].position_body_m - parts[0].position_body_m)
+            - (assembled.body_transforms[1].translation_body_m
+                - assembled.body_transforms[0].translation_body_m))
+            .length()
+            < 1e-12
+    );
+    for (body, part) in parts.iter().enumerate() {
+        assert_eq!(part.assembly_body, Some(body));
+        assert_eq!(
+            part.orientation_mesh_to_body,
+            assembled.body_transforms[body].rotation_body
+        );
+        part.mesh.validate().unwrap();
+        assert_eq!(part.mesh.positions.len(), 226);
+        assert_eq!(part.mesh.indices.len(), 960);
+    }
+    let state = RigidBodyState::new(
+        DVec3::new(1e12, 2e12, -3e12),
+        DVec3::ZERO,
+        DQuat::from_rotation_z(0.4),
+        DVec3::ZERO,
+    )
+    .unwrap();
+    let split = vehicle
+        .split_definitions_after_link_failure("stack", state, &vehicle.initial_resource_state())
+        .unwrap();
+    for ((definition, child, _), original) in split.iter().zip(parts) {
+        let part = &definition.render_geometry.parts[0];
+        assert_eq!(definition.render_geometry.parts.len(), 1);
+        assert_eq!(part.name, original.name);
+        assert!(Arc::ptr_eq(&part.mesh, &original.mesh));
+        for vertex in &part.mesh.positions {
+            let before = state.position_inertial_m
+                + state.orientation_body_to_inertial
+                    * (original.position_body_m + original.orientation_mesh_to_body * *vertex);
+            let after = child.position_inertial_m
+                + child.orientation_body_to_inertial
+                    * (part.position_body_m + part.orientation_mesh_to_body * *vertex);
+            assert!((after - before).length() < 0.001);
+        }
+    }
+    let decoded: VehicleDefinition =
+        serde_json::from_str(&serde_json::to_string(&vehicle).unwrap()).unwrap();
+    decoded.validate().unwrap();
+    for (a, b) in decoded.render_geometry.parts.iter().zip(parts) {
+        assert_eq!(a.mesh.indices, b.mesh.indices);
+        for (a, b) in a.mesh.positions.iter().zip(&b.mesh.positions) {
+            assert!((*a - *b).length() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn offline_render_sampling_is_bounded_and_does_not_change_physics() {
+    let source = include_str!("../../../data/vehicles/example_assembly.toml");
+    let mut asset: VehicleAsset = toml::from_str(source).unwrap();
+    asset.body_render.radial_samples = 7;
+    assert!(
+        asset
+            .bake()
+            .unwrap_err()
+            .to_string()
+            .contains("body_render sampling")
+    );
+    let mut low: VehicleAsset = toml::from_str(source).unwrap();
+    low.body_render.radial_samples = 8;
+    low.body_render.axial_samples_per_station = 1;
+    let mut low = low.bake().unwrap();
+    let mut standard = toml::from_str::<VehicleAsset>(source)
+        .unwrap()
+        .bake()
+        .unwrap();
+    assert!(
+        low.render_geometry.parts[0].mesh.positions.len()
+            < standard.render_geometry.parts[0].mesh.positions.len()
+    );
+    low.render_geometry = Default::default();
+    standard.render_geometry = Default::default();
+    assert_eq!(low, standard);
+}
+
+#[test]
+#[ignore = "offline baker CPU timing diagnostic"]
+fn body_render_bake_measurement() {
+    let source = include_str!("../../../data/vehicles/example_assembly.toml");
+    for enabled in [false, true] {
+        let mut elapsed = Vec::new();
+        let mut bytes = 0;
+        for _ in 0..100 {
+            let mut asset: VehicleAsset = toml::from_str(source).unwrap();
+            asset.body_render.enabled = enabled;
+            let start = std::time::Instant::now();
+            let vehicle = std::hint::black_box(asset.bake().unwrap());
+            elapsed.push(start.elapsed().as_secs_f64() * 1e6);
+            bytes = serde_json::to_vec(&vehicle).unwrap().len();
+        }
+        elapsed.sort_by(f64::total_cmp);
+        eprintln!(
+            "body_render enabled={enabled} bodies=2 samples=100 median_bake_us={:.3} json_bytes={bytes}; parsing/JSON encoding excluded; existing bake diagnostics included; debug profile, not runtime renderer",
+            elapsed[50]
+        );
+    }
+}
+
+#[test]
 fn example_vehicle_asset_bakes_to_valid_generic_definition() {
     let asset: VehicleAsset =
         toml::from_str(include_str!("../../../data/vehicles/example_aircraft.toml"))

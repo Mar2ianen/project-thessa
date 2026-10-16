@@ -103,7 +103,10 @@ The next migration slice adds optional MIT `RenderGeometry` to vehicle definitio
 f64 rigid part poses, indexed local meshes shared by Arc, and validated body
 ownership. Existing cluster reconstruction partitions/remaps the parts and moves
 their origins with the physical COM; mass, contact and forces do not consume
-these meshes. Producer baking and client/world consumption remain later slices.
+these meshes. The baker retains procedural body shells using the existing
+fuselage tessellator (configurable `[body_render]`); source assembly transforms
+and final COM shifts are preserved. Surfaces, authored appearance materials and
+client/world consumption remain later slices.
 
 ## Autopilot and roadmap
 

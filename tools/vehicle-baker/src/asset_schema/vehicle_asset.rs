@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// Offline appearance sampling, independent of physical panel/contact budgets.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct BodyRenderOptions {
+    pub enabled: bool,
+    pub axial_samples_per_station: usize,
+    pub radial_samples: usize,
+}
+
+impl Default for BodyRenderOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            axial_samples_per_station: 4,
+            radial_samples: 32,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct VehicleAsset {
     pub(super) name: String,
@@ -26,6 +45,9 @@ pub(crate) struct VehicleAsset {
     /// legacy assets valid.
     #[serde(default)]
     pub(crate) procedural_bodies: Vec<ProceduralBody>,
+    /// Retain tessellated body shells in baked JSON; never used by physics.
+    #[serde(default)]
+    pub(crate) body_render: BodyRenderOptions,
     /// Optional rigid assembly of authored body parts with live crew, air,
     /// and resource connectivity.
     #[serde(default)]
@@ -271,6 +293,13 @@ impl VehicleAsset {
         // hardware needs explicit per-part bodies (later slice) and fails
         // closed below instead of being silently misattributed.
         let track_ownership = !self.assembly.links.is_empty();
+        let mut render_parts = Vec::new();
+        if self.body_render.enabled
+            && (!(1..=64).contains(&self.body_render.axial_samples_per_station)
+                || !(8..=128).contains(&self.body_render.radial_samples))
+        {
+            return Err("body_render sampling must be axial 1..=64 and radial 8..=128".into());
+        }
         let hand_panel_count = panels.len();
         let hand_control_count = controls.len();
         let mut ownership_panel_bodies: Vec<usize> = Vec::new();
@@ -318,6 +347,25 @@ impl VehicleAsset {
             // Assembly transforms own part placement; compile in the part's
             // local frame to avoid applying the authored origin twice.
             part_frame_body.origin_body_m = DVec3::ZERO;
+            if self.body_render.enabled {
+                let mesh = thessa_fuselage::tessellate_fuselage(
+                    &part_frame_body,
+                    self.body_render.axial_samples_per_station,
+                    self.body_render.radial_samples,
+                )
+                .map_err(|error| format!("body '{}' render mesh: {error}", body.name))?;
+                render_parts.push(thessa_sim_core::RenderPart {
+                    name: body.name.clone(),
+                    assembly_body: track_ownership.then_some(body_index),
+                    position_body_m: transform.translation_body_m,
+                    orientation_mesh_to_body: transform.rotation_body,
+                    mesh: std::sync::Arc::new(thessa_sim_core::RenderMesh {
+                        positions: mesh.positions,
+                        normals: mesh.normals,
+                        indices: mesh.indices,
+                    }),
+                });
+            }
             let mut compiled = compile_body(&part_frame_body, &BodyCompileOptions::default())
                 .map_err(|error| format!("body '{}': {error}", body.name))?;
             transform_compiled_body(&mut compiled, transform);
@@ -1270,6 +1318,14 @@ impl VehicleAsset {
         let recentered =
             vehicle.mass_properties.inertia_body_kg_m2 - parallel_axis(total, assembly_com);
         vehicle.mass_properties = RigidBodyProperties::new(total, recentered)?;
+        // Install after all physical mass bakes and the final recenter. Mesh
+        // vertices stay in the original part-local frame; only origins move.
+        for part in &mut render_parts {
+            part.position_body_m += shift;
+        }
+        vehicle.render_geometry = thessa_sim_core::RenderGeometry {
+            parts: render_parts,
+        };
         vehicle.validate()?;
         Ok(vehicle)
     }

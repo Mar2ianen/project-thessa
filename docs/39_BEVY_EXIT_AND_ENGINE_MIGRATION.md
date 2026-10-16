@@ -2472,6 +2472,28 @@ clones versus **421.215 μs** for one deep mesh copy (3,932,160 payload bytes;
 Full workspace/gpu gates for the stacked continuation are recorded with the
 following integration slice before branch publication.
 
+### Procedural body appearance producer (2026-10-16)
+
+The second stacked slice connects the retained contract to the **existing**
+fuselage tessellator. The baker stores mesh-local buffers, solved assembly
+rotation/translation and explicit part ownership, then applies only the final
+COM translation to retained origins. It never builds appearance from contact
+boxes. `[body_render]` controls offline sampling and can disable output entirely;
+see `details/06_ATTACHMENT_MODEL.md`. Hand panels/wings, cockpit/interiors,
+textures and physically authored appearance materials are not implemented.
+No network schema or runtime pixels change in this slice.
+
+The baker suite passes with new exact physical-equivalence, bounded sampling,
+transformed ownership, JSON and real split regressions. Offline diagnostic:
+`cargo test -p thessa-vehicle-baker body_render_bake_measurement -- --ignored --nocapture`;
+100 debug-profile bakes of the two-body assembly, TOML parsing/JSON encoding
+excluded, existing console diagnostics included. Mesh-off/on median bake times
+were **7,853.092 / 7,817.856 μs**, and JSON grew **11,143 → 53,547 bytes**.
+The noisy difference is not a speedup or isolated tessellator-cost claim.
+Logs: `/tmp/opencode/body-render-baker-{tests,bench}.log`; validation/projection
+precision is pinned by the tests, not inferred from these timings. Runtime
+consumer and stacked workspace gates follow in the next slice.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

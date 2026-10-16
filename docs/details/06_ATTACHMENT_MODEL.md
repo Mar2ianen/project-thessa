@@ -327,6 +327,22 @@ and shared allocation identity. Empty appearance stays empty: no inferred X-15
 or contact-hull appearance is synthesized. Producer/client integrations are
 separate migration slices; this schema alone changes no pixels or wire kinds.
 
+The baker now retains one mesh per procedural body using the existing
+`tessellate_fuselage` on the zero-origin part frame, storing assembly rotation
+and solved translation separately. Mesh origins receive the same final COM
+shift as physical mounts. `[body_render]` in input TOML defaults to
+`enabled = true`, `axial_samples_per_station = 4`, `radial_samples = 32`;
+allowed ranges are 1–64 axial subdivisions and 8–128 radial samples. Disabled
+baking omits appearance buffers without changing any physical output; sampling
+counts also change appearance only. This is offline polygon sampling, not
+runtime graphics quality or a calibrated collision substitute. Tessellation
+remains the existing loft approximation, including flat end caps; superellipse
+fidelity varies with authoring and sampling. Only retained body meshes, not
+wing/control-surface appearance, textures/interiors or material design are baked.
+Regression tests compare assembled poses, exact mesh-free physical definitions,
+JSON coordinates within 1e-12 m, and separated world vertices within 1 mm at
+3e12 m. The two-body fixture emits 226 vertices and 320 triangles per shell.
+
 ## 8. Next slices
 
 - Internal assembly-joint load-path resolution; explicit per-part bodies for

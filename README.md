@@ -186,7 +186,10 @@ The checked-in vertical slice currently contains:
      must use wire v8; v7 is rejected rather than decoded as the new schema.
      `VehicleDefinition` also supports optional renderer-neutral retained meshes
      with explicit assembly-body ownership. Splits partition/recenter their poses
-     without copying mesh buffers; these are not yet baked or sent by this slice.
+     without copying mesh buffers. The baker now retains procedural body shells
+     using the existing fuselage tessellator; wings, materials and network/world
+     consumption remain separate work. `[body_render]` controls offline sampling
+     (default enabled, axial 4/radial 32); disabling it changes no physics.
    Its input mailbox counts all commands (including state votes and fleet/
    autopilot events) against the protocol's 64-command packet limit; observed
    pipe/encode failure or overflow closes the link and refuses further input.

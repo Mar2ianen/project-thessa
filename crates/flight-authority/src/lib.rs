@@ -19,6 +19,7 @@ pub(crate) mod control;
 pub mod input;
 pub mod launch_site;
 pub mod mode;
+pub mod navball;
 pub mod presentation;
 pub mod runtime;
 

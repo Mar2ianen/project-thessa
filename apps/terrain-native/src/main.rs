@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             #[cfg(feature = "hud")]
-            let hud_output = hud.as_ref().map(|hud| {
+            let hud_output = hud.as_mut().map(|hud| {
                 let mut controls = hud::Controls::from_scene(&scene);
                 // This path has no platform input. It exercises exactly the
                 // same widgets and GPU overlay as the native window.

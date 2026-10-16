@@ -1900,6 +1900,66 @@ audio/network test or equal-scene parity proof.
 
 ![Native live COAST flight with speed/altitude readout](artifacts/owned-data-flight-2026-10-16.png)
 
+### Owned navball continuation (2026-10-16)
+
+The next slice ports the attitude instrument itself: the 128 px navball
+sphere (nose-+X view, sky/ground blend, pitch ladder, horizon glow) renders
+from the body-frame local up that the flight-data readout already carries.
+The pixel renderer moves verbatim to GPL `flight-authority::navball` — pure
+CPU RGBA with no clock, ECS, Bevy image or renderer handle — and the old
+pilot keeps thin Bevy image wrappers around the same function. The native
+HUD uploads the pixels as a shared-device egui texture with the shipped
+rebuild policy (at most 30 Hz, only after real attitude travel), gated on
+presentation time so headless captures stay deterministic. No new GPU device,
+scene target, readback or toolkit beyond the existing egui path.
+
+Regressions pin the dynamic deterministic sphere projection (level vs
+pitched, transparent corners, degenerate-input fallback) in the shared crate,
+the old client's continued rendering through the shared function, and the
+native HUD branch rendering without touching controls. Old-client throttle
+gating and texture lifecycle are untouched. No new unsafe code, external
+dependencies, CLI surface or benchmarks (128² pixels render in microseconds
+on existing paths; no new math enters beyond the moved renderer).
+
+**Validation and measurements.** On the Radeon 880M, the terrain-only 1280×720
+HUD A/B/B/A run (600 measured + 30 warm-up frames, 10 s pre-stream) measured
+baseline **2.609 / 2.647 ms** and new **2.569 / 2.644 ms** medians. Every run
+ended at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications or capacity refusals. Overlapping medians establish neither a
+speedup nor an isolated adapter tax. The preserved baseline executable is the
+exact `77ee5d4` build from the static-mesh checkpoint.
+
+Orbit and chase live runs reached **10.5 s** completed authority/presentation
+time with identical final relative coordinates and no stopped flight (**3.223 /
+2.885 ms** medians), carrying the owned navball beside the speed/altitude
+readout. These include full local physics demand, per-frame sampling,
+throttled navball uploads, streaming, rendering, HUD and GPU completion,
+**not** isolated instrument cost or game FPS; camera cover differs, so do not
+compare medians as an equal scene. Both runs submitted one mesh instance /
+two draws / 78,465 mesh triangles / 640 frame upload bytes (42 / 36 measured
+terrain publications, zero refusals). Native Wayland smoke requested **1,200**
+presentations in **10.104 s** (**118.8 requests/s**, not display/game FPS),
+exited 0, and finished at **10.092 s** completed simulation with a
+**0.005070 s** backlog, no flight stop and no refusals. Window clamping does
+not promise real-time simulation; this run does **not** establish 1×
+realtime throughput.
+
+Captures and machine-readable methodology/results are recorded in
+`artifacts/owned-navball-2026-10-16.json`.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, agent QA unit tests (5 passed) and
+the architecture boundary check (12 guarded crates), **1,779** workspace
+lib/bin + **52** integration + **24** Bevy-CBT hardware + **4** native GPU +
+**4** native-window tests = **1,863 successful tests**. Local review covered
+pixel-renderer move exactness, rebuild-policy parity, the shared-device
+texture path and GPL/MIT separation (no new crate, no game logic moved). The
+debug legacy Bevy pilot also ran **unpaused**, saved a flight screenshot and
+exited 0 using the existing local fallback; not an audio/network test or
+equal-scene parity proof.
+
+![Native live COAST flight with the owned navball](artifacts/owned-navball-flight-2026-10-16.png)
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

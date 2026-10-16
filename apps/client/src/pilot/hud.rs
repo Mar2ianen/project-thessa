@@ -5,8 +5,8 @@ use super::*;
 const NAVBALL_SIZE: f32 = 256.0;
 // Keep the logical 256 px instrument, but generate a filtered 128 px source:
 // rebuilding the procedural navball is CPU work and the HUD does not resolve
-// a source texel one-to-one at normal display scale.
-pub(super) const NAVBALL_TEXTURE_SIZE: u32 = 128;
+// a source texel one-to-one at normal display scale. The source size lives in
+// shared `flight-authority::navball`; this file keeps display sizes only.
 const PANEL: Color = Color::srgba(0.035, 0.052, 0.074, 0.94);
 const EDGE: Color = Color::srgba(0.48, 0.60, 0.69, 0.40);
 

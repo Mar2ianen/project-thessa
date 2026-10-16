@@ -154,6 +154,9 @@ pub struct Hud {
     pub context: egui::Context,
     renderer: egui_wgpu::Renderer,
     adapter: String,
+    navball: Option<egui::TextureHandle>,
+    navball_up: glam::DVec3,
+    navball_time_s: f64,
 }
 
 impl Hud {
@@ -167,16 +170,55 @@ impl Hud {
                 egui_wgpu::RendererOptions::default(),
             ),
             adapter: backend.adapter_name.clone(),
+            navball: None,
+            navball_up: glam::DVec3::NAN,
+            navball_time_s: f64::NAN,
         }
     }
 
     pub fn run(
-        &self,
+        &mut self,
         input: egui::RawInput,
         controls: &mut Controls,
         stats: &Stats,
     ) -> egui::FullOutput {
-        widgets(&self.context, input, controls, stats, &self.adapter)
+        // Same rebuild policy as the shipped pilot HUD: at most 30 Hz and
+        // only after real attitude travel, on presentation (not wall) time
+        // so headless captures stay deterministic.
+        use thessa_flight_authority::navball::{
+            MAX_REFRESH_HZ, NAVBALL_TEXTURE_SIZE, REBUILD_TRAVEL_SQUARED, navball_pixels,
+        };
+        if let Some(data) = stats.data {
+            let due = stats.sim_time_s - self.navball_time_s >= 1.0 / MAX_REFRESH_HZ;
+            let moved =
+                data.local_up_body.distance_squared(self.navball_up) > REBUILD_TRAVEL_SQUARED;
+            if self.navball.is_none() || (due && moved) {
+                let pixels = navball_pixels(data.local_up_body);
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [NAVBALL_TEXTURE_SIZE as usize, NAVBALL_TEXTURE_SIZE as usize],
+                    &pixels,
+                );
+                let handle = self.context.load_texture(
+                    "thessa-navball",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.navball = Some(handle);
+                self.navball_up = data.local_up_body;
+                self.navball_time_s = stats.sim_time_s;
+            }
+        } else {
+            self.navball = None;
+        }
+        let navball = self.navball.as_ref();
+        widgets(
+            &self.context,
+            input,
+            controls,
+            stats,
+            &self.adapter,
+            navball,
+        )
     }
 
     /// Encode after terrain, on the same target/encoder. Auxiliary command
@@ -259,6 +301,7 @@ fn widgets(
     controls: &mut Controls,
     stats: &Stats,
     adapter: &str,
+    navball: Option<&egui::TextureHandle>,
 ) -> egui::FullOutput {
     context.run_ui(input, |root| {
         let context = root.ctx();
@@ -309,7 +352,19 @@ fn widgets(
                 ui.small("Host wall time, not GPU timing or game FPS.");
                 ui.separator();
                 if stats.live_flight {
-                    if let Some(data) = stats.data {
+                    if let (Some(data), Some(navball)) = (stats.data, navball) {
+                        ui.horizontal(|ui| {
+                            ui.image((navball.id(), egui::vec2(96.0, 96.0)));
+                            ui.vertical(|ui| {
+                                ui.label(format!("Speed {:.1} m/s", data.surface_speed_mps));
+                                ui.label(format!(
+                                    "Alt {:.0} m (AGL {:.0} m)",
+                                    data.altitude_datum_m, data.altitude_agl_m
+                                ));
+                                ui.label(format!("V/S {:+.1} m/s", data.vertical_speed_mps));
+                            });
+                        });
+                    } else if let Some(data) = stats.data {
                         ui.label(format!(
                             "Speed {:.1} m/s · Alt {:.0} m (AGL {:.0} m) · V/S {:+.1} m/s",
                             data.surface_speed_mps,
@@ -449,10 +504,52 @@ mod tests {
         let mut controls = controls();
         controls.vehicle_preview = true;
         controls.distance = 32.0;
-        widgets(&context, input, &mut controls, &Stats::default(), "test")
-            .drop_without_applying_deltas();
+        widgets(
+            &context,
+            input,
+            &mut controls,
+            &Stats::default(),
+            "test",
+            None,
+        )
+        .drop_without_applying_deltas();
         assert_eq!(controls.distance, 32.0);
         assert!(!controls.reset_camera);
+    }
+
+    #[test]
+    fn navball_branch_renders_without_touching_controls() {
+        use crate::scene::FlightData;
+        let context = context();
+        let pixels = thessa_flight_authority::navball::navball_pixels(glam::DVec3::Z);
+        let handle = context.load_texture(
+            "test-navball",
+            egui::ColorImage::from_rgba_unmultiplied([128, 128], &pixels),
+            egui::TextureOptions::LINEAR,
+        );
+        let stats = Stats {
+            live_flight: true,
+            data: Some(FlightData {
+                surface_speed_mps: 180.0,
+                vertical_speed_mps: -2.0,
+                altitude_datum_m: 602.0,
+                altitude_agl_m: 500.0,
+                local_up_body: glam::DVec3::Z,
+            }),
+            ..Stats::default()
+        };
+        let before = controls();
+        let mut controls = before;
+        widgets(
+            &context,
+            input(1280, 720, 1.0),
+            &mut controls,
+            &stats,
+            "test GPU",
+            Some(&handle),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(controls, before);
     }
 
     fn input(width: u32, height: u32, scale: f32) -> egui::RawInput {
@@ -483,6 +580,7 @@ mod tests {
                 &mut controls,
                 &Stats::default(),
                 "test GPU",
+                None,
             )
             .drop_without_applying_deltas();
         }
@@ -507,6 +605,7 @@ mod tests {
             &mut controls,
             &Stats::default(),
             "test GPU",
+            None,
         )
         .drop_without_applying_deltas();
         assert!(context.egui_wants_pointer_input());
@@ -520,6 +619,7 @@ mod tests {
             &mut controls,
             &Stats::default(),
             "test GPU",
+            None,
         )
         .drop_without_applying_deltas();
         assert!(!context.egui_wants_pointer_input());

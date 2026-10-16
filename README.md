@@ -136,7 +136,9 @@ The checked-in vertical slice currently contains:
   The live HUD also reads speed, datum/AGL altitude and vertical speed from
   the same shared kinematics the old client's instruments consume
   (reference-body readout; the old client's dominant-body display switching
-  stays out of scope). Server forwarding, assists and the mode HUD are not
+  stays out of scope), plus the shared 128 px navball sphere rendered from
+  the body-frame local up with the shipped 30 Hz/travel rebuild policy.
+  Server forwarding, assists and the mode HUD are not
   ported yet.
   `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle

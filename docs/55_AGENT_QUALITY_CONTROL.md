@@ -9,9 +9,9 @@ are **not** implemented by this document.
 
 1. **Orient.** Read root `AGENTS.md`, `docs/00_STATUS.md`, the relevant ADR
    and subsystem docs. Trace existing producers/consumers before adding a path.
-2. **Simplify first.** Reuse an existing subsystem, standard library or
-   dependency where possible. Prefer removing unnecessary work to new code;
-   minimize the whole diff, including tests and integration overhead.
+2. **Simplify first.** Load `.agents/skills/ponytail/SKILL.md` and apply
+   its smallest-complete-change ladder. It does not override Thessa's
+   physical, numerical or safety invariants.
 3. **Preserve the complete solution.** Never trade away physical causality,
    numeric error envelopes, fallbacks, diagnostics, input handling, test
    coverage, or measured performance just to reduce LOC.

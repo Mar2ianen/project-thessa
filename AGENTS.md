@@ -310,11 +310,9 @@ A feature is not done without:
   The prefix marks scope, **not authorship**. Product code, physics, graphics,
   and ordinary product CI commits use normal subjects even when an agent wrote them.
   Split mixed-scope commits where practical.
-- Prefer an existing mechanism, small extension, standard-library solution,
-  or deletion over introducing another subsystem or abstraction. Minimize the
-  **complete** diff rather than an individual function; do not skip numerical
-  error bounds, causal modeling, tests, diagnostics, fallbacks, or performance
-  evidence for the sake of fewer lines.
+- For coding and review, load `.agents/skills/ponytail/SKILL.md` (vendored
+  from `DietrichGebert/ponytail` under MIT). Follow its smallest-complete-change
+  ladder; Thessa's physical, numerical, architecture and safety rules prevail.
 - Record which checks actually ran, the reproducible scenario and baseline,
   hardware/backend when relevant, known gaps, and what was deliberately omitted.
   Never claim green CI, visual parity, or a benchmark win without its evidence.

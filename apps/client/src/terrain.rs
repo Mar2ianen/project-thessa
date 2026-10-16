@@ -90,9 +90,8 @@ pub(super) struct SurfaceSurvey {
     site: usize,
     #[reflect(ignore)]
     sites: Vec<([f64; 3], &'static str)>,
-    pub(super) orbit: Quat,
-    look: Quat,
-    distance: f32,
+    #[reflect(ignore)]
+    pub(super) camera: thessa_flight_authority::survey::SurveyCamera,
 }
 #[derive(Component)]
 struct SurveyButton(usize);
@@ -466,10 +465,9 @@ fn setup_terrain(
         thessa_flight_authority::canonical_launch_setup(&ephemeris).expect("launch sites");
     survey.sites = bookmarks
         .into_iter()
-        .zip(["COAST", "HIGHLANDS", "VOLCANIC"])
+        .zip(thessa_flight_authority::SURVEY_SITE_LABELS)
         .collect();
-    survey.distance = 5000.0;
-    survey.orbit = Quat::IDENTITY;
+    survey.camera = thessa_flight_authority::survey::SurveyCamera::survey_default();
     if std::env::var_os("THESSA_AUTOBENCH").is_some()
         || std::env::var_os("THESSA_SCREENSHOT_PATH").is_some()
     {
@@ -483,14 +481,16 @@ fn setup_terrain(
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|v| v.is_finite())
         {
-            survey.distance = distance.clamp(80.0, 2_000_000.0);
+            survey.camera.set_distance_m(distance);
         }
         if let Some(pitch) = std::env::var("THESSA_AUTOBENCH_SURVEY_PITCH_RAD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|v| v.is_finite())
         {
-            survey.orbit = Quat::from_rotation_x(pitch.clamp(-1.3, 1.3));
+            survey
+                .camera
+                .set_orbit(Quat::from_rotation_x(pitch.clamp(-1.3, 1.3)));
         }
     }
     info!(
@@ -604,24 +604,21 @@ fn survey_input(
         survey.active = index < 3;
         if survey.active {
             survey.site = index;
-            survey.distance = 5000.0;
-            survey.look = Quat::IDENTITY;
+            survey.camera.reset_site();
         }
         pilot.view_mode = ClientViewMode::Map;
         // Survey is a camera mode. It must not advance or teleport the aircraft.
     }
     if survey.active {
         if mouse.pressed(MouseButton::Right) {
-            let delta = Quat::from_rotation_y(-motion.delta.x * 0.004)
-                * Quat::from_rotation_x(-motion.delta.y * 0.004);
-            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
-                survey.look = (survey.look * delta).normalize();
-            } else {
-                survey.orbit = (survey.orbit * delta).normalize();
-            }
+            survey.camera.drag(
+                motion.delta.x,
+                motion.delta.y,
+                keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
+            );
         }
         for e in wheel.read() {
-            survey.distance = (survey.distance * (-e.y * 0.1).exp()).clamp(80.0, 2_000_000.0);
+            survey.camera.zoom(e.y);
         }
     } else {
         wheel.clear();
@@ -1087,27 +1084,24 @@ fn update_frame_camera(
         let spin = DQuat::from_rotation_y(runtime.render_spin());
         let up = spin * DVec3::from_array(dir);
         let center = up * (radius + world.field.height_m(dir, 32.0).max(0.0));
-        let north = (DVec3::Y - up * up.y).normalize();
-        let east = north.cross(up).normalize();
-        let basis = Mat3::from_cols(east.as_vec3(), up.as_vec3(), -north.as_vec3());
-        let offset =
-            basis * (survey.orbit * Vec3::new(0.0, survey.distance * 0.18, survey.distance));
-        let globe_eye = center + offset.as_dvec3();
-        let minimum = radius
-            + world
-                .field
-                .height_m((spin.inverse() * globe_eye.normalize()).to_array(), 32.0)
-                .max(0.0)
-            + 5.0;
-        let globe_eye = if globe_eye.length() < minimum {
-            globe_eye.normalize() * minimum
-        } else {
-            globe_eye
-        };
-        let offset = (globe_eye - center).as_vec3();
-        camera.0.translation = offset;
-        *camera.0 = camera.0.looking_at(Vec3::ZERO, up.as_vec3());
-        camera.0.rotation *= survey.look;
+        // Shared owned survey offsets; a degenerate site frame keeps the
+        // previous camera instead of publishing NaNs.
+        if let Some((offset, site_up)) = survey.camera.offsets(up) {
+            let globe_eye = center + offset.as_dvec3();
+            let minimum = radius
+                + world
+                    .field
+                    .height_m((spin.inverse() * globe_eye.normalize()).to_array(), 32.0)
+                    .max(0.0)
+                + thessa_flight_authority::survey::MIN_ALTITUDE_MARGIN_M;
+            let globe_eye = thessa_flight_authority::survey::SurveyCamera::enforce_minimum_altitude(
+                globe_eye, minimum,
+            );
+            let offset = (globe_eye - center).as_vec3();
+            camera.0.translation = offset;
+            *camera.0 = camera.0.looking_at(Vec3::ZERO, site_up);
+            camera.0.rotation *= survey.camera.look();
+        }
         if let Projection::Perspective(p) = &mut *camera.1 {
             p.near = 1.0;
             p.far = 12_000_000.0;
@@ -1115,7 +1109,10 @@ fn update_frame_camera(
         // Sky and ambient stay owned by the atmosphere plugin: hardcoded
         // replacements here would fight the LUT sky and night side.
         for mut text in readout {
-            text.0 = format!("THESSA  /  {label}     {:.1} km", survey.distance / 1000.0);
+            text.0 = format!(
+                "THESSA  /  {label}     {:.1} km",
+                survey.camera.distance_m() / 1000.0
+            );
         }
         (center, spin)
     } else {

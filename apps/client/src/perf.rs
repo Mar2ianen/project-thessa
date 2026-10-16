@@ -371,7 +371,7 @@ fn perf_autobench(
         };
         let orbit = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-0.65);
         pilot.camera.set_orbit(orbit);
-        survey.orbit = orbit;
+        survey.camera.set_orbit(orbit);
     }
     const SHOTS: [f64; 8] = [11.0, 14.0, 19.0, 22.0, 27.0, 30.0, 35.0, 39.0];
     if let Some(directory) = std::env::var_os("THESSA_AUTOBENCH_SCREENSHOT_DIR")

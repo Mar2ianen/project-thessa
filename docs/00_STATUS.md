@@ -81,6 +81,12 @@ do not update in place).
 | `45_CAD_RCBT_GEOMETRY.md` | 🔵 design baseline | D1 STEP/BRep fixture audited; existing RCBT + mesh-shader terrain path reused architecturally | CAD importer, normalized BRep runtime, crack-free adaptive face meshing, editor integration |
 | `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🟡 first slice | `audio-core` path semantics, exact-vacuum gating, structural/direct paths, Mach-cone arrival; `audio-synth` live procedural engine DSP; temporary Bevy RCS/GPWS/docking/demo adapter | calibrated physical engine telemetry/spectra, procedural one-shot mechanisms, structural attenuation graph, real IVA listener, occlusion/reverb/HRTF, post-Bevy backend |
 
+The doc 39 branch also shares the owned GPL surface-survey camera between
+clients (quaternion orbit/free look/zoom/reset and native bookmark selection).
+Native survey framing is now 5 km by default rather than 30 km; prior terrain
+timings are not an equal-workload comparison. The celestial map camera remains
+in the unported remainder above.
+
 ## Autopilot and roadmap
 
 | Doc | Status | Implemented | Future |

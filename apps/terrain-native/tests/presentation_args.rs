@@ -24,6 +24,13 @@ fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
         (vec!["--flight", "--sim-time", "1"], "--flight requires"),
         (vec!["--flight", "--vehicle-preview"], "--flight requires"),
         (vec!["--chase"], "--chase requires"),
+        (vec!["--site"], "--site requires"),
+        (vec!["--site", "3"], "--site requires"),
+        (vec!["--site", "0", "--flight"], "--site is survey-only"),
+        (
+            vec!["--site", "1", "--vehicle-preview"],
+            "--site is survey-only",
+        ),
         (vec!["--throttle", "0.5"], "--throttle requires"),
         (vec!["--engine-on"], "--engine-on requires"),
         (
@@ -122,6 +129,9 @@ fn help_exposes_presentation_sampling_and_warmup_boundary() {
         "--engine-on",
         "WASDQE",
         "COAST",
+        "--site",
+        "F6",
+        "Shift-right-drag",
         "30 warmup frames",
         "not server warp",
     ] {

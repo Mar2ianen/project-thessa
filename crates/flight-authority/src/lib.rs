@@ -22,6 +22,7 @@ pub mod mode;
 pub mod navball;
 pub mod presentation;
 pub mod runtime;
+pub mod survey;
 
 pub use thessa_flight_control::{
     ActuatorDynamics, ActuatorGroup, AircraftControlLaw, AircraftState, AllocationResult,
@@ -35,7 +36,9 @@ pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
 pub use contact::{
     BroadPhasePair, ContactActivation, ContactBroadPhase, ContactCandidate, ContactRuntime,
 };
-pub use launch_site::{canonical_launch_setup, canonical_world_field, survey_bookmarks};
+pub use launch_site::{
+    SURVEY_SITE_LABELS, canonical_launch_setup, canonical_world_field, survey_bookmarks,
+};
 pub use mode::{ControlMode, FlightRegime};
 pub use runtime::{
     COAST_DENSITY_KG_M3, FlightAuthority, FlightTraceWriter, LocalAirKinematics,

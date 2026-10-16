@@ -1850,8 +1850,9 @@ iteration sampling the raw inertial direction read the wrong terrain by
 ~140 m and is pinned against by regression. Readout is reference-body only;
 the old client's dominant-body display switching near other worlds stays
 out of scope and is documented, not reimplemented. Failures (no flight,
-failed ephemeris/atmosphere sample) yield `None` and keep the previous
-readout instead of NaNs. Telemetry gains `spd/vspeed/alt/agl` keys.
+failed ephemeris/atmosphere sample) yield `None`; the HUD omits that frame's
+readout instead of publishing NaNs (it does not cache the previous values).
+Telemetry gains `spd/vspeed/alt/agl` keys.
 
 Regressions pin the 500 m launch AGL, the ~180 m/s launch energy, climb
 under full thrust over 600 steps, the `None`-without-flight boundary and
@@ -1959,6 +1960,73 @@ exited 0 using the existing local fallback; not an audio/network test or
 equal-scene parity proof.
 
 ![Native live COAST flight with the owned navball](artifacts/owned-navball-flight-2026-10-16.png)
+
+### Owned survey-camera continuation (2026-10-16)
+
+GPL `flight-authority::survey::SurveyCamera` now owns the shipped surface
+survey's quaternion orbit/free look, 0.004 rad/pixel right-drag gain,
+exponential wheel zoom (0.1 per line), 80 m–2,000 km distance limits,
+5 km default and per-site framing reset. The legacy Bevy survey and native
+terrain-only viewer consume the same controller. Placement preserves the
+original f64 north/east computation followed by the f32 matrix/offset path,
+not a new quaternion basis. Exact poles use a finite fallback basis; invalid
+site vectors are rejected. The shared radial minimum-altitude clamp retains
+the host's terrain query plus the shipped 5 m clearance. This is presentation
+policy, not an authoritative vehicle constraint or a physical force.
+
+Native HUD buttons, window `F6` and `--site 0|1|2` select the shared
+COAST/HIGHLANDS/VOLCANIC bookmarks (HIGHLANDS by default). Site selection
+resets distance/free look, preserves orbit, and cannot mutate flight or the
+constructor preview. Native right-drag orbits, Shift-right-drag turns free
+look, wheel zooms and Backquote restores defaults. Existing HUD input capture
+blocks gestures/shortcuts; middle-drag pan remains vehicle-only. The obsolete
+single-angle survey slider and native scalar-orbit path are removed. No new
+device, GPU scene pass, scene copy, readback or external dependency is added.
+The celestial map/orbit UI and its camera remain old-client-only.
+
+The native default changes from 30 km elevated framing to the shipped 5 km
+survey framing. This deliberately breaks the earlier equal-terrain-workload
+benchmark chain; do not compare those terrain medians as an adapter tax or
+speedup. Native projection remains the existing 0.9 rad vertical FOV and
+1 m–100,000 km depth range, not legacy Bevy projection parity. The old client's
+projection and site-selection controls are unchanged.
+
+Tests cover the original placement arithmetic, gesture gains, zoom clamps,
+invalid inputs, poles, resets, site selection without flight mutation,
+body/render-frame eye agreement, and valid camera-relative GPU ABI data.
+Body attachment across sampled spin is bounded to 2 mm eye displacement at
+the default distance and 1e-6 forward-vector error, accounting for the shipped
+f32 offset boundary. This is numerical/camera verification, not blind visual
+acceptance or full Bevy scene parity.
+
+Validation: workspace all-target/all-feature clippy with warnings denied,
+no-default-feature viewer clippy, **1,788** workspace lib/bin + **52**
+integration + **24** Bevy-CBT hardware + **4** native GPU + **4** native-window
+tests passed (**1,872** Rust tests), along with the five agent-QA unit tests
+and the architecture check for 12 foundational crates. Hardware tests ran on
+AMD Radeon 880M / RADV STRIX1; no adapter-dependent suite was skipped here.
+
+At 1280×720 with HUD, 600 measured + 30 warm-up frames and 10 s pre-stream,
+COAST/HIGHLANDS/VOLCANIC medians were **2.372 / 2.487 / 2.559 ms**; the new
+quaternion sweep measured **2.768 ms** and 148 measured geometry publications.
+All had zero capacity refusals. These are different scenes, not a ranking of
+camera cost. Live-flight A/B/B/A against exact `d33f480` measured baseline
+**3.235 / 3.132 ms** and new **3.214 / 3.181 ms**: overlapping medians, not a
+speedup. All four reached the same 10.5 s authority/presentation state and
+final coordinates, zero backlog and the same final terrain/mesh geometry.
+Full local physics and GPU completion are included, not isolated render cost
+or game FPS. Native Wayland requested 1,200 presentations in 10.089 s
+(118.9 requests/s, not display feedback) and exited cleanly. The debug Bevy
+HIGHLANDS survey also captured and exited cleanly, unpaused on its existing
+local fallback; ALSA device warnings mean audio was not verified.
+
+Reproduction, binary/capture hashes and per-run counters are in
+`artifacts/owned-survey-camera-2026-10-16.json`. Captures show the current
+terrain seams/LOD defects and missing native atmosphere/effects; they are
+not visual acceptance, and the mismatched Bevy/native scenes are not a valid
+blind preference comparison.
+
+![Native shared survey framing at HIGHLANDS](artifacts/owned-survey-highlands-2026-10-16.png)
 
 ## 15. FastRT
 

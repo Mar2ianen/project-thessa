@@ -7,7 +7,8 @@ pub struct Controls {
     pub vehicle_preview: bool,
     pub chase: bool,
     pub reset_camera: bool,
-    pub angle: f64,
+    pub survey_site: Option<usize>,
+    pub survey_distance: f64,
     pub distance: f64,
     pub throttle: f64,
     pub engine: bool,
@@ -28,12 +29,9 @@ impl Controls {
             vehicle_preview: scene.vehicle_preview(),
             chase: scene.camera.chase(),
             reset_camera: false,
-            angle: scene.angle,
-            distance: if scene.vehicle_preview() {
-                f64::from(scene.camera.distance_m())
-            } else {
-                scene.distance
-            },
+            survey_site: None,
+            survey_distance: f64::from(scene.survey.distance_m()),
+            distance: f64::from(scene.camera.distance_m()),
             throttle: scene.input.throttle,
             engine: scene.input.engine_active,
             precision: scene.input.precision,
@@ -51,22 +49,23 @@ impl Controls {
     /// Graphics edits remain requests and must go through capability resolution.
     pub fn apply(self, scene: &mut crate::scene::Scene) {
         scene.camera.set_chase(self.chase);
+        if let Some(site) = self.survey_site {
+            scene.select_site(site);
+        }
         if self.reset_camera {
             if scene.vehicle_preview() {
                 scene.camera.reset();
             } else {
-                scene.angle = 0.0;
-                scene.distance = 30_000.0;
+                scene.survey.reset();
             }
             scene.requested.renderer.exposure_ev100 = self.exposure_ev100;
             scene.requested.renderer.vsync = self.vsync;
             return;
         }
-        scene.angle = self.angle;
         if scene.vehicle_preview() {
             scene.camera.set_distance_m(self.distance as f32);
-        } else {
-            scene.distance = self.distance;
+        } else if self.survey_site.is_none() {
+            scene.survey.set_distance_m(self.survey_distance as f32);
         }
         if scene.live_flight() {
             scene.input.set_throttle(self.throttle);
@@ -112,6 +111,8 @@ pub struct Stats {
     pub stick: [f64; 3],
     pub parts: (bool, bool, bool, bool),
     pub data: Option<crate::scene::FlightData>,
+    pub survey_label: &'static str,
+    pub survey_distance: f64,
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
     pub sim_time_s: f64,
@@ -137,6 +138,12 @@ impl Stats {
             stick: scene.input.stick_scaled().to_array(),
             parts: scene.part_states().unwrap_or((true, true, true, false)),
             data: scene.flight_data(),
+            survey_label: scene
+                .sites
+                .get(scene.site)
+                .map(|site| site.1)
+                .unwrap_or("—"),
+            survey_distance: f64::from(scene.survey.distance_m()),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
@@ -416,34 +423,37 @@ fn widgets(
                 if controls.vehicle_preview {
                     ui.checkbox(&mut controls.chase, "Chase camera (follow craft attitude)");
                 } else {
+                    ui.horizontal(|ui| {
+                        for (index, label) in
+                            thessa_flight_authority::SURVEY_SITE_LABELS.iter().enumerate()
+                        {
+                            if ui.button(*label).clicked() {
+                                controls.survey_site = Some(index);
+                            }
+                        }
+                    });
+                    ui.small(format!(
+                        "Survey: {} · {:.1} km (F6 cycles sites)",
+                        stats.survey_label, stats.survey_distance / 1000.0,
+                    ));
+                }
+                if controls.vehicle_preview {
                     ui.add(
-                        egui::Slider::new(
-                            &mut controls.angle,
-                            -std::f64::consts::PI..=std::f64::consts::PI,
-                        )
-                        .clamping(egui::SliderClamping::Edits)
-                        .text("Orbit / rad"),
+                        egui::Slider::new(&mut controls.distance, 8.0..=180.0)
+                            .logarithmic(true)
+                            .text("Distance / m"),
+                    );
+                } else {
+                    ui.add(
+                        egui::Slider::new(&mut controls.survey_distance, 80.0..=2_000_000.0)
+                            .logarithmic(true)
+                            .text("Distance / m"),
                     );
                 }
-                ui.add(
-                    egui::Slider::new(
-                        &mut controls.distance,
-                        if controls.vehicle_preview {
-                            8.0..=180.0
-                        } else {
-                            1_000.0..=200_000.0
-                        },
-                    )
-                    .logarithmic(true)
-                    .text("Distance / m"),
-                );
                 if ui.button("Reset camera").clicked() {
                     controls.reset_camera = true;
                     if controls.vehicle_preview {
                         controls.chase = false;
-                    } else {
-                        controls.angle = 0.0;
-                        controls.distance = 30_000.0;
                     }
                 }
                 ui.add(
@@ -472,7 +482,8 @@ mod tests {
             vehicle_preview: false,
             chase: false,
             reset_camera: false,
-            angle: 8.0,
+            survey_site: None,
+            survey_distance: 5000.0,
             distance: 30_000.0,
             throttle: 0.0,
             engine: false,
@@ -584,8 +595,7 @@ mod tests {
             )
             .drop_without_applying_deltas();
         }
-        // Arrow-key orbit is unbounded. Merely showing a slider must not clamp
-        // it, round it, reset the camera or edit graphics requests.
+        // Merely showing the HUD must not edit either camera or graphics requests.
         assert_eq!(controls, before);
         context.fonts_mut(|fonts| {
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {

@@ -21,7 +21,7 @@ pub struct Scene {
         thessa_render_core::mesh::MeshInstance,
     )>,
     /// Owned pilot camera (vehicle/preview view only). The terrain-only
-    /// survey view keeps its legacy angle orbit until the map view migrates.
+    /// survey view uses its own shared quaternion controller.
     pub camera: thessa_flight_authority::camera::FlightCamera,
     /// Owned live flight-input intent (throttle/engine/stick/precision).
     /// Applied to the authority on every rendered frame; headless runs stay
@@ -39,8 +39,13 @@ pub struct Scene {
     pub center: DVec3,
     pub up: DVec3,
     pub east: DVec3,
-    pub distance: f64,
-    pub angle: f64,
+    /// Owned survey camera driving the terrain-only view. The legacy
+    /// single-angle orbit is retired: framing matches the shipped survey.
+    pub survey: thessa_flight_authority::survey::SurveyCamera,
+    /// Survey bookmarks in `SURVEY_SITE_LABELS` order with the active index.
+    /// The default site is HIGHLANDS, like the previous survey bookmark.
+    pub sites: [([f64; 3], &'static str); 3],
+    pub site: usize,
     celestial: CelestialPresentation,
     pub sample: Sample,
     lighting_dirty: bool,
@@ -124,13 +129,6 @@ impl Scene {
     pub fn vehicle_preview(&self) -> bool {
         self.vehicle.is_some()
     }
-    pub fn camera_distance_limits(&self) -> (f64, f64, f64) {
-        if self.vehicle_preview() {
-            (8.0, 180.0, 32.0)
-        } else {
-            (1_000.0, 200_000.0, 30_000.0)
-        }
-    }
     pub fn load(requested: thessa_graphics::RequestedGraphics) -> Result<Self, String> {
         let system: thessa_sim_core::SystemConfig =
             toml::from_str(include_str!("../../../data/system.toml")).map_err(|e| e.to_string())?;
@@ -144,18 +142,15 @@ impl Scene {
             .ok_or("missing terrain body")?;
         let celestial = CelestialPresentation::new(&system, ephemeris, body)?;
         let sample = celestial.sample(thessa_sim_core::SimTime::EPOCH)?;
-        let up = DVec3::from(sites[1]); // same HIGHLANDS bookmark as the shipped client
-        let center = up * (field.params.radius_m + field.height_m(up.to_array(), 32.0).max(0.0));
-        let east = DVec3::Y.cross(up).normalize();
+        let sites = [
+            (sites[0], thessa_flight_authority::SURVEY_SITE_LABELS[0]),
+            (sites[1], thessa_flight_authority::SURVEY_SITE_LABELS[1]),
+            (sites[2], thessa_flight_authority::SURVEY_SITE_LABELS[2]),
+        ];
         let stream = TerrainStream::new(field, StreamingPolicy::default())?;
-        eprintln!(
-            "canonical Thessa: {} resident tiles; highlands={:?}",
-            stream.visible().len(),
-            center
-        );
-        Ok(Self {
+        let mut scene = Self {
             flight: None,
-            launch_site: sites[0],
+            launch_site: sites[0].0,
             vehicle: None,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
             input: thessa_flight_authority::input::FlightInput::default(),
@@ -166,15 +161,45 @@ impl Scene {
             regenerated: 0,
             material_upload_bytes: 0,
             capacity_rejections: 0,
-            center,
-            up,
-            east,
-            distance: 30_000.0,
-            angle: 0.0,
+            center: DVec3::ZERO,
+            up: DVec3::Y,
+            east: DVec3::X,
+            survey: thessa_flight_authority::survey::SurveyCamera::survey_default(),
+            sites,
+            site: 1,
             celestial,
             sample,
             lighting_dirty: false,
-        })
+        };
+        scene.select_site(1);
+        eprintln!(
+            "canonical Thessa: {} resident tiles; highlands={:?}",
+            scene.stream.visible().len(),
+            scene.center
+        );
+        Ok(scene)
+    }
+
+    /// Select a survey bookmark by index, restoring its per-site framing
+    /// (distance + free look, orbit preserved like the shipped survey).
+    /// Out-of-range indices are ignored so HUD buttons stay total.
+    pub fn select_site(&mut self, site: usize) {
+        if self.vehicle_preview() {
+            return;
+        }
+        let Some(&(dir, _)) = self.sites.get(site) else {
+            return;
+        };
+        self.site = site;
+        let up = DVec3::from(dir);
+        self.center =
+            up * (self.stream.radius_m() + self.stream.field().height_m(dir, 32.0).max(0.0));
+        self.up = up;
+        self.east = DVec3::Y
+            .cross(up)
+            .try_normalize()
+            .unwrap_or_else(|| up.any_orthonormal_vector());
+        self.survey.reset_site();
     }
 
     fn vehicle_source() -> Result<thessa_render_core::mesh::MeshAsset, String> {
@@ -645,21 +670,64 @@ impl Scene {
             return view;
         }
         self.survey_view(width, height, exposure)
+            .unwrap_or_else(|| {
+                elevated_view(
+                    self.center,
+                    self.up,
+                    self.east,
+                    f64::from(self.survey.distance_m()),
+                    width,
+                    height,
+                    exposure,
+                )
+            })
     }
 
-    fn survey_view(&self, width: u32, height: u32, exposure: f32) -> ViewParams {
+    /// Owned survey framing in body space: the shared orbit offset around the
+    /// active bookmark, clamped above local terrain like the shipped survey,
+    /// with the free-look quaternion applied after the look-at. Physics state
+    /// is never touched here.
+    fn survey_view(&self, width: u32, height: u32, exposure: f32) -> Option<ViewParams> {
+        use thessa_flight_authority::survey::SurveyCamera;
         let frame = self.sample.frame;
-        let render_view = orbit_view(
-            frame.body_to_render_point(self.center),
-            frame.body_to_render_direction(self.up),
-            frame.body_to_render_direction(self.east),
-            self.distance,
-            self.angle,
-            width,
-            height,
+        let center = frame.body_to_render_point(self.center);
+        let up = frame.body_to_render_direction(self.up);
+        let (offset, site_up) = self.survey.offsets(up)?;
+        let mut eye = center + offset.as_dvec3();
+        let ground = self
+            .stream
+            .field()
+            .height_m(frame.render_to_body_point(eye).normalize().to_array(), 32.0)
+            .max(0.0);
+        let minimum = self.stream.radius_m()
+            + ground
+            + thessa_flight_authority::survey::MIN_ALTITUDE_MARGIN_M;
+        let body_eye =
+            SurveyCamera::enforce_minimum_altitude(frame.render_to_body_point(eye), minimum);
+        eye = frame.body_to_render_point(body_eye);
+        let target = center;
+        let up_ref = DVec3::new(site_up.x as f64, site_up.y as f64, site_up.z as f64);
+        let axis = (eye - target).normalize();
+        if !eye.is_finite()
+            || !up_ref.is_finite()
+            || !axis.is_finite()
+            || axis.dot(up_ref).abs() > 1.0 - 1e-6
+        {
+            return None;
+        }
+        let base = glam::dcamera::rh::view::look_at_mat4(eye, target, up_ref).inverse();
+        let world_from_view = base * glam::DMat4::from_quat(self.survey.look().as_dquat());
+        Some(frame.view_in_body(&ViewParams {
+            world_from_view,
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                0.9,
+                width as f64 / height as f64,
+                1.0,
+                1e8,
+            ),
+            world_position_m: eye,
             exposure,
-        );
-        frame.view_in_body(&render_view)
+        }))
     }
 
     /// Owned pilot-camera framing of the vehicle, staged in body space. The
@@ -710,22 +778,43 @@ impl Scene {
     }
 }
 
+/// Total degenerate fallback for failed survey/vehicle views: an elevated
+/// view with a re-orthogonalized reference axis. Never NaNs; the primary
+/// shared-controller paths above are total for the validated pipeline.
 #[allow(clippy::too_many_arguments)]
-fn orbit_view(
+fn elevated_view(
     center: DVec3,
     up: DVec3,
     east: DVec3,
     distance: f64,
-    angle: f64,
     width: u32,
     height: u32,
     exposure: f32,
 ) -> ViewParams {
-    let north = east.cross(up);
-    let tangent = north * angle.cos() + east * angle.sin();
-    let eye = center + (up - tangent) * distance;
+    let up_n = up.try_normalize().unwrap_or(DVec3::Y);
+    let east_n = east
+        .try_normalize()
+        .unwrap_or_else(|| up_n.any_orthonormal_vector());
+    let east_n = (east_n - up_n * east_n.dot(up_n))
+        .try_normalize()
+        .unwrap_or_else(|| up_n.any_orthonormal_vector());
+    let distance = if distance.is_finite() && distance > 0.0 {
+        distance
+    } else {
+        5000.0
+    };
+    let eye = if center.is_finite() {
+        center + up_n * distance
+    } else {
+        up_n * (3_200_000.0 + distance)
+    };
+    let target = if center.is_finite() {
+        center
+    } else {
+        eye - up_n * distance
+    };
     ViewParams {
-        world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, north).inverse(),
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, target, east_n).inverse(),
         clip_from_view: glam::dcamera::rh::proj::directx::perspective(
             0.9,
             width as f64 / height as f64,
@@ -971,6 +1060,103 @@ mod tests {
         assert!(scene.camera.chase(), "reset preserves the chase selection");
         assert_eq!(scene.camera.distance_m(), 32.0);
         assert_eq!(scene.camera.pan(), glam::Vec2::ZERO);
+    }
+
+    #[test]
+    fn survey_sites_reset_framing_without_touching_flight_or_orbit() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        assert_eq!(scene.site, 1);
+        scene.survey.drag(40.0, -20.0, false);
+        let orbit = scene.survey.orbit();
+        for site in 0..scene.sites.len() {
+            scene.survey.drag(10.0, 15.0, true);
+            scene.survey.zoom(3.0);
+            scene.select_site(site);
+            assert_eq!(scene.site, site);
+            assert_eq!(scene.survey.orbit(), orbit);
+            assert_eq!(scene.survey.look(), glam::Quat::IDENTITY);
+            assert_eq!(scene.survey.distance_m(), 5000.0);
+            assert!((scene.center.normalize() - DVec3::from(scene.sites[site].0)).length() < 1e-12);
+            assert!(scene.survey_view(1280, 720, 1.0).is_some());
+        }
+        let center = scene.center;
+        let camera = scene.survey;
+        scene.select_site(usize::MAX);
+        assert_eq!(scene.center, center);
+        assert_eq!(scene.survey, camera);
+        scene.enable_live_flight().unwrap();
+        let center = scene.center;
+        let state = scene.flight.as_ref().unwrap().state;
+        scene.select_site(0);
+        assert_eq!(scene.center, center);
+        assert_eq!(
+            scene.flight.as_ref().unwrap().state.position_inertial_m,
+            state.position_inertial_m
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "hud")]
+    fn hud_site_selection_does_not_reapply_stale_distance() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.survey.set_distance_m(80.0);
+        scene.survey.drag(10.0, 20.0, true);
+        let mut controls = crate::hud::Controls::from_scene(&scene);
+        controls.survey_site = Some(0);
+        controls.apply(&mut scene);
+        assert_eq!(scene.site, 0);
+        assert_eq!(scene.survey.distance_m(), 5000.0);
+        assert_eq!(scene.survey.look(), glam::Quat::IDENTITY);
+        scene.survey.drag(25.0, 30.0, false);
+        let mut controls = crate::hud::Controls::from_scene(&scene);
+        controls.reset_camera = true;
+        controls.apply(&mut scene);
+        assert_eq!(scene.survey, Default::default());
+    }
+
+    #[test]
+    fn survey_eye_matches_pre_extraction_placement_in_render_and_body_frames() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        for time in [0.0, 72_000.0, -144_000.0] {
+            scene
+                .set_presentation_time(thessa_sim_core::SimTime(time))
+                .unwrap();
+            for site in 0..3 {
+                scene.select_site(site);
+                for distance in [80.0, 5000.0, 2_000_000.0] {
+                    scene.survey.set_distance_m(distance);
+                    scene.survey.set_orbit(glam::Quat::from_rotation_x(-0.4));
+                    let frame = scene.sample.frame;
+                    let up = frame.body_to_render_direction(scene.up);
+                    // Original terrain.rs arithmetic, not another call to the shared helper.
+                    let north = (DVec3::Y - up * up.y).normalize();
+                    let east = north.cross(up).normalize();
+                    let basis =
+                        glam::Mat3::from_cols(east.as_vec3(), up.as_vec3(), -north.as_vec3());
+                    let offset = basis
+                        * (scene.survey.orbit() * glam::Vec3::new(0.0, distance * 0.18, distance));
+                    let globe_eye = frame.body_to_render_point(scene.center) + offset.as_dvec3();
+                    let body_eye = frame.render_to_body_point(globe_eye);
+                    let minimum = scene.stream.radius_m()
+                        + scene
+                            .stream
+                            .field()
+                            .height_m(body_eye.normalize().to_array(), 32.0)
+                            .max(0.0)
+                        + 5.0;
+                    let expected = if body_eye.length() < minimum {
+                        body_eye.normalize() * minimum
+                    } else {
+                        body_eye
+                    };
+                    let view = scene.survey_view(1280, 720, 1.0).unwrap();
+                    assert!((view.world_position_m - expected).length() < 1e-8);
+                    assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
+                    let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
+                    assert!((forward - (scene.center - expected).normalize()).length() < 1e-9);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1229,7 +1415,7 @@ mod tests {
                 .is_none()
         );
         scene.enable_vehicle_preview().unwrap();
-        assert_eq!(scene.camera_distance_limits(), (8.0, 180.0, 32.0));
+        assert_eq!(scene.camera.distance_m(), 32.0);
         assert!(
             scene
                 .set_presentation_time(thessa_sim_core::SimTime(1.0))
@@ -1337,11 +1523,12 @@ mod tests {
                 .set_presentation_time(thessa_sim_core::SimTime(time))
                 .unwrap();
             let view = scene.view(1280, 720, 1.0);
-            assert!((view.world_position_m - epoch.world_position_m).length() < 1e-8);
+            // Legacy survey offsets cross f64 -> f32 at the site basis.
+            assert!((view.world_position_m - epoch.world_position_m).length() < 0.002);
             assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
             let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
             let original_forward = epoch.world_from_view.transform_vector3(DVec3::NEG_Z);
-            assert!((forward - original_forward).length() < 1e-12);
+            assert!((forward - original_forward).length() < 1e-6);
         }
         assert_ne!(scene.sample.lighting, initial_lighting);
         let before = scene.sample;
@@ -1363,20 +1550,15 @@ mod tests {
     }
 
     #[test]
-    fn orbit_views_keep_checked_camera_relative_abi() {
-        let center = DVec3::Z * 3_200_000.0;
-        for distance in [1_000.0, 30_000.0, 200_000.0] {
+    fn survey_views_keep_checked_camera_relative_abi() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        for distance in [80.0, 5_000.0, 2_000_000.0] {
+            scene.survey.set_distance_m(distance);
             for step in 0..32 {
-                let view = orbit_view(
-                    center,
-                    DVec3::Z,
-                    DVec3::X,
-                    distance,
-                    step as f64 * std::f64::consts::TAU / 32.0,
-                    1280,
-                    720,
-                    1.0,
-                );
+                scene.survey.set_orbit(glam::Quat::from_rotation_y(
+                    step as f32 * std::f32::consts::TAU / 32.0,
+                ));
+                let view = scene.view(1280, 720, 1.0);
                 assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
                 assert!(
                     (view.world_from_view.w_axis.truncate() - view.world_position_m).length()

@@ -1,0 +1,103 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/owned-survey-camera",
+  "base_commit": "d33f480",
+  "binary_sha256": "93a25fea6647094fcc1e41593e8259e8c816cbc42dfaffee821a37a512572804",
+  "baseline_binary_sha256": "710c5a72bdc767e76fe174c9acb1f53f651644f6e44ef1a573baa814aff50ac1",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile and hud feature",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b",
+  "ownership": {
+    "gpl": "flight-authority::survey owns camera policy; old Bevy survey and native host consume it; shared bookmark labels remain game policy",
+    "mit": "render-core/render-wgpu frames, geometry and shared device/queue unchanged",
+    "new_dependencies_crates_or_unsafe": false,
+    "extra_gpu_devices_scene_passes_copies_or_runtime_readbacks": 0
+  },
+  "contract": {
+    "default_site": "HIGHLANDS",
+    "sites": ["COAST", "HIGHLANDS", "VOLCANIC"],
+    "distance_m": {"default": 5000, "min": 80, "max": 2000000},
+    "minimum_clearance_m": 5,
+    "drag_gain_rad_per_pixel": 0.004,
+    "wheel_zoom_exponent_per_line": 0.1,
+    "site_reset": "distance and free look reset; orbit preserved; ignored during vehicle preview/live flight",
+    "precision": "legacy f64 site north/east, cast to f32 matrix and orbit offset; not a quaternion replacement of that matrix",
+    "polar_policy": "finite orthogonal basis at exact poles instead of the old NaNs; invalid or non-unit up rejected",
+    "native_projection": "existing 0.9 rad vertical FOV, 1..1e8 m depth range; not Bevy projection parity",
+    "native_controls": "--site 0|1|2; HUD site buttons; F6 cycle; right-drag orbit; Shift-right-drag look; wheel zoom; Backquote reset; arrows yaw/zoom; HUD capture blocks gestures/shortcuts",
+    "not_ported": "celestial map camera/orbit UI, native network/fleet adoption and remaining graphics/UI/effects"
+  },
+  "measurement_boundary": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10, plus per-run arguments below",
+    "size": [1280, 720],
+    "measured_frames": 600,
+    "warmup_frames": 30,
+    "prestream_seconds": 10,
+    "latency": "host presentation/streaming/camera/classify/raster/HUD/uploads/GPU completion; live flight includes full existing local physics demand; excludes setup, prestream, warmup and final readback; not game FPS or GPU-only time",
+    "terrain_comparison": "new 5 km framing replaces old native 30 km elevated framing: no equal-workload terrain A/B claim",
+    "live_comparison": "A/B/B/A against the exact navball baseline binary; unchanged camera/authority workload, async publication counts vary; no isolated controller cost or speedup claim"
+  },
+  "terrain_runs": [
+    {"name": "coast", "arguments": "--site 0", "median_ms": 2.372, "p95_ms": 3.269, "p99_ms": 4.115, "max_ms": 10.164, "final_tiles": 366, "terrain_triangles": 382464, "measured_selections": 2, "measured_publications": 0, "material_upload_bytes": 32330600, "capacity_rejections": 0},
+    {"name": "highlands", "arguments": "--site 1", "median_ms": 2.487, "p95_ms": 3.727, "p99_ms": 4.802, "max_ms": 11.464, "final_tiles": 370, "terrain_triangles": 366336, "measured_selections": 2, "measured_publications": 0, "material_upload_bytes": 21233340, "capacity_rejections": 0},
+    {"name": "volcanic", "arguments": "--site 2", "median_ms": 2.559, "p95_ms": 3.275, "p99_ms": 4.130, "max_ms": 10.381, "final_tiles": 371, "terrain_triangles": 405504, "measured_selections": 2, "measured_publications": 0, "material_upload_bytes": 21932380, "capacity_rejections": 0},
+    {"name": "sweep", "arguments": "--sweep", "median_ms": 2.768, "p95_ms": 4.974, "p99_ms": 9.734, "max_ms": 13.403, "final_tiles": 369, "terrain_triangles": 361728, "measured_selections": 13, "measured_publications": 148, "material_upload_bytes": 20534300, "capacity_rejections": 0, "final_orbit_yaw_principal_rad": -2.509}
+  ],
+  "live_runs": {
+    "arguments": "--flight",
+    "order": ["baseline-flight-1", "flight-1", "flight-2", "baseline-flight-2"],
+    "requested_elapsed_per_frame_s": 0.016666666666666666,
+    "completed_authority_and_presentation_time_s_each_run": 10.5,
+    "identical_final_relative_position_m": [-2847029.6640625, 759068.1640593708, 1250706.967514596],
+    "final_backlog_s_each_run": 0,
+    "flight_stopped_each_run": false,
+    "final_tiles_each_run": 374,
+    "terrain_triangles_each_run": 410112,
+    "mesh": {"instances": 1, "draw_calls": 2, "triangles": 78465, "frame_upload_bytes": 640},
+    "runs": [
+      {"name": "baseline-flight-1", "median_ms": 3.235, "p95_ms": 5.306, "p99_ms": 10.295, "max_ms": 12.642, "measured_publications": 44, "capacity_rejections": 0},
+      {"name": "flight-1", "median_ms": 3.214, "p95_ms": 5.108, "p99_ms": 9.971, "max_ms": 14.473, "measured_publications": 43, "capacity_rejections": 0},
+      {"name": "flight-2", "median_ms": 3.181, "p95_ms": 4.973, "p99_ms": 8.775, "max_ms": 12.477, "measured_publications": 45, "capacity_rejections": 0},
+      {"name": "baseline-flight-2", "median_ms": 3.132, "p95_ms": 4.965, "p99_ms": 10.643, "max_ms": 13.854, "measured_publications": 44, "capacity_rejections": 0}
+    ],
+    "conclusion": "trajectory and final geometry preserved; medians overlap, no speedup or isolated adapter overhead claim"
+  },
+  "native_wayland": {"arguments": "--frames 1200", "hud": true, "presentation_requests": 1200, "elapsed_s": 10.089, "requests_per_second": 118.9, "final_tiles": 370, "capacity_rejections": 0, "exit_code": 0, "boundary": "presentation requests including compositor policy, not display feedback or game FPS"},
+  "legacy_bevy": {
+    "build": "cargo build -p thessa-client (debug)",
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=surface THESSA_AUTOBENCH_SITE=1 THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0,
+    "capture_size": [1270, 1588],
+    "limitations": "missing sibling server binary: existing local simulation fallback; ALSA device warnings, no audio validation; different resolution/FOV/time/effects/HUD, not equal-scene parity"
+  },
+  "verification": {
+    "fmt": "pass",
+    "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1788,
+    "workspace_integration_tests": 52,
+    "bevy_cbt_hardware_tests": 24,
+    "native_gpu_tests": 4,
+    "native_window_tests": 4,
+    "successful_rust_tests": 1872,
+    "agent_qa_unittests": 5,
+    "architecture_guarded_crates": 12,
+    "regressions": "original arithmetic differential; gesture/zoom/reset factors; invalid/polar inputs; site/flight isolation; HUD site reset without stale-distance overwrite; original eye placement across site/spin/distance; camera-relative ABI",
+    "default_spin_attachment_error_bounds": {"eye_m": 0.002, "forward_vector": 0.000001},
+    "review_boundary": "implementer inspection and deterministic numeric/GPU tests only, not independent blind visual preference or acceptance",
+    "logs": "/tmp/opencode/owned-survey-{lib,integration,clippy,nohud,qa,bevy-gpu,native-gpu,window-test,build,legacy-build,legacy-smoke,wayland}.log and owned-survey-measure-*.log"
+  },
+  "captures": [
+    {"path": "owned-survey-coast-2026-10-16.png", "sha256": "ae99d3afde439eb0ad5753ef69af8cc907d2a2121627ba0610eca4378ecc7371"},
+    {"path": "owned-survey-highlands-2026-10-16.png", "sha256": "e242ab5088ed175ddee8eef4ebc54d59d1a837a8376abb0c620ffa94323a2c27"},
+    {"path": "owned-survey-volcanic-2026-10-16.png", "sha256": "f91d08e0afcd4656e5ae3727a7812734e8a1294e35b2b2c93b0001dbff3c137c"},
+    {"path": "owned-survey-sweep-2026-10-16.png", "sha256": "f7bed57e46eaf777641c012210e31daeccb3a69d87c78b00748dd8ff4b9c7f51"},
+    {"path": "owned-survey-flight-1-2026-10-16.png", "sha256": "47ea4f29a275e72d4108701e709cb33a7a77d88d5c6657aa407dc7433740951e"},
+    {"path": "owned-survey-bevy-highlands-2026-10-16.png", "sha256": "cd7ea7ce66e93f0c393d97dc250f28fddab760c7537b4196d3e88ce86c808555"}
+  ],
+  "limitations": [
+    "Existing terrain seams/LOD defects, flat native sky and material/effects parity remain unresolved; captures are not visual acceptance.",
+    "No persistent conforming GPU bisector pool, FastRT acceleration structures or device-loss recovery is established by this slice.",
+    "Celestial map camera, server/fleet presentation, remaining UI/assists/assets and effects remain migration work."
+  ]
+}

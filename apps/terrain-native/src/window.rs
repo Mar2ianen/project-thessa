@@ -372,16 +372,14 @@ impl ApplicationHandler for App {
                             if vehicle {
                                 self.scene.camera.orbit_yaw(delta as f32);
                             } else {
-                                self.scene.angle += delta;
+                                self.scene.survey.orbit_yaw(delta as f32);
                             }
                         }
                         Some(Shortcut::Zoom(factor)) => {
                             if vehicle {
                                 self.scene.camera.zoom_by_factor(factor as f32);
                             } else {
-                                let (min, max, _) = self.scene.camera_distance_limits();
-                                self.scene.distance =
-                                    (self.scene.distance * factor).clamp(min, max);
+                                self.scene.survey.zoom_by_factor(factor as f32);
                             }
                         }
                         // Repeats keep orbiting/zooming while held but never
@@ -395,9 +393,12 @@ impl ApplicationHandler for App {
                             if vehicle {
                                 self.scene.camera.reset();
                             } else {
-                                self.scene.angle = 0.0;
-                                self.scene.distance = 30_000.0;
+                                self.scene.survey.reset();
                             }
+                        }
+                        Some(Shortcut::CycleSite) if !vehicle && !event.repeat => {
+                            self.scene
+                                .select_site((self.scene.site + 1) % self.scene.sites.len());
                         }
                         _ => {}
                     }
@@ -431,16 +432,14 @@ impl ApplicationHandler for App {
                 let (x, y) = (position.x, position.y);
                 if let Some((last_x, last_y)) = self.last_cursor {
                     let (dx, dy) = ((x - last_x) as f32, (y - last_y) as f32);
-                    if drag_delta(
-                        self.right_held,
-                        self.right_consumed,
-                        self.scene.vehicle_preview(),
-                        dx,
-                        dy,
-                    )
-                    .is_some()
-                    {
-                        self.scene.camera.drag_orbit(dx, dy);
+                    if drag_delta(self.right_held, self.right_consumed, true, dx, dy).is_some() {
+                        if self.scene.vehicle_preview() {
+                            self.scene.camera.drag_orbit(dx, dy);
+                        } else {
+                            let look = self.held.contains(&KeyCode::ShiftLeft)
+                                || self.held.contains(&KeyCode::ShiftRight);
+                            self.scene.survey.drag(dx, dy, look);
+                        }
                     }
                     if drag_delta(
                         self.middle_held,
@@ -457,8 +456,12 @@ impl ApplicationHandler for App {
                 self.last_cursor = Some((x, y));
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if !consumed && self.scene.vehicle_preview() {
-                    self.scene.camera.zoom(wheel_lines(delta));
+                if !consumed {
+                    if self.scene.vehicle_preview() {
+                        self.scene.camera.zoom(wheel_lines(delta));
+                    } else {
+                        self.scene.survey.zoom(wheel_lines(delta));
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -578,8 +581,7 @@ fn held_flight_keys(
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Shortcut {
     Exit,
-    /// Yaw step in radians: survey angle in terrain mode, shared-controller
-    /// yaw in vehicle mode.
+    /// Shared-controller yaw step in radians for the active camera.
     Orbit(f64),
     /// Multiplicative zoom factor for the active camera.
     Zoom(f64),
@@ -587,6 +589,7 @@ enum Shortcut {
     ToggleChase,
     /// Restore the active camera default (matches `Backquote` in the pilot).
     ResetView,
+    CycleSite,
 }
 
 fn camera_shortcut(key: PhysicalKey, consumed: bool) -> Option<Shortcut> {
@@ -601,20 +604,21 @@ fn camera_shortcut(key: PhysicalKey, consumed: bool) -> Option<Shortcut> {
         PhysicalKey::Code(KeyCode::ArrowDown) => Some(Shortcut::Zoom(1.1)),
         PhysicalKey::Code(KeyCode::KeyV) => Some(Shortcut::ToggleChase),
         PhysicalKey::Code(KeyCode::Backquote) => Some(Shortcut::ResetView),
+        PhysicalKey::Code(KeyCode::F6) => Some(Shortcut::CycleSite),
         _ => None,
     }
 }
 
 /// Pure drag gate: a drag orbits/pans only while its button is held from a
-/// press outside the UI and a vehicle camera is active.
+/// press outside the UI and the requested gesture is enabled.
 fn drag_delta(
     held: bool,
     press_consumed: bool,
-    vehicle: bool,
+    enabled: bool,
     dx: f32,
     dy: f32,
 ) -> Option<(f32, f32)> {
-    if held && !press_consumed && vehicle && (dx != 0.0 || dy != 0.0) {
+    if held && !press_consumed && enabled && (dx != 0.0 || dy != 0.0) {
         Some((dx, dy))
     } else {
         None
@@ -670,6 +674,7 @@ mod tests {
             (KeyCode::ArrowDown, Shortcut::Zoom(1.1)),
             (KeyCode::KeyV, Shortcut::ToggleChase),
             (KeyCode::Backquote, Shortcut::ResetView),
+            (KeyCode::F6, Shortcut::CycleSite),
         ] {
             assert_eq!(camera_shortcut(PhysicalKey::Code(key), true), None);
             assert_eq!(

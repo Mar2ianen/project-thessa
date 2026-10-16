@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut vehicle_preview = false;
     let mut live_flight = false;
     let mut chase = false;
+    let mut survey_site = None;
     let mut throttle_preset = None;
     let mut engine_on = false;
     let mut flight_step = None;
@@ -47,6 +48,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--vehicle-preview" => vehicle_preview = true,
             "--flight" => live_flight = true,
             "--chase" => chase = true,
+            "--site" => {
+                survey_site = Some(
+                    args.next()
+                        .ok_or("--site requires 0, 1 or 2")?
+                        .parse::<usize>()?,
+                );
+            }
             "--throttle" => {
                 throttle_preset = Some(
                     args.next()
@@ -85,6 +93,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
                 );
                 println!(
+                    "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with --flight or --vehicle-preview. Shared quaternion orbit/free look, distance 80..2000000m (default/reset 5000m). Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                );
+                println!(
                     "--throttle FRACTION (0..=1, requires --flight) presets the owned throttle intent before the first frame; deterministic in window and headless. --engine-on (requires --flight) arms the engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, CapsLock precision (shared factors with the old pilot; RCS/gear/chute part commands are not ported yet)."
                 );
                 return Ok(());
@@ -100,6 +111,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if chase && !live_flight && !vehicle_preview {
         return Err("--chase requires --flight or --vehicle-preview".into());
+    }
+    if survey_site.is_some_and(|site| site >= thessa_flight_authority::SURVEY_SITE_LABELS.len()) {
+        return Err("--site requires 0, 1 or 2".into());
+    }
+    if survey_site.is_some() && (live_flight || vehicle_preview) {
+        return Err(
+            "--site is survey-only; incompatible with --flight or --vehicle-preview".into(),
+        );
     }
     if throttle_preset.is_some() && !live_flight {
         return Err("--throttle requires --flight".into());
@@ -145,6 +164,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         "migration viewer consumes manual exposure/vsync only; atmosphere, shadows, HDR/tonemapping, RT, automatic exposure and other effects are unported"
     );
     let mut scene = scene::Scene::load(requested)?;
+    if let Some(site) = survey_site {
+        scene.select_site(site);
+    }
     scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
     if vehicle_preview {
         scene.enable_vehicle_preview()?;
@@ -210,7 +232,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if scene.vehicle_preview() {
                     scene.camera.orbit_yaw(0.006);
                 } else {
-                    scene.angle = frame as f64 * 0.006;
+                    scene
+                        .survey
+                        .set_orbit(glam::Quat::from_rotation_y(frame as f32 * 0.006));
                 }
             }
             #[cfg(feature = "hud")]
@@ -316,7 +340,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             streaming_timings.last().unwrap(),
             scene.material_upload_bytes,
             scene.capacity_rejections,
-            scene.angle
+            f64::from(scene.survey.orbit().to_euler(glam::EulerRot::YXZ).0)
         );
         println!(
             "presentation_sim_time_s={} sim_step_s={sim_step} body_inertial_m={:?}",

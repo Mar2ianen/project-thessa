@@ -151,6 +151,10 @@ pub fn canonical_launch_setup(
     Ok((field, sites))
 }
 
+/// Survey bookmark labels in `survey_bookmarks` order. Shared by the old
+/// survey buttons and the native viewer so the two hosts cannot drift apart.
+pub const SURVEY_SITE_LABELS: [&str; 3] = ["COAST", "HIGHLANDS", "VOLCANIC"];
+
 fn canonical_planet_id() -> Result<String, String> {
     let recipe: SpecRecipe =
         toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))

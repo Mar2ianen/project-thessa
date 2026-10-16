@@ -116,7 +116,7 @@ The checked-in vertical slice currently contains:
   The native draw loads the existing terrain color/depth targets before HUD;
   its base-color/Lambert shader is **not** PBR parity. Live flight-input
   intents (stick/throttle/engine/precision/control-law/SAS) are owned in
-  `--flight`; network, part commands and remaining game UI are still missing.
+   `--flight`; networking and remaining game UI are still missing.
   Preview requires epoch time and no
   time stepping. Reusable source descriptors/decoding live in MIT `render-core`
   / `render-assets`; game asset calibration remains GPL. X-15 by cmoreau is
@@ -142,7 +142,14 @@ The checked-in vertical slice currently contains:
   ported yet.
   `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
-  chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.
+   chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.
+   Terrain-only survey now uses the shared GPL `flight-authority::survey`
+   quaternion camera in both clients: right-drag orbits, Shift-right-drag
+   turns free look, wheel zooms (80 m–2,000 km), Backquote resets to 5 km.
+   `--site 0|1|2`, HUD buttons or window `F6` select COAST/HIGHLANDS/VOLCANIC
+   (default HIGHLANDS), resetting distance/free look while preserving orbit.
+   This changes the old native 30 km framing; pre-slice terrain timings are
+   not equal-workload comparisons. The celestial map camera is not ported.
   Window elapsed demand uses the
   old local client's 0.1 s clamp/8 ms work budget. Headless `--flight-step 0.016666666666666666`
   requests elapsed simulation time per frame, including warm-up; pre-stream is

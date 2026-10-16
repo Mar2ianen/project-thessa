@@ -19,3 +19,6 @@ glam.workspace = true
 serde.workspace = true
 toml.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

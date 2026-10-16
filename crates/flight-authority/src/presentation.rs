@@ -60,6 +60,10 @@ impl FlightPose {
     pub fn visual_orientation(self) -> glam::Quat {
         craft_visual_orientation(self.orientation)
     }
+    /// Uncalibrated f64 attitude for retained body-axis meshes, not GLB axes.
+    pub fn orientation_body_to_inertial(self) -> DQuat {
+        self.orientation
+    }
 }
 
 // Inherited pilot calibration, retained for visual compatibility. The decoded

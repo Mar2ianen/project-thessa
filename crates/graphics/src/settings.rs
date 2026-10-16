@@ -153,6 +153,11 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RendererSettings {
+    /// Native retained fleet meshes; no effect on authoritative simulation.
+    #[serde(default = "default_true")]
+    pub fleet_meshes: bool,
+    #[serde(default)]
+    pub fleet_quality: Quality,
     #[serde(default)]
     pub backend: BackendRequest,
     #[serde(default)]
@@ -199,6 +204,8 @@ fn default_terrain_mesh_cells() -> u32 {
 impl Default for RendererSettings {
     fn default() -> Self {
         Self {
+            fleet_meshes: true,
+            fleet_quality: Quality::High,
             backend: BackendRequest::Auto,
             ray_tracing: RayTracingRequest::Auto,
             terrain: TerrainRenderRequest::Cpu,
@@ -791,6 +798,7 @@ impl RequestedGraphics {
         self.renderer.bloom = false;
         match preset {
             Preset::Low => {
+                self.renderer.fleet_quality = Quality::Low;
                 self.renderer.resolution_scale = 0.75;
                 self.renderer.ray_tracing = RayTracingRequest::Off;
                 self.renderer.terrain_mesh_cells = 16;
@@ -819,6 +827,7 @@ impl RequestedGraphics {
                 self.upper_atmosphere.aurora_lighting = false;
             }
             Preset::Medium => {
+                self.renderer.fleet_quality = Quality::Medium;
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
                 self.renderer.terrain_mesh_cells = 20;
@@ -845,6 +854,7 @@ impl RequestedGraphics {
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
             }
             Preset::High => {
+                self.renderer.fleet_quality = Quality::High;
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
                 self.renderer.terrain_mesh_cells = 24;
@@ -873,6 +883,7 @@ impl RequestedGraphics {
                 self.upper_atmosphere.aurora_animate = true;
             }
             Preset::Ultra => {
+                self.renderer.fleet_quality = Quality::High;
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
                 self.renderer.terrain_mesh_cells = 32;

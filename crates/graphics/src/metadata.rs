@@ -37,6 +37,28 @@ pub struct SettingMeta {
 pub fn describe() -> Vec<SettingMeta> {
     vec![
         SettingMeta {
+            path: "renderer.fleet_meshes",
+            label: "Fleet retained meshes",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: true,
+            description: "Native opaque fleet appearance; disabled allocates no fleet GPU meshes.",
+        },
+        SettingMeta {
+            path: "renderer.fleet_quality",
+            label: "Fleet mesh quality",
+            kind: SettingKind::Enum,
+            range: "low | medium | high",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: true,
+            description: "Projected-size culling at 8/2/0.5 pixels; same retained surface geometry.",
+        },
+        SettingMeta {
             path: "preset",
             label: "Graphics preset",
             kind: SettingKind::Enum,

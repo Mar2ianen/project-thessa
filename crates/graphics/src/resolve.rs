@@ -151,6 +151,9 @@ impl Capabilities {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    pub fleet_meshes: bool,
+    /// Screen-size culling fallback, not a change to physical geometry.
+    pub fleet_min_pixels: f32,
     pub preset_label: String,
     pub backend: ResolvedBackend,
     pub terrain: ResolvedTerrainRender,
@@ -316,6 +319,12 @@ impl ResolvedGraphicsSettings {
             hdr: requested.renderer.hdr,
             bloom: requested.renderer.bloom,
             exposure_ev100: requested.renderer.exposure_ev100,
+            fleet_meshes: requested.renderer.fleet_meshes,
+            fleet_min_pixels: match requested.renderer.fleet_quality {
+                Quality::Low => 8.0,
+                Quality::Medium => 2.0,
+                Quality::High => 0.5,
+            },
             auto_exposure: requested.renderer.auto_exposure && requested.renderer.hdr,
             atmosphere_enabled: requested.atmosphere.enabled,
             atmosphere_quality: requested.atmosphere.quality,
@@ -483,6 +492,8 @@ impl ResolvedGraphicsSettings {
     /// Flat string map for perf capture metadata (`resolved` section).
     pub fn as_meta_map(&self) -> BTreeMap<String, String> {
         let mut map = BTreeMap::new();
+        map.insert("fleet_meshes".into(), self.fleet_meshes.to_string());
+        map.insert("fleet_min_pixels".into(), self.fleet_min_pixels.to_string());
         map.insert("auto_exposure".into(), self.auto_exposure.to_string());
         map.insert("preset".to_string(), self.preset_label.clone());
         map.insert("backend".to_string(), self.backend.name.clone());
@@ -574,6 +585,33 @@ impl ResolvedGraphicsSettings {
 mod tests {
     use super::*;
     use crate::settings::RequestedGraphics;
+
+    #[test]
+    fn fleet_quality_is_a_resolved_budget_and_disabled_stays_disabled() {
+        for (quality, pixels) in [
+            (Quality::Low, 8.0),
+            (Quality::Medium, 2.0),
+            (Quality::High, 0.5),
+        ] {
+            let mut requested = RequestedGraphics::default();
+            requested.renderer.fleet_quality = quality;
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+            assert_eq!(resolved.fleet_min_pixels, pixels);
+            assert!(resolved.fleet_meshes);
+            requested.renderer.fleet_meshes = false;
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+            assert!(!resolved.fleet_meshes);
+            assert_eq!(resolved.as_meta_map()["fleet_meshes"], "false");
+        }
+        let requested = RequestedGraphics::from_toml(
+            "[renderer]\nfleet_meshes = false\nfleet_quality = 'low'\n",
+        )
+        .unwrap();
+        assert!(!requested.renderer.fleet_meshes);
+        assert_eq!(requested.renderer.fleet_quality, Quality::Low);
+    }
 
     #[test]
     fn auto_resolves_to_raster_when_capability_unknown() {

@@ -34,6 +34,7 @@ pub struct MeshRenderer {
     capacity: usize,
     count: u32,
     staging: Vec<u8>,
+    ranges: Vec<std::ops::Range<u32>>,
 }
 fn fail(s: &str) -> BackendError {
     BackendError::Device(s.into())
@@ -45,17 +46,13 @@ impl MeshRenderer {
     pub fn draw_stats(&self) -> MeshDrawStats {
         MeshDrawStats {
             instances: self.count,
-            draw_calls: if self.count == 0 {
-                0
-            } else {
-                self.primitives.len()
-            },
+            draw_calls: self.ranges.iter().filter(|r| !r.is_empty()).count(),
             triangles: self
                 .primitives
                 .iter()
-                .map(|p| u64::from(p.count) / 3)
-                .sum::<u64>()
-                * u64::from(self.count),
+                .zip(&self.ranges)
+                .map(|(p, range)| u64::from(p.count) / 3 * u64::from(range.end - range.start))
+                .sum::<u64>(),
             frame_upload_bytes: 464 + 112 + self.count as usize * 64,
         }
     }
@@ -248,7 +245,7 @@ impl MeshRenderer {
                 ],
             }));
         }
-        let primitives = source
+        let primitives: Vec<_> = source
             .primitives
             .iter()
             .map(|p| Primitive {
@@ -272,6 +269,7 @@ impl MeshRenderer {
             })
             .collect();
         Ok(Self {
+            ranges: vec![0..0; primitives.len()],
             pipeline,
             global,
             materials,
@@ -293,6 +291,27 @@ impl MeshRenderer {
         lighting: &SurfaceLighting,
         instances: &[MeshInstance],
     ) -> Result<(), BackendError> {
+        self.update_selected(backend, view, lighting, instances, None)
+    }
+
+    /// Optional per-primitive instance ranges allow heterogeneous sources in
+    /// the existing single pass/pipeline. Validate before publishing any bytes.
+    pub fn update_selected(
+        &mut self,
+        backend: &Backend,
+        view: &ViewParams,
+        lighting: &SurfaceLighting,
+        instances: &[MeshInstance],
+        ranges: Option<&[std::ops::Range<u32>]>,
+    ) -> Result<(), BackendError> {
+        if let Some(ranges) = ranges
+            && (ranges.len() != self.primitives.len()
+                || ranges
+                    .iter()
+                    .any(|r| r.start > r.end || r.end as usize > instances.len()))
+        {
+            return Err(fail("invalid mesh primitive instance ranges"));
+        }
         if instances.len() > self.capacity {
             return Err(fail("mesh instance capacity exceeded"));
         }
@@ -329,6 +348,9 @@ impl MeshRenderer {
                 .write_buffer(&self.instances, 0, &self.staging);
         }
         self.count = instances.len() as u32;
+        for (i, range) in self.ranges.iter_mut().enumerate() {
+            *range = ranges.map_or(0..self.count, |ranges| ranges[i].clone());
+        }
         Ok(())
     }
     pub fn encode(
@@ -337,7 +359,7 @@ impl MeshRenderer {
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
     ) {
-        if self.count == 0 {
+        if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
             return;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -365,11 +387,14 @@ impl MeshRenderer {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.global, &[]);
-        for p in &self.primitives {
+        for (p, range) in self.primitives.iter().zip(&self.ranges) {
+            if range.is_empty() {
+                continue;
+            }
             pass.set_bind_group(1, &self.materials[p.material], &[]);
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..p.count, 0, 0..self.count);
+            pass.draw_indexed(0..p.count, 0, range.clone());
         }
     }
 }

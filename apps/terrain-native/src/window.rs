@@ -17,7 +17,7 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     backend: Backend,
     renderer: TerrainRenderer,
-    mesh_renderer: Option<thessa_render_wgpu::mesh::MeshRenderer>,
+    mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
     drawable: bool,
     exposure: f32,

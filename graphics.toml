@@ -33,6 +33,8 @@ hdr = true
 bloom = false # bright-light glow; off by default to preserve terrain contrast
 auto_exposure = false # AE metering curve untuned; deterministic manual EV for now
 exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
+fleet_meshes = true # native retained body meshes; false adds no fleet GPU resources/draws
+fleet_quality = "high" # low/medium/high: cull meshes below 8/2/0.5 projected pixels
 
 [atmosphere]
 enabled = true

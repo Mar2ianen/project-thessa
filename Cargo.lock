@@ -6482,6 +6482,7 @@ version = "0.0.1"
 dependencies = [
  "glam 0.33.7",
  "serde",
+ "serde_json",
  "thessa-autopilot",
  "thessa-autopilot-js",
  "thessa-flight-authority",

@@ -23,7 +23,8 @@ impl ProtocolVersion {
     // the handshake instead of decoding a partially compatible payload.
     // v8 adds revision-matched fleet contact geometry catalogues. Old peers
     // must not decode the extended FleetSnapshot as a v7 payload.
-    pub const CURRENT: Self = Self(8);
+    // v9 adds retained appearance to the same bounded on-change catalogue.
+    pub const CURRENT: Self = Self(9);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -44,7 +45,7 @@ pub mod kind {
     /// Fleet snapshots for non-primary vehicles. The primary vehicle keeps
     /// [`SNAPSHOT`](SNAPSHOT) so legacy fast paths never change shape.
     pub const FLEET_SNAPSHOT: u32 = 9;
-    /// Revisioned complete fleet contact-geometry catalogue; not bulk assets.
+    /// Revisioned bounded fleet contact/retained-appearance catalogue.
     pub const FLEET_GEOMETRY: u32 = 10;
 }
 
@@ -258,7 +259,7 @@ mod tests {
 
     #[test]
     fn foreign_version_is_rejected() {
-        for version in [7, 999] {
+        for version in [7, 8, 999] {
             let envelope = Envelope {
                 version: ProtocolVersion(version),
                 kind: kind::HELLO,

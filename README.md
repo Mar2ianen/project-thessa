@@ -57,7 +57,7 @@ The checked-in vertical slice currently contains:
   Lambert, plane change, velocity matching) plus candidate search. Planning
   approximations are revalidated through the exact field before execution;
 - `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
-  transport (wire v8) with strict validation, ordered typed part commands,
+  transport (wire v9) with strict validation, ordered typed part commands,
   per-vehicle input/guidance targeting, and fleet Separate/Dock/Undock
   commands plus fleet snapshots;
 - `apps/server`: headless authoritative simulation over stdio or TCP, with a
@@ -181,14 +181,19 @@ The checked-in vertical slice currently contains:
      names and exact authoritative contact parts (64 parts per secondary); the
      first row opens an auto-fit body-frame wireframe. Missing geometry and
      budget omission are explicit; no partial hull or X-15 copy is substituted.
-     Names are labels, not model IDs. Beauty meshes/materials, fleet world draws,
-     prediction/reconciliation and reconnect remain unimplemented. Both peers
-     must use wire v8; v7 is rejected rather than decoded as the new schema.
+     Names are labels, not model IDs. Wire v9 also carries retained body-shell
+     appearance with explicit absent/over-budget states (8 parts, 1,024 vertices,
+     4,096 indices per secondary). Native draws available shells with a neutral
+     finish through the existing opaque mesh pass, only when a secondary's
+     samples bracket PRIMARY's presentation epoch; no extrapolation masks clock
+     debt. Stale/revision-mismatched observations withhold world draws. Authored
+     materials, full designs, PRIMARY model replacement, prediction/reconciliation
+     and reconnect remain unimplemented. v7/v8 peers fail version checking.
      `VehicleDefinition` also supports optional renderer-neutral retained meshes
      with explicit assembly-body ownership. Splits partition/recenter their poses
      without copying mesh buffers. The baker now retains procedural body shells
-     using the existing fuselage tessellator; wings, materials and network/world
-     consumption remain separate work. `[body_render]` controls offline sampling
+     using the existing fuselage tessellator; wing appearance and authored
+     materials remain separate work. `[body_render]` controls offline sampling
      (default enabled, axial 4/radial 32); disabling it changes no physics.
    Its input mailbox counts all commands (including state votes and fleet/
    autopilot events) against the protocol's 64-command packet limit; observed
@@ -204,8 +209,10 @@ The checked-in vertical slice currently contains:
    session-only and pass through the shared settings resolver. `--no-hud`
    omits UI allocation/work; `--no-default-features` excludes egui entirely.
    Headless captures omit HUD unless `--hud` is explicitly supplied.
-   Only manual exposure/vsync settings are consumed from `graphics.toml`
-    (`--graphics PATH`); missing fleet rendering/effects/production game UI/external networking and
+    Manual exposure/vsync and retained fleet mesh enable/quality are consumed
+    from `graphics.toml` (`--graphics PATH`). Fleet Low/Medium/High culls below
+    estimated 8/2/0.5 pixels; disabled adds no fleet GPU meshes or track work.
+     Missing full design/material replication, effects/production game UI/external networking and
   coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 

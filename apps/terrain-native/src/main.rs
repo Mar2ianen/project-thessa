@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nOnly manual exposure and vsync settings are consumed; other effects are unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nManual exposure, vsync and retained fleet mesh enable/quality settings are consumed; other effects are unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -198,7 +198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     eprintln!(
-        "migration viewer consumes manual exposure/vsync only; atmosphere, shadows, HDR/tonemapping, RT, automatic exposure and other effects are unported"
+        "migration viewer consumes manual exposure/vsync and retained fleet mesh enable/quality; atmosphere, shadows, HDR/tonemapping, RT, automatic exposure and other effects are unported"
     );
     let mut scene = scene::Scene::load(requested)?;
     if let Some(site) = survey_site {
@@ -408,6 +408,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "mesh_submitted={:?}; drawn_triangles above counts terrain only; live_flight={live_flight}",
                 mesh.draw_stats()
+            );
+            println!(
+                "fleet_mesh_source_publications={} epoch_withheld={} size_culled={}; retained neutral shells at PRIMARY presentation epoch, no extrapolation",
+                mesh.source_publications, mesh.epoch_withheld, mesh.size_culled
             );
         }
         if let Some(status) = scene.flight_telemetry() {

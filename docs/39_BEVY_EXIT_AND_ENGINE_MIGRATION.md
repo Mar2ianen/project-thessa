@@ -2494,6 +2494,131 @@ Logs: `/tmp/opencode/body-render-baker-{tests,bench}.log`; validation/projection
 precision is pinned by the tests, not inferred from these timings. Runtime
 consumer and stacked workspace gates follow in the next slice.
 
+### Bounded native fleet body rendering (2026-10-16)
+
+The third stacked continuation connects retained appearance to the existing
+on-change catalogue and opaque mesh consumer. This supersedes the earlier
+contact-only/world-mesh gaps **only for bounded retained body shells**, not full
+authored vehicle designs/materials or complete Bevy replacement. The preceding
+dated measurements remain snapshots, not current-protocol captures.
+
+**Wire v9** adds `RenderAppearance::{Absent, Available, OmittedBudget}` to each
+non-primary descriptor; kind 10 and revision pairing remain unchanged. v7/v8
+envelopes are rejected. Available geometry is the actual retained mesh plus
+body-local part poses. Authority has already partitioned/remapped assembly
+ownership; display peers receive no ownership indices, executable loader,
+texture path, GLB blob or right to replace authority. Part names are bounded
+display labels, not asset hashes. Ordinary cached comparisons use Arc identity
+before buffer equality; only a changed descriptor rebuilds/encodes geometry.
+The server's existing shared frame/mailbox suppression applies equally to meshes.
+
+The per-secondary appearance policy is **8 parts / 1,024 vertices / 4,096
+indices**, including every part (shared payloads count per occurrence). Local
+positions and part origins are bounded to ±1,024 m per component; rotated part
+vertices are converted once at catalogue publication and checked for **≤1 mm
+absolute f64→f32 error**. Larger sources publish explicit omission, not partial
+triangles or a contact/X-15 substitute. Thus at most 64,512 appearance vertices
+are admitted across 63 secondaries; the existing 8 MiB frame cap still applies.
+Receiver validation remains post-deserialization, not a proof of bounded
+transient hostile-decoder allocation. No source changes physical mass or forces.
+
+Native combines admitted sources with the compatibility PRIMARY source on the
+same device/queue, into the existing mesh renderer/pipeline/targets/pass. The
+MIT wgpu consumer gains validated per-primitive instance ranges; the default
+API still draws all instances of a homogeneous source. Only static catalogue
+changes recreate the combined source; the current implementation also reuploads
+PRIMARY on a nonempty source replacement/removal. This is bounded and counted,
+not an incremental GPU asset/residency cache or a zero-upload claim. Empty
+catalogues do not copy/upload PRIMARY again. Steady frames only update existing
+view/lighting/matrix buffers and retained ranges. There is no second device,
+scene copy, intermediate target, extra world pass or runtime scene readback.
+Part-origin changes (including resource-driven COM recentering) also revise
+the complete catalogue and may repeatedly transfer unchanged mesh buffers and
+replace GPU sources. An incremental network mesh dictionary/residency contract
+is not implemented; this slice does not establish production streaming efficiency.
+
+World selection is separate GPL game presentation policy. Each available member
+keeps two observed poses, sampling inertial linear positions and slerped f64
+attitudes at **PRIMARY's current presentation epoch**, before subtracting the
+reference body's ephemeris there. Geometry revisions reset histories. An exact
+sample is enough; without a bracketing interval the world mesh is withheld,
+never extrapolated from another vehicle's clock or sent through local physics.
+Observer rows retain their own times. Stale or unmatched catalogues withhold
+world draws without inventing despawn. This is basic bounded interpolation,
+not prediction/reconciliation, a fleet-authority clock change, or a trajectory
+accuracy guarantee between snapshots. The CPU oracle checks the moving-reference
+subtraction to <1 mm and attitude axes independently from X-15 calibration.
+
+The shared settings resolver supplies `renderer.fleet_meshes` and
+`fleet_quality`. Disabled creates no fleet GPU source or track history and does
+no world-mesh track/draw work; the independent contact inspector remains. The
+basic triangle backend requires no optional capability. Low/Medium/High use
+the same mesh with estimated angular-footprint
+culling at **8/2/0.5 pixels**; near/intersecting bounds are not size-culled.
+These are representation budgets, not physics/model switches. Settings apply
+at renderer creation; metadata marks them restart-required. Counters expose
+source publications, epoch-withheld and size-culled objects plus submitted
+instances/draw calls/triangles/uniform+instance upload bytes. Appearance currently
+has an explicitly neutral untextured finish: no material/texture/PBR parity,
+wing/control-surface appearance, interior or full design registry is implied.
+
+Verification and reproducible evidence are recorded in
+`artifacts/native-fleet-body-rendering-2026-10-16.json`. The deterministic GPU
+oracle uses two distinct retained triangles and synthetic poses against a black
+target, checking heterogeneous instance ranges, repeated-frame exactness,
+resize, stale/epoch withholding, disabled work and atomic invalid-range failure.
+Its 63-member overlapping-triangle diagnostic is a bounded workload, not a
+physical fleet or beauty/visibility benchmark. A separate frozen replay takes
+the **baked example assembly** through actual authority separation and driver
+encoding into the real native CLI/link/world consumer; it is not live separation
+input acknowledgement. PRIMARY still uses the compatibility X-15 appearance
+even for custom fixture authorities. Captures are implementer diagnostics,
+not a blind preference review, native/Bevy matched scene or production parity.
+
+Final stacked gates passed: **1,823** workspace lib/bin + **53** integration +
+**24** Bevy-CBT GPU + **1** mesh-shader GPU + **5** native GPU + **1** real-server
+CPU + **1** framed-fixture CLI/GPU + **5** window tests = **1,913** Rust gate
+tests. The offline bake diagnostic and generated baked-authority replay add
+two distinct ignored CPU tests (**1,915 including diagnostics**). Formatting,
+workspace all-target/all-feature clippy, no-default native clippy (warnings
+denied), five agent-QA tests and the 12-crate architecture guard passed. Gates
+ran sequentially and hardware/window tests actually executed on Radeon 880M /
+RADV Vulkan; this is not an assertion that remote CI has run.
+
+At 63 members × 64 contact parts plus 1,024 appearance vertices / 4,095 indices
+per member, the complete catalogue measured **3,982,242 bytes**. Borrowed cached
+comparison was **10.380 μs** median versus **2,539.718 μs** rebuilding/encoding
+(200 samples each, no competing builds/tests). The latter is an alternative
+implementation diagnostic, not the old production path or a frame-time win.
+The 63-overlapping-triangle GPU diagnostic measured **229.538 μs** median for
+CPU selection/update + test-only target clear + submit/GPU completion at
+320×240 (100 samples, 10 warmup). It excludes source replacement and readback
+and uses exact epochs, not the interpolation path or a full-size/physical fleet.
+
+The generated two-body example passed real authority separation and driver
+serialization: **12,731-byte** initial Welcome/transaction, **411-byte** subsequent
+kinematic packets. Native adopted one catalogue/source publication and drew
+**2 instances / 3 draw calls / 78,785 triangles**, including the actual **320**
+capsule triangles; no stale rows, withheld epoch, size cull or local step.
+The screenshot still overlaps the capsule with the incorrect compatibility
+PRIMARY and has an incomplete dark terrain scene; it is a provenance/consumer
+check, not a visually correct split scene.
+
+![Deterministic heterogeneous range oracle, synthetic triangles](artifacts/native-fleet-body-world-oracle-2026-10-16.png)
+![Frozen baked-assembly separation, diagnostic world consumer](artifacts/native-fleet-body-baked-separation-2026-10-16.png)
+
+Release local A/B/B/A against exact `e5efb98`: **3.151 / 3.197 / 3.380 /
+3.247 ms** medians, 1280×720, 600 measured + 30 warmup frames, 10 s pre-stream.
+All four retained the identical 10.5 s trajectory and final geometry counts.
+The mean of the two new per-run medians is about **2.8% higher**; asynchronous
+publication counts/tails vary, and no zero-overhead or speedup claim is made.
+Real default-server HUD/no-HUD medians were **3.063 / 2.772 ms**, adopting
+**30 / 28** fleet updates, one matching empty catalogue and zero fleet GPU source
+publications each. Different wall-time epochs/workloads and concurrent server
+CPU prevent an isolated HUD/network-cost comparison. The rebuilt legacy Bevy
+pilot also linked to the real v9 server and captured/exited without local
+fallback; audio remains unverified due to device warnings.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

@@ -484,7 +484,7 @@ fn widgets(
                 .default_width(330.0)
                 .resizable(false)
                 .show(context, |ui| {
-                    ui.small("Additional vehicles · contact geometry, not beauty meshes");
+                    ui.small("Additional vehicles · contact inspector / retained body shells");
                     if stats.flight_stopped {
                         ui.colored_label(egui::Color32::RED, "Frozen: server session stopped");
                     } else if fleet.updates == 0 {
@@ -502,6 +502,11 @@ fn widgets(
                                 ui.small(format!("Reference radius {:.3} km", row.pose.relative_position_m().length() / 1000.0));
                                 if let Some(geometry) = fleet.matched_geometry().and_then(|g| g.vehicles.iter().find(|g| g.vehicle_id == row.vehicle_id)) {
                                     ui.label(&geometry.display_name);
+                                    match &geometry.render {
+                                        thessa_flight_net::geometry::RenderAppearance::Absent => { ui.small("No retained appearance mesh"); }
+                                        thessa_flight_net::geometry::RenderAppearance::OmittedBudget => { ui.small("Appearance omitted: bounded wire representation"); }
+                                        thessa_flight_net::geometry::RenderAppearance::Available(mesh) => { ui.small(format!("{} retained render parts · neutral finish", mesh.parts.len())); }
+                                    }
                                     match &geometry.contact {
                                         thessa_flight_net::geometry::ContactGeometry::Absent => { ui.small("No authoritative contact geometry"); }
                                         thessa_flight_net::geometry::ContactGeometry::OmittedBudget => { ui.small("Contact geometry omitted: wire budget exceeded"); }

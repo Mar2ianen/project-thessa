@@ -545,6 +545,22 @@ aurora shells, gas-giant bands, and the engine plume are consumed by the
 renderer (not reserved). Unknown keys are ignored by
 older builds; they are not a second hidden settings system.
 
+The native migration host (doc 39) additionally consumes resolved
+`renderer.fleet_meshes` (default true) and `renderer.fleet_quality`
+(`low` / `medium` / `high`). The retained opaque body-shell effect needs no
+optional GPU feature and reuses the existing mesh device/targets/pass. Quality
+selects estimated angular-footprint culling thresholds of 8/2/0.5 pixels;
+near/intersecting bounds are not size-culled. Disabling the effect adds no fleet
+GPU source, track history or world-draw work. Settings are selected at renderer
+creation (restart/recreate to change them), not ad-hoc environment toggles.
+Unavailable/over-budget geometry and unbracketed render epochs withhold draws,
+not physics or observations. Source-publication, epoch-withheld, size-cull and
+mesh-workload counters are diagnostic outputs. The current source budget is
+8 parts, 1,024 vertices, 4,096 indices per secondary; replacement uploads may
+include PRIMARY again. Neutral untextured shells are not PBR/material parity,
+and production performance acceptance remains open. The legacy Bevy host does
+not consume this fleet effect.
+
 Presets are only bulk writes/default expansions over the same settings. They are not hidden alternative state.
 
 If a user changes one preset-derived value manually, the UI may display `custom`, but the underlying values remain explicit.

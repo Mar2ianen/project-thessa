@@ -38,6 +38,20 @@ fn main() {
             .collect(),
     )
     .unwrap();
+    vehicle
+        .render_geometry
+        .parts
+        .push(thessa_sim_core::RenderPart {
+            name: "retained-body".into(),
+            assembly_body: None,
+            position_body_m: DVec3::ZERO,
+            orientation_mesh_to_body: DQuat::IDENTITY,
+            mesh: std::sync::Arc::new(thessa_sim_core::RenderMesh {
+                positions: vec![DVec3::new(0.1, 0.2, 0.3); MAX_RENDER_VERTICES],
+                normals: vec![DVec3::Z; MAX_RENDER_VERTICES],
+                indices: vec![1023; 4095],
+            }),
+        });
     let build = || FleetGeometry {
         revision: 1,
         vehicles: (1..MAX_FLEET_VEHICLES as u32)
@@ -59,7 +73,7 @@ fn main() {
         black_box(encode_fleet_geometry(&build()).unwrap());
     });
     println!(
-        "fleet_geometry members={} parts_per_member={} encoded_frame_bytes={} cached_borrowed_scan_median_us={scan:.3} rebuild_encode_median_us={rebuild:.3}; n=200 each; excludes IO/UI/GPU/decoder; rebuild is a diagnostic alternative, not the previous production server",
+        "fleet_geometry members={} contact_parts_per_member={} render_vertices_per_member=1024 render_indices_per_member=4095 encoded_frame_bytes={} cached_borrowed_scan_median_us={scan:.3} rebuild_encode_median_us={rebuild:.3}; n=200 each; excludes IO/UI/GPU/decoder; rebuild is a diagnostic alternative, not the previous production server",
         catalogue.vehicles.len(),
         MAX_GEOMETRY_PARTS_PER_VEHICLE,
         bytes.len()

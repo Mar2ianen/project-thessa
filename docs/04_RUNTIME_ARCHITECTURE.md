@@ -204,12 +204,15 @@ not an atomic common-epoch scene packet. Secondary simulation debt can differ.
 The native embedded link demultiplexes these kinds with one reader and the same
 bounded two-arrival inbox mechanism. Its read-only fleet inspector validates
 each pose at that vehicle's own time; stale fleet observations are withheld,
-not inferred to have despawned. The lean wire data lacks vehicle-design/model
-identity and complete resource state, so this is not fleet mesh rendering or
-prediction/reconciliation. The old Bevy host still ignores fleet observations.
+not inferred to have despawned. Kinematics alone do not define appearance:
+bounded retained meshes come from the revision-matched catalogue below, not
+inference from the stable ID or name. Full designs/resources and
+prediction/reconciliation remain absent. The old Bevy host still ignores fleet
+observations.
 
-Wire v8 adds `FleetGeometry` (kind 10) and an exact `geometry_revision` reference
-in `FleetSnapshot`; v7 peers fail version checking. The complete, sorted
+Wire v9 extends `FleetGeometry` (kind 10, introduced in v8) and retains the exact
+`geometry_revision` reference in `FleetSnapshot`; v7/v8 peers fail version
+checking. The complete, sorted
 non-primary catalogue contains bounded display labels and actual authoritative
 contact geometry, including the recentered geometry of split clusters. It is
 neither full `VehicleDefinition` replication nor a beauty mesh/model registry.
@@ -228,11 +231,42 @@ catalogues are errors. The producer limits labels to 128 UTF-8 bytes (control
 characters removed) and geometry to 64 contact parts per secondary. A definition
 with more parts publishes explicit budget omission, not a truncated hull;
 missing contact geometry is also explicit. These policies do not change physics.
-The native inspector draws a diagnostic auto-fit contact wireframe, not world
-instances or appearance. Geometry storage is Arc-shared through the HUD rather
+The native inspector draws a diagnostic auto-fit contact wireframe, not an
+appearance proxy. Geometry storage is Arc-shared through the HUD rather
 than deep-copied per frame; `--no-hud` omits projection/UI work. Stale membership
-still withholds all rows. Complete resources, render designs, coherent fleet
-render epoch and production remote prediction/interpolation remain future work.
+still withholds all rows. The same catalogue also carries optional retained
+appearance, limited to 8 parts / 1,024 vertices / 4,096 indices per secondary;
+part origins and local vertices are bounded to ±1,024 m per component. Oversized
+sources are explicitly omitted, never partly rendered or replaced by a contact
+hull/X-15. Authority resolves/remaps assembly ownership; the display catalogue
+strips ownership indices and retains actual meshes and body-local rigid poses.
+Source comparison uses Arc identity before value comparison, with no periodic
+mesh buffer copy/encode. No paths, loaders, textures or full definitions arrive.
+
+Native combines admitted appearance and the compatibility PRIMARY source on
+catalogue change in the existing renderer/device/targets/pipeline/pass. Static
+source replacement currently reuploads PRIMARY as well as admitted shells;
+it does not claim an incremental GPU residency/asset registry. Ordinary frames
+update only matrices/view/lighting and per-primitive instance ranges. A second
+two-pose presentation history exists only for available world meshes, not
+physics or authoritative prediction. It samples inertial linear positions and
+slerped attitudes at PRIMARY's scene epoch, subtracting the ephemeris there;
+without a bracket/exact sample it withholds that world mesh. Geometry revisions
+reset histories. Observer rows still show their own authoritative times.
+Changing a part origin, including a resource-driven COM shift, revises the whole
+catalogue even when shared vertex buffers are unchanged; an incremental network
+mesh dictionary and efficient active-fleet source updates remain future work.
+Stale/revision-mismatched membership withholds draws, never invents despawn.
+
+`renderer.fleet_meshes=false` allocates/uploads no fleet GPU source or track
+history. Enabled Low/Medium/High resolutions choose 8/2/0.5-pixel estimated
+angular-footprint culling through `ResolvedGraphicsSettings`, with identical
+mesh geometry. The basic opaque triangle path needs no optional GPU feature;
+there is no hidden device or global architecture switch. Shells use an explicitly
+neutral untextured finish, not authored/PBR material parity. Counters expose
+source publications, out-of-epoch withholding, size culls and submitted mesh
+instances/draws/triangles/upload bytes. Complete resources, render designs,
+PRIMARY shape replacement and production prediction/reconciliation remain gaps.
 
 The current protocol is designed for a local/server prototype. Production
 prediction, interpolation policy for remote craft, authentication, persistence,

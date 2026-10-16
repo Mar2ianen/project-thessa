@@ -13,6 +13,10 @@ use thessa_terrain_stream::{
     selection::SelectionView,
 };
 
+#[path = "fleet_mesh.rs"]
+mod fleet_mesh;
+pub use fleet_mesh::SceneMeshes;
+
 pub struct Scene {
     flight: Option<thessa_flight_authority::FlightAuthority>,
     remote: Option<RemoteFlight>,
@@ -63,8 +67,8 @@ struct RemoteFlight {
     fleet: FleetObserver,
 }
 
-/// Bounded latest authoritative observations, not render instances. The wire
-/// carries no design identity and secondary clocks may differ from PRIMARY.
+/// Bounded own-time authoritative observations, separate from world instances.
+/// Retained appearance is optional; secondary clocks may differ from PRIMARY.
 #[derive(Default, Clone)]
 pub struct FleetObserver {
     pub rows: Vec<thessa_flight_net::presentation::FleetPose>,
@@ -784,33 +788,21 @@ impl Scene {
         &self,
         backend: &Backend,
         format: wgpu::TextureFormat,
-    ) -> Result<Option<thessa_render_wgpu::mesh::MeshRenderer>, BackendError> {
+    ) -> Result<Option<SceneMeshes>, BackendError> {
         self.vehicle
             .as_ref()
-            .map(|(source, _)| {
-                thessa_render_wgpu::mesh::MeshRenderer::new(backend, source, format, 1)
-            })
+            .map(|(source, _)| SceneMeshes::new(self, backend, source, format))
             .transpose()
     }
     pub fn update_mesh(
         &self,
         backend: &Backend,
-        renderer: &mut thessa_render_wgpu::mesh::MeshRenderer,
+        renderer: &mut SceneMeshes,
         width: u32,
         height: u32,
         exposure: f32,
     ) -> Result<(), BackendError> {
-        let instances = self
-            .vehicle
-            .as_ref()
-            .map(|(_, instance)| std::slice::from_ref(instance))
-            .unwrap_or(&[]);
-        renderer.update(
-            backend,
-            &self.view(width, height, exposure),
-            &self.sample.lighting,
-            instances,
-        )
+        renderer.update(self, backend, width, height, exposure)
     }
 
     /// Explicit presentation sampling, separate from wall-time streaming
@@ -1285,9 +1277,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        let render = |scene: &mut Scene,
-                      terrain: &mut TerrainRenderer,
-                      mesh: &mut thessa_render_wgpu::mesh::MeshRenderer| {
+        let render = |scene: &mut Scene, terrain: &mut TerrainRenderer, mesh: &mut SceneMeshes| {
             scene.publish_presentation(&backend, terrain).unwrap();
             let exposure = crate::manual_exposure(13.0);
             terrain

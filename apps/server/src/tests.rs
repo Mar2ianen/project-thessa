@@ -2015,6 +2015,125 @@ fn install_separable_vehicle(sim: &mut Sim) {
 }
 
 #[test]
+fn retained_render_changes_revise_cached_catalogue_without_periodic_mesh_copy() {
+    use thessa_sim_core::{RenderGeometry, RenderMesh, RenderPart};
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    let mesh = Arc::new(RenderMesh {
+        positions: vec![DVec3::ZERO, DVec3::X, DVec3::Y],
+        normals: vec![DVec3::Z; 3],
+        indices: vec![0, 1, 2],
+    });
+    driver.sim.authority.vehicle.render_geometry = RenderGeometry {
+        parts: (0..2)
+            .map(|body| RenderPart {
+                name: format!("shell-{body}"),
+                assembly_body: Some(body),
+                position_body_m: DVec3::new(body as f64 * 4.0 - 2.0, 0.0, 0.0),
+                orientation_mesh_to_body: DQuat::IDENTITY,
+                mesh: mesh.clone(),
+            })
+            .collect(),
+    };
+    driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }]),
+    );
+    driver.broadcast_snapshot();
+    let (catalogue, frame) = driver.geometry.as_ref().unwrap();
+    assert_eq!(catalogue.revision, 1);
+    let thessa_flight_net::geometry::RenderAppearance::Available(render) =
+        &catalogue.vehicles[0].render
+    else {
+        panic!("actual retained geometry");
+    };
+    assert!(Arc::ptr_eq(&mesh, &render.parts[0].mesh));
+    let frame = frame.clone();
+    driver.broadcast_snapshot();
+    assert!(Arc::ptr_eq(&frame, &driver.geometry.as_ref().unwrap().1));
+    let before = driver.sim.fleet[&1].state;
+    Arc::make_mut(
+        &mut driver
+            .sim
+            .fleet
+            .get_mut(&1)
+            .unwrap()
+            .vehicle
+            .render_geometry
+            .parts[0]
+            .mesh,
+    )
+    .positions[0]
+        .x += 0.25;
+    driver.broadcast_snapshot();
+    assert_eq!(driver.geometry.as_ref().unwrap().0.revision, 2);
+    assert_eq!(driver.sim.fleet[&1].state, before);
+}
+
+#[test]
+#[ignore = "requires a generated baker JSON at THESSA_TEST_BAKED_VEHICLE"]
+fn baked_body_separation_emits_native_render_replay() {
+    let source = std::fs::read_to_string(
+        std::env::var("THESSA_TEST_BAKED_VEHICLE").expect("path to baked example_assembly JSON"),
+    )
+    .unwrap();
+    let vehicle: VehicleDefinition = serde_json::from_str(&source).unwrap();
+    vehicle.validate().unwrap();
+    assert_eq!(vehicle.render_geometry.parts.len(), 2);
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    driver.sim.authority = FlightAuthority::new_with_vehicle(
+        &driver.sim.ephemeris,
+        driver.sim.authority.reference_body,
+        vehicle,
+    )
+    .unwrap();
+    driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }]),
+    );
+    assert_eq!(driver.sim.fleet.len(), 1);
+    assert_eq!(driver.sim.fleet[&1].vehicle.render_geometry.parts.len(), 1);
+    let mailbox = Arc::new(OutboundMailbox::new());
+    driver.subscribers.push(("pilot".into(), mailbox.clone()));
+    driver.broadcast_snapshot();
+    let mut frames = thessa_flight_net::encode_welcome(&thessa_flight_net::Welcome {
+        tick: 0,
+        flight_time_s: 0.0,
+    })
+    .unwrap();
+    while let Some(frame) = mailbox.try_next() {
+        frames.extend_from_slice(frame.as_ref());
+    }
+    let (geometry, _) = driver.geometry.as_ref().unwrap();
+    assert!(matches!(
+        geometry.vehicles[0].render,
+        thessa_flight_net::geometry::RenderAppearance::Available(_)
+    ));
+    driver.broadcast_snapshot();
+    let mut samples = Vec::new();
+    while let Some(frame) = mailbox.try_next() {
+        samples.extend_from_slice(frame.as_ref());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("baked-render-separation.frame"), &frames).unwrap();
+    std::fs::write(root.join("baked-render-separation.samples"), &samples).unwrap();
+    eprintln!(
+        "baked real-authority separation replay: transaction_bytes={} repeated_kinematic_bytes={} render_parts=1",
+        frames.len(),
+        samples.len()
+    );
+}
+
+#[test]
 fn separate_rejects_vehicles_without_assembly_or_links() {
     let (mut driver, _) = test_driver();
     driver.sim.register("pilot");

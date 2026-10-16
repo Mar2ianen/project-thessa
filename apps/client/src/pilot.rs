@@ -1973,6 +1973,8 @@ mod tests {
         let mut flight = PilotFlightRuntime::new(&ephemeris, body).unwrap();
         let original_state = flight.state;
         let mut snapshot = Snapshot {
+            geometry_revision: 1,
+            appearance_frame_revision: 1,
             tick: 10,
             flight_time_s: 10.0,
             state: flight.state,

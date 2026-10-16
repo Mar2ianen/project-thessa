@@ -42,6 +42,9 @@ impl FlightAuthority {
         self.aero_panels
             .sync_geometry(&self.vehicle.aero_geometry)
             .map_err(FlightError::Aero)?;
+        if let Some(origin) = &mut self.starter_render_origin_body_m {
+            *origin += frame_shift_body_m;
+        }
         Ok(())
     }
 

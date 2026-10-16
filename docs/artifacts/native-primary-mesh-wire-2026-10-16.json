@@ -1,0 +1,115 @@
+{
+  "date": "2026-10-16",
+  "base_commit": "e09e6ba",
+  "branch": "feat/primary-appearance-mesh-wire",
+  "scope": {
+    "implemented": "wire-v10 bounded immutable mesh epochs separate from contact/pose descriptors; zero mesh retransmission on COM-only changes; authoritative PRIMARY retained geometry and explicit compatibility identity; exact snapshot/descriptor pairing; current rotating body frame for PRIMARY and fleet meshes",
+    "not_implemented": "arbitrary per-asset network deltas, general incremental GPU residency, full authored designs/materials/textures or wing appearance, continuous PRIMARY interpolation across COM frame revisions, prediction/reconciliation, external networking/reconnect, complete native/Bevy parity",
+    "licensing": "asset identity, authority policy, wire resolution and native integration remain GPL; MIT protocol only adds a numeric message kind/version; no game code moved into engine crates",
+    "runtime_devices_passes_scene_copies_readbacks_added": 0,
+    "new_runtime_packages_or_unsafe": false,
+    "dev_dependency": "flight-net tests reuse the existing workspace toml dependency for the canonical authority fixture"
+  },
+  "contracts": {
+    "wire": "ProtocolVersion 10; kind 10 descriptors carry labels, contacts, body-local part poses and epoch-local mesh IDs; kind 11 carries a complete bounded immutable active mesh epoch; v7/v8/v9 envelopes rejected",
+    "descriptor_pairing": "PRIMARY Snapshot.geometry_revision and FleetSnapshot.geometry_revision name the exact descriptor revision; unknown/absent/omitted/mismatched PRIMARY appearance draws nothing, never an inferred X-15",
+    "primary_frame_revision": "Snapshot.appearance_frame_revision advances only for PRIMARY render/frame changes; unrelated fleet and PRIMARY label changes retain interpolation; different PRIMARY frame revisions select the whole newer sample, not a blend of different COM origins",
+    "publication": "exact mesh equality uses Arc identity then values; active mesh ordering survives reordered/split parts; COM/pose/label/contact changes reuse the cached encoded payload frame; actual active mesh-set changes publish a complete new payload epoch including unchanged survivors",
+    "mailbox": "existing single writer, separate coalesced mesh/descriptor slots and persistent revision markers updated under one lock; payload drains before its descriptor; an unsent dependency survives pose-only coalescing; new subscribers get current complete dependencies",
+    "receiver": "single reader, one bounded active mesh epoch and latest descriptor; resolves either arrival order before publishing the existing Arc-shared materialized FleetGeometry application API; skipped epochs never reuse another epoch's IDs; invalid matching IDs, reused/backwards revisions, malformed buffers or exceeded budgets fail closed",
+    "fleet_ingress": "complete membership uses the same short bounded inbox lock as on-change catalogues rather than dropping a one-shot birth/removal on host-drain contention; no extra reader or per-tick polling system",
+    "per_vehicle_appearance_budget": {"parts": 8, "vertices": 1024, "indices": 4096, "maximum_local_component_m": 1024},
+    "payload_epoch_budget": {"entries": 512, "vertices": 65536, "indices": 262144, "framed_envelope_cap_bytes": 8388608},
+    "budget_limitations": "reference occurrences count against each vehicle's budget despite deduplication; bounds are post-deserialization, not a proof of hostile transient allocation safety",
+    "primary_identity": "only the standard GPL FlightAuthority constructor declares the closed StarterX15 identity; custom/split constructors do not inherit it, even for identical names/physical definitions; retained geometry takes precedence and compatibility origin follows the existing resource-frame shift pipeline",
+    "gpu": "server mode initially has no MeshRenderer/GPU source; declared PRIMARY and enabled fleet meshes share the existing device/queue/opaque renderer/pass/targets; common COM translations reuse source buffers; true layouts still rebuild the combined source and may reupload PRIMARY",
+    "coordinate_frame": "both actual body meshes and fleet instances convert inertial render axes into the current rotating BodyFrame used by camera/terrain; nonzero-epoch hardware oracle checks both sides",
+    "disabled": "renderer.fleet_meshes disables only secondaries, not PRIMARY; no fleet GPU source/history or retained old fleet catalogue in GPU source state; requested/resolved quality policy remains unchanged",
+    "diagnostics": "HUD and flight telemetry expose primary_appearance=unknown|revision_mismatch|absent|omitted_budget|retained|explicit_starter_x15; existing mesh source-publication, draw, triangle, epoch-withheld and cull counters remain"
+  },
+  "reproduction": {
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "hardware": "AMD Radeon 880M (RADV STRIX1), Vulkan, Mesa 26.2.4-arch1.1",
+    "focused": "cargo test -p thessa-flight-net -p thessa-server -p thessa-protocol -p thessa-flight-authority -p thessa-terrain-native --lib --bins",
+    "gpu_oracles": "cargo test -p thessa-terrain-native --bin thessa-terrain-native scene::fleet_mesh::tests -- --include-ignored --test-threads=1 --nocapture",
+    "wire_measurement": "cargo bench -p thessa-flight-net --bench fleet_geometry",
+    "workspace_gates": ["cargo fmt --all -- --check", "cargo clippy --workspace --all-targets --all-features -- -D warnings", "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings", "cargo test --workspace --lib --bins", "cargo test --workspace --test '*'"],
+    "hardware_gates": ["cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored", "cargo test -p thessa-bevy-rcbt --features mesh-shaders --lib gpu_mesh_emission_initializes_every_vertex_and_primitive -- --ignored", "cargo test -p thessa-terrain-native --bin thessa-terrain-native -- --ignored --test-threads=1 --nocapture", "cargo test -p thessa-terrain-native --test window_exit -- --ignored --test-threads=1 --nocapture"],
+    "physical_replay": "THESSA_TEST_BAKED_VEHICLE=/home/chechulin/Projects/project-thessa-gpui/target/render-batch/example-assembly.json cargo test -p thessa-server baked_body_separation_emits_native_render_replay -- --ignored --nocapture; bake input data/vehicles/example_assembly.toml with thessa-vehicle-baker",
+    "replay_peer": "reuse the frozen-transaction peer source/setup in native-fleet-body-rendering-2026-10-16.json; regenerate .frame/.samples with the v10 server test first, never reuse the old v9 bytes",
+    "replay_capture": "thessa-terrain-native --server-flight --server /home/chechulin/Projects/project-thessa-gpui/apps/server/target/test-tmp/baked-render-peer.py --headless IMAGE.png --hud --frames 60 --prestream-seconds 2",
+    "default_server_capture": "thessa-terrain-native --server-flight --headless IMAGE.png --hud --frames 120 --prestream-seconds 2",
+    "legacy_silent_capture": "ALSA_CONFIG_PATH=/home/chechulin/Projects/project-thessa-gpui/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:/home/chechulin/Projects/project-thessa-gpui/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6 thessa-client",
+    "silent_alsa_config": "pcm.!default { type null hint { show on description \"Silent test output\" } }\n",
+    "audio_policy": "User requested silent test runs. Final legacy smoke routes process-local ALSA output to null and disallows real Pulse/PipeWire endpoints; no system mixer or production audio settings changed. Native has no audio subsystem. Earlier legacy smoke preceded the request; no audible/audio-quality acceptance is claimed.",
+    "scratch": "repository/crate target directories; no std::env::temp_dir() or generic /tmp scratch; logs under /tmp/opencode"
+  },
+  "verification": {
+    "fmt": "pass",
+    "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "native_no_default_all_target_clippy_deny_warnings": "pass",
+    "native_server_legacy_baker_debug_build": "pass",
+    "native_server_release_build": "pass",
+    "workspace_lib_bin_tests": 1834,
+    "workspace_integration_tests": 53,
+    "bevy_cbt_gpu_tests": 24,
+    "additional_mesh_shader_gpu_test": 1,
+    "native_ignored_tests": {"gpu": 6, "real_server_cpu": 1, "framed_fixture_cli_gpu": 1},
+    "native_window_tests": 5,
+    "successful_distinct_rust_gate_tests": 1925,
+    "additional_baked_real_authority_replay_test": 1,
+    "agent_qa_tests": 5,
+    "architecture_guarded_crates": 12,
+    "logs": "/tmp/opencode/primary-wire-{fmt,clippy,nohud,lib,integration,bevy-gpu,mesh-shader-gpu,native-gpu,window,host-build,release-build,qa,architecture,catalogue-bench,baked-replay-generation,baked-replay,default-server,legacy-silent-smoke}.log",
+    "execution_notes": "Focused compile/test feedback was fixed before the full gates. Final workspace lib/bin, integration and hardware/window gates passed without retries; hardware/window workloads ran sequentially on the actual iGPU/display. An initial render-wgpu ignored-test command matched zero tests and is not counted; the correct Bevy mesh-shader gate ran one. No remote CI or subjective visual review result is claimed.",
+    "not_run": "unrelated ignored sim/authority wall-clock CPU profiling diagnostics; no physical integrator changed"
+  },
+  "wire_measurement": {
+    "log": "/tmp/opencode/primary-wire-catalogue-bench.log",
+    "samples_per_case": 200,
+    "secondaries": 63,
+    "primary_in_this_network_workload": false,
+    "contact_parts_each": 64,
+    "render_parts_each": 1,
+    "render_vertices_each": 1024,
+    "render_indices_each": 4095,
+    "equal_mesh_case": {"deduplicated_meshes": 1, "initial_mesh_plus_descriptor_bundle_bytes": 426677, "cached_borrowed_scan_median_us": 10.389, "rebuild_bundle_median_us": 640.843},
+    "unique_mesh_case": {"deduplicated_meshes": 63, "initial_mesh_frame_bytes": 3612936, "com_descriptor_frame_bytes": 369318, "com_mesh_frame_bytes": 0, "cached_payload_frame_arc_reused": true, "inline_struct_diagnostic_bytes": 3982243, "com_publication_median_us": 437.385},
+    "boundary": "release CPU diagnostic; publication measurement includes materialized descriptor clone, validation, active-set matching and encoding. Inline struct diagnostic serializes the old application shape plus the new empty PRIMARY field, not a valid current stream or an exact old binary. Excludes IO/decoder/UI/GPU and is not a production frame-time/network throughput claim. Contact geometry is still included in every changed descriptor; actual mesh-set changes publish complete epochs. No concurrent build/test jobs during this measurement."
+  },
+  "gpu_oracles": {
+    "primary": "nonzero 1234 s epoch, retained PRIMARY triangle and secondary triangle in current rotating body frame; both visible in expected image halves; unknown/absent/over-budget/mismatched PRIMARY never draws X-15; PRIMARY COM shift preserves identical pixels and source; disabled fleet keeps only PRIMARY and no fleet source/history",
+    "existing_control_sha256": "46162b934849737344c01e03fb802f50403cad5ce0a72f62c38bec0cc85a91f0",
+    "existing_control": "fleet-world-oracle.png remains byte-identical to native-fleet-body-world-oracle-2026-10-16.png",
+    "precision": "existing 1 nm publication-layout envelope reserved inside 1 mm local narrowing, plus rotating large-coordinate COM/interpolation regression at 3e12 m; unchanged",
+    "subjective_review": "not performed; deterministic pixel/geometry oracles are not beauty or full client-parity acceptance"
+  },
+  "baked_replay": {
+    "real_authority_path": "FlightAuthority::new_with_vehicle -> Separate(stack) -> existing physical cluster reconstruction -> Driver::broadcast_snapshot -> mesh/descriptor resolution -> native opaque mesh renderer",
+    "generated_json_sha256": "843ad5bcd549e457a19c95145c2a7c6f4ef70a94eb7b20cdcf537f3599737a0e",
+    "transaction_with_welcome_bytes": 25037,
+    "repeated_kinematic_bytes": 415,
+    "primary_and_secondary_epoch_s": 0.0,
+    "parts_vertices_triangles_per_cluster": [1, 226, 320],
+    "native_draws": {"instances": 2, "draw_calls": 2, "triangles": 640, "frame_upload_bytes": 704, "source_publications": 1, "epoch_withheld": 0, "size_culled": 0},
+    "adoption": {"primary_appearance": "retained", "geometry_revision": 1, "geometry_updates": 1, "fleet_members": 1, "fleet_updates": 7, "geometry_matched": true, "fleet_stale": false, "local_steps": 0, "stopped": false, "link_closed": false},
+    "comparison": "old v9 capture drew 78,785 triangles including the wrong compatibility PRIMARY; current capture draws exactly the two real 320-triangle split shells. This is a frozen actual-authority transaction, not a live separation acknowledgement, matched-frame timing comparison or subjective aesthetic acceptance. Dark/incomplete terrain scene remains outside this slice."
+  },
+  "default_server_and_legacy": {
+    "native_actual_default_server": {"primary_appearance": "explicit_starter_x15", "instances": 1, "triangles": 78465, "source_publications": 1, "geometry_updates": 1, "fleet_members": 0, "local_steps": 0, "stopped": false, "link_closed": false},
+    "legacy_actual_v10_link": {"exit_code": 0, "local_fallback": false, "last_logged_sim_s": 10, "last_logged_steps": 1200, "requested_effective_warp": 1, "audio": "process-local null output; audible behavior deliberately untested"},
+    "boundary": "different wall-time runs/epochs/resolutions/terrain work, not matched native/Bevy visual parity or an isolated networking/renderer speed comparison"
+  },
+  "binaries": {
+    "release_native_sha256": "71910d8fe150b598ca917bd14ae2ac653dda6b0d5eee0badf19cd74c69cca3d8",
+    "release_server_sha256": "9ca09b72a6b80332212e691df7f28ae567d6fc195304c8e4537b5c6a6ea87df5",
+    "debug_legacy_sha256": "8c94e0bebada09c1a299b0b075c86c5689c29d5c61c41d713dcd6000fc98ba54",
+    "debug_server_sha256": "c6ac1fcc6ed861103a58adff884bbff26d47745f113cea57df67d3ff2754038b"
+  },
+  "captures": [
+    {"path": "native-primary-body-frame-oracle-2026-10-16.png", "size": [320, 240], "sha256": "af67b281649dddd4a9d505195a154cd60c83eba57b20f518a131cbd78ddd2aae", "scenario": "synthetic PRIMARY/secondary triangles at a nonzero body-spin epoch, deterministic black-target oracle"},
+    {"path": "native-primary-baked-separation-2026-10-16.png", "size": [1280, 720], "sha256": "048294d5ecb19f33f51983068e7de3a1494228cbb240a39debebaade4c9f7504", "scenario": "frozen real split transaction; actual PRIMARY and capsule shells, no compatibility X-15"},
+    {"path": "native-primary-default-server-2026-10-16.png", "size": [1280, 720], "sha256": "71b308f2f1ea05892de4134e3780ac009944bafa10fcb5306d6cc62adcf41a05", "scenario": "actual standard v10 server explicitly authorizes the compatibility X-15"},
+    {"path": "native-primary-legacy-pilot-2026-10-16.png", "sha256": "97464f2dfdf79e54f0381325272f21ae62aca5b9fc6779603105003e412b32e2", "scenario": "rebuilt legacy host on an actual v10 server, silent process-local audio output; not a matched native scene"}
+  ]
+}

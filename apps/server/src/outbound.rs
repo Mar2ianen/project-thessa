@@ -10,6 +10,8 @@ struct OutboundState {
     latest_snapshot: Option<Arc<Vec<u8>>>,
     latest_fleet_snapshot: Option<Arc<Vec<u8>>>,
     latest_fleet_geometry: Option<Arc<Vec<u8>>>,
+    latest_meshes: Option<Arc<Vec<u8>>>,
+    mesh_revision: u64,
     geometry_revision: u64,
     closed: bool,
 }
@@ -46,6 +48,8 @@ impl OutboundMailbox {
                 latest_snapshot: None,
                 latest_fleet_snapshot: None,
                 latest_fleet_geometry: None,
+                latest_meshes: None,
+                mesh_revision: 0,
                 geometry_revision: 0,
                 closed: false,
             }),
@@ -101,7 +105,12 @@ impl OutboundMailbox {
     /// Persistent revision marker suppresses retransmission after draining.
     /// A new mailbox always receives the current catalogue. Coalescing may
     /// skip revisions; consumers match the snapshot's revision, never guess.
-    pub(super) fn replace_fleet_geometry(&self, revision: u64, frame: Arc<Vec<u8>>) -> bool {
+    pub(super) fn replace_fleet_geometry(
+        &self,
+        revision: u64,
+        frame: Arc<Vec<u8>>,
+        meshes: Option<(u64, Arc<Vec<u8>>)>,
+    ) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
@@ -110,6 +119,15 @@ impl OutboundMailbox {
         }
         if revision == state.geometry_revision {
             return true;
+        }
+        if let Some((mesh_revision, mesh_frame)) = meshes {
+            if mesh_revision == 0 || mesh_revision < state.mesh_revision {
+                return false;
+            }
+            if mesh_revision != state.mesh_revision {
+                state.latest_meshes = Some(mesh_frame);
+                state.mesh_revision = mesh_revision;
+            }
         }
         state.latest_fleet_geometry = Some(frame);
         state.geometry_revision = revision;
@@ -124,6 +142,7 @@ impl OutboundMailbox {
             .latest_snapshot
             .take()
             .map(OutboundFrame::Shared)
+            .or_else(|| state.latest_meshes.take().map(OutboundFrame::Shared))
             .or_else(|| {
                 state
                     .latest_fleet_geometry

@@ -396,6 +396,12 @@ impl GuidanceInput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub tick: u64,
+    /// Exact appearance/COM-frame revision. Zero is reserved for unframed
+    /// local/unframed state; PRIMARY broadcasts always stamp a nonzero revision.
+    pub geometry_revision: u64,
+    /// Changes only with PRIMARY appearance/body-frame changes. Fleet-only
+    /// descriptor changes must not interrupt PRIMARY interpolation.
+    pub appearance_frame_revision: u64,
     pub flight_time_s: f64,
     pub state: RigidBodyState,
     pub throttle: f64,
@@ -701,6 +707,8 @@ mod tests {
     #[test]
     fn fleet_snapshot_round_trips_behind_its_own_kind() {
         let snapshot = Snapshot {
+            geometry_revision: 1,
+            appearance_frame_revision: 1,
             tick: 7,
             flight_time_s: 1.5,
             state: RigidBodyState::stationary(DVec3::ZERO),
@@ -825,6 +833,8 @@ mod tests {
 
     fn sample_snapshot() -> Snapshot {
         Snapshot {
+            geometry_revision: 1,
+            appearance_frame_revision: 1,
             tick: 7200,
             flight_time_s: 60.0,
             state: RigidBodyState::new(

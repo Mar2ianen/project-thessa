@@ -342,6 +342,7 @@ impl EmbeddedLink {
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0u8; 65536];
             let mut welcomed = false;
+            let mut geometry_receiver = crate::geometry::GeometryReceiver::default();
             'read: loop {
                 match child_out.read(&mut buffer) {
                     Ok(0) => break,
@@ -358,25 +359,21 @@ impl EmbeddedLink {
                                     }
                                     continue;
                                 }
-                                if envelope.kind == kind::FLEET_GEOMETRY {
-                                    match crate::decode_payload::<crate::geometry::FleetGeometry>(
-                                        &envelope,
-                                    ) {
-                                        Ok(geometry) => {
-                                            if let Err(error) = geometry.validate() {
-                                                eprintln!(
-                                                    "[client] invalid fleet geometry: {error}"
-                                                );
-                                                break 'read;
-                                            }
+                                if matches!(
+                                    envelope.kind,
+                                    kind::FLEET_GEOMETRY | kind::FLEET_MESHES
+                                ) {
+                                    match geometry_receiver.accept(&envelope) {
+                                        Ok(Some(geometry)) => {
                                             if !geometries_writer.push_catalogue(ReceivedSnapshot {
-                                                snapshot: Arc::new(geometry),
+                                                snapshot: geometry,
                                                 received_at: std::time::Instant::now(),
                                                 generation: 0,
                                             }) {
                                                 break 'read;
                                             }
                                         }
+                                        Ok(None) => {}
                                         Err(error) => {
                                             eprintln!(
                                                 "[client] invalid fleet geometry payload: {error}"
@@ -393,7 +390,10 @@ impl EmbeddedLink {
                                                 eprintln!("[client] invalid fleet: {error}");
                                                 break 'read;
                                             }
-                                            fleets_writer.push(ReceivedSnapshot {
+                                            // Complete membership may be the only
+                                            // birth/removal observation. Don't lose
+                                            // it merely because a host drains now.
+                                            fleets_writer.push_catalogue(ReceivedSnapshot {
                                                 snapshot: fleet,
                                                 received_at: std::time::Instant::now(),
                                                 generation: 0,
@@ -554,6 +554,8 @@ mod tests {
 
     fn snapshot(position: DVec3, angle: f64, time: f64) -> Snapshot {
         Snapshot {
+            geometry_revision: 1,
+            appearance_frame_revision: 1,
             tick: time as u64,
             flight_time_s: time,
             state: RigidBodyState::new(
@@ -680,6 +682,7 @@ mod tests {
         let primary = snapshot(DVec3::Y, 0.0, 3.0);
         let fleet = fleet([1, 7]);
         let catalogue = crate::geometry::FleetGeometry {
+            primary: None,
             revision: 1,
             vehicles: vec![],
         };
@@ -726,10 +729,14 @@ mod tests {
             crate::encode_fleet_snapshot(&fleet([1, 1])).unwrap(),
             crate::encode_frame(kind::FLEET_SNAPSHOT, &()).unwrap(),
             crate::encode_frame(kind::FLEET_GEOMETRY, &()).unwrap(),
-            crate::geometry::encode_fleet_geometry(&crate::geometry::FleetGeometry {
-                revision: 0,
-                vehicles: vec![],
-            })
+            crate::encode_frame(
+                kind::FLEET_GEOMETRY,
+                &crate::geometry::FleetGeometry {
+                    primary: None,
+                    revision: 0,
+                    vehicles: vec![],
+                },
+            )
             .unwrap(),
         ] {
             let bytes: String = wire.iter().map(|byte| format!("\\{byte:03o}")).collect();
@@ -752,6 +759,21 @@ mod tests {
         assert!((middle.flight_time_s - 15.0).abs() < 1.0e-12);
         assert!((middle.state.position_inertial_m - DVec3::X * 5.0).length() < 1.0e-12);
         assert!((middle.state.orientation_body_to_inertial.length() - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn primary_interpolation_never_blends_different_com_geometry_frames() {
+        let first = snapshot(DVec3::ZERO, 0.0, 10.0);
+        let mut next = snapshot(DVec3::X * 100.0, 0.2, 20.0);
+        next.geometry_revision += 1;
+        next.appearance_frame_revision += 1;
+        assert_eq!(interpolate_snapshot(&first, &next, 0.5), next);
+        next.appearance_frame_revision = first.appearance_frame_revision;
+        assert_eq!(
+            interpolate_snapshot(&first, &next, 0.5).flight_time_s,
+            15.0,
+            "unrelated fleet descriptor changes keep interpolation"
+        );
     }
 
     #[test]

@@ -24,7 +24,9 @@ impl ProtocolVersion {
     // v8 adds revision-matched fleet contact geometry catalogues. Old peers
     // must not decode the extended FleetSnapshot as a v7 payload.
     // v9 adds retained appearance to the same bounded on-change catalogue.
-    pub const CURRENT: Self = Self(9);
+    // v10 separates immutable mesh payload epochs from contact/pose descriptors
+    // and pairs authoritative PRIMARY appearance with its snapshot COM frame.
+    pub const CURRENT: Self = Self(10);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -47,6 +49,8 @@ pub mod kind {
     pub const FLEET_SNAPSHOT: u32 = 9;
     /// Revisioned bounded fleet contact/retained-appearance catalogue.
     pub const FLEET_GEOMETRY: u32 = 10;
+    /// Bounded complete active mesh payload epoch, sent only on mesh-set change.
+    pub const FLEET_MESHES: u32 = 11;
 }
 
 /// Versioned envelope around one postcard-encoded game payload.
@@ -259,7 +263,7 @@ mod tests {
 
     #[test]
     fn foreign_version_is_rejected() {
-        for version in [7, 8, 999] {
+        for version in [7, 8, 9, 999] {
             let envelope = Envelope {
                 version: ProtocolVersion(version),
                 kind: kind::HELLO,

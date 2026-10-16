@@ -181,17 +181,22 @@ The checked-in vertical slice currently contains:
      names and exact authoritative contact parts (64 parts per secondary); the
      first row opens an auto-fit body-frame wireframe. Missing geometry and
      budget omission are explicit; no partial hull or X-15 copy is substituted.
-     Names are labels, not model IDs. Wire v9 also carries retained body-shell
+      Names are labels, not model IDs. Wire v10 carries retained body-shell
      appearance with explicit absent/over-budget states (8 parts, 1,024 vertices,
      4,096 indices per secondary). Native draws available shells with a neutral
      finish through the existing opaque mesh pass, only when a secondary's
      samples bracket PRIMARY's presentation epoch; no extrapolation masks clock
       debt. Stale/revision-mismatched observations withhold world draws.
-      COM-only translations reuse the existing GPU source and interpolation
-      history in the original publication frame; the wire still sends the full
-      changed catalogue. Shape/relative-pose changes rebuild the combined source.
-      Authored materials, full designs, PRIMARY model replacement, prediction/reconciliation
-     and reconnect remain unimplemented. v7/v8 peers fail version checking.
+      COM-only translations reuse GPU sources and send only lightweight
+      contact/pose descriptors: immutable meshes have a separately revisioned,
+      bounded active-set publication. True mesh-set changes send the complete
+      active payload set; this is not arbitrary incremental asset streaming.
+      PRIMARY also uses its authoritative retained geometry, including after a
+      split. Only the explicit standard-authority identity permits the bundled
+      X-15; unknown, absent, over-budget or revision-mismatched PRIMARY appearance
+      is not replaced with it. PRIMARY appearance is independent of the fleet
+      quality toggle. Authored materials, full designs, prediction/reconciliation
+      and reconnect remain unimplemented. v7/v8/v9 peers fail version checking.
      `VehicleDefinition` also supports optional renderer-neutral retained meshes
      with explicit assembly-body ownership. Splits partition/recenter their poses
      without copying mesh buffers. The baker now retains procedural body shells

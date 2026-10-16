@@ -158,6 +158,11 @@ pub fn input_for_server(
 /// The receive-policy owner supplies finite alpha; a pose consumer must validate
 /// the result before publishing it. This does not validate/adopt server truth.
 pub fn interpolate_snapshot(previous: &Snapshot, latest: &Snapshot, alpha: f64) -> Snapshot {
+    // Different PRIMARY frame revisions can have different COM origins. Never blend
+    // their body positions into an invented intermediate authoritative frame.
+    if previous.appearance_frame_revision != latest.appearance_frame_revision {
+        return latest.clone();
+    }
     let alpha = alpha.clamp(0.0, 1.0);
     let mut snapshot = latest.clone();
     snapshot.flight_time_s =

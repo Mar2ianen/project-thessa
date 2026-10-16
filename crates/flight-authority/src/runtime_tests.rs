@@ -43,6 +43,31 @@ fn fixture() -> (BakedEphemeris, FlightAuthority) {
     (ephemeris, runtime)
 }
 
+#[test]
+fn starter_appearance_is_explicit_constructor_provenance_and_moves_with_the_com_frame() {
+    let (ephemeris, mut starter) = fixture();
+    let custom = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        starter.reference_body,
+        starter.vehicle.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        custom.starter_render_origin_body_m(),
+        None,
+        "an identical name/definition is not built-in asset authorization"
+    );
+    assert_eq!(starter.starter_render_origin_body_m(), Some(DVec3::ZERO));
+    let before = starter.state.position_inertial_m;
+    let mut state = starter.state;
+    starter
+        .apply_resource_frame_shift(DVec3::new(0.125, -0.25, 0.5), &mut state)
+        .unwrap();
+    let world_origin = state.position_inertial_m
+        + state.orientation_body_to_inertial * starter.starter_render_origin_body_m().unwrap();
+    assert!((world_origin - before).length() < 0.001);
+}
+
 fn vehicle_with_resource_test_rocket(
     base: &VehicleDefinition,
     thrust_axis_body: [f64; 3],

@@ -53,6 +53,7 @@ fn main() {
             }),
         });
     let build = || FleetGeometry {
+        primary: None,
         revision: 1,
         vehicles: (1..MAX_FLEET_VEHICLES as u32)
             .map(|id| FleetVehicleGeometry::from_vehicle(VehicleId::new(id), black_box(&vehicle)))
@@ -77,5 +78,41 @@ fn main() {
         catalogue.vehicles.len(),
         MAX_GEOMETRY_PARTS_PER_VEHICLE,
         bytes.len()
+    );
+    let mut unique = build();
+    for vehicle in &mut unique.vehicles {
+        let RenderAppearance::Available(render) = &mut vehicle.render else {
+            unreachable!()
+        };
+        std::sync::Arc::make_mut(&mut render.parts[0].mesh).positions[0].x +=
+            f64::from(vehicle.vehicle_id.0);
+    }
+    let publication = GeometryPublication::new(unique.clone(), None).unwrap();
+    unique.revision += 1;
+    for vehicle in &mut unique.vehicles {
+        let RenderAppearance::Available(render) = &mut vehicle.render else {
+            unreachable!()
+        };
+        for part in &mut render.parts {
+            part.position_body_m -= DVec3::new(0.125, -0.25, 0.5);
+        }
+    }
+    let changed = GeometryPublication::new(unique.clone(), Some(&publication)).unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &changed.mesh_frame,
+        &publication.mesh_frame
+    ));
+    let update = measure(|| {
+        black_box(GeometryPublication::new(unique.clone(), Some(&publication)).unwrap());
+    });
+    let inline_bytes =
+        thessa_flight_net::encode_frame(thessa_protocol::kind::FLEET_GEOMETRY, &unique)
+            .unwrap()
+            .len();
+    println!(
+        "fleet_mesh_wire members=63 distinct_meshes=63 vertices_each=1024 indices_each=4095 contact_parts_each=64 initial_mesh_bytes={} descriptor_bytes={} com_mesh_bytes=0 inline_shape_diagnostic_bytes={} com_publication_median_us={update:.3}; n=200; includes descriptor clone/build/encode and mesh-set comparison, excludes IO/decoder/GPU; inline diagnostic serializes the old struct, not a current valid stream",
+        publication.mesh_frame.len(),
+        changed.frame.len(),
+        inline_bytes
     );
 }

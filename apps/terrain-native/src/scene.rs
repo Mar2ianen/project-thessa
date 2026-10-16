@@ -18,6 +18,9 @@ mod fleet_mesh;
 pub use fleet_mesh::SceneMeshes;
 
 pub struct Scene {
+    primary_presentation: Option<(u64, thessa_flight_authority::presentation::FlightPose)>,
+    last_primary_revision: u64,
+    last_primary_frame_revision: u64,
     flight: Option<thessa_flight_authority::FlightAuthority>,
     remote: Option<RemoteFlight>,
     launch_site: [f64; 3],
@@ -193,6 +196,9 @@ impl Scene {
         ];
         let stream = TerrainStream::new(field, StreamingPolicy::default())?;
         let mut scene = Self {
+            primary_presentation: None,
+            last_primary_revision: 0,
+            last_primary_frame_revision: 0,
             flight: None,
             remote: None,
             launch_site: sites[0].0,
@@ -482,6 +488,13 @@ impl Scene {
     ) -> Result<(), String> {
         let flight = self.flight.as_mut().ok_or("missing flight replica")?;
         let remote = self.remote.as_mut().ok_or("missing server host")?;
+        if snapshot.geometry_revision == 0
+            || snapshot.geometry_revision < self.last_primary_revision
+            || snapshot.appearance_frame_revision == 0
+            || snapshot.appearance_frame_revision < self.last_primary_frame_revision
+        {
+            return Err("PRIMARY appearance revision is zero or moved backwards".into());
+        }
         if remote.last_tick.is_some_and(|tick| {
             snapshot.tick < tick || snapshot.flight_time_s < flight.flight_time_s
         }) {
@@ -494,6 +507,8 @@ impl Scene {
             snapshot,
         )?;
         remote.last_tick = Some(snapshot.tick);
+        self.last_primary_revision = snapshot.geometry_revision;
+        self.last_primary_frame_revision = snapshot.appearance_frame_revision;
         remote.snapshots += 1;
         Ok(())
     }
@@ -565,6 +580,7 @@ impl Scene {
                 flight.reference_body,
             )?;
             self.publish_vehicle_pose(pose)?;
+            self.primary_presentation = Some((snapshot.geometry_revision, pose));
         }
         if self.flight_stopped() {
             return Err(self
@@ -619,6 +635,7 @@ impl Scene {
         self.east = east;
         self.lighting_dirty |= self.sample.lighting != sample.lighting;
         self.sample = sample;
+        self.primary_presentation = Some((0, pose));
         Ok(())
     }
 
@@ -664,7 +681,32 @@ impl Scene {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
             let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN });
-            format!("{source} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
+            format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
+    }
+
+    pub fn primary_appearance_status(&self) -> &'static str {
+        use thessa_flight_net::geometry::RenderAppearance;
+        let Some(remote) = &self.remote else {
+            return "local";
+        };
+        let Some(geometry) = &remote.fleet.geometry else {
+            return "unknown";
+        };
+        let Some(primary) = &geometry.primary else {
+            return "unknown";
+        };
+        if self
+            .primary_presentation
+            .is_none_or(|(revision, _)| revision != geometry.revision)
+        {
+            return "revision_mismatch";
+        }
+        match primary.render {
+            RenderAppearance::Absent => "absent",
+            RenderAppearance::OmittedBudget => "omitted_budget",
+            RenderAppearance::Available(_) => "retained",
+            RenderAppearance::StarterX15 { .. } => "explicit_starter_x15",
+        }
     }
     pub fn flight_stopped(&self) -> bool {
         self.flight

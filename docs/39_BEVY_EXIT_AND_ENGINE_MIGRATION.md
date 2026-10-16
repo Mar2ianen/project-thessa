@@ -2625,6 +2625,10 @@ fallback; audio remains unverified due to device warnings.
 
 ### COM-stable native GPU publications (2026-10-16)
 
+This is the `e09e6ba` snapshot. The following wire-v10/PRIMARY continuation
+supersedes its remaining full-mesh COM retransmission and compatibility-PRIMARY
+limitations; these dated measurements remain unchanged.
+
 The `feat/native-render-origin` continuation retains a catalogue Arc with the
 GPU publication. On a matched revision, native compares IDs, part counts,
 orientations, mesh/normal/index payloads and **relative** part origins. Labels
@@ -2686,6 +2690,80 @@ One later workspace rerun hit the existing fleet-silence fixture's five-second
 receive deadline. Its focused retry and another complete default-thread workspace
 run passed without changing the fixture or product code. The failure/retry logs
 remain recorded in the artifact; hardware/window gates needed no retry.
+
+### Wire-v10 mesh epochs and authoritative PRIMARY (2026-10-16)
+
+`feat/primary-appearance-mesh-wire` resolves the two remaining blockers from
+`e09e6ba` together under one incompatible wire revision. `FLEET_GEOMETRY` (kind 10)
+now carries labels, contacts, part poses and mesh references; `FLEET_MESHES` (kind
+11) carries an immutable bounded active mesh epoch. PRIMARY has an explicit
+descriptor alongside up to 63 secondary descriptors. Both PRIMARY `Snapshot`
+and `FleetSnapshot` reference the exact descriptor revision. v7/v8/v9 peers fail
+version checking rather than partially decoding these payloads.
+
+The producer deduplicates exact mesh values, using Arc identity first, and
+preserves active-set ordering across reordered/split parts. Pose/contact/label
+changes reuse the cached encoded payload frame and epoch. **COM-only updates
+send zero mesh frames** to an existing subscriber, although complete lightweight
+contact/pose descriptors still change. Each new subscriber receives the current
+complete dependency. Actual active mesh-set changes create a new complete epoch,
+including unchanged survivors; arbitrary per-asset deltas, network asset requests
+and an unbounded content cache are deliberately not implemented.
+
+Per-vehicle budgets remain 8 parts / 1,024 vertices / 4,096 indices / ±1,024 m
+local components, now including PRIMARY. The mesh table is bounded to 512 entries
+/ 65,536 vertices / 262,144 indices. Reference occurrences still count against
+each vehicle's budget; deduplication cannot bypass it. Validation remains
+post-deserialization, not a hostile-allocation safety proof. No filenames,
+loaders, renderer handles, full designs or extra network workers are introduced.
+
+The existing mailbox gains one latest payload slot and persistent epoch marker.
+Payload and descriptor slots update under one mutex; the writer drains payloads
+before descriptors. A newer pose descriptor therefore cannot evict its only
+unsent mesh dependency. A single reader retains one payload epoch and latest
+descriptor, resolves either arrival order, and exposes the existing Arc-shared
+`FleetGeometry` application API only after exact dependency resolution. Skipped
+epochs never reinterpret another epoch's integer IDs. Changed/reused/backwards
+revisions, unknown matching-epoch IDs, malformed buffers and exceeded budgets
+fail closed. Complete fleet membership now also takes the short inbox lock: a
+one-shot birth/removal is not lost merely because the host drains concurrently.
+
+The GPL standard authority constructor alone declares `StarterX15` provenance
+and a body-local asset origin, which follows the existing resource-frame shift
+pipeline. A custom constructor—even with an identical X-15 name/definition—and
+every split constructor start without that identity. Retained appearance takes
+precedence. The descriptor's built-in identity is a closed enum, never a display
+name/path heuristic or missing-geometry fallback. No game asset policy is moved
+into MIT simulation/render crates.
+
+Native server mode initially allocates **no** mesh renderer/source. Once a
+declaration arrives it builds only the declared PRIMARY and enabled fleet sources
+in the existing device/queue/opaque pass/targets. A custom or split PRIMARY uses
+its own retained geometry, not a simultaneous or hidden X-15 draw. Unknown,
+absent, over-budget or revision-mismatched PRIMARY appearance draws nothing;
+HUD and telemetry expose `primary_appearance`. PRIMARY is independent of
+`renderer.fleet_meshes`: disabled allocates no fleet GPU source/history and does
+not retain an old fleet catalogue in GPU source state, while PRIMARY still works.
+Actual render-layout changes still replace the combined source, including PRIMARY;
+this is not a general incremental GPU residency cache.
+
+Common-publication-frame COM correction applies to PRIMARY as well as secondaries.
+Snapshots also carry a separate PRIMARY appearance/frame revision, advanced only
+when PRIMARY render state changes, not on unrelated fleet metadata. PRIMARY
+presentation never interpolates body positions across such frame revisions that
+can have different COM origins: it selects a whole newer sample at that boundary.
+Fleet-only descriptor changes retain PRIMARY interpolation. Continuous PRIMARY
+interpolation across actual COM revisions remains a gap,
+not an invented intermediate body frame. Secondary histories retain their existing
+common-publication-frame interpolation. Both paths finally transform inertial
+render axes into the **current rotating body frame** used by the camera/terrain;
+the nonzero-epoch GPU oracle covers this conversion, which epoch-zero captures
+could not verify. No authoritative physics, prediction or clock policy changes.
+
+Verification, replay/capture commands, measurements and remaining scope are
+recorded in `artifacts/native-primary-mesh-wire-2026-10-16.json`. The tests are
+deterministic provenance/geometry checks, not a blind subjective review or a
+complete native/Bevy visual-parity claim.
 
 ## 15. FastRT
 

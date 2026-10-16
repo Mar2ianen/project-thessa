@@ -2044,7 +2044,8 @@ fn retained_render_changes_revise_cached_catalogue_without_periodic_mesh_copy() 
         }]),
     );
     driver.broadcast_snapshot();
-    let (catalogue, frame) = driver.geometry.as_ref().unwrap();
+    let publication = driver.geometry.as_ref().unwrap();
+    let (catalogue, frame) = (&publication.geometry, &publication.frame);
     assert_eq!(catalogue.revision, 1);
     let thessa_flight_net::geometry::RenderAppearance::Available(render) =
         &catalogue.vehicles[0].render
@@ -2054,7 +2055,10 @@ fn retained_render_changes_revise_cached_catalogue_without_periodic_mesh_copy() 
     assert!(Arc::ptr_eq(&mesh, &render.parts[0].mesh));
     let frame = frame.clone();
     driver.broadcast_snapshot();
-    assert!(Arc::ptr_eq(&frame, &driver.geometry.as_ref().unwrap().1));
+    assert!(Arc::ptr_eq(
+        &frame,
+        &driver.geometry.as_ref().unwrap().frame
+    ));
     let before = driver.sim.fleet[&1].state;
     Arc::make_mut(
         &mut driver
@@ -2070,8 +2074,42 @@ fn retained_render_changes_revise_cached_catalogue_without_periodic_mesh_copy() 
     .positions[0]
         .x += 0.25;
     driver.broadcast_snapshot();
-    assert_eq!(driver.geometry.as_ref().unwrap().0.revision, 2);
+    assert_eq!(driver.geometry.as_ref().unwrap().geometry.revision, 2);
     assert_eq!(driver.sim.fleet[&1].state, before);
+    let mesh_frame = driver.geometry.as_ref().unwrap().mesh_frame.clone();
+    let mesh_revision = driver.geometry.as_ref().unwrap().mesh_revision;
+    let mailbox = Arc::new(OutboundMailbox::new());
+    driver
+        .subscribers
+        .push(("mesh-observer".into(), mailbox.clone()));
+    driver.broadcast_snapshot();
+    while mailbox.try_next().is_some() {}
+    driver
+        .sim
+        .fleet
+        .get_mut(&1)
+        .unwrap()
+        .vehicle
+        .render_geometry
+        .parts[0]
+        .position_body_m
+        .x += 0.125;
+    driver.broadcast_snapshot();
+    let publication = driver.geometry.as_ref().unwrap();
+    assert_eq!(publication.geometry.revision, 3);
+    assert_eq!(publication.mesh_revision, mesh_revision);
+    assert!(Arc::ptr_eq(&mesh_frame, &publication.mesh_frame));
+    let mut kinds = vec![];
+    while let Some(frame) = mailbox.try_next() {
+        for bytes in FrameDecoder::new().push(frame.as_ref()).unwrap() {
+            kinds.push(thessa_flight_net::decode_frame(&bytes).unwrap().kind);
+        }
+    }
+    assert_eq!(
+        kinds,
+        [kind::SNAPSHOT, kind::FLEET_GEOMETRY, kind::FLEET_SNAPSHOT],
+        "COM-only publication must transmit zero mesh frames"
+    );
 }
 
 #[test]
@@ -2112,7 +2150,14 @@ fn baked_body_separation_emits_native_render_replay() {
     while let Some(frame) = mailbox.try_next() {
         frames.extend_from_slice(frame.as_ref());
     }
-    let (geometry, _) = driver.geometry.as_ref().unwrap();
+    let geometry = &driver.geometry.as_ref().unwrap().geometry;
+    assert!(
+        matches!(
+            geometry.primary.as_ref().unwrap().render,
+            thessa_flight_net::geometry::RenderAppearance::Available(_)
+        ),
+        "split PRIMARY keeps its own retained body, never the compatibility X-15"
+    );
     assert!(matches!(
         geometry.vehicles[0].render,
         thessa_flight_net::geometry::RenderAppearance::Available(_)
@@ -2227,17 +2272,20 @@ fn fleet_broadcast_is_complete_including_transition_to_empty() {
     };
     driver.broadcast_snapshot();
     assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
+    let mut receiver = thessa_flight_net::geometry::GeometryReceiver::default();
+    let meshes = decode(mailbox.try_next().unwrap());
+    assert_eq!(meshes.kind, kind::FLEET_MESHES);
+    assert!(receiver.accept(&meshes).unwrap().is_none());
     let geometry = decode(mailbox.try_next().unwrap());
     assert_eq!(geometry.kind, kind::FLEET_GEOMETRY);
-    let geometry: thessa_flight_net::geometry::FleetGeometry =
-        thessa_flight_net::decode_payload(&geometry).unwrap();
+    let geometry = receiver.accept(&geometry).unwrap().unwrap();
     assert_eq!(
         geometry.vehicles[0].contact,
         thessa_flight_net::geometry::ContactGeometry::Available(
             driver.sim.fleet[&1].vehicle.collision_geometry.clone()
         )
     );
-    let cached_frame = driver.geometry.as_ref().unwrap().1.clone();
+    let cached_frame = driver.geometry.as_ref().unwrap().frame.clone();
     let fleet = decode(mailbox.try_next().unwrap());
     assert_eq!(fleet.kind, kind::FLEET_SNAPSHOT);
     let fleet: FleetSnapshot = thessa_flight_net::decode_payload(&fleet).unwrap();
@@ -2248,7 +2296,7 @@ fn fleet_broadcast_is_complete_including_transition_to_empty() {
     driver.broadcast_snapshot();
     assert!(Arc::ptr_eq(
         &cached_frame,
-        &driver.geometry.as_ref().unwrap().1
+        &driver.geometry.as_ref().unwrap().frame
     ));
     assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
     assert_eq!(
@@ -2267,14 +2315,20 @@ fn fleet_broadcast_is_complete_including_transition_to_empty() {
     assert_eq!(decode(newcomer.try_next().unwrap()).kind, kind::SNAPSHOT);
     assert_eq!(
         decode(newcomer.try_next().unwrap()).kind,
+        kind::FLEET_MESHES
+    );
+    assert_eq!(
+        decode(newcomer.try_next().unwrap()).kind,
         kind::FLEET_GEOMETRY
     );
     while mailbox.try_next().is_some() {}
     driver.sim.fleet.clear(); // Exercise membership publication, not a new despawn policy.
     driver.broadcast_snapshot();
     assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
-    let empty: thessa_flight_net::geometry::FleetGeometry =
-        thessa_flight_net::decode_payload(&decode(mailbox.try_next().unwrap())).unwrap();
+    let empty = receiver
+        .accept(&decode(mailbox.try_next().unwrap()))
+        .unwrap()
+        .unwrap();
     assert_eq!(empty.revision, geometry.revision + 1);
     assert!(empty.vehicles.is_empty());
     let fleet: FleetSnapshot =
@@ -2333,14 +2387,14 @@ fn geometry_mailbox_coalesces_revisions_and_is_not_a_reliable_event_queue() {
     let mailbox = OutboundMailbox::new();
     let first = Arc::new(vec![1]);
     let second = Arc::new(vec![2]);
-    assert!(mailbox.replace_fleet_geometry(1, first.clone()));
-    assert!(mailbox.replace_fleet_geometry(2, second.clone()));
-    assert!(!mailbox.replace_fleet_geometry(1, first));
+    assert!(mailbox.replace_fleet_geometry(1, first.clone(), None));
+    assert!(mailbox.replace_fleet_geometry(2, second.clone(), None));
+    assert!(!mailbox.replace_fleet_geometry(1, first, None));
     assert_eq!(mailbox.try_next().unwrap().as_ref(), &[2]);
-    assert!(mailbox.replace_fleet_geometry(2, second));
+    assert!(mailbox.replace_fleet_geometry(2, second, None));
     assert!(mailbox.try_next().is_none());
     mailbox.close();
-    assert!(!mailbox.replace_fleet_geometry(3, Arc::new(vec![3])));
+    assert!(!mailbox.replace_fleet_geometry(3, Arc::new(vec![3]), None));
 }
 
 #[test]
@@ -2398,7 +2452,12 @@ fn physical_separation_emits_a_replayable_geometry_transaction() {
         .collect();
     assert_eq!(
         envelope_kinds,
-        [kind::SNAPSHOT, kind::FLEET_GEOMETRY, kind::FLEET_SNAPSHOT]
+        [
+            kind::SNAPSHOT,
+            kind::FLEET_MESHES,
+            kind::FLEET_GEOMETRY,
+            kind::FLEET_SNAPSHOT
+        ]
     );
     driver.broadcast_snapshot();
     let mut samples = Vec::new();
@@ -2442,12 +2501,39 @@ fn same_id_recenter_or_shape_change_revises_geometry_without_touching_flight_sta
         .local_position_m
         .x += 0.125;
     driver.broadcast_snapshot();
-    let (catalogue, _) = driver.geometry.as_ref().unwrap();
+    let catalogue = &driver.geometry.as_ref().unwrap().geometry;
     assert_eq!(catalogue.revision, 2);
     assert!(
         catalogue.vehicles[0].matches_vehicle(VehicleId::new(1), &driver.sim.fleet[&1].vehicle)
     );
     assert_eq!(driver.sim.fleet[&1].state, before);
+}
+
+#[test]
+fn coalescing_pose_revisions_retains_unsent_mesh_dependency_and_orders_epoch_replacement() {
+    let mailbox = OutboundMailbox::new();
+    let bytes = |v| Arc::new(vec![v]);
+    assert!(mailbox.replace_fleet_geometry(1, bytes(1), Some((1, bytes(11)))));
+    assert!(mailbox.replace_fleet_geometry(2, bytes(2), Some((1, bytes(11)))));
+    assert_eq!(mailbox.try_next().unwrap().as_ref(), &[11]);
+    assert_eq!(mailbox.try_next().unwrap().as_ref(), &[2]);
+    assert!(mailbox.try_next().is_none());
+    assert!(mailbox.replace_fleet_geometry(3, bytes(3), Some((1, bytes(11)))));
+    assert_eq!(
+        mailbox.try_next().unwrap().as_ref(),
+        &[3],
+        "COM change sends no mesh frame after drain"
+    );
+    assert!(mailbox.replace_fleet_geometry(4, bytes(4), Some((2, bytes(12)))));
+    assert!(mailbox.replace_fleet_geometry(6, bytes(6), Some((3, bytes(13)))));
+    assert_eq!(mailbox.try_next().unwrap().as_ref(), &[13]);
+    assert_eq!(mailbox.try_next().unwrap().as_ref(), &[6]);
+    assert!(mailbox.try_next().is_none());
+    assert!(!mailbox.replace_fleet_geometry(7, bytes(7), Some((2, bytes(12)))));
+    assert!(
+        mailbox.try_next().is_none(),
+        "rejected transaction must not mutate metadata slot"
+    );
 }
 
 #[test]

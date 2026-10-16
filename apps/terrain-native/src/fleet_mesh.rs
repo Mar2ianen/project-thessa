@@ -72,7 +72,7 @@ impl Track {
 
 /// Bounds are game wire/graphics policy, not a second GPU backend or pass.
 pub struct SceneMeshes {
-    inner: MeshRenderer,
+    inner: Option<MeshRenderer>,
     format: wgpu::TextureFormat,
     enabled: bool,
     min_pixels: f32,
@@ -96,29 +96,51 @@ pub struct SceneMeshes {
 // equally; the 1 nm subtraction envelope is far below the 1 mm mesh budget.
 const RENDER_ORIGIN_ERROR_M: f64 = 1e-9;
 
+fn in_body_frame(mut instance: MeshInstance, frame: thessa_render_core::BodyFrame) -> MeshInstance {
+    instance.position_m = frame.render_to_body_point(instance.position_m);
+    instance.rotation = (frame.rotation().conjugate() * instance.rotation).normalize();
+    instance
+}
+
 fn same_render_layout(before: &FleetGeometry, after: &FleetGeometry) -> bool {
-    before.vehicles.len() == after.vehicles.len()
-        && before.vehicles.iter().zip(&after.vehicles).all(|(a, b)| {
-            a.vehicle_id == b.vehicle_id
-                && match (&a.render, &b.render) {
-                    (RenderAppearance::Available(a), RenderAppearance::Available(b)) => {
-                        let anchor_a = a.parts[0].position_body_m;
-                        let anchor_b = b.parts[0].position_body_m;
-                        a.parts.len() == b.parts.len()
-                            && a.parts.iter().zip(&b.parts).all(|(a, b)| {
-                                ((a.position_body_m - anchor_a) - (b.position_body_m - anchor_b))
-                                    .length()
-                                    <= RENDER_ORIGIN_ERROR_M
-                                    && a.orientation_mesh_to_body == b.orientation_mesh_to_body
-                                    && (Arc::ptr_eq(&a.mesh, &b.mesh) || a.mesh == b.mesh)
-                            })
-                    }
-                    (RenderAppearance::Available(_), _) | (_, RenderAppearance::Available(_)) => {
-                        false
-                    }
-                    _ => true,
-                }
-        })
+    same_primary_layout(before, after)
+        && before.vehicles.len() == after.vehicles.len()
+        && before
+            .vehicles
+            .iter()
+            .zip(&after.vehicles)
+            .all(|(a, b)| same_vehicle_layout(a, b))
+}
+
+fn same_primary_layout(before: &FleetGeometry, after: &FleetGeometry) -> bool {
+    match (&before.primary, &after.primary) {
+        (None, None) => true,
+        (Some(a), Some(b)) => same_vehicle_layout(a, b),
+        _ => false,
+    }
+}
+
+fn same_vehicle_layout(
+    a: &thessa_flight_net::geometry::FleetVehicleGeometry,
+    b: &thessa_flight_net::geometry::FleetVehicleGeometry,
+) -> bool {
+    a.vehicle_id == b.vehicle_id
+        && match (&a.render, &b.render) {
+            (RenderAppearance::Available(a), RenderAppearance::Available(b)) => {
+                let anchor_a = a.parts[0].position_body_m;
+                let anchor_b = b.parts[0].position_body_m;
+                a.parts.len() == b.parts.len()
+                    && a.parts.iter().zip(&b.parts).all(|(a, b)| {
+                        ((a.position_body_m - anchor_a) - (b.position_body_m - anchor_b)).length()
+                            <= RENDER_ORIGIN_ERROR_M
+                            && a.orientation_mesh_to_body == b.orientation_mesh_to_body
+                            && (Arc::ptr_eq(&a.mesh, &b.mesh) || a.mesh == b.mesh)
+                    })
+            }
+            (RenderAppearance::Available(_), _) | (_, RenderAppearance::Available(_)) => false,
+            (RenderAppearance::StarterX15 { .. }, RenderAppearance::StarterX15 { .. }) => true,
+            _ => a.render == b.render,
+        }
 }
 
 fn render_root(
@@ -143,6 +165,7 @@ fn append_catalogue(
     source: &mut MeshAsset,
     catalogue: &FleetGeometry,
     radii: &mut BTreeMap<VehicleId, (f64, Range<usize>, DVec3)>,
+    include_fleet: bool,
 ) -> Result<(), BackendError> {
     let material = source.materials.len();
     source.materials.push(Material {
@@ -150,7 +173,11 @@ fn append_catalogue(
         metallic: 0.0,
         ..Default::default()
     });
-    for vehicle in &catalogue.vehicles {
+    for vehicle in catalogue
+        .primary
+        .iter()
+        .chain(catalogue.vehicles.iter().filter(|_| include_fleet))
+    {
         let RenderAppearance::Available(geometry) = &vehicle.render else {
             continue;
         };
@@ -208,7 +235,11 @@ impl SceneMeshes {
             &backend.caps,
         );
         Ok(Self {
-            inner: MeshRenderer::new(backend, source, format, 1)?,
+            inner: if scene.server_flight() {
+                None
+            } else {
+                Some(MeshRenderer::new(backend, source, format, 1)?)
+            },
             format,
             enabled: resolved.fleet_meshes,
             min_pixels: resolved.fleet_min_pixels,
@@ -227,7 +258,15 @@ impl SceneMeshes {
     }
 
     pub fn draw_stats(&self) -> MeshDrawStats {
-        self.inner.draw_stats()
+        self.inner.as_ref().map_or(
+            MeshDrawStats {
+                instances: 0,
+                draw_calls: 0,
+                triangles: 0,
+                frame_upload_bytes: 0,
+            },
+            MeshRenderer::draw_stats,
+        )
     }
     pub fn encode(
         &self,
@@ -235,7 +274,9 @@ impl SceneMeshes {
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
     ) {
-        self.inner.encode(encoder, color, depth);
+        if let Some(inner) = &self.inner {
+            inner.encode(encoder, color, depth);
+        }
     }
 
     pub fn update(
@@ -248,12 +289,14 @@ impl SceneMeshes {
     ) -> Result<(), BackendError> {
         let view = scene.view(width, height, exposure);
         let Some((primary, primary_instance)) = &scene.vehicle else {
-            return self
-                .inner
-                .update(backend, &view, &scene.sample.lighting, &[]);
+            return if let Some(inner) = &mut self.inner {
+                inner.update(backend, &view, &scene.sample.lighting, &[])
+            } else {
+                Ok(())
+            };
         };
-        if !self.enabled {
-            return self.inner.update(
+        if !scene.server_flight() {
+            return self.inner.as_mut().expect("local source").update(
                 backend,
                 &view,
                 &scene.sample.lighting,
@@ -262,40 +305,67 @@ impl SceneMeshes {
         }
         let observer = scene.remote.as_ref().map(|r| &r.fleet);
         let matched = observer.and_then(FleetObserver::matched_geometry);
-        if let Some(catalogue) = matched
+        let catalogue = observer.and_then(|o| o.geometry.as_deref());
+        if let Some(catalogue) = catalogue
             && catalogue.revision != self.revision
         {
-            let changed = self
-                .source_geometry
-                .as_deref()
-                .is_none_or(|before| !same_render_layout(before, catalogue));
+            let changed = self.source_geometry.as_deref().is_none_or(|before| {
+                if self.enabled {
+                    !same_render_layout(before, catalogue)
+                } else {
+                    // Disabled fleet rendering never rebuilds PRIMARY for
+                    // unrelated fleet revisions or retains fleet GPU ranges.
+                    !same_primary_layout(before, catalogue)
+                }
+            });
             if changed {
                 let mut radii = BTreeMap::new();
-                // Empty catalogues don't re-upload PRIMARY; removal does retire the
-                // old fleet source. All resources use the same existing device.
-                if catalogue
-                    .vehicles
-                    .iter()
-                    .any(|v| matches!(v.render, RenderAppearance::Available(_)))
-                    || !self.radii.is_empty()
-                {
-                    let mut source = primary.clone();
-                    append_catalogue(&mut source, catalogue, &mut radii)?;
-                    let inner = MeshRenderer::new(backend, &source, self.format, 64)?;
-                    self.inner = inner;
+                let builtin = catalogue
+                    .primary
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.render, RenderAppearance::StarterX15 { .. }));
+                let mut source = if builtin {
+                    primary.clone()
+                } else {
+                    MeshAsset {
+                        primitives: vec![],
+                        materials: vec![],
+                        textures: vec![],
+                        images: vec![],
+                    }
+                };
+                let primary_primitives = source.primitives.len();
+                append_catalogue(&mut source, catalogue, &mut radii, self.enabled)?;
+                let inner = if source.primitives.is_empty() {
+                    None
+                } else {
+                    Some(MeshRenderer::new(backend, &source, self.format, 64)?)
+                };
+                if self.inner.is_some() || inner.is_some() {
                     self.source_publications += 1;
                 }
+                self.inner = inner;
+                self.primary_primitives = primary_primitives;
                 self.tracks.clear();
                 self.observed_updates = 0;
                 self.radii = radii;
                 let primitive_count = self.primary_primitives
                     + self.radii.values().map(|(_, r, _)| r.len()).sum::<usize>();
                 self.ranges.resize(primitive_count, 0..0);
-                self.source_geometry = observer.and_then(|o| o.geometry.clone());
+                self.source_geometry = if self.enabled {
+                    observer.and_then(|o| o.geometry.clone())
+                } else {
+                    Some(Arc::new(FleetGeometry {
+                        revision: catalogue.revision,
+                        primary: catalogue.primary.clone(),
+                        vehicles: vec![],
+                    }))
+                };
             }
             self.revision = catalogue.revision;
         }
         if let Some(observer) = observer
+            && self.enabled
             && !self.radii.is_empty()
             && observer.updates != self.observed_updates
             && let Some(catalogue) = matched
@@ -325,14 +395,54 @@ impl SceneMeshes {
             self.observed_updates = observer.updates;
         }
         self.instances.clear();
-        self.instances.push(*primary_instance);
         self.ranges.fill(0..0);
-        self.ranges[..self.primary_primitives].fill(0..1);
         self.epoch_withheld = 0;
         self.size_culled = 0;
-        if observer.is_some_and(|o| !o.stale) && matched.is_some() {
+        if let (Some(catalogue), Some((revision, pose))) = (catalogue, scene.primary_presentation)
+            && revision == catalogue.revision
+            && let Some(primary) = &catalogue.primary
+        {
+            match &primary.render {
+                RenderAppearance::StarterX15 { origin_body_m } => {
+                    let mut instance = *primary_instance;
+                    instance.position_m +=
+                        scene
+                            .sample
+                            .frame
+                            .render_to_body_direction(inertial_to_render_axes(
+                                pose.orientation_body_to_inertial() * *origin_body_m,
+                            ));
+                    self.instances.push(instance);
+                    self.ranges[..self.primary_primitives].fill(0..1);
+                }
+                RenderAppearance::Available(geometry) => {
+                    if let Some((_, primitives, anchor)) = self.radii.get(&VehicleId::PRIMARY)
+                        && let Some(root) = render_root(pose, geometry, *anchor)
+                        && let Some(instance) = (Track {
+                            previous: None,
+                            latest: root,
+                        })
+                        .at(
+                            scene.sample.time,
+                            scene.celestial.ephemeris(),
+                            scene.flight.as_ref().expect("flight").reference_body,
+                        )
+                    {
+                        let index = self.instances.len() as u32;
+                        self.instances
+                            .push(in_body_frame(instance, scene.sample.frame));
+                        self.ranges[primitives.clone()].fill(index..index + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if self.enabled && observer.is_some_and(|o| !o.stale) && matched.is_some() {
             let body = scene.flight.as_ref().expect("server flight").reference_body;
             for (id, (radius, primitives, _)) in &self.radii {
+                if id.is_primary() {
+                    continue;
+                }
                 let Some(instance) = self
                     .tracks
                     .get(id)
@@ -341,6 +451,7 @@ impl SceneMeshes {
                     self.epoch_withheld += 1;
                     continue;
                 };
+                let instance = in_body_frame(instance, scene.sample.frame);
                 // Angular-size quality fallback. Near/intersecting bounds are
                 // never culled. This estimates footprint, not exact visibility.
                 let distance = (instance.position_m - view.world_position_m).length();
@@ -355,13 +466,17 @@ impl SceneMeshes {
                 self.ranges[primitives.clone()].fill(index..index + 1);
             }
         }
-        self.inner.update_selected(
-            backend,
-            &view,
-            &scene.sample.lighting,
-            &self.instances,
-            Some(&self.ranges),
-        )
+        if let Some(inner) = &mut self.inner {
+            inner.update_selected(
+                backend,
+                &view,
+                &scene.sample.lighting,
+                &self.instances,
+                Some(&self.ranges),
+            )
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -370,6 +485,241 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use thessa_sim_core::{RenderGeometry, RenderMesh, RenderPart};
+
+    fn builtin_primary() -> thessa_flight_net::geometry::FleetVehicleGeometry {
+        thessa_flight_net::geometry::FleetVehicleGeometry {
+            vehicle_id: VehicleId::PRIMARY,
+            display_name: "explicit fixture asset".into(),
+            contact: thessa_flight_net::geometry::ContactGeometry::Absent,
+            render: RenderAppearance::StarterX15 {
+                origin_body_m: DVec3::ZERO,
+            },
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a wgpu adapter"]
+    fn authoritative_primary_replaces_x15_and_shares_the_rotating_body_frame_with_fleet() {
+        use thessa_render_wgpu::terrain::OffscreenTarget;
+        let backend = Backend::bring_up().unwrap();
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        let time = SimTime(1234.0);
+        scene.sample = scene.celestial.sample(time).unwrap();
+        let frame = scene.sample.frame;
+        let view = scene.view(320, 240, 1.0);
+        let camera_rotation = DQuat::from_mat3(&glam::DMat3::from_mat4(view.world_from_view));
+        let pose = |x| {
+            let body_position = view.world_position_m + camera_rotation * DVec3::new(x, 0.0, -10.0);
+            let render = frame.body_to_render_point(body_position);
+            FlightPose::new(
+                time,
+                DVec3::new(render.x, -render.z, render.y),
+                DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2)
+                    * frame.rotation()
+                    * camera_rotation,
+            )
+            .unwrap()
+        };
+        let primary_pose = pose(-2.0);
+        let mut catalogue = layout();
+        let mut primary = catalogue.vehicles.remove(0);
+        primary.vehicle_id = VehicleId::PRIMARY;
+        let RenderAppearance::Available(render) = &mut primary.render else {
+            unreachable!()
+        };
+        render.parts.truncate(1);
+        render.parts[0].position_body_m = DVec3::ZERO;
+        render.parts[0].orientation_mesh_to_body = DQuat::IDENTITY;
+        let mut secondary = primary.clone();
+        secondary.vehicle_id = VehicleId::new(1);
+        catalogue.primary = Some(primary);
+        catalogue.vehicles = vec![secondary];
+        catalogue.validate().unwrap();
+        scene.primary_presentation = Some((1, primary_pose));
+        scene.remote = Some(RemoteFlight {
+            link: None,
+            commands: vec![],
+            started: std::time::Instant::now(),
+            timeout: std::time::Duration::from_secs(5),
+            snapshots: 1,
+            last_tick: Some(0),
+            fleet: FleetObserver {
+                rows: vec![thessa_flight_net::presentation::FleetPose {
+                    vehicle_id: VehicleId::new(1),
+                    tick: 0,
+                    stopped: false,
+                    pose: pose(2.0),
+                }],
+                updates: 1,
+                geometry_revision: 1,
+                ..Default::default()
+            },
+        });
+        let mut meshes = scene
+            .mesh_renderer(&backend, OffscreenTarget::FORMAT)
+            .unwrap()
+            .unwrap();
+        let image = |scene: &Scene, meshes: &mut SceneMeshes| {
+            let target = OffscreenTarget::new(&backend, 320, 240).unwrap();
+            scene.update_mesh(&backend, meshes, 320, 240, 1.0).unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            {
+                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target.color,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &target.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+            }
+            meshes.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()
+        };
+        let black = image(&scene, &mut meshes);
+        assert_eq!(
+            meshes.draw_stats().triangles,
+            0,
+            "no implicit X-15 while appearance is unknown"
+        );
+        assert!(meshes.inner.is_none() && meshes.source_geometry.is_none());
+        scene.remote.as_mut().unwrap().fleet.geometry = Some(Arc::new(catalogue.clone()));
+        let actual = image(&scene, &mut meshes);
+        assert_eq!(
+            meshes.draw_stats().triangles,
+            2,
+            "actual PRIMARY + secondary, not the 78k-triangle compatibility asset"
+        );
+        assert_eq!(meshes.draw_stats().instances, 2);
+        let count = |bytes: &[u8], left: bool| {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| (*i % 320 < 160) == left && p[..3] != [0, 0, 0])
+                .count()
+        };
+        assert!(
+            count(&actual, true) > 100 && count(&actual, false) > 100,
+            "both meshes must use the same non-epoch rotating body frame"
+        );
+        let shift = DVec3::new(0.125, -0.25, 0.5);
+        let RenderAppearance::Available(render) = &mut catalogue.primary.as_mut().unwrap().render
+        else {
+            unreachable!()
+        };
+        render.parts[0].position_body_m -= shift;
+        catalogue.revision = 2;
+        scene.remote.as_mut().unwrap().fleet.geometry = Some(Arc::new(catalogue.clone()));
+        scene.remote.as_mut().unwrap().fleet.geometry_revision = 2;
+        scene.primary_presentation = Some((
+            2,
+            FlightPose::new(
+                time,
+                primary_pose.relative_position_m()
+                    + primary_pose.orientation_body_to_inertial() * shift,
+                primary_pose.orientation_body_to_inertial(),
+            )
+            .unwrap(),
+        ));
+        assert_eq!(actual, image(&scene, &mut meshes));
+        assert_eq!(
+            meshes.source_publications, 1,
+            "PRIMARY COM correction reuses the existing GPU source"
+        );
+        let paired = scene.primary_presentation;
+        scene.primary_presentation.as_mut().unwrap().0 = 1;
+        let mismatch = image(&scene, &mut meshes);
+        assert_eq!(
+            count(&mismatch, true),
+            0,
+            "never attach a new PRIMARY COM frame to an old pose"
+        );
+        assert!(count(&mismatch, false) > 100);
+        scene.primary_presentation = paired;
+        scene.requested.renderer.fleet_meshes = false;
+        let mut disabled = scene
+            .mesh_renderer(&backend, OffscreenTarget::FORMAT)
+            .unwrap()
+            .unwrap();
+        let only_primary = image(&scene, &mut disabled);
+        assert!(count(&only_primary, true) > 100 && count(&only_primary, false) == 0);
+        assert_eq!(disabled.draw_stats().triangles, 1);
+        assert!(
+            disabled.tracks.is_empty()
+                && disabled
+                    .source_geometry
+                    .as_ref()
+                    .unwrap()
+                    .vehicles
+                    .is_empty()
+        );
+        catalogue.primary = None;
+        catalogue.revision = 3;
+        scene.remote.as_mut().unwrap().fleet.geometry = Some(Arc::new(catalogue));
+        scene.remote.as_mut().unwrap().fleet.geometry_revision = 3;
+        scene.primary_presentation.as_mut().unwrap().0 = 3;
+        assert_eq!(
+            black,
+            image(&scene, &mut disabled),
+            "missing PRIMARY appearance is invisible, not a guessed X-15"
+        );
+        assert!(disabled.inner.is_none());
+        for render in [RenderAppearance::Absent, RenderAppearance::OmittedBudget] {
+            let mut catalogue = (**scene
+                .remote
+                .as_ref()
+                .unwrap()
+                .fleet
+                .geometry
+                .as_ref()
+                .unwrap())
+            .clone();
+            catalogue.revision += 1;
+            let mut primary = builtin_primary();
+            primary.render = render;
+            catalogue.primary = Some(primary);
+            scene.primary_presentation.as_mut().unwrap().0 = catalogue.revision;
+            scene.remote.as_mut().unwrap().fleet.geometry_revision = catalogue.revision;
+            scene.remote.as_mut().unwrap().fleet.geometry = Some(Arc::new(catalogue));
+            assert_eq!(
+                black,
+                image(&scene, &mut disabled),
+                "absent/over-budget PRIMARY must never substitute a compatibility asset"
+            );
+            assert!(disabled.inner.is_none());
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp/primary-fleet-body-frame-oracle.png");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut encoder = png::Encoder::new(std::fs::File::create(&path).unwrap(), 320, 240);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&actual)
+            .unwrap();
+        eprintln!(
+            "PRIMARY/fleet nonzero-epoch body-frame oracle: {}",
+            path.display()
+        );
+    }
 
     fn triangle() -> Arc<RenderMesh> {
         Arc::new(RenderMesh {
@@ -387,6 +737,7 @@ mod tests {
         use thessa_flight_net::geometry::{ContactGeometry, FleetVehicleGeometry};
         FleetGeometry {
             revision: 1,
+            primary: None,
             vehicles: vec![FleetVehicleGeometry {
                 vehicle_id: VehicleId::new(1),
                 display_name: "shell".into(),
@@ -460,6 +811,7 @@ mod tests {
             &before,
             &FleetGeometry {
                 revision: 2,
+                primary: None,
                 vehicles: vec![]
             }
         ));
@@ -552,7 +904,7 @@ mod tests {
             textures: vec![],
             images: vec![],
         };
-        append_catalogue(&mut source, &catalogue, &mut BTreeMap::new()).unwrap();
+        append_catalogue(&mut source, &catalogue, &mut BTreeMap::new(), true).unwrap();
         assert!(
             (glam::Vec3::from(source.primitives[0].vertices[0].position).as_dvec3() - expected)
                 .length()
@@ -625,6 +977,7 @@ mod tests {
         );
         let catalogue = Arc::new(FleetGeometry {
             revision: 1,
+            primary: Some(builtin_primary()),
             vehicles: vec![a, b],
         });
         catalogue.validate().unwrap();
@@ -644,6 +997,8 @@ mod tests {
                 ..Default::default()
             },
         });
+        let primary_pose = scene.primary_presentation.unwrap().1;
+        scene.primary_presentation = Some((1, primary_pose));
         let mut meshes = scene
             .mesh_renderer(&backend, OffscreenTarget::FORMAT)
             .unwrap()
@@ -736,6 +1091,7 @@ mod tests {
                 .all(|p| p[..3] == [0, 0, 0])
         );
         scene.remote.as_mut().unwrap().fleet.geometry_revision = 2;
+        scene.primary_presentation = Some((2, primary_pose));
         assert_eq!(
             image,
             render(&scene, &mut meshes, 320, 240),
@@ -770,6 +1126,8 @@ mod tests {
         assert!(
             meshes
                 .inner
+                .as_mut()
+                .unwrap()
                 .update_selected(
                     &backend,
                     &view,
@@ -804,7 +1162,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(empty, render(&scene, &mut disabled, 320, 240));
-        assert_eq!(disabled.source_publications, 0);
+        assert_eq!(
+            disabled.source_publications, 1,
+            "PRIMARY publication is independent of the disabled fleet effect"
+        );
         assert!(disabled.radii.is_empty() && disabled.tracks.is_empty());
         // Target-size update/submit diagnostic: repeated synthetic poses, NOT
         // a 63-vehicle physical replay or a visibility-quality benchmark.
@@ -819,6 +1180,7 @@ mod tests {
             .collect();
         fleet.geometry = Some(Arc::new(FleetGeometry {
             revision: 3,
+            primary: Some(builtin_primary()),
             vehicles: (1..64)
                 .map(|id| {
                     let mut g = geometry.clone();
@@ -829,6 +1191,7 @@ mod tests {
         }));
         fleet.geometry_revision = 3;
         fleet.updates += 1;
+        scene.primary_presentation = Some((3, primary_pose));
         let target = OffscreenTarget::new(&backend, 320, 240).unwrap();
         let mut times = Vec::new();
         for sample in 0..110 {
@@ -860,6 +1223,7 @@ mod tests {
         // hold visibility constant; this is upload/selection work, not a fleet
         // scene or an aesthetic comparison. Fresh Arcs model decoded packets.
         let mut full = layout();
+        full.primary = Some(builtin_primary());
         let part = render_parts(&mut full)[0].clone();
         let positions = triangle().positions.clone();
         *render_parts(&mut full) = (0..8)
@@ -888,6 +1252,7 @@ mod tests {
         fleet.geometry = Some(Arc::new(full.clone()));
         fleet.geometry_revision = full.revision;
         fleet.updates += 1;
+        scene.primary_presentation = Some((4, primary_pose));
         scene
             .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
             .unwrap();
@@ -925,6 +1290,7 @@ mod tests {
                     )
                     .unwrap();
                 }
+                scene.primary_presentation = Some((revision, primary_pose));
                 if force_rebuild {
                     meshes.source_geometry = None;
                 }
@@ -967,11 +1333,13 @@ mod tests {
         let fleet = &mut scene.remote.as_mut().unwrap().fleet;
         fleet.geometry = Some(Arc::new(FleetGeometry {
             revision: revision + 1,
+            primary: Some(builtin_primary()),
             vehicles: vec![],
         }));
         fleet.geometry_revision = revision + 1;
         fleet.rows.clear();
         fleet.updates += 1;
+        scene.primary_presentation = Some((revision + 1, primary_pose));
         let publications = meshes.source_publications;
         assert_eq!(empty, render(&scene, &mut meshes, 320, 240));
         assert_eq!(meshes.source_publications, publications + 1);

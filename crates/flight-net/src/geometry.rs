@@ -6,6 +6,9 @@ use thessa_sim_core::{CollisionGeometry, RenderGeometry, VehicleDefinition, Vehi
 
 use crate::MAX_FLEET_VEHICLES;
 
+mod wire;
+pub use wire::{GeometryPublication, GeometryReceiver};
+
 pub const MAX_GEOMETRY_PARTS_PER_VEHICLE: usize = 64;
 pub const MAX_DISPLAY_NAME_BYTES: usize = 128;
 pub const MAX_RENDER_PARTS: usize = 8;
@@ -16,6 +19,11 @@ pub const MAX_RENDER_EXTENT_M: f64 = 1024.0;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RenderAppearance {
     Absent,
+    /// Explicit authority-owned compatibility asset, PRIMARY only. This is a
+    /// closed built-in identity, not a path, display-name guess or fallback.
+    StarterX15 {
+        origin_body_m: glam::DVec3,
+    },
     /// Actual retained meshes. Assembly ownership has already been resolved
     /// by authority; only body-local part poses cross this display boundary.
     Available(RenderGeometry),
@@ -83,6 +91,26 @@ fn part_name_matches(label: &str, name: &str) -> bool {
 }
 
 impl FleetVehicleGeometry {
+    pub fn primary_from_authority(authority: &thessa_flight_authority::FlightAuthority) -> Self {
+        let mut descriptor = Self::from_vehicle(VehicleId::PRIMARY, &authority.vehicle);
+        if matches!(descriptor.render, RenderAppearance::Absent)
+            && let Some(origin_body_m) = authority.starter_render_origin_body_m()
+        {
+            descriptor.render = RenderAppearance::StarterX15 { origin_body_m };
+        }
+        descriptor
+    }
+
+    pub fn matches_primary(&self, authority: &thessa_flight_authority::FlightAuthority) -> bool {
+        self.matches_vehicle(VehicleId::PRIMARY, &authority.vehicle)
+            && match self.render {
+                RenderAppearance::StarterX15 { origin_body_m } => {
+                    authority.starter_render_origin_body_m() == Some(origin_body_m)
+                }
+                RenderAppearance::Absent => authority.starter_render_origin_body_m().is_none(),
+                _ => true,
+            }
+    }
     pub fn from_vehicle(vehicle_id: VehicleId, vehicle: &VehicleDefinition) -> Self {
         let parts = &vehicle.collision_geometry.parts;
         Self {
@@ -135,6 +163,7 @@ impl FleetVehicleGeometry {
             }
             && match &self.render {
                 RenderAppearance::Absent => vehicle.render_geometry.parts.is_empty(),
+                RenderAppearance::StarterX15 { .. } => vehicle.render_geometry.parts.is_empty(),
                 RenderAppearance::OmittedBudget => {
                     !vehicle.render_geometry.parts.is_empty()
                         && !render_fits(&vehicle.render_geometry)
@@ -157,12 +186,14 @@ impl FleetVehicleGeometry {
     }
 }
 
-/// Complete non-primary descriptor set. Revisions increase within one link;
-/// fleet snapshots name the exact revision they require. Sent on change and
+/// Complete secondary set plus explicit PRIMARY appearance. Revisions increase
+/// within one link; snapshots name the exact revision they require. Sent on change and
 /// to newly subscribed peers, not as bulk geometry on every kinematic sample.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FleetGeometry {
     pub revision: u64,
+    /// Missing means appearance unknown: consumers must not invent PRIMARY.
+    pub primary: Option<FleetVehicleGeometry>,
     pub vehicles: Vec<FleetVehicleGeometry>,
 }
 
@@ -199,7 +230,14 @@ impl FleetGeometry {
         {
             return Err("invalid fleet geometry revision/capacity/IDs".into());
         }
-        for vehicle in &self.vehicles {
+        if self
+            .primary
+            .as_ref()
+            .is_some_and(|p| !p.vehicle_id.is_primary())
+        {
+            return Err("primary appearance has a non-primary ID".into());
+        }
+        for vehicle in self.primary.iter().chain(&self.vehicles) {
             if vehicle.display_name.len() > MAX_DISPLAY_NAME_BYTES
                 || vehicle.display_name.chars().any(char::is_control)
             {
@@ -225,6 +263,13 @@ impl FleetGeometry {
                 }
                 geometry.validate(None)?;
             }
+            if let RenderAppearance::StarterX15 { origin_body_m } = vehicle.render
+                && (!vehicle.vehicle_id.is_primary()
+                    || !origin_body_m.is_finite()
+                    || origin_body_m.abs().max_element() > MAX_RENDER_EXTENT_M)
+            {
+                return Err("invalid built-in PRIMARY identity/origin".into());
+            }
         }
         Ok(())
     }
@@ -233,7 +278,13 @@ impl FleetGeometry {
 pub fn encode_fleet_geometry(
     geometry: &FleetGeometry,
 ) -> Result<Vec<u8>, thessa_protocol::CodecError> {
-    crate::encode_frame(thessa_protocol::kind::FLEET_GEOMETRY, geometry)
+    // Self-contained initial stream bundle for fixtures/one-shot consumers.
+    // Live publishers retain GeometryPublication to reuse payload epochs.
+    let publication = GeometryPublication::new(geometry.clone(), None)
+        .map_err(thessa_protocol::CodecError::Codec)?;
+    let mut bytes = (*publication.mesh_frame).clone();
+    bytes.extend_from_slice(&publication.frame);
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -241,6 +292,64 @@ mod tests {
     use super::*;
     use glam::{DQuat, DVec3};
     use thessa_sim_core::{CollisionMaterial, CollisionPart, CollisionShape, X15StarterProfile};
+
+    fn roundtrip(bytes: &[u8]) -> FleetGeometry {
+        let mut receiver = GeometryReceiver::default();
+        let mut result = None;
+        for frame in thessa_protocol::FrameDecoder::new().push(bytes).unwrap() {
+            if let Some(geometry) = receiver
+                .accept(&crate::decode_frame(&frame).unwrap())
+                .unwrap()
+            {
+                result = Some(geometry);
+            }
+        }
+        (*result.unwrap()).clone()
+    }
+
+    #[test]
+    fn primary_asset_identity_is_authority_declared_not_a_name_fallback() {
+        let system: thessa_sim_core::SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = system.bake().unwrap();
+        let body = ephemeris.body_id("thessa").unwrap();
+        let starter = thessa_flight_authority::FlightAuthority::new(&ephemeris, body).unwrap();
+        let declared = FleetVehicleGeometry::primary_from_authority(&starter);
+        assert!(matches!(
+            declared.render,
+            RenderAppearance::StarterX15 { .. }
+        ));
+        assert!(declared.matches_primary(&starter));
+        let custom = thessa_flight_authority::FlightAuthority::new_with_vehicle(
+            &ephemeris,
+            body,
+            starter.vehicle.clone(),
+        )
+        .unwrap();
+        assert!(!declared.matches_primary(&custom));
+        let custom_descriptor = FleetVehicleGeometry::primary_from_authority(&custom);
+        assert_eq!(
+            custom_descriptor.render,
+            RenderAppearance::Absent,
+            "identical X-15 name/physical parameters do not authorize an asset"
+        );
+        let mut catalogue = FleetGeometry {
+            revision: 1,
+            primary: Some(declared.clone()),
+            vehicles: vec![],
+        };
+        assert_eq!(
+            roundtrip(&encode_fleet_geometry(&catalogue).unwrap()),
+            catalogue
+        );
+        let mut invalid = declared;
+        invalid.vehicle_id = VehicleId::new(1);
+        catalogue.vehicles.push(invalid);
+        assert!(
+            catalogue.validate().is_err(),
+            "built-in identity is PRIMARY-only"
+        );
+    }
 
     #[test]
     fn render_roundtrip_keeps_authored_sources_and_bounds_the_complete_frame() {
@@ -269,6 +378,7 @@ mod tests {
         assert_eq!(render.parts[0].name, "unnamed");
         let catalogue = FleetGeometry {
             revision: 2,
+            primary: None,
             vehicles: (1..MAX_FLEET_VEHICLES as u32)
                 .map(|id| FleetVehicleGeometry::from_vehicle(VehicleId::new(id), &vehicle))
                 .collect(),
@@ -276,13 +386,7 @@ mod tests {
         catalogue.validate().unwrap();
         let bytes = encode_fleet_geometry(&catalogue).unwrap();
         assert!(bytes.len() < thessa_protocol::MAX_FRAME_BYTES);
-        let frame = thessa_protocol::FrameDecoder::new()
-            .push(&bytes)
-            .unwrap()
-            .pop()
-            .unwrap();
-        let decoded: FleetGeometry =
-            crate::decode_payload(&crate::decode_frame(&frame).unwrap()).unwrap();
+        let decoded = roundtrip(&bytes);
         assert_eq!(decoded, catalogue);
         vehicle.render_geometry.parts[0].position_body_m.x += 0.125;
         assert!(!descriptor.matches_vehicle(VehicleId::new(1), &vehicle));
@@ -333,18 +437,12 @@ mod tests {
         );
         let catalogue = FleetGeometry {
             revision: 1,
+            primary: None,
             vehicles: vec![descriptor],
         };
         catalogue.validate().unwrap();
         let frame = encode_fleet_geometry(&catalogue).unwrap();
-        let envelope =
-            crate::decode_frame(&thessa_protocol::FrameDecoder::new().push(&frame).unwrap()[0])
-                .unwrap();
-        assert_eq!(envelope.kind, thessa_protocol::kind::FLEET_GEOMETRY);
-        assert_eq!(
-            crate::decode_payload::<FleetGeometry>(&envelope).unwrap(),
-            catalogue
-        );
+        assert_eq!(roundtrip(&frame), catalogue);
         let mut shifted = vehicle.clone();
         shifted.collision_geometry.parts[0].local_position_m.x += 0.01;
         assert!(!catalogue.vehicles[0].matches_vehicle(VehicleId::new(1), &shifted));
@@ -382,6 +480,7 @@ mod tests {
     fn reject_nonfinite_shapes_poses_ids_names_and_unbounded_catalogues() {
         let descriptor = FleetVehicleGeometry::from_vehicle(VehicleId::new(1), &vehicle());
         let valid = FleetGeometry {
+            primary: None,
             revision: 1,
             vehicles: vec![descriptor.clone()],
         };

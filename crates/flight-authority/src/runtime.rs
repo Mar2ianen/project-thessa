@@ -247,6 +247,9 @@ pub struct FlightAuthority {
     pub recipe_max_elevation_m: f64,
     pub launch_site_dir: Option<[f64; 3]>,
     pub vehicle: VehicleDefinition,
+    /// Explicit game-owned provenance of the compatibility constructor, never
+    /// inferred from a display name or reused by custom/split constructors.
+    starter_render_origin_body_m: Option<DVec3>,
     /// Mutable propellant inventory and solid-motor burn clocks.
     pub resource_state: VehicleResourceState,
     /// Authoritative electrical-bus state and command. Physical mounted APU
@@ -658,8 +661,13 @@ impl FlightAuthority {
     /// Build the compatibility X-15 flight used by the starter scene.
     pub fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
         let mut authority = Self::new_with_vehicle(ephemeris, reference_body, x15_vehicle()?)?;
+        authority.starter_render_origin_body_m = Some(DVec3::ZERO);
         authority.set_legacy_propulsion(1.0, true);
         Ok(authority)
+    }
+
+    pub fn starter_render_origin_body_m(&self) -> Option<DVec3> {
+        self.starter_render_origin_body_m
     }
 
     /// Build an authoritative flight around a baked vehicle definition.
@@ -859,6 +867,7 @@ impl FlightAuthority {
             recipe_max_elevation_m,
             launch_site_dir: None,
             vehicle,
+            starter_render_origin_body_m: None,
             resource_state,
             electrical_power_state,
             electrical_power_command,

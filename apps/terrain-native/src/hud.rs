@@ -105,6 +105,7 @@ pub struct Stats {
     pub fleet: Option<crate::scene::FleetObserver>,
     pub live_flight: bool,
     pub server_snapshots: Option<u64>,
+    pub primary_appearance: &'static str,
     pub flight_stopped: bool,
     pub chase: bool,
     pub throttle: f64,
@@ -133,6 +134,7 @@ impl Stats {
             submitted_frames: frames,
             live_flight: scene.live_flight(),
             server_snapshots: scene.server_snapshot_count(),
+            primary_appearance: scene.primary_appearance_status(),
             fleet: scene.fleet_observer().cloned(),
             flight_stopped: scene.flight_stopped(),
             chase: scene.camera.chase(),
@@ -343,6 +345,7 @@ fn widgets(
                     );
                     if let Some(count) = stats.server_snapshots {
                         ui.small(format!("Server snapshots: {count} · readout = newest acknowledgement; scene = interpolated"));
+                        ui.small(format!("PRIMARY appearance: {}", stats.primary_appearance));
                     }
                 }
                 ui.separator();
@@ -505,6 +508,7 @@ fn widgets(
                                     match &geometry.render {
                                         thessa_flight_net::geometry::RenderAppearance::Absent => { ui.small("No retained appearance mesh"); }
                                         thessa_flight_net::geometry::RenderAppearance::OmittedBudget => { ui.small("Appearance omitted: bounded wire representation"); }
+                                        thessa_flight_net::geometry::RenderAppearance::StarterX15 { .. } => { ui.small("Explicit starter asset"); }
                                         thessa_flight_net::geometry::RenderAppearance::Available(mesh) => { ui.small(format!("{} retained render parts · neutral finish", mesh.parts.len())); }
                                     }
                                     match &geometry.contact {
@@ -530,6 +534,7 @@ mod tests {
 
     fn fleet_with_contact_geometry() -> crate::scene::FleetObserver {
         let geometry = std::sync::Arc::new(thessa_flight_net::geometry::FleetGeometry {
+            primary: None,
             revision: 1,
             vehicles: vec![
                 thessa_flight_net::geometry::FleetVehicleGeometry::from_vehicle(

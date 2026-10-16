@@ -16,6 +16,9 @@ serde.workspace = true
 glam.workspace = true
 postcard.workspace = true
 
+[dev-dependencies]
+toml.workspace = true
+
 [[bench]]
 name = "fleet_geometry"
 harness = false

@@ -35,7 +35,7 @@ do not update in place).
 | `details/05_PROCEDURAL_LANDING_GEAR.md` | 🟡 partial | wheel/tire/strut/brake/drive laws, mass/COM bake, sprung/unsprung split, articulated Rapier wheel bodies/joints, retractable chassis, fold-out legs, powered authority state/telemetry | dynamic-body wheel contacts, granular soil response, steering/anti-skid, electrical bus limits, representative fleet benchmarks |
 | `details/06_REACTION_WHEELS.md` | ✅ implemented model | named banks, per-axis torque allocation, automatic bus-load coupling (idle + marginal torque draw, same-name utility consumer, starvation yields to RCS), rotor-momentum reservoirs with saturation and RCS desaturation, rotor-speed and saturation telemetry, motor-heat ledger routable to thermal nodes, mass/inertia bake, RCS residual routing, telemetry and pilot controls | thermal state |
 | `details/07_PARACHUTES.md` | ✅ implemented model | named packs, pressure/q deployment gates, reefing, viscous-elastic suspension lines with shock smoothing, canopy breathing deformation, aerodynamic loads/failure, cut/failed repack servicing with authored timer and clean restow, mass/inertia bake and telemetry | inflation shock beyond line compliance |
-| `details/08_VEHICLE_PART_COMMANDS.md` | ✅ implemented API | ordered group/named commands on current wire v9 (per-vehicle targeting introduced in v7), including per-engine throttle and propellant transfer plus parachute repack, fleet Separate/Dock/Undock, and per-vehicle input/guidance targeting with per-vehicle control mode, guidance, and maneuver/burn executors; pilot local prediction and server application | stage-definition resolution, action-group routing, and per-vehicle graphs/scripts/plans |
+| `details/08_VEHICLE_PART_COMMANDS.md` | ✅ implemented API | ordered group/named commands on current wire v10 (per-vehicle targeting introduced in v7), including per-engine throttle and propellant transfer plus parachute repack, fleet Separate/Dock/Undock, and per-vehicle input/guidance targeting with per-vehicle control mode, guidance, and maneuver/burn executors; pilot local prediction and server application | stage-definition resolution, action-group routing, and per-vehicle graphs/scripts/plans |
 | `details/09_ELECTRICAL_POWER.md` | 🟡 implemented vehicle slice | ideal shared bus, prioritized consumers, battery/ultracapacitor energy/efficiency limits with pooled headroom, ultracapacitor self-discharge, fission and fuel-cell sources, reactor live-mass drift, APU and jet generation, solar arrays/occlusion/single- and two-axis tracking, mounted electric-propulsion load coupling, automatic reaction-wheel load coupling, docked-bus exchange across a shared interface, vehicle-baker TOML and 64-vessel benchmark | automatic load coupling for other nonpropulsive actuators, electrical circuits/current dynamics, cycle ageing, self-shadowing, three-axis gimbals |
 | `details/10_THERMAL_SYSTEM.md` | 🟡 implemented vehicle slice | lumped thermal nodes with conduction links and fixed/foldable area radiators, single-axis radiator pointing gimbals with edge-on auto-tracking, shared occluded solar inputs with own-hull ray occlusion, Sutton-Graves aero heating, wired internal loads, authored reactor/fuel-cell/generator waste-heat routing, stability-substepped integration, overheat reporting, mass/COM baking, vehicle-baker TOML and 64-vessel benchmark | shield-specific thermal-protection/ablation coupling (design baseline in 11), temperature-dependent strength, phase change, convective cooling, silhouette penumbra, multi-axis radiator gimbals, automatic engine-to-node heat wiring past the authored routes |
 | `details/11_HEAT_SHIELDS.md` | 🟡 partial slice | Newtonian shield-disc aerodynamics through the common drag/lift force contract, baker/vehicle wiring, wing hex tile-layer toggle with mass and lumped thermal nodes | ablative recession/burn-through, shield-specific thermal protection, spline-bounded tile screens, tile detachment, jettison, subsonic disc blend |
@@ -74,7 +74,7 @@ do not update in place).
 | `37_CBT_INTEGRATION_STATUS_2026_09_14.md` | ✅ opt-in | fallback + indexed raster + material pages | visual acceptance, numeric comparison, persistent topology |
 | `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ audit | defects fixed + follow-ups | bisector pool, shadow parity, FFT ocean, virtual texture |
 | `38_ENGINE_PLUME_RENDERING.md` | 🟡 implemented renderer slice | backend-neutral plume core, Low impostor, Medium/High field-integrated volume ribbon and field-derived light | live compiled engine/nozzle state in client, adaptive residual integration, ray-traced lighting and higher-quality tiers |
-| `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🟡 isolated implementation branches | FastRT classification + bounded slab compute; owned CBT compute/indirect raster, backend-neutral f64 body/camera frames, dirty height/material publication and bounded geometry slots; Bevy-free canonical window/headless viewer with coherent ephemeris/spin/stellar lighting, shared async terrain streaming and COW sources, winit + shared-device egui HUD; shared GLB sources and opaque X-15 draw; shared GPL flight pose/cameras/input/instruments; canonical COAST local authority or explicit PRIMARY server flight via shared embedded transport, checked adoption/input construction, receive-time interpolation, separate intent/acknowledgement and failure freeze; bounded own-time fleet observer/contact inspector; body-owned retained render meshes, procedural body baking and wire-v9 appearance catalogue; available neutral body shells use the existing opaque pass at a bracketed PRIMARY epoch, with resolved quality/disabled policy and 64-total-vehicle admission | production client replacement, remaining WorldTerrain topology/map-camera/ECS integration and CPU fallback assets, complete render designs/materials and PRIMARY shape replacement, prediction/reconciliation, external TCP/reconnect and fuller resources, PBR material parity, production UI/assists/dominant-body display and remaining assets/effects, complete platform integration and acceleration structures |
+| `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🟡 isolated implementation branches | FastRT classification + bounded slab compute; owned CBT compute/indirect raster, backend-neutral f64 body/camera frames, dirty height/material publication and bounded geometry slots; Bevy-free canonical window/headless viewer with coherent ephemeris/spin/stellar lighting, shared async terrain streaming and COW sources, winit + shared-device egui HUD; shared GLB sources and explicit compatibility X-15 identity; shared GPL flight pose/cameras/input/instruments; canonical COAST local authority or explicit PRIMARY server flight via shared embedded transport, checked adoption/input construction, receive-time interpolation, separate intent/acknowledgement and failure freeze; bounded own-time fleet observer/contact inspector; body-owned retained render meshes, procedural body baking and wire-v10 descriptors with separate immutable mesh epochs; authoritative retained PRIMARY/split appearance, COM-stable GPU publication and rotating-body-frame draws; neutral fleet shells use the existing opaque pass at a bracketed PRIMARY epoch, with resolved quality/disabled policy and 64-total-vehicle admission | production client replacement, remaining WorldTerrain topology/map-camera/ECS integration and CPU fallback assets, complete render designs/materials and general incremental residency, prediction/reconciliation, external TCP/reconnect and fuller resources, PBR material parity, production UI/assists/dominant-body display and remaining assets/effects, complete platform integration and acceleration structures |
 | `54_BEVY_0_20_MIGRATION_PLAN.md` | 🔵 study plan | 0.19.1→0.20.0 migrated on branch (deps, extraction, WESL, buttons, wgpu-30) + 8 regression tests, gates green | merge/defer decision |
 | `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 experimental | codec A–E, allocator/residency, GPU LOD/mip/aniso path, game + render-world A/B measured; compact path pre-decodes to RGBA and raw remains default | packed material-shader sampling, crack-free geometry, baked-format adoption, production height pages |
 | `43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md` | 🟡 experimental | scalar adaptive residual codec with force/moment error bounds, safe table/query validation, non-negative decoded drag, and direct panel sampling; 257×257 storage is 1.77× smaller; scalar sampling was 1.58× slower in the dated baseline and 1.77–2.10× slower across three later one-pass reruns; canonical tables remain the default | fused SIMD decode, channel-specific budgets, real VLM/CFD fields, production acceptance |
@@ -95,18 +95,26 @@ inspector wireframe. Bounded retained body shells now render with a neutral
 finish in the existing opaque pass when their samples cover PRIMARY's render
 epoch; common COM translations reuse GPU sources and interpolation histories
 in their publication frame. Shape/relative-pose changes still rebuild the combined
-source; network catalogues still retransmit complete meshes on COM changes.
+source. Wire-v10 pose/contact descriptors reuse a bounded immutable mesh epoch,
+so COM changes transmit no mesh payload. Actual active mesh-set changes still
+publish a complete payload epoch, not arbitrary incremental asset deltas.
 Missing/stale geometry and out-of-bracket clocks withhold draws rather
-than substitute a model or extrapolate. Full authored appearance/materials,
-PRIMARY model replacement and prediction/reconciliation remain unported.
+than substitute a model or extrapolate. Full authored appearance/materials
+and prediction/reconciliation remain unported. PRIMARY now consumes its own
+retained geometry and split ownership. Only explicit standard-authority provenance
+authorizes the bundled X-15; absent/omitted/unknown/mismatched PRIMARY appearance
+draws nothing. PRIMARY is independent of the fleet-quality setting. Snapshot
+interpolation does not blend different PRIMARY COM revisions (fleet-only changes
+retain interpolation), and both mesh paths use the current rotating body frame.
+General incremental GPU residency remains absent.
 The shared link now caps complete pending command packets at the protocol's
 64-command limit (all variants and state votes), and worker pipe/encode
 failures close the input side visibly. Stalled-peer heartbeat/reconnect and
-external native networking remain future work. Wire v9 extends the bounded,
-on-change `FleetGeometry` catalogue and a matching revision in `FleetSnapshot`;
-contact catalogue with retained appearance; v7/v8 peers are rejected. This is
+external native networking remain future work. Wire v10 separates bounded
+on-change descriptors and active mesh payloads; PRIMARY and fleet snapshots name
+the matching descriptor revision. v7/v8/v9 peers are rejected. This is
 not a full render-design/model registry or complete resource replica.
-The next migration slice adds optional MIT `RenderGeometry` to vehicle definitions:
+Vehicle definitions now include optional MIT `RenderGeometry`:
 f64 rigid part poses, indexed local meshes shared by Arc, and validated body
 ownership. Existing cluster reconstruction partitions/remaps the parts and moves
 their origins with the physical COM; mass, contact and forces do not consume
@@ -116,7 +124,7 @@ and final COM shifts are preserved. Surfaces, authored appearance materials and
 full vehicle appearance remain later slices. Native fleet meshes consume
 resolved `renderer.fleet_meshes` / `fleet_quality` settings with explicit disabled
 and Low/Medium/High angular-size culling levels. The legacy host still ignores
-fleet observations (but is rebuilt for v9).
+fleet observations (but is rebuilt for v10).
 
 ## Autopilot and roadmap
 

@@ -210,19 +210,26 @@ inference from the stable ID or name. Full designs/resources and
 prediction/reconciliation remain absent. The old Bevy host still ignores fleet
 observations.
 
-Wire v9 extends `FleetGeometry` (kind 10, introduced in v8) and retains the exact
-`geometry_revision` reference in `FleetSnapshot`; v7/v8 peers fail version
-checking. The complete, sorted
-non-primary catalogue contains bounded display labels and actual authoritative
+Wire v10 separates `FleetGeometry` descriptors (kind 10) from bounded immutable
+active mesh payload epochs (`FleetMeshes`, kind 11). Both `Snapshot` (PRIMARY)
+and `FleetSnapshot` reference the exact descriptor `geometry_revision`;
+v7/v8/v9 peers fail version checking. The complete, sorted
+non-primary catalogue plus an explicit PRIMARY descriptor contain display labels and actual authoritative
 contact geometry, including the recentered geometry of split clusters. It is
 neither full `VehicleDefinition` replication nor a beauty mesh/model registry.
-The server retains one encoded Arc-shared catalogue, compares existing source
+The server retains encoded Arc-shared descriptor and payload frames, compares existing source
 parts without copying on ordinary snapshots, and publishes only on change or
-to a new subscriber. Each mailbox retains one latest geometry slot plus its
-last published revision, so draining does not cause periodic retransmission.
+to a new subscriber. Each mailbox retains separate latest descriptor/payload
+slots and revision markers, updated under one lock and drained payload-first,
+so descriptor coalescing cannot discard an unsent mesh dependency.
 Coalescing can skip revisions. Readers keep independently bounded catalogue and
-snapshot inboxes; an on-change catalogue waits for the short inbox lock instead
-of being silently lost under contention. No extra reader or asset IO is added.
+snapshot inboxes. Catalogues and complete fleet membership wait for the short
+bounded inbox lock rather than losing their only publication under contention.
+The single reader resolves either dependency arrival order before exposing the
+existing Arc-shared `FleetGeometry` application API. Mesh IDs are epoch-local;
+skipped epochs never attach another epoch's IDs. Unknown matching-epoch IDs,
+changed/reused revisions or malformed payloads close the link. No extra reader,
+device or asset IO is added.
 
 Only matching revisions and identical member IDs attach geometry to observations.
 In-flight revisions show waiting, never a guessed model. Same-revision changes,
@@ -235,7 +242,7 @@ The native inspector draws a diagnostic auto-fit contact wireframe, not an
 appearance proxy. Geometry storage is Arc-shared through the HUD rather
 than deep-copied per frame; `--no-hud` omits projection/UI work. Stale membership
 still withholds all rows. The same catalogue also carries optional retained
-appearance, limited to 8 parts / 1,024 vertices / 4,096 indices per secondary;
+appearance, limited to 8 parts / 1,024 vertices / 4,096 indices per vehicle;
 part origins and local vertices are bounded to ±1,024 m per component. Oversized
 sources are explicitly omitted, never partly rendered or replaced by a contact
 hull/X-15. Authority resolves/remaps assembly ownership; the display catalogue
@@ -243,7 +250,7 @@ strips ownership indices and retains actual meshes and body-local rigid poses.
 Source comparison uses Arc identity before value comparison, with no periodic
 mesh buffer copy/encode. No paths, loaders, textures or full definitions arrive.
 
-Native combines admitted appearance and the compatibility PRIMARY source on
+Native combines admitted appearance and the authoritative PRIMARY source on
 render-layout change in the existing renderer/device/targets/pipeline/pass. Static
 source replacement currently reuploads PRIMARY as well as admitted shells;
 it does not claim an incremental GPU residency/asset registry. Ordinary frames
@@ -262,21 +269,43 @@ Relative-position equality permits a 1 nm subtraction envelope against the
 retained publication, never the preceding packet, so errors cannot accumulate.
 Narrowing reserves that envelope within the existing 1 mm local vertex budget.
 Observer rows still show their own authoritative times.
-Changing a part origin, including a resource-driven COM shift, revises the whole
-catalogue even when shared vertex buffers are unchanged; an incremental network
-mesh dictionary and general incremental GPU residency remain future work. COM-only
-translations no longer cause GPU source replacement, but still retransmit meshes.
+Changing a part origin, including a resource-driven COM shift, revises the
+descriptor but sends no mesh frame and causes no GPU source replacement.
+Mesh-set equality is exact (Arc identity, then values), with stable ordering
+across reordered/split parts; active tables deduplicate equal meshes. Actual
+active mesh-set changes publish a new complete bounded epoch, including unchanged
+survivors, rather than arbitrary deltas. Payload budgets are 512 entries / 65,536
+vertices / 262,144 indices across PRIMARY plus 63 secondaries; per-vehicle
+occurrence budgets still apply after reference resolution. Validation remains
+post-deserialization, not a hostile-allocation safety proof. A general incremental
+asset dictionary or GPU residency registry remains future work.
 Stale/revision-mismatched membership withholds draws, never invents despawn.
 
+PRIMARY retained meshes use the same render contract, neutral finish, publication
+COM correction and opaque pass. The standard GPL authority constructor alone
+declares the closed `StarterX15` identity and its body origin; custom and split
+constructors do not inherit it, even with the same name/physical parameters.
+The compatibility origin follows the existing resource-frame shift pipeline.
+Absent/unknown/over-budget appearance or a mismatched PRIMARY snapshot revision
+draws nothing, not an inferred X-15. Server mode creates no mesh renderer/GPU
+source until the first geometry declaration.
+Snapshot interpolation selects a whole new sample across PRIMARY appearance/frame
+revisions rather than blending different COM origins; fleet-only descriptor
+changes retain PRIMARY interpolation. Continuous interpolation across actual
+PRIMARY frame changes is not implemented.
+PRIMARY and secondary poses both convert to the current rotating body frame,
+including at nonzero epochs. HUD/telemetry report `primary_appearance` explicitly.
+
 `renderer.fleet_meshes=false` allocates/uploads no fleet GPU source or track
-history. Enabled Low/Medium/High resolutions choose 8/2/0.5-pixel estimated
+history; it neither hides nor substitutes PRIMARY, and retains no old fleet
+catalogue in its GPU source state. Enabled Low/Medium/High resolutions choose 8/2/0.5-pixel estimated
 angular-footprint culling through `ResolvedGraphicsSettings`, with identical
 mesh geometry. The basic opaque triangle path needs no optional GPU feature;
 there is no hidden device or global architecture switch. Shells use an explicitly
 neutral untextured finish, not authored/PBR material parity. Counters expose
 source publications, out-of-epoch withholding, size culls and submitted mesh
-instances/draws/triangles/upload bytes. Complete resources, render designs,
-PRIMARY shape replacement and production prediction/reconciliation remain gaps.
+instances/draws/triangles/upload bytes. Complete resources, render designs
+and production prediction/reconciliation remain gaps.
 
 The current protocol is designed for a local/server prototype. Production
 prediction, interpolation policy for remote craft, authentication, persistence,

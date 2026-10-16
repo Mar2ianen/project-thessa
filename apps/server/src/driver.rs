@@ -18,7 +18,7 @@ pub(super) struct Driver {
     pub(super) last_snapshot: Instant,
     pub(super) last_status: Instant,
     pub(super) exit_when_empty: bool,
-    pub(super) geometry: Option<(thessa_flight_net::geometry::FleetGeometry, Arc<Vec<u8>>)>,
+    pub(super) geometry: Option<thessa_flight_net::geometry::GeometryPublication>,
 }
 
 impl Driver {
@@ -34,7 +34,25 @@ impl Driver {
     }
 
     pub(super) fn broadcast_snapshot(&mut self) {
-        let snapshot = self.sim.snapshot();
+        if let Err(error) = self.update_fleet_geometry() {
+            eprintln!("[server] fleet geometry error: {error}");
+            for (_, mailbox) in self.subscribers.drain(..) {
+                mailbox.close();
+            }
+            return;
+        }
+        let mut snapshot = self.sim.snapshot();
+        snapshot.geometry_revision = self
+            .geometry
+            .as_ref()
+            .expect("prepared catalogue")
+            .geometry
+            .revision;
+        snapshot.appearance_frame_revision = self
+            .geometry
+            .as_ref()
+            .expect("prepared catalogue")
+            .primary_revision;
         let frame = match thessa_flight_net::encode_snapshot(&snapshot) {
             Ok(frame) => frame,
             Err(error) => {
@@ -52,15 +70,8 @@ impl Driver {
         });
         // Complete membership includes empty: silence cannot acknowledge that
         // all secondaries disappeared, nor distinguish an old peer from empty.
-        if let Err(error) = self.update_fleet_geometry() {
-            eprintln!("[server] fleet geometry error: {error}");
-            for (_, mailbox) in self.subscribers.drain(..) {
-                mailbox.close();
-            }
-            return;
-        }
-        let (geometry, geometry_frame) = self.geometry.as_ref().expect("catalogue was prepared");
-        let fleet = self.sim.fleet_snapshot(geometry.revision);
+        let publication = self.geometry.as_ref().expect("catalogue was prepared");
+        let fleet = self.sim.fleet_snapshot(publication.geometry.revision);
         let frame = match thessa_flight_net::encode_fleet_snapshot(&fleet) {
             Ok(frame) => frame,
             Err(error) => {
@@ -70,9 +81,11 @@ impl Driver {
         };
         let frame = Arc::new(frame);
         self.subscribers.retain(|(_, mailbox)| {
-            let accepted = mailbox
-                .replace_fleet_geometry(geometry.revision, geometry_frame.clone())
-                && mailbox.replace_fleet_snapshot(frame.clone());
+            let accepted = mailbox.replace_fleet_geometry(
+                publication.geometry.revision,
+                publication.frame.clone(),
+                Some((publication.mesh_revision, publication.mesh_frame.clone())),
+            ) && mailbox.replace_fleet_snapshot(frame.clone());
             if !accepted {
                 mailbox.close();
             }
@@ -82,10 +95,15 @@ impl Driver {
 
     fn update_fleet_geometry(&mut self) -> Result<(), String> {
         use thessa_flight_net::geometry::{
-            FleetGeometry, FleetVehicleGeometry, encode_fleet_geometry,
+            FleetGeometry, FleetVehicleGeometry, GeometryPublication,
         };
-        if self.geometry.as_ref().is_some_and(|(catalogue, _)| {
-            catalogue.vehicles.len() == self.sim.fleet.len()
+        if self.geometry.as_ref().is_some_and(|publication| {
+            let catalogue = &publication.geometry;
+            catalogue
+                .primary
+                .as_ref()
+                .is_some_and(|p| p.matches_primary(&self.sim.authority))
+                && catalogue.vehicles.len() == self.sim.fleet.len()
                 && catalogue.vehicles.iter().zip(&self.sim.fleet).all(
                     |(descriptor, (id, authority))| {
                         descriptor.matches_vehicle(VehicleId::new(*id), &authority.vehicle)
@@ -95,7 +113,8 @@ impl Driver {
             return Ok(());
         }
         let revision = match &self.geometry {
-            Some((previous, _)) => previous
+            Some(previous) => previous
+                .geometry
                 .revision
                 .checked_add(1)
                 .ok_or("fleet geometry revision overflow")?,
@@ -103,6 +122,9 @@ impl Driver {
         };
         let catalogue = FleetGeometry {
             revision,
+            primary: Some(FleetVehicleGeometry::primary_from_authority(
+                &self.sim.authority,
+            )),
             vehicles: self
                 .sim
                 .fleet
@@ -113,8 +135,7 @@ impl Driver {
                 .collect(),
         };
         catalogue.validate()?;
-        let frame = Arc::new(encode_fleet_geometry(&catalogue).map_err(|e| e.to_string())?);
-        self.geometry = Some((catalogue, frame));
+        self.geometry = Some(GeometryPublication::new(catalogue, self.geometry.as_ref())?);
         Ok(())
     }
 

@@ -1033,6 +1033,8 @@ impl Sim {
         wall_s: f64,
     ) -> Snapshot {
         Snapshot {
+            geometry_revision: 0,
+            appearance_frame_revision: 0,
             tick: authority.world_tick.0,
             flight_time_s: authority.flight_time_s,
             state: authority.state,

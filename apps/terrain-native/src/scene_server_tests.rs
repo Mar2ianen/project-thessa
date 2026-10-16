@@ -14,6 +14,8 @@ fn snapshot(scene: &Scene, time: f64) -> Snapshot {
     state.position_inertial_m =
         body.position_inertial + flight.relative_position_m + DVec3::new(time * 100.0, 0.0, 0.0);
     Snapshot {
+        geometry_revision: 1,
+        appearance_frame_revision: 1,
         tick: (time * 120.0) as u64,
         flight_time_s: time,
         state,
@@ -66,6 +68,7 @@ fn geometry(
     revision: u64,
 ) -> std::sync::Arc<thessa_flight_net::geometry::FleetGeometry> {
     std::sync::Arc::new(thessa_flight_net::geometry::FleetGeometry {
+        primary: None,
         revision,
         vehicles: ids
             .iter()

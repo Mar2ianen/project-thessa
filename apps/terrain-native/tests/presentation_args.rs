@@ -21,6 +21,14 @@ fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
             "presentation sample times must be finite",
         ),
         (vec!["--sim-step", "1"], "require --headless"),
+        (
+            vec!["--vehicle-preview", "--sim-time", "1"],
+            "--vehicle-preview requires epoch",
+        ),
+        (
+            vec!["--vehicle-preview", "--sim-step", "1"],
+            "--vehicle-preview requires epoch",
+        ),
         (vec!["--sim-time"], "--sim-time requires seconds"),
         (vec!["--sim-step"], "--sim-step requires seconds per frame"),
     ] {

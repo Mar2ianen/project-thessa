@@ -357,6 +357,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     rt_active: Option<Res<RayTracingActive>>,
     graphics: Option<Res<GraphicsResolved>>,
 ) {
@@ -508,7 +509,9 @@ fn setup(
         &mut commands,
         sphere_mesh.clone(),
         visual_materials.thessa.clone(),
-        &asset_server,
+        &mut meshes,
+        &mut images,
+        &mut materials,
         ephemeris
             .body(flight_body)
             .expect("the playable world body must exist")

@@ -34,6 +34,7 @@ members = [
     "crates/fastrt-wgpu",
     "crates/render-wgpu",
     "crates/render-core",
+    "crates/render-assets",
     "crates/wgpu-exp",
     "crates/terrain-stream",
     "crates/bevy-rcbt",

@@ -3,6 +3,41 @@
 use glam::{DQuat, DVec3};
 use thessa_sim_core::{BakedBody, SimTime};
 
+// Inherited pilot calibration, retained for visual compatibility. The decoded
+// GLB's measured X extent is 17.794085 m, not this nominal source length.
+pub const X15_SOURCE_LENGTH_M: f32 = 16.77;
+pub const X15_AUTHORED_LENGTH_M: f32 = 15.45;
+/// Authored GLB nose -X / top +Y / span +Z to the existing craft-visual
+/// parent nose +Y / top -Z / span +X. Game asset calibration remains GPL.
+pub fn x15_asset_to_craft_rotation() -> glam::Quat {
+    glam::Quat::from_mat3(&glam::Mat3::from_cols(
+        glam::Vec3::NEG_Y,
+        glam::Vec3::NEG_Z,
+        glam::Vec3::X,
+    ))
+}
+
+/// Existing visual-parent basis used by the pilot. Only the final local
+/// attitude is narrowed; authoritative orientation stays f64 in the runtime.
+pub fn craft_visual_orientation(orientation: DQuat) -> glam::Quat {
+    let forward = inertial_to_render_axes(orientation * DVec3::X)
+        .as_vec3()
+        .normalize_or_zero();
+    let lateral = inertial_to_render_axes(orientation * DVec3::Y)
+        .as_vec3()
+        .normalize_or_zero();
+    let up = inertial_to_render_axes(orientation * DVec3::Z)
+        .as_vec3()
+        .normalize_or_zero();
+    if forward.length_squared() < 1e-8
+        || lateral.length_squared() < 1e-8
+        || up.length_squared() < 1e-8
+    {
+        return glam::Quat::IDENTITY;
+    }
+    glam::Quat::from_mat3(&glam::Mat3::from_cols(lateral, forward, -up))
+}
+
 /// Same period selection used by flight atmosphere/contact/terrain sampling.
 /// It is a uniform-spin approximation, not eccentric tidal-lock libration or
 /// the gravity harmonics frame (which also models axial tilt/prime meridian).

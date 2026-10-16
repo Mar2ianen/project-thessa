@@ -17,8 +17,13 @@ wgpu.workspace = true
 pollster = "0.4"
 
 [dev-dependencies]
+thessa-render-assets = { path = "../render-assets" }
 png = "0.18"
 
 [[bench]]
 name = "clear"
+harness = false
+
+[[bench]]
+name = "mesh"
 harness = false

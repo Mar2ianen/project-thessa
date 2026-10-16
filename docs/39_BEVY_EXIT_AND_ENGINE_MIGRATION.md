@@ -1270,6 +1270,148 @@ The moving sample is deliberately shown without manufactured ambient light;
 its very dark direct-lit terrain is not missing coverage or a claim of complete
 night-side rendering. Existing visual artifacts remain unaccepted.
 
+### Shared static mesh/rigid-instance continuation (2026-10-16)
+
+The next slice removes X-15 source ownership from Bevy `WorldAsset` without
+replacing the old client. MIT `render-core::mesh` defines triangle vertices,
+indices, material/image/texture references and rigid-instance inputs without
+ECS, asset-server, GPU or game dependencies. MIT `render-assets` decodes a
+bounded **embedded static GLB subset** into these descriptors. Node hierarchy
+transforms are flattened once; inverse-transpose normals and mirrored winding
+are preserved. Dense accessor/view ranges use checked arithmetic before reader
+creation. Input file size, vertices, indices, nodes, image edges and total
+decoded RGBA bytes have explicit caller-supplied limits. No URI/file/network
+resolution is performed. Sparse accessors, animations/skins, extensions,
+non-triangle geometry, attributes other than POSITION/NORMAL/TEXCOORD_0,
+emissive and transparent
+materials are not part of this subset; unsupported semantic input is rejected.
+This is not a general streaming asset manager, hot reload or full glTF support.
+
+The old pilot converts that neutral source to Bevy meshes/images/materials;
+base color uses sRGB while normals/metallic-roughness/AO use linear textures.
+Its bridge generates tangents and preserves double-sidedness and shared ORM/AO
+images. Non-unity normal/AO strengths are explicitly rejected by that bridge
+rather than silently lost. Source loading is synchronous once during startup,
+not asynchronous Bevy loading. Other assets (including docking demo WorldAsset)
+remain unmigrated. The original X-15 calibration and visual basis move unchanged
+to GPL `flight-authority::presentation`; they are not copied into MIT libraries.
+Regression inspection found the GLB's actual X extent is **17.794085 m**, not
+the inherited nominal `16.77 m` source-length constant. The old `15.45/16.77`
+scale remains for compatibility, yielding ~16.393 m visual extent; this slice
+does not claim a corrected physical mesh calibration.
+
+MIT `render-wgpu::mesh::MeshRenderer` uploads persistent vertex/index/albedo
+buffers/textures once. A bounded instance buffer receives complete validated
+pose publications, with f64 camera subtraction before f32 narrowing. Invalid
+camera/light/instance/capacity updates preserve the prior GPU data and draw
+count; empty publication produces no mesh pass. Each primitive is drawn with
+one indexed instanced draw. `draw_stats()` and the final native log expose
+submitted instances, draw calls, triangles and frame-upload bytes; existing
+`drawn_triangles` still counts terrain only. The same device, queue and encoder load the terrain
+color **and depth**, draw opaque meshes, then draw HUD. There is no scene
+readback, intermediate scene texture or second device. An absent preview creates
+no mesh GPU resources and performs no per-frame mesh work. Frame staging reuses
+its CPU allocation. Device recovery, asset unloading, culling/LOD, heterogeneous
+asset registries and indirect scene submission are future layers.
+
+The native shader is deliberately only **sRGB base-color + Lambert direct/
+ambient lighting**, sharing the terrain exposure and body-space stellar sample.
+Normal/ORM/AO sources are retained but not uploaded/used by this shader; no
+normal mapping, metallic BRDF, shadows, mip-chain generation or material-parity
+claim is made. This is diagnostic basic mesh bring-up, not a new configurable
+production effect. Any production material/effect extension must enter the
+shared requested/resolved graphics quality pipeline before promotion.
+
+`--vehicle-preview` loads the shipped source and samples the **existing**
+`FlightAuthority::new` initial position and attitude at epoch, not a decorative
+animation or second integrator. This is the constructor's north-pole
+compatibility snapshot, **not** the old client's later PostStartup COAST-site
+relocation (`initialize_launch_site`). Position/attitude and asset basis are mapped
+through the same flight/render convention as the old pilot. The camera orbits
+that snapshot at 8–180 m (reset 32 m); normal terrain-only distances are unchanged.
+Nonzero presentation time/step is rejected before graphics loading. Moving
+instance translation/rotation is exercised by GPU regressions, but live flight,
+snapshot interpolation, input/network lifecycle and controller/UI migration
+remain unfinished. Do not describe this snapshot as a complete moving-object
+production consumer.
+
+Regressions pin the shipped geometry/image/material inventory, nested nonuniform
+and mirrored node transforms, image/sampler/color-space roles, file/resource
+budgets, invalid byte ranges/component types/indices and external-URI rejection.
+Real GPU coverage checks exact textured pixels, retained existing color/depth,
+instance translation/rotation, identical output after an astronomical common
+translation, multiple/empty instances and atomic rejection. A native hardware
+test draws the actual model over terrain. The exact-pole starter pose exposed
+an undefined geographic east; the preview uses a finite orthonormal tangent
+there, and close-camera regressions cover all orbit quadrants/distances.
+
+```sh
+cargo run --release -p thessa-terrain-native -- --vehicle-preview
+cargo run --release -p thessa-terrain-native -- --vehicle-preview --headless x15.png --hud --frames 600 --prestream-seconds 10
+cargo bench -p thessa-render-assets --bench decode
+cargo bench -p thessa-render-wgpu --bench mesh
+```
+
+The X-15 source has two primitives, 86,214 vertices, 78,465 triangles and six
+2048² source images (**96 MiB** decoded RGBA). Native uploads only the two
+base-color images (**32 MiB**, one mip), plus ~3.53 MiB geometry; Bevy consumes
+all six material images. The source CPU snapshot remains resident in the viewer;
+source residency/retirement and mip generation are explicitly not optimized yet.
+No new unsafe code or external dependency version is introduced. Decoder
+dependencies are permissive; reusable libraries remain MIT and game code GPL.
+The model remains **CC BY 4.0**, by **cmoreau**; attribution/source/license links
+in `assets/models/north_american_x-15_plane.LICENSE.txt` must accompany distribution.
+
+Validation gates: fmt, workspace all-target/all-feature clippy with Rust
+warnings denied, no-default-feature viewer clippy, **1,753** workspace lib/bin +
+**52** integration + **24** Bevy-CBT hardware + **4** native GPU/window tests
+(**1,833** successful tests). The native runtime still contains no Bevy and
+uses one wgpu version (30.0.1).
+
+Radeon 880M measurements, 1280×720: terrain-only-with-HUD A/B/B/A against
+`6608a48`, 600 measured + 30 warm-up frames and 10 s pre-stream per run, gave
+old medians **2.582 / 2.605 ms** and new **2.558 / 2.612 ms**. Every run ended
+at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications/refusals. The distributions overlap; asynchronous material work
+and unlocked clocks prevent a speedup or universal zero-overhead claim.
+
+The normalized static-mesh microbenchmark (120 measured + 30 warm-up frames,
+host update/encode/submit/device-completion latency, no readback) measured
+**0.041 ms** for the zero-instance draw floor, **0.157 ms** for one X-15
+(78,465 triangles), and **2.712 ms** for 32 instances (2,510,880 triangles).
+It excludes asset decoding/upload, terrain, UI and streaming; this zero-lit,
+single-mip synthetic workload is not GPU-timestamp timing, production scene
+parity or a comparison against Bevy/Solari/FastRT acceleration structures.
+Full static CPU source decode measured **140.452 ms median**, 10 samples,
+excluding file IO, GPU upload and source destruction.
+
+The complete native initial-flight preview with HUD measured **3.544 ms**
+median; the camera sweep measured **3.062 ms**, with 58 measured terrain
+publications and no refusals. Both submit one mesh instance, two draws and
+78,465 mesh triangles, with **640 bytes** of successful frame uploads. They
+have a different terrain cover/camera from the A/B runs, so subtracting those
+timings does not isolate mesh cost. The dark polar ground and mostly dark
+reverse view reflect the unchanged direct-only illumination: no atmosphere,
+sky/ambient model or shadows were manufactured for these screenshots. Geometry
+visibility is tested separately with controlled GPU fixtures; these captures
+are not final visual acceptance.
+
+The native Wayland preview requested 1,200 presentations in **10.226 s** and
+exited 0 (117.3 requests/s, **not** display feedback or game FPS; whole-process
+elapsed time was 11.838 s). The debug Bevy client loaded the shared model,
+rendered its paused pilot scene, saved a screenshot and exited 0. Its embedded
+server binary was absent, so the existing local-simulation fallback ran;
+ALSA/JACK diagnostics mean audio/networking were not validated. The COAST pilot
+and native constructor snapshot have different poses/cameras/lighting and are
+not a side-by-side material/visual parity test. Existing old-client sky/terrain
+artifacts are not repaired by this asset slice.
+
+[Measurements/validation](artifacts/owned-mesh-assets-2026-10-16.json),
+[terrain-only frame](artifacts/owned-mesh-terrain-2026-10-16.png),
+[initial X-15 preview](artifacts/owned-mesh-x15-2026-10-16.png),
+[camera-sweep preview](artifacts/owned-mesh-x15-sweep-2026-10-16.png), and
+[legacy pilot smoke](artifacts/owned-mesh-bevy-pilot-2026-10-16.png).
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

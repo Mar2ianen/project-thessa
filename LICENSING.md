@@ -17,7 +17,15 @@ Intended for:
 - reusable developer tools.
 
 `crates/render-core` is MIT: it contains only backend-neutral f64 rigid-frame
-geometry and camera inputs (glam math, no game content, spin model or policy).
+geometry, camera inputs and static triangle/material/rigid-instance descriptors
+(glam math, no game content, spin model or policy).
+`crates/render-assets` is MIT: a bounded embedded static-GLB decoder using
+permissively licensed `gltf` 1.4 (`MIT OR Apache-2.0`) and `image` 0.25
+(`MIT OR Apache-2.0`), already present in the dependency graph. The production
+decoder library embeds no game asset. Its tests/benchmarks reference the existing
+CC BY 4.0 X-15; the GPL native application embeds that model for its optional
+diagnostic preview. Binary distribution must retain cmoreau's attribution and
+the source/license links in `assets/models/north_american_x-15_plane.LICENSE.txt`.
 The existing flight terrain spin/axis convention remains GPL in
 `flight-authority::presentation`; the GPL native viewer samples it alongside
 baked ephemerides and combines it with the reusable presentation geometry.

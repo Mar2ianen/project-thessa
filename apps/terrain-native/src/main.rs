@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut hud_override = None;
     let mut sim_time = 0.0_f64;
     let mut sim_step = 0.0_f64;
+    let mut vehicle_preview = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
@@ -38,6 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .parse::<f64>()?
             }
             "--sweep" => sweep = true,
+            "--vehicle-preview" => vehicle_preview = true,
             "--sim-time" => sim_time = args.next().ok_or("--sim-time requires seconds")?.parse()?,
             "--sim-step" => {
                 sim_step = args
@@ -51,6 +53,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nOnly manual exposure and vsync settings are consumed; other effects are unported."
                 );
+                println!(
+                    "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -58,6 +63,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if frame_limit == Some(0) {
         return Err("--frames must be non-zero".into());
+    }
+    if vehicle_preview && (sim_time != 0.0 || sim_step != 0.0) {
+        return Err("--vehicle-preview requires epoch --sim-time 0 and --sim-step 0".into());
     }
     if !prestream_seconds.is_finite() || !(0.0..=3600.0).contains(&prestream_seconds) {
         return Err("--prestream-seconds must be finite and within 0..=3600".into());
@@ -83,6 +91,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     let mut scene = scene::Scene::load(requested)?;
     scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
+    if vehicle_preview {
+        scene.enable_vehicle_preview()?;
+    }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",
         started.elapsed().as_secs_f64()
@@ -91,6 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let backend = Backend::bring_up()?;
         let target = OffscreenTarget::new(&backend, 1280, 720)?;
         let mut renderer = scene.renderer(&backend, OffscreenTarget::FORMAT)?;
+        let mut mesh_renderer = scene.mesh_renderer(&backend, OffscreenTarget::FORMAT)?;
         #[cfg(feature = "hud")]
         let mut hud = hud_enabled.then(|| hud::Hud::new(&backend, OffscreenTarget::FORMAT));
         let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
@@ -154,8 +166,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
             let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
             renderer.update_view(&backend, &scene.view(1280, 720, exposure))?;
+            if let Some(mesh) = &mut mesh_renderer {
+                scene.update_mesh(&backend, mesh, 1280, 720, exposure)?;
+            }
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             renderer.encode(&mut encoder, &target.color, &target.depth);
+            if let Some(mesh) = &mesh_renderer {
+                mesh.encode(&mut encoder, &target.color, &target.depth);
+            }
             #[cfg(feature = "hud")]
             let commands = if let (Some(hud), Some(output)) = (&mut hud, hud_output) {
                 hud.encode(&backend, &mut encoder, &target.color, output, [1280, 720])
@@ -228,6 +246,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             "presentation_sim_time_s={} sim_step_s={sim_step} body_inertial_m={:?}",
             scene.sample.time.0, scene.sample.position_inertial_m
         );
+        if let Some(mesh) = &mesh_renderer {
+            println!(
+                "mesh_submitted={:?}; drawn_triangles above counts terrain only; initial flight-state snapshot, not live flight",
+                mesh.draw_stats()
+            );
+        }
         return Ok(());
     }
     window::run(scene, frame_limit, hud_enabled)

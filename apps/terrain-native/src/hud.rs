@@ -4,6 +4,7 @@ use thessa_render_wgpu::Backend;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
+    pub vehicle_preview: bool,
     pub angle: f64,
     pub distance: f64,
     pub exposure_ev100: f32,
@@ -13,6 +14,7 @@ pub struct Controls {
 impl Controls {
     pub fn from_scene(scene: &crate::scene::Scene) -> Self {
         Self {
+            vehicle_preview: scene.vehicle_preview(),
             angle: scene.angle,
             distance: scene.distance,
             exposure_ev100: scene.requested.renderer.exposure_ev100,
@@ -211,13 +213,24 @@ fn widgets(
                     .text("Orbit / rad"),
                 );
                 ui.add(
-                    egui::Slider::new(&mut controls.distance, 1_000.0..=200_000.0)
-                        .logarithmic(true)
-                        .text("Distance / m"),
+                    egui::Slider::new(
+                        &mut controls.distance,
+                        if controls.vehicle_preview {
+                            8.0..=180.0
+                        } else {
+                            1_000.0..=200_000.0
+                        },
+                    )
+                    .logarithmic(true)
+                    .text("Distance / m"),
                 );
                 if ui.button("Reset camera").clicked() {
                     controls.angle = 0.0;
-                    controls.distance = 30_000.0;
+                    controls.distance = if controls.vehicle_preview {
+                        32.0
+                    } else {
+                        30_000.0
+                    };
                 }
                 ui.add(
                     egui::Slider::new(&mut controls.exposure_ev100, 1.0..=20.0)
@@ -242,11 +255,30 @@ mod tests {
 
     fn controls() -> Controls {
         Controls {
+            vehicle_preview: false,
             angle: 8.0,
             distance: 30_000.0,
             exposure_ev100: 13.0,
             vsync: false,
         }
+    }
+
+    #[test]
+    fn passive_vehicle_hud_preserves_close_camera_distance() {
+        let mut controls = controls();
+        controls.vehicle_preview = true;
+        controls.distance = 32.0;
+        let context = context();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        widgets(&context, input, &mut controls, &Stats::default(), "test")
+            .drop_without_applying_deltas();
+        assert_eq!(controls.distance, 32.0);
     }
 
     fn input(width: u32, height: u32, scale: f32) -> egui::RawInput {

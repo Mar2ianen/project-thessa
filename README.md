@@ -109,6 +109,14 @@ The checked-in vertical slice currently contains:
   epoch; `--sim-time 72000` samples a different celestial pose, and headless
   `--sim-step 120` samples motion per rendered frame (including warm-up), not
   authoritative simulation warp. See doc 39 for the spin-model boundary.
+  `--vehicle-preview` displays the shared X-15 GLB at the initial flight-state
+  pose, with an 8–180 m orbit camera. The old pilot now converts the same neutral
+  mesh/material source instead of loading this model through Bevy `WorldAsset`.
+  The native draw loads the existing terrain color/depth targets before HUD;
+  its base-color/Lambert shader is **not** PBR parity or live flight/controller
+  migration. Preview requires epoch time and no time stepping. Reusable source
+  descriptors/decoding live in MIT `render-core` / `render-assets`; game asset
+  calibration remains GPL. X-15 by cmoreau is CC BY 4.0 (see its asset license).
   Headless `--prestream-seconds 10 --sweep` exercises
    changing demand rather than a fixed resident snapshot.
    The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's
@@ -120,7 +128,7 @@ The checked-in vertical slice currently contains:
    omits UI allocation/work; `--no-default-features` excludes egui entirely.
    Headless captures omit HUD unless `--hud` is explicitly supplied.
    Only manual exposure/vsync settings are consumed from `graphics.toml`
-   (`--graphics PATH`); missing body motion/effects/production game UI/networking and
+   (`--graphics PATH`); missing live object motion/effects/production game UI/networking and
   coarse terrain mean this is **not** a replacement client or game-FPS result;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 

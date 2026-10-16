@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/owned-mesh-assets",
+  "base_commit": "6608a48",
+  "baseline_binary_sha256": "a6ed4b699321c7f6357163196260f0b5d707d3e8f708b80e361deb3970b798f5",
+  "binary_sha256": "a4476e58b8f3ef86b48ec41f082bcaa75c63d7df9410fc23f2d2e01e45011f89",
+  "build": "cargo build --release -p thessa-terrain-native; default release profile and hud feature",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "settings": {"graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b", "exposure_ev100": 13, "vsync": false},
+  "ownership": {
+    "mit": "render-core::mesh static source descriptors and checked rigid instances; render-assets embedded static GLB decoder; render-wgpu persistent opaque instanced draw",
+    "gpl": "existing pilot visual basis/asset calibration extracted unchanged into flight-authority::presentation; native initial-flight snapshot and host conversion stay game-owned",
+    "asset": "North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt includes attribution/source/license links",
+    "new_internal_crates": ["thessa-render-assets (MIT)"],
+    "new_external_dependency_versions": [], "new_unsafe_code": false,
+    "native_bevy_runtime_crates": [], "native_wgpu_versions": ["30.0.1"],
+    "extra_gpu_devices_scene_readbacks_or_intermediate_scene_targets": 0
+  },
+  "source": {
+    "primitives": 2, "vertices": 86214, "triangles": 78465,
+    "images": 6, "image_size": [2048, 2048], "decoded_rgba_bytes": 100663296,
+    "native_base_color_image_bytes": 33554432, "native_geometry_bytes": 3700428,
+    "source_x_extent_m": 17.794085,
+    "inherited_nominal_source_length_m": 16.77, "inherited_nominal_authored_length_m": 15.45,
+    "calibration_boundary": "15.45/16.77 scale retained for old-pilot compatibility; actual visual X extent is about 16.393m, not a corrected physical calibration",
+    "default_limits": {"file_bytes": 67108864, "vertices": 2000000, "indices": 6000000, "nodes": 4096, "texture_edge": 4096, "decoded_image_bytes": 134217728},
+    "subset": "embedded PNG/JPEG, dense POSITION/NORMAL/TEXCOORD_0, flattened static triangles, opaque non-emissive materials; no external URIs, skins, animations, sparse accessors or extensions",
+    "bevy_bridge": "sRGB base-color and linear normal/ORM/AO; shared ORM/AO image handle; generated tangents; unity normal/AO strengths required",
+    "native_material": "base color/Lambert only; normal/ORM/AO CPU sources retained but not uploaded/used; one source mip"
+  },
+  "stationary_offscreen": {
+    "arguments": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "order": ["baseline-1", "new-1", "new-2", "baseline-2"],
+    "size": [1280, 720], "hud": true,
+    "measured_frames_per_run": 600, "warmup_frames_per_run": 30, "prestream_seconds_per_run": 10,
+    "final_tiles_each_run": 287, "terrain_triangles_each_run": 297216,
+    "measured_geometry_publications_each_run": 0, "capacity_rejections_each_run": 0,
+    "runs": [
+      {"name": "baseline-1", "median_ms": 2.582, "p95_ms": 3.251, "p99_ms": 3.647, "max_ms": 8.122, "material_update_upload_bytes": 23068320},
+      {"name": "new-1", "median_ms": 2.558, "p95_ms": 3.079, "p99_ms": 3.457, "max_ms": 9.855, "material_update_upload_bytes": 23155700},
+      {"name": "new-2", "median_ms": 2.612, "p95_ms": 3.359, "p99_ms": 3.595, "max_ms": 10.574, "material_update_upload_bytes": 23417840},
+      {"name": "baseline-2", "median_ms": 2.605, "p95_ms": 3.277, "p99_ms": 3.887, "max_ms": 10.718, "material_update_upload_bytes": 23068320}
+    ],
+    "boundary": "host presentation/streaming/camera/classify/raster/HUD/upload/GPU-completion latency; excludes setup, pre-stream, warm-up and capture readback",
+    "conclusion": "overlapping medians; asynchronous material work and unlocked clocks do not isolate an adapter tax or establish a speedup"
+  },
+  "mesh_microbenchmark": {
+    "command": "cargo bench -p thessa-render-wgpu --bench mesh",
+    "size": [1280, 720], "measured_frames": 120, "warmup_frames": 30,
+    "runs": [
+      {"instances": 0, "triangles": 0, "median_ms": 0.041, "p95_ms": 0.051},
+      {"instances": 1, "triangles": 78465, "median_ms": 0.157, "p95_ms": 0.227},
+      {"instances": 32, "triangles": 2510880, "median_ms": 2.712, "p95_ms": 3.114}
+    ],
+    "boundary": "normalized single-mip zero-lit synthetic source: host frame/instance upload, clear, indexed instanced raster, submit and device completion; zero-instance floor still uploads frame uniforms",
+    "excluded": ["asset decode/upload", "terrain", "UI", "streaming", "readback"],
+    "not_claimed": ["GPU timestamp timing", "game FPS", "Bevy/Solari performance parity", "FastRT acceleration-structure parity"]
+  },
+  "decode_benchmark": {"command": "cargo bench -p thessa-render-assets --bench decode", "samples": 10, "median_ms": 140.452, "reported_p90_ms": 148.210, "excluded": ["file IO", "GPU upload", "source destruction"]},
+  "native_preview": {
+    "arguments": "--vehicle-preview --headless IMAGE.png --hud --frames 600 --prestream-seconds 10",
+    "state": "existing FlightAuthority::new north-pole constructor snapshot at SimTime::EPOCH, before old-client PostStartup COAST relocation; no live integration/interpolation/controller",
+    "mesh_instances": 1, "mesh_draw_calls": 2, "mesh_triangles": 78465, "mesh_frame_upload_bytes": 640,
+    "stationary": {"median_ms": 3.544, "p95_ms": 4.790, "p99_ms": 5.950, "max_ms": 10.552, "final_tiles": 351, "terrain_triangles": 198144, "measured_publications": 0, "capacity_rejections": 0},
+    "camera_sweep": {"added_arguments": "--sweep", "median_ms": 3.062, "p95_ms": 5.062, "p99_ms": 11.836, "max_ms": 13.776, "final_angle_rad": 3.774, "final_tiles": 351, "terrain_triangles": 244224, "measured_publications": 58, "capacity_rejections": 0},
+    "boundary": "different terrain cover/camera from stationary terrain A/B; do not subtract these times to infer isolated mesh cost; dark polar ground/reverse view has no manufactured ambient or sky"
+  },
+  "native_wayland_smoke": {
+    "arguments": "--vehicle-preview --frames 1200", "hud": true,
+    "presentation_requests": 1200, "presentation_elapsed_s": 10.226,
+    "requests_per_second": 117.3, "process_elapsed_s": 11.838, "exit_code": 0,
+    "final_tiles": 351, "capacity_rejections": 0,
+    "boundary": "host presentation requests including compositor policy, not display feedback, GPU-only time or game FPS"
+  },
+  "legacy_bevy_smoke": {
+    "build": "cargo build -p thessa-client (debug)",
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_AUTOBENCH_PAUSED=1 THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6",
+    "exit_code": 0, "capture_size": [1270, 1588],
+    "limitations": "embedded server absent: existing local simulation fallback; ALSA/JACK diagnostics; not an audio/network test, equal-scene performance comparison or visual parity proof"
+  },
+  "verification": {
+    "fmt": "pass", "workspace_all_target_all_feature_clippy_deny_warnings": "pass", "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1753, "workspace_integration_tests": 52, "ignored_bevy_cbt_hardware_tests": 24,
+    "ignored_native_gpu_window_tests": 4, "successful_total": 1833,
+    "gpu_regressions": "exact textured pixels, color/depth loads, translation/rotation/rebase invariance, multi/empty instances and atomic rejection of invalid camera/light/instance/capacity publications; actual model over terrain",
+    "camera_regression": "exact-pole initial flight required a finite tangent; close camera and normalized compatibility quaternion validated",
+    "review": "local source ownership/API/license, accessor bounds/types/budgets, color-space, pose publication, target lifetime and shared-device review; no GPL-to-MIT transfer",
+    "logs": "/tmp/opencode/mesh-closed-*.log and /tmp/opencode/mesh-final-clippy.log"
+  },
+  "captures": [
+    {"path": "owned-mesh-terrain-2026-10-16.png", "size": [1280, 720], "sha256": "8cc7df9c620e03a3ad859ff0ce5d8ec74e672276e6223fa20d2386d414b0ce7d", "meaning": "new-1 normal terrain-only HUD frame"},
+    {"path": "owned-mesh-x15-2026-10-16.png", "size": [1280, 720], "sha256": "37e1d847160b6f8e6aee19cb2814d90670ec0bde242333c44cac1a6f71bfbe18", "meaning": "initial flight-state mesh preview; not live flight or PBR parity"},
+    {"path": "owned-mesh-x15-sweep-2026-10-16.png", "size": [1280, 720], "sha256": "f79624df36e08afa7c3292e6676e85861bd61032461ddb217934a1ffa4cb59d3", "meaning": "same frozen vehicle, orbit camera swept to 3.774rad; dark reverse view, no ambient model"},
+    {"path": "owned-mesh-bevy-pilot-2026-10-16.png", "size": [1270, 1588], "sha256": "26fb37df66712dec9abaed69f199c1917e2b1fc9af2bfece9151275b7c4d56b2", "meaning": "legacy paused COAST pilot consumes shared source; different camera/scene, not visual parity"}
+  ],
+  "limitations": [
+    "Static embedded GLB subset and synchronous old-pilot startup conversion, not a generic runtime asset registry, streaming or hot-reload system.",
+    "Native source remains resident at 96MiB CPU RGBA; source retirement and mip generation are not optimized yet.",
+    "No live moving-object state/interpolation/network integration, flight camera/controller/UI migration, material parity, shadows, atmosphere or final visual acceptance.",
+    "No culling/LOD, indirect heterogeneous scene submission, device-loss recovery or acceleration-structure implementation is established by this slice."
+  ]
+}

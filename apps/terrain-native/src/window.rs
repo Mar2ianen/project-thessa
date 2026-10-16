@@ -17,6 +17,7 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     backend: Backend,
     renderer: TerrainRenderer,
+    mesh_renderer: Option<thessa_render_wgpu::mesh::MeshRenderer>,
     depth: wgpu::TextureView,
     drawable: bool,
     exposure: f32,
@@ -75,6 +76,7 @@ impl State {
         let exposure = crate::manual_exposure(resolved.exposure_ev100);
         surface.configure(&backend.device, &config);
         let renderer = scene.renderer(&backend, config.format)?;
+        let mesh_renderer = scene.mesh_renderer(&backend, config.format)?;
         let depth = depth(&backend, config.width, config.height);
         #[cfg(feature = "hud")]
         let hud = hud_enabled.then(|| {
@@ -96,6 +98,7 @@ impl State {
             config,
             backend,
             renderer,
+            mesh_renderer,
             depth,
             drawable: size.width > 0 && size.height > 0,
             exposure,
@@ -197,12 +200,24 @@ impl State {
             &self.backend,
             &scene.view(self.config.width, self.config.height, self.exposure),
         )?;
+        if let Some(mesh) = &mut self.mesh_renderer {
+            scene.update_mesh(
+                &self.backend,
+                mesh,
+                self.config.width,
+                self.config.height,
+                self.exposure,
+            )?;
+        }
         let color = frame.texture.create_view(&Default::default());
         let mut encoder = self
             .backend
             .device
             .create_command_encoder(&Default::default());
         self.renderer.encode(&mut encoder, &color, &self.depth);
+        if let Some(mesh) = &self.mesh_renderer {
+            mesh.encode(&mut encoder, &color, &self.depth);
+        }
         #[cfg(feature = "hud")]
         let commands = if let (Some(hud), Some(output)) = (&mut self.hud, hud_output) {
             hud.gpu.encode(
@@ -324,8 +339,8 @@ impl ApplicationHandler for App {
                     Some(Shortcut::Exit) => event_loop.exit(),
                     Some(Shortcut::Orbit(delta)) => self.scene.angle += delta,
                     Some(Shortcut::Zoom(factor)) => {
-                        self.scene.distance =
-                            (self.scene.distance * factor).clamp(1_000.0, 200_000.0)
+                        let (min, max, _) = self.scene.camera_distance_limits();
+                        self.scene.distance = (self.scene.distance * factor).clamp(min, max)
                     }
                     _ => {}
                 }

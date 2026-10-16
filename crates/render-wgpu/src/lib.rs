@@ -36,6 +36,7 @@ use std::sync::Arc;
 use thessa_graphics::Capabilities;
 
 pub mod material;
+pub mod mesh;
 pub mod terrain;
 pub mod view;
 

@@ -30,6 +30,9 @@ pub struct Sample {
 }
 
 impl CelestialPresentation {
+    pub fn initial_flight(&self) -> Result<thessa_flight_authority::FlightAuthority, String> {
+        thessa_flight_authority::FlightAuthority::new(&self.ephemeris, self.body)
+    }
     pub fn new(
         system: &SystemConfig,
         ephemeris: BakedEphemeris,

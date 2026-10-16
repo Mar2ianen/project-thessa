@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use glam::{DMat4, DQuat, DVec3};
+pub mod mesh;
 
 /// Camera pose in a caller-selected coordinate frame, in SI metres. Projection
 /// and photometric exposure are supplied by the camera/graphics policy owner.

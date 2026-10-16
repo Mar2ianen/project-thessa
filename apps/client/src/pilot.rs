@@ -1,6 +1,7 @@
 use super::*;
 
 mod hud;
+mod mesh_assets;
 use hud::{pilot_hud_buttons, spawn_pilot_hud, update_pilot_hud};
 
 use std::path::Path;
@@ -11,7 +12,6 @@ use bevy::{
     math::{DQuat, DVec3, Mat3},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     ui::FocusPolicy,
-    world_serialization::{WorldAsset, WorldAssetRoot},
 };
 
 use thessa_flight_net::{ClientInput, Command, ManeuverNodeCommand, Snapshot};
@@ -30,8 +30,10 @@ const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const PILOT_CAMERA_DEFAULT_DISTANCE_M: f32 = 32.0;
 const PILOT_CAMERA_MIN_DISTANCE_M: f32 = 8.0;
 const PILOT_CAMERA_MAX_DISTANCE_M: f32 = 180.0;
-const X15_SOURCE_LENGTH_M: f32 = 16.77;
-const X15_AUTHORED_LENGTH_M: f32 = 15.45;
+use thessa_flight_authority::presentation::{
+    X15_AUTHORED_LENGTH_M, X15_SOURCE_LENGTH_M, craft_visual_orientation as render_orientation,
+    x15_asset_to_craft_rotation,
+};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClientViewMode {
     Map,
@@ -802,11 +804,20 @@ pub(super) fn spawn_pilot_preview(
     commands: &mut Commands,
     sphere_mesh: Handle<Mesh>,
     planet_material: Handle<StandardMaterial>,
-    asset_server: &AssetServer,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
     planet_radius_m: f64,
 ) {
-    let x15_scene: Handle<WorldAsset> =
-        asset_server.load("models/north_american_x-15_plane.glb#Scene0");
+    let bytes = std::fs::read(
+        std::path::Path::new(&client_asset_directory())
+            .join("models/north_american_x-15_plane.glb"),
+    )
+    .expect("X15 GLB asset must be available");
+    let source = thessa_render_assets::decode_glb(&bytes, Default::default())
+        .expect("X15 static GLB source");
+    let x15_meshes =
+        mesh_assets::convert(&source, meshes, images, materials).expect("X15 host mesh conversion");
     let planet_radius = planet_radius_m.max(1.0) as f32;
 
     commands
@@ -837,15 +848,18 @@ pub(super) fn spawn_pilot_preview(
                     Name::new("PFD North American X-15"),
                 ))
                 .with_children(|vehicle| {
-                    vehicle.spawn((
-                        WorldAssetRoot(x15_scene),
-                        Transform {
-                            rotation: x15_asset_to_craft_rotation(),
-                            scale: Vec3::splat(X15_AUTHORED_LENGTH_M / X15_SOURCE_LENGTH_M),
-                            ..default()
-                        },
-                        Name::new("North American X-15 CC-BY-4.0 mesh"),
-                    ));
+                    for (mesh, material) in x15_meshes {
+                        vehicle.spawn((
+                            Mesh3d(mesh),
+                            MeshMaterial3d(material),
+                            Transform {
+                                rotation: x15_asset_to_craft_rotation(),
+                                scale: Vec3::splat(X15_AUTHORED_LENGTH_M / X15_SOURCE_LENGTH_M),
+                                ..default()
+                            },
+                            Name::new("North American X-15 CC-BY-4.0 mesh"),
+                        ));
+                    }
                 });
         });
 }
@@ -1244,29 +1258,6 @@ fn simulate_pilot_flight(
         "client.pilot_simulation",
         system_started.elapsed().as_secs_f64(),
     );
-}
-
-/// The checked-in GLB scene (before Blender's Y-up -> Z-up import conversion)
-/// has nose -X, cockpit/dorsal fin +Y, and lateral +Z. Its root nodes only
-/// scale the mesh; they do not rotate it. Map those axes into the craft
-/// parent's nose +Y, top -Z, lateral +X exactly once.
-fn x15_asset_to_craft_rotation() -> Quat {
-    Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Y, Vec3::NEG_Z, Vec3::X))
-}
-
-fn render_orientation(orientation: DQuat) -> Quat {
-    let forward = pilot_render_offset(orientation * DVec3::X).normalize_or_zero();
-    let lateral = pilot_render_offset(orientation * DVec3::Y).normalize_or_zero();
-    let up = pilot_render_offset(orientation * DVec3::Z).normalize_or_zero();
-    if forward.length_squared() < 1.0e-8
-        || lateral.length_squared() < 1.0e-8
-        || up.length_squared() < 1.0e-8
-    {
-        return Quat::IDENTITY;
-    }
-    // The model's +Y is its nose, +X its lateral axis and +Z points down so the
-    // three visual axes form a right-handed basis around the engine body axes.
-    Quat::from_mat3(&Mat3::from_cols(lateral, forward, -up))
 }
 
 /// Requested autopilot kick (m/s prograde) via `THESSA_AUTO_MANEUVER_DV_MPS`.

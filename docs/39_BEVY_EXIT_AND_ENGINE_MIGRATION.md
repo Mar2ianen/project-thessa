@@ -1770,6 +1770,74 @@ test or equal-scene parity proof.
 
 ![Full-thrust climb on owned intent, same completed time](artifacts/owned-input-full-2026-10-16.png)
 
+### Owned part-command continuation (2026-10-16)
+
+The next slice ports the installed-subsystem commands that complete the
+discrete control set: RCS, reaction wheels, landing gear and parachutes. The
+authority endpoint is unchanged (`FlightAuthority::apply_part_command` with
+the same explicit `VehiclePartCommand` values the old pilot sends); only the
+native host learns to call it. The old client additionally forwards each
+command to the server for multiplayer truth — a link the local viewer does
+not have, so native application stays local-only by construction. No new
+solver, wire format or shared math is introduced: this is host adoption of an
+existing command contract with the old pilot's key bindings.
+
+Native mapping: `R`/`Y`/`G`/`P` toggle through `Scene::apply_part_toggle`,
+which reads back current state and issues the explicit enabled/disabled
+command; the HUD mirrors four checkboxes that adopt on change only (no
+per-frame command spam). Telemetry reports `rcs/wheels/gear/chutes`
+alongside the input intent. Built-in commands are infallible for the starter
+vehicle; an unexpected rejection stops the flight like a physics error
+instead of panicking, preserving the last valid presentation. Starter states
+are RCS/wheels on, gear down, chutes safe, so default runs reproduce the
+previous trajectory exactly.
+
+Regressions pin starter states, every toggle round-trip, absolute HUD
+adoption, change-only application, key parity with the old pilot, no-op
+without flight and telemetry keys. Old-client command ownership is untouched.
+No new unsafe code, external dependencies, devices, scene readback,
+intermediate scene targets, CLI surface or benchmarks (no new math enters;
+command application is solver-internal).
+
+**Validation and measurements.** On the Radeon 880M, the terrain-only 1280×720
+HUD A/B/B/A run (600 measured + 30 warm-up frames, 10 s pre-stream) measured
+baseline **2.539 / 2.770 ms** and new **2.531 / 2.755 ms** medians. Every run
+ended at 287 tiles / 297,216 terrain triangles with zero measured geometry
+publications or capacity refusals; the slice issues no commands by default,
+so this A/B stays an equal workload. Overlapping medians establish neither a
+speedup nor an isolated adapter tax. The preserved baseline executable is the
+exact `77ee5d4` build from the static-mesh checkpoint.
+
+Orbit and chase live runs reached **10.5 s** completed authority/presentation
+time with identical final relative coordinates and no stopped flight (**3.107 /
+2.903 ms** medians), reporting starter states throughout (`rcs=true
+wheels=true gear=true chutes=false`). These include full local physics
+demand, streaming, rendering, the extended HUD and GPU completion, **not**
+isolated command cost or game FPS; camera cover differs, so do not compare
+medians as an equal scene. Both runs submitted one mesh instance / two draws /
+78,465 mesh triangles / 640 frame upload bytes (43 / 36 measured terrain
+publications, zero refusals). Native Wayland smoke requested **1,200**
+presentations in **12.470 s** (**96.2 requests/s**, not display/game FPS),
+exited 0, and finished at **12.467 s** completed simulation with a
+**0.000291 s** backlog, no flight stop and no refusals. Window clamping does
+not promise real-time simulation; this run does **not** establish 1× realtime
+throughput.
+
+Captures and machine-readable methodology/results are recorded in
+`artifacts/owned-part-commands-2026-10-16.json`.
+
+Final gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, **1,777** workspace lib/bin + **52**
+integration + **24** Bevy-CBT hardware + **4** native GPU + **4** native-window
+tests = **1,861 successful tests**. Local review covered command ownership,
+explicit-command semantics, no-command trajectory identity, HUD spam
+avoidance and GPL/MIT separation (no new crate, no game logic moved). The
+debug legacy Bevy pilot also ran **unpaused**, saved a flight screenshot and
+exited 0 using the existing local fallback; not an audio/network test or
+equal-scene parity proof.
+
+![Native live COAST flight with the systems panel](artifacts/owned-parts-flight-2026-10-16.png)
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

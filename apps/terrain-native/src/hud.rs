@@ -14,6 +14,10 @@ pub struct Controls {
     pub precision: bool,
     pub sas: bool,
     pub cycle_mode: bool,
+    pub rcs: bool,
+    pub wheels: bool,
+    pub gear: bool,
+    pub chutes: bool,
     pub exposure_ev100: f32,
     pub vsync: bool,
 }
@@ -35,6 +39,10 @@ impl Controls {
             precision: scene.input.precision,
             sas: scene.sas_enabled(),
             cycle_mode: false,
+            rcs: scene.part_states().unwrap_or((true, true, true, false)).0,
+            wheels: scene.part_states().unwrap_or((true, true, true, false)).1,
+            gear: scene.part_states().unwrap_or((true, true, true, false)).2,
+            chutes: scene.part_states().unwrap_or((true, true, true, false)).3,
             exposure_ev100: scene.requested.renderer.exposure_ev100,
             vsync: scene.requested.renderer.vsync,
         }
@@ -68,6 +76,25 @@ impl Controls {
             if self.cycle_mode {
                 scene.cycle_control_mode();
             }
+            use crate::scene::PartToggle;
+            for (toggle, enabled) in [
+                (PartToggle::Rcs, self.rcs),
+                (PartToggle::ReactionWheels, self.wheels),
+                (PartToggle::Gear, self.gear),
+                (PartToggle::Parachutes, self.chutes),
+            ] {
+                if scene.part_states().is_some_and(|state| {
+                    let current = match toggle {
+                        PartToggle::Rcs => state.0,
+                        PartToggle::ReactionWheels => state.1,
+                        PartToggle::Gear => state.2,
+                        PartToggle::Parachutes => state.3,
+                    };
+                    current != enabled
+                }) {
+                    scene.set_part_state(toggle, enabled);
+                }
+            }
         }
         scene.requested.renderer.exposure_ev100 = self.exposure_ev100;
         scene.requested.renderer.vsync = self.vsync;
@@ -83,6 +110,7 @@ pub struct Stats {
     pub engine: bool,
     pub control_mode: Option<thessa_flight_authority::ControlMode>,
     pub stick: [f64; 3],
+    pub parts: (bool, bool, bool, bool),
     pub submitted_frames: u64,
     pub previous_cpu_ms: f64,
     pub sim_time_s: f64,
@@ -106,6 +134,7 @@ impl Stats {
             engine: scene.input.engine_active,
             control_mode: scene.live_flight().then_some(scene.control_mode),
             stick: scene.input.stick_scaled().to_array(),
+            parts: scene.part_states().unwrap_or((true, true, true, false)),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,
             tiles: scene.stream.visible().len(),
@@ -304,6 +333,19 @@ fn widgets(
                         }
                         ui.small("WASDQE stick · Shift/Ctrl slew · X/Z presets · Space engine · C law · T SAS");
                     });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut controls.rcs, "RCS");
+                        ui.checkbox(&mut controls.wheels, "Wheels");
+                        ui.checkbox(&mut controls.gear, "Gear");
+                        ui.checkbox(&mut controls.chutes, "Chutes");
+                    });
+                    ui.small(format!(
+                        "Systems: RCS {} · wheels {} · gear {} · chutes {} (R/Y/G/P)",
+                        if stats.parts.0 { "on" } else { "off" },
+                        if stats.parts.1 { "on" } else { "off" },
+                        if stats.parts.2 { "DOWN" } else { "UP" },
+                        if stats.parts.3 { "ARMED" } else { "safe" },
+                    ));
                 }
                 if controls.vehicle_preview {
                     ui.checkbox(&mut controls.chase, "Chase camera (follow craft attitude)");
@@ -371,6 +413,10 @@ mod tests {
             precision: false,
             sas: true,
             cycle_mode: false,
+            rcs: true,
+            wheels: true,
+            gear: true,
+            chutes: false,
             exposure_ev100: 13.0,
             vsync: false,
         }

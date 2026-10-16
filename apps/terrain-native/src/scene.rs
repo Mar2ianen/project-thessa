@@ -46,6 +46,18 @@ pub struct Scene {
     lighting_dirty: bool,
 }
 
+/// Installed-subsystem selector sharing keys with the old pilot
+/// (`R` RCS, `Y` reaction wheels, `G` gear, `P` parachutes). The old client
+/// forwards the same commands to the server; the local viewer applies them
+/// to its own authority only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartToggle {
+    Rcs,
+    ReactionWheels,
+    Gear,
+    Parachutes,
+}
+
 impl Scene {
     pub fn vehicle_preview(&self) -> bool {
         self.vehicle.is_some()
@@ -269,7 +281,7 @@ impl Scene {
     }
 
     pub fn flight_telemetry(&self) -> Option<String> {
-        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled))
+        self.flight.as_ref().map(|flight|format!("authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed))
     }
     pub fn flight_stopped(&self) -> bool {
         self.flight
@@ -317,6 +329,58 @@ impl Scene {
     pub fn set_sas(&mut self, enabled: bool) {
         if let Some(flight) = &mut self.flight {
             flight.sas_enabled = enabled;
+        }
+    }
+
+    /// Live subsystem states `(rcs, wheels, gear_down, chutes_armed)`.
+    /// `None` without live flight; the starter states are RCS/wheels on,
+    /// gear down, chutes safe.
+    pub fn part_states(&self) -> Option<(bool, bool, bool, bool)> {
+        self.flight.as_ref().map(|flight| {
+            (
+                flight.rcs_enabled,
+                flight.reaction_wheels_enabled,
+                flight.gear_down,
+                flight.parachutes_armed,
+            )
+        })
+    }
+
+    /// Flip one subsystem through the same explicit command the old pilot
+    /// sends. Built-in commands are infallible for the starter vehicle; an
+    /// unexpected rejection stops the flight like a physics error instead
+    /// of panicking, preserving the last valid presentation.
+    pub fn apply_part_toggle(&mut self, toggle: PartToggle) {
+        let Some((rcs, wheels, gear, chutes)) = self.part_states() else {
+            return;
+        };
+        let (toggle, enabled) = match toggle {
+            PartToggle::Rcs => (toggle, !rcs),
+            PartToggle::ReactionWheels => (toggle, !wheels),
+            PartToggle::Gear => (toggle, !gear),
+            PartToggle::Parachutes => (toggle, !chutes),
+        };
+        self.set_part_state(toggle, enabled);
+    }
+
+    /// Absolute subsystem demand for HUD checkboxes.
+    pub fn set_part_state(&mut self, toggle: PartToggle, enabled: bool) {
+        use thessa_sim_core::VehiclePartCommand;
+        let command = match toggle {
+            PartToggle::Rcs => VehiclePartCommand::SetRcsEnabled { enabled },
+            PartToggle::ReactionWheels => VehiclePartCommand::SetReactionWheelsEnabled { enabled },
+            PartToggle::Gear => VehiclePartCommand::SetLandingGearDeployed { deployed: enabled },
+            PartToggle::Parachutes => VehiclePartCommand::SetParachutesArmed { armed: enabled },
+        };
+        let Some(flight) = &mut self.flight else {
+            return;
+        };
+        if let Err(error) = flight.apply_part_command(&command) {
+            flight.engine_active = false;
+            flight.control_input = DVec3::ZERO;
+            flight.accumulator_s = 0.0;
+            flight.flight_error = Some(error.to_string());
+            eprintln!("Native flight stopped: {error}; preserving last complete visual sample");
         }
     }
 
@@ -973,6 +1037,59 @@ mod tests {
                 .unwrap();
         }
         assert!((glide.relative_position_m - thrust).length() > 100.0);
+    }
+
+    #[test]
+    fn part_toggles_flip_subsystems_and_report_telemetry() {
+        use super::PartToggle;
+        let mut scene = Scene::load(Default::default()).unwrap();
+        assert_eq!(scene.part_states(), None);
+        scene.apply_part_toggle(PartToggle::Gear);
+        assert_eq!(scene.part_states(), None, "no flight: no-op");
+        scene.enable_live_flight().unwrap();
+        assert_eq!(scene.part_states(), Some((true, true, true, false)));
+        for toggle in [
+            PartToggle::Rcs,
+            PartToggle::ReactionWheels,
+            PartToggle::Gear,
+            PartToggle::Parachutes,
+        ] {
+            scene.apply_part_toggle(toggle);
+        }
+        assert_eq!(scene.part_states(), Some((false, false, false, true)));
+        for toggle in [
+            PartToggle::Rcs,
+            PartToggle::ReactionWheels,
+            PartToggle::Gear,
+            PartToggle::Parachutes,
+        ] {
+            scene.apply_part_toggle(toggle);
+        }
+        assert_eq!(scene.part_states(), Some((true, true, true, false)));
+        scene.set_part_state(PartToggle::Gear, false);
+        scene.set_part_state(PartToggle::Parachutes, true);
+        assert_eq!(scene.part_states(), Some((true, true, false, true)));
+        assert!(!scene.flight_stopped());
+        let telemetry = scene.flight_telemetry().unwrap();
+        for key in ["rcs=true", "wheels=true", "gear=false", "chutes=true"] {
+            assert!(telemetry.contains(key), "missing {key} in {telemetry}");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "hud")]
+    fn hud_part_checkboxes_adopt_on_change_only() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        let mut controls = crate::hud::Controls::from_scene(&scene);
+        assert!(controls.rcs && controls.wheels && controls.gear && !controls.chutes);
+        controls.rcs = false;
+        controls.chutes = true;
+        controls.apply(&mut scene);
+        assert_eq!(scene.part_states(), Some((false, true, true, true)));
+        let states = scene.part_states();
+        controls.apply(&mut scene);
+        assert_eq!(scene.part_states(), states);
     }
 
     #[test]

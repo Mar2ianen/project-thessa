@@ -131,7 +131,9 @@ The checked-in vertical slice currently contains:
   arms the engine, window `WASDQE` flies the stick, `Shift`/`Ctrl` slew the
   throttle, `X`/`Z` cut/fill, `Space` toggles the engine, `C` cycles the
   control law, `T` toggles SAS and `CapsLock` scales precision; the HUD mirrors
-  the same panel. RCS/gear/chute part commands are not ported yet.
+  the same panel plus installed-system toggles (`R` RCS, `Y` wheels, `G` gear,
+  `P` chutes) applied as the explicit part commands the old pilot sends.
+  Server forwarding, assists and the mode HUD are not ported yet.
   `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
   chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.

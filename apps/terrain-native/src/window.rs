@@ -517,12 +517,30 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Installed-subsystem key mapping shared with the old pilot
+/// (`R` RCS, `Y` wheels, `G` gear, `P` parachutes). Pure mapping; the scene
+/// owns application and gating.
+fn part_toggle_for_key(key: PhysicalKey) -> Option<crate::scene::PartToggle> {
+    use crate::scene::PartToggle;
+    match key {
+        PhysicalKey::Code(KeyCode::KeyR) => Some(PartToggle::Rcs),
+        PhysicalKey::Code(KeyCode::KeyY) => Some(PartToggle::ReactionWheels),
+        PhysicalKey::Code(KeyCode::KeyG) => Some(PartToggle::Gear),
+        PhysicalKey::Code(KeyCode::KeyP) => Some(PartToggle::Parachutes),
+        _ => None,
+    }
+}
+
 /// Discrete flight inputs sharing factors with the old pilot. Repeats never
 /// re-fire presets or toggles; slew and stick read the held set every frame
 /// instead. Free function so the event arm can borrow the scene while the
 /// window state is already borrowed.
 fn apply_discrete_flight_input(scene: &mut Scene, key: PhysicalKey, repeat: bool, consumed: bool) {
     if consumed || repeat || !scene.live_flight() {
+        return;
+    }
+    if let Some(toggle) = part_toggle_for_key(key) {
+        scene.apply_part_toggle(toggle);
         return;
     }
     match key {
@@ -663,6 +681,22 @@ mod tests {
             camera_shortcut(PhysicalKey::Code(KeyCode::KeyA), false),
             None
         );
+    }
+
+    #[test]
+    fn part_keys_match_the_old_pilot_bindings() {
+        use crate::scene::PartToggle;
+        for (key, expected) in [
+            (KeyCode::KeyR, Some(PartToggle::Rcs)),
+            (KeyCode::KeyY, Some(PartToggle::ReactionWheels)),
+            (KeyCode::KeyG, Some(PartToggle::Gear)),
+            (KeyCode::KeyP, Some(PartToggle::Parachutes)),
+            (KeyCode::KeyT, None),
+            (KeyCode::KeyC, None),
+            (KeyCode::Space, None),
+        ] {
+            assert_eq!(part_toggle_for_key(PhysicalKey::Code(key)), expected);
+        }
     }
 
     #[test]

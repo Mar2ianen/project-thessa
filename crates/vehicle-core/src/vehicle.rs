@@ -493,6 +493,10 @@ pub struct VehicleDefinition {
     /// split routine consumes it to partition independent clusters.
     #[serde(default)]
     pub assembly_ownership: Option<AssemblyOwnership>,
+    /// Optional retained appearance meshes with explicit assembly-body ownership.
+    /// Not a source of physics; absent in legacy assets.
+    #[serde(default)]
+    pub render_geometry: crate::RenderGeometry,
     /// Optional named consumer-to-assembly feed-port routes. Consumers not
     /// listed use the legacy vehicle-level reachable tank set.
     #[serde(default)]
@@ -828,6 +832,7 @@ impl VehicleDefinition {
             control_stations: Vec::new(),
             assembly: None,
             assembly_ownership: None,
+            render_geometry: crate::RenderGeometry::default(),
             resource_feed_ports: Vec::new(),
             electrical_power: ElectricalPowerSystem::default(),
             thermal: ThermalSystem::default(),
@@ -1963,6 +1968,9 @@ impl VehicleDefinition {
                 control_stations,
                 assembly: Some(split_assembly),
                 assembly_ownership: Some(local_ownership),
+                render_geometry: self
+                    .render_geometry
+                    .for_cluster(&cluster.body_indices, shift),
                 resource_feed_ports,
                 electrical_power,
                 thermal,
@@ -1993,6 +2001,9 @@ impl VehicleDefinition {
         }
         for part in &mut self.collision_geometry.parts {
             part.local_position_m += shift;
+        }
+        for part in &mut self.render_geometry.parts {
+            part.position_body_m += shift;
         }
         for mount in &mut self.engines {
             shift_array(&mut mount.position_body_m, shift);
@@ -2099,6 +2110,14 @@ impl VehicleDefinition {
 
     pub(crate) fn body_frame_shift_is_finite(&self, shift: DVec3) -> bool {
         let shifted_point_is_finite = |point: DVec3| (point + shift).is_finite();
+        if !self
+            .render_geometry
+            .parts
+            .iter()
+            .all(|part| shifted_point_is_finite(part.position_body_m))
+        {
+            return false;
+        }
         let shifted_station_is_finite =
             |station: &[f64; 3]| shifted_point_is_finite(DVec3::from_array(*station));
         self.aero_geometry.panels.iter().all(|panel| {
@@ -2262,6 +2281,13 @@ impl VehicleDefinition {
     }
 
     pub fn validate(&self) -> Result<(), VehicleError> {
+        self.render_geometry
+            .validate(
+                self.assembly
+                    .as_ref()
+                    .map(|assembly| assembly.body_names.len()),
+            )
+            .map_err(VehicleError::InvalidVehicle)?;
         self.validate_with_cabins(&self.cabins)
     }
 
@@ -6082,6 +6108,81 @@ mod cabin_authority_tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn render_parts_follow_physical_split_and_frame_shifts_without_copying_meshes() {
+        use crate::{RenderGeometry, RenderMesh, RenderPart};
+        use std::sync::Arc;
+        let (mut vehicle, mut state) = separable_test_vehicle(Vec::new());
+        state.position_inertial_m = DVec3::new(1e12, -2e12, 3e12);
+        state.orientation_body_to_inertial = DQuat::from_rotation_y(0.37);
+        let mesh = Arc::new(RenderMesh {
+            positions: vec![DVec3::ZERO, DVec3::X, DVec3::Y],
+            normals: vec![DVec3::Z; 3],
+            indices: vec![0, 1, 2],
+        });
+        vehicle.render_geometry = RenderGeometry {
+            parts: (0..2)
+                .map(|body| RenderPart {
+                    name: format!("shell-{body}"),
+                    assembly_body: Some(body),
+                    position_body_m: DVec3::new(body as f64 * 2.0 - 1.0, 0.2, 0.3),
+                    orientation_mesh_to_body: DQuat::from_rotation_x(0.41),
+                    mesh: mesh.clone(),
+                })
+                .collect(),
+        };
+        vehicle.validate().unwrap();
+        let bare = {
+            let mut bare = vehicle.clone();
+            bare.render_geometry = RenderGeometry::default();
+            bare
+        };
+        let resource = vehicle.initial_resource_state();
+        let split = vehicle
+            .split_definitions_after_link_failure("stack", state, &resource)
+            .unwrap();
+        let physical = bare
+            .split_definitions_after_link_failure("stack", state, &resource)
+            .unwrap();
+        assert_eq!(split.len(), 2);
+        for (
+            index,
+            ((definition, child_state, child_resource), (bare, bare_state, bare_resource)),
+        ) in split.iter().zip(&physical).enumerate()
+        {
+            assert_eq!(child_state, bare_state);
+            assert_eq!(child_resource, bare_resource);
+            assert_eq!(definition.mass_properties, bare.mass_properties);
+            assert_eq!(definition.collision_geometry, bare.collision_geometry);
+            let part = &definition.render_geometry.parts[0];
+            assert_eq!(definition.render_geometry.parts.len(), 1);
+            assert_eq!(part.assembly_body, Some(0));
+            assert!(Arc::ptr_eq(&part.mesh, &mesh));
+            let original = &vehicle.render_geometry.parts[index];
+            for vertex in &mesh.positions {
+                let before = state.position_inertial_m
+                    + state.orientation_body_to_inertial
+                        * (original.position_body_m + original.orientation_mesh_to_body * *vertex);
+                let after = child_state.position_inertial_m
+                    + child_state.orientation_body_to_inertial
+                        * (part.position_body_m + part.orientation_mesh_to_body * *vertex);
+                assert!(
+                    (before - after).length() < 0.001,
+                    "<1 mm at 3e12 m inertial distance"
+                );
+            }
+        }
+        let shift = DVec3::new(0.125, -0.25, 0.5);
+        let old = vehicle.render_geometry.clone();
+        vehicle.shift_body_frame_origin(shift);
+        for (before, after) in old.parts.iter().zip(&vehicle.render_geometry.parts) {
+            assert_eq!(after.position_body_m, before.position_body_m + shift);
+            assert!(Arc::ptr_eq(&before.mesh, &after.mesh));
+        }
+        vehicle.render_geometry.parts[0].position_body_m.x = f64::MAX;
+        assert!(!vehicle.body_frame_shift_is_finite(DVec3::splat(f64::MAX)));
     }
 
     fn station(name: &str, occupied: bool) -> ControlStation {

@@ -2448,6 +2448,30 @@ authored render-design/model identity, split render ownership, world fleet
 instances at a coherent presentation epoch, fuller resources and
 prediction/reconciliation. This catalogue does not claim to solve those gaps.
 
+### Retained render ownership (2026-10-16)
+
+The first continuation after the contact catalogue introduces optional MIT
+`vehicle-core::RenderGeometry`, re-exported by `sim-core`. It is backend-neutral
+appearance data, not GPL game policy moved into an engine crate. No device,
+entity, asset loader, texture URL or physics law is added. Mesh payloads are
+Arc-shared (serde rc support), with f64 local positions/normals, u32 triangles
+and explicit rigid part poses/body ownership. See `details/06_ATTACHMENT_MODEL.md`
+for validation, COM-shift and split contracts. Legacy JSON defaults to empty.
+Partitioning follows existing authoritative cluster reconstruction, preserving
+world vertex placement within 1 mm at 3e12 m and leaving all physical output
+identical to a mesh-free definition. No wire/pixels change in this slice.
+
+Reproduction: `cargo test -p thessa-vehicle-core -p thessa-sim-core --lib` and
+`cargo bench -p thessa-vehicle-core --bench render_geometry`; logs under
+`/tmp/opencode/render-ownership-{focused,bench}.log`. The benchmark compares
+64 shared part clones against copying a single 65,536-vertex mesh; it is an
+allocation/copy diagnostic, not a previous-production or frame-time speedup.
+Focused tests passed; the diagnostic measured **1.092 μs** median for 64 part
+clones versus **421.215 μs** for one deep mesh copy (3,932,160 payload bytes;
+200 samples each, CPU-only). It does not measure a physics tick or GPU path.
+Full workspace/gpu gates for the stacked continuation are recorded with the
+following integration slice before branch publication.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

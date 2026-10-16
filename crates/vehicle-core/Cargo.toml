@@ -8,9 +8,13 @@ publish = false
 
 [dependencies]
 glam.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 thessa-aero-core = { path = "../aero-core" }
 thessa-propulsion = { path = "../propulsion" }
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[[bench]]
+name = "render_geometry"
+harness = false

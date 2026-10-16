@@ -304,6 +304,29 @@ validation; the `assembly_air` benchmark measures 12.85 us per
 four-body/sixty-four-panel definition split on an AMD Ryzen 7 8745H
 (release run).
 
+### Retained render ownership
+
+`VehicleDefinition::render_geometry` is optional (default empty for old JSON).
+Each `RenderPart` retains its name, mesh-to-body rigid pose, immutable Arc-shared
+`RenderMesh` (f64 positions/unit normals and u32 CCW triangles), and an explicit
+`assembly_body` index. An assembled vehicle must assign every retained part to
+an existing body; a non-assembly vehicle uses `None`. This is appearance data,
+not a second collision, aerodynamic, mass or structural model. Validation rejects
+invalid ownership, non-finite poses/vertices, non-unit normals/quaternions and
+invalid triangle indices. Full asset validation checks meshes; the internal
+cabin/resource-update validation does not rescan static vertex buffers.
+
+The existing cluster splitter selects owned parts, remaps each owner into the
+cluster's body list and translates its f64 origin by minus the cluster COM.
+Vertex/index payloads remain shared, normals and mesh-local coordinates do not
+change. The existing body-frame shift path also moves retained origins and
+checks their finiteness before resource-driven recentering. A regression pins
+world vertex placement to <1 mm absolute at 3e12 m inertial coordinates with
+rotated parts/craft, exact physical-state equivalence without appearance data,
+and shared allocation identity. Empty appearance stays empty: no inferred X-15
+or contact-hull appearance is synthesized. Producer/client integrations are
+separate migration slices; this schema alone changes no pixels or wire kinds.
+
 ## 8. Next slices
 
 - Internal assembly-joint load-path resolution; explicit per-part bodies for

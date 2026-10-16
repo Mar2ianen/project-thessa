@@ -99,6 +99,11 @@ failures close the input side visibly. Stalled-peer heartbeat/reconnect and
 external native networking remain future work. Wire v8 adds a bounded,
 on-change `FleetGeometry` catalogue and a matching revision in `FleetSnapshot`;
 contact geometry is not a render-design/model identity or full resource replica.
+The next migration slice adds optional MIT `RenderGeometry` to vehicle definitions:
+f64 rigid part poses, indexed local meshes shared by Arc, and validated body
+ownership. Existing cluster reconstruction partitions/remaps the parts and moves
+their origins with the physical COM; mass, contact and forces do not consume
+these meshes. Producer baking and client/world consumption remain later slices.
 
 ## Autopilot and roadmap
 

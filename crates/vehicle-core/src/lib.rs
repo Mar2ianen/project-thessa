@@ -21,10 +21,13 @@ mod parachute;
 mod part_command;
 mod power;
 mod reaction_wheel;
+mod render_geometry;
 mod resources;
 mod shield;
 mod thermal;
 mod vehicle;
+
+pub use render_geometry::{RenderGeometry, RenderMesh, RenderPart};
 
 pub use assembly::{
     AssemblyBodyMassProperties, AssemblyEndpoint, AssemblyError, AssemblyJointLoad,

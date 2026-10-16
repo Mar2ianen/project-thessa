@@ -184,6 +184,9 @@ The checked-in vertical slice currently contains:
      Names are labels, not model IDs. Beauty meshes/materials, fleet world draws,
      prediction/reconciliation and reconnect remain unimplemented. Both peers
      must use wire v8; v7 is rejected rather than decoded as the new schema.
+     `VehicleDefinition` also supports optional renderer-neutral retained meshes
+     with explicit assembly-body ownership. Splits partition/recenter their poses
+     without copying mesh buffers; these are not yet baked or sent by this slice.
    Its input mailbox counts all commands (including state votes and fleet/
    autopilot events) against the protocol's 64-command packet limit; observed
    pipe/encode failure or overflow closes the link and refuses further input.

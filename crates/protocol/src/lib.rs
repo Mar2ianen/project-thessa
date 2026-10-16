@@ -21,7 +21,9 @@ impl ProtocolVersion {
     // partially compatible payload.
     // Postcard structs are not a negotiated schema, so old peers must fail
     // the handshake instead of decoding a partially compatible payload.
-    pub const CURRENT: Self = Self(7);
+    // v8 adds revision-matched fleet contact geometry catalogues. Old peers
+    // must not decode the extended FleetSnapshot as a v7 payload.
+    pub const CURRENT: Self = Self(8);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -42,6 +44,8 @@ pub mod kind {
     /// Fleet snapshots for non-primary vehicles. The primary vehicle keeps
     /// [`SNAPSHOT`](SNAPSHOT) so legacy fast paths never change shape.
     pub const FLEET_SNAPSHOT: u32 = 9;
+    /// Revisioned complete fleet contact-geometry catalogue; not bulk assets.
+    pub const FLEET_GEOMETRY: u32 = 10;
 }
 
 /// Versioned envelope around one postcard-encoded game payload.
@@ -254,13 +258,15 @@ mod tests {
 
     #[test]
     fn foreign_version_is_rejected() {
-        let envelope = Envelope {
-            version: ProtocolVersion(999),
-            kind: kind::HELLO,
-            payload: Vec::new(),
-        };
-        let bytes = postcard::to_allocvec(&envelope).expect("encode");
-        let error = decode_envelope(&bytes).expect_err("must reject");
-        assert_eq!(error, CodecError::VersionMismatch { got: 999 });
+        for version in [7, 999] {
+            let envelope = Envelope {
+                version: ProtocolVersion(version),
+                kind: kind::HELLO,
+                payload: Vec::new(),
+            };
+            let bytes = postcard::to_allocvec(&envelope).expect("encode");
+            let error = decode_envelope(&bytes).expect_err("must reject");
+            assert_eq!(error, CodecError::VersionMismatch { got: version });
+        }
     }
 }

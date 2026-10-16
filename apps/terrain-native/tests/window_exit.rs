@@ -48,6 +48,8 @@ fn server_flight_window_adopts_snapshots_and_exits_cleanly() {
     assert!(number("received_snapshots=") > 1.0);
     assert!(number("fleet_updates=") > 1.0);
     assert_eq!(number("fleet_last_known="), 0.0);
+    assert_eq!(number("geometry_updates="), 1.0);
+    assert!(stdout.contains("geometry_matched=true"));
     assert!(number("authority_time_s=") > 0.0);
     assert!(number("presentation_time_s=") <= number("authority_time_s="));
 }

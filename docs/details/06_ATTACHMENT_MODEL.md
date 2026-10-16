@@ -200,7 +200,8 @@ The server owns the fleet above that scene. `Sim` keeps the primary
 `VehicleDefinition::split_definitions_after_link_failure` on a `Separate`
 command (root-body cluster keeps the source id, every authority shares one
 server clock and warp). Every input packet and typed guidance command carries
-the targeted vehicle id (wire v7, primary by default): continuous controls,
+the targeted vehicle id (introduced in wire v7, primary by default; current
+wire v8 adds revisioned fleet contact-geometry catalogues): continuous controls,
 part/engine/stage commands, typed guidance, and maneuver/burn plans all route
 to the targeted vehicle, which keeps its own control mode, guidance, and
 maneuver/burn executors and serves them on the shared tick. Graphs, scripts,

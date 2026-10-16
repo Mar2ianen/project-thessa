@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 mod celestial;
 #[cfg(feature = "hud")]
+mod contact_preview;
+#[cfg(feature = "hud")]
 mod hud;
 mod scene;
 mod window;

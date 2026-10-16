@@ -18,6 +18,7 @@ pub(super) struct Driver {
     pub(super) last_snapshot: Instant,
     pub(super) last_status: Instant,
     pub(super) exit_when_empty: bool,
+    pub(super) geometry: Option<(thessa_flight_net::geometry::FleetGeometry, Arc<Vec<u8>>)>,
 }
 
 impl Driver {
@@ -51,7 +52,15 @@ impl Driver {
         });
         // Complete membership includes empty: silence cannot acknowledge that
         // all secondaries disappeared, nor distinguish an old peer from empty.
-        let fleet = self.sim.fleet_snapshot();
+        if let Err(error) = self.update_fleet_geometry() {
+            eprintln!("[server] fleet geometry error: {error}");
+            for (_, mailbox) in self.subscribers.drain(..) {
+                mailbox.close();
+            }
+            return;
+        }
+        let (geometry, geometry_frame) = self.geometry.as_ref().expect("catalogue was prepared");
+        let fleet = self.sim.fleet_snapshot(geometry.revision);
         let frame = match thessa_flight_net::encode_fleet_snapshot(&fleet) {
             Ok(frame) => frame,
             Err(error) => {
@@ -61,12 +70,52 @@ impl Driver {
         };
         let frame = Arc::new(frame);
         self.subscribers.retain(|(_, mailbox)| {
-            let accepted = mailbox.replace_fleet_snapshot(frame.clone());
+            let accepted = mailbox
+                .replace_fleet_geometry(geometry.revision, geometry_frame.clone())
+                && mailbox.replace_fleet_snapshot(frame.clone());
             if !accepted {
                 mailbox.close();
             }
             accepted
         });
+    }
+
+    fn update_fleet_geometry(&mut self) -> Result<(), String> {
+        use thessa_flight_net::geometry::{
+            FleetGeometry, FleetVehicleGeometry, encode_fleet_geometry,
+        };
+        if self.geometry.as_ref().is_some_and(|(catalogue, _)| {
+            catalogue.vehicles.len() == self.sim.fleet.len()
+                && catalogue.vehicles.iter().zip(&self.sim.fleet).all(
+                    |(descriptor, (id, authority))| {
+                        descriptor.matches_vehicle(VehicleId::new(*id), &authority.vehicle)
+                    },
+                )
+        }) {
+            return Ok(());
+        }
+        let revision = match &self.geometry {
+            Some((previous, _)) => previous
+                .revision
+                .checked_add(1)
+                .ok_or("fleet geometry revision overflow")?,
+            None => 1,
+        };
+        let catalogue = FleetGeometry {
+            revision,
+            vehicles: self
+                .sim
+                .fleet
+                .iter()
+                .map(|(id, authority)| {
+                    FleetVehicleGeometry::from_vehicle(VehicleId::new(*id), &authority.vehicle)
+                })
+                .collect(),
+        };
+        catalogue.validate()?;
+        let frame = Arc::new(encode_fleet_geometry(&catalogue).map_err(|e| e.to_string())?);
+        self.geometry = Some((catalogue, frame));
+        Ok(())
     }
 
     /// Drain a bounded ingress slice. The limit only prevents a hot producer

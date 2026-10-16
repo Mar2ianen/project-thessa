@@ -15,3 +15,7 @@ thessa-flight-authority = { path = "../flight-authority" }
 serde.workspace = true
 glam.workspace = true
 postcard.workspace = true
+
+[[bench]]
+name = "fleet_geometry"
+harness = false

@@ -201,12 +201,38 @@ empty; silence cannot acknowledge removal. The shared capacity is 64 vehicles
 including PRIMARY (at most 63 secondaries), checked before a split mutates
 authority. Primary and fleet outbound slots are independently latest-wins,
 not an atomic common-epoch scene packet. Secondary simulation debt can differ.
-The native embedded link demultiplexes both kinds with one reader and the same
+The native embedded link demultiplexes these kinds with one reader and the same
 bounded two-arrival inbox mechanism. Its read-only fleet inspector validates
 each pose at that vehicle's own time; stale fleet observations are withheld,
 not inferred to have despawned. The lean wire data lacks vehicle-design/model
 identity and complete resource state, so this is not fleet mesh rendering or
 prediction/reconciliation. The old Bevy host still ignores fleet observations.
+
+Wire v8 adds `FleetGeometry` (kind 10) and an exact `geometry_revision` reference
+in `FleetSnapshot`; v7 peers fail version checking. The complete, sorted
+non-primary catalogue contains bounded display labels and actual authoritative
+contact geometry, including the recentered geometry of split clusters. It is
+neither full `VehicleDefinition` replication nor a beauty mesh/model registry.
+The server retains one encoded Arc-shared catalogue, compares existing source
+parts without copying on ordinary snapshots, and publishes only on change or
+to a new subscriber. Each mailbox retains one latest geometry slot plus its
+last published revision, so draining does not cause periodic retransmission.
+Coalescing can skip revisions. Readers keep independently bounded catalogue and
+snapshot inboxes; an on-change catalogue waits for the short inbox lock instead
+of being silently lost under contention. No extra reader or asset IO is added.
+
+Only matching revisions and identical member IDs attach geometry to observations.
+In-flight revisions show waiting, never a guessed model. Same-revision changes,
+backwards revisions, invalid part poses/shapes/materials or over-budget received
+catalogues are errors. The producer limits labels to 128 UTF-8 bytes (control
+characters removed) and geometry to 64 contact parts per secondary. A definition
+with more parts publishes explicit budget omission, not a truncated hull;
+missing contact geometry is also explicit. These policies do not change physics.
+The native inspector draws a diagnostic auto-fit contact wireframe, not world
+instances or appearance. Geometry storage is Arc-shared through the HUD rather
+than deep-copied per frame; `--no-hud` omits projection/UI work. Stale membership
+still withholds all rows. Complete resources, render designs, coherent fleet
+render epoch and production remote prediction/interpolation remain future work.
 
 The current protocol is designed for a local/server prototype. Production
 prediction, interpolation policy for remote craft, authentication, persistence,

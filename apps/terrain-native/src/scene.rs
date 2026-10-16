@@ -71,6 +71,17 @@ pub struct FleetObserver {
     pub updates: u64,
     pub age_s: Option<f64>,
     pub stale: bool,
+    pub geometry_revision: u64,
+    pub geometry_updates: u64,
+    pub geometry: Option<std::sync::Arc<thessa_flight_net::geometry::FleetGeometry>>,
+}
+
+impl FleetObserver {
+    pub fn matched_geometry(&self) -> Option<&thessa_flight_net::geometry::FleetGeometry> {
+        self.geometry
+            .as_deref()
+            .filter(|g| g.revision == self.geometry_revision)
+    }
 }
 
 /// Installed-subsystem selector sharing keys with the old pilot
@@ -376,6 +387,22 @@ impl Scene {
             reference,
         )?;
         let remote = self.remote.as_mut().ok_or("missing server host")?;
+        if fleet.geometry_revision < remote.fleet.geometry_revision {
+            return Err("fleet geometry reference moved backwards".into());
+        }
+        if fleet.geometry_revision == remote.fleet.geometry_revision
+            && (fleet.vehicles.len() != remote.fleet.rows.len()
+                || !fleet
+                    .vehicles
+                    .iter()
+                    .zip(&remote.fleet.rows)
+                    .all(|(wire, old)| wire.vehicle_id == old.vehicle_id))
+        {
+            return Err("fleet membership changed under the same geometry revision".into());
+        }
+        if let Some(geometry) = &remote.fleet.geometry {
+            geometry.matches_snapshot(fleet)?;
+        }
         for row in &rows {
             if let Ok(index) = remote
                 .fleet
@@ -392,7 +419,39 @@ impl Scene {
         // blend births with another ID, infer despawn from silence or touch
         // PRIMARY intent/replica/presentation.
         remote.fleet.rows = rows;
+        remote.fleet.geometry_revision = fleet.geometry_revision;
         remote.fleet.updates += 1;
+        Ok(())
+    }
+
+    fn accept_fleet_geometry(
+        &mut self,
+        geometry: std::sync::Arc<thessa_flight_net::geometry::FleetGeometry>,
+    ) -> Result<(), String> {
+        geometry.validate()?;
+        let fleet = &mut self.remote.as_mut().ok_or("missing server host")?.fleet;
+        if let Some(old) = &fleet.geometry {
+            if geometry.revision < old.revision
+                || (geometry.revision == old.revision && geometry != *old)
+            {
+                return Err("fleet geometry revision reused or moved backwards".into());
+            }
+            if geometry == *old {
+                return Ok(());
+            }
+        }
+        if geometry.revision == fleet.geometry_revision
+            && (geometry.vehicles.len() != fleet.rows.len()
+                || !geometry
+                    .vehicles
+                    .iter()
+                    .zip(&fleet.rows)
+                    .all(|(g, p)| g.vehicle_id == p.vehicle_id))
+        {
+            return Err("fleet geometry/observation membership mismatch".into());
+        }
+        fleet.geometry = Some(geometry);
+        fleet.geometry_updates += 1;
         Ok(())
     }
 
@@ -471,6 +530,7 @@ impl Scene {
         let latest = link.latest_snapshot();
         let display = link.interpolated_snapshot();
         let fleet = link.latest_fleet_snapshot();
+        let geometry = link.latest_fleet_geometry();
         let age = link.fleet_snapshot_age();
         remote.fleet.age_s = age.map(|age| age.as_secs_f64());
         remote.fleet.stale = age.is_some_and(|age| age > remote.timeout);
@@ -480,6 +540,9 @@ impl Scene {
             > remote.timeout
         {
             return Err("embedded server snapshot deadline exceeded".into());
+        }
+        if let Some(geometry) = geometry {
+            self.accept_fleet_geometry(geometry)?;
         }
         if let Some(fleet) = fleet {
             self.accept_fleet_snapshot(&fleet)?;
@@ -595,7 +658,7 @@ impl Scene {
 
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
-            let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale));
+            let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
             let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN });
             format!("{source} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }

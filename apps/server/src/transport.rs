@@ -164,6 +164,7 @@ pub(super) fn run_stdio(mut sim: Sim) -> Result<(), String> {
     });
 
     let mut driver = Driver {
+        geometry: None,
         sim,
         autopilot: AutopilotHost::new()?,
         upstream: upstream_rx,
@@ -323,6 +324,7 @@ pub(super) fn run_tcp(mut sim: Sim, addr: &str) -> Result<(), String> {
                 }
             };
             let mut driver = Driver {
+                geometry: None,
                 sim,
                 autopilot,
                 upstream: upstream_rx,

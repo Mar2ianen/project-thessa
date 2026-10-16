@@ -35,7 +35,7 @@ do not update in place).
 | `details/05_PROCEDURAL_LANDING_GEAR.md` | 🟡 partial | wheel/tire/strut/brake/drive laws, mass/COM bake, sprung/unsprung split, articulated Rapier wheel bodies/joints, retractable chassis, fold-out legs, powered authority state/telemetry | dynamic-body wheel contacts, granular soil response, steering/anti-skid, electrical bus limits, representative fleet benchmarks |
 | `details/06_REACTION_WHEELS.md` | ✅ implemented model | named banks, per-axis torque allocation, automatic bus-load coupling (idle + marginal torque draw, same-name utility consumer, starvation yields to RCS), rotor-momentum reservoirs with saturation and RCS desaturation, rotor-speed and saturation telemetry, motor-heat ledger routable to thermal nodes, mass/inertia bake, RCS residual routing, telemetry and pilot controls | thermal state |
 | `details/07_PARACHUTES.md` | ✅ implemented model | named packs, pressure/q deployment gates, reefing, viscous-elastic suspension lines with shock smoothing, canopy breathing deformation, aerodynamic loads/failure, cut/failed repack servicing with authored timer and clean restow, mass/inertia bake and telemetry | inflation shock beyond line compliance |
-| `details/08_VEHICLE_PART_COMMANDS.md` | ✅ implemented API | ordered group/named commands on wire v7, including per-engine throttle and propellant transfer plus parachute repack, fleet Separate/Dock/Undock, and per-vehicle input/guidance targeting with per-vehicle control mode, guidance, and maneuver/burn executors; pilot local prediction and server application | stage-definition resolution, action-group routing, and per-vehicle graphs/scripts/plans |
+| `details/08_VEHICLE_PART_COMMANDS.md` | ✅ implemented API | ordered group/named commands on current wire v8 (per-vehicle targeting introduced in v7), including per-engine throttle and propellant transfer plus parachute repack, fleet Separate/Dock/Undock, and per-vehicle input/guidance targeting with per-vehicle control mode, guidance, and maneuver/burn executors; pilot local prediction and server application | stage-definition resolution, action-group routing, and per-vehicle graphs/scripts/plans |
 | `details/09_ELECTRICAL_POWER.md` | 🟡 implemented vehicle slice | ideal shared bus, prioritized consumers, battery/ultracapacitor energy/efficiency limits with pooled headroom, ultracapacitor self-discharge, fission and fuel-cell sources, reactor live-mass drift, APU and jet generation, solar arrays/occlusion/single- and two-axis tracking, mounted electric-propulsion load coupling, automatic reaction-wheel load coupling, docked-bus exchange across a shared interface, vehicle-baker TOML and 64-vessel benchmark | automatic load coupling for other nonpropulsive actuators, electrical circuits/current dynamics, cycle ageing, self-shadowing, three-axis gimbals |
 | `details/10_THERMAL_SYSTEM.md` | 🟡 implemented vehicle slice | lumped thermal nodes with conduction links and fixed/foldable area radiators, single-axis radiator pointing gimbals with edge-on auto-tracking, shared occluded solar inputs with own-hull ray occlusion, Sutton-Graves aero heating, wired internal loads, authored reactor/fuel-cell/generator waste-heat routing, stability-substepped integration, overheat reporting, mass/COM baking, vehicle-baker TOML and 64-vessel benchmark | shield-specific thermal-protection/ablation coupling (design baseline in 11), temperature-dependent strength, phase change, convective cooling, silhouette penumbra, multi-axis radiator gimbals, automatic engine-to-node heat wiring past the authored routes |
 | `details/11_HEAT_SHIELDS.md` | 🟡 partial slice | Newtonian shield-disc aerodynamics through the common drag/lift force contract, baker/vehicle wiring, wing hex tile-layer toggle with mass and lumped thermal nodes | ablative recession/burn-through, shield-specific thermal protection, spline-bounded tile screens, tile detachment, jettison, subsonic disc blend |
@@ -89,11 +89,16 @@ in the unported remainder above.
 The owned native embedded-server transport now lives in GPL `flight-net`
 (stdio handshake, receive timestamps/inbox, input mailbox and child cleanup);
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot
-adoption, fleet rendering and prediction/reconciliation remain unported.
+adoption and read-only fleet observations are implemented on the migration
+branch, including revision-matched authoritative contact geometry and an
+inspector wireframe. Fleet beauty meshes/world rendering and
+prediction/reconciliation remain unported.
 The shared link now caps complete pending command packets at the protocol's
 64-command limit (all variants and state votes), and worker pipe/encode
 failures close the input side visibly. Stalled-peer heartbeat/reconnect and
-native viewer networking remain future work.
+external native networking remain future work. Wire v8 adds a bounded,
+on-change `FleetGeometry` catalogue and a matching revision in `FleetSnapshot`;
+contact geometry is not a render-design/model identity or full resource replica.
 
 ## Autopilot and roadmap
 

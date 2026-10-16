@@ -57,7 +57,7 @@ The checked-in vertical slice currently contains:
   Lambert, plane change, velocity matching) plus candidate search. Planning
   approximations are revalidated through the exact field before execution;
 - `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
-  transport (wire v7) with strict validation, ordered typed part commands,
+  transport (wire v8) with strict validation, ordered typed part commands,
   per-vehicle input/guidance targeting, and fleet Separate/Dock/Undock
   commands plus fleet snapshots;
 - `apps/server`: headless authoritative simulation over stdio or TCP, with a
@@ -177,8 +177,13 @@ The checked-in vertical slice currently contains:
     inspector shows stable IDs, ticks, each vehicle's own sample time and
     reference-body distance. Missing/stale packets are not treated as despawn.
     At most 63 secondaries fit alongside PRIMARY; invalid membership/poses stop
-    the session. Fleet model identity is not on the wire: no invented X-15
-    copies, fleet meshes, prediction/reconciliation or reconnect support yet.
+     the session. A revision-matched, on-change catalogue supplies bounded display
+     names and exact authoritative contact parts (64 parts per secondary); the
+     first row opens an auto-fit body-frame wireframe. Missing geometry and
+     budget omission are explicit; no partial hull or X-15 copy is substituted.
+     Names are labels, not model IDs. Beauty meshes/materials, fleet world draws,
+     prediction/reconciliation and reconnect remain unimplemented. Both peers
+     must use wire v8; v7 is rejected rather than decoded as the new schema.
    Its input mailbox counts all commands (including state votes and fleet/
    autopilot events) against the protocol's 64-command packet limit; observed
    pipe/encode failure or overflow closes the link and refuses further input.

@@ -3,7 +3,8 @@
 //!
 //! Layout mirrors the server: one reader thread owns the stdout pipe end
 //! to end (Welcome gate first, then snapshots), one writer thread owns
-//! stdin. The handshake runs on the calling thread with a timeout.
+//! stdin. The reader also receives bounded on-change fleet geometry catalogues.
+//! The handshake runs on the calling thread with a timeout.
 //! The host chooses whether to fall back. This transport neither steps a
 //! local authority nor adopts wire state into simulation/render state.
 
@@ -120,11 +121,26 @@ impl<T> SnapshotInboxWriter<T> {
         let Ok(mut queue) = self.queue.try_lock() else {
             return false;
         };
+        Self::retain_latest(&mut queue, received);
+        true
+    }
+
+    /// A catalogue is sent on change, not periodically: mutex contention
+    /// must not silently lose its only publication. Only the reader waits on
+    /// this short bounded queue lock; it never holds a lock during pipe IO.
+    fn push_catalogue(&self, received: ReceivedSnapshot<T>) -> bool {
+        let Ok(mut queue) = self.queue.lock() else {
+            return false;
+        };
+        Self::retain_latest(&mut queue, received);
+        true
+    }
+
+    fn retain_latest(queue: &mut VecDeque<ReceivedSnapshot<T>>, received: ReceivedSnapshot<T>) {
         if queue.len() == 2 {
             queue.pop_front();
         }
         queue.push_back(received);
-        true
     }
 }
 
@@ -231,6 +247,7 @@ fn merge_commands(
 pub struct EmbeddedLink {
     snapshots: std::sync::Mutex<SnapshotInbox>,
     fleets: std::sync::Mutex<SnapshotInbox<FleetSnapshot>>,
+    geometries: std::sync::Mutex<SnapshotInbox<Arc<crate::geometry::FleetGeometry>>>,
     inputs: std::sync::Arc<InputMailbox>,
     child: Child,
 }
@@ -306,6 +323,7 @@ impl EmbeddedLink {
 
         let (snapshots, snapshots_writer) = SnapshotInbox::new();
         let (fleets, fleets_writer) = SnapshotInbox::new();
+        let (geometries, geometries_writer) = SnapshotInbox::new();
         let (welcomed_tx, welcomed_rx) = channel::<()>();
         let inputs = std::sync::Arc::new(InputMailbox {
             pending: std::sync::Mutex::new(None),
@@ -337,6 +355,34 @@ impl EmbeddedLink {
                                     if envelope.kind == kind::WELCOME {
                                         welcomed = true;
                                         let _ = welcomed_tx.send(());
+                                    }
+                                    continue;
+                                }
+                                if envelope.kind == kind::FLEET_GEOMETRY {
+                                    match crate::decode_payload::<crate::geometry::FleetGeometry>(
+                                        &envelope,
+                                    ) {
+                                        Ok(geometry) => {
+                                            if let Err(error) = geometry.validate() {
+                                                eprintln!(
+                                                    "[client] invalid fleet geometry: {error}"
+                                                );
+                                                break 'read;
+                                            }
+                                            if !geometries_writer.push_catalogue(ReceivedSnapshot {
+                                                snapshot: Arc::new(geometry),
+                                                received_at: std::time::Instant::now(),
+                                                generation: 0,
+                                            }) {
+                                                break 'read;
+                                            }
+                                        }
+                                        Err(error) => {
+                                            eprintln!(
+                                                "[client] invalid fleet geometry payload: {error}"
+                                            );
+                                            break 'read;
+                                        }
                                     }
                                     continue;
                                 }
@@ -430,6 +476,7 @@ impl EmbeddedLink {
         Ok(Self {
             snapshots: std::sync::Mutex::new(snapshots),
             fleets: std::sync::Mutex::new(fleets),
+            geometries: std::sync::Mutex::new(geometries),
             inputs,
             child,
         })
@@ -478,6 +525,12 @@ impl EmbeddedLink {
     /// Same reader and bounded two-arrival inbox as PRIMARY, no extra worker.
     pub fn latest_fleet_snapshot(&self) -> Option<FleetSnapshot> {
         self.fleets.lock().ok()?.latest()
+    }
+
+    /// Immutable complete catalogue, independently latest-wins. Its revision
+    /// must match a FleetSnapshot before use; no periodic geometry cloning.
+    pub fn latest_fleet_geometry(&self) -> Option<Arc<crate::geometry::FleetGeometry>> {
+        self.geometries.lock().ok()?.latest()
     }
 
     /// Reader age of the newest drained fleet packet; not PRIMARY's age and
@@ -545,6 +598,7 @@ mod tests {
 
     fn fleet(ids: impl IntoIterator<Item = u32>) -> FleetSnapshot {
         FleetSnapshot {
+            geometry_revision: 1,
             vehicles: ids
                 .into_iter()
                 .map(|id| crate::FleetVehicleSnapshot {
@@ -599,15 +653,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn on_change_catalogue_publication_survives_queue_contention() {
+        let (mut inbox, writer) = SnapshotInbox::<u64>::new();
+        let queue = inbox.queue.clone();
+        let held = queue.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            writer.push_catalogue(ReceivedSnapshot {
+                snapshot: 42,
+                received_at: std::time::Instant::now(),
+                generation: 0,
+            })
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(held);
+        assert!(worker.join().unwrap());
+        assert_eq!(inbox.latest(), Some(42));
+        assert!(inbox.latest().is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn one_reader_demultiplexes_fleet_without_consuming_primary_generation() {
         let primary = snapshot(DVec3::Y, 0.0, 3.0);
         let fleet = fleet([1, 7]);
+        let catalogue = crate::geometry::FleetGeometry {
+            revision: 1,
+            vehicles: vec![],
+        };
         let wire: String = crate::encode_snapshot(&primary)
             .unwrap()
             .into_iter()
             .chain(crate::encode_fleet_snapshot(&fleet).unwrap())
+            .chain(crate::geometry::encode_fleet_geometry(&catalogue).unwrap())
             .map(|byte| format!("\\{byte:03o}"))
             .collect();
         let (command, pid) = welcomed_server(&format!("printf '{wire}'; exec sleep 30"));
@@ -622,6 +702,15 @@ mod tests {
             std::thread::yield_now();
         };
         assert_eq!(received, fleet);
+        let received_geometry = loop {
+            if let Some(g) = link.latest_fleet_geometry() {
+                break g;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert_eq!(*received_geometry, catalogue);
+        assert!(link.latest_fleet_geometry().is_none());
         assert_eq!(link.latest_snapshot(), Some(primary));
         assert!(link.latest_snapshot().is_none());
         assert!(link.latest_fleet_snapshot().is_none());
@@ -636,6 +725,12 @@ mod tests {
         for wire in [
             crate::encode_fleet_snapshot(&fleet([1, 1])).unwrap(),
             crate::encode_frame(kind::FLEET_SNAPSHOT, &()).unwrap(),
+            crate::encode_frame(kind::FLEET_GEOMETRY, &()).unwrap(),
+            crate::geometry::encode_fleet_geometry(&crate::geometry::FleetGeometry {
+                revision: 0,
+                vehicles: vec![],
+            })
+            .unwrap(),
         ] {
             let bytes: String = wire.iter().map(|byte| format!("\\{byte:03o}")).collect();
             let (command, pid) = welcomed_server(&format!("printf '{bytes}'; exec sleep 30"));

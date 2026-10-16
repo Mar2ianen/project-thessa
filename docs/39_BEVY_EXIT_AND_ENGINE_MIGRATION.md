@@ -2326,6 +2326,128 @@ fleet mesh rendering/common render epoch, remote interpolation policy,
 prediction/reconciliation and the other migration gaps above. No whole-client
 replacement, visual acceptance or speedup is established by this slice.
 
+### Native fleet contact-geometry continuation (2026-10-16)
+
+This follows the observer above; it is **not** fleet beauty/world rendering.
+`flight-net::geometry` now defines a bounded immutable `FleetGeometry` catalogue
+of stable non-primary IDs, display names and authoritative contact shapes/poses.
+Names are not design hashes, asset keys or model identity. No path, URL, bulk
+GLB, client-supplied geometry or executable loader crosses this boundary.
+The existing `CollisionGeometry` contract is reused, including its material,
+shape and unit-quaternion validation. No second physical model or tessellated
+collision source is introduced. Split clusters supply the actual definition's
+recentered contact parts, not a copy of the compatibility X-15.
+
+Wire **v8** adds kind 10 and `FleetSnapshot::geometry_revision`; all peers must
+be rebuilt. A v7 envelope is explicitly rejected, not optimistically decoded.
+The server compares cached descriptors with borrowed authoritative definitions;
+only a changed label/member/available contact shape or pose creates a new
+monotonic catalogue revision and encoded Arc-shared frame. New subscribers get
+the current catalogue even when nothing changed. A per-mailbox revision marker
+suppresses retransmission after its one latest catalogue slot has been drained.
+Snapshots remain small and reference the matching catalogue revision, rather
+than retransmitting static geometry at 20 Hz. Independently coalesced slots may
+skip revisions and are not an atomic primary/fleet scene packet.
+
+The existing single stdio reader also demultiplexes catalogues. They reuse the
+bounded inbox, with immutable Arc payloads (including through HUD stats). Because
+catalogues are on-change publications, this ingress takes the short queue lock:
+unlike periodic snapshot ingress it must not discard the only update on mutex
+contention. No lock is held during pipe IO, no extra worker/device is created,
+and geometry is not deep-copied every frame. Reader retention is at most two
+pending plus drained previous/latest catalogues, not an unbounded ID cache.
+
+Native observation poses keep their previous own-time validation. Geometry only
+attaches when both revision and complete ID set match. Either delivery order is
+supported; a temporarily different revision shows **waiting**, not an old hull
+on a new pose. Reusing a revision with different data, backwards references or
+same-revision member mismatches fail through the existing no-fallback path.
+No geometry receive-age timeout is imposed on a correctly referenced immutable
+catalogue: unchanged geometry need not arrive again. Fleet kinematic staleness
+still withholds all rows, including the geometry inspector.
+
+Wire-policy budgets are **128 UTF-8 bytes per display label** (producer strips
+control characters) and **64 contact parts per secondary**, with the existing
+63-secondary membership limit. A source with more parts publishes an explicit
+`OmittedBudget`; a source without parts publishes `Absent`. Neither truncates
+or changes the authority hull. Oversized/invalid *received* catalogues fail
+validation, not silent truncation. Existing 8 MiB framing still bounds bytes;
+these are post-deserialization limits, not a complete hostile-decoder memory
+proof. Changes hidden behind `OmittedBudget` need not revise an identical
+omission descriptor. The current branch still has no beauty-mesh/model registry.
+
+The native HUD shows the label and contact availability per row; the first
+row opens an auto-fit, isometric, **body-frame contact wireframe** when available.
+Cuboid edges are exact; sphere great circles use 16 chords (maximum arc sagitta
+`1-cos(pi/16)`, about 1.93% of radius), and capsule half-circle arcs use 16
+chords (about 0.49% of radius). This is a diagnostic UI projection, not a
+physics reduction, production graphics effect, camera/world mesh or an
+appearance LOD. Scaling is done in f64 before narrowing to UI pixels; geometry
+outside a representable preview scale is reported rather than overflowing.
+Collapsed rows do no projection; `--no-hud` does none of this UI work. No new
+scene targets, GPU mesh resources, passes or runtime readbacks are introduced.
+
+The bounded CPU benchmark (`cargo bench -p thessa-flight-net --bench fleet_geometry`)
+uses 63 members × 64 contact parts. A catalogue frame is **364,718 bytes**;
+the borrowed unchanged-source scan measured **9.237 μs** median, compared with
+**246.419 μs** for rebuilding/encoding every time (200 samples each, without
+concurrent build/test jobs; earlier contended measurements discarded). The latter
+is a diagnostic alternative, **not** the previous production implementation;
+this is neither a network throughput nor frame-time speedup claim.
+
+Tests cover catalogue roundtrip/budgets/labels, exact authoritative geometry,
+changed/recentered source detection, no periodic retransmission, late
+subscribers, coalesced mailbox revisions, on-change inbox contention, revision
+pairing in either order, malformed/reused/backwards catalogues, and unchanged
+PRIMARY state/intent. Hardware HUD tests exercise actual contact previews across
+resize/DPI/recreation, preserving the existing exact untouched-background oracle.
+The default real server still verifies empty fleet plus input acknowledgement;
+a server test produces a separate physical-separation wire replay with conserved
+world part placement (below 1 mm absolute inertial error), for native inspector
+capture. That frozen replay is not a live separation-input acknowledgement or
+whole-scene beauty test; the compatibility PRIMARY model remains X-15.
+
+Gates passed: **1,814** workspace lib/bin + **53** integration + **24** Bevy-CBT
+GPU + **1** mesh-shader GPU + **4** native GPU + **1** real-server CPU + **1**
+capacity-fixture CLI/GPU + **5** window tests = **1,903 Rust tests**, all-feature
+workspace clippy and no-default-feature viewer clippy with warnings denied,
+five agent-QA tests and the 12-crate architecture check. GPU/window tests ran on
+the Radeon 880M / RADV STRIX1, not an adapter-less skip. The frozen real-server
+split replay reached native with one secondary, one geometry publication and
+matching revision 1, without stale rows or local steps. Its primary scene is
+dark/incomplete and still uses the compatibility model, so only the inspector
+and provenance are evaluated here.
+
+One concurrent-build verification attempt hit the existing 250 ms startup-test
+PID-publication race in two embedded-link cleanup fixtures. Its failure log is
+retained. The complete lib/bin suite passed on retry without competing cargo
+jobs, without relaxing product timeouts or test assertions; scheduling-sensitive
+startup fixtures remain a known test-infrastructure limitation, not a claim that
+every attempted run or remote CI was green.
+
+![Actual server separation geometry replay, diagnostic inspector only](artifacts/native-fleet-geometry-separation-2026-10-16.png)
+
+Release local A/B/B/A medians against exact `4221ba1` were **3.203 / 3.251 /
+3.202 / 3.141 ms** (1280×720, 600 measured + 30 warmup frames, 10 s pre-stream).
+All four ended at the identical 10.5 s trajectory and geometry counts; asynchronous
+material residency/publication counts and tails vary. The mean of the two new
+per-run medians is about 1.7% higher; no speedup or zero-overhead claim is made.
+All final measurements were repeated after the last membership-revision guard;
+earlier worktree runs are retained separately, not pooled with final-binary data.
+Real default-server HUD/no-HUD runs measured **3.081 / 2.751 ms**, adopting
+**33 / 30** fleet updates and exactly **one** matching immutable catalogue each,
+without stale rows, stops, closed links or capacity rejection. Their different
+wall-time epochs/geometry and concurrent child CPU prevent an isolated HUD or
+network-overhead comparison. The rebuilt legacy Bevy pilot captured and exited
+on the real v8 server (last logged 10 s / 1,200 ticks), without local fallback;
+audio remains unverified due to device warnings.
+
+Commands, hashes, check results and diagnostic captures are recorded in
+`artifacts/native-fleet-geometry-2026-10-16.json`. Remaining work includes actual
+authored render-design/model identity, split render ownership, world fleet
+instances at a coherent presentation epoch, fuller resources and
+prediction/reconciliation. This catalogue does not claim to solve those gaps.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

@@ -484,7 +484,7 @@ fn widgets(
                 .default_width(330.0)
                 .resizable(false)
                 .show(context, |ui| {
-                    ui.small("Additional vehicles · no meshes or prediction yet");
+                    ui.small("Additional vehicles · contact geometry, not beauty meshes");
                     if stats.flight_stopped {
                         ui.colored_label(egui::Color32::RED, "Frozen: server session stopped");
                     } else if fleet.updates == 0 {
@@ -494,11 +494,22 @@ fn widgets(
                     } else {
                         ui.label(format!("{} secondaries · {} updates · receive age {:.3} s", fleet.rows.len(), fleet.updates, fleet.age_s.unwrap_or(0.0)));
                         ui.small("Each row uses its own sim time/reference-body frame.");
+                        if fleet.matched_geometry().is_none() { ui.colored_label(egui::Color32::YELLOW, format!("Waiting for geometry revision {}", fleet.geometry_revision)); }
                         egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                            for row in &fleet.rows {
+                            for (index, row) in fleet.rows.iter().enumerate() {
                                 ui.separator();
                                 ui.label(format!("{} · tick {} · t={:.3} s{}", row.vehicle_id, row.tick, row.pose.time().0, if row.stopped { " · stopped" } else { "" }));
                                 ui.small(format!("Reference radius {:.3} km", row.pose.relative_position_m().length() / 1000.0));
+                                if let Some(geometry) = fleet.matched_geometry().and_then(|g| g.vehicles.iter().find(|g| g.vehicle_id == row.vehicle_id)) {
+                                    ui.label(&geometry.display_name);
+                                    match &geometry.contact {
+                                        thessa_flight_net::geometry::ContactGeometry::Absent => { ui.small("No authoritative contact geometry"); }
+                                        thessa_flight_net::geometry::ContactGeometry::OmittedBudget => { ui.small("Contact geometry omitted: wire budget exceeded"); }
+                                        thessa_flight_net::geometry::ContactGeometry::Available(contact) => {
+                                            ui.push_id(row.vehicle_id.0, |ui| { egui::CollapsingHeader::new(format!("{} contact parts · inspect", contact.parts.len())).default_open(index == 0).show(ui, |ui| crate::contact_preview::show(ui, contact)); });
+                                        }
+                                    }
+                                }
                             }
                         });
                     }
@@ -511,6 +522,36 @@ fn widgets(
 mod tests {
     use super::*;
     use thessa_render_wgpu::terrain::OffscreenTarget;
+
+    fn fleet_with_contact_geometry() -> crate::scene::FleetObserver {
+        let geometry = std::sync::Arc::new(thessa_flight_net::geometry::FleetGeometry {
+            revision: 1,
+            vehicles: vec![
+                thessa_flight_net::geometry::FleetVehicleGeometry::from_vehicle(
+                    thessa_sim_core::VehicleId::new(1),
+                    &thessa_sim_core::X15StarterProfile::new().unwrap().vehicle,
+                ),
+            ],
+        });
+        crate::scene::FleetObserver {
+            rows: vec![thessa_flight_net::presentation::FleetPose {
+                vehicle_id: thessa_sim_core::VehicleId::new(1),
+                tick: 120,
+                pose: thessa_flight_authority::presentation::FlightPose::new(
+                    thessa_sim_core::SimTime(1.0),
+                    glam::DVec3::X * 3.2e6,
+                    glam::DQuat::IDENTITY,
+                )
+                .unwrap(),
+                stopped: false,
+            }],
+            updates: 1,
+            geometry_revision: 1,
+            geometry_updates: 1,
+            geometry: Some(geometry),
+            ..Default::default()
+        }
+    }
 
     fn controls() -> Controls {
         Controls {
@@ -710,7 +751,7 @@ mod tests {
                             input(width, height, scale),
                             &mut controls,
                             &Stats {
-                                fleet: fleet.then(crate::scene::FleetObserver::default),
+                                fleet: fleet.then(fleet_with_contact_geometry),
                                 ..Default::default()
                             },
                         );

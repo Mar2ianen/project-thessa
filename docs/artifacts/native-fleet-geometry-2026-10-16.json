@@ -1,0 +1,151 @@
+{
+  "date": "2026-10-16",
+  "branch": "feat/native-fleet-geometry",
+  "base_commit": "4221ba1",
+  "scope": {
+    "implemented": "bounded revision-matched authoritative fleet contact-geometry catalogue and read-only native body-frame wireframe inspector",
+    "not_implemented": "beauty meshes, model/asset identity, split render ownership, world fleet draws, common render epoch, prediction/reconciliation or complete resource replication",
+    "protocol": "v8; FleetSnapshot gains geometry_revision and kind 10 carries FleetGeometry; v7 is rejected",
+    "new_external_dependencies_or_unsafe": false,
+    "extra_reader_workers_devices_scene_targets_passes_or_runtime_readbacks": 0,
+    "licensing": "GPL game wire/UI policy; existing MIT CollisionGeometry and generic protocol envelope contracts reused without moving GPL game logic into engine crates"
+  },
+  "contracts": {
+    "identity": "stable VehicleId plus bounded display name only; names are not asset keys or design hashes; no file path/URL/load command or bulk GLB on the wire",
+    "geometry": "actual authoritative CollisionGeometry, including per-part body-local position/orientation, physical dimensions and collision material; split definitions use their recentered cluster frame",
+    "budget": "128 UTF-8 bytes per display label with producer-side control-character filtering; 64 contact parts per secondary, 63 secondaries; empty source is Absent and over-budget source is explicit OmittedBudget, never a partial hull; no change to authoritative physics",
+    "validation": "post-decode catalogue/ID/count/label/shape/pose/material checks; existing 8 MiB frame limit; not a proof of bounded transient decoder allocation or complete hostile-server validation",
+    "publication": "one cached catalogue/frame on server; compare authoritative definitions by borrowing, build/encode only on descriptor change; per-mailbox revision marker suppresses retransmission after drain; new subscriber gets the current catalogue",
+    "transport": "same single reader, bounded inbox with Arc payloads; on-change catalogue waits for the short queue lock rather than being silently lost under contention; no lock during pipe IO; PRIMARY interpolation unchanged",
+    "pairing": "only identical revision and complete member IDs attach geometry to poses; either delivery order supported; mismatched in-flight revisions show waiting; backwards/reused/corrupt revisions fail through existing native freeze/no-fallback path",
+    "immutability": "correctly referenced unchanged catalogue does not need repeated receive-age refresh; stale fleet observations still hide all rows; geometry is Arc-shared through HUD stats, not deep-copied per frame",
+    "preview": "diagnostic auto-fit isometric body-frame wireframe; first row open when available, other rows collapsible; f64 normalization before f32 UI coordinates; unrepresentable scale is reported; no projection/UI work with --no-hud",
+    "preview_error": "cuboid edges exact; sphere great circles have 16 chords, sagitta <1.93% radius; capsule semicircles have 16 chords, sagitta <0.49% radius; regression pins subdivision count and envelopes; no physical-law reduction"
+  },
+  "reproduction": {
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "build": "cargo build --release -p thessa-terrain-native -p thessa-server; cargo build -p thessa-terrain-native -p thessa-server -p thessa-client",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Mesa 26.2.4-arch1.1, Vulkan",
+    "baseline": "exact previous 4221ba1 release preserved at target/fleet-geometry-baseline-viewer (SHA-256 94132f4655391d82f5bcbb22fa117781febe22ed87a29a2c613e8500f975a263) and target/fleet-geometry-baseline-server",
+    "benchmark": "cargo bench -p thessa-flight-net --bench fleet_geometry",
+    "capacity_capture": "cargo test -p thessa-terrain-native --bin thessa-terrain-native fleet_inspector_capture -- --ignored --nocapture; built sibling native viewer required; 63-member synthetic peer, one catalogue then periodic kinematics, not physical separation",
+    "physical_replay_generation": "cargo test -p thessa-server physical_separation_emits -- --nocapture; writes apps/server/target/test-tmp/fleet-separation-v8.frame (Welcome plus real driver transaction) and .samples (kinematic frames only)",
+    "physical_replay_peer": "Python stdio peer reads u32-LE Hello length and discards that Hello payload, writes .frame once then .samples every 0.05 s; no authority stepping or input acknowledgement; scratch script apps/server/target/test-tmp/fleet-separation-peer.py",
+    "physical_replay_peer_source": "#!/usr/bin/env python3\nimport pathlib, struct, sys, time\nroot = pathlib.Path(__file__).parent\nlength = sys.stdin.buffer.read(4)\nif len(length) != 4: raise SystemExit(1)\nsys.stdin.buffer.read(struct.unpack('<I', length)[0])\nsys.stdout.buffer.write((root / 'fleet-separation-v8.frame').read_bytes())\nsys.stdout.buffer.flush()\nsample = (root / 'fleet-separation-v8.samples').read_bytes()\nwhile True:\n    sys.stdout.buffer.write(sample)\n    sys.stdout.buffer.flush()\n    time.sleep(0.05)\n",
+    "physical_replay_peer_setup": "After generation, write physical_replay_peer_source verbatim to apps/server/target/test-tmp/fleet-separation-peer.py and chmod +x that file. The whole scratch directory is ignored; no captured frame is a production asset.",
+    "physical_replay_capture": "thessa-terrain-native --server-flight --server ABSOLUTE_REPLAY_PEER_PATH --headless docs/artifacts/native-fleet-geometry-separation-2026-10-16.png --hud --frames 60 --prestream-seconds 2",
+    "local_measurement": "--headless IMAGE.png --hud --frames 600 --prestream-seconds 10 --flight; A/B/B/A; 1280x720, 30 warmup frames, requested elapsed 1/60 s",
+    "measurement_boundary": "host simulation/input/streaming/uploads/classify/raster/HUD/GPU completion; excludes setup/prestream/warmup/final readback; not isolated GPU or game FPS; server wall-time runs are distinct workloads",
+    "scratch_policy": "crate target/test-tmp, not std::env::temp_dir()"
+  },
+  "verification": {
+    "fmt": "pass",
+    "workspace_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1814,
+    "workspace_integration_tests": 53,
+    "bevy_cbt_hardware_tests": 24,
+    "additional_mesh_shader_hardware_test": 1,
+    "native_gpu_tests": 4,
+    "native_real_server_cpu_test": 1,
+    "native_framed_fixture_cli_gpu_test": 1,
+    "native_window_tests": 5,
+    "successful_rust_tests": 1903,
+    "agent_qa_unittests": 5,
+    "architecture_guarded_crates": 12,
+    "logs": "/tmp/opencode/fleet-geometry-{lib,integration,clippy,nohud,native-gpu,window-test,bevy-gpu,mesh-gpu,qa,architecture,host-build,build,bench,replay,legacy-smoke}.log",
+    "numeric_regressions": "contact part world placement after real authority separation within 1 mm absolute inertial error; exact collision geometry roundtrip; own-time pose/ephemeris and PRIMARY isolation regressions retained",
+    "protocol_regressions": "v7 rejection; invalid/malformed geometry closes link; no unchanged catalogue retransmission; late subscribers; coalescing and revision rollback; contention cannot drop on-change publication; pairing either order; geometry and PRIMARY generations remain independent",
+    "gpu_regression": "actual contact preview in shared-device HUD across resize/DPI/recreation; unchanged exact background patch oracle retained, no pixel tolerance",
+    "retry_note": "A concurrent-build workspace run failed the existing embedded_startup_timeout_reaps_child and embedded_startup_early_exit_reaps_child fixture PID-publication assertions (250 ms startup deadline). Log preserved at /tmp/opencode/fleet-geometry-lib-contended.log. The same complete workspace lib/bin suite passed when rerun without competing cargo jobs; no product timeout/test assertion was relaxed. Consistent with child scheduling starvation before PID publication, not established as a new transport regression; existing timing-test susceptibility remains a known gap.",
+    "not_run": "existing ignored sim-core/flight-authority wall-clock profiling diagnostics; no new physical integration algorithm"
+  },
+  "catalogue_microbenchmark": {
+    "members": 63,
+    "parts_per_member": 64,
+    "encoded_frame_bytes": 364718,
+    "samples_per_case": 200,
+    "cached_borrowed_scan_median_us": 9.237,
+    "rebuild_encode_median_us": 246.419,
+    "measurement_conditions": "final rerun with no concurrent build/test jobs; earlier contended measurements discarded",
+    "comparison_boundary": "rebuild is a diagnostic alternative, not previous production code; excludes decoder/IO/UI/GPU and does not establish a network/render speedup"
+  },
+  "physical_replay": {
+    "source": "real Driver::broadcast_snapshot after authoritative Separate on the existing separable_assembly_vehicle test fixture",
+    "welcome_and_transaction_bytes": 538,
+    "repeated_kinematic_bytes": 411,
+    "primary_and_secondary_epoch_s": 0.0,
+    "secondaries": 1,
+    "secondary_label": "separable#booster",
+    "fleet_updates_adopted": 8,
+    "geometry_updates_adopted": 1,
+    "geometry_revision": 1,
+    "geometry_matched": true,
+    "fleet_stale": false,
+    "local_steps": 0,
+    "stopped": false,
+    "capture": "native-fleet-geometry-separation-2026-10-16.png",
+    "scope": "frozen physical separation output through native CLI/link/HUD; no live authority stepping, secondary world mesh or acknowledgement of viewer input; PRIMARY is still the legacy X-15 appearance and not the custom split fixture's geometry"
+  },
+  "binaries": {
+    "release_viewer_sha256": "bdffc646ab3c53aa4b584aef4fe5e441c574edf32cece7ef6ee99c70f6c5fb72",
+    "release_server_sha256": "82c1b3f89964cb1bd740981ce480cc20805b462ea09073f946a0693acd2b7e35",
+    "debug_bevy_viewer_sha256": "11ec7b5b2098ac1c6ac523159ac70b094d1d4b42b71b7cc9a125e0d5675fbe1c",
+    "debug_server_sha256": "48bd125f9bd5ca6bb1d9cb4cea410dc312121740b7f1c873b890d7387b8b6e71",
+    "graphics_toml_sha256": "2c9b04d528a5b9c41ab6f50be855a55e083054f3ab0dbb3359af463e5b62d55b"
+  },
+  "measurements": {
+    "order": ["baseline-local-1", "local-1", "local-2", "baseline-local-2", "remote-hud", "remote-nohud"],
+    "logs": "/tmp/opencode/fleet-geometry-measure-NAME.log",
+    "local_final_each": {
+      "authority_and_presentation_s": 10.5,
+      "relative_position_m": [-2847029.6640625, 759068.1640593708, 1250706.967514596],
+      "backlog_s": 0,
+      "stopped": false,
+      "terrain_tiles": 374,
+      "terrain_triangles": 410112,
+      "mesh_instances": 1,
+      "mesh_draw_calls": 2,
+      "mesh_triangles": 78465,
+      "mesh_frame_upload_bytes": 640,
+      "capacity_rejections": 0
+    },
+    "local_runs": [
+      {"name": "baseline-local-1", "median_ms": 3.203, "p95_ms": 5.230, "p99_ms": 9.993, "max_ms": 13.292, "measured_publications": 43},
+      {"name": "local-1", "median_ms": 3.251, "p95_ms": 5.125, "p99_ms": 8.839, "max_ms": 13.205, "measured_publications": 44},
+      {"name": "local-2", "median_ms": 3.202, "p95_ms": 5.253, "p99_ms": 12.216, "max_ms": 13.208, "measured_publications": 43},
+      {"name": "baseline-local-2", "median_ms": 3.141, "p95_ms": 4.855, "p99_ms": 9.630, "max_ms": 11.365, "measured_publications": 42}
+    ],
+    "local_conclusion": "identical final trajectory and geometry counts; new medians 3.202-3.251 ms versus baseline 3.141-3.203 ms, about 1.7% higher mean of these two per-build medians, with async residency/publication/tail variation. No speedup, zero-overhead, visual parity or isolated-adapter-cost claim.",
+    "superseded_measurements": "Earlier worktree measurements before the final same-revision membership guard are preserved as /tmp/opencode/fleet-geometry-pre-guard-measure-NAME.log, not pooled with final-binary results. Final local A/B/B/A and both server modes were rerun after all builds/tests finished.",
+    "server_runs": [
+      {"name": "remote-hud", "median_ms": 3.081, "p95_ms": 4.142, "p99_ms": 4.948, "max_ms": 13.303, "primary_snapshots_adopted": 33, "fleet_updates_adopted": 33, "geometry_updates_adopted": 1, "geometry_revision": 1, "geometry_matched": true, "secondaries": 0, "fleet_stale": false, "last_tick": 1467, "authority_s": 12.225, "presentation_s": 12.225, "terrain_triangles": 421632, "capacity_rejections": 0, "local_steps": 0, "stopped": false, "link_closed": false},
+      {"name": "remote-nohud", "median_ms": 2.751, "p95_ms": 3.385, "p99_ms": 4.434, "max_ms": 11.048, "primary_snapshots_adopted": 30, "fleet_updates_adopted": 30, "geometry_updates_adopted": 1, "geometry_revision": 1, "geometry_matched": true, "secondaries": 0, "fleet_stale": false, "last_tick": 1426, "authority_s": 11.883333333333333, "presentation_s": 11.883333333333333, "terrain_triangles": 412416, "capacity_rejections": 0, "local_steps": 0, "stopped": false, "link_closed": false}
+    ],
+    "server_boundary": "actual default server, zero secondaries; immutable empty catalogue arrives once while kinematics continue. Different completed wall-time epochs/geometry and concurrent child CPU prevent a matched HUD-cost or network-overhead comparison."
+  },
+  "legacy_bevy_smoke": {
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0,
+    "actual_v8_server_link": true,
+    "local_fallback": false,
+    "last_logged_status": "sim_s=10 steps=1200; reqwarp=x1 effwarp=x1",
+    "limitations": "audio unverified due to device warnings; not a matched native/Bevy scene, epoch or resolution"
+  },
+  "captures": [
+    {"path": "native-fleet-geometry-capacity-2026-10-16.png", "size": [1280, 720], "sha256": "2f32385a01162dae73942c511091574b37c85e81e64e9a522911ded06c82c4ba", "scenario": "debug viewer, 63-member synthetic fixture, first contact preview open; not a physical fleet replay"},
+    {"path": "native-fleet-geometry-separation-2026-10-16.png", "size": [1280, 720], "sha256": "d670fb407ada8aa70397b4cb1bc56fc55d59ba43bb1eaecd101c6f0ee014ff92", "scenario": "release viewer, frozen real authority separation transaction; diagnostic inspector, not custom PRIMARY appearance"},
+    {"path": "native-fleet-geometry-local-1-2026-10-16.png", "size": [1280, 720], "sha256": "2e3f03bba53eec648f44154d0ff0e47abad0d2d3be2b98c5926b584ed6fd7040", "scenario": "release local flight baseline-preserving trajectory"},
+    {"path": "native-fleet-geometry-remote-hud-2026-10-16.png", "size": [1280, 720], "sha256": "97bf5dbb48433e7c0fa5212abb7e46da11aa6e42a0a4884efb76e8e38a413923", "scenario": "release default real server, empty fleet, catalogue revision matched"},
+    {"path": "native-fleet-geometry-bevy-pilot-2026-10-16.png", "size": [1270, 1588], "sha256": "b54ff89c96217d8d2f93f5edce639751e5cf426689354e33068027d164a703b2", "scenario": "debug legacy host, real server v8 link, audio unverified"}
+  ],
+  "limitations": [
+    "Contact geometry is not appearance: authored external meshes, model keys, surface materials and split render ownership still need a separate contract. The native PRIMARY remains the compatibility X-15 renderer even in custom-authority diagnostic replays.",
+    "The frozen real-server separation replay proves geometric provenance/COM partition/transport/inspector, not a live server command acknowledgement or a whole-scene flight/render acceptance test.",
+    "The capacity screenshot uses synthetic PRIMARY placement near terrain (AGL zero), inherited occlusion/LOD defects and 63 explicitly fixture-derived observations, not 63 physically separated vehicles.",
+    "Omitted geometry descriptors do not track changes hidden behind the same budget omission; labels are bounded display data, not full design identity.",
+    "Independently coalesced PRIMARY/fleet/catalogue slots are not a paired common-time scene. No remote interpolation or extrapolation is added.",
+    "Old Bevy host ignores fleet observations; it must be rebuilt for v8. Its audio remains unverified due to device warnings.",
+    "Captures are implementer diagnostics, not blind preference review, matched native/Bevy scenes, visual parity or complete Bevy displacement. Existing terrain/material/sky/effect/UI/platform gaps remain."
+  ]
+}

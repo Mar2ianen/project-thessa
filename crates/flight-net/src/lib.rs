@@ -420,6 +420,7 @@ pub struct Snapshot {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod embedded;
+pub mod geometry;
 pub mod presentation;
 
 /// Encode a game message into a framed byte stream chunk.
@@ -537,9 +538,12 @@ pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, CodecError> {
 
 /// Authoritative fleet snapshot: the primary snapshot keeps its dedicated
 /// kind and fast path; every additional vehicle rides one shared frame as
-/// `(vehicle id, snapshot)` pairs in ascending id order.
+/// `(vehicle id, snapshot)` pairs in ascending id order. Contact descriptors
+/// live in the independently published, revision-matched geometry catalogue.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FleetSnapshot {
+    /// Exact complete geometry catalogue required for this membership/pose set.
+    pub geometry_revision: u64,
     pub vehicles: Vec<FleetVehicleSnapshot>,
 }
 
@@ -548,7 +552,8 @@ impl FleetSnapshot {
     /// Empty means an explicitly empty fleet, not a missing/stale packet.
     /// Kinematics/ephemeris validation belongs to the presentation consumer.
     pub fn validate_membership(&self) -> Result<(), String> {
-        if self.vehicles.len() >= MAX_FLEET_VEHICLES
+        if self.geometry_revision == 0
+            || self.vehicles.len() >= MAX_FLEET_VEHICLES
             || self
                 .vehicles
                 .first()
@@ -713,6 +718,7 @@ mod tests {
             flight_error: None,
         };
         let fleet = FleetSnapshot {
+            geometry_revision: 1,
             vehicles: vec![FleetVehicleSnapshot {
                 vehicle_id: VehicleId::new(2),
                 snapshot: snapshot.clone(),

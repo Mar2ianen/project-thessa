@@ -1053,12 +1053,13 @@ impl Sim {
 
     /// Fleet snapshots for non-primary vehicles in ascending id order. The
     /// primary keeps its dedicated snapshot path.
-    pub(super) fn fleet_snapshot(&self) -> FleetSnapshot {
+    pub(super) fn fleet_snapshot(&self, geometry_revision: u64) -> FleetSnapshot {
         let paused = self.paused();
         let effective_warp = self.effective_warp();
         let compute_s = self.compute_s;
         let wall_s = self.wall_s();
         FleetSnapshot {
+            geometry_revision,
             vehicles: self
                 .fleet
                 .iter()

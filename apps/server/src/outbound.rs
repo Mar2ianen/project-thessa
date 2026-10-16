@@ -9,6 +9,8 @@ struct OutboundState {
     reliable: VecDeque<Vec<u8>>,
     latest_snapshot: Option<Arc<Vec<u8>>>,
     latest_fleet_snapshot: Option<Arc<Vec<u8>>>,
+    latest_fleet_geometry: Option<Arc<Vec<u8>>>,
+    geometry_revision: u64,
     closed: bool,
 }
 
@@ -43,6 +45,8 @@ impl OutboundMailbox {
                 reliable: VecDeque::with_capacity(RELIABLE_OUTBOUND_CAPACITY),
                 latest_snapshot: None,
                 latest_fleet_snapshot: None,
+                latest_fleet_geometry: None,
+                geometry_revision: 0,
                 closed: false,
             }),
             blocking_wake: Condvar::new(),
@@ -94,11 +98,38 @@ impl OutboundMailbox {
         true
     }
 
+    /// Persistent revision marker suppresses retransmission after draining.
+    /// A new mailbox always receives the current catalogue. Coalescing may
+    /// skip revisions; consumers match the snapshot's revision, never guess.
+    pub(super) fn replace_fleet_geometry(&self, revision: u64, frame: Arc<Vec<u8>>) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed || revision < state.geometry_revision || revision == 0 {
+            return false;
+        }
+        if revision == state.geometry_revision {
+            return true;
+        }
+        state.latest_fleet_geometry = Some(frame);
+        state.geometry_revision = revision;
+        drop(state);
+        self.blocking_wake.notify_one();
+        self.async_wake.notify_one();
+        true
+    }
+
     fn drain_snapshots(state: &mut OutboundState) -> Option<OutboundFrame> {
         state
             .latest_snapshot
             .take()
             .map(OutboundFrame::Shared)
+            .or_else(|| {
+                state
+                    .latest_fleet_geometry
+                    .take()
+                    .map(OutboundFrame::Shared)
+            })
             .or_else(|| {
                 state
                     .latest_fleet_snapshot

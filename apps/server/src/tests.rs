@@ -89,6 +89,7 @@ fn test_driver() -> (Driver, IngressSender) {
     assert!(upstream.mark_active_for_sender("pilot"));
     (
         Driver {
+            geometry: None,
             sim,
             autopilot: AutopilotHost::new().expect("autopilot host"),
             upstream: receiver,
@@ -1810,6 +1811,7 @@ fn lowering_warp_rebases_old_pacing_debt() {
     assert!(upstream_tx.reserve_exact_connection("pilot".into()));
     assert!(upstream_tx.mark_active_for_sender("pilot"));
     let mut driver = Driver {
+        geometry: None,
         sim,
         autopilot: AutopilotHost::new().expect("autopilot host"),
         upstream: upstream_rx,
@@ -1844,6 +1846,7 @@ fn pause_vote_forces_a_prompt_snapshot_even_at_high_warp() {
     assert!(upstream_tx.mark_active_for_sender("pilot"));
     let snapshot_mailbox = Arc::new(OutboundMailbox::new());
     let mut driver = Driver {
+        geometry: None,
         sim,
         autopilot: AutopilotHost::new().expect("autopilot host"),
         upstream: upstream_rx,
@@ -2070,7 +2073,7 @@ fn separate_spawns_a_secondary_with_conserved_mass_and_fleet_snapshot() {
         assert!(authority.vehicle.validate().is_ok());
     }
     // Fleet snapshots carry the secondary behind the primary fast path.
-    let fleet = driver.sim.fleet_snapshot();
+    let fleet = driver.sim.fleet_snapshot(1);
     assert_eq!(fleet.vehicles.len(), 1);
     assert_eq!(fleet.vehicles[0].vehicle_id, VehicleId::new(1));
     assert_eq!(fleet.vehicles[0].snapshot.state, secondary.state);
@@ -2105,21 +2108,63 @@ fn fleet_broadcast_is_complete_including_transition_to_empty() {
     };
     driver.broadcast_snapshot();
     assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
+    let geometry = decode(mailbox.try_next().unwrap());
+    assert_eq!(geometry.kind, kind::FLEET_GEOMETRY);
+    let geometry: thessa_flight_net::geometry::FleetGeometry =
+        thessa_flight_net::decode_payload(&geometry).unwrap();
+    assert_eq!(
+        geometry.vehicles[0].contact,
+        thessa_flight_net::geometry::ContactGeometry::Available(
+            driver.sim.fleet[&1].vehicle.collision_geometry.clone()
+        )
+    );
+    let cached_frame = driver.geometry.as_ref().unwrap().1.clone();
     let fleet = decode(mailbox.try_next().unwrap());
     assert_eq!(fleet.kind, kind::FLEET_SNAPSHOT);
     let fleet: FleetSnapshot = thessa_flight_net::decode_payload(&fleet).unwrap();
     fleet.validate_membership().unwrap();
     assert_eq!(fleet.vehicles.len(), 1);
+    assert!(geometry.matches_snapshot(&fleet).unwrap());
     assert_eq!(fleet.vehicles[0].snapshot.state, driver.sim.fleet[&1].state);
+    driver.broadcast_snapshot();
+    assert!(Arc::ptr_eq(
+        &cached_frame,
+        &driver.geometry.as_ref().unwrap().1
+    ));
+    assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
+    assert_eq!(
+        decode(mailbox.try_next().unwrap()).kind,
+        kind::FLEET_SNAPSHOT
+    );
+    assert!(
+        mailbox.try_next().is_none(),
+        "unchanged geometry must not be resent at snapshot cadence"
+    );
+    let newcomer = Arc::new(OutboundMailbox::new());
+    driver
+        .subscribers
+        .push(("observer".into(), newcomer.clone()));
+    driver.broadcast_snapshot();
+    assert_eq!(decode(newcomer.try_next().unwrap()).kind, kind::SNAPSHOT);
+    assert_eq!(
+        decode(newcomer.try_next().unwrap()).kind,
+        kind::FLEET_GEOMETRY
+    );
+    while mailbox.try_next().is_some() {}
     driver.sim.fleet.clear(); // Exercise membership publication, not a new despawn policy.
     driver.broadcast_snapshot();
     assert_eq!(decode(mailbox.try_next().unwrap()).kind, kind::SNAPSHOT);
+    let empty: thessa_flight_net::geometry::FleetGeometry =
+        thessa_flight_net::decode_payload(&decode(mailbox.try_next().unwrap())).unwrap();
+    assert_eq!(empty.revision, geometry.revision + 1);
+    assert!(empty.vehicles.is_empty());
     let fleet: FleetSnapshot =
         thessa_flight_net::decode_payload(&decode(mailbox.try_next().unwrap())).unwrap();
     assert!(
         fleet.vehicles.is_empty(),
         "silence cannot clear a client registry"
     );
+    assert!(empty.matches_snapshot(&fleet).unwrap());
     assert!(mailbox.try_next().is_none());
 }
 
@@ -2144,7 +2189,7 @@ fn fleet_capacity_counts_primary_and_rejects_split_before_mutation() {
     }]);
     driver.sim.apply_input("pilot", &separate);
     assert_eq!(driver.sim.fleet.len() + 1, crate::sim::MAX_FLEET_VEHICLES);
-    driver.sim.fleet_snapshot().validate_membership().unwrap();
+    driver.sim.fleet_snapshot(1).validate_membership().unwrap();
     install_separable_vehicle(&mut driver.sim);
     let source_mass = driver.sim.authority.vehicle.mass_properties.mass_kg;
     driver.sim.apply_input("pilot", &separate);
@@ -2162,6 +2207,128 @@ fn fleet_capacity_counts_primary_and_rejects_split_before_mutation() {
             .unwrap()
             .contains("fleet is full")
     );
+}
+
+#[test]
+fn geometry_mailbox_coalesces_revisions_and_is_not_a_reliable_event_queue() {
+    let mailbox = OutboundMailbox::new();
+    let first = Arc::new(vec![1]);
+    let second = Arc::new(vec![2]);
+    assert!(mailbox.replace_fleet_geometry(1, first.clone()));
+    assert!(mailbox.replace_fleet_geometry(2, second.clone()));
+    assert!(!mailbox.replace_fleet_geometry(1, first));
+    assert_eq!(mailbox.try_next().unwrap().as_ref(), &[2]);
+    assert!(mailbox.replace_fleet_geometry(2, second));
+    assert!(mailbox.try_next().is_none());
+    mailbox.close();
+    assert!(!mailbox.replace_fleet_geometry(3, Arc::new(vec![3])));
+}
+
+#[test]
+fn physical_separation_emits_a_replayable_geometry_transaction() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    let source_state = driver.sim.authority.state;
+    let source_parts = driver
+        .sim
+        .authority
+        .vehicle
+        .collision_geometry
+        .parts
+        .clone();
+    driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }]),
+    );
+    assert_eq!(driver.sim.fleet.len(), 1);
+    // Contact geometry uses the same recentered cluster frame as authority;
+    // world-space part placement is conserved, not copied from an X-15 model.
+    let world_parts: Vec<_> = std::iter::once(&driver.sim.authority)
+        .chain(driver.sim.fleet.values())
+        .flat_map(|a| {
+            a.vehicle.collision_geometry.parts.iter().map(move |p| {
+                a.state.position_inertial_m
+                    + a.state.orientation_body_to_inertial * p.local_position_m
+            })
+        })
+        .collect();
+    for part in source_parts {
+        let original = source_state.position_inertial_m
+            + source_state.orientation_body_to_inertial * part.local_position_m;
+        assert!(
+            world_parts.iter().any(|p| (*p - original).length() < 0.001),
+            "binary64 inertial subtraction error must remain below 1 mm"
+        );
+    }
+    let mailbox = Arc::new(OutboundMailbox::new());
+    driver.subscribers.push(("pilot".into(), mailbox.clone()));
+    driver.broadcast_snapshot();
+    let mut transaction = Vec::new();
+    while let Some(frame) = mailbox.try_next() {
+        transaction.extend_from_slice(frame.as_ref());
+    }
+    let envelope_kinds: Vec<_> = FrameDecoder::new()
+        .push(&transaction)
+        .unwrap()
+        .iter()
+        .map(|frame| thessa_flight_net::decode_frame(frame).unwrap().kind)
+        .collect();
+    assert_eq!(
+        envelope_kinds,
+        [kind::SNAPSHOT, kind::FLEET_GEOMETRY, kind::FLEET_SNAPSHOT]
+    );
+    driver.broadcast_snapshot();
+    let mut samples = Vec::new();
+    while let Some(frame) = mailbox.try_next() {
+        samples.extend_from_slice(frame.as_ref());
+    }
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut replay = thessa_flight_net::encode_welcome(&thessa_flight_net::Welcome {
+        tick: driver.sim.snapshot().tick,
+        flight_time_s: driver.sim.snapshot().flight_time_s,
+    })
+    .unwrap();
+    replay.extend(transaction);
+    std::fs::write(directory.join("fleet-separation-v8.frame"), replay).unwrap();
+    std::fs::write(directory.join("fleet-separation-v8.samples"), samples).unwrap();
+}
+
+#[test]
+fn same_id_recenter_or_shape_change_revises_geometry_without_touching_flight_state() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }]),
+    );
+    driver.broadcast_snapshot();
+    let before = driver.sim.fleet[&1].state;
+    driver
+        .sim
+        .fleet
+        .get_mut(&1)
+        .unwrap()
+        .vehicle
+        .collision_geometry
+        .parts[0]
+        .local_position_m
+        .x += 0.125;
+    driver.broadcast_snapshot();
+    let (catalogue, _) = driver.geometry.as_ref().unwrap();
+    assert_eq!(catalogue.revision, 2);
+    assert!(
+        catalogue.vehicles[0].matches_vehicle(VehicleId::new(1), &driver.sim.fleet[&1].vehicle)
+    );
+    assert_eq!(driver.sim.fleet[&1].state, before);
 }
 
 #[test]

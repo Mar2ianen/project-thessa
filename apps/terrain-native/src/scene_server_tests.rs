@@ -49,6 +49,7 @@ fn replica() -> Scene {
 
 fn fleet(scene: &Scene, ids_and_times: &[(u32, f64)]) -> thessa_flight_net::FleetSnapshot {
     thessa_flight_net::FleetSnapshot {
+        geometry_revision: 1,
         vehicles: ids_and_times
             .iter()
             .map(|&(id, time)| thessa_flight_net::FleetVehicleSnapshot {
@@ -57,6 +58,97 @@ fn fleet(scene: &Scene, ids_and_times: &[(u32, f64)]) -> thessa_flight_net::Flee
             })
             .collect(),
     }
+}
+
+fn geometry(
+    scene: &Scene,
+    ids: &[u32],
+    revision: u64,
+) -> std::sync::Arc<thessa_flight_net::geometry::FleetGeometry> {
+    std::sync::Arc::new(thessa_flight_net::geometry::FleetGeometry {
+        revision,
+        vehicles: ids
+            .iter()
+            .map(|id| {
+                thessa_flight_net::geometry::FleetVehicleGeometry::from_vehicle(
+                    thessa_sim_core::VehicleId::new(*id),
+                    &scene.flight.as_ref().unwrap().vehicle,
+                )
+            })
+            .collect(),
+    })
+}
+
+#[test]
+fn geometry_pairs_only_exact_revisions_in_either_delivery_order_and_rejects_reuse() {
+    let mut scene = replica();
+    let sample = fleet(&scene, &[(1, 1.0)]);
+    scene.accept_fleet_snapshot(&sample).unwrap();
+    assert!(
+        scene
+            .remote
+            .as_ref()
+            .unwrap()
+            .fleet
+            .matched_geometry()
+            .is_none()
+    );
+    let catalogue = geometry(&scene, &[1], 1);
+    scene.accept_fleet_geometry(catalogue.clone()).unwrap();
+    assert_eq!(
+        scene.remote.as_ref().unwrap().fleet.matched_geometry(),
+        Some(catalogue.as_ref())
+    );
+    let mut corrupt = (*catalogue).clone();
+    corrupt.vehicles[0].display_name = "changed under same revision".into();
+    assert!(
+        scene
+            .accept_fleet_geometry(std::sync::Arc::new(corrupt))
+            .is_err()
+    );
+    assert_eq!(scene.remote.as_ref().unwrap().fleet.geometry_updates, 1);
+    scene.accept_fleet_geometry(catalogue.clone()).unwrap();
+    assert_eq!(scene.remote.as_ref().unwrap().fleet.geometry_updates, 1);
+    let next = geometry(&scene, &[1, 7], 2);
+    scene.accept_fleet_geometry(next.clone()).unwrap();
+    assert!(
+        scene
+            .remote
+            .as_ref()
+            .unwrap()
+            .fleet
+            .matched_geometry()
+            .is_none(),
+        "never attach a future geometry to old poses"
+    );
+    let mut sample = fleet(&scene, &[(1, 2.0), (7, 0.5)]);
+    sample.geometry_revision = 2;
+    scene.accept_fleet_snapshot(&sample).unwrap();
+    assert_eq!(
+        scene.remote.as_ref().unwrap().fleet.matched_geometry(),
+        Some(next.as_ref())
+    );
+    assert!(scene.accept_fleet_geometry(catalogue).is_err());
+    let previous = scene.remote.as_ref().unwrap().fleet.rows.clone();
+    let mut corrupt = sample.clone();
+    corrupt.vehicles.pop();
+    assert!(scene.accept_fleet_snapshot(&corrupt).is_err());
+    assert_eq!(scene.remote.as_ref().unwrap().fleet.rows, previous);
+    sample.geometry_revision = 1;
+    assert!(scene.accept_fleet_snapshot(&sample).is_err());
+    let mut future = fleet(&scene, &[(1, 3.0)]);
+    future.geometry_revision = 3;
+    scene.accept_fleet_snapshot(&future).unwrap();
+    assert!(
+        scene
+            .accept_fleet_geometry(geometry(&scene, &[1, 7], 3))
+            .is_err()
+    );
+    assert_eq!(
+        scene.remote.as_ref().unwrap().fleet.geometry.as_ref(),
+        Some(&next)
+    );
+    assert_eq!(scene.flight.as_ref().unwrap().flight_time_s, 0.0);
 }
 
 #[test]
@@ -91,7 +183,7 @@ fn fleet_membership_is_atomic_and_each_vehicle_keeps_its_own_reference_time() {
     assert_eq!(scene.remote.as_ref().unwrap().fleet.rows, previous);
     assert!(
         scene
-            .accept_fleet_snapshot(&fleet(&scene, &[(1, 4.0)]))
+            .accept_fleet_snapshot(&fleet(&scene, &[(1, 4.0), (4, 8.0)]))
             .is_err()
     );
     assert!(
@@ -100,9 +192,14 @@ fn fleet_membership_is_atomic_and_each_vehicle_keeps_its_own_reference_time() {
             .is_err()
     );
     assert_eq!(scene.remote.as_ref().unwrap().fleet.updates, 1);
-    scene
-        .accept_fleet_snapshot(&fleet(&scene, &[(4, 9.0), (8, 1.0)]))
-        .unwrap();
+    let changed = fleet(&scene, &[(4, 9.0), (8, 1.0)]);
+    assert!(
+        scene.accept_fleet_snapshot(&changed).is_err(),
+        "a revision cannot change membership even before its catalogue arrives"
+    );
+    let mut changed = changed;
+    changed.geometry_revision = 2;
+    scene.accept_fleet_snapshot(&changed).unwrap();
     assert_eq!(
         scene
             .remote
@@ -115,7 +212,9 @@ fn fleet_membership_is_atomic_and_each_vehicle_keeps_its_own_reference_time() {
             .collect::<Vec<_>>(),
         vec![4, 8]
     );
-    scene.accept_fleet_snapshot(&fleet(&scene, &[])).unwrap();
+    let mut empty = fleet(&scene, &[]);
+    empty.geometry_revision = 3;
+    scene.accept_fleet_snapshot(&empty).unwrap();
     assert!(scene.remote.as_ref().unwrap().fleet.rows.is_empty());
     assert_eq!(scene.center, before.0);
     assert_eq!(scene.sample.time, before.1.time);
@@ -488,6 +587,13 @@ fn real_server_adoption_advances_and_acknowledges_input_without_local_steps() {
     while scene.server_snapshot_count().unwrap() < 5
         || scene.sample.time.0 <= 0.1
         || scene.remote.as_ref().unwrap().fleet.updates < 2
+        || scene
+            .remote
+            .as_ref()
+            .unwrap()
+            .fleet
+            .matched_geometry()
+            .is_none()
     {
         scene.push_live_input(0.0, false, false);
         scene.advance_flight(f64::NAN, None).unwrap();
@@ -500,6 +606,11 @@ fn real_server_adoption_advances_and_acknowledges_input_without_local_steps() {
     assert!(!flight.engine_active);
     assert!(scene.remote.as_ref().unwrap().fleet.rows.is_empty());
     assert!(!scene.remote.as_ref().unwrap().fleet.stale);
+    assert_eq!(
+        scene.remote.as_ref().unwrap().fleet.geometry_updates,
+        1,
+        "unchanged geometry is not resent on each snapshot"
+    );
     assert_eq!(flight.accumulator_s, 0.0);
     assert!(scene.sample.time.0 <= flight.flight_time_s);
     assert!(scene.flight_data().is_some());
@@ -519,13 +630,21 @@ fn fleet_inspector_capture_through_actual_native_cli_and_shared_link() {
         .collect();
     let mut samples = fleet(&scene, &members);
     samples.vehicles[6].snapshot.flight_error = Some("fixture stopped secondary".into());
+    let catalogue = geometry(&scene, &(1..64).collect::<Vec<_>>(), 1);
+    let catalogue_wire: String = thessa_flight_net::geometry::encode_fleet_geometry(&catalogue)
+        .unwrap()
+        .into_iter()
+        .map(|byte| format!("\\{byte:03o}"))
+        .collect();
     let wire: String = thessa_flight_net::encode_snapshot(&primary)
         .unwrap()
         .into_iter()
         .chain(thessa_flight_net::encode_fleet_snapshot(&samples).unwrap())
         .map(|byte| format!("\\{byte:03o}"))
         .collect();
-    let path = peer(&format!("while :; do printf '{wire}'; sleep 0.05; done"));
+    let path = peer(&format!(
+        "printf '{catalogue_wire}'; while :; do printf '{wire}'; sleep 0.05; done"
+    ));
     let viewer = std::env::current_exe()
         .unwrap()
         .parent()
@@ -557,6 +676,8 @@ fn fleet_inspector_capture_through_actual_native_cli_and_shared_link() {
         "fleet_stale=false",
         "stopped=false",
         "local_steps=0",
+        "geometry_matched=true",
+        "geometry_updates=1",
     ] {
         assert!(stdout.contains(expected), "{stdout}");
     }

@@ -129,12 +129,10 @@ struct InputMailbox {
     closed: AtomicBool,
 }
 
-const MAX_PENDING_EDGE_COMMANDS: usize = 64;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputPushError {
     Closed,
-    TooManyEdgeCommands,
+    TooManyCommands,
 }
 
 impl InputMailbox {
@@ -157,16 +155,14 @@ impl InputMailbox {
             .unwrap_or_default();
         let original_commands = queued_commands.clone();
         let merged_commands = merge_commands(queued_commands, std::mem::take(&mut input.commands));
-        if merged_commands
-            .iter()
-            .filter(|command| is_edge_command(command))
-            .count()
-            > MAX_PENDING_EDGE_COMMANDS
-        {
+        // The server validates the whole packet, including state votes.
+        // Count every variant so newer fleet/autopilot events cannot bypass
+        // the retained queue bound or make an accepted packet unsendable.
+        if merged_commands.len() > crate::MAX_COMMANDS_PER_INPUT {
             if let Some(queued) = pending.as_mut() {
                 queued.commands = original_commands;
             }
-            return Err(InputPushError::TooManyEdgeCommands);
+            return Err(InputPushError::TooManyCommands);
         }
         input.commands = merged_commands;
         *pending = Some(input);
@@ -202,16 +198,6 @@ impl InputMailbox {
         self.closed.store(true, Ordering::Release);
         self.wake.notify_all();
     }
-}
-
-fn is_edge_command(command: &crate::Command) -> bool {
-    matches!(
-        command,
-        crate::Command::Stage
-            | crate::Command::Engine { .. }
-            | crate::Command::Part { .. }
-            | crate::Command::Reset
-    )
 }
 
 fn merge_commands(
@@ -314,6 +300,12 @@ impl EmbeddedLink {
 
         let (snapshots, snapshots_writer) = SnapshotInbox::new();
         let (welcomed_tx, welcomed_rx) = channel::<()>();
+        let inputs = std::sync::Arc::new(InputMailbox {
+            pending: std::sync::Mutex::new(None),
+            wake: std::sync::Condvar::new(),
+            closed: AtomicBool::new(false),
+        });
+        let reader_inputs = inputs.clone();
 
         // Reader thread owns stdout end to end: Welcome gate, then snapshots.
         let mut child_out = startup
@@ -366,6 +358,9 @@ impl EmbeddedLink {
                     Err(_) => break,
                 }
             }
+            // EOF, read failure or framing failure ends the receive half.
+            // Surface that state to the host and wake an idle writer.
+            reader_inputs.close();
         });
 
         // Handshake on this thread: Hello out, Welcome (via the reader)
@@ -387,23 +382,19 @@ impl EmbeddedLink {
             .recv_timeout(handshake_timeout)
             .map_err(|_| "server handshake timed out".to_string())?;
 
-        // Writer thread takes stdin from here; inputs are idempotent
-        // snapshots of live control state, so no ordering hazards.
-        let inputs = std::sync::Arc::new(InputMailbox {
-            pending: std::sync::Mutex::new(None),
-            wake: std::sync::Condvar::new(),
-            closed: AtomicBool::new(false),
-        });
+        // Writer thread takes stdin from here; state intents coalesce but
+        // discrete commands retain their full order in the bounded mailbox.
         let writer_inputs = inputs.clone();
         std::thread::spawn(move || {
             while let Some(input) = writer_inputs.take() {
                 let Ok(frame) = crate::encode_input(&input) else {
-                    continue;
+                    break;
                 };
                 if child_in.write_all(&frame).is_err() {
                     break;
                 }
             }
+            writer_inputs.close();
             let _ = child_in.flush();
         });
 
@@ -415,14 +406,19 @@ impl EmbeddedLink {
             child,
         })
     }
-    /// Queue one input for the server (briefly locks the mailbox; closes on command
-    /// overflow or disconnect so an accepted edge can never be silently
-    /// dropped).
+    /// Queue one input for the server (briefly locks the mailbox). An overflow
+    /// or observed pipe/encode failure closes the link rather than silently
+    /// accepting further intent. `true` means queued, not server acknowledged.
     pub fn send_input(&self, input: &ClientInput) -> bool {
+        // Reject an oversized caller packet before cloning its command list.
+        if input.commands.len() > crate::MAX_COMMANDS_PER_INPUT {
+            self.inputs.close();
+            return false;
+        }
         match self.inputs.push(input.clone()) {
             Ok(()) => true,
             Err(InputPushError::Closed) => false,
-            Err(InputPushError::TooManyEdgeCommands) => {
+            Err(InputPushError::TooManyCommands) => {
                 eprintln!(
                     "[client] embedded input mailbox overflow; closing link to preserve command ordering"
                 );
@@ -430,6 +426,12 @@ impl EmbeddedLink {
                 false
             }
         }
+    }
+
+    /// A worker observed EOF/error, or the host overflowed/closed the mailbox.
+    /// This is not a heartbeat: a live but stalled peer needs host timeouts.
+    pub fn is_closed(&self) -> bool {
+        self.inputs.closed.load(Ordering::Acquire)
     }
 
     /// Drain snapshots, keeping the newest. `None` when nothing arrived.
@@ -473,6 +475,24 @@ mod tests {
             parachutes: Vec::new(),
             wake_notice: None,
             flight_error: None,
+        }
+    }
+
+    fn input(commands: Vec<Command>) -> ClientInput {
+        ClientInput {
+            tick: 0,
+            vehicle_id: thessa_sim_core::VehicleId::PRIMARY,
+            control_input: [0.0; 3],
+            control_mode: thessa_flight_authority::ControlMode::Direct,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
+            throttle: 0.0,
+            engine_active: false,
+            sas_enabled: false,
+            rcs_enabled: false,
+            reaction_wheels_enabled: true,
+            gear_down: false,
+            parachutes_armed: false,
+            commands,
         }
     }
 
@@ -602,33 +622,48 @@ mod tests {
             wake: std::sync::Condvar::new(),
             closed: AtomicBool::new(false),
         };
-        let mut input = ClientInput {
-            tick: 0,
-            vehicle_id: thessa_sim_core::VehicleId::PRIMARY,
-            control_input: [0.0; 3],
-            control_mode: thessa_flight_authority::ControlMode::Direct,
-            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
-            throttle: 0.0,
-            engine_active: false,
-            sas_enabled: false,
-            rcs_enabled: false,
-            reaction_wheels_enabled: true,
-            gear_down: false,
-            parachutes_armed: false,
-            commands: vec![Command::Stage; MAX_PENDING_EDGE_COMMANDS],
-        };
+        let mut input = input(vec![Command::Stage; crate::MAX_COMMANDS_PER_INPUT]);
         assert!(mailbox.push(input.clone()).is_ok());
         input.commands.push(Command::Part {
             command: thessa_sim_core::VehiclePartCommand::SetRcsEnabled { enabled: true },
         });
-        assert_eq!(
-            mailbox.push(input),
-            Err(InputPushError::TooManyEdgeCommands)
-        );
+        assert_eq!(mailbox.push(input), Err(InputPushError::TooManyCommands));
         assert_eq!(
             mailbox.take().expect("accepted input").commands.len(),
-            MAX_PENDING_EDGE_COMMANDS
+            crate::MAX_COMMANDS_PER_INPUT
         );
+    }
+
+    #[test]
+    fn fleet_events_and_state_votes_share_the_wire_command_bound() {
+        let mailbox = InputMailbox {
+            pending: std::sync::Mutex::new(None),
+            wake: std::sync::Condvar::new(),
+            closed: AtomicBool::new(false),
+        };
+        let event = Command::Separate {
+            vehicle_id: thessa_sim_core::VehicleId::PRIMARY,
+            link_name: "stage-link".into(),
+        };
+        let mut accepted = input(vec![event.clone(); crate::MAX_COMMANDS_PER_INPUT - 2]);
+        accepted.commands.extend([
+            Command::Pause { paused: true },
+            Command::SetWarp { factor: 1.0 },
+        ]);
+        accepted.validate().unwrap();
+        mailbox.push(accepted.clone()).unwrap();
+        let votes = input(vec![
+            Command::Pause { paused: true },
+            Command::SetWarp { factor: 1.0 },
+        ]);
+        mailbox.push(votes).unwrap();
+        let mut incoming = input(vec![event, Command::Pause { paused: false }]);
+        incoming.tick = 99;
+        assert_eq!(mailbox.push(incoming), Err(InputPushError::TooManyCommands));
+        let retained = mailbox.take().unwrap();
+        retained.validate().unwrap();
+        assert_eq!(retained.commands, accepted.commands);
+        assert_eq!(retained.tick, accepted.tick);
     }
 
     #[cfg(unix)]
@@ -721,20 +756,97 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn embedded_successful_handshake_drop_reaps_child() {
+        let (command, pid_path) = welcomed_server("exec sleep 30");
+        let link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+        assert!(link.latest_snapshot().is_none());
+        assert!(!link.is_closed());
+        drop(link);
+        assert_startup_child_gone(&pid_path);
+    }
+
+    #[cfg(unix)]
+    fn welcome_bytes() -> String {
         let welcome = crate::encode_welcome(&crate::Welcome {
             tick: 0,
             flight_time_s: 0.0,
         })
         .unwrap();
-        // POSIX printf emits the actual framed binary Welcome; keep the
-        // child alive until Drop, unlike the early-exit startup fixture.
-        let bytes = welcome
+        // POSIX printf can emit an actual framed binary Welcome.
+        welcome
             .iter()
             .map(|byte| format!("\\{:03o}", byte))
-            .collect::<String>();
-        let (command, pid_path) = injected_server(&format!("printf '{bytes}'; exec sleep 30"));
+            .collect::<String>()
+    }
+
+    #[cfg(unix)]
+    fn welcomed_server(after_welcome: &str) -> (std::process::Command, std::path::PathBuf) {
+        injected_server(&format!("printf '{}'; {after_welcome}", welcome_bytes()))
+    }
+
+    #[cfg(unix)]
+    fn wait_closed(link: &EmbeddedLink) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !link.is_closed() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pipe failure did not close link"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!link.send_input(&input(Vec::new())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reader_eof_closes_input_while_child_is_still_alive() {
+        let (command, pid_path) = welcomed_server("exec 1>&-; exec sleep 30");
+        let mut link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+        wait_closed(&link);
+        assert!(link.child.try_wait().unwrap().is_none());
+        drop(link);
+        assert_startup_child_gone(&pid_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writer_broken_pipe_closes_input_while_stdout_stays_open() {
+        let hello_len = crate::encode_hello(&crate::Hello {
+            client_name: "thessa-client-embedded".into(),
+        })
+        .unwrap()
+        .len();
+        // Consume Hello before Welcome so closing stdin cannot race startup.
+        let (command, pid_path) = injected_server(&format!(
+            "dd bs=1 count={hello_len} of=/dev/null 2>/dev/null; printf '{}'; exec 0<&-; exec sleep 30",
+            welcome_bytes(),
+        ));
+        let mut link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !link.is_closed() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "broken writer did not close link"
+            );
+            link.send_input(&input(Vec::new()));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        wait_closed(&link);
+        assert!(link.child.try_wait().unwrap().is_none());
+        drop(link);
+        assert_startup_child_gone(&pid_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_caller_packet_closes_link_without_queuing_it() {
+        let (command, pid_path) = welcomed_server("exec sleep 30");
         let link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
-        assert!(link.latest_snapshot().is_none());
+        assert!(!link.send_input(&input(vec![
+            Command::Stage;
+            crate::MAX_COMMANDS_PER_INPUT + 1
+        ])));
+        assert!(link.is_closed());
+        assert!(link.inputs.pending.lock().unwrap().is_none());
         drop(link);
         assert_startup_child_gone(&pid_path);
     }

@@ -2086,6 +2086,54 @@ to the real server**, with remote stepping logged through 10 s / 1,200 ticks
 checks, binary/capture hashes and limitations are in
 `artifacts/owned-embedded-link-2026-10-16.json`.
 
+### Embedded-link bounds and disconnect continuation (2026-10-16)
+
+This continuation supersedes the command-cap and observed-disconnect
+limitations recorded in the transport extraction above. The input mailbox
+now uses `flight-net::MAX_COMMANDS_PER_INPUT` for the **whole coalesced
+packet**, including Pause/SetWarp votes and every ordered event variant.
+The old four-variant counter let fleet/autopilot events accumulate without
+that bound and could accept 64 legacy events plus two state votes, which the
+server's existing validator then rejected. The mailbox now rejects overflow
+transactionally, preserving previously accepted pending commands, and the
+public link closes rather than silently discarding an event. Oversized
+caller packets are refused before cloning. State votes still coalesce and
+ordered events retain FIFO order; the wire format/server limit are unchanged.
+
+The reader and writer share the existing input mailbox's close predicate.
+Reader EOF/read/framing failure or writer encode/write failure now closes it
+and wakes an idle writer; subsequent `send_input` returns false, letting the
+old pilot's existing link-lost error path report the failure. `is_closed`
+exposes that observed state to other native hosts. An accepted input is only
+**queued**, not acknowledged by the server. A live but stalled peer still
+needs a host deadline/heartbeat; there is no reconnect, full snapshot
+validation or joined-worker guarantee in this slice. Native viewer snapshot
+adoption and fleet rendering remain unported. No additional thread, queue,
+dependency or renderer/device change is introduced.
+
+Regressions cover full packets of fleet events plus state votes, coalescing
+at capacity, transactional rejection, oversized caller packets, reader EOF
+while the child remains alive, and broken stdin while stdout remains open.
+All spawned fixtures are killed/reaped and keep scratch under the crate's
+`target/test-tmp`. The real-server probe also returns early on observed
+closure rather than waiting for its snapshot deadline.
+
+Local gates passed: fmt, workspace all-target/all-feature clippy with warnings
+denied, no-default-feature viewer clippy, **1,793** workspace lib/bin + **52**
+integration + **24** Bevy-CBT hardware + **4** native GPU + **4** native-window
+tests = **1,877 Rust tests**, five agent-QA tests and the 12-crate architecture
+check. The 14-test transport suite additionally passed **20 repetitions**
+(280 executions, reported separately rather than inflating the workspace
+total). GPU/window suites ran on Radeon 880M / RADV STRIX1.
+
+The real-server probe again acknowledged throttle cut/engine off and received
+nine snapshots (ticks 5→150, simulation 0.041667→1.25 s). Startup/handshake
+was 1.382 s including 1.262 s world setup; no isolated-latency or performance
+win is claimed. The unpaused debug Bevy pilot stayed linked to the actual
+server, captured and exited cleanly, with remote status logged through
+10 s / 1,201 ticks; audio remains unverified due to device warnings. Evidence,
+reproduction and hashes are in `artifacts/embedded-link-bounds-2026-10-16.json`.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

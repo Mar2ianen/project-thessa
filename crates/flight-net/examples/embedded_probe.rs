@@ -13,6 +13,9 @@ fn next_snapshot(link: &EmbeddedLink, timeout: Duration) -> Result<Snapshot, Box
         if let Some(snapshot) = link.latest_snapshot() {
             return Ok(snapshot);
         }
+        if link.is_closed() {
+            return Err("embedded transport closed before the next snapshot".into());
+        }
         if Instant::now() >= deadline {
             return Err("snapshot deadline exceeded".into());
         }

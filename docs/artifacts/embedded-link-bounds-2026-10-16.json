@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-16",
+  "branch": "fix/embedded-link-bounds",
+  "base_commit": "f44f8ab",
+  "scope": {
+    "owner": "GPL flight-net::embedded; same Bevy resource adapter",
+    "wire_server_renderer_or_physics_changes": false,
+    "new_threads_queues_dependencies_crates_or_unsafe": false,
+    "native_viewer_network_adoption": false
+  },
+  "contract": {
+    "pending_command_limit": 64,
+    "limit_source": "flight-net::MAX_COMMANDS_PER_INPUT, also enforced by server payload validation",
+    "counted": "whole coalesced packet: every ordered event variant plus remaining Pause/SetWarp state votes",
+    "overflow": "reject without replacing accepted pending input; public link closes/refuses further intent; oversized caller list refused before cloning",
+    "ordering": "state votes coalesce, ordered events stay FIFO",
+    "observed_io_failure": "reader EOF/read/framing error or writer encode/write error closes existing mailbox and wakes idle writer",
+    "api": "is_closed observes worker/mailbox closure; send_input true means queued, not acknowledged",
+    "not_established": "heartbeat, stalled-peer detection without a host deadline, reconnect, joined-worker shutdown, stronger snapshot/Welcome validation or native viewer server adoption"
+  },
+  "regressions": {
+    "count_and_transaction": "62 valid fleet Separate events plus two state votes fit; replacing votes at capacity fits; an additional event rejects transactionally and preserves previous tick/commands",
+    "reader_eof": "child closes stdout but remains alive; input side closes and later sends fail; Drop kills/reaps child",
+    "broken_writer": "child consumes Hello, emits Welcome, closes stdin and keeps stdout open while alive; write failure closes mailbox; Drop kills/reaps child",
+    "oversized_caller": "65-command caller packet closes link without queuing that packet",
+    "existing": "ten transport inbox/mailbox/interpolation/startup/successful-drop tests retained; old legacy-edge bound regression now uses shared protocol limit"
+  },
+  "stress": {
+    "command": "cargo test -p thessa-flight-net --lib embedded::tests",
+    "repetitions": 20,
+    "tests_per_repetition": 14,
+    "passed_executions": 280,
+    "scratch": "crates/flight-net/target/test-tmp",
+    "log": "/tmp/opencode/link-bounds-stress.log",
+    "boundary": "fixture stress, not a throughput benchmark or a proof of all possible scheduling interleavings"
+  },
+  "verification": {
+    "fmt": "pass",
+    "workspace_all_target_all_feature_clippy_deny_warnings": "pass",
+    "viewer_no_default_feature_clippy_deny_warnings": "pass",
+    "workspace_lib_bin_tests": 1793,
+    "workspace_integration_tests": 52,
+    "bevy_cbt_hardware_tests": 24,
+    "native_gpu_tests": 4,
+    "native_window_tests": 4,
+    "successful_rust_tests": 1877,
+    "agent_qa_unittests": 5,
+    "architecture_guarded_crates": 12,
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "logs": "/tmp/opencode/link-bounds-{clippy,lib,integration,nohud,bevy-gpu,native-gpu,window-test,qa,host-build,probe,legacy-smoke,stress}.log"
+  },
+  "real_server_probe": {
+    "command": "cargo build -p thessa-server -p thessa-client; cargo run -p thessa-flight-net --example embedded_probe -- /home/chechulin/Projects/project-thessa-fastrt/target/debug/thessa-server",
+    "profile": "debug",
+    "probe_binary_sha256": "dd591960ce61eec3fb953dd848f08e2dd2b0f81e0894b5c3bff79600f5f77a0f",
+    "server_binary_sha256": "2af9823ecfa09d41216416946c1e8ab13eaf3133d1bd40e2bc65f4c784f188be",
+    "exit_code": 0,
+    "startup_handshake_ms": 1382.341,
+    "server_world_setup_s": 1.262,
+    "snapshots_received": 9,
+    "first_tick": 5,
+    "last_tick": 150,
+    "first_sim_time_s": 0.041666666666666664,
+    "last_sim_time_s": 1.25,
+    "throttle_cut_engine_off_acknowledged": true,
+    "finite_interpolated_state_checked": true,
+    "link_dropped": true,
+    "elapsed_s": 2.597,
+    "boundary": "functional smoke with world startup included; not isolated network latency, throughput benchmark or game FPS"
+  },
+  "legacy_bevy_smoke": {
+    "environment": "THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot THESSA_SCREENSHOT_PATH=IMAGE.png THESSA_SCREENSHOT_AT_S=6; not paused",
+    "exit_code": 0,
+    "actual_server_link": true,
+    "local_fallback": false,
+    "last_logged_server_status": "sim_s=10 steps=1201; reqwarp=x1 effwarp=x1",
+    "capture": "link-bounds-bevy-pilot-2026-10-16.png",
+    "capture_size": [1270, 1588],
+    "capture_sha256": "8dc5f090949ff16aef7b64221b6fe3702b57c98add80a7b72924aadd62a517af",
+    "limitations": "audio device warnings, no audio verification; capture wall-time is not a fixed simulation epoch or visual-parity/acceptance evidence"
+  },
+  "limitations": [
+    "A peer can remain alive with open pipes and stop producing snapshots: host deadlines/heartbeat remain necessary.",
+    "Input queue acceptance is not remote acknowledgement or guaranteed delivery after disconnect.",
+    "The cap bounds command count, not arbitrary caller-owned heap data; semantic payload validation and frame-byte limits remain existing protocol/producer responsibilities.",
+    "Native viewer networking/fleets/prediction, visual parity and remaining Bevy displacement are not established by this fix."
+  ]
+}

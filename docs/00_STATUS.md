@@ -90,6 +90,10 @@ The owned native embedded-server transport now lives in GPL `flight-net`
 (stdio handshake, receive timestamps/inbox, input mailbox and child cleanup);
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot
 adoption, fleet rendering and prediction/reconciliation remain unported.
+The shared link now caps complete pending command packets at the protocol's
+64-command limit (all variants and state votes), and worker pipe/encode
+failures close the input side visibly. Stalled-peer heartbeat/reconnect and
+native viewer networking remain future work.
 
 ## Autopilot and roadmap
 

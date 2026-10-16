@@ -161,6 +161,10 @@ The checked-in vertical slice currently contains:
    smoke is available with `cargo run -p thessa-flight-net --example embedded_probe -- PATH_TO_THESSA_SERVER`
    after building `thessa-server`. This does not yet wire server snapshots into
    the native viewer or implement fleet presentation/prediction.
+   Its input mailbox counts all commands (including state votes and fleet/
+   autopilot events) against the protocol's 64-command packet limit; observed
+   pipe/encode failure or overflow closes the link and refuses further input.
+   This is not a heartbeat or a server acknowledgement for each queued input.
   Headless `--prestream-seconds 10 --sweep` exercises
    changing demand rather than a fixed resident snapshot.
    The default `hud` feature adds MIT/Apache-2.0 egui 0.37 on the renderer's

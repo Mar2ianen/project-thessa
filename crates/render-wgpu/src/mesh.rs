@@ -23,9 +23,26 @@ pub struct MeshDrawStats {
     /// Uniform + instance bytes written by one successful `update`.
     pub frame_upload_bytes: usize,
 }
+/// Surface/lighting configuration for a native mesh renderer. Bundling the
+/// resolved settings in one struct keeps the constructor readable as shadows,
+/// material quality and ray tracing join it.
+pub struct SurfaceSettings<'a> {
+    pub format: wgpu::TextureFormat,
+    /// Rigid-instance capacity.
+    pub capacity: usize,
+    pub quality: thessa_graphics::Quality,
+    /// Specular reflections (terrain and mesh) on/off.
+    pub reflections: bool,
+    pub shadows: Option<&'a crate::shadows::ShadowAtlas>,
+    /// Resolved graphics settings; `None` keeps the raster-only path.
+    pub ray_tracing: Option<&'a thessa_graphics::ResolvedGraphicsSettings>,
+}
+
 pub struct MeshRenderer {
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
+    rt: Option<crate::ray_scene::RayScene>,
+    rt_reason: Option<String>,
     pipeline: wgpu::RenderPipeline,
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
@@ -116,6 +133,19 @@ fn material_texture(
     (texture, sampler)
 }
 impl MeshRenderer {
+    /// Ray-tracing accounting for telemetry; inactive when RT is off or was
+    /// rejected, with `rt_reason` explaining a rejection.
+    pub fn rt_stats(&self) -> crate::ray_scene::RayStats {
+        self.rt.as_ref().map_or_else(
+            crate::ray_scene::RayStats::default,
+            crate::ray_scene::RayScene::stats,
+        )
+    }
+
+    pub fn rt_reason(&self) -> Option<&str> {
+        self.rt_reason.as_deref()
+    }
+
     pub fn draw_stats(&self) -> MeshDrawStats {
         MeshDrawStats {
             instances: self.count,
@@ -135,27 +165,42 @@ impl MeshRenderer {
         format: wgpu::TextureFormat,
         capacity: usize,
     ) -> Result<Self, BackendError> {
-        Self::with_surface_settings(
+        Self::with_surface(
             backend,
             source,
-            format,
-            capacity,
-            thessa_graphics::Quality::Low,
-            false,
-            None,
+            SurfaceSettings {
+                format,
+                capacity,
+                quality: thessa_graphics::Quality::Low,
+                reflections: false,
+                shadows: None,
+                ray_tracing: None,
+            },
         )
     }
 
-    pub fn with_surface_settings(
+    pub fn with_surface(
         backend: &Backend,
         source: &MeshAsset,
-        format: wgpu::TextureFormat,
-        capacity: usize,
-        quality: thessa_graphics::Quality,
-        reflections: bool,
-        shadows: Option<&crate::shadows::ShadowAtlas>,
+        settings: SurfaceSettings<'_>,
     ) -> Result<Self, BackendError> {
+        let SurfaceSettings {
+            format,
+            capacity,
+            quality,
+            reflections,
+            shadows,
+            ray_tracing,
+        } = settings;
         source.validate().map_err(fail)?;
+        // Feasibility (device feature, scene sizes, RT memory budget) is
+        // decided before the pipeline exists, because the shader include
+        // depends on it.
+        let rt = crate::ray_scene::plan(backend, source, ray_tracing, capacity);
+        let rt_reason = match &rt {
+            crate::ray_scene::Enable::Unavailable(reason) => Some(reason.clone()),
+            _ => None,
+        };
         let device = &backend.device;
         if capacity == 0
             || capacity > 65536
@@ -193,11 +238,16 @@ impl MeshRenderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let rt_include = match &rt {
+            crate::ray_scene::Enable::Ready(plan) => crate::ray_scene::shader(plan),
+            _ => crate::ray_scene::FALLBACK.to_string(),
+        };
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("owned-mesh"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}",
+                    rt_include,
                     thessa_rcbt_core::shaders::OCEAN_WGSL,
                     shadows.map_or_else(
                         || crate::shadows::NO_SHADOWS.into(),
@@ -387,7 +437,18 @@ impl MeshRenderer {
                 material: p.material,
             })
             .collect();
+        let rt = match rt {
+            crate::ray_scene::Enable::Ready(plan) => Some(crate::ray_scene::RayScene::new(
+                backend,
+                plan,
+                &pipeline.get_bind_group_layout(3),
+                source,
+            )?),
+            _ => None,
+        };
         Ok(Self {
+            rt,
+            rt_reason,
             shadow_receiver: shadows
                 .map(|s| s.receiver(backend, &pipeline.get_bind_group_layout(2))),
             shadow_caster: shadows.map(|s| {
@@ -484,16 +545,29 @@ impl MeshRenderer {
         for (i, range) in self.ranges.iter_mut().enumerate() {
             *range = ranges.map_or(0..self.count, |ranges| ranges[i].clone());
         }
+        if let Some(rt) = &mut self.rt {
+            rt.update(
+                &backend.queue,
+                view.world_position_m,
+                instances,
+                &self.ranges,
+            )?;
+        }
         Ok(())
     }
     pub fn encode(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
     ) {
         if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
             return;
+        }
+        // Acceleration-structure builds are encoder-level state and must
+        // precede the pass that traces them.
+        if let Some(rt) = &mut self.rt {
+            rt.encode(encoder);
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("owned-rigid-mesh"),
@@ -522,6 +596,9 @@ impl MeshRenderer {
         pass.set_bind_group(0, &self.global, &[]);
         if let Some(receiver) = &self.shadow_receiver {
             pass.set_bind_group(2, receiver, &[]);
+        }
+        if let Some(rt) = &self.rt {
+            pass.set_bind_group(3, rt.bind_group(), &[]);
         }
         for (p, range) in self.primitives.iter().zip(&self.ranges) {
             if range.is_empty() {

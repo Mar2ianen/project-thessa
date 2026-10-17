@@ -2884,6 +2884,146 @@ modeled atmospheric indirect light; no invented ambient was added to disguise
 that gap. Deterministic checks are not blind aesthetic or production-quality
 acceptance. The legacy client stays runnable during this partial migration.
 
+### Native ray-query scene reflections (2026-10-17)
+
+Branch `feat/native-surface-lighting`. This replaces the "directional-source
+and ambient reflection, not scene-object reflection" boundary above with a
+Thessa-owned ray-query reflection path for **scene objects only**. No Bevy
+dependency, new device/queue, scene copy or runtime readback was added; the RT
+scene is built from buffers the native renderer already owns.
+
+**Enablement.** `renderer.ray_tracing = "off" | "local" | "full" | "auto"`
+plus the `[raytracing]` participation/budget block (`terrain`, `vehicles`,
+`landmarks`, `atmosphere`, `clouds`, `max_distance_m`, `scene_memory_mib`,
+`max_instances`, `reflection_bounces`, `ray_bias_m`). `auto` resolves to local
+RT only when the adapter reports ray query before device creation. An explicit
+`local`/`full` request is never silently downgraded: the resolver keeps the
+request, publishes the participation flags and notes the limitation, and
+`Backend::bring_up_for_graphics` fails fast with `BackendError::Device` when
+the negotiated device lacks `EXPERIMENTAL_RAY_QUERY` (wgpu's consent-gated
+experimental feature, requested only for this case). `resolve_graphics`
+re-resolves the resolved settings against the **negotiated device**, so
+metadata/captures describe what the device actually carries rather than the
+adapter's unrequested features. `limits_for` raises the acceleration-structure
+limits only when ray query was negotiated.
+
+**Scene.** `render-wgpu::ray_scene` owns one BLAS per primitive over a
+consolidated 16-byte-stride position copy plus a 4-byte index copy, so raster
+vertex/index buffers keep their existing usage and layout. **A TLAS instance
+references a whole BLAS**, so per-primitive instancing requires per-primitive
+BLASes; a single shared BLAS placed every primitive at every instance
+transform (this was observed as a real defect before the split). TLAS
+instances are the renderer's live mesh instances filtered by the existing
+per-primitive instance ranges; the TLAS is rebuilt only when transforms,
+ranges or pairing change, the BLAS once. Scene primitives are flagged `OPAQUE`
+because a derived ray query has no any-hit stage and a non-opaque candidate
+intersection is never committed — the traversal then reports nothing at all.
+Hit `custom_data` carries the TLAS slot, and a `pairs` storage buffer returns
+the primitive plus the three rows of that instance's camera-relative 3×4
+transform, so hit points and normals leave asset-local space without depending
+on driver object-to-world conventions. The scene is rejected (with a reason)
+rather than truncated when it exceeds device limits or
+`raytracing.scene_memory_mib`; the budget counts the exact vertex/index copies
+plus bounded per-BLAS and per-instance planning terms, not the driver's own
+size query.
+
+**Shading.** `mesh.wgsl` calls one named hook, `rt_reflection(...)`. The RT
+build substitutes the `ray_scene.wgsl` implementation; the raster build
+substitutes `ray_scene::FALLBACK`, which is exactly
+`ambient / OCEAN_PI * fresnel * occlusion` — the operand order of the
+environment term it replaces, so a miss is bit-identical to the raster render
+and RT never invents sky or ambient radiance. A hit is shaded with the
+material's linear base color, metallic/roughness factors, the geometric normal
+(one-sided assets still shade their reflection) and the existing surface
+illumination model: ambient plus per-light N·L with the shared cascaded shadow
+atlas. Textures and UVs are **not** sampled in the hit path. The chain is
+single-sample mirror specular, faded to the isotropic environment term by
+`ROUGHNESS_CUTOFF = 0.6`: above it a mirror direction cannot represent the
+lobe, so the hook returns the same environment term as raster instead of
+inventing a highlight. `reflection_bounces` (default 2, clamped 1–4) bounds
+the chain. `specular_reflections = false` or `ray_tracing = "off"` allocates no
+acceleration structure, no extra shader module and performs no AS work.
+
+**Verification.** `crates/render-wgpu/tests/ray_scene.rs` pins three
+deterministic GPU oracles on the real renderer: (1) a mirror facing a red quad
+returns a red-dominant center pixel (≥32 red, <8 green/blue) where the raster
+render is black — reflection is replaced by scene geometry, not by an ambient
+highlight; (2) a ray that hits nothing reproduces the raster frame
+byte-for-byte; (3) RT off performs zero acceleration-structure work.
+`crates/render-wgpu/tests/ray_probe.rs` additionally pins the stack contract in
+isolation on a one-triangle BLAS: opaque geometry is traceable, instance
+`custom_data` round-trips, the instance transform is the row-major 3×4 affine
+the renderer writes (verified with a translation), and barycentrics/primitive
+index address the hit triangle. `rt_stats()` reports active/instances/
+triangles/bytes/passes; `rt_reason()` reports a rejection, and the native
+reporting path prints both plus the environment-only fallback.
+
+**Cost.** `cargo test --release -p thessa-render-wgpu --test ray_scene
+fixed_source_ray_query_frame_cost -- --ignored --nocapture` renders the same
+device, scene, lights and 48 MiB shadow atlas twice in one process at
+1280×720, 30 warm-up + 120 measured frames, with a screen-filling mirror quad
+over a 16-patch terrain (the assertion requires that the two configurations
+differ in more than 10,000 pixels, and they differ in all 921,600):
+
+| Same fixed source/scene | Median | p95 | RT scene |
+| --- | ---: | ---: | --- |
+| RT off | 1.078 ms | 1.181 ms | 0 B / 0 builds |
+| RT local | 2.947 ms | 5.431 ms | 1,200 B / 0 steady-state builds |
+
+That delta is a **worst-case per-pixel traversal + hit-shading** cost (every
+pixel reflects, and the hit path samples the shadow atlas), not a typical
+scene cost and not a game-FPS claim; the acceleration structure is only four
+triangles, so it does not measure BVH-size effects. Live-stream X-15 preview
+observations, 120 frames after a 3 s pre-stream, same binary/scene/machine,
+Radeon 880M/RADV Vulkan: RT off medians 11.499/11.853/12.000 ms, RT local
+medians 13.479/12.559/12.896 ms — an observed ≈ +0.7…+2.0 ms median shift on
+single runs with 0.4 ms run-to-run spread and overlapping p95/p99, reported as
+a diagnostic because it mixes terrain streaming and material populations.
+Steady state reports `as_builds = 0` (no per-frame acceleration-structure work
+when instances are static); the retained two-stage replay rebuilds the TLAS
+once per frame while poses interpolate, which is the designed behavior for
+moving bodies. The RT scene for the canonical vehicle is 2.32 MiB of
+renderer-owned buffers over 78,465 triangles.
+
+**Captures are not reflection evidence.** The preview captures with RT on and
+off differ by ≈ 20–50 pixels at ≤ 5/255, which is the same magnitude as the
+**same-config run-to-run floor** (22–53 pixels, ≤ 5/255) measured
+interleaved on this machine: these captures are not deterministic at that
+level and the delta is indistinguishable from noise. The physical reason is
+recorded rather than patched over: the canonical X-15's two materials carry
+`metallicFactor = 1, roughnessFactor = 1` with textures, while the RT hit
+record currently uses material **factors** only, so per-surface roughness
+resolves to 1.0 — above `ROUGHNESS_CUTOFF`, so the trace yields to the
+environment term for the whole aircraft. Making reflections visible on
+textured assets requires sampling base-color/roughness (and, for parity,
+normal/AO) in the RT hit path; that is the next RT slice, not a claim of this
+one. Deterministic oracles, not captures, are this slice's correctness
+evidence; no blind aesthetic review was performed.
+
+Full commands, oracle results, the negotiated-feature notes, the fixed-source
+measurement and the noise-floor analysis are in
+[`artifacts/native-ray-query-reflections-2026-10-17.json`](artifacts/native-ray-query-reflections-2026-10-17.json).
+Gates passed in this slice: fmt, workspace all-target/all-feature clippy,
+native no-default clippy, **1,839** workspace lib/bin + **61** integration
+(+6 ignored) + **24** Bevy-CBT GPU + **1** mesh-shader GPU + **8** native
+ignored GPU/server + **5** native-window tests (**1,938** distinct Rust gate
+tests: the RT oracles and the stack probe are inside the integration count),
+the release fixed-source RT diagnostic, five agent-QA tests and the
+architecture guard over its 12 guarded crates. No remote CI result is claimed.
+
+**Still missing.** Terrain, ocean, atmosphere, cloud and landmark geometry are
+not in the RT scene (`raytracing.terrain/atmosphere/clouds` remain
+participation flags without a consumer); RT shadow rays are not implemented
+(visibility still comes from the raster shadow atlas, so hits are not
+occlusion-tested against unshadowed geometry); no texture/UV/normal/AO sampling
+in the hit path; no alpha/transparent casters; no temporal or spatial
+denoising, reservoir reuse or ray-budget policy beyond the single mirror
+sample; no HDR/tonemapping/auto-exposure; mip chains, atmospheric indirect
+light, COMPLETE authored material/Bevy parity, prediction/reconciliation and
+external TCP/reconnect remain open. FastRT's ray-budget allocator, visibility
+correction and sparse RT correction are still unimplemented; this slice is a
+correct, bounded, removable step toward them.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

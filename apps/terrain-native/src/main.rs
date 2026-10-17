@@ -236,7 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         started.elapsed().as_secs_f64()
     );
     if let Some(path) = headless {
-        let backend = Backend::bring_up()?;
+        let backend = Backend::bring_up_for_graphics(&scene.requested)?;
         let target = OffscreenTarget::new(&backend, 1280, 720)?;
         let mut renderer = scene.renderer(&backend, OffscreenTarget::FORMAT)?;
         let mut mesh_renderer = scene.mesh_renderer_with_shadows(
@@ -246,10 +246,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         #[cfg(feature = "hud")]
         let mut hud = hud_enabled.then(|| hud::Hud::new(&backend, OffscreenTarget::FORMAT));
-        let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
-            &scene.requested,
-            &backend.caps,
-        );
+        let resolved = backend.resolve_graphics(&scene.requested);
         let exposure = manual_exposure(resolved.exposure_ev100);
         let stream_started = Instant::now();
         while stream_started.elapsed().as_secs_f64() < prestream_seconds {
@@ -342,7 +339,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
             );
             renderer.encode(&mut encoder, &target.color, &target.depth);
-            if let Some(mesh) = &mesh_renderer {
+            if let Some(mesh) = &mut mesh_renderer {
                 mesh.encode(&mut encoder, &target.color, &target.depth);
             }
             #[cfg(feature = "hud")]
@@ -428,12 +425,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
         println!(
-            "shadow_atlas_bytes={} shadow_passes={} material_quality={:?} specular_reflections={}; raster geometry shadows, no scene-object reflection tracing",
+            "shadow_atlas_bytes={} shadow_passes={} material_quality={:?} specular_reflections={}",
             renderer.shadows().map_or(0, |s| s.storage_bytes()),
             renderer.shadows().map_or(0, |s| s.active_passes()),
             resolved.surface_quality,
             resolved.specular_reflections
         );
+        if let Some(mesh) = mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque) {
+            let stats = mesh.rt_stats();
+            if stats.active {
+                println!(
+                    "ray_tracing=active tlas_instances={} traced_triangles={} rt_bytes={} as_builds={}; scene-object reflections through the shared shadow atlas, terrain/atmosphere/clouds stay raster",
+                    stats.instances, stats.triangles, stats.bytes, stats.passes
+                );
+            } else {
+                println!(
+                    "ray_tracing=inactive reason={}; environment-only reflection fallback",
+                    mesh.rt_reason().unwrap_or("ray tracing not requested")
+                );
+            }
+        }
         if let Some(status) = scene.flight_telemetry() {
             if server_flight {
                 println!(

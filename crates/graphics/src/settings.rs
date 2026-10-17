@@ -509,6 +509,15 @@ impl Default for EnginePlumeSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RaytracingParticipation {
+    /// Native hit-attribute/texture storage, not driver-owned AS memory.
+    #[serde(default = "default_rt_memory")]
+    pub scene_memory_mib: u32,
+    #[serde(default = "default_rt_instances")]
+    pub max_instances: u32,
+    #[serde(default = "default_rt_bounces")]
+    pub reflection_bounces: u32,
+    #[serde(default = "default_ray_bias")]
+    pub ray_bias_m: f32,
     #[serde(default = "default_true")]
     pub terrain: bool,
     #[serde(default = "default_true")]
@@ -526,11 +535,27 @@ pub struct RaytracingParticipation {
 fn default_rt_distance() -> f64 {
     500_000.0
 }
+fn default_rt_memory() -> u32 {
+    32
+}
+fn default_rt_instances() -> u32 {
+    4096
+}
+fn default_rt_bounces() -> u32 {
+    2
+}
+fn default_ray_bias() -> f32 {
+    0.01
+}
 
 impl Default for RaytracingParticipation {
     fn default() -> Self {
         Self {
             terrain: true,
+            scene_memory_mib: default_rt_memory(),
+            max_instances: default_rt_instances(),
+            reflection_bounces: default_rt_bounces(),
+            ray_bias_m: default_ray_bias(),
             vehicles: true,
             landmarks: false,
             atmosphere: true,

@@ -54,7 +54,10 @@ impl State {
             Box::new(event_loop.owned_display_handle()),
         ));
         let surface = instance.create_surface(window.clone())?;
-        let backend = Backend::for_surface(instance.clone(), &surface)?;
+        // Graphics-aware bring-up: the RT feature is negotiated here, from the
+        // requested settings, instead of appearing available from the adapter
+        // probe alone.
+        let backend = Backend::for_surface_graphics(instance.clone(), &surface, &scene.requested)?;
         let size = window.inner_size();
         let mut config = surface
             .get_default_config(&backend.adapter, size.width.max(1), size.height.max(1))
@@ -65,10 +68,7 @@ impl State {
             .into_iter()
             .find(|f| f.is_srgb())
             .ok_or("no sRGB surface format")?;
-        let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
-            &scene.requested,
-            &backend.caps,
-        );
+        let resolved = backend.resolve_graphics(&scene.requested);
         config.present_mode = if resolved.vsync {
             wgpu::PresentMode::AutoVsync
         } else {
@@ -185,10 +185,7 @@ impl State {
             hud.input
                 .handle_platform_output(&self.window, std::mem::take(&mut output.platform_output));
             if before.exposure_ev100 != controls.exposure_ev100 || before.vsync != controls.vsync {
-                let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
-                    &scene.requested,
-                    &self.backend.caps,
-                );
+                let resolved = self.backend.resolve_graphics(&scene.requested);
                 self.exposure = crate::manual_exposure(resolved.exposure_ev100);
                 let mode = if resolved.vsync {
                     wgpu::PresentMode::AutoVsync
@@ -245,7 +242,7 @@ impl State {
                 .and_then(crate::scene::SceneMeshes::opaque),
         );
         self.renderer.encode(&mut encoder, &color, &self.depth);
-        if let Some(mesh) = &self.mesh_renderer {
+        if let Some(mesh) = &mut self.mesh_renderer {
             mesh.encode(&mut encoder, &color, &self.depth);
         }
         #[cfg(feature = "hud")]

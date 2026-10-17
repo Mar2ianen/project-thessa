@@ -907,10 +907,7 @@ impl Scene {
                 page: self.stream.height(key).unwrap().page,
             })
             .collect();
-        let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
-            &self.requested,
-            &backend.caps,
-        );
+        let resolved = backend.resolve_graphics(&self.requested);
         let mut renderer = TerrainRenderer::with_capacity_and_lighting(
             backend,
             &patches,
@@ -1810,7 +1807,7 @@ mod tests {
         scene
             .update_mesh(&backend, &mut mesh, 257, 257, exposure)
             .unwrap();
-        let render = |with_mesh: bool| {
+        let mut render = |with_mesh: bool| {
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             terrain.encode(&mut encoder, &target.color, &target.depth);
             if with_mesh {

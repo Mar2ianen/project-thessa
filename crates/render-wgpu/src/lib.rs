@@ -37,6 +37,7 @@ use thessa_graphics::Capabilities;
 
 pub mod material;
 pub mod mesh;
+pub mod ray_scene;
 pub mod shadows;
 pub mod terrain;
 pub mod view;
@@ -80,6 +81,27 @@ pub struct Backend {
     pub caps: Capabilities,
 }
 
+/// Device limits for one bring-up. Byte-identical to `Limits::default()`
+/// unless ray tracing was negotiated, in which case the acceleration-structure
+/// budgets come from the adapter instead of staying at the zero-valued
+/// defaults (which would reject any RT pipeline at layout derivation).
+fn limits_for(adapter: &wgpu::Adapter, features: wgpu::Features) -> wgpu::Limits {
+    let mut limits = wgpu::Limits::default();
+    if !features.contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {
+        return limits;
+    }
+    let caps = adapter.limits();
+    limits.max_acceleration_structures_per_shader_stage =
+        caps.max_acceleration_structures_per_shader_stage;
+    limits.max_blas_primitive_count = caps.max_blas_primitive_count;
+    limits.max_blas_geometry_count = caps.max_blas_geometry_count;
+    limits.max_tlas_instance_count = caps.max_tlas_instance_count;
+    limits.max_buffers_and_acceleration_structures_per_shader_stage = limits
+        .max_buffers_and_acceleration_structures_per_shader_stage
+        .max(caps.max_buffers_and_acceleration_structures_per_shader_stage);
+    limits
+}
+
 impl Backend {
     /// Headless bring-up on the high-performance adapter. Succeeds anywhere
     /// a wgpu adapter exists; returns [`BackendError::NoAdapter`] otherwise.
@@ -99,7 +121,7 @@ impl Backend {
 
     fn bring_up_inner(consent: Option<wgpu::ExperimentalFeatures>) -> Result<Self, BackendError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        Self::request(instance, None, consent)
+        Self::request(instance, None, consent, None)
     }
 
     /// Stable device selected for a caller-owned window surface. The platform
@@ -109,13 +131,42 @@ impl Backend {
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
     ) -> Result<Self, BackendError> {
-        Self::request(instance, Some(surface), None)
+        Self::request(instance, Some(surface), None, None)
+    }
+
+    pub fn bring_up_for_graphics(
+        requested: &thessa_graphics::RequestedGraphics,
+    ) -> Result<Self, BackendError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Self::request(instance, None, None, Some(requested))
+    }
+    pub fn for_surface_graphics(
+        instance: wgpu::Instance,
+        surface: &wgpu::Surface<'_>,
+        requested: &thessa_graphics::RequestedGraphics,
+    ) -> Result<Self, BackendError> {
+        Self::request(instance, Some(surface), None, Some(requested))
+    }
+    /// Capability resolution must describe the negotiated device, not just
+    /// the adapter's unrequested experimental features.
+    pub fn resolve_graphics(
+        &self,
+        requested: &thessa_graphics::RequestedGraphics,
+    ) -> thessa_graphics::ResolvedGraphicsSettings {
+        let mut caps = self.caps;
+        caps.ray_query_supported = Some(
+            self.device
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
+        );
+        thessa_graphics::ResolvedGraphicsSettings::from_requested(requested, &caps)
     }
 
     fn request(
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
         consent: Option<wgpu::ExperimentalFeatures>,
+        graphics: Option<&thessa_graphics::RequestedGraphics>,
     ) -> Result<Self, BackendError> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -126,7 +177,7 @@ impl Backend {
         }))
         .map_err(|_| BackendError::NoAdapter)?;
         let info = adapter.get_info();
-        let (features, experimental) = match consent {
+        let (mut features, mut experimental) = match consent {
             Some(token) => (thessa_wgpu_exp::supported_experimental(&adapter), token),
             // Stable-only: experimental consent is never taken implicitly.
             None => (
@@ -134,10 +185,30 @@ impl Backend {
                 wgpu::ExperimentalFeatures::disabled(),
             ),
         };
+        if let Some(settings) = graphics {
+            use thessa_graphics::RayTracingRequest;
+            let supported = adapter
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+            let forced = matches!(
+                settings.renderer.ray_tracing,
+                RayTracingRequest::Local | RayTracingRequest::Full
+            );
+            if forced && !supported {
+                return Err(BackendError::Device("explicit native RT requested, adapter lacks ray query; use ray_tracing=off or auto".into()));
+            }
+            if supported
+                && settings.renderer.ray_tracing != RayTracingRequest::Off
+                && (settings.renderer.specular_reflections || settings.shadows.enabled)
+            {
+                features |= wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+                experimental = thessa_wgpu_exp::experimental_consent();
+            }
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("thessa-render-backend"),
             required_features: features,
-            required_limits: wgpu::Limits::default(),
+            required_limits: limits_for(&adapter, features),
             experimental_features: experimental,
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,

@@ -65,7 +65,7 @@ fn camera(origin: DVec3) -> ViewParams {
         exposure: 0.5,
     }
 }
-fn draw(backend: &Backend, mesh: &MeshRenderer, terrain: Option<&TerrainRenderer>) -> Vec<u8> {
+fn draw(backend: &Backend, mesh: &mut MeshRenderer, terrain: Option<&TerrainRenderer>) -> Vec<u8> {
     let target = OffscreenTarget::new(backend, 129, 129).unwrap();
     let mut encoder = backend.device.create_command_encoder(&Default::default());
     if let Some(terrain) = terrain {
@@ -148,14 +148,17 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
         ..Default::default()
     };
     let mesh_source = source();
-    let mut mesh = MeshRenderer::with_surface_settings(
+    let mut mesh = MeshRenderer::with_surface(
         &backend,
         &mesh_source,
-        OffscreenTarget::FORMAT,
-        1,
-        Quality::Medium,
-        false,
-        terrain.shadows(),
+        thessa_render_wgpu::mesh::SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 1,
+            quality: Quality::Medium,
+            reflections: false,
+            shadows: terrain.shadows(),
+            ray_tracing: None,
+        },
     )
     .unwrap();
     let sample =
@@ -175,7 +178,7 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
             }],
         )
         .unwrap();
-        let image = draw(&backend, &mesh, Some(&terrain));
+        let image = draw(&backend, &mut mesh, Some(&terrain));
         let blocked = sample(&image, 36);
         let clear = sample(&image, 64);
         assert!(
@@ -224,21 +227,24 @@ fn pbr_uses_linear_metal_roughness_maps_and_reflection_disable_has_no_hidden_spe
         rotation: DQuat::IDENTITY,
         scale: 1.0,
     };
-    let render = |source: &MeshAsset, quality, reflections| {
-        let mut renderer = MeshRenderer::with_surface_settings(
+    let render = |source: &MeshAsset, quality: Quality, reflections: bool| {
+        let mut renderer = MeshRenderer::with_surface(
             &backend,
             source,
-            OffscreenTarget::FORMAT,
-            1,
-            quality,
-            reflections,
-            None,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality,
+                reflections,
+                shadows: None,
+                ray_tracing: None,
+            },
         )
         .unwrap();
         renderer
             .update(&backend, &camera(DVec3::ZERO), &light, &[instance])
             .unwrap();
-        draw(&backend, &renderer, None)
+        draw(&backend, &mut renderer, None)
     };
     let center = |bytes: &[u8]| bytes[(64 * 129 + 64) * 4..(64 * 129 + 64) * 4 + 3].to_vec();
     assert_eq!(
@@ -332,14 +338,17 @@ fn resident_terrain_casts_onto_mesh_without_using_the_camera_visibility_list() {
     };
     let mut source = source();
     source.primitives.truncate(1);
-    let mut mesh = MeshRenderer::with_surface_settings(
+    let mut mesh = MeshRenderer::with_surface(
         &backend,
         &source,
-        OffscreenTarget::FORMAT,
-        1,
-        Quality::Medium,
-        false,
-        terrain.shadows(),
+        thessa_render_wgpu::mesh::SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 1,
+            quality: Quality::Medium,
+            reflections: false,
+            shadows: terrain.shadows(),
+            ray_tracing: None,
+        },
     )
     .unwrap();
     let view = camera(origin);
@@ -356,7 +365,7 @@ fn resident_terrain_casts_onto_mesh_without_using_the_camera_visibility_list() {
         }],
     )
     .unwrap();
-    let image = draw(&backend, &mesh, Some(&terrain));
+    let image = draw(&backend, &mut mesh, Some(&terrain));
     let pixel = |x: usize| image[(64 * 129 + x) * 4];
     assert!(
         pixel(36) < 10,
@@ -370,7 +379,7 @@ fn resident_terrain_casts_onto_mesh_without_using_the_camera_visibility_list() {
     );
     // Retire the page: stale generated vertex slots must no longer cast.
     terrain.publish_partition(&backend, &[]).unwrap();
-    let retired = draw(&backend, &mesh, Some(&terrain));
+    let retired = draw(&backend, &mut mesh, Some(&terrain));
     assert!(retired[(64 * 129 + 36) * 4] > 100);
 }
 
@@ -395,14 +404,17 @@ fn normal_maps_change_the_tangent_frame_and_ao_only_attenuates_indirect_light() 
         ..Default::default()
     };
     let render = |source: &MeshAsset, lights: &SurfaceLighting| {
-        let mut mesh = MeshRenderer::with_surface_settings(
+        let mut mesh = MeshRenderer::with_surface(
             &backend,
             source,
-            OffscreenTarget::FORMAT,
-            1,
-            Quality::High,
-            false,
-            None,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality: Quality::High,
+                reflections: false,
+                shadows: None,
+                ray_tracing: None,
+            },
         )
         .unwrap();
         mesh.update(
@@ -416,7 +428,7 @@ fn normal_maps_change_the_tangent_frame_and_ao_only_attenuates_indirect_light() 
             }],
         )
         .unwrap();
-        draw(&backend, &mesh, None)
+        draw(&backend, &mut mesh, None)
     };
     let direct = render(&source, &lights);
     source.textures.push(Texture {
@@ -501,14 +513,17 @@ fn fixed_source_shadow_frame_cost() {
         terrain.update_view(&backend, &view).unwrap();
         terrain.update_lighting(&backend, &lights).unwrap();
         terrain.update_shadows(&backend, origin, &lights).unwrap();
-        let mut mesh = MeshRenderer::with_surface_settings(
+        let mut mesh = MeshRenderer::with_surface(
             &backend,
             &source,
-            OffscreenTarget::FORMAT,
-            64,
-            Quality::High,
-            true,
-            terrain.shadows(),
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 64,
+                quality: Quality::High,
+                reflections: true,
+                shadows: terrain.shadows(),
+                ray_tracing: None,
+            },
         )
         .unwrap();
         mesh.update(&backend, &view, &lights, &instances).unwrap();

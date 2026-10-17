@@ -151,6 +151,11 @@ impl Capabilities {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    pub rt_scene_memory_bytes: u64,
+    pub rt_max_instances: u32,
+    pub rt_reflection_bounces: u32,
+    pub rt_reflection_samples: u32,
+    pub rt_ray_bias_m: f32,
     pub surface_quality: Quality,
     pub specular_reflections: bool,
     pub native_shadow_map_size: u32,
@@ -321,6 +326,21 @@ impl ResolvedGraphicsSettings {
         }
         Self {
             preset_label: requested.effective_preset_label().to_string(),
+            rt_scene_memory_bytes: u64::from(requested.raytracing.scene_memory_mib.clamp(1, 128))
+                * 1024
+                * 1024,
+            rt_max_instances: requested.raytracing.max_instances.clamp(1, 16384),
+            rt_reflection_bounces: requested.raytracing.reflection_bounces.clamp(1, 4),
+            rt_reflection_samples: match requested.renderer.surface_quality {
+                Quality::Low => 1,
+                Quality::Medium => 2,
+                Quality::High => 4,
+            },
+            rt_ray_bias_m: if requested.raytracing.ray_bias_m.is_finite() {
+                requested.raytracing.ray_bias_m.clamp(0.0001, 1.0)
+            } else {
+                0.01
+            },
             native_shadow_map_size,
             shadow_filter_radius: match requested.shadows.quality {
                 Quality::Low => 0,
@@ -578,6 +598,18 @@ impl ResolvedGraphicsSettings {
             "rt_max_distance_m".to_string(),
             format!("{:.0}", self.rt_max_distance_m),
         );
+        map.insert(
+            "rt_scene_memory_bytes".to_string(),
+            self.rt_scene_memory_bytes.to_string(),
+        );
+        map.insert(
+            "rt_max_instances".to_string(),
+            self.rt_max_instances.to_string(),
+        );
+        map.insert(
+            "rt_reflection_bounces".to_string(),
+            self.rt_reflection_bounces.to_string(),
+        );
         map.insert("shadows".to_string(), self.shadow_enabled.to_string());
         map.insert(
             "shadow_cascades".to_string(),
@@ -765,6 +797,43 @@ mod tests {
             requested
         );
         assert_eq!(resolved.as_meta_map()["specular_reflections"], "false");
+    }
+
+    #[test]
+    fn rt_scene_budget_instances_bounces_and_bias_are_clamped_and_round_trip() {
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.ray_tracing = RayTracingRequest::Local;
+        requested.raytracing.scene_memory_mib = 0;
+        requested.raytracing.max_instances = 0;
+        requested.raytracing.reflection_bounces = 99;
+        requested.raytracing.ray_bias_m = -1.0;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(resolved.rt_scene_memory_bytes, 1024 * 1024);
+        assert_eq!(resolved.rt_max_instances, 1);
+        assert_eq!(resolved.rt_reflection_bounces, 4);
+        assert_eq!(resolved.rt_ray_bias_m, 0.0001);
+        assert!(resolved.rt_vehicles);
+        assert_eq!(
+            resolved.as_meta_map()["rt_scene_memory_bytes"],
+            (1024 * 1024).to_string()
+        );
+        // Explicit RT on an incapable adapter stays visible and is not
+        // silently downgraded; the device path fails fast instead.
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.ray_tracing = RayTracingRequest::Full;
+        let resolved = ResolvedGraphicsSettings::from_requested(
+            &requested,
+            &Capabilities {
+                ray_query_supported: Some(false),
+                ..Capabilities::unknown()
+            },
+        );
+        assert_eq!(resolved.ray_tracing, ResolvedRayTracing::Full);
+        // An explicit request is not silently downgraded to raster: the
+        // participation flags stay set and the device path fails fast.
+        assert!(resolved.rt_vehicles);
+        assert!(resolved.notes.iter().any(|n| n.contains("lacks ray query")));
     }
 
     #[test]

@@ -117,6 +117,13 @@ landmarks = false
 atmosphere = true # ray-aware transmittance/sky queries where supported
 clouds = false
 max_distance_m = 500000.0
+# Native RT scene: consolidated geometry, hit tables and TLAS instances are
+# budgeted here; driver-owned acceleration-structure memory is additional.
+scene_memory_mib = 32
+max_instances = 4096
+# Specular chain length for object reflections (1 = single mirror bounce).
+reflection_bounces = 2
+ray_bias_m = 0.01
 
 [shadows]
 # Sun shadow cascade cover for the raster path (RT lighting ignores it).

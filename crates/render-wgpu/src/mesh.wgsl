@@ -60,7 +60,7 @@ struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>
     if (material.quality!=0u) { fresnel=f0+(vec3(1.0)-f0)*pow(1.0-max(dot(normal,eye),0.0),5.0); }
     var radiance=(vec3(1.0)-fresnel)*(1.0-metallic)*albedo*(illuminance-light.ambient.rgb*(1.0-ao))/OCEAN_PI;
     if (material.reflections!=0u) {
-        radiance+=light.ambient.rgb/OCEAN_PI*fresnel*ao;
+        radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
         for (var i=0u;i<3u;i++) {
             if (any(light.colors[i].rgb>vec3(0.0))) {
                 radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,light.colors[i].rgb,roughness,f0)*shadow_visibility(in.position,normal,i);

@@ -73,8 +73,9 @@ impl Track {
 /// Bounds are game wire/graphics policy, not a second GPU backend or pass.
 pub struct SceneMeshes {
     shadows: Option<thessa_render_wgpu::shadows::ShadowAtlas>,
-    surface_quality: thessa_graphics::Quality,
-    reflections: bool,
+    /// Resolved against the *negotiated* device, so an RT feature that was
+    /// not requested at device creation cannot appear as available here.
+    resolved: thessa_graphics::ResolvedGraphicsSettings,
     inner: Option<MeshRenderer>,
     format: wgpu::TextureFormat,
     enabled: bool,
@@ -244,30 +245,34 @@ impl SceneMeshes {
         format: wgpu::TextureFormat,
         shadows: Option<&thessa_render_wgpu::shadows::ShadowAtlas>,
     ) -> Result<Self, BackendError> {
-        let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
-            &scene.requested,
-            &backend.caps,
+        let resolved = backend.resolve_graphics(&scene.requested);
+        let (quality, enabled, min_pixels) = (
+            resolved.surface_quality,
+            resolved.fleet_meshes,
+            resolved.fleet_min_pixels,
         );
         Ok(Self {
             shadows: shadows.cloned(),
-            surface_quality: resolved.surface_quality,
-            reflections: resolved.specular_reflections,
             inner: if scene.server_flight() {
                 None
             } else {
-                Some(MeshRenderer::with_surface_settings(
+                Some(MeshRenderer::with_surface(
                     backend,
                     source,
-                    format,
-                    1,
-                    resolved.surface_quality,
-                    resolved.specular_reflections,
-                    shadows,
+                    thessa_render_wgpu::mesh::SurfaceSettings {
+                        format,
+                        capacity: 1,
+                        quality,
+                        reflections: resolved.specular_reflections,
+                        shadows,
+                        ray_tracing: Some(&resolved),
+                    },
                 )?)
             },
+            resolved,
             format,
-            enabled: resolved.fleet_meshes,
-            min_pixels: resolved.fleet_min_pixels,
+            enabled,
+            min_pixels,
             revision: 0,
             source_geometry: None,
             observed_updates: 0,
@@ -297,12 +302,12 @@ impl SceneMeshes {
         self.inner.as_ref()
     }
     pub fn encode(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
     ) {
-        if let Some(inner) = &self.inner {
+        if let Some(inner) = &mut self.inner {
             inner.encode(encoder, color, depth);
         }
     }
@@ -367,14 +372,17 @@ impl SceneMeshes {
                 let inner = if source.primitives.is_empty() {
                     None
                 } else {
-                    Some(MeshRenderer::with_surface_settings(
+                    Some(MeshRenderer::with_surface(
                         backend,
                         &source,
-                        self.format,
-                        64,
-                        self.surface_quality,
-                        self.reflections,
-                        self.shadows.as_ref(),
+                        thessa_render_wgpu::mesh::SurfaceSettings {
+                            format: self.format,
+                            capacity: 64,
+                            quality: self.resolved.surface_quality,
+                            reflections: self.resolved.specular_reflections,
+                            shadows: self.shadows.as_ref(),
+                            ray_tracing: Some(&self.resolved),
+                        },
                     )?)
                 };
                 if self.inner.is_some() || inner.is_some() {

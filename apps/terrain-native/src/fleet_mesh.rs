@@ -328,6 +328,13 @@ impl SceneMeshes {
         }
         Ok(())
     }
+    pub fn encode_rt(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(inner) = &mut self.inner {
+            inner.encode_rt(encoder);
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,

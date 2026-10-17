@@ -8,6 +8,13 @@ mapping, telemetry frames, and server snapshot path are implemented in
 simulation state. Contact debug visualization lives in
 `apps/client/src/contact_gizmos.rs`.
 
+The Bevy-free native viewer now has a distinct aircraft /FDAI-inspired
+spacecraft deck and an app-owned native-pixel GPU navball, with shared
+surface-frame/telemetry inputs. `[instruments]` settings do not select a control
+law. See [doc 57](57_NATIVE_FLIGHT_DECK.md) for the current native scope,
+representation comparison, tests and costs. The controls below still describe
+the legacy prototype; they are not a claim of native input/UI parity.
+
 ## 10.1. Modes and controls
 
 | Input | Current action |

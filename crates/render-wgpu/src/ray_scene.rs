@@ -522,9 +522,11 @@ pub struct RayScene {
     vertex_stride: u64,
     placements: Vec<Placement>,
     transforms: Vec<[f32; 12]>,
+    candidate_transforms: Vec<[f32; 12]>,
     previous: Vec<[f32; 12]>,
     /// Primitive (and BLAS) index per TLAS slot, and the shader-side pairing.
     primitives: Vec<u32>,
+    candidate_primitives: Vec<u32>,
     previous_primitives: Vec<u32>,
     pairs: Option<wgpu::Buffer>,
     built: bool,
@@ -759,8 +761,10 @@ impl RayScene {
             vertex_stride: plan.vertex_stride,
             placements: plan.placements,
             transforms: Vec::new(),
+            candidate_transforms: Vec::new(),
             previous: Vec::new(),
             primitives: Vec::new(),
+            candidate_primitives: Vec::new(),
             previous_primitives: Vec::new(),
             pairs,
             built: false,
@@ -826,8 +830,9 @@ impl RayScene {
     }
 
     /// Refresh TLAS instances from the renderer's live instances and the
-    /// per-primitive instance ranges. Invalid transforms are rejected before
-    /// any state changes; an unchanged transform list costs no rebuild.
+    /// per-primitive instance ranges. Invalid candidates leave the published
+    /// state (including a pending valid update) intact; unchanged lists rebuild
+    /// nothing. Only private, reusable staging buffers change on rejection.
     pub fn update(
         &mut self,
         _queue: &wgpu::Queue,
@@ -838,26 +843,37 @@ impl RayScene {
         if ranges.len() != self.placements.len() {
             return Err(BackendError::Device("RT range count mismatch".into()));
         }
-        self.transforms.clear();
-        self.primitives.clear();
+        if !camera_m.is_finite() {
+            return Err(BackendError::Device("invalid RT camera origin".into()));
+        }
+        // Staging capacity is reused. An error leaves the published lists,
+        // camera, counters and any pending successful update intact, so callers
+        // may still encode the last valid state before attempting recovery.
+        self.candidate_transforms.clear();
+        self.candidate_primitives.clear();
         for (primitive, range) in ranges.iter().enumerate().filter(|_| self.mesh_enabled) {
+            if range.start > range.end || range.end as usize > instances.len() {
+                return Err(BackendError::Device(
+                    "RT instance range out of bounds".into(),
+                ));
+            }
             for i in range.clone() {
-                let Some(instance) = instances.get(i as usize) else {
-                    return Err(BackendError::Device("RT instance out of bounds".into()));
-                };
+                if self.candidate_transforms.len() == self.tlas.get().len() {
+                    return Err(BackendError::Device("RT instance capacity exceeded".into()));
+                }
+                let instance = &instances[i as usize];
                 let matrix = instance
                     .camera_relative_matrix(camera_m)
                     .ok_or_else(|| BackendError::Device("invalid RT instance transform".into()))?;
                 let (r0, r1, r2) = (matrix.row(0), matrix.row(1), matrix.row(2));
-                self.transforms.push([
+                self.candidate_transforms.push([
                     r0.x, r0.y, r0.z, r0.w, r1.x, r1.y, r1.z, r1.w, r2.x, r2.y, r2.z, r2.w,
                 ]);
-                self.primitives.push(primitive as u32);
+                self.candidate_primitives.push(primitive as u32);
             }
         }
-        if self.transforms.len() > self.tlas.get().len() {
-            return Err(BackendError::Device("RT instance capacity exceeded".into()));
-        }
+        std::mem::swap(&mut self.transforms, &mut self.candidate_transforms);
+        std::mem::swap(&mut self.primitives, &mut self.candidate_primitives);
         self.mesh_count = self.transforms.len();
         self.camera_m = camera_m;
         self.passes = 0;
@@ -1001,4 +1017,131 @@ fn f32_bytes(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
 
 fn u32_bytes(values: impl IntoIterator<Item = u32>) -> Vec<u8> {
     values.into_iter().flat_map(u32::to_le_bytes).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{DQuat, DVec3};
+    use thessa_render_core::mesh::{Material, Primitive, Vertex};
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // One instance range per primitive.
+    fn rejected_update_preserves_published_and_pending_state_and_allows_recovery() {
+        let mut request = thessa_graphics::RequestedGraphics::default();
+        request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Local;
+        let backend = match Backend::bring_up_for_graphics(&request) {
+            Ok(b) => b,
+            Err(BackendError::NoAdapter) => return,
+            Err(BackendError::Device(reason)) if reason.contains("lacks ray query") => return,
+            Err(e) => panic!("{e}"),
+        };
+        let settings = backend.resolve_graphics(&request);
+        let source = MeshAsset {
+            primitives: vec![Primitive {
+                vertices: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+                    .map(|position| Vertex {
+                        position,
+                        normal: [0.0, 0.0, 1.0],
+                        uv: [0.0; 2],
+                    })
+                    .to_vec(),
+                indices: vec![0, 1, 2],
+                material: 0,
+            }],
+            materials: vec![Material::default()],
+            textures: vec![],
+            images: vec![],
+        };
+        let Enable::Ready(plan) = plan(&backend, &source, Some(&settings), 2, Quality::Low, false)
+        else {
+            panic!("RT fixture not admitted")
+        };
+        let layout = backend
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("transactional-rt"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::AccelerationStructure {
+                        vertex_return: false,
+                    },
+                    count: None,
+                }],
+            });
+        let mut scene =
+            RayScene::new(&backend, *plan, &layout, &source, &mut Default::default()).unwrap();
+        let good = MeshInstance {
+            position_m: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+            scale: 1.0,
+        };
+        let mut live = [good; 3];
+        live[1].position_m = DVec3::X;
+        let submit = |scene: &mut RayScene| {
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            let passes = scene.encode(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            passes
+        };
+        scene
+            .update(&backend.queue, DVec3::ZERO, &live, &[0..2])
+            .unwrap();
+        assert_eq!(submit(&mut scene), 1);
+        for pending in [false, true] {
+            if pending {
+                live[0].position_m += DVec3::Y;
+                scene
+                    .update(&backend.queue, DVec3::ZERO, &live, &[0..2])
+                    .unwrap();
+            }
+            let before = (
+                scene.transforms.clone(),
+                scene.primitives.clone(),
+                scene.mesh_count,
+                scene.camera_m,
+                scene.passes,
+                scene.terrain_blas_builds,
+                scene.dirty,
+            );
+            let mut invalid = live;
+            invalid[1].scale = f64::NAN;
+            for (camera, instances, ranges) in [
+                (DVec3::Z, &invalid[..], vec![0..2]),
+                (DVec3::Z, &live[..], vec![0..3]),
+                (DVec3::Z, &live[..], vec![0..4]),
+                (DVec3::Z, &live[..], vec![Range { start: 2, end: 1 }]),
+                (DVec3::NAN, &live[..], vec![0..2]),
+                (DVec3::Z, &live[..], vec![]),
+            ] {
+                assert!(
+                    scene
+                        .update(&backend.queue, camera, instances, &ranges)
+                        .is_err()
+                );
+                assert_eq!(
+                    (
+                        scene.transforms.clone(),
+                        scene.primitives.clone(),
+                        scene.mesh_count,
+                        scene.camera_m,
+                        scene.passes,
+                        scene.terrain_blas_builds,
+                        scene.dirty
+                    ),
+                    before
+                );
+            }
+            assert_eq!(submit(&mut scene), u32::from(pending));
+            scene
+                .update(&backend.queue, DVec3::ZERO, &live, &[0..2])
+                .unwrap();
+            assert_eq!(
+                submit(&mut scene),
+                0,
+                "recovery must reuse the same AS state"
+            );
+        }
+    }
 }

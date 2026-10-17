@@ -48,8 +48,8 @@ impl HeadlessPerf {
                 let values = gpu.read(backend)?;
                 let names = [
                     "render.shadows",
-                    "render.terrain_and_sky",
-                    "render.mesh_and_rt",
+                    "render.rt_as_build",
+                    "render.scene_classify_and_raster",
                     "render.ui",
                 ];
                 GpuFrame {
@@ -106,7 +106,10 @@ impl HeadlessPerf {
             "requested_toml".into(),
             toml::to_string(&scene.requested).unwrap_or_default(),
         );
-        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling; terrain_and_sky includes classification; mesh_and_rt includes AS builds when dirty. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
+        meta.graphics
+            .resolved
+            .insert("gpu_scope_layout".into(), "unified-scene-v2".into());
+        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: shadows; rt_as_build (mesh/terrain AS only); scene_classify_and_raster (terrain classification then shared terrain/opaque-mesh/sky raster pass); ui. These replace the old terrain_and_sky/mesh_and_rt boundaries and are not directly comparable to those historical scopes. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);

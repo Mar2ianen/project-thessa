@@ -376,13 +376,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 1);
             }
-            renderer.encode(&mut encoder, &target.color, &target.depth);
+            if let Some(mesh) = &mut mesh_renderer {
+                mesh.encode_rt(&mut encoder);
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 2);
             }
-            if let Some(mesh) = &mut mesh_renderer {
-                mesh.encode(&mut encoder, &target.color, &target.depth);
-            }
+            renderer.encode_scene(
+                &mut encoder,
+                &target.color,
+                &target.depth,
+                mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
+            );
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 3);
             }

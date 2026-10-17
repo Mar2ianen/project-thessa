@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-18",
+  "base_commit": "1e86e72",
+  "pre_work_publication": "1e86e72 pushed to origin/feat/native-surface-lighting before this review/HUD work, as requested. Authored locally as Mar2ianen. New changes are not included in that commit.",
+  "scope": "Transactional RayScene update recovery plus a native-resolution app-owned GPU attitude sphere and aircraft/FDAI-inspired spacecraft decks. Not complete client/UI parity, a full Apollo FDAI simulation, an inertial/orbit navigation system or a new flight-control law.",
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Linux, Vulkan",
+  "concurrent_tree_boundary": "Separate renderer batching edits appeared after the pre-work push and were initially preserved. The user then requested their independent review; that follow-up, corrected GPU scopes and bounded CPU optimizations are documented in native-pipeline-review-2026-10-18.json/doc 58. Current branch observed: feat/render-pipeline-optimizations, HEAD still 1e86e72. Whole-application captures include that tree and do not isolate or attribute its work to FastNavball.",
+  "ray_scene_review": {
+    "finding": "Confirmed: clearing live transforms/primitives before late instance/capacity validation corrupts the state subsequently consumed by encode(), even when the caller tries to recover.",
+    "fix": "Reusable candidate transform/primitive vectors; validate camera, ranges, capacity and every transform; swap into live state only on complete success. No per-frame fresh candidate allocation after capacity warmup, no new GPU resource path.",
+    "regression": "Real-adapter unit test snapshots live arrays, counts, camera, pass/build counters and dirty flag for late NaN, late capacity failure, out-of-bounds/reversed/count ranges and invalid camera. Tests both built state and successful update pending encode. Invalid update never replaces that state; unchanged recovered instances produce zero AS passes.",
+    "test": "cargo test -p thessa-render-wgpu --lib rejected_update_preserves_published_and_pending_state_and_allows_recovery"
+  },
+  "instrument_contract": {
+    "math": "GPL flight-authority::navball::InstrumentFrame: f64 surface-frame orthonormal basis, body nose +X/right -Y/up +Z. Projected spin-pole north, north cross up east, heading explicitly unavailable at poles/vertical nose. Zero/invalid velocity omits prograde; rear vectors do not leak onto the visible hemisphere.",
+    "data": "Existing Scene::flight_data shared authority/kinematics supplies up, pole and surface velocity in the vehicle body frame. Native server instruments retain newest-replica telemetry versus interpolated world pose; no fabricated time-identity claim.",
+    "render": "App-owned fastnavball.rs/WGSL in the existing egui-wgpu callback/pass/device/queue. One six-vertex native-pixel quad; physical output resolution follows DPI. Changed frame/palette uploads 48 bytes, unchanged input skips upload. No CPU128 image, 30 Hz/travel throttle, per-attitude texture, scene copy/readback or intermediate scene target.",
+    "representations": "CPU128 legacy baseline; native analytic derivative-filtered graticules (auto/default); optional static R8 graticule with wrapped longitude and area-reduced mips. Wrapped angular derivatives avoid atan2 branch-cut AA/mip seams. Live labels, reticle, roll scale and surface prograde/retrograde/radial-up vectors reuse egui vectors/font.",
+    "layouts": "Aircraft blue/brown sphere with surface-speed/datum-altitude tapes and gear switch. Spacecraft black/white FDAI-inspired sphere with vertical/horizontal surface-speed decomposition, pitch/roll readouts and reaction-wheel switch. Both preserve current commands and show surface, not IAS/orbital telemetry. SIM is sample time since epoch, not a fabricated mission timer. Display changes never select a control law.",
+    "settings": "[instruments] enabled, quality, layout=aircraft|rocket, navball_renderer=auto|analytic|baked. Common graphics resolver/helper; disabled/no-data removes callback resources and draws/uploads nothing instrument-specific. Quality Low/Medium/High uses 192/256/320 logical points and optional 512/1024/2048-wide static atlases; native viewport is not a source-resolution cap.",
+    "static_bytes_R8_with_mips": [174763,699051,2796203],
+    "licensing": "No KSA/Apollo code or artwork copied; original procedural display, existing OFL font. No dependency, unsafe code, new crate or GPL-to-MIT move. Legacy Bevy instrument unchanged."
+  },
+  "initial_release_representation_diagnostic": {
+    "command": "cargo test --release -p thessa-terrain-native navball_cost_diagnostic -- --ignored --nocapture",
+    "samples": 120,
+    "warmup": 20,
+    "legacy_CPU128": {"pixel_generation_p50_ms":0.44551999999999997,"pixel_generation_p95_ms":0.871784,"upload_bytes_per_rebuild":65536,"boundary":"Pixel generation only; not upload/draw. Does not contain heading/marker feature parity with the new path."},
+    "GPU_clear_and_quad": [
+      {"mode":"analytic","physical_side":256,"GPU_p50_ms":0.009217513389587404,"GPU_p95_ms":0.010459873889923097,"host_p50_ms":0.1074,"init_host_ms":10.549221,"uniform_upload_bytes":48,"static_atlas_bytes":0},
+      {"mode":"analytic","physical_side":512,"GPU_p50_ms":0.028694519943237306,"GPU_p95_ms":0.03334335278320313,"host_p50_ms":0.133819,"init_host_ms":1.339564,"uniform_upload_bytes":48,"static_atlas_bytes":0},
+      {"mode":"baked","physical_side":256,"GPU_p50_ms":0.00841599048614502,"GPU_p95_ms":0.011742310535430909,"host_p50_ms":0.060583,"init_host_ms":74.85112600000001,"uniform_upload_bytes":48,"static_atlas_bytes":2796203},
+      {"mode":"baked","physical_side":512,"GPU_p50_ms":0.04095782036590576,"GPU_p95_ms":0.049213506271362305,"host_p50_ms":0.102671,"init_host_ms":36.571132,"uniform_upload_bytes":48,"static_atlas_bytes":2796203}
+    ],
+    "boundary": "Hardware GPU command intervals bracket clear+quad only, excluding labels/markers/egui/scene; host includes update+submit+completion but excludes timestamp readback. Different output sizes and analytic-versus-baked line filtering are not image-identical workloads. Pipeline/cache/clocks uncontrolled. Initial run precedes the wrapped-longitude-derivative fix; do not present it as the final shader's exact timing.",
+    "decision": "Auto selects analytic: baking did not consistently win both extents and adds preparation/storage. No CPU/GPU end-to-end speedup ratio, whole-renderer win or game FPS claim.",
+    "log": "/tmp/opencode/fastnavball-cost.log"
+  },
+  "initial_native_controls": {
+    "shared": "Sequential silent --flight --chase --hud --frames 120 --prestream-seconds 10, 1280x720, 30 warmup frames; RT off and shadows disabled in all four configs. Real existing local authority advances to 2.5 s. Captures precede final wrapped-derivative/pitch-label changes; these remain earlier-tree evidence.",
+    "runs": [
+      {"config":"navball-aircraft.toml","host_p50_ms":3.016777,"host_p95_ms":4.736489,"whole_UI_GPU_p50_ms":0.03149985010528565},
+      {"config":"navball-rocket.toml","host_p50_ms":2.8289470000000003,"host_p95_ms":3.666728,"whole_UI_GPU_p50_ms":0.03250175373458863},
+      {"config":"navball-baked.toml","host_p50_ms":2.8151465,"host_p95_ms":4.89265,"whole_UI_GPU_p50_ms":0.03238152529907227},
+      {"config":"navball-disabled.toml","host_p50_ms":2.8738405,"host_p95_ms":4.717303,"whole_UI_GPU_p50_ms":0.010900711486816407}
+    ],
+    "authority_identity": "All end at presentation time 2.5 s and body inertial position [4821999341525.126,110259115.18622804,192817.30653965616]; host frame includes streaming/physics/GPU completion, so sequential wall times are not an isolated navball benchmark.",
+    "raw": "target/render-batch/navball-{aircraft,rocket,baked,disabled}.{toml,png,json,csv}; /tmp/opencode/fastnavball-{aircraft,rocket,baked,disabled}.log"
+  },
+  "final_isolated_representation_diagnostic":{
+    "log":"/tmp/opencode/fastnavball-final-cost.log","samples":120,"warmup":20,
+    "legacy_CPU128":{"pixel_generation_p50_ms":0.39089799999999997,"pixel_generation_p95_ms":0.422727,"upload_bytes_per_rebuild":65536},
+    "GPU_clear_and_quad":[
+      {"mode":"analytic","physical_side":256,"GPU_p50_ms":0.008936980373382569,"GPU_p95_ms":0.012022843551635744,"host_p50_ms":0.062566,"init_host_ms":1.179146},
+      {"mode":"analytic","physical_side":512,"GPU_p50_ms":0.029295662120819094,"GPU_p95_ms":0.03318304820251465,"host_p50_ms":0.090018,"init_host_ms":0.7733300000000001},
+      {"mode":"baked","physical_side":256,"GPU_p50_ms":0.009137361099243164,"GPU_p95_ms":0.011461777519226075,"host_p50_ms":0.059301,"init_host_ms":39.919296},
+      {"mode":"baked","physical_side":512,"GPU_p50_ms":0.04191964785003663,"GPU_p95_ms":0.05133754196548462,"host_p50_ms":0.106698,"init_host_ms":36.603402}
+    ],
+    "boundary":"Final wrapped-derivative/pole-safe shader. Separate sequential GPU job after other agent GPU checks. Same clear+quad boundary as initial diagnostic, no labels/markers/egui in these GPU intervals. CPU128 is generation only and not a feature-/resolution-matched baseline. No end-to-end CPU/GPU speedup ratio. Clocks/caches not controlled; changed input uploads 48 bytes, paused unchanged input skips upload; baked High retains 2796203 static R8 mip bytes."
+  },
+  "final_native_controls":{
+    "shared":"Sequential silent 1280x720 local --flight --chase --hud, 120 samples after 30 warmup and 10 s prestream; same RT-off/shadows-disabled configs as initial controls. Final packed terrain encoder and gpu_scope_layout=unified-scene-v2. All four exited 0.",
+    "runs":[
+      {"mode":"aircraft_analytic","host_p50_ms":2.9169465,"host_p95_ms":4.406625,"whole_UI_GPU_p50_ms":0.038913936962127686},
+      {"mode":"rocket_analytic","host_p50_ms":2.7321774999999997,"host_p95_ms":3.661217,"whole_UI_GPU_p50_ms":0.036850015485763554},
+      {"mode":"rocket_baked","host_p50_ms":2.9707165,"host_p95_ms":5.0041269999999995,"whole_UI_GPU_p50_ms":0.03815249020385742},
+      {"mode":"disabled","host_p50_ms":2.6741794999999997,"host_p95_ms":4.958152,"whole_UI_GPU_p50_ms":0.016912133262634278}
+    ],
+    "authority_identity":"All end at presentation time 2.5 s and body inertial position [4821999341525.126,110259115.18622804,192817.30653965616]. These still include asynchronous streaming and other UI work, not an isolated FPS comparison.",
+    "raw":"target/render-batch/navball-{aircraft,rocket,baked,disabled}-verified.{png,json,csv}; /tmp/opencode/fastnavball-{aircraft,rocket,baked,disabled}-verified.log",
+    "visual_review":"Aircraft and spacecraft final captures inspected as implementer integration evidence, not blind preference acceptance. PRO / RETRO legend uses ASCII to avoid an unavailable circled-times font glyph."
+  },
+  "native_reproduction": {
+    "release_build": "cargo build --release -p thessa-terrain-native",
+    "command_template": "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native --flight --chase --hud --graphics target/render-batch/navball-MODE.toml --headless target/render-batch/navball-MODE-verified.png --perf-capture target/render-batch/navball-MODE-verified.json --frames 120 --prestream-seconds 10",
+    "common_config": "version=1; preset='high'; renderer.ray_tracing='off'; shadows.enabled=false; instruments.quality='high'. aircraft: layout='aircraft'/renderer='analytic'; rocket: layout='rocket'/renderer='analytic'; baked: layout='rocket'/renderer='baked'; disabled: instruments.enabled=false. The renderer key here abbreviates instruments.navball_renderer.",
+    "prerequisites": "Use the TMPDIR/CARGO_TARGET_DIR and silent audio environment listed in verification.environment. Native ignored real-server tests additionally require cargo build -p thessa-server in the same debug target directory. Run GPU diagnostic/perf captures sequentially, not against competing GPU tests."
+  },
+  "verification": {
+    "completed_before_full_workspace_run": ["143 scoped authority/graphics/render-wgpu lib tests including transactional RT recovery", "Native GPU attitude/palette/rewind/resolution/antimeridian oracle on real adapter", "Native egui flight-deck callback DPI/disabled-release/passive-controls hardware test", "Release representation diagnostic", "Release native build and four silent real-flight application controls"],
+    "initial_workspace_lib_bins": {"passed":1866,"failed":0,"ignored":42,"log":"/tmp/opencode/fastnavball-workspace-tests.log"},
+    "initial_workspace_integration": {"passed":90,"failed":0,"ignored":12,"log":"/tmp/opencode/fastnavball-workspace-integration.log"},
+    "final_workspace_lib_bins":{"passed":1867,"failed":0,"ignored":44,"log":"/tmp/opencode/pipeline-final-workspace-tests.log"},
+    "final_workspace_integration":{"passed":90,"failed":0,"ignored":14,"log":"/tmp/opencode/pipeline-final-workspace-integration.log"},
+    "workspace_clippy": {"result":"passed","command":"cargo clippy --workspace --all-targets --all-features -- -D warnings","log":"/tmp/opencode/pipeline-final-workspace-clippy.log"},
+    "format_diff_architecture_QA": "cargo fmt --all -- --check, git diff --check, 12-crate architecture guard and five agent-QA Python tests passed.",
+    "native_ignored_first_attempt": "12 passed; one real-server adoption test failed because target/debug/thessa-server was absent. This was a missing executable prerequisite, not a navball/GPU assertion. Rebuild prerequisite and sequential rerun recorded below. Debug cost diagnostics ran concurrently and are not used for performance claims.",
+    "final_hardware_checks":"Passed: 13 native ignored checks (including new navball/HUD and real-server recovery), 24 Bevy-CBT GPU checks, unified release oracle+counterbalanced diagnostic (2), origin-cache hardware test (1), perf-capture hardware regression (1), release navball diagnostic (1), four silent final native captures. Logs /tmp/opencode/pipeline-final-{native-ignored,bevy-gpu,unified-release,origin-cache,perf-capture}.log and /tmp/opencode/fastnavball-final-cost.log. Broad workspace ignored tests are not claimed as executed unless separately listed.",
+    "final_other_checks":"Passed native all-target no-default clippy with warnings denied; release application build; focused compass frame test. No outstanding final check or known doc/code mismatch is left in this scope. No new commit/push or remote CI claim.",
+    "environment": "Every cargo command: TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target. Audio-bearing tests/application runs: ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio. System audio settings unchanged.",
+    "known_gaps": ["No inertial/orbit/target/maneuver frame or orbital-normal vectors", "No full Apollo gimbal/rate/error-needle simulation", "No autopilot/assist/program panels or complete client migration", "No tiny/mobile/accessibility acceptance", "No native Bevy-adapter replacement for the legacy CPU128 instrument", "No blind aesthetic acceptance or cross-platform runtime validation", "No isolated speedup claim for concurrent batching edits"]
+  }
+}

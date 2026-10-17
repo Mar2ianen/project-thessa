@@ -661,9 +661,49 @@ impl Default for OceanSettings {
     }
 }
 
+/// Presentation layout only; independent of the active flight-control law.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstrumentLayout {
+    #[default]
+    Aircraft,
+    Rocket,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavballRenderer {
+    #[default]
+    Auto,
+    Analytic,
+    Baked,
+}
+
+/// Native instruments only. Layout never selects a flight-control law.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InstrumentSettings {
+    pub enabled: bool,
+    pub quality: Quality,
+    pub layout: InstrumentLayout,
+    pub navball_renderer: NavballRenderer,
+}
+impl Default for InstrumentSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::High,
+            layout: InstrumentLayout::Aircraft,
+            navball_renderer: NavballRenderer::Auto,
+        }
+    }
+}
+
 /// Requested graphics configuration as parsed from `graphics.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestedGraphics {
+    #[serde(default)]
+    pub instruments: InstrumentSettings,
     #[serde(default)]
     pub ocean: OceanSettings,
     #[serde(default = "default_config_version")]
@@ -699,6 +739,7 @@ fn default_config_version() -> u32 {
 impl Default for RequestedGraphics {
     fn default() -> Self {
         Self {
+            instruments: InstrumentSettings::default(),
             ocean: OceanSettings::default(),
             version: 1,
             preset: Preset::High,
@@ -918,6 +959,7 @@ impl RequestedGraphics {
                 Preset::Medium => Quality::Medium,
                 _ => Quality::High,
             };
+            self.instruments.quality = self.ocean.quality;
         }
         match preset {
             Preset::Low => {
@@ -1081,6 +1123,31 @@ mod tests {
         let config = RequestedGraphics::from_toml(text).unwrap();
         assert_eq!(config.version, 1);
         assert_eq!(config.renderer.terrain, TerrainRenderRequest::GpuAuto);
+    }
+
+    #[test]
+    fn instrument_choices_roundtrip_and_resolve_without_changing_flight_state() {
+        let request = RequestedGraphics::from_toml(
+            "[instruments]\nlayout='rocket'\nnavball_renderer='baked'\nquality='medium'\n",
+        )
+        .unwrap();
+        assert_eq!(request.instruments.layout, InstrumentLayout::Rocket);
+        let resolved = crate::resolve_instruments(request.instruments);
+        assert_eq!(resolved.atlas_width, 1024);
+        assert_eq!(resolved.diameter_points, 256);
+        let text = toml::to_string(&request).unwrap();
+        assert_eq!(RequestedGraphics::from_toml(&text).unwrap(), request);
+        let disabled = crate::resolve_instruments(InstrumentSettings {
+            enabled: false,
+            ..request.instruments
+        });
+        assert_eq!(disabled.diameter_points, 0);
+        assert_eq!(disabled.atlas_width, 0);
+        assert_eq!(
+            crate::resolve_instruments(InstrumentSettings::default()).renderer,
+            NavballRenderer::Analytic
+        );
+        assert!(RequestedGraphics::from_toml("[instruments]\nlayout='bogus'").is_err());
     }
 
     #[test]

@@ -161,10 +161,15 @@ The checked-in vertical slice currently contains:
   The live HUD also reads speed, datum/AGL altitude and vertical speed from
   the same shared kinematics the old client's instruments consume
   (reference-body readout; the old client's dominant-body display switching
-  stays out of scope), plus the shared 128 px navball sphere rendered from
-  the body-frame local up with the shipped 30 Hz/travel rebuild policy.
-  Server forwarding, assists and the mode HUD are not
-  ported yet.
+   stays out of scope). Native `[instruments]` now selects aircraft or
+   FDAI-inspired spacecraft decks with a native-pixel GPU navball, full surface
+   heading/pitch/roll and live vector cues; no 128 px/30 Hz CPU image rebuild.
+   An optional static-grid bake was measured against the default analytic path
+   ([doc 57](docs/57_NATIVE_FLIGHT_DECK.md)). Legacy Bevy retains CPU128.
+   High-level assist/autopilot panels are not ported yet. Native terrain,
+   opaque meshes and sky share one pass, with AS builds timed separately;
+   [doc 58](docs/58_NATIVE_PIPELINE_REVIEW.md) records the optimization review,
+   fixed-resident comparisons and limits of the supplied performance claims.
   `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
    chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.

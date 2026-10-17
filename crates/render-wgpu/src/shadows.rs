@@ -20,7 +20,7 @@ pub struct ShadowAtlas {
     normal_bias_m: f64,
     filter: u32,
     active: [bool; 3],
-    matrices: Vec<[f32; 16]>,
+    matrices: Option<[[f32; 16]; 12]>,
     depth_revision: u64,
 }
 
@@ -221,7 +221,7 @@ impl ShadowAtlas {
             normal_bias_m: settings.shadow_normal_bias_m,
             filter: settings.shadow_filter_radius,
             active: [false; 3],
-            matrices: Vec::new(),
+            matrices: None,
             depth_revision: 0,
         }))
     }
@@ -274,7 +274,7 @@ impl ShadowAtlas {
         if lights.records().is_none() || !camera.is_finite() {
             return Err(BackendError::Device("invalid shadow frame".into()));
         }
-        let mut matrices = vec![[0.0f32; 16]; 12];
+        let mut matrices = [[0.0f32; 16]; 12];
         let mut active = [false; 3];
         for sun in 0..3 {
             active[sun] = lights.colors_lux[sun][..3].iter().any(|&c| c > 0.0);
@@ -296,28 +296,31 @@ impl ShadowAtlas {
                 matrices[sun * self.radii.len() + i] = matrix.to_cols_array();
             }
         }
-        let encode = |values: &[f32]| {
-            values
+        if self.matrices.as_ref() != Some(&matrices) || active != self.active {
+            // Fixed shader ABI: 12 mat4s and eight scalars. Stack encoding
+            // avoids transient vectors, and cached frames serialize nothing.
+            let mut frame_bytes = [0; 800];
+            let words = matrices
                 .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<_>>()
-        };
-        let mut frame = matrices.iter().flatten().copied().collect::<Vec<_>>();
-        frame.extend((0..4).map(|i| self.radii.get(i).copied().unwrap_or(0.0) as f32));
-        frame.extend([
-            self.radii.len() as f32,
-            self.normal_bias_m as f32,
-            self.filter as f32,
-            1.0 / self.size as f32,
-        ]);
-        if matrices != self.matrices || active != self.active {
-            backend.queue.write_buffer(&self.frame, 0, &encode(&frame));
+                .flatten()
+                .copied()
+                .chain((0..4).map(|i| self.radii.get(i).copied().unwrap_or(0.0) as f32))
+                .chain([
+                    self.radii.len() as f32,
+                    self.normal_bias_m as f32,
+                    self.filter as f32,
+                    1.0 / self.size as f32,
+                ]);
+            for (chunk, val) in frame_bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+                *chunk = val.to_le_bytes();
+            }
+            backend.queue.write_buffer(&self.frame, 0, &frame_bytes);
             for (i, (_, uniform, _)) in self.layers.iter().enumerate() {
                 backend
                     .queue
-                    .write_buffer(uniform, 0, &encode(&matrices[i]));
+                    .write_buffer(uniform, 0, &frame_bytes[i * 64..(i + 1) * 64]);
             }
-            self.matrices = matrices;
+            self.matrices = Some(matrices);
             self.depth_revision = self.depth_revision.wrapping_add(1);
         }
         self.active = active;

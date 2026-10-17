@@ -850,6 +850,12 @@ pub fn describe() -> Vec<SettingMeta> {
             },
         ),
     );
+    metadata.extend([
+        ("instruments.enabled","Flight instruments",SettingKind::Bool,"true | false","No native navball draw, pipeline, atlas or attitude upload when disabled."),
+        ("instruments.quality","Instrument resolution",SettingKind::Enum,"low | medium | high","192/256/320 logical points at native display DPI; baked grid 512/1024/2048 wide."),
+        ("instruments.layout","Flight deck layout",SettingKind::Enum,"aircraft | rocket","Aircraft tapes or spacecraft FDAI-inspired deck. Never switches control law."),
+        ("instruments.navball_renderer","Navball representation",SettingKind::Enum,"auto | analytic | baked","Auto selects native-pixel analytic GPU; baked samples a one-time static graticule, not an attitude image."),
+    ].map(|(path,label,kind,range,description)|SettingMeta{path,label,kind,range,step:"-",unit:"-",advanced:false,restart_required:false,description}));
     metadata
 }
 

@@ -17,12 +17,13 @@ mod settings;
 pub use metadata::{SettingKind, SettingMeta, describe};
 pub use resolve::{
     ActiveCloudRepresentation, Capabilities, ResolvedBackend, ResolvedGraphicsSettings,
-    ResolvedMaterialStorage, ResolvedRayTracing, ResolvedTerrainRender, cloud_backend_override_env,
-    resolve_cloud_integrator,
+    ResolvedInstruments, ResolvedMaterialStorage, ResolvedRayTracing, ResolvedTerrainRender,
+    cloud_backend_override_env, resolve_cloud_integrator, resolve_instruments,
 };
 pub use settings::{
     AtmosphereSettings, AuroraQuality, BackendRequest, CloudIntegratorRequest, CloudSettings,
-    ConfigError, DebugSettings, EnginePlumeSettings, GasGiantSettings, MaterialStorageRequest,
-    OceanSettings, Preset, Quality, RayTracingRequest, RaytracingParticipation, RendererSettings,
-    RequestedGraphics, ShadowSettings, TerrainRenderRequest, UpperAtmosphereSettings,
+    ConfigError, DebugSettings, EnginePlumeSettings, GasGiantSettings, InstrumentLayout,
+    InstrumentSettings, MaterialStorageRequest, NavballRenderer, OceanSettings, Preset, Quality,
+    RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
+    ShadowSettings, TerrainRenderRequest, UpperAtmosphereSettings,
 };

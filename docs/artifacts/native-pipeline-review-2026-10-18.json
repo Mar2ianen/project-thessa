@@ -1,0 +1,84 @@
+{
+  "date":"2026-10-18",
+  "base_commit":"1e86e72",
+  "branch_observed":"feat/render-pipeline-optimizations",
+  "scope":"Review existing uncommitted serialization/shared-pass edits, repair measurement boundaries, independently test split/unified behavior, and apply bounded nearby CPU serialization/cache simplifications. Native HUD/transactional RayScene work remains in the same working tree but is documented separately.",
+  "supplied_claims":"Not trusted. The +18.2% reciprocal-median FPS, 100% visual equivalence, zero-copy and zero-hot-path-allocation claims are not accepted as demonstrated product results.",
+  "supplied_artifact_reinspection":{
+    "paths":"target/{baseline-perf,baseline-sweep-perf,unified-static-perf,unified-sweep-perf}.json and matching target/*frame.png files",
+    "scenario":"All have vehicle_preview=false live_flight=false server_flight=false hud=false prestream_s=1 sim_step_s=0; 60 measured frames after 30 warmup. No second mesh pass exists in that native scenario. Build metadata commit is unknown; background jobs remain pending. This cannot demonstrate a terrain+mesh pass-merging benefit or prove identical per-frame streaming work.",
+    "recomputed_host_medians_ms":{"baseline_static":7.4890285,"unified_static":6.8342694999999996,"baseline_sweep":18.1581285,"unified_sweep":15.3683895},
+    "static_image_diff":{"mean_absolute_channel_diff_255":0.0005976019965277777,"max_absolute_channel_diff_255":82,"changed_pixels":151,"total_pixels":921600,"changed_channels":403},
+    "sweep_image_diff":{"mean_absolute_channel_diff_255":0.18804416232638888,"max_absolute_channel_diff_255":37,"changed_pixels":79214,"total_pixels":921600,"changed_channels":213265},
+    "diff_boundary":"Pillow-decoded uint8 RGBA; absolute signed-int16 channel differences, changed-pixel mask uses any changed RGBA channel. Not a blind review. The cause of the supplied differences is not established; Early-Z was not isolated.",
+    "existing_test_gap":"surface_lighting::fixed_source_shadow_frame_cost calls terrain.encode then mesh.encode; its exact-pixel assertion compares shadow cache versus forced redraw, not the merged pass."
+  },
+  "changes":{
+    "scopes":"Five marks now bracket shadows, AS, classification+shared raster, UI. render.rt_as_build and render.scene_classify_and_raster replace historical render.terrain_and_sky/render.mesh_and_rt names. Metadata gpu_scope_layout=unified-scene-v2; no fabricated GPU time, ordinary path still constructs no profiler.",
+    "pass_contract":"Reuse existing mesh/terrain pipelines, shared targets/device/queue; prepare AS before the render pass. draw_into_pass requires matching format, Depth32Float and single-sample attachments. No-draw mesh sets skip AS work. Split encoders remain the test reference, not a separate renderer or configuration mode.",
+    "nearby_shadow_optimization":"12 fixed matrices (Option marks initial unpublished state), 800-byte stack frame only when changed; layer writes borrow its matrix slices. No transient Vec for these CPU serialization steps, but no claim about driver/queue/global hot-path allocations or zero-copy.",
+    "nearby_terrain_optimization":"One reusable staging Vec pre-sized at admitted terrain slot capacity; 112 retained CPU bytes per slot. Camera-origin changes and partition publication refill it; projection/attitude/exposure-only changes do not reserialize/upload tile anchors. Each frame is encoded as a fixed 112-byte stack record then appended once, not four bytes at a time. All fallible staging finishes before GPU publication; invalid candidates leave live camera/frame state intact."
+  },
+  "correctness":{
+    "unified_oracle":"tests/unified_scene.rs exercises actual split/unified APIs B/A/B/A on the same scene at 129 and 256 pixels, visible and empty meshes, transform changes, sky, shadow cache/forced redraw, RT off/on and spectral ocean off/on. Includes a visible foreground and uncovered-sky fixture, not only equality between blank frames.",
+    "terrain_CPU_oracle":"Exact pre-optimization inner-Vec encoder comparison over 1024 anchors at ordinary/large origins, staging pointer/capacity reuse and invalid-input recovery.",
+    "origin_cache_oracle":"Real-adapter private scratch marker verifies projection/attitude/exposure-only changes do not serialize frames, a changed origin refills the same capacity, and invalid view state is rejected without publication.",
+    "status":"First sequential release oracle passed exact pixels, including foreground and uncovered-sky observability assertions, RT/ocean on/off and empty meshes. Origin-cache hardware oracle also passed. Initial new image fixture saturated the direct specular lobe; its material was adjusted to keep the foreground-observability assertion meaningful. No split/unified byte mismatch was observed in that development failure. Final post-packed-encoding rerun is recorded below."
+  },
+  "measurement_plan":{
+    "GPU":"cargo test --release -p thessa-render-wgpu --test unified_scene fixed_resident_split_unified_cost -- --ignored --nocapture --test-threads=1; same scene/buffers, 1024 patches, 64 synthetic quads, RT off, 1280x720, static and identical moving-camera paths. First run ABAB; final run ABAB then BABA to counterbalance order drift, with 600 measured frames and 30 warmup in each block. Hardware GPU command and update-through-GPU-completion wall p50/p95/p99; uploads outside GPU interval, readback/streaming/pipeline setup outside both intervals. Not an exact old-executable or production-FPS comparison.",
+    "CPU":"cargo test --release -p thessa-render-wgpu --lib frame_serialization_cost -- --ignored --nocapture; legacy inner Vec versus supplied scalar fresh Vec versus fixed-record packed fresh Vec versus packed reusable staging, rotated order, 1024 anchors, 200 samples after 20 warmup. CPU encode only, no driver/uploads or allocator instrumentation.",
+    "environment":"TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target for every cargo command. Audio-bearing tests/captures additionally use ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio. GPU measurements run sequentially after other GPU jobs."
+  },
+  "initial_review_measurements":{
+    "first_ABAB":{"log":"/tmp/opencode/pipeline-unified-release.log","order":"split, unified, split, unified","static_GPU_p50_ms":[4.54992491368103,4.498467143280029,4.456988333026887,4.095341198993683],"moving_GPU_p50_ms":[21.12277353128815,21.304558925788882,20.817994447254183,20.12696147605133],"static_wall_p50_ms":[4.83915,4.759091,4.750124,4.313351],"moving_wall_p50_ms":[22.000964,22.291625,21.77851,20.994009000000002],"interpretation":"Static paired gains vary greatly; moving includes one small regression and one improvement. Does not substantiate supplied +18.2% game-FPS claim. This run predates fixed-record CPU packing; its GPU interval excludes uploads, but its host numbers belong to that earlier CPU encoder."},
+    "scalar_CPU_diagnostic":{"log":"/tmp/opencode/pipeline-frame-cost.log","p50_us":{"legacy_per_tile_vec":27.932,"direct_fresh_vec":36.388,"direct_reused_staging":36.237},"finding":"The supplied scalar append loop was slower in this isolated workload. Fewer allocations alone were not accepted as sufficient justification to retain it."},
+    "first_packed_CPU_diagnostic":{"log":"/tmp/opencode/pipeline-frame-cost-packed.log","p50_us":{"legacy_per_tile_vec":13.135,"supplied_scalar_fresh_vec":25.888,"packed_fresh_vec":10.87,"packed_reused_staging":10.850999999999999},"p95_us":{"legacy_per_tile_vec":13.234,"supplied_scalar_fresh_vec":26.950000000000003,"packed_fresh_vec":11.001,"packed_reused_staging":10.981},"boundary":"Within-run rotated same-workload comparison. Do not compare absolute medians across the separate runs: clocks/cache/host state differ. Exact bytes pinned independently; no allocator-wide or application-speedup claim."},
+    "gates_before_final_packing":{"workspace_lib_bins_passed":1867,"workspace_integration_passed":90,"workspace_clippy":"passed","Bevy_GPU_passed":24,"native_ignored_passed":13,"perf_capture_hardware_passed":1,"note":"The earlier server-test missing-executable prerequisite was fixed by building thessa-server, and the sequential native run passed. Final packed-encoding gates are recorded below."}
+  },
+  "final_results":{
+    "hardware":"AMD Radeon 880M Graphics (RADV STRIX1), Linux, Vulkan; radv; Mesa 26.2.4-arch1.1. Sequential agent jobs; GPU/CPU clocks, caches and desktop activity were not locked.",
+    "counterbalanced_pass_cost":{
+      "log":"/tmp/opencode/pipeline-final-unified-release.log",
+      "order":["split","unified","split","unified","unified","split","unified","split"],
+      "measured_frames_per_block":600,"warmup_per_block":30,"blocks_per_scenario":8,"total_measured_frames":9600,
+      "static":{
+        "wall_p50_ms":[4.38811,4.315505,4.349759,4.326245,4.368644,4.701594,4.380135,4.33398],
+        "wall_p95_ms":[5.825807,5.699763,6.285853,6.338161,6.252011,6.404445,6.400818,6.425613],
+        "wall_p99_ms":[6.467331,6.393124,6.468744,6.558011,6.436133,6.695427,6.984505,6.55778],
+        "GPU_p50_ms":[4.128203638034821,4.097865996139527,4.123354424468995,4.1043583316574095,4.11798422101593,4.47995196421051,4.132652090148926,4.13934480639267],
+        "GPU_p95_ms":[4.280973903430939,4.156858081832886,4.252359535778046,4.220979914108277,4.206833034862519,4.665905277809143,4.775794067871094,4.279931923656464],
+        "GPU_p99_ms":[4.536339100467682,4.236569534580231,4.299769615516663,4.283298319850922,4.258932023586274,4.778679550323487,4.90375719940567,4.350385786869049],
+        "median_of_block_GPU_medians_ms":{"split":4.133774222213745,"unified":4.11117127633667,"delta_percent":-0.5467871408073921}
+      },
+      "moving":{
+        "wall_p50_ms":[21.709842,20.616897,20.728895,20.603221,20.665548,20.659096,20.573335,20.614302],
+        "wall_p95_ms":[27.116138,26.987749,27.089829,26.583516,26.831367,26.795611,25.803073,21.347848],
+        "wall_p99_ms":[29.288843,27.72997,27.669288,27.587536,27.378987,28.061949,27.391842,22.179877],
+        "GPU_p50_ms":[20.977136819732667,19.96862062647629,20.03166040283203,19.987656795433047,20.001202532501225,19.995712100612643,19.965815296314243,19.96393171749115],
+        "GPU_p95_ms":[24.199980262184145,23.71153220482636,23.842901808700564,23.495962619945526,23.616591816913605,23.653542022762302,23.45512502801514,20.38733619123459],
+        "GPU_p99_ms":[26.806813277194976,24.42400591369629,24.55517513684464,24.278289049850464,24.478589623420717,24.619417197555542,24.221941989738465,20.829576453208926],
+        "median_of_block_GPU_medians_ms":{"split":20.013686251722337,"unified":19.978138710954667,"delta_percent":-0.17761615886534576}
+      },
+      "interpretation":"Only a small central GPU-command difference on this synthetic resident workload, with larger block/tail drift. These are medians of four per-path block medians, not pooled frame percentiles or statistically established cross-workload gains. No claim of a stable production/FPS speedup; certainly not evidence for supplied +18.2%. All final-frame RGBA comparisons matched exactly across paths."
+    },
+    "CPU_encoding":{
+      "log":"/tmp/opencode/pipeline-final-frame-cost.log","anchors":1024,"bytes":114688,"samples_per_mode":200,"warmup":20,
+      "p50_us":{"legacy_per_tile_vec":28.072,"supplied_scalar_fresh_vec":55.303,"packed_fresh_vec":23.244,"packed_reused_staging":23.174},
+      "p95_us":{"legacy_per_tile_vec":30.787,"supplied_scalar_fresh_vec":63.088,"packed_fresh_vec":25.517,"packed_reused_staging":25.187},
+      "interpretation":"Packed/staged median is about 17.45% below the legacy encoding median within this rotated same-input run; supplied scalar loop is slower. This is CPU serialization only, not frame time/FPS, allocator-wide behavior or zero-copy. Absolute CPU medians drift across runs; both packed diagnostics preserve the same within-run ordering."
+    },
+    "verification":{
+      "workspace_lib_bins":{"passed":1867,"failed":0,"ignored":44,"log":"/tmp/opencode/pipeline-final-workspace-tests.log"},
+      "workspace_integration":{"passed":90,"failed":0,"ignored":14,"log":"/tmp/opencode/pipeline-final-workspace-integration.log"},
+      "workspace_clippy":"passed --workspace --all-targets --all-features -- -D warnings; /tmp/opencode/pipeline-final-workspace-clippy.log",
+      "native_no_default_clippy":"passed --all-targets --no-default-features -- -D warnings; /tmp/opencode/pipeline-final-no-default-clippy.log",
+      "fmt":"passed cargo fmt --all -- --check; /tmp/opencode/pipeline-final-fmt.log",
+      "real_adapter_checks":{"unified_release_oracle_and_counterbalanced_diagnostic":2,"origin_cache":1,"native_ignored_including_HUD_navball_and_real_server":13,"perf_capture_new_scopes":1,"Bevy_CBT_GPU":24},
+      "GPU_logs":"/tmp/opencode/pipeline-final-{unified-release,origin-cache,native-ignored,perf-capture,bevy-gpu}.log",
+      "additional":"12-crate architecture guard and five agent-QA Python tests passed; all four silent final native instrument captures passed at identical authority epoch/body position (doc 57 artifact).",
+      "boundary":"All listed jobs actually completed with exit 0 on this machine. Ignored counts in broad workspace commands are not presented as executed; the named hardware checks above were separately run. No commit/push or remote CI result is implied."
+    }
+  },
+  "known_gaps":["No accepted supplied whole-application speedup", "No allocator-wide count or zero-copy claim", "No causal attribution of supplied PNG differences", "No blind visual preference or platform-runtime acceptance", "No complete native renderer/client replacement"]
+}

@@ -78,6 +78,7 @@ pub struct TerrainRenderer {
     ray_revisions: Vec<u64>,
     anchors: Vec<TileAnchor>,
     frames: wgpu::Buffer,
+    frame_staging: Vec<u8>,
     view: wgpu::Buffer,
     vertices: wgpu::Buffer,
     draw: wgpu::Buffer,
@@ -745,6 +746,7 @@ impl TerrainRenderer {
             ray_revisions: vec![1; capacity],
             anchors,
             frames,
+            frame_staging: frames_data,
             view,
             vertices,
             draw,
@@ -936,7 +938,11 @@ impl TerrainRenderer {
             ];
         }
         let active_extent = ids.iter().rposition(|id| *id != 0).map_or(0, |i| i + 1);
-        let frames = frame_bytes(&anchors[..active_extent], self.camera)?;
+        encode_frames(
+            &mut self.frame_staging,
+            &anchors[..active_extent],
+            self.camera,
+        )?;
         // From here all fallible validation has completed. Queue ordering keeps
         // the previous submitted draw intact and the next draw wholly new.
         if ids != self.node_ids || !dirty.is_empty() {
@@ -958,8 +964,10 @@ impl TerrainRenderer {
         backend
             .queue
             .write_buffer(&self.leaves, 0, &bytes(leaves.into_iter().flatten()));
-        if !frames.is_empty() {
-            backend.queue.write_buffer(&self.frames, 0, &frames);
+        if !self.frame_staging.is_empty() {
+            backend
+                .queue
+                .write_buffer(&self.frames, 0, &self.frame_staging);
         }
         self.anchors = anchors;
         self.node_ids = ids;
@@ -1080,14 +1088,22 @@ impl TerrainRenderer {
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
         let camera = params.world_position_m.to_array();
-        let frames = frame_bytes(&self.anchors[..self.active_extent], camera)?;
         if camera != self.camera {
+            // Projection/rotation/exposure changes do not change tile-relative
+            // anchors. Publications already upload anchors at self.camera.
+            encode_frames(
+                &mut self.frame_staging,
+                &self.anchors[..self.active_extent],
+                camera,
+            )?;
+            if !self.frame_staging.is_empty() {
+                backend
+                    .queue
+                    .write_buffer(&self.frames, 0, &self.frame_staging);
+            }
             self.invalidate_shadows();
         }
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
-        if !frames.is_empty() {
-            backend.queue.write_buffer(&self.frames, 0, &frames);
-        }
         self.camera = camera;
         Ok(())
     }
@@ -1342,13 +1358,17 @@ impl TerrainRenderer {
         )
     }
 
-    /// Encode a full GPU-owned visibility/triangle-LOD/indirect raster frame.
-    /// Target format must match construction; depth must be Depth32Float.
-    pub fn encode(
+    /// Encode a full GPU-owned visibility/triangle-LOD/indirect raster frame,
+    /// optionally drawing rigid scene meshes in the same render pass to eliminate
+    /// LoadOp::Load and attachment store/load overhead.
+    /// Color formats must match both renderers; depth is single-sample
+    /// Depth32Float. Call mesh.encode_rt() before opening this pass if present.
+    pub fn encode_scene(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
+        mesh: Option<&crate::mesh::MeshRenderer>,
     ) {
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -1365,7 +1385,7 @@ impl TerrainRenderer {
             }
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("owned-cbt-frame"),
+            label: Some("owned-unified-scene-frame"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: color,
                 depth_slice: None,
@@ -1401,11 +1421,25 @@ impl TerrainRenderer {
             pass.set_bind_group(2, ocean, &[]);
         }
         pass.draw_indirect(&self.draw, 0);
-        // Far depth, no depth writes: terrain rejects covered pixels before
-        // sky sampling; later opaque meshes still overwrite it normally.
+        if let Some(mesh) = mesh {
+            mesh.draw_into_pass(&mut pass);
+        }
+        // Far depth, no depth writes: terrain and opaque meshes reject covered
+        // pixels before sky sampling. UI remains a separate overlay pass.
         if let Some(sky) = &self.sky {
             sky.draw(&mut pass);
         }
+    }
+
+    /// Encode a full GPU-owned visibility/triangle-LOD/indirect raster frame.
+    /// Target format must match construction; depth must be Depth32Float.
+    pub fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) {
+        self.encode_scene(encoder, color, depth, None);
     }
 
     /// Diagnostic only: tile-local xyz/w followed by normal xyz/height.
@@ -1437,13 +1471,26 @@ fn ocean_height_range(page: &HeightPage) -> Option<(f64, f64)> {
 
 fn frame_bytes(anchors: &[TileAnchor], camera: [f64; 3]) -> Result<Vec<u8>, BackendError> {
     let mut out = Vec::with_capacity(anchors.len() * 112);
+    encode_frames(&mut out, anchors, camera)?;
+    Ok(out)
+}
+
+fn encode_frames(
+    out: &mut Vec<u8>,
+    anchors: &[TileAnchor],
+    camera: [f64; 3],
+) -> Result<(), BackendError> {
+    out.clear();
     for anchor in anchors {
         let frame = anchor
             .to_gpu(camera)
             .ok_or_else(|| BackendError::Device("invalid terrain frame".into()))?;
-        out.extend(bytes(frame.words().into_iter().flatten().map(f32::to_bits)));
+        // Encode one fixed shader record before extending the destination.
+        // Appending four bytes at a time inhibits bulk-store optimization.
+        let encoded = frame.words().map(|word| word.map(f32::to_le_bytes));
+        out.extend_from_slice(encoded.as_flattened().as_flattened());
     }
-    Ok(out)
+    Ok(())
 }
 
 fn tile_node_id(anchor: &TileAnchor) -> Option<u64> {
@@ -1613,3 +1660,7 @@ impl OffscreenTarget {
             .collect())
     }
 }
+
+#[cfg(test)]
+#[path = "terrain_frame_tests.rs"]
+mod frame_encoding_tests;

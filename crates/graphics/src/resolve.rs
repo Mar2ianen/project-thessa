@@ -20,6 +20,53 @@ use crate::settings::{
     BackendRequest, Quality, RayTracingRequest, RequestedGraphics, TerrainRenderRequest,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedInstruments {
+    pub enabled: bool,
+    pub layout: crate::settings::InstrumentLayout,
+    pub renderer: crate::settings::NavballRenderer,
+    pub diameter_points: u32,
+    pub atlas_width: u32,
+}
+impl Default for ResolvedInstruments {
+    fn default() -> Self {
+        resolve_instruments(Default::default())
+    }
+}
+
+/// Shared resolver for the native HUD and the full graphics settings. Both
+/// paths require only baseline portable fragment/uniform/R8 texture support.
+/// Auto selects the texture-free analytic representation; baking is opt-in.
+pub fn resolve_instruments(request: crate::settings::InstrumentSettings) -> ResolvedInstruments {
+    use crate::settings::NavballRenderer;
+    ResolvedInstruments {
+        enabled: request.enabled,
+        layout: request.layout,
+        renderer: match request.navball_renderer {
+            NavballRenderer::Auto => NavballRenderer::Analytic,
+            v => v,
+        },
+        diameter_points: if !request.enabled {
+            0
+        } else {
+            match request.quality {
+                Quality::Low => 192,
+                Quality::Medium => 256,
+                Quality::High => 320,
+            }
+        },
+        atlas_width: if !request.enabled || request.navball_renderer != NavballRenderer::Baked {
+            0
+        } else {
+            match request.quality {
+                Quality::Low => 512,
+                Quality::Medium => 1024,
+                Quality::High => 2048,
+            }
+        },
+    }
+}
+
 /// Resolved ray-tracing mode. There is no single boolean: `local` buys RT
 /// where it has the highest visual value first (spec section 18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -151,6 +198,7 @@ impl Capabilities {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    pub instruments: ResolvedInstruments,
     pub ocean: crate::settings::OceanSettings,
     pub ocean_size: u32,
     pub rt_scene_memory_bytes: u64,
@@ -327,6 +375,7 @@ impl ResolvedGraphicsSettings {
             ));
         }
         Self {
+            instruments: resolve_instruments(requested.instruments),
             ocean: requested.ocean.clone(),
             ocean_size: match requested.ocean.quality {
                 Quality::Low => 32,
@@ -566,6 +615,23 @@ impl ResolvedGraphicsSettings {
         map.insert("fleet_meshes".into(), self.fleet_meshes.to_string());
         map.insert("fleet_min_pixels".into(), self.fleet_min_pixels.to_string());
         map.insert("auto_exposure".into(), self.auto_exposure.to_string());
+        map.insert("instruments".into(), self.instruments.enabled.to_string());
+        map.insert(
+            "instrument_layout".into(),
+            format!("{:?}", self.instruments.layout).to_lowercase(),
+        );
+        map.insert(
+            "navball_diameter_points".into(),
+            self.instruments.diameter_points.to_string(),
+        );
+        map.insert(
+            "navball_atlas_width".into(),
+            self.instruments.atlas_width.to_string(),
+        );
+        map.insert(
+            "navball_renderer".into(),
+            format!("{:?}", self.instruments.renderer).to_lowercase(),
+        );
         map.insert("ocean".into(), self.ocean.enabled.to_string());
         map.insert("ocean_size".into(), self.ocean_size.to_string());
         map.insert(

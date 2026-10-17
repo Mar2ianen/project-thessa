@@ -121,6 +121,13 @@ mach_diamonds = true # visual shock-cell toggle; never changes simulation physic
 flicker = true
 light = true
 
+[instruments]
+# Native HUD only; legacy Bevy retains its CPU instrument until adapted.
+enabled = true
+quality = "high" # logical diameter 192/256/320 points, rendered at native DPI
+layout = "aircraft" # aircraft | rocket; changes display, never flight control
+navball_renderer = "auto" # auto/analytic: texture-free GPU; baked: static R8 grid
+
 [ocean]
 # Native render-only linear spectral sea; legacy Bevy keeps its analytic path.
 # Explicitly opt in: no field, deformation, textures or FFT work when disabled.

@@ -1,9 +1,12 @@
 //! App-owned egui HUD. The GPU pass loads the terrain's existing color target;
 //! it never imports/copies the scene or creates another GPU device.
 use thessa_render_wgpu::Backend;
+#[path = "fastnavball.rs"]
+mod fastnavball;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
+    pub instrument_layout: thessa_graphics::InstrumentLayout,
     pub vehicle_preview: bool,
     pub chase: bool,
     pub reset_camera: bool,
@@ -26,6 +29,7 @@ pub struct Controls {
 impl Controls {
     pub fn from_scene(scene: &crate::scene::Scene) -> Self {
         Self {
+            instrument_layout: scene.requested.instruments.layout,
             vehicle_preview: scene.vehicle_preview(),
             chase: scene.camera.chase(),
             reset_camera: false,
@@ -48,6 +52,7 @@ impl Controls {
 
     /// Graphics edits remain requests and must go through capability resolution.
     pub fn apply(self, scene: &mut crate::scene::Scene) {
+        scene.requested.instruments.layout = self.instrument_layout;
         scene.camera.set_chase(self.chase);
         if let Some(site) = self.survey_site {
             scene.select_site(site);
@@ -102,6 +107,7 @@ impl Controls {
 
 #[derive(Default)]
 pub struct Stats {
+    pub instruments: thessa_graphics::ResolvedInstruments,
     pub fleet: Option<crate::scene::FleetObserver>,
     pub live_flight: bool,
     pub server_snapshots: Option<u64>,
@@ -131,6 +137,7 @@ pub struct Stats {
 impl Stats {
     pub fn from_scene(scene: &crate::scene::Scene, frames: u64, cpu_ms: f64) -> Self {
         Self {
+            instruments: thessa_graphics::resolve_instruments(scene.requested.instruments),
             submitted_frames: frames,
             live_flight: scene.live_flight(),
             server_snapshots: scene.server_snapshot_count(),
@@ -167,9 +174,7 @@ pub struct Hud {
     pub context: egui::Context,
     renderer: egui_wgpu::Renderer,
     adapter: String,
-    navball: Option<egui::TextureHandle>,
-    navball_up: glam::DVec3,
-    navball_time_s: f64,
+    format: wgpu::TextureFormat,
 }
 
 impl Hud {
@@ -183,9 +188,7 @@ impl Hud {
                 egui_wgpu::RendererOptions::default(),
             ),
             adapter: backend.adapter_name.clone(),
-            navball: None,
-            navball_up: glam::DVec3::NAN,
-            navball_time_s: f64::NAN,
+            format,
         }
     }
 
@@ -195,35 +198,23 @@ impl Hud {
         controls: &mut Controls,
         stats: &Stats,
     ) -> egui::FullOutput {
-        // Same rebuild policy as the shipped pilot HUD: at most 30 Hz and
-        // only after real attitude travel, on presentation (not wall) time
-        // so headless captures stay deterministic.
-        use thessa_flight_authority::navball::{
-            MAX_REFRESH_HZ, NAVBALL_TEXTURE_SIZE, REBUILD_TRAVEL_SQUARED, navball_pixels,
-        };
-        if let Some(data) = stats.data {
-            let due = stats.sim_time_s - self.navball_time_s >= 1.0 / MAX_REFRESH_HZ;
-            let moved =
-                data.local_up_body.distance_squared(self.navball_up) > REBUILD_TRAVEL_SQUARED;
-            if self.navball.is_none() || (due && moved) {
-                let pixels = navball_pixels(data.local_up_body);
-                let image = egui::ColorImage::from_rgba_unmultiplied(
-                    [NAVBALL_TEXTURE_SIZE as usize, NAVBALL_TEXTURE_SIZE as usize],
-                    &pixels,
-                );
-                let handle = self.context.load_texture(
-                    "thessa-navball",
-                    image,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.navball = Some(handle);
-                self.navball_up = data.local_up_body;
-                self.navball_time_s = stats.sim_time_s;
-            }
-        } else {
-            self.navball = None;
+        let navball = stats
+            .data
+            .filter(|_| stats.live_flight && stats.instruments.enabled)
+            .map(|data| fastnavball::Paint {
+                frame: thessa_flight_authority::navball::InstrumentFrame::new(
+                    data.local_up_body,
+                    data.pole_body,
+                    data.surface_velocity_body,
+                ),
+                settings: stats.instruments,
+                format: self.format,
+            });
+        if navball.is_none() {
+            self.renderer
+                .callback_resources
+                .remove::<fastnavball::FastNavball>();
         }
-        let navball = self.navball.as_ref();
         widgets(
             &self.context,
             input,
@@ -314,11 +305,12 @@ fn widgets(
     controls: &mut Controls,
     stats: &Stats,
     adapter: &str,
-    navball: Option<&egui::TextureHandle>,
+    navball: Option<fastnavball::Paint>,
 ) -> egui::FullOutput {
     context.run_ui(input, |root| {
         let context = root.ctx();
         egui::Window::new("Thessa | terrain migration")
+            .default_open(!stats.live_flight)
             .default_pos([16.0, 16.0])
             .default_width(300.0)
             .resizable(false)
@@ -371,19 +363,7 @@ fn widgets(
                 ui.small("Host wall time, not GPU timing or game FPS.");
                 ui.separator();
                 if stats.live_flight {
-                    if let (Some(data), Some(navball)) = (stats.data, navball) {
-                        ui.horizontal(|ui| {
-                            ui.image((navball.id(), egui::vec2(96.0, 96.0)));
-                            ui.vertical(|ui| {
-                                ui.label(format!("Speed {:.1} m/s", data.surface_speed_mps));
-                                ui.label(format!(
-                                    "Alt {:.0} m (AGL {:.0} m)",
-                                    data.altitude_datum_m, data.altitude_agl_m
-                                ));
-                                ui.label(format!("V/S {:+.1} m/s", data.vertical_speed_mps));
-                            });
-                        });
-                    } else if let Some(data) = stats.data {
+                    if let Some(data) = stats.data {
                         ui.label(format!(
                             "Speed {:.1} m/s · Alt {:.0} m (AGL {:.0} m) · V/S {:+.1} m/s",
                             data.surface_speed_mps,
@@ -481,6 +461,7 @@ fn widgets(
                     "Migration viewer, not the complete game client.",
                 );
             });
+        if let (Some(navball),Some(data))=(navball,stats.data){flight_deck(context,navball,data,controls,stats);}
         if let Some(fleet) = &stats.fleet {
             egui::Window::new("Fleet | authoritative observer")
                 .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
@@ -527,6 +508,184 @@ fn widgets(
     })
 }
 
+fn flight_deck(
+    context: &egui::Context,
+    navball: fastnavball::Paint,
+    data: crate::scene::FlightData,
+    controls: &mut Controls,
+    stats: &Stats,
+) {
+    use thessa_graphics::InstrumentLayout;
+    let screen = context.content_rect();
+    let side = (navball.settings.diameter_points as f32)
+        .min((screen.height() - 85.0).max(80.0))
+        .min((screen.width() - 244.0).max(64.0));
+    egui::Area::new(egui::Id::unique("native-flight-deck"))
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
+        .show(context, |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_black_alpha(225))
+                .corner_radius(12.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut controls.instrument_layout,
+                            InstrumentLayout::Aircraft,
+                            "AIRCRAFT",
+                        );
+                        ui.selectable_value(
+                            &mut controls.instrument_layout,
+                            InstrumentLayout::Rocket,
+                            "FDAI",
+                        );
+                        ui.small("SURFACE");
+                        if stats.flight_stopped {
+                            ui.colored_label(egui::Color32::RED, "DATA FROZEN");
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(100.0);
+                            if navball.settings.layout == InstrumentLayout::Aircraft {
+                                instrument_readout(
+                                    ui,
+                                    "SURF m/s",
+                                    format!("{:06.1}", data.surface_speed_mps),
+                                );
+                                tape(ui, data.surface_speed_mps, 10.0, "m/s");
+                            } else {
+                                instrument_readout(
+                                    ui,
+                                    "VELOCITY m/s",
+                                    format!("{:06.1}", data.surface_speed_mps),
+                                );
+                                instrument_readout(
+                                    ui,
+                                    "VERT m/s",
+                                    format!("{:+.1}", data.vertical_speed_mps),
+                                );
+                                let horizontal = (data.surface_speed_mps.powi(2)
+                                    - data.vertical_speed_mps.powi(2))
+                                .max(0.0)
+                                .sqrt();
+                                instrument_readout(ui, "HORIZ m/s", format!("{horizontal:.1}"));
+                            }
+                            ui.separator();
+                            ui.small(format!("THR {:03.0}%", stats.throttle * 100.0));
+                            ui.add(
+                                egui::ProgressBar::new(stats.throttle as f32).desired_width(90.0),
+                            );
+                            ui.checkbox(&mut controls.engine, "ENGINE");
+                            ui.checkbox(&mut controls.sas, "SAS");
+                        });
+                        ui.vertical(|ui| {
+                            navball.show(ui, side);
+                            let heading = navball
+                                .frame
+                                .heading_rad
+                                .map(|a| format!("HDG {:03.0}°", a.to_degrees().rem_euclid(360.0)))
+                                .unwrap_or_else(|| "HDG —".into());
+                            ui.horizontal(|ui| {
+                                ui.monospace(heading);
+                                ui.small("PRO / RETRO");
+                            });
+                        });
+                        ui.vertical(|ui| {
+                            ui.set_width(100.0);
+                            instrument_readout(
+                                ui,
+                                "DATUM m",
+                                format!("{:07.0}", data.altitude_datum_m),
+                            );
+                            if navball.settings.layout == InstrumentLayout::Aircraft {
+                                tape(ui, data.altitude_datum_m, 100.0, "m");
+                            }
+                            instrument_readout(ui, "AGL m", format!("{:.0}", data.altitude_agl_m));
+                            if navball.settings.layout == InstrumentLayout::Aircraft {
+                                instrument_readout(
+                                    ui,
+                                    "V/S m/s",
+                                    format!("{:+.1}", data.vertical_speed_mps),
+                                );
+                            } else {
+                                instrument_readout(
+                                    ui,
+                                    "PITCH deg",
+                                    format!(
+                                        "{:+.1}",
+                                        navball.frame.up.x.clamp(-1.0, 1.0).asin().to_degrees()
+                                    ),
+                                );
+                                let roll = if navball.frame.up.y.hypot(navball.frame.up.z) > 1e-6 {
+                                    format!(
+                                        "{:+.1}",
+                                        navball.frame.up.y.atan2(navball.frame.up.z).to_degrees()
+                                    )
+                                } else {
+                                    "—".into()
+                                };
+                                instrument_readout(ui, "ROLL deg", roll);
+                            }
+                            ui.separator();
+                            ui.checkbox(&mut controls.rcs, "RCS");
+                            if navball.settings.layout == InstrumentLayout::Aircraft {
+                                ui.checkbox(&mut controls.gear, "GEAR");
+                            } else {
+                                ui.checkbox(&mut controls.wheels, "R/WHEELS");
+                            }
+                            ui.small(format!("SIM {:.1} s", stats.sim_time_s));
+                        });
+                    });
+                });
+        });
+}
+
+fn instrument_readout(ui: &mut egui::Ui, label: &str, value: String) {
+    ui.small(label);
+    ui.label(
+        egui::RichText::new(value)
+            .monospace()
+            .size(20.0)
+            .color(egui::Color32::from_rgb(195, 240, 210)),
+    );
+}
+
+fn tape(ui: &mut egui::Ui, value: f64, step: f64, unit: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(88.0, 100.0), egui::Sense::hover());
+    let painter = ui.painter();
+    let base = (value / step).floor() * step;
+    for i in -3..=3 {
+        let mark = base + i as f64 * step;
+        let y = rect.center().y - ((mark - value) / step) as f32 * 20.0;
+        if y < rect.top() + 6.0 || y > rect.bottom() - 6.0 {
+            continue;
+        }
+        painter.text(
+            egui::pos2(rect.left() + 4.0, y),
+            egui::Align2::LEFT_CENTER,
+            format!("{mark:.0}"),
+            egui::FontId::monospace(12.0),
+            egui::Color32::LIGHT_GRAY,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(rect.right() - 12.0, y),
+                egui::pos2(rect.right(), y),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::GRAY),
+        );
+    }
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.center().y),
+            egui::pos2(rect.right(), rect.center().y),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::LIGHT_GREEN),
+    );
+    ui.small(unit);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +724,7 @@ mod tests {
 
     fn controls() -> Controls {
         Controls {
+            instrument_layout: thessa_graphics::InstrumentLayout::Aircraft,
             vehicle_preview: false,
             chase: false,
             reset_camera: false,
@@ -618,12 +778,15 @@ mod tests {
     fn navball_branch_renders_without_touching_controls() {
         use crate::scene::FlightData;
         let context = context();
-        let pixels = thessa_flight_authority::navball::navball_pixels(glam::DVec3::Z);
-        let handle = context.load_texture(
-            "test-navball",
-            egui::ColorImage::from_rgba_unmultiplied([128, 128], &pixels),
-            egui::TextureOptions::LINEAR,
-        );
+        let navball = fastnavball::Paint {
+            frame: thessa_flight_authority::navball::InstrumentFrame::new(
+                glam::DVec3::Z,
+                glam::DVec3::X,
+                glam::DVec3::X,
+            ),
+            settings: Default::default(),
+            format: OffscreenTarget::FORMAT,
+        };
         let stats = Stats {
             live_flight: true,
             data: Some(FlightData {
@@ -632,6 +795,8 @@ mod tests {
                 altitude_datum_m: 602.0,
                 altitude_agl_m: 500.0,
                 local_up_body: glam::DVec3::Z,
+                pole_body: glam::DVec3::X,
+                surface_velocity_body: glam::DVec3::X * 180.0,
             }),
             ..Stats::default()
         };
@@ -643,7 +808,7 @@ mod tests {
             &mut controls,
             &stats,
             "test GPU",
-            Some(&handle),
+            Some(navball),
         )
         .drop_without_applying_deltas();
         assert_eq!(controls, before);
@@ -721,6 +886,102 @@ mod tests {
         assert!(!context.egui_wants_pointer_input());
         assert!(!context.egui_wants_keyboard_input());
         assert_eq!(controls, before);
+    }
+
+    #[test]
+    #[ignore = "requires a wgpu adapter; run on development hardware"]
+    fn gpu_flight_deck_shares_target_handles_dpi_and_releases_disabled_resources() {
+        use thessa_graphics::{InstrumentLayout, InstrumentSettings, NavballRenderer};
+        let backend = Backend::bring_up().unwrap();
+        for (layout, renderer) in [
+            (InstrumentLayout::Aircraft, NavballRenderer::Analytic),
+            (InstrumentLayout::Rocket, NavballRenderer::Baked),
+        ] {
+            let mut hud = Hud::new(&backend, OffscreenTarget::FORMAT);
+            let before = controls();
+            let mut controls = before;
+            let mut stats = Stats {
+                live_flight: true,
+                instruments: thessa_graphics::resolve_instruments(InstrumentSettings {
+                    layout,
+                    navball_renderer: renderer,
+                    ..Default::default()
+                }),
+                data: Some(crate::scene::FlightData {
+                    surface_speed_mps: 180.0,
+                    vertical_speed_mps: 2.0,
+                    altitude_datum_m: 602.0,
+                    altitude_agl_m: 500.0,
+                    local_up_body: glam::DVec3::Z,
+                    pole_body: glam::DVec3::X,
+                    surface_velocity_body: glam::DVec3::X * 180.0,
+                }),
+                ..Default::default()
+            };
+            for (width, height, scale) in [(800, 600, 1.0), (1280, 900, 1.5)] {
+                let target = OffscreenTarget::new(&backend, width, height).unwrap();
+                for _ in 0..3 {
+                    let output = hud.run(input(width, height, scale), &mut controls, &stats);
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    {
+                        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &target.color,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        });
+                    }
+                    let mut commands = hud.encode(
+                        &backend,
+                        &mut encoder,
+                        &target.color,
+                        output,
+                        [width, height],
+                    );
+                    commands.push(encoder.finish());
+                    backend.queue.submit(commands);
+                }
+                assert!(
+                    hud.renderer
+                        .callback_resources
+                        .get::<fastnavball::FastNavball>()
+                        .is_some()
+                );
+                let rgba = target.read_rgba8(&backend).unwrap();
+                assert!(
+                    rgba.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter(|p| p[0] > 80 || p[1] > 80 || p[2] > 80)
+                        .count()
+                        > 1000
+                );
+                // Outside both the collapsed debug header and bottom deck.
+                assert_eq!(
+                    &rgba[((height / 2 * width + width - 1) * 4) as usize..][..4],
+                    &[0, 0, 0, 255]
+                );
+                assert_eq!(
+                    controls, before,
+                    "passive presentation must not change flight commands"
+                );
+            }
+            stats.instruments.enabled = false;
+            hud.run(input(800, 600, 1.0), &mut controls, &stats)
+                .drop_without_applying_deltas();
+            assert!(
+                hud.renderer
+                    .callback_resources
+                    .get::<fastnavball::FastNavball>()
+                    .is_none()
+            );
+        }
     }
 
     #[test]

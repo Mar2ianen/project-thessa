@@ -122,6 +122,8 @@ pub struct FlightData {
     /// Local up in the vehicle body frame (nose +X), driving the navball.
     /// Mirrors the old client's instrument input, not a new attitude model.
     pub local_up_body: DVec3,
+    pub pole_body: DVec3,
+    pub surface_velocity_body: DVec3,
 }
 
 impl Scene {
@@ -178,6 +180,14 @@ impl Scene {
             altitude_agl_m: (altitude_datum_m - ground).max(0.0),
             local_up_body: flight.state.orientation_body_to_inertial.inverse()
                 * kinematics.radial_up,
+            pole_body: flight.state.orientation_body_to_inertial.inverse()
+                * flight
+                    .atmosphere
+                    .body_rotation_rad_s
+                    .try_normalize()
+                    .unwrap_or(DVec3::Z),
+            surface_velocity_body: flight.state.orientation_body_to_inertial.inverse()
+                * kinematics.surface_velocity_inertial_mps,
         })
     }
     pub fn vehicle_preview(&self) -> bool {
@@ -704,7 +714,7 @@ impl Scene {
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
-            let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN });
+            let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN, pole_body:DVec3::NAN,surface_velocity_body:DVec3::NAN });
             format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }
 

@@ -709,6 +709,17 @@ impl MeshRenderer {
             .as_ref()
             .map(|_| (self.instances.clone(), self.shadow_revision))
     }
+    /// Encode acceleration-structure builds (TLAS/BLAS) outside the render pass,
+    /// before draw_into_pass(). Empty draw sets do no AS work.
+    pub fn encode_rt(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
+            return;
+        }
+        if let Some(rt) = &mut self.rt {
+            rt.encode(encoder);
+        }
+    }
+
     pub fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -736,9 +747,7 @@ impl MeshRenderer {
         if let Some(t) = timing {
             t.mark(encoder, 0);
         }
-        if let Some(rt) = &mut self.rt {
-            rt.encode(encoder);
-        }
+        self.encode_rt(encoder);
         if let Some(t) = timing {
             t.mark(encoder, 1);
         }
@@ -765,6 +774,21 @@ impl MeshRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        self.draw_into_pass(&mut pass);
+        drop(pass);
+        if let Some(t) = timing {
+            t.mark(encoder, 2);
+            t.resolve(encoder);
+        }
+    }
+
+    /// Draw rigid mesh instances directly into an existing compatible render pass.
+    /// Caller must first encode_rt() outside that pass. Attachments must match
+    /// construction (color format, Depth32Float and single-sample raster).
+    pub fn draw_into_pass<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
+            return;
+        }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.global, &[]);
         if let Some(receiver) = &self.shadow_receiver {
@@ -781,11 +805,6 @@ impl MeshRenderer {
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..p.count, 0, range.clone());
-        }
-        drop(pass);
-        if let Some(t) = timing {
-            t.mark(encoder, 2);
-            t.resolve(encoder);
         }
     }
 

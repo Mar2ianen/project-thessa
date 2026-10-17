@@ -51,14 +51,16 @@ fn native_headless_capture_exports_measured_frames_and_capability_truth() {
     let supported = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 5).is_some();
     let names = [
         "render.shadows",
-        "render.terrain_and_sky",
-        "render.mesh_and_rt",
+        "render.rt_as_build",
+        "render.scene_classify_and_raster",
         "render.ui",
     ];
     for frame in &capture.frames {
         assert!(frame.frame_cpu_s <= frame.frame_wall_s);
         assert_eq!(frame.gpu.available, supported);
         if supported {
+            assert!(!frame.gpu.scopes.contains_key("render.terrain_and_sky"));
+            assert!(!frame.gpu.scopes.contains_key("render.mesh_and_rt"));
             assert!(frame.gpu.frame_s.unwrap() > 0.0);
             assert!(names.iter().all(|name| {
                 frame
@@ -77,6 +79,15 @@ fn native_headless_capture_exports_measured_frames_and_capability_truth() {
     let csv = std::fs::read_to_string(json.with_extension("csv")).unwrap();
     assert_eq!(csv.lines().count(), 4);
     if supported {
-        assert!(csv.contains("gpu_scope:render.terrain_and_sky_ms"));
+        assert!(csv.contains("gpu_scope:render.scene_classify_and_raster_ms"));
     }
+    assert_eq!(
+        capture
+            .metadata
+            .graphics
+            .resolved
+            .get("gpu_scope_layout")
+            .map(String::as_str),
+        Some("unified-scene-v2")
+    );
 }

@@ -17,11 +17,17 @@ and sibling CSV after rendering, and negotiates stable timestamp-query plus
 encoder-timestamp features only for this diagnostic. If either feature is
 unsupported, CPU capture still works and GPU timings are explicitly unavailable.
 Ordinary native devices create no timestamp query/readback buffers or collector.
-GPU intervals are `render.shadows`, `render.terrain_and_sky` (including classify),
-`render.mesh_and_rt` (including dirty AS builds), and `render.ui`; their sum
+GPU intervals (`gpu_scope_layout=unified-scene-v2`) are `render.shadows`,
+`render.rt_as_build` (dirty mesh/terrain AS builds),
+`render.scene_classify_and_raster` (classification plus the shared terrain,
+opaque-mesh and sky pass), and `render.ui`; their sum
 is the measured GPU command span. They include barriers/scheduling and exclude
 queue-write uploads before the first mark and separate egui command buffers.
-They are not isolated sky/scattering/AS/trace costs or a complete GPU frame.
+They are not isolated sky/scattering/trace costs or a complete GPU frame; an
+empty AS interval still includes timestamp/scheduling overhead. Historical
+`render.terrain_and_sky` /`render.mesh_and_rt` scopes had different boundaries
+and must not be compared directly to the new scopes. See
+[doc 58](58_NATIVE_PIPELINE_REVIEW.md) for the unified-pass review and evidence.
 CPU `frame.cpu` is host wall time through submit, not processor cycles;
 frame wall includes GPU completion. Timestamp mapping and capture writing are
 outside samples, but the diagnostic can still perturb scheduling. This path

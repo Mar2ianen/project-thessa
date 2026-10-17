@@ -243,10 +243,17 @@ impl State {
                 .as_ref()
                 .and_then(crate::scene::SceneMeshes::opaque),
         );
-        self.renderer.encode(&mut encoder, &color, &self.depth);
         if let Some(mesh) = &mut self.mesh_renderer {
-            mesh.encode(&mut encoder, &color, &self.depth);
+            mesh.encode_rt(&mut encoder);
         }
+        self.renderer.encode_scene(
+            &mut encoder,
+            &color,
+            &self.depth,
+            self.mesh_renderer
+                .as_ref()
+                .and_then(crate::scene::SceneMeshes::opaque),
+        );
         #[cfg(feature = "hud")]
         let commands = if let (Some(hud), Some(output)) = (&mut self.hud, hud_output) {
             hud.gpu.encode(

@@ -1903,6 +1903,11 @@ audio/network test or equal-scene parity proof.
 
 ### Owned navball continuation (2026-10-16)
 
+**Later native follow-up:** [doc 57](57_NATIVE_FLIGHT_DECK.md) supersedes this
+CPU128/30 Hz implementation only in the native viewer with native-pixel GPU
+FastNavball and separate aircraft /FDAI-inspired spacecraft layouts. The dated
+measurements and legacy Bevy path below remain intact.
+
 The next slice ports the attitude instrument itself: the 128 px navball
 sphere (nose-+X view, sky/ground blend, pitch ladder, horizon glow) renders
 from the body-frame local up that the flight-data readout already carries.

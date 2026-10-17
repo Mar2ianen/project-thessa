@@ -20,6 +20,8 @@ pub struct ShadowAtlas {
     normal_bias_m: f64,
     filter: u32,
     active: [bool; 3],
+    matrices: Vec<[f32; 16]>,
+    depth_revision: u64,
 }
 
 pub fn receiver_shader(group: u32) -> String {
@@ -219,6 +221,8 @@ impl ShadowAtlas {
             normal_bias_m: settings.shadow_normal_bias_m,
             filter: settings.shadow_filter_radius,
             active: [false; 3],
+            matrices: Vec::new(),
+            depth_revision: 0,
         }))
     }
     pub fn storage_bytes(&self) -> u64 {
@@ -226,6 +230,10 @@ impl ShadowAtlas {
     }
     pub fn active_passes(&self) -> usize {
         self.active.iter().filter(|&&a| a).count() * self.radii.len()
+    }
+
+    pub(crate) fn depth_revision(&self) -> u64 {
+        self.depth_revision
     }
     /// Conservative enclosing sphere for the finite light-view caster volume.
     pub fn caster_distance_m(&self) -> f64 {
@@ -302,11 +310,15 @@ impl ShadowAtlas {
             self.filter as f32,
             1.0 / self.size as f32,
         ]);
-        backend.queue.write_buffer(&self.frame, 0, &encode(&frame));
-        for (i, (_, uniform, _)) in self.layers.iter().enumerate() {
-            backend
-                .queue
-                .write_buffer(uniform, 0, &encode(&matrices[i]));
+        if matrices != self.matrices || active != self.active {
+            backend.queue.write_buffer(&self.frame, 0, &encode(&frame));
+            for (i, (_, uniform, _)) in self.layers.iter().enumerate() {
+                backend
+                    .queue
+                    .write_buffer(uniform, 0, &encode(&matrices[i]));
+            }
+            self.matrices = matrices;
+            self.depth_revision = self.depth_revision.wrapping_add(1);
         }
         self.active = active;
         Ok(())

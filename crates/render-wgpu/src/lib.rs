@@ -35,11 +35,16 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod environment;
 pub mod material;
 pub mod mesh;
+pub mod ocean;
 pub mod ray_scene;
 pub mod shadows;
+mod sky;
 pub mod terrain;
+pub mod terrain_ray;
+pub mod timing;
 pub mod view;
 
 /// Mesh limits the terrain mesh-shader path needs. Duplicates the bridge
@@ -96,6 +101,11 @@ fn limits_for(adapter: &wgpu::Adapter, features: wgpu::Features) -> wgpu::Limits
     limits.max_blas_primitive_count = caps.max_blas_primitive_count;
     limits.max_blas_geometry_count = caps.max_blas_geometry_count;
     limits.max_tlas_instance_count = caps.max_tlas_instance_count;
+    // Mesh hit tables + shared environment + borrowed terrain geometry and
+    // its material directory. Lesser devices retain the mesh-only RT path.
+    limits.max_storage_buffers_per_shader_stage = caps
+        .max_storage_buffers_per_shader_stage
+        .clamp(limits.max_storage_buffers_per_shader_stage, 9);
     limits.max_buffers_and_acceleration_structures_per_shader_stage = limits
         .max_buffers_and_acceleration_structures_per_shader_stage
         .max(caps.max_buffers_and_acceleration_structures_per_shader_stage);
@@ -121,7 +131,7 @@ impl Backend {
 
     fn bring_up_inner(consent: Option<wgpu::ExperimentalFeatures>) -> Result<Self, BackendError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        Self::request(instance, None, consent, None)
+        Self::request(instance, None, consent, None, false)
     }
 
     /// Stable device selected for a caller-owned window surface. The platform
@@ -131,21 +141,30 @@ impl Backend {
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
     ) -> Result<Self, BackendError> {
-        Self::request(instance, Some(surface), None, None)
+        Self::request(instance, Some(surface), None, None, false)
     }
 
     pub fn bring_up_for_graphics(
         requested: &thessa_graphics::RequestedGraphics,
     ) -> Result<Self, BackendError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        Self::request(instance, None, None, Some(requested))
+        Self::request(instance, None, None, Some(requested), false)
+    }
+
+    /// Opt-in diagnostic device. Missing timestamp capability degrades to
+    /// unavailable timings, never an invented CPU-derived GPU duration.
+    pub fn bring_up_for_graphics_profiled(
+        requested: &thessa_graphics::RequestedGraphics,
+    ) -> Result<Self, BackendError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Self::request(instance, None, None, Some(requested), true)
     }
     pub fn for_surface_graphics(
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
         requested: &thessa_graphics::RequestedGraphics,
     ) -> Result<Self, BackendError> {
-        Self::request(instance, Some(surface), None, Some(requested))
+        Self::request(instance, Some(surface), None, Some(requested), false)
     }
     /// Capability resolution must describe the negotiated device, not just
     /// the adapter's unrequested experimental features.
@@ -167,6 +186,7 @@ impl Backend {
         surface: Option<&wgpu::Surface<'_>>,
         consent: Option<wgpu::ExperimentalFeatures>,
         graphics: Option<&thessa_graphics::RequestedGraphics>,
+        profiling: bool,
     ) -> Result<Self, BackendError> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -185,6 +205,10 @@ impl Backend {
                 wgpu::ExperimentalFeatures::disabled(),
             ),
         };
+        let timing = timing::required_features();
+        if profiling && adapter.features().contains(timing) {
+            features |= timing;
+        }
         if let Some(settings) = graphics {
             use thessa_graphics::RayTracingRequest;
             let supported = adapter

@@ -77,8 +77,7 @@ impl State {
         let exposure = crate::manual_exposure(resolved.exposure_ev100);
         surface.configure(&backend.device, &config);
         let renderer = scene.renderer(&backend, config.format)?;
-        let mesh_renderer =
-            scene.mesh_renderer_with_shadows(&backend, config.format, renderer.shadows())?;
+        let mesh_renderer = scene.mesh_renderer_with_shadows(&backend, config.format, &renderer)?;
         let depth = depth(&backend, config.width, config.height);
         #[cfg(feature = "hud")]
         let hud = hud_enabled.then(|| {
@@ -219,8 +218,10 @@ impl State {
             scene
                 .view(self.config.width, self.config.height, self.exposure)
                 .world_position_m,
-            &scene.sample.lighting,
+            &scene.lighting(),
         )?;
+        self.renderer
+            .update_ocean(&self.backend, scene.sample.time.0)?;
         if let Some(mesh) = &mut self.mesh_renderer {
             scene.update_mesh(
                 &self.backend,
@@ -229,6 +230,7 @@ impl State {
                 self.config.height,
                 self.exposure,
             )?;
+            mesh.sync_rt_terrain(&self.backend, &self.renderer)?;
         }
         let color = frame.texture.create_view(&Default::default());
         let mut encoder = self
@@ -509,9 +511,10 @@ impl ApplicationHandler for App {
                                 println!("{status}");
                             }
                             println!(
-                                "shadow_atlas_bytes={} shadow_passes={}",
+                                "shadow_atlas_bytes={} shadow_active_layers={} shadow_rendered_passes={}",
                                 state.renderer.shadows().map_or(0, |s| s.storage_bytes()),
-                                state.renderer.shadows().map_or(0, |s| s.active_passes())
+                                state.renderer.shadows().map_or(0, |s| s.active_passes()),
+                                state.renderer.last_shadow_passes()
                             );
                             event_loop.exit();
                         }

@@ -6,7 +6,10 @@
 //! deterministic node-to-layer assignment across updates and reports only
 //! pages whose source generation needs to be uploaded.
 
-use std::fmt;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 /// Resident ancestors are explicit GPU demand, not cold opportunistic slots.
 /// Coarse levels come first under exhaustion so residency-edge filtering has
@@ -134,6 +137,8 @@ impl std::error::Error for SlotCacheError {}
 #[derive(Debug, Clone)]
 pub struct SlotCache {
     slots: Vec<Option<Occupied>>,
+    /// Lookup only: allocation/eviction never depends on hash iteration order.
+    index: HashMap<u64, u32>,
     request_epoch: u64,
 }
 
@@ -145,6 +150,7 @@ impl SlotCache {
         }
         Ok(Self {
             slots: vec![None; capacity],
+            index: HashMap::with_capacity(capacity),
             request_epoch: 0,
         })
     }
@@ -154,7 +160,7 @@ impl SlotCache {
     }
 
     pub fn len(&self) -> usize {
-        self.slots.iter().filter(|slot| slot.is_some()).count()
+        self.index.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -163,10 +169,7 @@ impl SlotCache {
 
     /// Returns the layer currently assigned to `node_id`.
     pub fn slot(&self, node_id: u64) -> Option<u32> {
-        self.slots
-            .iter()
-            .position(|entry| entry.is_some_and(|occupied| occupied.node_id == node_id))
-            .map(|slot| slot as u32)
+        self.index.get(&node_id).copied()
     }
 
     /// Returns the occupied entry at a layer.
@@ -194,16 +197,7 @@ impl SlotCache {
         let epoch = self.next_request_epoch();
         // Deduplicate in priority order. Node id 0 is the CBT null node and is
         // ignored so it can never accidentally claim a material layer.
-        let mut selected = Vec::with_capacity(self.capacity().min(requested.len()));
-        for &(node_id, generation) in requested {
-            if node_id == 0 || selected.iter().any(|(id, _)| *id == node_id) {
-                continue;
-            }
-            selected.push((node_id, generation));
-            if selected.len() == self.capacity() {
-                break;
-            }
-        }
+        let selected = self.select(requested);
 
         // First retain all selected residents. This is the key anti-churn
         // rule: layer identity follows the node, never the input ordinal.
@@ -225,9 +219,17 @@ impl SlotCache {
         // list whose state depends on the order of prior frames.
         for (slot, entry) in self.slots.iter_mut().enumerate() {
             if entry.is_some() && !retained[slot] {
+                self.index.remove(&entry.expect("occupied slot").node_id);
                 *entry = None;
             }
         }
+        let mut free = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| entry.is_none().then_some(slot))
+            .collect::<Vec<_>>()
+            .into_iter();
 
         // New pages claim the lowest currently free slot, while changes stay
         // in requested priority order.
@@ -244,16 +246,13 @@ impl SlotCache {
                 }
                 continue;
             }
-            let slot = self
-                .slots
-                .iter()
-                .position(Option::is_none)
-                .expect("selected count is bounded by capacity");
+            let slot = free.next().expect("selected count is bounded by capacity");
             self.slots[slot] = Some(Occupied {
                 node_id,
                 generation,
                 last_requested: epoch,
             });
+            self.index.insert(node_id, slot as u32);
             changes.push(SlotChange {
                 slot: slot as u32,
                 node_id,
@@ -272,16 +271,29 @@ impl SlotCache {
     /// requested inactive resident is evicted (slot index breaks ties).
     pub fn update_retaining(&mut self, requested: &[(u64, u64)]) -> Vec<SlotChange> {
         let epoch = self.next_request_epoch();
-        let mut selected = Vec::with_capacity(self.capacity().min(requested.len()));
-        for &(node_id, generation) in requested {
-            if node_id == 0 || selected.iter().any(|(id, _)| *id == node_id) {
-                continue;
-            }
-            selected.push((node_id, generation));
-            if selected.len() == self.capacity() {
-                break;
+        let selected = self.select(requested);
+        let mut protected = vec![false; self.capacity()];
+        for &(id, _) in &selected {
+            if let Some(slot) = self.slot(id) {
+                protected[slot as usize] = true;
             }
         }
+        // Compute candidates once, not once per new page. The free prefix is
+        // ascending slot order; occupied candidates preserve the original
+        // (last_requested, slot) tie-break exactly.
+        let mut free = Vec::new();
+        let mut inactive = Vec::new();
+        for (slot, entry) in self.slots.iter().enumerate() {
+            match entry {
+                None => free.push(slot),
+                Some(entry) if !protected[slot] => inactive.push((entry.last_requested, slot)),
+                _ => (),
+            }
+        }
+        inactive.sort_unstable();
+        let mut available = free
+            .into_iter()
+            .chain(inactive.into_iter().map(|(_, slot)| slot));
 
         let mut changes = Vec::with_capacity(selected.len());
         for &(node_id, generation) in &selected {
@@ -299,29 +311,18 @@ impl SlotCache {
                 continue;
             }
 
-            let slot = self.slots.iter().position(Option::is_none).or_else(|| {
-                self.slots
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(slot, entry)| {
-                        let occupied = entry.as_ref()?;
-                        (!selected.iter().any(|(id, _)| *id == occupied.node_id))
-                            .then_some((slot, occupied.last_requested))
-                    })
-                    .min_by_key(|&(slot, last_requested)| (last_requested, slot))
-                    .map(|(slot, _)| slot)
-            });
-            let Some(slot) = slot else {
-                // This can only occur if the capacity invariant is violated;
-                // selected is bounded by capacity and all selected IDs were
-                // already processed as residents.
-                continue;
-            };
+            let slot = available
+                .next()
+                .expect("selected count is bounded by capacity");
+            if let Some(before) = self.slots[slot] {
+                self.index.remove(&before.node_id);
+            }
             self.slots[slot] = Some(Occupied {
                 node_id,
                 generation,
                 last_requested: epoch,
             });
+            self.index.insert(node_id, slot as u32);
             changes.push(SlotChange {
                 slot: slot as u32,
                 node_id,
@@ -329,6 +330,22 @@ impl SlotCache {
             });
         }
         changes
+    }
+
+    fn select(&self, requested: &[(u64, u64)]) -> Vec<(u64, u64)> {
+        let limit = self.capacity().min(requested.len());
+        let mut seen = HashSet::with_capacity(limit);
+        let mut selected = Vec::with_capacity(limit);
+        for &(id, generation) in requested {
+            if id == 0 || !seen.insert(id) {
+                continue;
+            }
+            selected.push((id, generation));
+            if selected.len() == self.capacity() {
+                break;
+            }
+        }
+        selected
     }
 
     fn next_request_epoch(&mut self) -> u64 {
@@ -340,6 +357,112 @@ impl SlotCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deliberately slow original-policy oracle. No index or precomputed
+    /// candidates: catches a faster implementation changing tie breaks,
+    /// duplicate priority, generation refresh, or cold/warm policy switching.
+    fn reference_update(
+        slots: &mut [Option<Occupied>],
+        requested: &[(u64, u64)],
+        epoch: u64,
+        retain: bool,
+    ) -> Vec<SlotChange> {
+        let mut selected = Vec::new();
+        for &(id, generation) in requested {
+            if id == 0 || selected.iter().any(|&(before, _)| before == id) {
+                continue;
+            }
+            selected.push((id, generation));
+            if selected.len() == slots.len() {
+                break;
+            }
+        }
+        if !retain {
+            for entry in slots.iter_mut() {
+                if entry.is_some_and(|e| !selected.iter().any(|&(id, _)| id == e.node_id)) {
+                    *entry = None;
+                }
+            }
+        }
+        let mut changes = Vec::new();
+        for &(id, generation) in &selected {
+            if let Some(slot) = slots
+                .iter()
+                .position(|e| e.is_some_and(|e| e.node_id == id))
+            {
+                let entry = slots[slot].as_mut().unwrap();
+                entry.last_requested = epoch;
+                if entry.generation != generation {
+                    entry.generation = generation;
+                    changes.push(SlotChange {
+                        slot: slot as u32,
+                        node_id: id,
+                        generation,
+                    });
+                }
+            } else {
+                let slot = slots.iter().position(Option::is_none).unwrap_or_else(|| {
+                    slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(slot, e)| {
+                            let entry = e.as_ref()?;
+                            (!selected.iter().any(|&(id, _)| id == entry.node_id))
+                                .then_some((entry.last_requested, slot))
+                        })
+                        .min()
+                        .unwrap()
+                        .1
+                });
+                slots[slot] = Some(Occupied {
+                    node_id: id,
+                    generation,
+                    last_requested: epoch,
+                });
+                changes.push(SlotChange {
+                    slot: slot as u32,
+                    node_id: id,
+                    generation,
+                });
+            }
+        }
+        changes
+    }
+
+    #[test]
+    fn indexed_cache_matches_original_policy_over_mixed_replays() {
+        for capacity in [1, 4, 64, 256] {
+            let mut cache = SlotCache::new(capacity).unwrap();
+            let mut reference = vec![None; capacity];
+            let mut seed = 0xd1ce_cafe_u64;
+            for epoch in 1..=240 {
+                let count = (epoch * 7) as usize % (capacity * 2 + 1);
+                let mut request = Vec::new();
+                for _ in 0..count {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    request.push((seed % (capacity as u64 * 3 + 1), seed % 4));
+                }
+                let retain = epoch % 9 != 0;
+                let expected = reference_update(&mut reference, &request, epoch, retain);
+                let actual = if retain {
+                    cache.update_retaining(&request)
+                } else {
+                    cache.update(&request)
+                };
+                assert_eq!(actual, expected, "capacity={capacity}, epoch={epoch}");
+                assert_eq!(cache.slots, reference);
+                assert_eq!(cache.len(), cache.iter().count());
+                for entry in cache.iter() {
+                    assert_eq!(cache.slot(entry.node_id), Some(entry.slot));
+                }
+                if epoch % 11 == 0 {
+                    cache = cache.clone();
+                }
+            }
+        }
+    }
 
     #[test]
     fn fixed_directory_hashes_against_the_bound_length() {

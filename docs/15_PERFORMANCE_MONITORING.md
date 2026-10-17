@@ -6,6 +6,38 @@ counters, server/on-rails accounting, and tests are implemented. GPU timing is
 reported as unavailable when the active backend does not expose a trustworthy
 timestamp path; the overlay does not synthesize it.
 
+The native migration viewer now has an **opt-in serial headless adapter**:
+
+```sh
+cargo run --release -p thessa-terrain-native -- --headless target/frame.png --frames 120 --perf-capture target/native-perf.json
+```
+
+It reuses `thessa-perf` (last 1800 measured frames after 30 warmup), writes JSON
+and sibling CSV after rendering, and negotiates stable timestamp-query plus
+encoder-timestamp features only for this diagnostic. If either feature is
+unsupported, CPU capture still works and GPU timings are explicitly unavailable.
+Ordinary native devices create no timestamp query/readback buffers or collector.
+GPU intervals are `render.shadows`, `render.terrain_and_sky` (including classify),
+`render.mesh_and_rt` (including dirty AS builds), and `render.ui`; their sum
+is the measured GPU command span. They include barriers/scheduling and exclude
+queue-write uploads before the first mark and separate egui command buffers.
+They are not isolated sky/scattering/AS/trace costs or a complete GPU frame.
+CPU `frame.cpu` is host wall time through submit, not processor cycles;
+frame wall includes GPU completion. Timestamp mapping and capture writing are
+outside samples, but the diagnostic can still perturb scheduling. This path
+already waits serially for offscreen completion; **it is not window profiling**
+and must not be inserted into the native window loop. Asynchronous window/Bevy
+timestamp collection, richer native counters and authoritative simulation
+telemetry remain future work. Unknown counters retain schema defaults with this
+limitation in capture metadata; GPU/UMA memory remains unknown. GPU scopes also
+appear as sorted `gpu_scope:NAME_ms` CSV columns: missing/unavailable values are
+blank, while a measured zero is `0.0000`. Existing CPU columns are unchanged.
+See doc 39's sky/perf checkpoint for scenario measurements and runtime evidence.
+Its subsequent shadow-depth-cache checkpoint uses those GPU intervals to
+target the measured static atlas bottleneck; cached and forced-redraw tests
+retain identical quality/content and report actual rendered layer counts
+separately from the number of potentially active layers.
+
 Scope: client rendering, authoritative simulation, time warp, world/terrain runtime, memory, and capture tooling.
 
 The performance subsystem exists to answer one question reliably:

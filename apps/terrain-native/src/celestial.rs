@@ -11,6 +11,7 @@ use thessa_sim_core::{BakedEphemeris, BodyId, SimTime, SystemConfig};
 struct Star {
     id: BodyId,
     luminosity_w: f64,
+    radius_m: f64,
     tint: [f64; 3],
 }
 
@@ -21,12 +22,16 @@ pub struct CelestialPresentation {
     stars: Vec<Star>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Sample {
     pub time: SimTime,
     pub position_inertial_m: DVec3,
     pub frame: BodyFrame,
     pub lighting: SurfaceLighting,
+    /// Stellar sources in body axes with physical irradiance, for the shared
+    /// scattering model. Separate from `lighting`, which is already scaled to
+    /// the presentation's photometric units for shading.
+    pub environment_lights: Vec<thessa_atmosphere::CelestialLight>,
 }
 
 impl CelestialPresentation {
@@ -62,6 +67,7 @@ impl CelestialPresentation {
                 Ok(Star {
                     id: ephemeris.body_id(&star.id).ok_or("missing star")?,
                     luminosity_w: star.luminosity_solar * 3.828e26,
+                    radius_m: star.radius_solar * 6.957e8,
                     tint: thessa_atmosphere::blackbody_rgb(star.temperature_k),
                 })
             })
@@ -88,6 +94,7 @@ impl CelestialPresentation {
         let frame = BodyFrame::new(position, terrain_rotation(time, self.period_s), position)
             .ok_or("invalid celestial presentation pose")?;
         let mut stars = [(0.0_f64, DVec3::ZERO, [0.0_f32; 3]); 3];
+        let mut environment_lights = Vec::with_capacity(self.stars.len());
         for (index, star) in self.stars.iter().enumerate() {
             let state = self
                 .ephemeris
@@ -100,12 +107,23 @@ impl CelestialPresentation {
             }
             let direction =
                 frame.render_to_body_direction(inertial_to_render_axes(delta.normalize()));
-            let lux = thessa_atmosphere::irradiance_at_distance(star.luminosity_w, distance) * 93.0;
+            let irradiance_w_m2 =
+                thessa_atmosphere::irradiance_at_distance(star.luminosity_w, distance);
+            let lux = irradiance_w_m2 * crate::environment::LUX_PER_W_M2;
             stars[index] = (
                 lux,
                 direction,
                 star.tint.map(|channel| (channel * lux) as f32),
             );
+            environment_lights.push(thessa_atmosphere::CelestialLight {
+                direction_to_star: direction,
+                irradiance_w_m2,
+                color_rgb: star.tint,
+                angular_radius_rad: thessa_atmosphere::angular_radius(star.radius_m, distance),
+                // Eclipses are not part of this presentation yet: the native
+                // path must not claim an eclipse it does not model.
+                visibility: 1.0,
+            });
         }
         stars[..self.stars.len()].sort_by(|a, b| b.0.total_cmp(&a.0));
         let mut lighting = SurfaceLighting::default();
@@ -126,6 +144,7 @@ impl CelestialPresentation {
             position_inertial_m: planet.position_inertial,
             frame,
             lighting,
+            environment_lights,
         })
     }
 }

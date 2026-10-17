@@ -16,6 +16,7 @@ use crate::{
 
 pub const VERTICES_PER_PATCH: u32 = shaders::VERTICES_PER_PATCH as u32;
 const TRIANGLES_PER_PATCH: u64 = shaders::TRIANGLES_PER_PATCH as u64;
+pub(crate) const FALLBACK_ALBEDO: [u8; 4] = [100, 130, 70, 255];
 
 /// Borrowed source pages. Quantized heights are uploaded without expansion.
 pub struct TerrainPatch<'a> {
@@ -48,6 +49,19 @@ pub struct TerrainPublication {
 /// Persistent GPU terrain working set. Geometry is generated at publication;
 /// camera-only frames update anchors/view and rerun classification, not geometry.
 pub struct TerrainRenderer {
+    ocean: Option<crate::ocean::OceanField>,
+    ocean_geometry: Option<crate::ocean::OceanGeometry>,
+    ocean_bind: Option<wgpu::BindGroup>,
+    ocean_environment: Option<crate::environment::EnvironmentBinding>,
+    ocean_settings: thessa_graphics::OceanSettings,
+    ocean_dirty: bool,
+    ocean_last_camera: Option<[f64; 3]>,
+    ocean_reason: Option<String>,
+    ocean_possible: Vec<Option<(f64, f64)>>,
+    shadow_cache: Option<(u64, Option<(wgpu::Buffer, u64)>)>,
+    last_shadow_passes: usize,
+    sky: Option<crate::sky::SkyBackground>,
+    format: wgpu::TextureFormat,
     shadows: Option<crate::shadows::ShadowAtlas>,
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
@@ -61,6 +75,7 @@ pub struct TerrainRenderer {
     lighting: wgpu::Buffer,
     materials: crate::material::MaterialArray,
     node_ids: Vec<u64>,
+    ray_revisions: Vec<u64>,
     anchors: Vec<TileAnchor>,
     frames: wgpu::Buffer,
     view: wgpu::Buffer,
@@ -159,13 +174,17 @@ fn pipeline(
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     entry: &str,
+    constants: &[(&str, f64)],
 ) -> wgpu::ComputePipeline {
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some(entry),
         layout: Some(layout),
         module,
         entry_point: Some(entry),
-        compilation_options: Default::default(),
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants,
+            ..Default::default()
+        },
         cache: None,
     })
 }
@@ -197,6 +216,7 @@ impl TerrainRenderer {
             patches.len(),
             None,
             None,
+            None,
         )
     }
 
@@ -218,6 +238,17 @@ impl TerrainRenderer {
         capacity: TerrainCapacity,
         settings: Option<&thessa_graphics::ResolvedGraphicsSettings>,
     ) -> Result<Self, BackendError> {
+        Self::with_capacity_lighting_and_ocean(backend, patches, format, capacity, settings, None)
+    }
+
+    pub fn with_capacity_lighting_and_ocean(
+        backend: &Backend,
+        patches: &[TerrainPatch<'_>],
+        format: wgpu::TextureFormat,
+        capacity: TerrainCapacity,
+        settings: Option<&thessa_graphics::ResolvedGraphicsSettings>,
+        sea: Option<thessa_render_core::ocean::SeaState>,
+    ) -> Result<Self, BackendError> {
         if capacity.height_grid_size < 2 || capacity.height_grid_size > 4096 {
             return Err(BackendError::Device(
                 "invalid terrain height slot grid".into(),
@@ -232,9 +263,13 @@ impl TerrainRenderer {
             capacity.patches as usize,
             Some(page_bytes),
             settings,
+            sea,
         )
     }
 
+    // One allocation boundary with independent source/capacity and optional
+    // physical sea inputs; not a second configuration model.
+    #[allow(clippy::too_many_arguments)]
     fn allocate(
         backend: &Backend,
         patches: &[TerrainPatch<'_>],
@@ -243,6 +278,7 @@ impl TerrainRenderer {
         capacity: usize,
         page_capacity: Option<u64>,
         settings: Option<&thessa_graphics::ResolvedGraphicsSettings>,
+        sea: Option<thessa_render_core::ocean::SeaState>,
     ) -> Result<Self, BackendError> {
         let device = &backend.device;
         let shadows = if let Some(settings) = settings {
@@ -255,6 +291,23 @@ impl TerrainRenderer {
             return Err(fail("terrain needs at least one patch"));
         };
         let radius = first.anchor.radius_m;
+        let ocean_settings = settings.map(|s| s.ocean.clone()).unwrap_or_default();
+        let ocean = if ocean_settings.enabled {
+            if ocean_settings.geometry_patches > 64
+                || !(0.0..=20_000.0).contains(&ocean_settings.geometry_distance_m)
+            {
+                return Err(fail("invalid ocean near-field capacity/distance"));
+            }
+            let sea = sea
+                .ok_or_else(|| fail("spectral ocean requires explicit local gravity/sea state"))?;
+            Some(crate::ocean::OceanField::new(
+                backend,
+                sea,
+                settings.unwrap().ocean_size,
+            )?)
+        } else {
+            None
+        };
         let count = capacity as u64;
         let limits = device.limits();
         let max_storage = limits
@@ -370,7 +423,26 @@ impl TerrainRenderer {
             &frames_data,
             ro | wgpu::BufferUsages::COPY_DST,
         );
-        let vertices = storage(device, vertex_bytes, wgpu::BufferUsages::COPY_SRC);
+        let ray_usage = if settings.is_some_and(|s| s.rt_terrain)
+            && device
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+        {
+            wgpu::BufferUsages::BLAS_INPUT
+        } else {
+            wgpu::BufferUsages::empty()
+        };
+        let vertices = storage(
+            device,
+            vertex_bytes,
+            wgpu::BufferUsages::COPY_SRC
+                | if ocean.is_some() {
+                    wgpu::BufferUsages::COPY_DST
+                } else {
+                    wgpu::BufferUsages::empty()
+                }
+                | ray_usage,
+        );
         let patch_records = storage(device, count * 16, wgpu::BufferUsages::empty());
         let params_data = bytes([
             patches.len() as u32,
@@ -414,7 +486,7 @@ impl TerrainRenderer {
             label: Some("cbt-geometry"),
             source: wgpu::ShaderSource::Wgsl(shaders::CBT_GEOMETRY_WGSL.into()),
         });
-        let geometry = pipeline(device, &module, &layout, "build_geometry");
+        let geometry = pipeline(device, &module, &layout, "build_geometry", &[]);
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -465,12 +537,29 @@ impl TerrainRenderer {
             label: Some("cbt-classify"),
             source: wgpu::ShaderSource::Wgsl(shaders::CBT_CLASSIFY_WGSL.into()),
         });
-        let classify = ["reset_active", "classify_active", "finalize_active"]
-            .map(|entry| pipeline(device, &module, &layout, entry));
+        let classify = ["reset_active", "classify_active", "finalize_active"].map(|entry| {
+            pipeline(
+                device,
+                &module,
+                &layout,
+                entry,
+                &[(
+                    "cbt_displacement_bound_m",
+                    ocean.as_ref().map_or(0.0, |f| f.stats().height_bound_m),
+                )],
+            )
+        });
         let reflections = settings.is_none_or(|s| s.specular_reflections);
-        let hooks = format!(
-            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}"
+        let mut hooks = format!(
+            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
+        hooks.push_str(if ocean.is_some(){include_str!("ocean_raster.wgsl")}else{
+            "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32)->vec4<f32>{return vec4(0.0);}"
+        });
+        if ocean.is_some() {
+            hooks.push_str(&crate::ocean::shader(2));
+            hooks.push_str(&include_str!("environment.wgsl").replace("@group(0)", "@group(2)"));
+        }
         let raster_source =
             shaders::CBT_RASTER_WGSL.replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -522,7 +611,7 @@ impl TerrainRenderer {
             cache: None,
         });
         // Globe asset loading and effect settings remain in the client.
-        let globe = solid_texture(backend, [100, 130, 70, 255], false);
+        let globe = solid_texture(backend, FALLBACK_ALBEDO, false);
         let roughness = solid_texture(backend, [255; 4], false);
         let black = solid_texture(backend, [0; 4], false);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -569,7 +658,52 @@ impl TerrainRenderer {
             layout: &raster_layout,
             entries: &entries,
         });
+        let ocean_environment = ocean
+            .as_ref()
+            .map(|_| crate::environment::EnvironmentBinding::new(device));
+        let ocean_bind = ocean.as_ref().map(|field| {
+            let mut entries = field.binding().entries().to_vec();
+            entries.extend(ocean_environment.as_ref().unwrap().entries());
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ocean-raster"),
+                layout: &raster.get_bind_group_layout(2),
+                entries: &entries,
+            })
+        });
+        let ocean_geometry = if let Some(field) = &ocean
+            && ocean_settings.geometry_patches > 0
+        {
+            Some(crate::ocean::OceanGeometry::new(
+                backend,
+                ocean_settings.geometry_patches as usize,
+                &vertices,
+                &frames,
+                &materials,
+                field,
+            ))
+        } else {
+            None
+        };
         Ok(Self {
+            ocean,
+            ocean_geometry,
+            ocean_bind,
+            ocean_environment,
+            ocean_settings,
+            ocean_dirty: true,
+            ocean_last_camera: None,
+            ocean_reason: None,
+            ocean_possible: (0..if settings.is_some_and(|s| s.ocean.enabled) {
+                capacity
+            } else {
+                0
+            })
+                .map(|i| patches.get(i).and_then(|p| ocean_height_range(p.page)))
+                .collect(),
+            shadow_cache: None,
+            last_shadow_passes: 0,
+            sky: None,
+            format,
             shadow_receiver: shadows
                 .as_ref()
                 .map(|s| s.receiver(backend, &raster.get_bind_group_layout(1))),
@@ -608,6 +742,7 @@ impl TerrainRenderer {
             lighting,
             materials,
             node_ids,
+            ray_revisions: vec![1; capacity],
             anchors,
             frames,
             view,
@@ -636,8 +771,11 @@ impl TerrainRenderer {
         demand: &[u64],
         pages: &crate::material::MaterialPages,
     ) -> Result<crate::material::MaterialUpload, BackendError> {
-        self.materials
-            .prepare(backend, &self.node_ids, demand, pages)
+        let upload = self
+            .materials
+            .prepare(backend, &self.node_ids, demand, pages)?;
+        self.ocean_dirty |= upload.changed;
+        Ok(upload)
     }
 
     /// Publish direct multi-source illumination; effects stay disabled. Only
@@ -675,13 +813,35 @@ impl TerrainRenderer {
     }
 
     pub fn encode_shadows(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         meshes: Option<&crate::mesh::MeshRenderer>,
     ) {
+        self.last_shadow_passes = 0;
         if let Some(shadows) = &self.shadows {
+            let key = (
+                shadows.depth_revision(),
+                meshes.and_then(crate::mesh::MeshRenderer::shadow_key),
+            );
+            if self.shadow_cache.as_ref() == Some(&key) {
+                return;
+            }
             shadows.encode(encoder, self, meshes);
+            self.last_shadow_passes = shadows.active_passes();
+            self.shadow_cache = Some(key);
         }
+    }
+
+    /// Last encoded depth-layer draws (zero on an exact cached frame), unlike
+    /// `ShadowAtlas::active_passes`, which counts potential active layers.
+    pub fn last_shadow_passes(&self) -> usize {
+        self.last_shadow_passes
+    }
+
+    /// Explicit invalidation for diagnostics/external source changes. Ordinary
+    /// camera, page, membership, mesh and light updates invalidate themselves.
+    pub fn invalidate_shadows(&mut self) {
+        self.shadow_cache = None;
     }
 
     pub(crate) fn cast_shadow(
@@ -779,6 +939,10 @@ impl TerrainRenderer {
         let frames = frame_bytes(&anchors[..active_extent], self.camera)?;
         // From here all fallible validation has completed. Queue ordering keeps
         // the previous submitted draw intact and the next draw wholly new.
+        if ids != self.node_ids || !dirty.is_empty() {
+            self.invalidate_shadows();
+            self.ocean_dirty = true;
+        }
         for (slot, (&old, &new)) in self.node_ids.iter().zip(&ids).enumerate() {
             if old != 0 && new == 0 {
                 backend
@@ -846,12 +1010,19 @@ impl TerrainRenderer {
         for &(slot, _) in updates {
             self.manual_updates[slot as usize] = true;
         }
+        self.invalidate_shadows();
         self.upload_pages(backend, updates);
         Ok(())
     }
 
-    fn upload_pages(&self, backend: &Backend, updates: &[(u32, &HeightPage)]) {
+    fn upload_pages(&mut self, backend: &Backend, updates: &[(u32, &HeightPage)]) {
+        self.ocean_dirty |= !updates.is_empty();
         for (i, page) in updates {
+            if let Some(possible) = self.ocean_possible.get_mut(*i as usize) {
+                *possible = ocean_height_range(page);
+            }
+            self.ray_revisions[*i as usize] =
+                self.ray_revisions[*i as usize].wrapping_add(1).max(1);
             let (offset, _) = self.page_slots[*i as usize];
             let mut data = page.residual_bytes();
             data.resize(data.len().div_ceil(4) * 4, 0);
@@ -910,12 +1081,265 @@ impl TerrainRenderer {
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
         let camera = params.world_position_m.to_array();
         let frames = frame_bytes(&self.anchors[..self.active_extent], camera)?;
+        if camera != self.camera {
+            self.invalidate_shadows();
+        }
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
         if !frames.is_empty() {
             backend.queue.write_buffer(&self.frames, 0, &frames);
         }
         self.camera = camera;
         Ok(())
+    }
+
+    /// Publish the scene's shared sky buffers. Disabled drops the consumer:
+    /// no background draw, extra target, or retained sky allocation/pipeline.
+    pub fn share_environment(
+        &mut self,
+        backend: &Backend,
+        environment: Option<&crate::environment::EnvironmentBinding>,
+    ) {
+        if let Some(field) = &self.ocean {
+            let environment = environment
+                .cloned()
+                .unwrap_or_else(|| crate::environment::EnvironmentBinding::new(&backend.device));
+            let mut entries = field.binding().entries().to_vec();
+            entries.extend(environment.entries());
+            self.ocean_bind = Some(
+                backend
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("ocean-raster-environment"),
+                        layout: &self.raster.get_bind_group_layout(2),
+                        entries: &entries,
+                    }),
+            );
+            self.ocean_environment = Some(environment);
+        }
+        if let Some(environment) = environment.filter(|field| field.enabled()) {
+            if let Some(sky) = &mut self.sky {
+                sky.rebind(&backend.device, &self.view, environment);
+            } else {
+                self.sky = Some(crate::sky::SkyBackground::new(
+                    &backend.device,
+                    self.format,
+                    &self.view,
+                    environment,
+                ));
+            }
+        } else {
+            self.sky = None;
+        }
+    }
+
+    pub fn sky_enabled(&self) -> bool {
+        self.sky.is_some()
+    }
+
+    pub fn ocean_stats(&self) -> crate::ocean::OceanStats {
+        let mut stats = self
+            .ocean
+            .as_ref()
+            .map_or_else(Default::default, |f| f.stats());
+        if let Some(geometry) = &self.ocean_geometry {
+            stats.deformed_patches = geometry.selected.len() as u32;
+            stats.geometry_bytes =
+                geometry.original.size() + geometry.slots.size() + geometry.params.size();
+        }
+        stats
+    }
+    pub fn ocean_reason(&self) -> Option<&str> {
+        self.ocean_reason.as_deref()
+    }
+
+    /// Publish one simulation sample after height/material/camera updates and
+    /// before shadow encoding and mesh RT synchronization. Restores datum
+    /// backups first; never accumulates displacement or expands CPU geometry.
+    pub fn update_ocean(&mut self, backend: &Backend, time_s: f64) -> Result<(), BackendError> {
+        self.update_ocean_profiled(backend, time_s, None)
+    }
+
+    /// Two-mark diagnostic for near-slot restoration/capture/deformation only;
+    /// FFT publication precedes this interval. Caller owns completion/readback.
+    pub fn update_ocean_profiled(
+        &mut self,
+        backend: &Backend,
+        time_s: f64,
+        timing: Option<&crate::timing::GpuIntervals>,
+    ) -> Result<(), BackendError> {
+        let Some(field) = &mut self.ocean else {
+            return Ok(());
+        };
+        let evolved = field.update(backend, time_s)?;
+        field.update_frame(
+            &backend.queue,
+            glam::DVec3::from_array(self.camera),
+            self.body_radius_m,
+        )?;
+        let Some(geometry) = &mut self.ocean_geometry else {
+            return Ok(());
+        };
+        if !evolved
+            && !self.ocean_dirty
+            && self.ocean_last_camera == Some(self.camera)
+            && geometry
+                .selected
+                .iter()
+                .all(|&(slot, rev)| self.ray_revisions[slot] == rev)
+        {
+            return Ok(());
+        }
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        if let Some(t) = timing {
+            t.mark(&mut encoder, 0);
+        }
+        let mut geometry_changed = !geometry.selected.is_empty();
+        let slot_bytes = u64::from(VERTICES_PER_PATCH) * 32;
+        for (backup, &(slot, revision)) in geometry.selected.iter().enumerate() {
+            backend
+                .queue
+                .write_buffer(&self.history, slot as u64 * 16 + 12, &0u32.to_le_bytes());
+            if self.ray_revisions[slot] == revision {
+                encoder.copy_buffer_to_buffer(
+                    &geometry.original,
+                    backup as u64 * slot_bytes,
+                    &self.vertices,
+                    slot as u64 * slot_bytes,
+                    slot_bytes,
+                );
+                self.ray_revisions[slot] = self.ray_revisions[slot].wrapping_add(1);
+            }
+        }
+        let camera = glam::DVec3::from_array(self.camera);
+        let distance = self.ocean_settings.geometry_distance_m;
+        let mut selected = Vec::new();
+        for (slot, anchor) in self
+            .anchors
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.node_ids[*i] != 0 && self.ocean_possible[*i].is_some())
+        {
+            let width = 2.0 * self.body_radius_m / 2f64.powi(i32::from(anchor.tile.level));
+            // At >= one longest period per filtered cell the zero-mean
+            // height field reduces to its DC mode; only optical variance stays.
+            if width / 32.0 * 2.0 >= thessa_render_core::ocean::PERIODS_M[0] {
+                continue;
+            }
+            let (low, high) = self.ocean_possible[slot].unwrap();
+            let (min, max) = anchor.aabb_body_m(low, high);
+            // Reuse the nine-point surface bound, padded by a normalized-cube
+            // Hessian envelope (||H|| <= 6 for |raw| >= 1). width²/R exceeds
+            // its bilinear sample error 1.5*R*half_extent².
+            let padding = (width / self.body_radius_m).powi(2)
+                * (self.body_radius_m + low)
+                    .abs()
+                    .max((self.body_radius_m + high).abs());
+            let closest = camera.clamp(
+                glam::DVec3::from_array(min) - glam::DVec3::splat(padding),
+                glam::DVec3::from_array(max) + glam::DVec3::splat(padding),
+            );
+            if (closest - camera).length() < distance {
+                selected.push(slot);
+            }
+        }
+        let reason = if selected.len() > geometry.capacity {
+            Some(format!(
+                "ocean near partition has {} patches, budget admits {}; filtered optical-only fallback",
+                selected.len(),
+                geometry.capacity
+            ))
+        } else {
+            None
+        };
+        if reason != self.ocean_reason {
+            if let Some(reason) = &reason {
+                eprintln!("{reason}");
+            }
+            self.ocean_reason = reason;
+        }
+        geometry.selected.clear();
+        if self.ocean_reason.is_none() && distance > 0.0 {
+            geometry_changed |= !selected.is_empty();
+            for (backup, &slot) in selected.iter().enumerate() {
+                backend.queue.write_buffer(
+                    &self.history,
+                    slot as u64 * 16 + 12,
+                    &1u32.to_le_bytes(),
+                );
+                encoder.copy_buffer_to_buffer(
+                    &self.vertices,
+                    slot as u64 * slot_bytes,
+                    &geometry.original,
+                    backup as u64 * slot_bytes,
+                    slot_bytes,
+                );
+                self.ray_revisions[slot] = self.ray_revisions[slot].wrapping_add(1);
+                geometry.selected.push((slot, self.ray_revisions[slot]));
+            }
+            if !selected.is_empty() {
+                backend.queue.write_buffer(
+                    &geometry.slots,
+                    0,
+                    &bytes(selected.iter().map(|&s| s as u32)),
+                );
+                backend.queue.write_buffer(
+                    &geometry.params,
+                    0,
+                    &bytes([
+                        selected.len() as u32,
+                        self.radius.to_bits(),
+                        (distance as f32).to_bits(),
+                        0,
+                    ]),
+                );
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&geometry.pipeline);
+                pass.set_bind_group(0, &geometry.bind, &[]);
+                pass.set_bind_group(1, &geometry.field_bind, &[]);
+                pass.dispatch_workgroups(
+                    (selected.len() as u32 * VERTICES_PER_PATCH).div_ceil(64),
+                    1,
+                    1,
+                );
+            }
+        }
+        if let Some(t) = timing {
+            t.mark(&mut encoder, 1);
+            t.resolve(&mut encoder);
+        }
+        if geometry_changed || timing.is_some() {
+            backend.queue.submit([encoder.finish()]);
+        }
+        self.ocean_dirty = false;
+        self.ocean_last_camera = Some(self.camera);
+        if geometry_changed {
+            self.invalidate_shadows();
+        }
+        Ok(())
+    }
+
+    pub fn ray_source(&self) -> Option<crate::terrain_ray::TerrainRaySource> {
+        self.vertices
+            .usage()
+            .contains(wgpu::BufferUsages::BLAS_INPUT)
+            .then(|| crate::terrain_ray::TerrainRaySource {
+                ocean: self.ocean.as_ref().map(|f| f.binding().clone()),
+                vertices: self.vertices.clone(),
+                directory: self.materials.directory.clone(),
+                material: self.materials.view.clone(),
+                sampler: self.materials.sampler.clone(),
+                radius_m: self.body_radius_m,
+                capacity: self.node_ids.len(),
+            })
+    }
+
+    pub(crate) fn ray_publication(&self) -> (&wgpu::Buffer, &[u64], &[u64], &[TileAnchor]) {
+        (
+            &self.vertices,
+            &self.node_ids,
+            &self.ray_revisions,
+            &self.anchors,
+        )
     }
 
     /// Encode a full GPU-owned visibility/triangle-LOD/indirect raster frame.
@@ -973,7 +1397,15 @@ impl TerrainRenderer {
         if let Some(receiver) = &self.shadow_receiver {
             pass.set_bind_group(1, receiver, &[]);
         }
+        if let Some(ocean) = &self.ocean_bind {
+            pass.set_bind_group(2, ocean, &[]);
+        }
         pass.draw_indirect(&self.draw, 0);
+        // Far depth, no depth writes: terrain rejects covered pixels before
+        // sky sampling; later opaque meshes still overwrite it normally.
+        if let Some(sky) = &self.sky {
+            sky.draw(&mut pass);
+        }
     }
 
     /// Diagnostic only: tile-local xyz/w followed by normal xyz/height.
@@ -995,6 +1427,12 @@ impl TerrainRenderer {
             .map(|b| u32::from_le_bytes(*b))
             .collect())
     }
+}
+
+fn ocean_height_range(page: &HeightPage) -> Option<(f64, f64)> {
+    let min = f64::from(page.min_height_m() - page.max_residual_error_m());
+    let max = f64::from(page.max_height_m() + page.max_residual_error_m()).min(1.0);
+    (min < 1.0).then_some((min, max))
 }
 
 fn frame_bytes(anchors: &[TileAnchor], camera: [f64; 3]) -> Result<Vec<u8>, BackendError> {

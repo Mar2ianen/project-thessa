@@ -10,16 +10,20 @@
 // Contract: the returned RGB is the reflected radiance leaving the surface.
 // A ray that hits nothing contributes `env * fresnel`, identical to the
 // environment term it replaces, so RT never invents sky or ambient light.
-// Hit shading uses the material's linear base color, the geometric normal and
-// the existing surface illumination model (ambient + per-light N·L with the
-// shared shadow atlas); textures and UVs are not sampled in this slice.
+// Hits use barycentric smooth normals/UVs, shared raster textures/samplers,
+// sRGB base colour and linear MR/normal/AO. Samples have explicit LOD zero:
+// a reflected ray has no screen-space texture derivatives.
 
 struct RtMaterial {
     // rgb = linear base color, w = metallic.
     color: vec4<f32>,
-    // x = roughness, yzw unused.
+    // x = roughness, y = normal scale, z = AO strength, w reserved.
     factors: vec4<f32>,
+    // Base colour, metallic/roughness, normal, AO; UINT_MAX means absent.
+    textures: vec4<u32>,
 }
+
+struct RtVertex { position:vec4<f32>, normal:vec4<f32>, uv:vec4<f32> }
 
 struct RtRange {
     // x = first index into rt_indices, y = first vertex into rt_positions,
@@ -37,68 +41,42 @@ struct RtPair {
     row2: vec4<f32>,
 }
 
-@group(3) @binding(0) var rt_scene: acceleration_structure;
 @group(3) @binding(1) var<storage, read> rt_materials: array<RtMaterial>;
 @group(3) @binding(2) var<storage, read> rt_ranges: array<RtRange>;
-@group(3) @binding(3) var<storage, read> rt_positions: array<vec4<f32>>;
+@group(3) @binding(3) var<storage, read> rt_vertices: array<RtVertex>;
 @group(3) @binding(4) var<storage, read> rt_indices: array<u32>;
 @group(3) @binding(5) var<storage, read> rt_pairs: array<RtPair>;
-
-struct RtHit {
-    hit: bool,
-    t: f32,
-    // TLAS slot of the hit instance. Instance custom data carries this slot
-    // because a TLAS instance references a whole BLAS: the slot, not the
-    // driver's geometry index, identifies which primitive was placed.
-    pair: u32,
-    triangle: u32,
-    barycentrics: vec2<f32>,
-}
 
 struct RtSurface {
     position: vec3<f32>,
     normal: vec3<f32>,
+    geometry: vec3<f32>,
     albedo: vec3<f32>,
     metallic: f32,
     roughness: f32,
-}
-
-fn rt_trace(origin: vec3<f32>, direction: vec3<f32>, t_min: f32, t_max: f32) -> RtHit {
-    var result: RtHit;
-    result.hit = false;
-    result.t = 0.0;
-    result.pair = 0u;
-    result.triangle = 0u;
-    result.barycentrics = vec2(0.0);
-    var query: ray_query;
-    rayQueryInitialize(
-        &query,
-        rt_scene,
-        RayDesc(0u, 0xFFu, t_min, t_max, origin, direction),
-    );
-    rayQueryProceed(&query);
-    let intersection = rayQueryGetCommittedIntersection(&query);
-    if intersection.kind != RAY_QUERY_INTERSECTION_NONE {
-        result.hit = true;
-        result.t = intersection.t;
-        result.pair = intersection.instance_custom_data;
-        result.triangle = intersection.primitive_index;
-        result.barycentrics = intersection.barycentrics;
-    }
-    return result;
+    occlusion: f32,
+    dielectric:f32,
 }
 
 // Barycentrics land in the primitive's own asset-local space; the pair rows
 // move the point and its normal into the camera-relative space the primary
 // surface, the lights and the shadow atlas live in.
+fn rt_vector(pair:RtPair, vector:vec3<f32>)->vec3<f32> {
+    return vec3(dot(pair.row0.xyz,vector),dot(pair.row1.xyz,vector),dot(pair.row2.xyz,vector));
+}
+
 fn rt_surface(hit: RtHit, ray_direction: vec3<f32>) -> RtSurface {
     let pair = rt_pairs[hit.pair];
+    // TERRAIN_HIT_HOOK
     let range = rt_ranges[pair.words.x];
     let first = range.words.x + hit.triangle * 3u;
     let base = range.words.y;
-    let p0 = rt_positions[base + rt_indices[first]].xyz;
-    let p1 = rt_positions[base + rt_indices[first + 1u]].xyz;
-    let p2 = rt_positions[base + rt_indices[first + 2u]].xyz;
+    let v0 = rt_vertices[base + rt_indices[first]];
+    let v1 = rt_vertices[base + rt_indices[first + 1u]];
+    let v2 = rt_vertices[base + rt_indices[first + 2u]];
+    let p0 = v0.position.xyz;
+    let p1 = v1.position.xyz;
+    let p2 = v2.position.xyz;
     let local = p0 + (p1 - p0) * hit.barycentrics.x + (p2 - p0) * hit.barycentrics.y;
     let local_normal = normalize(cross(p1 - p0, p2 - p0));
     let position = vec3(
@@ -106,21 +84,30 @@ fn rt_surface(hit: RtHit, ray_direction: vec3<f32>) -> RtSurface {
         dot(pair.row1.xyz, local) + pair.row1.w,
         dot(pair.row2.xyz, local) + pair.row2.w,
     );
-    let normal = normalize(vec3(
-        dot(pair.row0.xyz, local_normal),
-        dot(pair.row1.xyz, local_normal),
-        dot(pair.row2.xyz, local_normal),
-    ));
+    let normal = normalize(rt_vector(pair,local_normal));
     // Geometric normals are two-sided: face the incoming ray so single-sided
     // assets still shade the reflection instead of lighting a back face.
     let geometry = select(normal, -normal, dot(normal, ray_direction) > 0.0);
     let material = rt_materials[pair.words.x];
+    let bary = vec3(1.0-hit.barycentrics.x-hit.barycentrics.y,hit.barycentrics);
+    let uv = v0.uv.xy*bary.x + v1.uv.xy*bary.y + v2.uv.xy*bary.z;
+    var shading = ocean_safe_normalize(rt_vector(pair,
+        v0.normal.xyz*bary.x+v1.normal.xyz*bary.y+v2.normal.xyz*bary.z),geometry);
+    shading = select(shading,-shading,dot(shading,geometry)<0.0);
+    if (material.textures.z != 0xffffffffu) {
+        shading = surface_map_normal(shading,rt_sample(material.textures.z,uv).xyz*2.0-1.0,
+            material.factors.y,rt_vector(pair,p1-p0),rt_vector(pair,p2-p0),v1.uv.xy-v0.uv.xy,v2.uv.xy-v0.uv.xy);
+    }
+    let mr = rt_sample(material.textures.y,uv);
     var surface: RtSurface;
     surface.position = position;
-    surface.normal = geometry;
-    surface.albedo = material.color.rgb;
-    surface.metallic = material.color.w;
-    surface.roughness = material.factors.x;
+    surface.normal = shading;
+    surface.geometry = geometry;
+    surface.albedo = material.color.rgb * rt_sample(material.textures.x,uv).rgb;
+    surface.metallic = material.color.w * mr.b;
+    surface.roughness = material.factors.x * mr.g;
+    surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv).r,material.factors.z);
+    surface.dielectric=0.04;
     return surface;
 }
 
@@ -136,9 +123,9 @@ fn rt_reflection(
 ) -> vec3<f32> {
     // Same operand order as the raster environment term, so `mirror = 0`
     // reproduces it exactly instead of approximately.
-    let env = ambient / OCEAN_PI * fresnel * occlusion;
+    let env = env_radiance(reflect(-eye, normal), ambient) * fresnel * occlusion;
     // A single mirror-direction sample cannot represent a wide specular lobe;
-    // above the cutoff the estimate yields to the isotropic environment
+    // above the cutoff the estimate yields to the shared environment
     // exactly (mirror = 0 reproduces the raster term bit-for-bit).
     let mirror = clamp((RT_ROUGHNESS_CUTOFF - roughness) / RT_ROUGHNESS_CUTOFF, 0.0, 1.0);
     if mirror <= 0.0 {
@@ -149,36 +136,52 @@ fn rt_reflection(
     var origin = position + normal * RT_BIAS;
     var direction = reflect(-eye, normal);
     for (var bounce = 0u; bounce < RT_BOUNCES; bounce++) {
-        let hit = rt_trace(origin, direction, RT_BIAS, RT_TMAX);
+        let hit = rt_trace(origin, direction, RT_BIAS, RT_TMAX, 0u);
         if !hit.hit {
-            radiance += throughput * env;
+            // The miss contributes the environment radiance of that direction
+            // through the accumulated chain weight, matching the raster term's
+            // operand order (`radiance * fresnel * occlusion`).
+            radiance += env_radiance(direction, ambient) * throughput;
             break;
         }
         let surface = rt_surface(hit, direction);
         var illuminance = light.ambient.rgb;
+        var visibility:array<f32,3>;
         for (var i = 0u; i < 3u; i++) {
             if any(light.colors[i].rgb > vec3(0.0)) {
+                visibility[i]=surface_visibility(surface.position,surface.geometry,i);
                 illuminance +=
                     light.colors[i].rgb
                     * max(dot(surface.normal, light.directions[i].xyz), 0.0)
-                    * shadow_visibility(surface.position, surface.normal, i);
+                    * visibility[i];
             }
         }
-        let hit_f0 = mix(vec3(0.04), surface.albedo, surface.metallic);
+        let hit_f0 = mix(vec3(surface.dielectric), surface.albedo, surface.metallic);
         let hit_fresnel =
-            hit_f0
-            + (vec3(1.0) - hit_f0) * pow(1.0 - max(dot(surface.normal, -direction), 0.0), 5.0);
+            hit_f0 + select((vec3(1.0) - hit_f0) * pow(1.0 - max(dot(surface.normal, -direction), 0.0), 5.0),vec3(0.0),RT_LOW_QUALITY);
         // Diffuse light leaving the hit toward this ray, then the specular
         // continuation of the same weighted chain.
         radiance +=
             throughput * (vec3(1.0) - hit_fresnel) * (1.0 - surface.metallic) * surface.albedo
-            * illuminance / OCEAN_PI;
-        throughput *= hit_fresnel;
-        origin = surface.position + surface.normal * RT_BIAS;
-        direction = reflect(direction, surface.normal);
+            * (illuminance-light.ambient.rgb*(1.0-surface.occlusion)) / OCEAN_PI;
+        for (var i=0u;i<3u;i++) {
+            if (any(light.colors[i].rgb>vec3(0.0))) {
+                radiance += throughput*surface_sun_reflection(surface.normal,-direction,light.directions[i].xyz,
+                    light.colors[i].rgb,surface.roughness,hit_f0)*visibility[i];
+            }
+        }
+        let reflected = reflect(direction,surface.normal);
+        let continuation = clamp((RT_ROUGHNESS_CUTOFF-surface.roughness)/RT_ROUGHNESS_CUTOFF,0.0,1.0);
+        radiance += throughput*hit_fresnel*env_radiance(reflected,ambient)*surface.occlusion*(1.0-continuation);
+        throughput *= hit_fresnel*continuation*surface.occlusion;
+        origin = surface.position + surface.geometry * RT_BIAS;
+        direction = reflected;
         if all(throughput < vec3(0.002)) {
             break;
         }
     }
-    return mix(env, radiance, mirror);
+    // Everything arriving through this chain is indirect at the primary
+    // surface, including a secondary hit's direct stellar radiance. Apply
+    // primary AO once here, not only on a miss (or once per bounce).
+    return mix(env, radiance * occlusion, mirror);
 }

@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-17",
+  "base_commit": "da4f026",
+  "scope": "SlotCache CPU page-to-layer assignment only; not CBT topology, GPU uploads or frame rate",
+  "hardware": "AMD Ryzen AI 9 H 365 (10 cores, 20 logical CPUs), Linux; optimized Cargo bench profile; no affinity or fixed frequency",
+  "command": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target cargo bench -p thessa-rcbt-core --bench material_cache",
+  "samples": 31,
+  "baseline": "Original Vec-scan implementation from base_commit, measured with the same new benchmark before changing the policy implementation",
+  "indexed": "Ordered Vec + lookup-only HashMap + HashSet priority dedup + one free/LRU candidate pass sorted by (last_requested,slot); no hash-iteration decisions",
+  "scenario": {
+    "warm": "Full-capacity request unchanged, no uploads",
+    "cold": "Empty cache preallocated before each sample; request full capacity; all pages uploaded",
+    "churn_1_in_16": "Alternate full-capacity request sets sharing 15/16 of IDs; exactly capacity/16 page changes per sample",
+    "included": "update_retaining body including its allocations and returned change vector",
+    "excluded": "Request construction, empty cache setup/cloning, post-update residency/generation assertions, shader work and GPU traffic",
+    "validation": "Expected upload count, generation and complete residency asserted after every sample"
+  },
+  "baseline_ns": [
+    {"capacity": 64, "scenario": "warm", "median": 1022, "p95": 1042, "p99": 1653},
+    {"capacity": 64, "scenario": "cold", "median": 2304, "p95": 2404, "p99": 2595},
+    {"capacity": 64, "scenario": "churn_1_in_16", "median": 3106, "p95": 3777, "p99": 4228},
+    {"capacity": 256, "scenario": "warm", "median": 19336, "p95": 30286, "p99": 34264},
+    {"capacity": 256, "scenario": "cold", "median": 38232, "p95": 39073, "p99": 39684},
+    {"capacity": 256, "scenario": "churn_1_in_16", "median": 155950, "p95": 159848, "p99": 168965},
+    {"capacity": 1024, "scenario": "warm", "median": 277898, "p95": 302934, "p99": 330515},
+    {"capacity": 1024, "scenario": "cold", "median": 493920, "p95": 530067, "p99": 573728},
+    {"capacity": 1024, "scenario": "churn_1_in_16", "median": 7816333, "p95": 8663932, "p99": 8747657},
+    {"capacity": 4096, "scenario": "warm", "median": 3715298, "p95": 3861059, "p99": 3905492},
+    {"capacity": 4096, "scenario": "cold", "median": 8352091, "p95": 8865026, "p99": 8892227},
+    {"capacity": 4096, "scenario": "churn_1_in_16", "median": 458188317, "p95": 471311672, "p99": 483186001}
+  ],
+  "indexed_final_ns": [
+    {"capacity": 64, "scenario": "warm", "median": 1382, "p95": 1453, "p99": 1633},
+    {"capacity": 64, "scenario": "cold", "median": 1472, "p95": 1723, "p99": 1914},
+    {"capacity": 64, "scenario": "churn_1_in_16", "median": 1282, "p95": 1482, "p99": 1613},
+    {"capacity": 256, "scenario": "warm", "median": 4609, "p95": 4649, "p99": 4708},
+    {"capacity": 256, "scenario": "cold", "median": 5200, "p95": 5280, "p99": 5470},
+    {"capacity": 256, "scenario": "churn_1_in_16", "median": 4969, "p95": 5160, "p99": 5260},
+    {"capacity": 1024, "scenario": "warm", "median": 19216, "p95": 19647, "p99": 19697},
+    {"capacity": 1024, "scenario": "cold", "median": 20538, "p95": 47188, "p99": 47909},
+    {"capacity": 1024, "scenario": "churn_1_in_16", "median": 20188, "p95": 22743, "p99": 31910},
+    {"capacity": 4096, "scenario": "warm", "median": 80470, "p95": 90388, "p99": 90959},
+    {"capacity": 4096, "scenario": "cold", "median": 80860, "p95": 81181, "p99": 90819},
+    {"capacity": 4096, "scenario": "churn_1_in_16", "median": 82453, "p95": 89587, "p99": 90118}
+  ],
+  "indexed_initial_ns": [
+    {"capacity": 64, "scenario": "warm", "median": 2575, "p95": 2685, "p99": 2775},
+    {"capacity": 64, "scenario": "cold", "median": 3136, "p95": 3686, "p99": 3867},
+    {"capacity": 64, "scenario": "churn_1_in_16", "median": 2715, "p95": 3006, "p99": 3636},
+    {"capacity": 256, "scenario": "warm", "median": 9999, "p95": 10259, "p99": 19206},
+    {"capacity": 256, "scenario": "cold", "median": 11161, "p95": 11371, "p99": 11682},
+    {"capacity": 256, "scenario": "churn_1_in_16", "median": 10500, "p95": 15729, "p99": 18665},
+    {"capacity": 1024, "scenario": "warm", "median": 40886, "p95": 47348, "p99": 50965},
+    {"capacity": 1024, "scenario": "cold", "median": 43481, "p95": 54591, "p99": 54672},
+    {"capacity": 1024, "scenario": "churn_1_in_16", "median": 43220, "p95": 48109, "p99": 59510},
+    {"capacity": 4096, "scenario": "warm", "median": 172050, "p95": 179965, "p99": 201014},
+    {"capacity": 4096, "scenario": "cold", "median": 173533, "p95": 182389, "p99": 185094},
+    {"capacity": 4096, "scenario": "churn_1_in_16", "median": 177040, "p95": 194463, "p99": 197077}
+  ],
+  "limitations": [
+    "Initial indexed run overlapped a release build of the native app and is retained separately; final run had no overlapping agent build, but neither run used affinity/fixed clocks or controlled OS noise",
+    "p99 of 31 samples is the observed maximum, not a stable tail-latency estimate",
+    "64-slot warm regression remains in the final run (1382 vs 1022 ns); initial run also regressed cold. Small absolute differences are sensitive to CPU state; expected hashing/allocation overhead can dominate tiny caches",
+    "Index and scratch require O(capacity) extra memory; SlotCache clone becomes more expensive; allocation counts, publication clone cost and end-to-end streaming impact are not measured",
+    "No StagingBelt A/B, GPU timestamps, submission batching, native perf integration or new buffer allocator in this change"
+  ],
+  "regression_oracle": "Original slow policy independently replayed against indexed update/update_retaining at capacities 1,4,64,256 for 240 epochs each; exact changes and slot states compared, clones interleaved, lookup index validated against occupied slots",
+  "verification": "cargo test -p thessa-rcbt-core --lib; cargo bench -p thessa-rcbt-core --bench material_cache; workspace fmt/clippy/lib+bin/integration and architecture/agent-QA checks also run (see native-environment-radiance-2026-10-17.json)",
+  "brutal": "Review motivated measurement only. No BRUTAL execution, source copying, dependency or licensing-compatibility claim"
+}

@@ -24,6 +24,20 @@ struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>
     out.uv=uv;
     return out;
 }
+// Raster supplies screen derivatives; a ray hit supplies triangle edges and
+// UV differences. Both construct the same tangent frame, including mirrored UVs.
+fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
+    dx:vec3<f32>,dy:vec3<f32>,du:vec2<f32>,dv:vec2<f32>)->vec3<f32> {
+    let determinant=du.x*dv.y-du.y*dv.x;
+    if (abs(determinant)>1e-10) {
+        let t=(dx*dv.y-dy*du.y)/determinant;
+        let b=(dy*du.x-dx*dv.x)/determinant;
+        let tangent=ocean_safe_normalize(t-normal*dot(t,normal),vec3(0.0));
+        let bitangent=ocean_safe_normalize(cross(normal,tangent),vec3(0.0))*select(-1.0,1.0,dot(cross(normal,tangent),b)>=0.0);
+        return ocean_safe_normalize(tangent*map_normal.x*scale+bitangent*map_normal.y*scale+normal*map_normal.z,normal);
+    }
+    return normal;
+}
 @fragment fn fragment(in:Output,@builtin(front_facing) front:bool)->@location(0) vec4<f32> {
     if (!front && material.double_sided==0u) { discard; }
     var normal=normalize(in.normal)*select(-1.0,1.0,front);
@@ -33,20 +47,12 @@ struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>
     let mr=textureSample(mr_texture,mr_sampler,in.uv);
     let ao=mix(1.0,textureSample(ao_texture,ao_sampler,in.uv).r,material.factors.w);
     if (material.quality==2u && material.pad!=0u) {
-        // Derivative tangent frame, including mirrored UVs; degenerate UVs
-        // retain the geometric normal rather than normalizing a zero vector.
-        let determinant=du.x*dv.y-du.y*dv.x;
-        if (abs(determinant)>1e-10) {
-            let t=(dx*dv.y-dy*du.y)/determinant;
-            let b=(dy*du.x-dx*dv.x)/determinant;
-            let tangent=ocean_safe_normalize(t-normal*dot(t,normal),vec3(0.0));
-            let bitangent=ocean_safe_normalize(cross(normal,tangent),vec3(0.0))*select(-1.0,1.0,dot(cross(normal,tangent),b)>=0.0);
-            normal=ocean_safe_normalize(tangent*map_normal.x*material.factors.z+bitangent*map_normal.y*material.factors.z+normal*map_normal.z,normal);
-        }
+        normal=surface_map_normal(normal,map_normal,material.factors.z,dx,dy,du,dv);
     }
     let albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
     var illuminance=light.ambient.rgb;
-    for (var i=0u;i<3u;i++) { if (any(light.colors[i].rgb>vec3(0.0))) { illuminance+=light.colors[i].rgb*max(dot(normal,light.directions[i].xyz),0.0)*shadow_visibility(in.position,normal,i); } }
+    var visibility:array<f32,3>;
+    for (var i=0u;i<3u;i++) { if (any(light.colors[i].rgb>vec3(0.0))) { visibility[i]=surface_visibility(in.position,normal,i); illuminance+=light.colors[i].rgb*max(dot(normal,light.directions[i].xyz),0.0)*visibility[i]; } }
     if (material.quality==0u && material.reflections==0u) { return vec4(albedo*illuminance*(1.0-material.factors.x)/OCEAN_PI*view.exposure,1.0); }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
@@ -63,7 +69,7 @@ struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>
         radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
         for (var i=0u;i<3u;i++) {
             if (any(light.colors[i].rgb>vec3(0.0))) {
-                radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,light.colors[i].rgb,roughness,f0)*shadow_visibility(in.position,normal,i);
+                radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,light.colors[i].rgb,roughness,f0)*visibility[i];
             }
         }
     }

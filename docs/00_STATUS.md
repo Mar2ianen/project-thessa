@@ -72,14 +72,15 @@ do not update in place).
 | `22_RCBT_GPU_TERRAIN.md` | 🟡 baseline | §§1–18 normative, Arc-shared extraction snapshots, batched COW page streaming, stable height slots, dirty-ordinal geometry dispatch | GPU bisector pool, native Vulkan, compressed pages |
 | `47_RCBT_RENDER_AUDIT_2026_10_01.md` | 🕰️ draw/failed-visual checkpoint | native mesh draw with shared classifier/material, capability fallback, world-addressed material LOD, hardware regressions, matched debug coast metrics | later residency/material work in docs 51–53; final loading/visual acceptance and persistent conforming GPU topology remain incomplete |
 | `37_CBT_INTEGRATION_STATUS_2026_09_14.md` | ✅ opt-in | fallback + indexed raster + material pages | visual acceptance, numeric comparison, persistent topology |
-| `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ audit | defects fixed + follow-ups | bisector pool, shadow parity, FFT ocean, virtual texture |
+| `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ dated audit | defects fixed + follow-ups; later native spectral-ocean slice in doc 56 | historical gaps included bisector pool, shadow parity, FFT ocean and virtual texture; current scope in docs 39/56 |
 | `38_ENGINE_PLUME_RENDERING.md` | 🟡 implemented renderer slice | backend-neutral plume core, Low impostor, Medium/High field-integrated volume ribbon and field-derived light | live compiled engine/nozzle state in client, adaptive residual integration, ray-traced lighting and higher-quality tiers |
-| `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🟡 isolated implementation branches | FastRT classification + bounded slab compute; owned CBT compute/indirect raster, backend-neutral f64 body/camera frames, dirty height/material publication and bounded geometry slots; Bevy-free canonical window/headless viewer with coherent ephemeris/spin/stellar lighting, shared async terrain streaming and COW sources, winit + shared-device egui HUD; shared GLB sources and explicit compatibility X-15 identity; shared GPL flight pose/cameras/input/instruments; canonical COAST local authority or explicit PRIMARY server flight via shared embedded transport, checked adoption/input construction, receive-time interpolation, separate intent/acknowledgement and failure freeze; bounded own-time fleet observer/contact inspector; body-owned retained render meshes, procedural body baking and wire-v10 descriptors with separate immutable mesh epochs; authoritative retained PRIMARY/split appearance, COM-stable GPU publication and rotating-body-frame draws; neutral fleet shells use the existing opaque pass at a bracketed PRIMARY epoch, with resolved quality/disabled policy and 64-total-vehicle admission; native scene-object ray-query reflections with per-primitive BLASes, range-driven TLAS instances and a named reflection hook whose raster fallback is exactly the environment term | production client replacement, remaining WorldTerrain topology/map-camera/ECS integration and CPU fallback assets, complete render designs/materials and general incremental residency, prediction/reconciliation, external TCP/reconnect and fuller resources, PBR material parity, production UI/assists/dominant-body display and remaining assets/effects, complete platform integration, terrain/ocean/atmosphere/cloud RT scene membership, RT shadow rays, hit-path texture/normal/AO sampling and FastRT ray-budget/visibility policy |
+| `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🟡 isolated implementation branches | FastRT classification + bounded slab compute; owned CBT compute/indirect raster, backend-neutral f64 body/camera frames, dirty height/material publication and bounded geometry slots; Bevy-free canonical window/headless viewer with coherent ephemeris/spin/stellar lighting, shared async terrain streaming and COW sources, winit + shared-device egui HUD; shared GLB sources and explicit compatibility X-15 identity; shared GPL flight pose/cameras/input/instruments; canonical COAST local authority or explicit PRIMARY server flight via shared embedded transport, checked adoption/input construction, receive-time interpolation, separate intent/acknowledgement and failure freeze; bounded own-time fleet observer/contact inspector; body-owned retained render meshes, procedural body baking and wire-v10 descriptors with separate immutable mesh epochs; authoritative retained PRIMARY/split appearance, COM-stable GPU publication and rotating-body-frame draws; neutral fleet shells use the existing opaque pass at a bracketed PRIMARY epoch, with resolved quality/disabled policy and 64-total-vehicle admission; textured mesh ray-query reflections/shadows plus resident generated-terrain membership with dirty-only per-slot BLASes, shared material pages and whole-partition budget fallback; shared sky environment/background, GPU capture and exact shadow-depth reuse; bounded spectral near-ocean geometry/optics (doc 56) | production client replacement, remaining WorldTerrain topology/map-camera/ECS integration and CPU fallback assets, complete render designs/materials and general incremental residency, prediction/reconciliation, external TCP/reconnect and fuller resources, PBR material parity, production UI/assists/dominant-body display and remaining assets/effects, complete platform integration, exact displaced far-ocean/atmosphere/cloud RT membership, primary terrain/ocean mesh-query reflections and FastRT ray-budget/visibility policy |
 | `54_BEVY_0_20_MIGRATION_PLAN.md` | 🔵 study plan | 0.19.1→0.20.0 migrated on branch (deps, extraction, WESL, buttons, wgpu-30) + 8 regression tests, gates green | merge/defer decision |
 | `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 experimental | codec A–E, allocator/residency, GPU LOD/mip/aniso path, game + render-world A/B measured; compact path pre-decodes to RGBA and raw remains default | packed material-shader sampling, crack-free geometry, baked-format adoption, production height pages |
 | `43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md` | 🟡 experimental | scalar adaptive residual codec with force/moment error bounds, safe table/query validation, non-negative decoded drag, and direct panel sampling; 257×257 storage is 1.77× smaller; scalar sampling was 1.58× slower in the dated baseline and 1.77–2.10× slower across three later one-pass reruns; canonical tables remain the default | fused SIMD decode, channel-specific budgets, real VLM/CFD fields, production acceptance |
 | `45_CAD_RCBT_GEOMETRY.md` | 🔵 design baseline | D1 STEP/BRep fixture audited; existing RCBT + mesh-shader terrain path reused architecturally | CAD importer, normalized BRep runtime, crack-free adaptive face meshing, editor integration |
 | `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🟡 first slice | `audio-core` path semantics, exact-vacuum gating, structural/direct paths, Mach-cone arrival; `audio-synth` live procedural engine DSP; temporary Bevy RCS/GPWS/docking/demo adapter | calibrated physical engine telemetry/spectra, procedural one-shot mechanisms, structural attenuation graph, real IVA listener, occlusion/reverb/HRTF, post-Bevy backend |
+| `56_NATIVE_SPECTRAL_OCEAN.md` | 🟡 native render-only slice | independent multiband GPU FFT, simulation-time finite-depth/local-gravity waves, slope-moment filtering, bounded shared raster/atlas/mesh-RT near geometry, explicit quality/optical-only fallback, GPU oracles and scoped costs | nonlinear waves, foam/wakes, bathymetry/weather, authoritative fluid coupling, far displaced intersections, primary ocean mesh-query reflections, ray cones/environment convolution, blind visual/platform acceptance |
 
 The doc 39 branch also shares the owned GPL surface-survey camera between
 clients (quaternion orbit/free look/zoom/reset and native bookmark selection).
@@ -114,20 +115,70 @@ Native opaque lighting now consumes resolved material/reflection settings and
 the existing shadow settings: shared GGX with linear metallic/roughness, normal
 and AO maps, plus a three-source cascaded terrain/mesh shadow atlas (48 MiB at
 the default 64 MiB budget). Disabled shadows allocate no atlas or shadow
-pipelines. Native scene-object reflections now come from a Thessa-owned
+pipelines. The atlas now retains depth for exactly unchanged light matrices,
+terrain pages/membership/camera origin, and immutable mesh source + instance /
+primitive-range bytes. Changes invalidate it; there is no quality, cadence or
+geometry reduction. Forced-redraw GPU oracles compare byte-identical frames;
+static-only cost evidence is in doc 39's shadow-depth-cache checkpoint.
+Native scene-object reflections now come from a Thessa-owned
 ray-query path (`renderer.ray_tracing` + `[raytracing]` budgets): one BLAS per
 primitive over consolidated copies, TLAS instances from the existing instance
 ranges, and a named reflection hook whose raster fallback is exactly the
-environment term, so a miss is byte-identical to raster. Explicit RT requests
+environment term (white-mirror misses are byte-identical; dielectric/AO/roughness
+misses agree within 1/255). Explicit RT requests
 fail fast on a device without negotiated ray query; RT off allocates and builds
-nothing. See doc 39's ray-query checkpoint for oracles, telemetry and limits.
-This is not full replacement: terrain/ocean/atmosphere/clouds are not traced,
-RT shadow rays, texture/UV/normal/AO sampling in the hit path, HDR/tonemapping,
-mip chains and complete material/Bevy parity remain absent, and the documented
-captures are not reflection evidence (RT on/off differences are within the
-measured same-config noise, and the canonical asset's factor roughness exceeds
-the trace cutoff). Shadows only see retained scene geometry;
+no acceleration structures. See doc 39's ray-query and textured-hit/shadow
+checkpoints for oracles, telemetry and limits.
+Mesh queries now also trace the resident generated terrain grid (including its
+clamped sea datum), with persistent per-slot BLASes, dirty-only rebuilds and
+shared raster material sampling. Whole-partition budget rejection is explicit;
+no partial occluder truncation. Native window/headless mesh consumers synchronize
+membership after publication/replacement. Opt-in `[ocean]` now adds the shared
+multiband spectral field, filtered slope moments and bounded near-grid waves
+consumed by raster, the atlas and mesh RT; whole near-partition overflow is
+optical-only. See doc 56 for physical inputs, quality, bounds and scoped costs.
+This is not full replacement: primary terrain/ocean mesh-query reflection receivers, atmosphere/cloud
+traversal, HDR/tonemapping, mesh mip chains and complete material parity remain
+absent. See doc 39's resident-terrain checkpoint for costs and ocean direction.
+Hit shading now interpolates UVs/smooth normals, samples the raster material's
+base colour (sRGB) and High-tier MR/normal/AO (linear), and uses the shared GGX
+direct-light and tangent-frame functions. Hit roughness now controls specular
+continuation as well as the stellar BRDF. Native mesh and reflected-hit stellar
+visibility adds opaque mesh/resident-terrain RT shadow rays to the shared raster
+atlas; primary terrain still receives atlas visibility. Shadow rays obey the resolved
+shadow enable and RT distance/scene budgets, with atlas-only fallback if RT
+is unavailable. Specular-off no longer implies no AS work when RT shadows
+are enabled: disabling both consumers does. The original
+ray-query checkpoint captures are not reflection evidence: RT on/off differences
+were within the measured same-config noise. That explanation was corrected by measurement
+after the slice landed — the trace gate already uses the primary *textured*
+roughness (0.333 median on the canonical asset, below the 0.6 cutoff, so the
+trace is eligible). Mostly dielectric primary texels and the then-black
+environment were consistent with the tiny delta; changed pixels were not
+individually attributed. The native viewer now consumes resolved atmosphere
+enable/quality/steps/density/multi-star/airglow settings to evaluate the shared physical
+single-scattering sky into a direction grid: sky background, mesh raster reflections and RT
+misses sample it; terrain/mesh diffuse ambient comes from its local-radial
+hemisphere integral. Unchanged fields upload once, not every frame; disabling
+releases grid storage and the background consumer. The background shares the
+scene's GPU publication with mesh/RT consumers (one upload per revision), draws
+at far depth in the existing terrain pass and does not overwrite foreground
+depth. Spectral ocean reflection now samples that same directional field.
+No sun disks, aerial perspective or HDR yet.
+See doc 39's environment-radiance and sky/perf checkpoints for error/cost
+evidence and limitations. Shadows only
+see retained scene geometry;
 off-cover terrain residency and production shadow-quality acceptance are pending.
+The material `SlotCache` now uses an ID index and one deterministic free/LRU
+candidate pass, checked against the original policy over mixed replays.
+Its 64/256/1024/4096-page warm/cold/churn benchmark is a CPU residency
+microbenchmark, not a renderer-FPS or GPU-upload win; see doc 22. Headless native
+`--perf-capture PATH.json` now writes `thessa-perf` JSON/CSV with host-frame /
+streaming scopes and opt-in hardware GPU command intervals for shadows,
+terrain+sky, meshes+RT and UI. Unsupported timestamps are explicitly unavailable;
+normal devices allocate no profiler. This is serial offscreen instrumentation,
+not asynchronous window profiling, isolated sky/AS/trace timings or complete
+simulation/counter coverage. StagingBelt A/B and submission batching remain open.
 The shared link now caps complete pending command packets at the protocol's
 64-command limit (all variants and state votes), and worker pipe/encode
 failures close the input side visibly. Stalled-peer heartbeat/reconnect and
@@ -155,7 +206,7 @@ fleet observations (but is rebuilt for v10).
 | `07_AUTOPILOT.md` | 🟡 slice | IR, wait-bounded cycles, per-wait generations, 4 blocks, B-plane + variational, L0–L2 replays | full stdlib/editor, staging topology, L3–L4, powered rails |
 | `18-control-guidance-autopilot.md` | 🟡 baseline | authority/laws/allocator/graph/QuickJS/waits/server | allocator generalization, wire replacement, Phases 4–5 |
 | `12_X15_ASSET_PROVENANCE.md` | 📦 provenance | record current | — |
-| `15_PERFORMANCE_MONITORING.md` | ✅ active | capture/scopes/overlay/counters | GPU timestamps, backend memory, dev levels |
+| `15_PERFORMANCE_MONITORING.md` | ✅ active | capture/scopes/overlay/counters, native headless GPU intervals | window/Bevy GPU timestamps, finer GPU scopes, backend memory, dev levels |
 
 ## Process and reference
 

@@ -56,6 +56,13 @@ pub struct Scene {
     pub site: usize,
     celestial: CelestialPresentation,
     pub sample: Sample,
+    /// Body optics plus the field's bounded refresh policy; `None` for a body
+    /// without an atmosphere provider, which has no sky to integrate.
+    environment: Option<crate::environment::EnvironmentField>,
+    ocean_gravity_m_s2: f64,
+    /// One GPU publication used by both background and mesh/RT consumers.
+    gpu_environment: Option<thessa_render_wgpu::environment::EnvironmentBinding>,
+    gpu_environment_revision: Option<u64>,
     lighting_dirty: bool,
 }
 
@@ -187,6 +194,19 @@ impl Scene {
         let body = ephemeris
             .body_id(&recipe.planet.id)
             .ok_or("missing terrain body")?;
+        let environment = ephemeris.body(body).ok().and_then(|data| {
+            let atmosphere = data.atmosphere.as_ref().and_then(|baked| {
+                baked
+                    .surface_pressure_pa
+                    .map(|pressure| crate::environment::BodyAtmosphere {
+                        surface_pressure_pa: pressure,
+                        gas_constant_j_kg_k: baked.gas_constant_j_kg_k,
+                    })
+            });
+            crate::environment::EnvironmentField::new(data.radius_m, data.mu, atmosphere)
+        });
+        let data = ephemeris.body(body).map_err(|e| e.to_string())?;
+        let ocean_gravity_m_s2 = data.mu / data.radius_m.powi(2);
         let celestial = CelestialPresentation::new(&system, ephemeris, body)?;
         let sample = celestial.sample(thessa_sim_core::SimTime::EPOCH)?;
         let sites = [
@@ -196,6 +216,7 @@ impl Scene {
         ];
         let stream = TerrainStream::new(field, StreamingPolicy::default())?;
         let mut scene = Self {
+            ocean_gravity_m_s2,
             primary_presentation: None,
             last_primary_revision: 0,
             last_primary_frame_revision: 0,
@@ -219,6 +240,9 @@ impl Scene {
             sites,
             site: 1,
             celestial,
+            environment,
+            gpu_environment: None,
+            gpu_environment_revision: None,
             sample,
             lighting_dirty: false,
         };
@@ -841,11 +865,20 @@ impl Scene {
         &self,
         backend: &Backend,
         format: wgpu::TextureFormat,
-        shadows: Option<&thessa_render_wgpu::shadows::ShadowAtlas>,
+        terrain: &TerrainRenderer,
     ) -> Result<Option<SceneMeshes>, BackendError> {
         self.vehicle
             .as_ref()
-            .map(|(source, _)| SceneMeshes::with_shadows(self, backend, source, format, shadows))
+            .map(|(source, _)| {
+                SceneMeshes::with_shadows(
+                    self,
+                    backend,
+                    source,
+                    format,
+                    terrain.shadows(),
+                    terrain.ray_source(),
+                )
+            })
             .transpose()
     }
     pub fn update_mesh(
@@ -881,13 +914,67 @@ impl Scene {
         Ok(())
     }
 
+    /// Evaluate the field using the budget resolved at renderer creation from
+    /// the negotiated device. The field
+    /// writes the ambient it integrates back into the published lighting, so
+    /// indirect diffuse and reflective terms read one physical source.
+    fn update_environment(&mut self, camera_body_m: DVec3) {
+        if let Some(field) = &mut self.environment {
+            let revision = field.revision();
+            field.update(camera_body_m, &self.sample.environment_lights);
+            self.lighting_dirty |= revision != field.revision();
+        }
+    }
+
+    /// Compose current direct lighting and the cached sky ambient at the read
+    /// boundary. No second cache of direct light that can lag an adopted sample.
+    pub fn lighting(&self) -> thessa_rcbt_core::lighting::SurfaceLighting {
+        let mut lighting = self.sample.lighting;
+        let ambient = self
+            .environment_grid()
+            .map(thessa_render_core::environment::EnvironmentRadiance::ambient_lux);
+        if let Some(ambient) = ambient {
+            lighting.ambient_lux = [ambient[0], ambient[1], ambient[2], 0.0];
+        }
+        lighting
+    }
+
+    /// Environment accounting for telemetry; `None` when the scene has no
+    /// optics for its body at all (an airless body).
+    pub fn environment_stats(&self) -> Option<crate::environment::EnvironmentStats> {
+        Some(self.environment.as_ref()?.stats())
+    }
+
+    /// Bound environment grid for renderers, if any.
+    pub fn environment_grid(
+        &self,
+    ) -> Option<&thessa_render_core::environment::EnvironmentRadiance> {
+        self.environment.as_ref()?.grid()
+    }
+
+    pub fn environment_revision(&self) -> u64 {
+        self.environment.as_ref().map_or(0, |f| f.revision())
+    }
+
     fn publish_presentation(
         &mut self,
         backend: &Backend,
         renderer: &mut TerrainRenderer,
     ) -> Result<(), BackendError> {
+        let revision = self.environment_revision();
+        if self.gpu_environment_revision != Some(revision) {
+            if self.environment_grid().is_some() || self.gpu_environment.is_some() {
+                let mut binding = self.gpu_environment.take().unwrap_or_else(|| {
+                    thessa_render_wgpu::environment::EnvironmentBinding::new(&backend.device)
+                });
+                binding.update(backend, self.environment_grid());
+                renderer.share_environment(backend, Some(&binding));
+                self.gpu_environment = Some(binding);
+            }
+            self.gpu_environment_revision = Some(revision);
+        }
         if self.lighting_dirty {
-            renderer.update_lighting(backend, &self.sample.lighting)?;
+            renderer.update_lighting(backend, &self.lighting())?;
             self.lighting_dirty = false;
         }
         Ok(())
@@ -898,6 +985,10 @@ impl Scene {
         backend: &Backend,
         format: wgpu::TextureFormat,
     ) -> Result<TerrainRenderer, BackendError> {
+        let resolved = backend.resolve_graphics(&self.requested);
+        if let Some(field) = &mut self.environment {
+            field.set_budget(crate::environment::EnvironmentBudget::resolve(&resolved));
+        }
         let patches: Vec<_> = self
             .stream
             .visible()
@@ -907,8 +998,16 @@ impl Scene {
                 page: self.stream.height(key).unwrap().page,
             })
             .collect();
-        let resolved = backend.resolve_graphics(&self.requested);
-        let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+        let ocean = &resolved.ocean;
+        let sea = thessa_render_core::ocean::SeaState {
+            gravity_m_s2: self.ocean_gravity_m_s2,
+            wind_speed_m_s: ocean.wind_speed_m_s,
+            wind_direction_rad: ocean.wind_direction_rad,
+            significant_height_m: ocean.significant_height_m,
+            depth_m: ocean.depth_m,
+            seed: ocean.seed,
+        };
+        let mut renderer = TerrainRenderer::with_capacity_lighting_and_ocean(
             backend,
             &patches,
             format,
@@ -918,13 +1017,18 @@ impl Scene {
                 material_layers: backend.device.limits().max_texture_array_layers.min(256),
             },
             Some(&resolved),
+            Some(sea),
         )?;
         let stats = renderer.update_materials(
             backend,
             self.stream.material_demand(),
             self.stream.materials(),
         )?;
-        renderer.update_lighting(backend, &self.sample.lighting)?;
+        renderer.update_lighting(backend, &self.lighting())?;
+        // A replacement renderer must adopt the current buffers even if the
+        // source revision has not changed. No second upload.
+        self.publish_presentation(backend, &mut renderer)?;
+        renderer.share_environment(backend, self.gpu_environment.as_ref());
         self.lighting_dirty = false;
         eprintln!(
             "material publication: {} pages, {} bytes",
@@ -955,8 +1059,9 @@ impl Scene {
         exposure: f32,
         now_s: f64,
     ) -> Result<StreamUpdate, Box<dyn std::error::Error>> {
-        self.publish_presentation(backend, renderer)?;
         let camera = self.view(width, height, exposure);
+        self.update_environment(camera.world_position_m);
+        self.publish_presentation(backend, renderer)?;
         let forward = camera
             .world_from_view
             .transform_vector3(DVec3::NEG_Z)
@@ -1283,7 +1388,7 @@ mod tests {
             vertices
         );
         let before = (
-            scene.sample,
+            scene.sample.clone(),
             scene.center,
             scene.vehicle.as_ref().unwrap().1.position_m,
         );
@@ -1871,6 +1976,88 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a wgpu adapter"]
+    fn unchanged_sky_uploads_once_and_disable_releases_mesh_grid() {
+        let backend = Backend::bring_up().unwrap();
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_vehicle_preview().unwrap();
+        let mut terrain = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        let camera = scene.view(320, 240, 1.0).world_position_m;
+        scene.update_environment(camera);
+        scene.publish_presentation(&backend, &mut terrain).unwrap();
+        assert!(terrain.sky_enabled());
+        assert!(
+            scene.environment_grid().is_some(),
+            "publish the initial grid on this tick"
+        );
+        let mut meshes = scene
+            .mesh_renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap()
+            .unwrap();
+        for _ in 0..4 {
+            scene.update_environment(camera);
+            scene
+                .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+                .unwrap();
+        }
+        assert_eq!(meshes.opaque().unwrap().environment_stats().4, 1);
+        assert_eq!(scene.gpu_environment.as_ref().unwrap().uploads(), 1);
+        // Replacing either consumer adopts the current buffers without another
+        // upload. A scene-wide "already bound" flag would lose the new binding.
+        terrain = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        assert!(terrain.sky_enabled());
+        let mut replacement = scene
+            .mesh_renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap()
+            .unwrap();
+        scene
+            .update_mesh(&backend, &mut replacement, 320, 240, 1.0)
+            .unwrap();
+        assert_eq!(replacement.opaque().unwrap().environment_stats().4, 1);
+        assert_eq!(scene.gpu_environment.as_ref().unwrap().uploads(), 1);
+        // Changed resolved policy must not let a replacement renderer bind a
+        // stale enabled GPU publication even before the next ordinary tick.
+        scene.requested.atmosphere.enabled = false;
+        terrain = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        assert!(!terrain.sky_enabled());
+        scene.update_environment(camera);
+        scene.publish_presentation(&backend, &mut terrain).unwrap();
+        assert!(!terrain.sky_enabled());
+        scene
+            .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+            .unwrap();
+        let stats = meshes.opaque().unwrap().environment_stats();
+        assert!(!stats.0);
+        assert_eq!(stats.3, 0);
+        assert_eq!(stats.4, 2);
+        assert_eq!(
+            scene.lighting().ambient_lux,
+            scene.sample.lighting.ambient_lux
+        );
+    }
+
+    #[test]
     fn moving_celestial_samples_keep_body_attached_camera_and_failed_sample_preserves_state() {
         let mut scene = Scene::load(thessa_graphics::RequestedGraphics::default()).unwrap();
         let epoch = scene.view(1280, 720, 1.0);
@@ -1888,7 +2075,15 @@ mod tests {
             assert!((forward - original_forward).length() < 1e-6);
         }
         assert_ne!(scene.sample.lighting, initial_lighting);
-        let before = scene.sample;
+        assert_eq!(
+            scene.lighting().directions,
+            scene.sample.lighting.directions
+        );
+        assert_eq!(
+            scene.lighting().colors_lux,
+            scene.sample.lighting.colors_lux
+        );
+        let before = scene.sample.clone();
         let lighting = scene.sample.lighting;
         assert!(
             scene

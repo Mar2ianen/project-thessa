@@ -2931,12 +2931,15 @@ size query.
 build substitutes the `ray_scene.wgsl` implementation; the raster build
 substitutes `ray_scene::FALLBACK`, which is exactly
 `ambient / OCEAN_PI * fresnel * occlusion` — the operand order of the
-environment term it replaces, so a miss is bit-identical to the raster render
-and RT never invents sky or ambient radiance. A hit is shaded with the
-material's linear base color, metallic/roughness factors, the geometric normal
+environment term it replaces. The original miss oracle proved byte identity
+only for a **white mirror**, not for general materials; the environment
+follow-up below corrects double-applied Fresnel exposed by a dielectric oracle.
+A hit is shaded with the material's linear base-color and metallic factors,
+the geometric normal
 (one-sided assets still shade their reflection) and the existing surface
 illumination model: ambient plus per-light N·L with the shared cascaded shadow
-atlas. Textures and UVs are **not** sampled in the hit path. The chain is
+atlas. Stored hit roughness is unused; textures and UVs are **not** sampled
+in the hit path. The chain is
 single-sample mirror specular, faded to the isotropic environment term by
 `ROUGHNESS_CUTOFF = 0.6`: above it a mirror direction cannot represent the
 lobe, so the hook returns the same environment term as raster instead of
@@ -2948,7 +2951,7 @@ acceleration structure, no extra shader module and performs no AS work.
 deterministic GPU oracles on the real renderer: (1) a mirror facing a red quad
 returns a red-dominant center pixel (≥32 red, <8 green/blue) where the raster
 render is black — reflection is replaced by scene geometry, not by an ambient
-highlight; (2) a ray that hits nothing reproduces the raster frame
+highlight; (2) a white-mirror ray that hits nothing reproduces the raster frame
 byte-for-byte; (3) RT off performs zero acceleration-structure work.
 `crates/render-wgpu/tests/ray_probe.rs` additionally pins the stack contract in
 isolation on a one-triangle BLAS: opaque geometry is traceable, instance
@@ -2990,15 +2993,25 @@ off differ by ≈ 20–50 pixels at ≤ 5/255, which is the same magnitude as th
 **same-config run-to-run floor** (22–53 pixels, ≤ 5/255) measured
 interleaved on this machine: these captures are not deterministic at that
 level and the delta is indistinguishable from noise. The physical reason is
-recorded rather than patched over: the canonical X-15's two materials carry
-`metallicFactor = 1, roughnessFactor = 1` with textures, while the RT hit
-record currently uses material **factors** only, so per-surface roughness
-resolves to 1.0 — above `ROUGHNESS_CUTOFF`, so the trace yields to the
-environment term for the whole aircraft. Making reflections visible on
-textured assets requires sampling base-color/roughness (and, for parity,
-normal/AO) in the RT hit path; that is the next RT slice, not a claim of this
-one. Deterministic oracles, not captures, are this slice's correctness
-evidence; no blind aesthetic review was performed.
+recorded rather than patched over, and it was **corrected by measurement**
+after this slice landed: the trace gate uses the *primary textured* roughness
+(`roughness = material.factors.y * metallicRoughness.G`), and the canonical
+X-15's two 2048² MR textures (256² sampled texels each) measure 0.333/0.325
+median roughness with 99.9 %/100.0 % of samples below
+`ROUGHNESS_CUTOFF = 0.6`, so the trace is eligible over essentially
+the whole aircraft — the earlier "factor roughness 1.0 skips the craft" note
+was wrong. The same textures have a 0.000 median metallic (only
+3.5 %/14.6 % of samples above 0.5): most primary surfaces are dielectric,
+with `f0` near 0.04, rather than perfect mirrors. The native presentation
+publishes `ambient_lux = 0`, so environment misses have no content, and
+terrain/ocean are absent from the RT scene. These facts are consistent with
+the negligible delta, not a measured attribution of individual changed pixels.
+The hit path still uses material factors, not textures: primary-texel colour
+statistics must not be used to infer hit radiance. Making reflections visible
+therefore needs environment radiance and textured hit shading — not a
+change to the (already textured) roughness gate. Deterministic oracles, not
+captures, are this slice's correctness evidence; no blind aesthetic review
+was performed.
 
 Full commands, oracle results, the negotiated-feature notes, the fixed-source
 measurement and the noise-floor analysis are in
@@ -3022,7 +3035,513 @@ sample; no HDR/tonemapping/auto-exposure; mip chains, atmospheric indirect
 light, COMPLETE authored material/Bevy parity, prediction/reconciliation and
 external TCP/reconnect remain open. FastRT's ray-budget allocator, visibility
 correction and sparse RT correction are still unimplemented; this slice is a
-correct, bounded, removable step toward them.
+correct, bounded, removable step toward them. The atmosphere/indirect-light
+gap in this checkpoint is partially superseded by the follow-up below.
+
+### Native environment radiance (2026-10-17, follow-up)
+
+The native presentation now evaluates the existing `thessa-atmosphere`
+single-scattering model, rather than inventing an ambient colour. Body radius,
+gravity, pressure and mixture gas constant come from the baked body. Optical
+scale height uses the flight authority's 288.15 K reference temperature.
+The model is still the shared N2/O2 optical baseline, not a composition-resolved
+spectroscopic model. Stellar directions and the planet-centric camera are in
+body-fixed axes; the same 93 lm/W presentation conversion scales direct light
+and sky radiance. Ambient is a cosine-weighted integral about the camera's
+**local radial up**, not the body's polar axis. Using that single ambient for
+all diffuse normals retains the existing isotropic-diffuse approximation.
+
+`render-core::environment::EnvironmentRadiance` defines a validated full-sphere
+equirectangular direction grid. Sampling wraps azimuth, clamps pole rows and
+bilinearly interpolates. The grid axes stay body-fixed; camera rotation does
+not rotate the sky. Grid storage uses 16-byte RGB-padded texels. Mesh raster
+environment reflections and each RT-chain miss sample the same WGSL function.
+The miss now applies accumulated Fresnel **once**: the previous implementation
+multiplied by an environment contribution that already contained primary
+Fresnel. Its white-metal oracle (`F0=1`) could not detect this error; the new
+dielectric/roughness/AO oracle does.
+
+Policy consumes the **resolved** existing `[atmosphere]` settings:
+
+| Quality | Grid | View steps | Sun steps | Minimum refresh interval |
+|---|---:|---:|---:|---:|
+| Low | 8×4 | min(requested, 8) | min(requested, 4) | 8 frames |
+| Medium | 16×8 | min(requested, 12) | min(requested, 6) | 4 frames |
+| High | 32×16 | clamp(requested, 4, 32) | clamp(view/3, 2, 8) | 2 frames |
+
+Steps are first clamped to 4…32. `density_scale` multiplies scattering betas,
+not authoritative density or absorption. Resolved `airglow` controls the shared
+model's weak emission term independently: zero scattering still permits
+airglow when requested. `multi_star=false` evaluates the
+brightest source only. Otherwise all sources contribute and each is checked
+for invalidation independently (a moving secondary cannot hide behind a fixed
+primary). A field refresh needs a ≥250 m camera displacement, >0.002 rad source
+direction change, >1% per-channel weighted source change, or changed budget.
+The first evaluation and budget changes are immediate. These are visual cache
+thresholds, **not** a globally proven atmospheric error bound. Frame cadence
+bounds evaluation frequency, not latency. Independent rows use existing Rayon.
+The native telemetry reports evaluation latency, counts, grid bytes, ambient
+and upload counts. Static 150-frame preview: one evaluation, **one** 8192-byte
+grid upload; fleet renderer replacement forces a fresh binding of the current
+revision. No unchanged per-frame grid staging remains.
+
+`atmosphere.enabled=false` performs no sky integration or grid upload, uses
+the explicit isotropic `ambient/PI` fallback, and releases any formerly bound
+grid. Only a 32-byte metadata uniform and 16-byte binding placeholder remain.
+Buffer growth/release rebuilds the frame bind group, never the shader/pipeline.
+An airless body has no field.
+
+Final silent application checks confirm that a fresh disabled-atmosphere
+vehicle preview performs **zero** grid uploads and reserves **zero** grid
+bytes while scene-object RT remains active. A separate default **5 km survey**
+with `--sweep` (0.006 rad/frame, final angle 0.894 rad; 30 warm-up +120
+measured frames) performs 17 evaluations including pre-stream, with the last
+evaluation taking 3.05 ms. It also makes 34 geometry publications. This survey
+has no vehicle mesh/RT scene: it checks sky-cache invalidation under motion,
+not RT performance. Its whole-frame median/p95 were 12.984/19.548 ms;
+they are not comparable to the static vehicle preview as a rendering win.
+
+**Measured CPU diagnostic**, release build on this development machine, 21
+same-process samples after warm-up, 1000 W/m² white source at `(0.6,0.8,0)`,
+camera 1 km above radius 3200 km, `mu=5.02e13`, 24 requested view steps:
+
+| Quality | Evaluation median / p95 | Max / mean absolute interpolation+integration error |
+|---|---:|---:|
+| Low | 0.071 / 0.096 ms | 0.141794 / 0.027661 × direct E/π |
+| Medium | 0.240 / 0.282 ms | 0.118275 / 0.020992 × direct E/π |
+| High | 1.017 / 1.751 ms | 0.094580 / 0.010381 × direct E/π |
+
+Reference: 128 view ×64 solar steps at 128 upper-hemisphere directions,
+including near-horizon rays. Error is absolute radiance normalized to a
+decision-independent direct-light scale, not divided by near-zero sky radiance.
+The regression bound is 0.25×E/π **for this fixture only**; no global
+quality/parity claim is made. Near-horizon gradients and the Mie forward lobe
+are still poorly resolved by a coarse grid. Single evaluation of the three-star
+streaming preview was 3.84 ms (not comparable to the isolated one-star test).
+
+GPU oracles cover unset/disabled identity, uniform-field equivalence (measured
+0 changed bytes), correct directional reflection, RT-miss directional identity,
+dielectric/AO miss equivalence (≤1/255), and release/rebind after resolution
+changes. Commands and further measurements are in
+[`artifacts/native-environment-radiance-2026-10-17.json`](artifacts/native-environment-radiance-2026-10-17.json).
+
+**Still missing:** physical sky-background rendering (the existing clear is
+unchanged), terrain/ocean directional environment consumers, ground-emitted
+radiance, sun disks, aerial perspective, multiple scattering and
+eclipse visibility in native celestial presentation. Below-horizon rays include
+only atmosphere along the path to the opaque datum, **not** reflected ground.
+RT hits remain factors-only with geometric normals; their roughness field is
+not yet used to filter specular continuation. No prefiltered rough environment
+lobes, denoising, RT terrain/ocean membership or RT shadow rays are added by
+this slice. No blind aesthetic review or complete Bevy replacement is claimed.
+
+Local verification for this follow-up passed workspace fmt, all-target /
+all-feature clippy, native no-default-feature clippy, workspace lib/bin and
+integration tests (1856 lib/bin and 67 integration), the real Bevy-CBT GPU
+(24) and mesh-emission (1) regressions, native ignored GPU/server/CPU
+diagnostics (10), five window tests, both release render-cost
+diagnostics, the 12-crate architecture guard and five agent-QA tests. Test and
+application runs use null ALSA output and inaccessible PulseAudio/PipeWire
+endpoints; system audio configuration is unchanged. The complete commands
+and unmeasured boundaries are retained in the artifact, not presented as
+remote CI or production-parity acceptance.
+
+### Native textured hits and scene-object RT shadows (2026-10-17, follow-up)
+
+This partially supersedes the factors-only-hit/no-RT-shadow limits in the dated
+checkpoints above. It does **not** add terrain/ocean RT membership or complete
+client replacement.
+
+**One material source.** RT consolidates a 48-byte vertex record (padded
+position, smooth normal and UV) instead of positions alone. The BLAS reads
+the position at that same 48-byte stride. A committed hit uses its triangle
+indices and barycentrics to interpolate UVs and smooth normals; the existing
+rigid/uniform-scale pair transform places both in the camera-relative frame.
+The geometry normal faces the incoming ray and is retained for continuation
+origin bias. Hit normals are not derivatives of the primary camera ray.
+
+The shader reuses the raster GPU texture views and the existing sampler
+construction (wrap, nearest/linear, sRGB versus linear roles). Base colour is
+sampled at every quality; **High** also samples metallic/roughness (B/G),
+normal and AO, while **Low/Medium** preserve their factor-only fallback.
+Shared images used as both base colour and MR retain separate colour-space
+views. No texture resizing, packing, extra image upload or bindless feature
+negotiation is introduced. A generated static switch selects explicit
+texture/sampler bindings, not a dynamically indexed binding array.
+
+The planner reserves four primary-material texture/sampler slots plus the
+shadow atlas. If the hit bindings cannot fit the **negotiated device** limits,
+the whole RT scene is rejected with a visible reason and raster fallback;
+it is never truncated or given another material's texture. The consolidated
+storage buffers are also checked against device size/binding limits before
+allocation. Budget accounting now includes 48 bytes per vertex, 4 per index,
+16-byte ranges and 48-byte material records per primitive, plus the existing
+AS/pair estimates; shared raster textures are not counted or allocated twice.
+These are planning bytes, not a driver AS allocation query.
+
+**Hit shading.** The shared tangent-frame function accepts raster derivatives
+or RT triangle edges/UV differences; mirrored UVs and degenerate UV fallback
+therefore follow one implementation. Base colour is decoded from sRGB before
+GPU filtering; MR/normal/AO remain linear. Samples use **explicit LOD 0**:
+there are no ray differentials/cones or mip chains yet. Hits use the existing
+GGX stellar reflection function, Fresnel/diffuse metallic partition, and AO
+only on indirect terms. Primary AO is applied once to the complete reflected
+chain, not just misses: a secondary surface's directly lit radiance is still
+indirect at the primary. A zero/half-strength primary-AO hit oracle pins this
+previously uncovered case alongside the existing dielectric miss oracle.
+Hit roughness now fades continuation to the same
+environment approximation used by raster instead of treating every secondary
+surface as a perfect mirror. That is still a single-direction rough-lobe
+approximation, not a prefiltered environment convolution. The configured
+1–4 reflection-bounce cap still truncates the chain; this is not path-tracing
+convergence or full material parity.
+
+**Visibility.** Mesh primary surfaces and reflected hits use one named
+`surface_visibility` hook. With resolved `shadow_enabled` and active RT it
+tests opaque scene-object geometry toward the stellar direction up to
+`raytracing.max_distance_m`, then combines it with the existing atlas:
+`visibility = 0` on an RT blocker, otherwise the atlas visibility. Thus rays
+can add occlusion outside the atlas cover but cannot unshadow terrain that
+the atlas sees. No camera shadow receiver or extra AS copy is required.
+Diffuse and GGX direct terms reuse the same per-source visibility result.
+The raster substitute is exactly the existing atlas function.
+
+There are no shadow rays when the shared shadow effect is disabled.
+RT scene allocation is now needed when **either** specular reflections or
+shadow rays consumes it; `specular_reflections=false` no longer implies zero
+AS work if RT shadows remain enabled. Disabling both consumers or RT itself
+allocates/builds no RT scene. Unsupported/over-budget scenes retain the
+atlas-only fallback. Shadow-only RT retains 16-byte positions, not 48-byte
+hit attributes, and allocates no hit-material/range/pair buffers or hit texture
+bindings; too many material textures therefore cannot disable shadow-only RT.
+The two-quad oracle pins 944 planning bytes for shadow-only versus 1584 for
+textured reflections. Stars are directional sources in this native slice:
+RT shadows are hard opaque visibility, not finite-disk penumbrae or transparent
+transmittance. Ray intersections still treat geometry as two-sided opaque,
+including a material that raster draws single-sided; full facing/alpha parity
+is not claimed. The atlas still owns terrain and all other non-RT casters.
+
+**GPU regressions.** Numeric fixtures compare the reflected pixel with an
+independent analytic normal-incidence diffuse+GGX/sRGB result within **2/255**,
+not merely "some pixels changed". They cover non-central barycentric UVs,
+sRGB decode before bilinear filtering, clamp/repeat/mirror addressing,
+one source image used as sRGB base colour and linear MR, G/B channel roles,
+hit-roughness continuation, normal maps, AO strength, degenerate UVs and
+Low/Medium map omission. The old pure-red assertion was corrected: a rough
+red dielectric under a white star also has a white GGX lobe. Expected linear
+RGB after 0.5 exposure is `(0.485,0.005,0.005)`, not pure red.
+
+Visibility oracles put an off-camera blocker on a primary surface's light
+ray with **reflections disabled**, and separately block a reflected hit's
+stellar ray without blocking the reflection ray. RT-off/shadows-off controls
+remain lit and perform no AS work when neither consumer needs it. A binding
+exhaustion oracle verifies a reported whole-scene reflection fallback without
+rejecting shadow-only RT; a distance-cap control leaves a farther blocker
+untraced. The previous
+environment/miss/AO oracles remain in the same GPU suite.
+
+Commands, measured cost and remaining gaps are recorded in
+[`artifacts/native-textured-hits-shadows-2026-10-17.json`](artifacts/native-textured-hits-shadows-2026-10-17.json).
+No blind aesthetic review or production/Bevy parity is implied by these oracles.
+
+### Shared sky background and native performance capture (2026-10-17)
+
+This supersedes the missing-background claim in the dated environment slice,
+not its single-scattering/error limitations. There is still no terrain/ocean
+RT membership or complete replacement.
+
+**Shared publication, no second sky.** The scene now owns one
+`EnvironmentBinding` and publishes it only on a field revision. The mesh/RT
+consumer adopts cloned GPU handles, not another grid upload or CPU clone.
+Replacement terrain and mesh renderers adopt the current publication even
+when its revision is unchanged. Growth and disabling rebind both consumers;
+same-sized writes update the shared storage. Standalone mesh users still have
+the existing independently-owned `update_environment` API.
+
+The terrain renderer lazily creates a background consumer only for an enabled
+field. It draws one full-screen triangle **after terrain in the same pass**,
+at depth 1 with `LessEqual` and depth writes disabled. Foreground terrain
+rejects the sky samples; later opaque meshes load/overwrite normally. There
+is no sky render target, prepass, depth copy, CPU ray march, extra submission
+or per-frame upload. The shader unprojects each pixel with the inverse
+projection at finite clip z=0.5 (safe for infinite-far projections), rotates
+the direction into body-fixed field axes, then uses the same bilinear sampler
+as reflected rays and the existing manual exposure. Translation is excluded
+before narrowing. This is a **coarse single-scattering sky-grid background**,
+not sun disks, aerial perspective, ground radiance, multiple scattering,
+tonemapping or physically calibrated automatic exposure. Normal LDR target
+clipping remains a limitation.
+
+`[atmosphere]` resolved enable/quality/steps/density/multi-star/airglow settings
+remain the sole production source policy. Low/Medium/High background accuracy
+follows the existing 8×4 / 16×8 / 32×16 fields and 8/4/2-frame minimum refresh
+cadence. An absent/disabled field drops the background pipeline/bind group,
+issues no sky draw and retains the previous clear-colour fallback exactly.
+After disabling the shared publication holds only metadata and its 16-byte
+binding placeholder; no grid allocation remains after consumers adopt it.
+Airless bodies still have no field, not an invented atmosphere.
+
+**Numeric and cost evidence.** GPU tests compare every pixel against the CPU
+direction sampler within 2/255, for all three resolutions, rotations across
+the azimuth seam and poles, large translations and infinite-far projection;
+they exercise growth/shrink publications. A foreground test verifies
+byte-identical terrain pixels with sky on and exact restoration after off.
+The native scene test verifies one shared upload through camera-only frames,
+both renderer replacements and disable/release. This does not bound the
+underlying atmospheric approximation: the earlier fixture's coarse-grid
+error envelope and forward-lobe/horizon limitations still apply.
+
+The initial isolated full-uncovered-frame 1280×720 benchmark on Radeon 880M /
+RADV Vulkan, 30 warmup +120 measured frames per run, alternated off/on over
+three pairs. Median CPU encode/submit + GPU completion was
+0.127738/0.130182/0.127417 ms off and
+0.239326/0.234226/0.232383 ms on. Paired median differences were
+0.111588/0.104044/0.104966 ms; this is a diagnostic **whole-span difference**,
+not an isolated GPU timestamp or a game-FPS claim. The producer uploaded the
+8,192-byte High grid once; the test retains that source for both controls,
+but an off consumer performs no sky draw. Normal disabled publication releases
+the grid, covered by separate tests.
+
+**Performance before more render architecture.** Headless
+`--perf-capture PATH.json` adapts to `thessa-perf`, not a second capture schema.
+It writes JSON and sibling CSV after rendering; only measured frames after
+30 warmup are retained, up to the existing 1800-frame ring. Stable timestamp
+query + encoder-write features are negotiated **only** for this explicit
+diagnostic; absent support leaves GPU data unavailable, not CPU-derived.
+Normal runs allocate no profiler queries, readback buffers or collector.
+CSV now exports the sorted GPU-scope union with blank absent/unavailable values
+and a distinct measured zero; existing CPU columns are unchanged.
+
+Five GPU marks bound four command intervals: shadows, terrain+sky (including
+classification), meshes+RT (including dirty AS builds), and UI. Their sum is
+the captured GPU command span. Queue-write uploads before the first mark and
+separate egui command buffers are outside it; barriers and scheduling inside
+the intervals are included. These are **not** isolated sky, upload, BLAS/TLAS
+or individual reflection/shadow-ray timings. Frame CPU is host wall time
+through submit; whole host frame includes GPU completion. Timestamp mapping,
+RSS sampling and capture writing are outside frame samples, but can perturb
+the next frame's scheduling. This serial offscreen diagnostic does not insert
+a new stall into the native window; asynchronous window profiling remains open.
+Only a subset of world counters is populated, and authoritative sim-budget
+defaults are not new native telemetry. Captures name these boundaries and
+store actual adapter/backend/driver, requested/resolved settings and scenario.
+Build identity remains `unknown` unless supplied through the existing build
+metadata mechanism; an artifact records the exact working-tree boundary.
+
+Opaque shadow queries also use terminate-on-first-hit and skip back-lit
+sources: visibility cannot contribute when both diffuse and GGX direct terms
+are zero. Closest-hit queries remain unchanged for reflections. Correctness
+oracles pass; no isolated throughput win is inferred from unrelated runs.
+
+Reproduction, final verification and native GPU interval summaries:
+[`artifacts/native-sky-performance-2026-10-17.json`](artifacts/native-sky-performance-2026-10-17.json).
+Terrain/ocean RT integration, finite-disk shadow filtering, upload A/B and
+finer asynchronous GPU profiling are **not** implemented by this checkpoint.
+
+### Exact native shadow-depth reuse (2026-10-17)
+
+The new native GPU intervals identified a **static** cost before any change:
+in the 349-tile X-15 preview, the atlas interval median was 6.48–6.56 ms across
+the off/local/shadow-only controls. These sequential captures are recorded in
+the sky-performance artifact; they do not establish individual shader costs.
+Rather than lower shadow resolution, remove casters or introduce a cadence,
+the renderer now retains already-rendered atlas depth when its actual inputs
+are unchanged.
+
+This extends the existing atlas/terrain/mesh owners, not a new scheduler or
+shadow backend. Light matrix and source-activity changes increment an atlas
+depth revision; unchanged matrices also avoid redundant atlas uniform uploads.
+Terrain camera-origin changes, dirty height pages, anchor/slot/membership
+changes and removal invalidate depth after successful validation. An unchanged
+partition publication does not. Meshes compare their exact uploaded
+camera-relative instance bytes and primitive ranges; the immutable source's
+instance-buffer identity also distinguishes replacement renderers at the same
+revision. Removing the mesh source changes that key. Instance-history storage
+is allocated only for shadow casters and grows with actual instance bytes
+(64 bytes/instance, at most the existing 65,536-instance constructor cap),
+not all source vertices. Disabled shadows perform no such comparison/storage.
+Light intensity/ambient or primary projection/orientation changes alone do
+not change opaque caster depth; light directions/source activation do.
+
+There is no approximate matrix hash, epsilon, time threshold, lower-quality
+proxy or reuse across a changed camera origin. The first encoded frame draws
+the active atlas layers; subsequent exact matches issue **zero depth passes**.
+The normal submission ordering contract still applies: encoders that publish
+these draws must be submitted before receivers; external source/atlas changes
+must invalidate the owner. `invalidate_shadows()` is also the forced-redraw
+diagnostic control, not a new graphics mode. Shadow resolution/filter/bias,
+cover, fallback and requested/resolved settings remain unchanged. RT scene
+shadow rays remain live visibility queries, not results cached by this change.
+
+GPU regression fixtures compare cached frames **byte-for-byte** against forced
+redraw and verify refresh on mesh motion/range changes, renderer replacement,
+large camera-origin changes, stellar direction/activation, dirty terrain
+pages and retired casters. An unchanged instance resubmission/partition retains
+depth. Diagnostics report potential `shadow_active_layers` separately from
+actual `shadow_rendered_passes`; GPU timings bound the skipped or rendered
+atlas stage normally. The fixed 1024-patch /64-instance diagnostic now alternates
+three forced-redraw/cached pairs with identical settings and verifies identical
+images outside its timer; its disabled control remains a separate workload.
+This is a static-reuse comparison, **not** a claim of faster moving-caster or
+moving-camera shadow rendering, and does not improve off-cover terrain residency.
+
+On Radeon 880M /RADV Vulkan, the controlled fixed-source runs measured
+23.420/24.328/24.400 ms forced-redraw medians versus
+3.464/3.488/3.730 ms cached medians (same enabled atlas and byte-identical
+frames); the disabled control was 0.804 ms, so receiver shadow sampling remains
+a real cost. These are host encode/submit + GPU-completion spans, not GPU-only
+measurements. In the separate static native X-15 preview, the Local-RT host
+upper median changed from 15.025 to 7.766 ms, and the hardware GPU atlas interval
+median from 6.560946 to 0.001643 ms. The latter is an empty-stage timestamp /
+command interval with zero depth passes, not a claim that timestamps are free.
+Native captures are sequential and not the same-process cache-toggle control;
+the fixed-source test supplies that comparison. No whole-game-FPS inference.
+
+Final silent moving-camera survey control (5 km, no vehicle, 120 measured
+frames) retained all 12 last-frame atlas passes; GPU atlas p50/p95 was
+8.464342/11.330769 ms, host median/p95 13.851/20.281 ms. Streaming ended at
+370 resident tiles /373,248 drawn terrain triangles, so this is not an equal
+static-X-15 workload. Atmosphere-disabled Local-RT X-15 retained RT and exact
+static depth reuse while reporting zero grid bytes/uploads and no sky draw.
+Final local fmt/clippy/no-default checks, 1858 lib/bin tests, 80 integration
+tests, the real GPU/native/display/capture diagnostics, release build and
+architecture/agent-QA gates passed; artifacts enumerate the actual suites and
+omissions. No adapter-less skip, remote-CI or visual-parity claim.
+
+Measurements, commands and final verification are in
+[`artifacts/native-shadow-depth-cache-2026-10-17.json`](artifacts/native-shadow-depth-cache-2026-10-17.json).
+
+### Resident generated terrain in mesh ray queries (2026-10-17)
+
+This supersedes the earlier **terrain membership absent** statements for mesh
+queries only. `TerrainRenderer::ray_source()` exposes retained GPU resource
+identity, not a CPU mesh. `MeshRenderer::with_surface_and_terrain` extends the
+existing `ray_scene` planner/TLAS; `sync_rt_terrain` publishes the validated
+partition after height/mesh updates and before encode. Both native hosts do
+this, including replacement fleet sources. `adopt_rt_terrain` carries unchanged
+terrain BLAS handles across unrelated mesh/fleet source replacement when source
+identity and the new admission capacity agree; only the new mesh BLASes/TLAS
+build. No second TLAS/traversal service,
+generic geometry scheduler, readback or expanded vertex copy is introduced.
+
+Each resident slot has one lazily allocated opaque BLAS referencing its **existing
+32-byte, 1089-vertex tile-local generated buffer** and a shared 24,576-byte index
+grid. The 2048 surface triangles are exactly the classifier's step-one cell
+diagonals, without view-selected LOD, raster seam skirts or frustum rejection.
+Tile-anchor minus camera subtraction happens in f64 before narrowing the TLAS
+translation. Camera movement rebuilds the TLAS, **not BLAS geometry**; height,
+anchor or reused-slot changes rebuild only their affected BLASes. Retirement
+removes instances and releases slot structures. Ordered geometry submissions
+precede AS builds on the same queue. Consumers must synchronize and submit
+encoded builds before querying; externally replacing the terrain source requires
+recreating the mesh consumer, and a mismatched source is rejected explicitly.
+
+Reflected hits interpolate the original normals/positions and use the **shared
+world-addressed material directory, ancestor/residency-edge kernel, sRGB albedo
+and linear roughness texture array**. Material-only publications need no BLAS,
+TLAS or hit-table update. The globe fallback is the native renderer's existing
+linear `[100,130,70]/255` / roughness-one constant, not an invented environment.
+Explicit zero material footprint currently matches mesh hits' LOD-zero limit;
+this is not a ray-cone/mip-filtering solution. Hits reuse the existing dielectric
+GGX/direct/ambient and reflection-continuation kernels. The clamped sea datum
+can intersect rays, but **these are terrain material hits, not completed ocean
+optics or displaced ocean waves**. Primary terrain still receives raster atlas
+visibility and has no mesh-scene RT reflection consumer.
+
+The requested/resolved `[raytracing] terrain`, distance, memory and instance
+budgets remain the policy; disabling terrain adds no BLAS-input usage or ray
+source. Vehicle and terrain membership are independent: `vehicles=false` omits
+mesh BLASes/geometry copies while primary mesh receivers can still query terrain.
+An empty terrain-only partition builds an empty TLAS once, so receivers safely
+miss instead of binding an unbuilt structure. Reflections plus terrain need nine storage bindings; negotiation requests
+up to nine where supported, otherwise mesh RT survives with a reported terrain
+fallback. Shadow-only terrain needs neither terrain hit bindings nor textures.
+The planner reserves mesh pair capacity first and admits a bounded terrain count
+from remaining memory/instance limits. A terrain slot conservatively charges
+35,232 planning bytes (including its borrowed vertex data, not a duplicate GPU
+allocation), plus the shared grid. These are **planning reservations, not measured
+driver AS memory**. If the complete active partition exceeds admission, all terrain
+RT instances are removed and a visible reason reports raster fallback; no stale
+or arbitrarily partial blocker set survives. Recovery rebuilds newly admitted
+slots. `RayStats` adds terrain instance/build counts; native logs report them and
+fallback reasons separately. Raster shadows remain active under the same settings.
+
+GPU oracles verify reflected red/blue terrain radiance (two encoded-level fixture
+tolerance around the dielectric result), byte-identical cached versus identical
+regenerated geometry, shared material refresh with zero builds, camera-only TLAS
+changes, actual height displacement, retirement, whole-partition rejection and
+recovery, disabled participation and shadow-only visibility without hit tables.
+The retained release diagnostic uses **1024 patches /2,097,152 terrain triangles,
+one mirror instance, 1280×720, five warm-up +30 measured frames per mode**, with
+unchanged output bytes across cached, one-dirty and all-dirty cases. On Radeon
+880M/RADV Vulkan, one sequential run measured GPU AS+mesh/RT interval medians
+**0.778 /1.287 /74.229 ms**, and host encode/submit/completion medians
+**0.964 /1.580 /97.680 ms**. Height regeneration, setup and readback are excluded;
+prepare/sync medians were **10.259 /9.658 /39.363 µs**. These are scoped costs,
+not game FPS or proof of improved moving-camera rendering. Full reconstruction
+is expensive and not an acceptable per-frame ocean update strategy.
+
+Silent static native X-15 integration retained 349 terrain +2 mesh TLAS instances,
+793,217 source triangles, zero steady-state AS builds and exact cached atlas
+depth. Host upper median/p95 was 9.150/9.730 ms; that is a **new feature cost**,
+not a speedup claim against mesh-only captures. Detailed commands, controls and
+limitations: [`artifacts/native-terrain-ray-membership-2026-10-17.json`](artifacts/native-terrain-ray-membership-2026-10-17.json).
+
+#### Ocean direction after inspecting `large_cbt` (design, not implemented)
+
+Upstream `AnisB/large_cbt` revision
+`7351e6fc603b9b2c2ab4da399b13a9ab0f327398` separates multi-band spectral
+evolution/two-pass inverse FFT, displacement, and mipmapped surface gradients.
+Its deformer consumes the active indexed CBT bisectors through indirect dispatch
+and maps displacement into a planetary local frame. Relevant references are
+`demo/src/water/water_simulation.cpp`, `demo/src/water/water_deformer.cpp`,
+`shaders/Water/WaterSimulation.compute`, `WaterDeformation.compute`, and
+`shaders/shader_lib/water_utilities.hlsl`. The full demo is **not vendored** and
+upstream still has no license grant; no upstream implementation was copied or
+linked into runtime. Inspecting these files establishes architecture, **not** an
+equal-workload performance advantage. The primary algorithm reference for an
+independent implementation is Jerry Tessendorf, *Simulating Ocean Water* (2001).
+
+Useful principles for Thessa's goal rather than Bevy parity:
+
+- Reuse the terrain/CBT topology/update contract; one body-fixed spectral field
+  feeds displacement, shading gradients and ray representation. It must not be
+  an independently phased cosmetic ocean mesh or a second generic topology system.
+- Separate resolvable large-wave displacement from filtered fine gradients;
+  carry unresolved slope variance into the optical lobe instead of simply
+  deleting distant-wave energy. Geometry refinement and optical footprint differ.
+- Initialize spectra only when physical inputs change; evolve with simulation
+  time. Use local gravity, wind/fetch and water depth, with deep-water
+  `omega²=g*k` as a special case of `omega²=g*k*tanh(k*depth)`, not hard-coded
+  Earth gravity or a wall-clock animation speed. Test zero mode, conjugate
+  symmetry, flat-water limits and bounded phase precision.
+- Share f64/floating-origin/body-frame mapping across cube boundaries; test
+  seams, stationary/paused fields, orbit-to-surface transitions and coast masks.
+  An ocean datum does not substitute for bathymetry or shoreline geometry.
+- Do not rebuild every terrain BLAS for every small ripple. Keep fine-wave
+  optics in the shared filtered field; a future displaced ray representation
+  needs a measured update/refit/proxy policy with an intersection error envelope.
+  The present static full-grid oracle provides no such displaced-water guarantee.
+- Add the missing ocean feature through `RequestedGraphics -> resolved settings`
+  with disabled/cheap/high-quality tiers and common physics inputs. Benchmark
+  FFT, deformation, topology updates, ray updates and final frame **separately**
+  on the same scene/error target before choosing it over the analytic fallback.
+
+### Native spectral sea (2026-10-17, implemented follow-up)
+
+The ocean direction above is now partially implemented independently, not copied
+from the unlicensed upstream demo: shared backend-neutral spectral state, portable
+multi-band GPU FFT, slope-moment filtering and bounded near-slot displacement in
+the existing generated terrain pool. Raster/atlas/mesh RT share the displaced
+vertices and water field. Unchanged paused samples reuse field, AS and atlas;
+near admission/camera fade or material changes can rebuild only admitted slots.
+The default is disabled; Low/Medium/High and optical-only whole-partition fallback
+are explicit `[ocean]` controls. This supersedes earlier absent-FFT/displaced-ocean
+claims only for this **render-only bounded native slice**. Primary ocean/terrain
+mesh-query reflections, exact displaced far-ocean intersections, bathymetry,
+nonlinear waves, foam/wakes and authoritative water physics are still absent.
+Full state/consumer contracts, tolerances, resource/quality budgets and evidence:
+[`56_NATIVE_SPECTRAL_OCEAN.md`](56_NATIVE_SPECTRAL_OCEAN.md).
 
 ## 15. FastRT
 

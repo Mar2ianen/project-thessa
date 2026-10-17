@@ -72,11 +72,14 @@ impl Track {
 
 /// Bounds are game wire/graphics policy, not a second GPU backend or pass.
 pub struct SceneMeshes {
+    terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
+    terrain_reason: Option<String>,
     shadows: Option<thessa_render_wgpu::shadows::ShadowAtlas>,
     /// Resolved against the *negotiated* device, so an RT feature that was
     /// not requested at device creation cannot appear as available here.
     resolved: thessa_graphics::ResolvedGraphicsSettings,
     inner: Option<MeshRenderer>,
+    environment_revision: Option<u64>,
     format: wgpu::TextureFormat,
     enabled: bool,
     min_pixels: f32,
@@ -235,7 +238,7 @@ impl SceneMeshes {
         source: &MeshAsset,
         format: wgpu::TextureFormat,
     ) -> Result<Self, BackendError> {
-        Self::with_shadows(scene, backend, source, format, None)
+        Self::with_shadows(scene, backend, source, format, None, None)
     }
 
     pub fn with_shadows(
@@ -244,6 +247,7 @@ impl SceneMeshes {
         source: &MeshAsset,
         format: wgpu::TextureFormat,
         shadows: Option<&thessa_render_wgpu::shadows::ShadowAtlas>,
+        terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
     ) -> Result<Self, BackendError> {
         let resolved = backend.resolve_graphics(&scene.requested);
         let (quality, enabled, min_pixels) = (
@@ -253,10 +257,11 @@ impl SceneMeshes {
         );
         Ok(Self {
             shadows: shadows.cloned(),
+            environment_revision: None,
             inner: if scene.server_flight() {
                 None
             } else {
-                Some(MeshRenderer::with_surface(
+                Some(MeshRenderer::with_surface_and_terrain(
                     backend,
                     source,
                     thessa_render_wgpu::mesh::SurfaceSettings {
@@ -267,9 +272,12 @@ impl SceneMeshes {
                         shadows,
                         ray_tracing: Some(&resolved),
                     },
+                    terrain.as_ref(),
                 )?)
             },
             resolved,
+            terrain,
+            terrain_reason: None,
             format,
             enabled,
             min_pixels,
@@ -301,6 +309,25 @@ impl SceneMeshes {
     pub fn opaque(&self) -> Option<&MeshRenderer> {
         self.inner.as_ref()
     }
+    pub fn sync_rt_terrain(
+        &mut self,
+        backend: &Backend,
+        terrain: &thessa_render_wgpu::terrain::TerrainRenderer,
+    ) -> Result<(), BackendError> {
+        if let Some(inner) = &mut self.inner {
+            inner.sync_rt_terrain(backend, terrain)?;
+            let reason = inner.rt_terrain_reason();
+            if reason != self.terrain_reason.as_deref() {
+                if let Some(reason) = reason {
+                    eprintln!("ray_terrain_fallback={reason}");
+                } else {
+                    eprintln!("ray_terrain_fallback=cleared; resident terrain readmitted");
+                }
+                self.terrain_reason = reason.map(str::to_owned);
+            }
+        }
+        Ok(())
+    }
     pub fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -321,9 +348,10 @@ impl SceneMeshes {
         exposure: f32,
     ) -> Result<(), BackendError> {
         let view = scene.view(width, height, exposure);
+        self.update_environment(scene, backend);
         let Some((primary, primary_instance)) = &scene.vehicle else {
             return if let Some(inner) = &mut self.inner {
-                inner.update(backend, &view, &scene.sample.lighting, &[])
+                inner.update(backend, &view, &scene.lighting(), &[])
             } else {
                 Ok(())
             };
@@ -332,7 +360,7 @@ impl SceneMeshes {
             return self.inner.as_mut().expect("local source").update(
                 backend,
                 &view,
-                &scene.sample.lighting,
+                &scene.lighting(),
                 std::slice::from_ref(primary_instance),
             );
         }
@@ -369,10 +397,10 @@ impl SceneMeshes {
                 };
                 let primary_primitives = source.primitives.len();
                 append_catalogue(&mut source, catalogue, &mut radii, self.enabled)?;
-                let inner = if source.primitives.is_empty() {
+                let mut inner = if source.primitives.is_empty() {
                     None
                 } else {
-                    Some(MeshRenderer::with_surface(
+                    Some(MeshRenderer::with_surface_and_terrain(
                         backend,
                         &source,
                         thessa_render_wgpu::mesh::SurfaceSettings {
@@ -383,12 +411,17 @@ impl SceneMeshes {
                             shadows: self.shadows.as_ref(),
                             ray_tracing: Some(&self.resolved),
                         },
+                        self.terrain.as_ref(),
                     )?)
                 };
+                if let (Some(next), Some(previous)) = (&mut inner, &mut self.inner) {
+                    next.adopt_rt_terrain(previous);
+                }
                 if self.inner.is_some() || inner.is_some() {
                     self.source_publications += 1;
                 }
                 self.inner = inner;
+                self.environment_revision = None;
                 self.primary_primitives = primary_primitives;
                 self.tracks.clear();
                 self.observed_updates = 0;
@@ -514,16 +547,36 @@ impl SceneMeshes {
                 self.ranges[primitives.clone()].fill(index..index + 1);
             }
         }
+        self.update_environment(scene, backend);
         if let Some(inner) = &mut self.inner {
             inner.update_selected(
                 backend,
                 &view,
-                &scene.sample.lighting,
+                &scene.lighting(),
                 &self.instances,
                 Some(&self.ranges),
             )
         } else {
             Ok(())
+        }
+    }
+
+    fn update_environment(&mut self, scene: &Scene, backend: &Backend) {
+        let revision = scene.environment_revision();
+        if self.environment_revision != Some(revision)
+            && let Some(inner) = &mut self.inner
+        {
+            // An initially disabled renderer already owns the placeholder.
+            if let Some(binding) = scene
+                .gpu_environment
+                .as_ref()
+                .filter(|_| scene.gpu_environment_revision == Some(revision))
+            {
+                inner.share_environment(backend, binding);
+            } else if scene.environment_grid().is_some() || self.environment_revision.is_some() {
+                inner.update_environment(backend, scene.environment_grid());
+            }
+            self.environment_revision = Some(revision);
         }
     }
 }
@@ -1179,7 +1232,7 @@ mod tests {
                 .update_selected(
                     &backend,
                     &view,
-                    &scene.sample.lighting,
+                    &scene.lighting(),
                     &meshes.instances,
                     Some(&[])
                 )

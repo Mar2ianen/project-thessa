@@ -1,0 +1,83 @@
+{
+  "date":"2026-10-17",
+  "base_commit":"da4f026",
+  "tree_boundary":"Uncommitted follow-up on the environment/SlotCache and textured-hit/RT-shadow slices. No isolated before/after whole-renderer claim; prior artifacts preserve their dated source boundaries",
+  "scope":"Shared single-scattering sky-grid background and GPU publication, native serial headless thessa-perf adapter, coarse GPU command intervals, first-hit/back-lit shadow-query reduction",
+  "hardware":"AMD Radeon 880M Graphics (RADV STRIX1), Vulkan on Linux; no other-backend runtime claim",
+  "contracts":{
+    "source":"Existing resolved atmosphere enable/quality/steps/density/multi-star/airglow and shared thessa-atmosphere sky_radiance; no second scattering model",
+    "quality":"Existing Low/Medium/High 8x4/16x8/32x16 source grid and minimum refresh 8/4/2 frames. Consumer samples bilinearly with azimuth wrap/elevation clamp; no additional quality switch",
+    "publication":"One scene-owned EnvironmentBinding updated per revision. Background and mesh/RT consumers share GPU buffer handles, not new CPU-grid clones or duplicate texture/buffer uploads. Replacement consumers rebind the current source even when revision is unchanged",
+    "draw":"One fullscreen far-depth triangle after terrain in the existing render pass; LessEqual depth without writes. Later opaque meshes load/overwrite normally. No extra target/prepass/depth-copy/pass/submission, CPU scattering or per-frame grid upload",
+    "directions":"Inverse projection at z=0.5, then rotation by the camera's body-fixed world_from_view with w=0; excludes translation and supports infinite-far projections",
+    "disabled":"Absent/disabled field drops sky pipeline/bind, issues no background draw, preserves prior clear fallback exactly. Shared grid release leaves metadata plus a 16-byte binding placeholder only. Airless bodies have no synthetic atmosphere",
+    "render_limit":"Single-scattering coarse grid and manual exposure into existing LDR target; not finite sun disks, aerial perspective, ground radiance, multiple scattering, HDR/tonemapping or automatic exposure",
+    "shadow_reduction":"Opaque shadow rays skip back-lit sources whose direct diffuse/GGX contribution is zero and use RAY_FLAG_TERMINATE_ON_FIRST_HIT. Closest-hit reflection traversal is unchanged; no isolated speedup claim"
+  },
+  "isolated_background_cost":{
+    "command":"cargo test --release -p thessa-render-wgpu --test sky fixed_source_sky_background_cost -- --ignored --nocapture",
+    "boundary":"1280x720, no visible terrain, fully uncovered sky fill; CPU encode/submit + GPU completion, not isolated GPU timestamps. Setup, CPU field production and readback excluded. Producer grid retained in both controls; consumer draws only when enabled",
+    "warmup_frames_per_run":30,
+    "measured_frames_per_run":120,
+    "order":["off/on","on/off","off/on"],
+    "off_median_ms":[0.127738,0.130182,0.127417],
+    "on_median_ms":[0.239326,0.234226,0.232383],
+    "paired_median_differences_ms":[0.111588,0.104044,0.104966],
+    "off_p95_ms":[0.148457,0.146453,0.146112],
+    "on_p95_ms":[0.393714,0.288588,0.248011],
+    "producer_grid_bytes":8192,
+    "producer_uploads":1,
+    "log":"/tmp/opencode/sky-perf-diagnostics.log"
+  },
+  "performance_adapter":{
+    "cli":"--headless target/frame.png --frames 120 --perf-capture target/native-perf.json",
+    "schema":"Existing thessa-perf PerfCapture JSON and sibling CSV, last 1800 measured frames after 30 warmup; capture is written after rendering",
+    "capability":"Only explicit capture negotiates stable TIMESTAMP_QUERY + TIMESTAMP_QUERY_INSIDE_ENCODERS. Unsupported features leave GPU unavailable but preserve CPU capture. Normal runs have no profiler collector, query buffers or readback",
+    "gpu_scopes":["render.shadows","render.terrain_and_sky","render.mesh_and_rt","render.ui"],
+    "gpu_boundary":"Five marks bound consecutive command intervals; sum is the reported GPU command span. Includes barriers/scheduling, terrain classification and any dirty mesh AS builds. Excludes queue-write uploads before first mark and separate egui command buffers. Not isolated sky, AS, upload or per-ray costs, nor a complete end-to-end GPU frame",
+    "cpu_boundary":"frame.cpu is host wall time through submit, not processor cycles; frame wall includes GPU completion. Timestamp map/readback, RSS sampling and capture writing excluded from frame samples, but may perturb next-frame scheduling",
+    "csv":"Sorted union of gpu_scope:NAME_ms columns appended after existing CPU scope columns. Missing or unavailable GPU scope is blank, measured zero is 0.0000. JSON schema unchanged",
+    "metadata":"Actual adapter/backend/driver, requested/resolved graphics and scenario. Commit stays unknown unless the existing build metadata mechanism supplies it; artifact states source boundary explicitly",
+    "limits":"Serial offscreen diagnostics only; not asynchronous window/Bevy profiling, complete native simulation telemetry, full world-counter population, per-pass physics instrumentation or backend memory queries"
+  },
+  "pre_shadow_cache_native_gpu_profile":{
+    "boundary":"Sequential silent profiled release runs before exact atlas reuse, 349 resident tiles and 426240 drawn terrain triangles, static X15,1280x720,no HUD,3s prestream,30 warmup+120 measured. Median uses statistics.median; p95 uses sorted[int(n*.95)]. All three captures report hardware GPU timestamps. No concurrent build and no isolated throughput/cross-run speedup claim",
+    "off":{"frame_wall_median_ms":11.543723,"frame_cpu_median_ms":0.523895,"gpu_span_median_ms":10.919607,"gpu_shadow_median_ms":6.483639,"gpu_terrain_sky_median_ms":4.085803,"gpu_mesh_rt_median_ms":0.311311},
+    "local":{"frame_wall_median_ms":15.009361,"frame_cpu_median_ms":0.683096,"gpu_span_median_ms":14.140292,"gpu_shadow_median_ms":6.560946,"gpu_terrain_sky_median_ms":4.144154,"gpu_mesh_rt_median_ms":3.342731},
+    "shadow_only":{"frame_wall_median_ms":10.520473,"frame_cpu_median_ms":0.251173,"gpu_span_median_ms":9.980543,"gpu_shadow_median_ms":6.548222,"gpu_terrain_sky_median_ms":2.694600,"gpu_mesh_rt_median_ms":0.733253},
+    "source":"target/render-batch/sky-final-{off,local,shadow-only}.{json,csv,png}; /tmp/opencode/sky-final-app-{off,local,shadow-only}.log",
+    "interpretation":"The measured static atlas GPU interval motivated the subsequent exact-depth cache. Off and Local both retain specular reflections; shadow-only disables them and is not equal reflection work. Summing medians need not equal the median of sums. Final/native source and check results for exact reuse are recorded in native-shadow-depth-cache-2026-10-17.json"
+  },
+  "numeric_oracles":{
+    "sky":"Every pixel agrees with independent CPU ray unprojection + EnvironmentRadiance::sample within 2/255; three grid qualities, growth/shrink, camera rotation across seam/poles, large coordinates and infinite-far projection",
+    "foreground":"Sky on leaves terrain foreground byte-identical; disabled background restores the complete baseline exactly",
+    "publication":"Native hardware test verifies one scene GPU upload over unchanged frames and replacement terrain/mesh consumers; resolved disable before a replacement renderer drops the stale grid/sky",
+    "timing":"Unit checks seconds conversion/invalid ordering; hardware test verifies actual nonnegative advancing timestamps and three reuses of one query/readback allocation; ordinary device exposes no profiler",
+    "capture":"Native executable hardware test checks three measured frames, JSON/CSV shape and capability truth; CLI rejects window use, non-JSON output and a colliding screenshot path; CSV test distinguishes missing/unavailable/zero GPU scope values",
+    "not_proven":"These tests bound transport/sampling, not a global atmosphere approximation envelope or blind aesthetic preference. Prior environment horizon/forward-lobe errors remain"
+  },
+  "reproduction":{
+    "cargo_environment":"TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "silent_environment":"ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio; null ALSA output, system audio settings unchanged",
+    "scenario_configs":"All native preview modes use version=1, preset=high, renderer.surface_quality=high and shadows.enabled=true. Off: specular_reflections=true, ray_tracing=off; Local: specular_reflections=true, ray_tracing=local; shadow-only: specular_reflections=false, ray_tracing=local. Remaining settings inherit the standard schema/preset",
+    "tests":["cargo test -p thessa-render-wgpu --tests --lib","cargo test -p thessa-terrain-native --bin thessa-terrain-native -- --ignored","cargo test -p thessa-terrain-native --test perf_capture -- --ignored --nocapture"],
+    "test_scratch":"apps/terrain-native/target/test-tmp/native-perf-PID; no std::env::temp_dir() or system /tmp"
+  },
+  "final_verification":{
+    "scope":"After the subsequent exact shadow-depth reuse; same final Rust sources for all checks below. Local execution, not a remote CI or visual-parity claim",
+    "passed":["cargo fmt --all -- --check","cargo clippy --workspace --all-targets --all-features -- -D warnings","cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings","cargo test --workspace --lib --bins:1858 passed","cargo test --workspace --test '*':80 passed","Bevy-CBT render ignored GPU tests:24 passed","Bevy-CBT mesh-emission GPU test:1 passed","Native ignored GPU/server/CPU diagnostics:10 passed","Native executable perf-capture hardware test:1 passed","Native display/window tests:5 passed","Release render cost diagnostics:3 passed","cargo build --release -p thessa-terrain-native","Architecture guard:12 foundational crates","Agent-QA Python tests:5 passed"],
+    "hardware_skips":"No SKIP messages in these logs; adapter-required suites ran on this machine. Normal suites retain unrelated ignored tests; this does not claim every unrelated ignored workspace test ran",
+    "disabled_atmosphere":"Silent release X15 Local-RT preview,120 measured frames: sky_background=false,renderer_environment enabled=false,0 grid bytes,0 uploads,no sky integration; RT remains active with2 instances/78465 triangles/5080748 planning bytes/0 last-frame AS builds; atlas retains12 active layers,0 last-frame rendered passes. Median host7.968 ms,p95 10.502 ms; not a matched-quality speedup comparison",
+    "moving_camera":"Silent release 5km survey --sweep without vehicle,120 measured frames:370 final resident tiles,373248 drawn terrain triangles,sky_background=true,17 field evaluations including prestream,8192 field bytes,last evaluation2.64 ms (not average),12 last-frame atlas passes. Host median13.851 ms,p95 20.281 ms,p99 22.864 ms,max27.706 ms. Camera movement correctly refreshes rather than reuses depth; different workload from static X15",
+    "logs":"/tmp/opencode/native-close-{fmt,clippy,nodefault,lib,integration,bevy-gpu,mesh-gpu,native-gpu,capture,window,diagnostics,build,architecture,agentqa}.log; /tmp/opencode/native-close-app-{disabled,moving}.log",
+    "captures":"target/render-batch/native-close-{disabled,moving}.{json,csv,png}; versioned artifact records summaries and reproduction, raw captures are local diagnostics",
+    "not_run":"Cross-platform runtime tests, blind subjective preference review, production/Bevy-parity acceptance, StagingBelt/upload A/B and asynchronous window GPU profiling"
+  },
+  "remaining":[
+    "Terrain/ocean/cloud/landmark RT membership and off-cover terrain visibility",
+    "Sun disks, aerial perspective, ground radiance, multiple scattering, HDR/tonemapping/auto-exposure",
+    "Finite-star soft shadows, alpha/transmittance, ray-material facing parity, mip/ray-footprint and rough-environment filtering",
+    "StagingBelt/upload A/B, submission batching, publication-clone/allocation cost and finer asynchronous GPU profiling",
+    "Cross-platform runtime validation, blind subjective review, remaining Bevy client/UI migration and production acceptance"
+  ]
+}

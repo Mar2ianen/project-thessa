@@ -65,10 +65,14 @@ fn camera(origin: DVec3) -> ViewParams {
         exposure: 0.5,
     }
 }
-fn draw(backend: &Backend, mesh: &mut MeshRenderer, terrain: Option<&TerrainRenderer>) -> Vec<u8> {
+fn draw(
+    backend: &Backend,
+    mesh: &mut MeshRenderer,
+    mut terrain: Option<&mut TerrainRenderer>,
+) -> Vec<u8> {
     let target = OffscreenTarget::new(backend, 129, 129).unwrap();
     let mut encoder = backend.device.create_command_encoder(&Default::default());
-    if let Some(terrain) = terrain {
+    if let Some(terrain) = terrain.as_deref_mut() {
         terrain.encode_shadows(&mut encoder, Some(mesh));
     }
     {
@@ -99,6 +103,32 @@ fn draw(backend: &Backend, mesh: &mut MeshRenderer, terrain: Option<&TerrainRend
     mesh.encode(&mut encoder, &target.color, &target.depth);
     backend.queue.submit([encoder.finish()]);
     target.read_rgba8(backend).unwrap()
+}
+
+fn cached_matches_redraw(
+    backend: &Backend,
+    mesh: &mut MeshRenderer,
+    terrain: &mut TerrainRenderer,
+) -> Vec<u8> {
+    let first = draw(backend, mesh, Some(terrain));
+    assert!(
+        terrain.last_shadow_passes() > 0,
+        "changed inputs must refresh depth"
+    );
+    let cached = draw(backend, mesh, Some(terrain));
+    assert_eq!(terrain.last_shadow_passes(), 0);
+    assert_eq!(
+        cached, first,
+        "cached depth differs from just-rendered depth"
+    );
+    terrain.invalidate_shadows();
+    let forced = draw(backend, mesh, Some(terrain));
+    assert!(terrain.last_shadow_passes() > 0);
+    assert_eq!(
+        forced, cached,
+        "exact cache must be byte-identical to forced redraw"
+    );
+    first
 }
 
 #[test]
@@ -153,7 +183,7 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
         &mesh_source,
         thessa_render_wgpu::mesh::SurfaceSettings {
             format: OffscreenTarget::FORMAT,
-            capacity: 1,
+            capacity: 2,
             quality: Quality::Medium,
             reflections: false,
             shadows: terrain.shadows(),
@@ -178,7 +208,59 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
             }],
         )
         .unwrap();
-        let image = draw(&backend, &mut mesh, Some(&terrain));
+        let image = cached_matches_redraw(&backend, &mut mesh, &mut terrain);
+        // Resubmitting identical instance/range bytes must preserve the cache.
+        mesh.update(
+            &backend,
+            &view,
+            &lights,
+            &[MeshInstance {
+                position_m: origin,
+                rotation: DQuat::IDENTITY,
+                scale: 1.0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(draw(&backend, &mut mesh, Some(&mut terrain)), image);
+        assert_eq!(terrain.last_shadow_passes(), 0);
+        terrain.publish_partition(&backend, &[]).unwrap();
+        assert_eq!(draw(&backend, &mut mesh, Some(&mut terrain)), image);
+        assert_eq!(
+            terrain.last_shadow_passes(),
+            0,
+            "identical partition publication retains depth"
+        );
+        let mut replacement = MeshRenderer::with_surface(
+            &backend,
+            &mesh_source,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 2,
+                quality: Quality::Medium,
+                reflections: false,
+                shadows: terrain.shadows(),
+                ray_tracing: None,
+            },
+        )
+        .unwrap();
+        replacement
+            .update(
+                &backend,
+                &view,
+                &lights,
+                &[MeshInstance {
+                    position_m: origin,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.0,
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            cached_matches_redraw(&backend, &mut replacement, &mut terrain),
+            image,
+            "replacement source has its own cache identity even at the same instance revision"
+        );
+        mesh = replacement;
         let blocked = sample(&image, 36);
         let clear = sample(&image, 64);
         assert!(
@@ -194,6 +276,44 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
             terrain.shadows().unwrap().storage_bytes(),
             6 * 512 * 512 * 4
         );
+        for (offset, ranges) in [
+            (0.4, [0..1, 1..2]),
+            (0.9, [0..1, 1..2]),
+            (0.9, [0..1, 1..1]),
+        ] {
+            let placed = [
+                MeshInstance {
+                    position_m: origin,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.0,
+                },
+                MeshInstance {
+                    position_m: origin + DVec3::X * offset,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.0,
+                },
+            ];
+            mesh.update_selected(&backend, &view, &lights, &placed, Some(&ranges))
+                .unwrap();
+            cached_matches_redraw(&backend, &mut mesh, &mut terrain);
+        }
+        // Light intensity changes do not change opaque visibility; a new
+        // direction or source activation does, even with unchanged casters.
+        let mut changed_lights = lights;
+        changed_lights.directions[0] = DVec3::new(0.3, 0.0, 1.0)
+            .normalize()
+            .as_vec3()
+            .extend(0.0)
+            .to_array();
+        terrain
+            .update_shadows(&backend, origin, &changed_lights)
+            .unwrap();
+        cached_matches_redraw(&backend, &mut mesh, &mut terrain);
+        changed_lights.colors_lux[1] = [0.0; 4];
+        terrain
+            .update_shadows(&backend, origin, &changed_lights)
+            .unwrap();
+        cached_matches_redraw(&backend, &mut mesh, &mut terrain);
     }
     settings.shadow_enabled = false;
     assert!(
@@ -365,7 +485,7 @@ fn resident_terrain_casts_onto_mesh_without_using_the_camera_visibility_list() {
         }],
     )
     .unwrap();
-    let image = draw(&backend, &mut mesh, Some(&terrain));
+    let image = cached_matches_redraw(&backend, &mut mesh, &mut terrain);
     let pixel = |x: usize| image[(64 * 129 + x) * 4];
     assert!(
         pixel(36) < 10,
@@ -377,9 +497,14 @@ fn resident_terrain_casts_onto_mesh_without_using_the_camera_visibility_list() {
         "receiver outside terrain shadow remains lit: {}",
         pixel(64)
     );
+    let changed_page = HeightPage::bake(&[0.01; 4], 2, 0.001).unwrap();
+    terrain
+        .update_pages(&backend, &[(0, &changed_page)])
+        .unwrap();
+    cached_matches_redraw(&backend, &mut mesh, &mut terrain);
     // Retire the page: stale generated vertex slots must no longer cast.
     terrain.publish_partition(&backend, &[]).unwrap();
-    let retired = draw(&backend, &mut mesh, Some(&terrain));
+    let retired = cached_matches_redraw(&backend, &mut mesh, &mut terrain);
     assert!(retired[(64 * 129 + 36) * 4] > 100);
 }
 
@@ -494,7 +619,19 @@ fn fixed_source_shadow_frame_cost() {
         colors_lux: [[std::f32::consts::PI; 4]; 3],
         ..Default::default()
     };
-    for enabled in [false, true] {
+    let mut reference = None;
+    for (trial, (enabled, force_redraw)) in [
+        (false, false),
+        (true, true),
+        (true, false),
+        (true, false),
+        (true, true),
+        (true, true),
+        (true, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut request = RequestedGraphics::default();
         request.shadows.enabled = enabled;
         let settings = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
@@ -529,6 +666,9 @@ fn fixed_source_shadow_frame_cost() {
         mesh.update(&backend, &view, &lights, &instances).unwrap();
         let mut timings = Vec::new();
         for i in 0..150 {
+            if force_redraw {
+                terrain.invalidate_shadows();
+            }
             let start = std::time::Instant::now();
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             terrain.encode_shadows(&mut encoder, Some(&mesh));
@@ -545,12 +685,28 @@ fn fixed_source_shadow_frame_cost() {
         }
         timings.sort_by(f64::total_cmp);
         println!(
-            "fixed_source adapter={} shadows={enabled} patches=1024 instances=64 resolution=1280x720 atlas_bytes={} passes={} measured_frames=120 median_ms={:.3} p95_ms={:.3}; CPU encode/submit + GPU completion, not isolated GPU timestamps or game FPS",
+            "fixed_source adapter={} trial={trial} shadows={enabled} force_redraw={force_redraw} patches=1024 instances=64 resolution=1280x720 atlas_bytes={} active_layers={} last_rendered_passes={} measured_frames=120 median_ms={:.3} p95_ms={:.3}; CPU encode/submit + GPU completion, not isolated GPU timestamps or game FPS",
             backend.adapter_name,
             terrain.shadows().map_or(0, |s| s.storage_bytes()),
             terrain.shadows().map_or(0, |s| s.active_passes()),
+            terrain.last_shadow_passes(),
             timings[60],
             timings[114]
         );
+        if enabled {
+            let pixels = target.read_rgba8(&backend).unwrap();
+            if let Some(reference) = &reference {
+                assert_eq!(
+                    &pixels, reference,
+                    "forced/cached shadow depth must render identical frames"
+                );
+            } else {
+                reference = Some(pixels);
+            }
+            assert_eq!(
+                terrain.last_shadow_passes(),
+                if force_redraw { 12 } else { 0 }
+            );
+        }
     }
 }

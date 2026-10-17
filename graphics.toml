@@ -11,18 +11,23 @@
 # second independent settings system. Unknown future keys are ignored by older
 # builds; physics and world state are never affected by this file.
 #
-# Ray tracing is experimental (Bevy Solari). `ray_tracing = "local"|"full"`
+# Ray tracing is experimental (legacy Bevy Solari / native wgpu ray queries).
+# `ray_tracing = "local"|"full"`
 # requests RT device features and fails fast at startup when the GPU/driver
-# cannot provide them. `"auto"` currently resolves to raster until adapter
-# capabilities are available to the launcher.
+# cannot provide them. Native `"auto"` resolves against the negotiated adapter;
+# the legacy launcher may resolve raster before adapter capabilities are known.
 
 version = 1
 preset = "high" # low | medium | high | ultra | custom (auto-shown when values diverge)
 
 [renderer]
 surface_quality = "high" # native: low F0 approximation; medium GGX; high normal/MR/AO maps
-specular_reflections = true # material/stellar and ambient-environment reflection; not scene ray tracing
+specular_reflections = true # material/stellar + sky environment; native scene reflection also requires ray_tracing
 shadow_memory_mib = 64 # native 3-star cascade atlas cap; reduces resolution, never geometry
+# Native RT also tests opaque scene-object visibility toward each active star
+# when [shadows].enabled=true, including when specular_reflections=false.
+# Terrain visibility still uses the shared raster atlas; ray distance is capped
+# by raytracing.max_distance_m. RT off falls back to that atlas.
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
 terrain = "gpu_auto" # cpu | gpu_indexed | gpu_auto | gpu_mesh; mesh -> indexed fallback
@@ -40,6 +45,14 @@ fleet_meshes = true # native retained body meshes; false adds no fleet GPU resou
 fleet_quality = "high" # low/medium/high: cull meshes below 8/2/0.5 projected pixels
 
 [atmosphere]
+# Native background and mesh/RT indirect terms share this quality-tiered sky
+# field and one GPU publication. Disabling releases the field/background draw;
+# no sun disks, aerial perspective or HDR postprocessing in the native path yet.
+# Native: shared single-scattering/airglow environment for mesh reflections and
+# derived diffuse ambient. Low/medium/high grids: 8x4 / 16x8 / 32x16; changed
+# inputs refresh at most every 8/4/2 frames. Disabled releases the grid.
+# Physical sky background, aerial perspective, multiple scattering and external
+# eclipses remain unported in native; see doc 39's environment checkpoint.
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
 aerial_perspective = true # horizon haze on: distance fades blue like ISS photos; budgets only
@@ -108,9 +121,23 @@ mach_diamonds = true # visual shock-cell toggle; never changes simulation physic
 flicker = true
 light = true
 
+[ocean]
+# Native render-only linear spectral sea; legacy Bevy keeps its analytic path.
+# Explicitly opt in: no field, deformation, textures or FFT work when disabled.
+enabled = false
+quality = "high" # 32/64/128 samples per band at low/medium/high
+wind_speed_m_s = 10.0
+wind_direction_rad = 0.0 # same angle in each body-fixed planar spectrum
+significant_height_m = 2.0
+depth_m = 100.0 # uniform reference, not bathymetry
+seed = 17
+geometry_patches = 16 # 0..=64; whole near partition falls back if over budget
+geometry_distance_m = 300.0 # displacement fades from half radius to radius
+
 [raytracing]
-# Participation flags for the experimental Solari path. The single mode
-# switch lives in [renderer] ray_tracing; these flags budget it.
+# Participation flags for experimental ray paths. The native mesh consumer
+# also admits the resident generated terrain grid and bounded near-ocean waves.
+# The single mode switch lives in [renderer] ray_tracing.
 terrain = true
 vehicles = true
 landmarks = false
@@ -119,6 +146,8 @@ clouds = false
 max_distance_m = 500000.0
 # Native RT scene: consolidated geometry, hit tables and TLAS instances are
 # budgeted here; driver-owned acceleration-structure memory is additional.
+# Terrain charges borrowed vertex slots conservatively; an over-budget active
+# partition falls back whole to raster instead of dropping arbitrary blockers.
 scene_memory_mib = 32
 max_instances = 4096
 # Specular chain length for object reflections (1 = single mirror bounce).
@@ -126,6 +155,9 @@ reflection_bounces = 2
 ray_bias_m = 0.01
 
 [shadows]
+# Native depth reuse is exact: unchanged light matrices and caster inputs need
+# no redraw. Camera origin, geometry/membership and mesh transforms/ranges
+# invalidate it; this does not lower resolution or impose a refresh cadence.
 # Sun shadow cascade cover for the raster path (RT lighting ignores it).
 # Engine default ends at 150 m; planetary cover is explicit here instead
 # of magic numbers in the client.

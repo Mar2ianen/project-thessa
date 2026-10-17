@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 
 use glam::{DMat4, DQuat, DVec3};
+pub mod environment;
 pub mod mesh;
+pub mod ocean;
 pub mod shadow;
 
 /// Camera pose in a caller-selected coordinate frame, in SI metres. Projection

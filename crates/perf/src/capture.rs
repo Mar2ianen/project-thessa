@@ -54,6 +54,11 @@ impl PerfCapture {
             }
         }
         scope_names.sort();
+        let gpu_scope_names: std::collections::BTreeSet<_> = self
+            .frames
+            .iter()
+            .flat_map(|frame| frame.gpu.scopes.keys())
+            .collect();
 
         let mut out = String::new();
         out.push_str(
@@ -64,6 +69,9 @@ impl PerfCapture {
         }
         for name in &scope_names {
             let _ = write!(out, ",scope:{name}_ms");
+        }
+        for name in &gpu_scope_names {
+            let _ = write!(out, ",gpu_scope:{name}_ms");
         }
         out.push('\n');
 
@@ -131,6 +139,14 @@ impl PerfCapture {
             for name in &scope_names {
                 let ms = frame.cpu_scopes.get(name).copied().unwrap_or(0.0) * 1000.0;
                 let _ = write!(out, ",{ms:.4}");
+            }
+            for name in &gpu_scope_names {
+                out.push(',');
+                if frame.gpu.available
+                    && let Some(seconds) = frame.gpu.scopes.get(*name)
+                {
+                    let _ = write!(out, "{:.4}", seconds * 1000.0);
+                }
             }
             out.push('\n');
         }
@@ -288,6 +304,42 @@ mod tests {
         assert!(header.contains("scope:sim.aero_ms"));
         let row = lines.next().unwrap();
         assert!(row.contains("8.6000") || row.contains("8.6"));
+    }
+
+    #[test]
+    fn csv_keeps_gpu_scope_union_sorted_and_unavailable_or_missing_values_blank() {
+        let mut capture = sample_capture();
+        capture.frames.push(capture.frames[0].clone());
+        capture.frames.push(capture.frames[0].clone());
+        capture.frames[0].gpu = GpuFrame {
+            available: true,
+            frame_s: Some(0.004),
+            scopes: BTreeMap::from([
+                ("render.terrain".into(), 0.003),
+                ("render.mesh".into(), 0.001),
+            ]),
+        };
+        capture.frames[1].gpu = GpuFrame {
+            available: true,
+            frame_s: Some(0.0),
+            scopes: BTreeMap::from([("render.mesh".into(), 0.0)]),
+        };
+        let csv = capture.to_csv();
+        let rows: Vec<Vec<_>> = csv.lines().map(|line| line.split(',').collect()).collect();
+        let header = &rows[0];
+        let mesh = header
+            .iter()
+            .position(|name| *name == "gpu_scope:render.mesh_ms")
+            .unwrap();
+        let terrain = header
+            .iter()
+            .position(|name| *name == "gpu_scope:render.terrain_ms")
+            .unwrap();
+        assert!(mesh < terrain);
+        assert_eq!((rows[1][mesh], rows[1][terrain]), ("1.0000", "3.0000"));
+        assert_eq!((rows[2][mesh], rows[2][terrain]), ("0.0000", ""));
+        assert_eq!((rows[3][mesh], rows[3][terrain]), ("", ""));
+        assert!(rows.iter().all(|row| row.len() == header.len()));
     }
 
     #[test]

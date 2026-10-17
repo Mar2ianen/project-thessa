@@ -6543,6 +6543,7 @@ dependencies = [
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-graphics",
+ "thessa-perf",
  "thessa-rcbt-core",
  "thessa-render-assets",
  "thessa-render-core",

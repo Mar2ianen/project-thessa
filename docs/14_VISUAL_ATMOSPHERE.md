@@ -13,12 +13,12 @@ Current source of truth: `crates/atmosphere`, `crates/graphics`,
 atmosphere paths plus shared CPU-side optical inputs. Full cloud/weather
 coupling and every ray-aware mode described below are not shipped.
 
-The Bevy-free native migration viewer now consumes resolved opaque material
-quality/specular controls and the shared raster shadow settings, but does not
-yet consume the atmosphere/LUT/cloud paths described here. Native reflection
-currently means GGX stellar sources and explicit isotropic ambient, not
-scene-object rays or atmospheric IBL. See doc 39's 2026-10-17 surface-lighting
-checkpoint for settings, costs, hardware evidence and remaining scope.
+The Bevy-free native viewer consumes resolved materials, shared raster/mesh RT
+shadows and a shared single-scattering sky field for background, mesh/RT misses
+and opt-in spectral ocean reflection. Native mesh ray queries include resident
+terrain and bounded near-ocean geometry. It does not yet consume the Bevy LUT,
+cloud or aerial-perspective paths described here. See doc 39's migration
+checkpoints and doc 56's spectral-ocean contract for current scope and evidence.
 
 Scope: rocky planets and rocky moons first, with gas-giant bands already
 shipped as CPU-baked shells (`beauty.rs`). Full gas-giant volumetric

@@ -12,6 +12,8 @@ pub use thessa_rcbt_core::material_page::MaterialPages;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialUpload {
+    /// Texture bytes or sampling-directory membership changed.
+    pub changed: bool,
     pub pages: usize,
     pub bytes: usize,
     pub residents: usize,
@@ -189,6 +191,7 @@ impl MaterialArray {
             )
             .collect();
         if directory != self.directory_data {
+            stats.changed = true;
             backend
                 .queue
                 .write_buffer(&self.directory, 0, &words(&directory));
@@ -198,6 +201,7 @@ impl MaterialArray {
             backend.queue.write_buffer(&self.slots, 0, &words(&slots));
             self.slot_data = slots;
         }
+        stats.changed |= stats.pages > 0;
         Ok(stats)
     }
 }

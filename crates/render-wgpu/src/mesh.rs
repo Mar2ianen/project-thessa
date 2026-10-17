@@ -41,8 +41,11 @@ pub struct SurfaceSettings<'a> {
 pub struct MeshRenderer {
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
+    shadow_instances: Vec<u8>,
+    shadow_revision: u64,
     rt: Option<crate::ray_scene::RayScene>,
     rt_reason: Option<String>,
+    environment: crate::environment::EnvironmentBinding,
     pipeline: wgpu::RenderPipeline,
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
@@ -58,11 +61,45 @@ pub struct MeshRenderer {
 fn fail(s: &str) -> BackendError {
     BackendError::Device(s.into())
 }
+
+/// Shared frame bind group: view, lighting, instances and the environment
+/// field. Rebuilt when the environment texel buffer is reallocated, because a
+/// bind group captures the buffers it was created with.
+fn frame_bind_group(
+    device: &wgpu::Device,
+    pipeline: &wgpu::RenderPipeline,
+    view: &wgpu::Buffer,
+    lighting: &wgpu::Buffer,
+    instances: &wgpu::Buffer,
+    environment: &crate::environment::EnvironmentBinding,
+) -> wgpu::BindGroup {
+    let [environment_meta, environment_texels] = environment.entries();
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("mesh-frame"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: view.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: lighting.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: instances.as_entire_binding(),
+            },
+            environment_meta,
+            environment_texels,
+        ],
+    })
+}
 fn words(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
     values.into_iter().flat_map(f32::to_le_bytes).collect()
 }
 
-fn material_texture(
+pub(crate) fn material_texture(
     backend: &Backend,
     source: &MeshAsset,
     id: Option<usize>,
@@ -73,7 +110,7 @@ fn material_texture(
     let t = id.map(|i| source.textures[i]);
     let image = t.map(|t| t.image);
     let texture = cache
-        .entry((image, fallback, srgb))
+        .entry((image, if image.is_some() { [0; 4] } else { fallback }, srgb))
         .or_insert_with(|| {
             let (width, height, pixels) = image.map_or((1, 1, fallback.as_slice()), |i| {
                 let i = &source.images[i];
@@ -146,6 +183,92 @@ impl MeshRenderer {
         self.rt_reason.as_deref()
     }
 
+    pub fn rt_terrain_reason(&self) -> Option<&str> {
+        self.rt
+            .as_ref()
+            .and_then(crate::ray_scene::RayScene::terrain_reason)
+    }
+
+    /// Publish terrain membership after mesh updates, before encoding. Height
+    /// generation submissions precede these builds on the same queue.
+    pub fn sync_rt_terrain(
+        &mut self,
+        backend: &Backend,
+        terrain: &crate::terrain::TerrainRenderer,
+    ) -> Result<(), BackendError> {
+        if let Some(rt) = &mut self.rt {
+            rt.sync_terrain(backend, terrain)?;
+        }
+        Ok(())
+    }
+
+    /// Reuse unchanged terrain BLASes when only the immutable mesh asset was
+    /// replaced (for example, a new fleet appearance epoch).
+    pub fn adopt_rt_terrain(&mut self, previous: &mut Self) -> bool {
+        match (&mut self.rt, &mut previous.rt) {
+            (Some(next), Some(old)) => next.adopt_terrain(old),
+            _ => false,
+        }
+    }
+
+    /// Bind the radiance environment field, or `None` for the disabled state
+    /// that reproduces the legacy isotropic `ambient_lux / PI` reflection
+    /// term exactly. No pipeline or layout rebuild; buffer growth/release
+    /// rebuilds the frame bind group. Disabled retains only a 16-byte texel
+    /// placeholder and the metadata uniform.
+    pub fn update_environment(
+        &mut self,
+        backend: &Backend,
+        field: Option<&thessa_render_core::environment::EnvironmentRadiance>,
+    ) {
+        if self.environment.update(backend, field) {
+            self.global = frame_bind_group(
+                &backend.device,
+                &self.pipeline,
+                &self.view,
+                &self.lighting,
+                &self.instances,
+                &self.environment,
+            );
+        }
+    }
+
+    /// Adopt shared scene buffers, without staging or duplicating the grid.
+    /// Call after publication (and on renderer replacement), not every frame.
+    pub fn share_environment(
+        &mut self,
+        backend: &Backend,
+        binding: &crate::environment::EnvironmentBinding,
+    ) {
+        self.environment = binding.clone();
+        self.global = frame_bind_group(
+            &backend.device,
+            &self.pipeline,
+            &self.view,
+            &self.lighting,
+            &self.instances,
+            &self.environment,
+        );
+    }
+
+    /// Bound environment field: `(enabled, width, height, storage_bytes, uploads)`.
+    pub fn environment_stats(&self) -> (bool, u32, u32, u64, u64) {
+        let (width, height) = self.environment.dimensions();
+        (
+            self.environment.enabled(),
+            width,
+            height,
+            self.environment.storage_bytes(),
+            self.environment.uploads(),
+        )
+    }
+
+    /// Cos-weighted hemispherical irradiance of the bound field, in lux;
+    /// zero while disabled.
+    pub fn environment_ambient_lux(&self) -> [f32; 3] {
+        self.environment.ambient_lux()
+    }
+
     pub fn draw_stats(&self) -> MeshDrawStats {
         MeshDrawStats {
             instances: self.count,
@@ -184,6 +307,15 @@ impl MeshRenderer {
         source: &MeshAsset,
         settings: SurfaceSettings<'_>,
     ) -> Result<Self, BackendError> {
+        Self::with_surface_and_terrain(backend, source, settings, None)
+    }
+
+    pub fn with_surface_and_terrain(
+        backend: &Backend,
+        source: &MeshAsset,
+        settings: SurfaceSettings<'_>,
+        terrain: Option<&crate::terrain_ray::TerrainRaySource>,
+    ) -> Result<Self, BackendError> {
         let SurfaceSettings {
             format,
             capacity,
@@ -196,7 +328,15 @@ impl MeshRenderer {
         // Feasibility (device feature, scene sizes, RT memory budget) is
         // decided before the pipeline exists, because the shader include
         // depends on it.
-        let rt = crate::ray_scene::plan(backend, source, ray_tracing, capacity);
+        let rt = crate::ray_scene::plan_with_terrain(
+            backend,
+            source,
+            ray_tracing,
+            capacity,
+            quality,
+            reflections,
+            terrain,
+        );
         let rt_reason = match &rt {
             crate::ray_scene::Enable::Unavailable(reason) => Some(reason.clone()),
             _ => None,
@@ -240,15 +380,16 @@ impl MeshRenderer {
         });
         let rt_include = match &rt {
             crate::ray_scene::Enable::Ready(plan) => crate::ray_scene::shader(plan),
-            _ => crate::ray_scene::FALLBACK.to_string(),
+            _ => crate::ray_scene::fallback_shader(),
         };
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("owned-mesh"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}",
                     rt_include,
                     thessa_rcbt_core::shaders::OCEAN_WGSL,
+                    include_str!("environment.wgsl"),
                     shadows.map_or_else(
                         || crate::shadows::NO_SHADOWS.into(),
                         |_| crate::shadows::receiver_shader(2)
@@ -296,24 +437,15 @@ impl MeshRenderer {
             multiview_mask: None,
             cache: None,
         });
-        let global = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mesh-frame"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: view.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: lighting.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: instances.as_entire_binding(),
-                },
-            ],
-        });
+        let environment = crate::environment::EnvironmentBinding::new(device);
+        let global = frame_bind_group(
+            device,
+            &pipeline,
+            &view,
+            &lighting,
+            &instances,
+            &environment,
+        );
         let mut textures = std::collections::BTreeMap::new();
         let mut materials = Vec::new();
         for material in &source.materials {
@@ -440,15 +572,19 @@ impl MeshRenderer {
         let rt = match rt {
             crate::ray_scene::Enable::Ready(plan) => Some(crate::ray_scene::RayScene::new(
                 backend,
-                plan,
+                *plan,
                 &pipeline.get_bind_group_layout(3),
                 source,
+                &mut textures,
             )?),
             _ => None,
         };
         Ok(Self {
+            shadow_instances: Vec::new(),
+            shadow_revision: 0,
             rt,
             rt_reason,
+            environment,
             shadow_receiver: shadows
                 .map(|s| s.receiver(backend, &pipeline.get_bind_group_layout(2))),
             shadow_caster: shadows.map(|s| {
@@ -542,8 +678,20 @@ impl MeshRenderer {
                 .write_buffer(&self.instances, 0, &self.staging);
         }
         self.count = instances.len() as u32;
+        let mut shadow_changed = false;
         for (i, range) in self.ranges.iter_mut().enumerate() {
-            *range = ranges.map_or(0..self.count, |ranges| ranges[i].clone());
+            let next = ranges.map_or(0..self.count, |ranges| ranges[i].clone());
+            shadow_changed |= *range != next;
+            *range = next;
+        }
+        if self.shadow_caster.is_some() {
+            if self.shadow_instances != self.staging {
+                self.shadow_instances.clone_from(&self.staging);
+                shadow_changed = true;
+            }
+            if shadow_changed {
+                self.shadow_revision = self.shadow_revision.wrapping_add(1);
+            }
         }
         if let Some(rt) = &mut self.rt {
             rt.update(
@@ -555,19 +703,44 @@ impl MeshRenderer {
         }
         Ok(())
     }
+
+    pub(crate) fn shadow_key(&self) -> Option<(wgpu::Buffer, u64)> {
+        self.shadow_caster
+            .as_ref()
+            .map(|_| (self.instances.clone(), self.shadow_revision))
+    }
     pub fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
     ) {
+        self.encode_profiled(encoder, color, depth, None);
+    }
+
+    /// Optional three-mark hardware diagnostic: AS builds then mesh draws.
+    /// No query writes when no mesh is drawable. Caller supplies three marks,
+    /// completes submission and reads; ordinary encoding allocates no profiler.
+    pub fn encode_profiled(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        timing: Option<&crate::timing::GpuIntervals>,
+    ) {
         if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
             return;
         }
         // Acceleration-structure builds are encoder-level state and must
         // precede the pass that traces them.
+        if let Some(t) = timing {
+            t.mark(encoder, 0);
+        }
         if let Some(rt) = &mut self.rt {
             rt.encode(encoder);
+        }
+        if let Some(t) = timing {
+            t.mark(encoder, 1);
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("owned-rigid-mesh"),
@@ -608,6 +781,11 @@ impl MeshRenderer {
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..p.count, 0, range.clone());
+        }
+        drop(pass);
+        if let Some(t) = timing {
+            t.mark(encoder, 2);
+            t.resolve(encoder);
         }
     }
 

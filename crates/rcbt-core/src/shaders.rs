@@ -102,6 +102,7 @@ pub const CBT_CLASSIFY_WGSL: &str = concat!(
     include_str!("shaders/precision.wgsl"),
     include_str!("shaders/tile_frame.wgsl"),
     r#"
+override cbt_displacement_bound_m: f32 = 0.0;
 struct Params {
     leaf_count: u32,
     vertices_per_patch: u32,
@@ -162,15 +163,21 @@ fn intersects_clip(ordinal: u32) -> bool {
     var all_near = true;
     var all_far = true;
     var all_behind = true;
+    // The default specialization is exactly the legacy zero margin. Native
+    // spectral displacement supplies a coefficient-derived absolute envelope;
+    // two sampled points can differ by twice that envelope.
+    let rows=transpose(view.clip_from_world*render_from_body);
+    let bound=select(0.0,cbt_displacement_bound_m,grid_history[ordinal].w!=0u);
+    let margin=vec4(length(rows[0].xyz),length(rows[1].xyz),length(rows[2].xyz),length(rows[3].xyz))*2.0*bound;
     for (var corner = 0u; corner < 5u; corner = corner + 1u) {
         let position = clip_position(ordinal, corner);
-        all_left = all_left && position.x < -position.w;
-        all_right = all_right && position.x > position.w;
-        all_bottom = all_bottom && position.y < -position.w;
-        all_top = all_top && position.y > position.w;
-        all_near = all_near && position.z < 0.0;
-        all_far = all_far && position.z > position.w;
-        all_behind = all_behind && position.w <= 0.0;
+        all_left = all_left && position.x < -position.w-margin.x-margin.w;
+        all_right = all_right && position.x > position.w+margin.x+margin.w;
+        all_bottom = all_bottom && position.y < -position.w-margin.y-margin.w;
+        all_top = all_top && position.y > position.w+margin.y+margin.w;
+        all_near = all_near && position.z < -margin.z;
+        all_far = all_far && position.z > position.w+margin.z+margin.w;
+        all_behind = all_behind && position.w <= -margin.w;
     }
     return !(all_left || all_right || all_bottom || all_top || all_near || all_far || all_behind);
 }
@@ -202,6 +209,9 @@ fn classify_grid_span(span: f32) -> u32 {
 }
 
 fn screen_grid_step(ordinal: u32) -> u32 {
+    // Native near-ocean displacement is filtered for this full-resolution
+    // grid; decimating it afterwards would spatially alias the wave geometry.
+    if(grid_history[ordinal].w!=0u){return 1u;}
     let span = screen_grid_span(ordinal);
     let current = classify_grid_span(span);
     let history = grid_history[ordinal];
@@ -260,7 +270,7 @@ fn classify_active(
                     leaves[ordinal].x,
                     leaves[ordinal].y,
                     selected_step,
-                    0u,
+                    grid_history[ordinal].w,
                 );
                 let cells = 32u / selected_step;
                 selected_count = cells * cells * 2u + cells * 8u;
@@ -609,6 +619,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             sky * vec3(0.015, 0.018, 0.015)) * fresnel;
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
+    let spectral_ocean = cbt_spectral_ocean(input.render_position,normal,direction,input.height_m,roughness,albedo,footprint_m);
+    radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a);
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no
     // day-side masking is needed.

@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-17",
+  "base_commit": "da4f026",
+  "tree_boundary": "Uncommitted environment, textured-hit/shadow, sky/profiling and exact shadow-cache work, followed by resident generated-terrain membership in the existing mesh ray-query scene. No commit/push made by this continuation.",
+  "scope": "Mesh primary/reflected rays can intersect resident full-grid generated terrain. No primary terrain RT consumer, displaced ocean FFT, atmospheric/cloud traversal or whole-renderer replacement claim.",
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan, Mesa 26.2.4-arch1.1, Linux",
+  "contracts": {
+    "geometry": "One lazy BLAS per active stable terrain slot, referencing the existing 32-byte/1089-vertex generated GPU buffer; one shared 24576-byte index grid, 2048 step-one surface triangles per patch. No CPU expansion, readback, raster skirts or camera-visibility culling.",
+    "publication": "Existing terrain publication increments per-slot geometry revisions. Mesh consumer synchronizes after publication/replacement, then builds before its draw on the same queue. Unchanged terrain BLAS handles are adopted across unrelated immutable mesh/fleet source replacement when source identity and new admission capacity agree. Retired slots release their structures; source identity mismatch is rejected.",
+    "dirty_only": "Unchanged slots do not rebuild. Camera origin changes update f64-subtracted TLAS translations, not BLAS geometry. Height/anchor/reused-slot updates rebuild affected BLASes and the TLAS.",
+    "materials": "Reflected terrain hits interpolate generated normals/positions and sample the shared world-addressed material directory, ancestor/edge kernel and sRGB-albedo/linear-roughness array. Material-only publications need no AS rebuild or duplicate hit tables. Explicit zero footprint, not ray-cone filtering.",
+    "coverage": "Resident partition only, not whole-planet coverage. Terrain instance/memory capacity is reserved after requested mesh pairing capacity. Over-budget active partitions fall back whole, with visible reason and no stale partial blocker set; admission recovers automatically.",
+    "planning_memory": "35232 bytes per admitted terrain slot includes borrowed vertex data, descriptor overhead and pair/instance records, plus shared indices. Reported rt_bytes is a planning reservation, not an actual allocation or measured driver-owned AS footprint.",
+    "participation": "Existing resolved raytracing.terrain and raytracing.vehicles are independent. vehicles=false omits mesh BLASes and geometry copies but mesh receivers can still trace terrain. Terrain-only empty partitions build an empty TLAS once so receivers can safely miss. Disabled terrain adds no source/BLAS-input usage.",
+    "bindings": "Up to nine storage bindings negotiated only for ray-query devices; lesser devices report terrain fallback without disabling otherwise feasible mesh RT. Shadow-only terrain adds no hit bindings/textures.",
+    "ocean_boundary": "Existing clamped sea-datum terrain can intersect rays, but hits use native terrain material semantics. No claim of displaced waves, shared water optics, bathymetry, shoreline parity or completed ocean reflections. Primary terrain visibility still uses the shared raster atlas."
+  },
+  "correctness": {
+    "suite": "cargo test -p thessa-render-wgpu --test ray_scene",
+    "cases": [
+      "Resident red/blue terrain radiance agrees within two encoded 8-bit levels around the deterministic dielectric fixture result",
+      "Cached and forced-identically-regenerated terrain produce byte-identical images; immutable mesh replacement adopts terrain BLASes without rebuilding them",
+      "Shared material-only red-to-blue update requires zero BLAS/TLAS builds",
+      "Camera origin changes rebuild only the TLAS",
+      "A raised page moves out of the outgoing ray; stale intersections disappear",
+      "Retirement, whole-partition instance-budget rejection and re-admission remove/restore blockers correctly",
+      "Shadow-only terrain occludes a diffuse mesh without reflection hit tables or an atlas",
+      "Vehicle exclusion preserves terrain tracing; both first-frame and retired empty terrain-only TLASes are safe"
+    ]
+  },
+  "fixed_workload": {
+    "command": "cargo test --release -p thessa-render-wgpu --test ray_scene terrain_ray_dirty_build_cost_diagnostic -- --ignored --nocapture",
+    "scenario": "1024 patches, 2097152 terrain triangles, one mirror instance, 1280x720, five warmup plus 30 measured frames per mode. Same output bytes for cached, one-dirty and all-dirty modes.",
+    "baseline": "Same code, geometry, shaders and image; dirty-page publication deliberately regenerates identical pages to force selected BLAS builds. No Bevy or large_cbt renderer performance comparison.",
+    "boundary": "GPU hardware interval includes AS builds, mesh reflection draw and barriers. Host interval is encode/submit/completion; prepare/sync measured separately. Height regeneration, initial allocation, readback and screenshot comparison excluded. One sequential three-mode run, not a stable tail-latency estimate.",
+    "planning_bytes": 36103472,
+    "cached": {"terrain_blas_builds": 0, "as_command_batches": 0, "prepare_p50_ms": 0.010259, "host_p50_ms": 0.963914, "host_p95_ms": 1.065474, "gpu_p50_ms": 0.7777577493553162},
+    "one_dirty": {"terrain_blas_builds": 1, "as_command_batches": 1, "prepare_p50_ms": 0.009658, "host_p50_ms": 1.580362, "host_p95_ms": 1.658818, "gpu_p50_ms": 1.2870854783477783},
+    "all_dirty": {"terrain_blas_builds": 1024, "as_command_batches": 1, "prepare_p50_ms": 0.039363, "host_p50_ms": 97.679591, "host_p95_ms": 107.408416, "gpu_p50_ms": 74.22851509791184},
+    "interpretation": "Dirty-only reuse avoids the expensive full reconstruction; full-scene rebuild is not suitable for every-frame small ocean ripples. This is a measured cost boundary, not an FPS win or displaced-ocean solution.",
+    "raw_log": "/tmp/opencode/terrain-rt-cost.log",
+    "repeat": {"log": "/tmp/opencode/terrain-rt-release-hardware.log", "gpu_p50_ms_cached_one_all": [0.7715860229988099, 1.2918144634780884, 73.0838201633606], "host_p50_ms_cached_one_all": [0.944369, 1.591464, 100.135975], "same_output": true, "note": "Second sequential diagnostic in the release ignored suite; same fixed-workload output oracle. No affinity/clock lock."}
+  },
+  "native_static_controls": {
+    "command": "thessa-terrain-native --vehicle-preview --no-hud --graphics target/render-batch/rt-local.toml --headless target/render-batch/terrain-rt-local.png --perf-capture target/render-batch/terrain-rt-local.json --frames 120 --prestream-seconds 3",
+    "scenario": "349 resident tiles, 426240 drawn raster triangles, 78465 vehicle triangles, 1280x720, three-second prestream, 30 warmup and 120 measured frames, static epoch/camera, no HUD. Sequential controls, not an interleaved same-process A/B.",
+    "terrain_on": {"instances": 351, "terrain_instances": 349, "source_triangles": 793217, "planning_bytes": 33537548, "last_as_builds": 0, "last_terrain_blas_builds": 0, "last_shadow_passes": 0, "host_median_ms": 9.144812, "host_upper_median_ms": 9.150, "host_p95_ms": 9.730237, "gpu_mesh_rt_p50_ms": 4.396834039123536, "gpu_terrain_sky_p50_ms": 4.266506415023804, "gpu_atlas_p50_ms": 0.001683198097229004},
+    "terrain_off_same_executable": {"config": "rt-mesh-only.toml differs by raytracing.terrain=false", "instances": 2, "host_median_ms": 8.2103815, "host_p95_ms": 9.142523, "gpu_mesh_rt_p50_ms": 3.419737543682099, "gpu_terrain_sky_p50_ms": 4.204208047353745, "gpu_atlas_p50_ms": 0.0017633503875732423},
+    "budget_control": "max_instances=3 reserves two mesh pairings and admits one terrain slot. Final 349-tile partition reports an explicit whole-terrain raster fallback, retains two mesh TLAS instances and zero last-frame AS builds; shared atlas/sky stay active.",
+    "interpretation": "Terrain tracing adds feature cost; these sequential runs do not claim a speedup. No image aesthetic or matched renderer-parity verdict.",
+    "raw": "target/render-batch/terrain-rt-{local,mesh-only}.{json,csv,png}; /tmp/opencode/terrain-rt-app-{local,mesh-only,budget}.log"
+  },
+  "final_moving_and_server_controls": {
+    "moving_preview": {"command": "thessa-terrain-native --vehicle-preview --sweep --no-hud --graphics target/render-batch/rt-local.toml --headless target/render-batch/terrain-rt-moving.png --perf-capture target/render-batch/terrain-rt-moving.json --frames 120 --prestream-seconds 3", "host_upper_median_ms": 20.372, "host_p95_ms": 26.470, "last_terrain_instances": 340, "last_terrain_blas_builds": 0, "last_as_batches": 1, "last_atlas_passes": 12, "measured_geometry_publications": 17, "note": "Moving camera with streaming; not an equal static workload or speedup claim. Last frame updates the TLAS but reuses terrain BLASes."},
+    "server_flight": {"command": "thessa-terrain-native --server-flight --no-hud --graphics target/render-batch/rt-local.toml --headless target/render-batch/terrain-rt-server.png --frames 60 --prestream-seconds 3", "host_upper_median_ms": 33.054, "host_p95_ms": 38.802, "last_terrain_instances": 374, "last_terrain_blas_builds": 8, "last_as_batches": 1, "last_atlas_passes": 12, "mesh_source_publications": 1, "received_snapshots": 62, "local_physics_steps": 0, "note": "Live canonical PRIMARY via the existing embedded authority. Camera, terrain, stars and sky change while server CPU runs concurrently; this is an integration smoke test, not isolated renderer/network performance."}
+  },
+  "ocean_reference_review": {
+    "upstream": "https://github.com/AnisB/large_cbt/tree/7351e6fc603b9b2c2ab4da399b13a9ab0f327398",
+    "files": ["demo/src/water/water_simulation.cpp", "demo/src/water/water_deformer.cpp", "shaders/Water/WaterSimulation.compute", "shaders/Water/WaterDeformation.compute", "shaders/shader_lib/water_utilities.hlsl"],
+    "observed_architecture": "Multi-band spectral evolution, two-pass inverse FFT, surface-gradient mips, and indirect deformation of active indexed CBT bisectors in a planetary local frame.",
+    "license": "No upstream license grant found; full demo not vendored and no source copied or linked into runtime. Review of architecture only. Local third_party/large_cbt remains the pre-existing quarantined benchmark-only CPU subset.",
+    "independent_reference": "Jerry Tessendorf, Simulating Ocean Water (2001). Future physical inputs use local gravity, water depth, wind/fetch and simulation time, not Earth-specific tuning or wall-clock phase.",
+    "next_boundary": "Reuse CBT/shared surface ownership, displace resolvable large waves, filter fine gradients with unresolved slope variance, and measure ray update/refit/proxy error separately. No FFT ocean implementation or large_cbt speed claim is established here."
+  },
+  "reproduction": {
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "silent_environment": "ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio; system audio settings unchanged",
+    "executable": "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native"
+  },
+  "verification": {
+    "completed": ["Workspace all-target/all-feature clippy, including final terrain-adoption change", "1858 workspace lib/bin tests (initial 120-second harness timeout rerun to completion)", "84 workspace integration tests", "42 native ordinary tests", "10 native ignored hardware/diagnostic tests", "Render-wgpu ordinary GPU suites and final ray-scene rerun after terrain adoption", "Four release render ignored diagnostics, including the repeated terrain fixed-workload cost test", "24 Bevy-CBT ignored GPU tests on the real iGPU", "Native no-default-features all-target clippy", "Final release native build", "Silent native static terrain-on, mesh-only, budget-fallback, moving-preview and live-server controls", "Architecture guard", "cargo fmt --all -- --check and git diff --check"],
+    "logs": "/tmp/opencode/terrain-rt-*.log",
+    "capture_hardware_regression": "cargo test -p thessa-terrain-native --test perf_capture -- --ignored passed on the real adapter with silent inherited audio environment; JSON/CSV scope and capability checks remain valid.",
+    "omissions": ["No blind subjective acceptance", "No cross-platform runtime validation", "No remote-green-CI claim", "No full Bevy/large_cbt renderer parity", "No displaced ocean/primary terrain RT consumer", "No measured driver AS allocation", "No asynchronous window GPU profiler"]
+  }
+}

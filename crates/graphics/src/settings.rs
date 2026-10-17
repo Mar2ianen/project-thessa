@@ -628,9 +628,44 @@ impl Default for ShadowSettings {
     }
 }
 
+/// Render-only finite-depth spectral sea. State is shared across quality tiers;
+/// quality changes frequency sampling, never authoritative fluid/contact state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OceanSettings {
+    pub enabled: bool,
+    pub quality: Quality,
+    pub wind_speed_m_s: f64,
+    pub wind_direction_rad: f64,
+    pub significant_height_m: f64,
+    pub depth_m: f64,
+    pub seed: u64,
+    /// Bounded near-field deformation slots; zero is optical-only fallback.
+    pub geometry_patches: u32,
+    pub geometry_distance_m: f64,
+}
+
+impl Default for OceanSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quality: Quality::High,
+            wind_speed_m_s: 10.0,
+            wind_direction_rad: 0.0,
+            significant_height_m: 2.0,
+            depth_m: 100.0,
+            seed: 17,
+            geometry_patches: 16,
+            geometry_distance_m: 300.0,
+        }
+    }
+}
+
 /// Requested graphics configuration as parsed from `graphics.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestedGraphics {
+    #[serde(default)]
+    pub ocean: OceanSettings,
     #[serde(default = "default_config_version")]
     pub version: u32,
     #[serde(default)]
@@ -664,6 +699,7 @@ fn default_config_version() -> u32 {
 impl Default for RequestedGraphics {
     fn default() -> Self {
         Self {
+            ocean: OceanSettings::default(),
             version: 1,
             preset: Preset::High,
             renderer: RendererSettings::default(),
@@ -713,6 +749,46 @@ impl RequestedGraphics {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        for (path, value, low, high) in [
+            (
+                "ocean.wind_speed_m_s",
+                self.ocean.wind_speed_m_s,
+                0.0,
+                100.0,
+            ),
+            (
+                "ocean.wind_direction_rad",
+                self.ocean.wind_direction_rad,
+                -1e6,
+                1e6,
+            ),
+            (
+                "ocean.significant_height_m",
+                self.ocean.significant_height_m,
+                0.0,
+                20.0,
+            ),
+            ("ocean.depth_m", self.ocean.depth_m, 0.1, 100_000.0),
+            (
+                "ocean.geometry_distance_m",
+                self.ocean.geometry_distance_m,
+                0.0,
+                20_000.0,
+            ),
+        ] {
+            if !(low..=high).contains(&value) {
+                return Err(ConfigError::InvalidValue {
+                    path,
+                    detail: format!("expected finite {low}..={high}"),
+                });
+            }
+        }
+        if self.ocean.geometry_patches > 64 {
+            return Err(ConfigError::InvalidValue {
+                path: "ocean.geometry_patches",
+                detail: "expected 0..=64".into(),
+            });
+        }
         if self.version != 1 {
             return Err(ConfigError::UnsupportedVersion { got: self.version });
         }
@@ -836,6 +912,13 @@ impl RequestedGraphics {
         // Bloom is deliberately opt-in for every preset: it costs a full
         // mip-chain at native resolution and does not improve terrain detail.
         self.renderer.bloom = false;
+        if preset != Preset::Custom {
+            self.ocean.quality = match preset {
+                Preset::Low => Quality::Low,
+                Preset::Medium => Quality::Medium,
+                _ => Quality::High,
+            };
+        }
         match preset {
             Preset::Low => {
                 self.renderer.surface_quality = Quality::Low;
@@ -998,6 +1081,34 @@ mod tests {
         let config = RequestedGraphics::from_toml(text).unwrap();
         assert_eq!(config.version, 1);
         assert_eq!(config.renderer.terrain, TerrainRenderRequest::GpuAuto);
+    }
+
+    #[test]
+    fn ocean_config_roundtrips_validates_and_presets_keep_physical_inputs() {
+        let config=RequestedGraphics::from_toml("preset='high'\n[ocean]\nenabled=true\nquality='low'\nwind_speed_m_s=13.0\ndepth_m=9.0\nseed=8\n").unwrap();
+        assert!(config.ocean.enabled);
+        assert_eq!(config.ocean.quality, Quality::Low);
+        let text = toml::to_string(&config).unwrap();
+        assert_eq!(RequestedGraphics::from_toml(&text).unwrap(), config);
+        let mut selected = config.clone();
+        selected.apply_preset(Preset::High);
+        assert_eq!(selected.ocean.wind_speed_m_s, 13.0);
+        assert_eq!(selected.ocean.depth_m, 9.0);
+        assert_eq!(selected.ocean.seed, 8);
+        assert!(selected.ocean.enabled);
+        assert_eq!(selected.ocean.quality, Quality::High);
+        for assignment in [
+            "wind_speed_m_s=nan",
+            "significant_height_m=-1.0",
+            "depth_m=0.0",
+            "geometry_patches=65",
+            "geometry_distance_m=inf",
+        ] {
+            assert!(
+                RequestedGraphics::from_toml(&format!("[ocean]\n{assignment}")).is_err(),
+                "{assignment}"
+            );
+        }
     }
 
     #[test]

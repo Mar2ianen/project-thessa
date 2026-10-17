@@ -23,6 +23,6 @@ pub use resolve::{
 pub use settings::{
     AtmosphereSettings, AuroraQuality, BackendRequest, CloudIntegratorRequest, CloudSettings,
     ConfigError, DebugSettings, EnginePlumeSettings, GasGiantSettings, MaterialStorageRequest,
-    Preset, Quality, RayTracingRequest, RaytracingParticipation, RendererSettings,
+    OceanSettings, Preset, Quality, RayTracingRequest, RaytracingParticipation, RendererSettings,
     RequestedGraphics, ShadowSettings, TerrainRenderRequest, UpperAtmosphereSettings,
 };

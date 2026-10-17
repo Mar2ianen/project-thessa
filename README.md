@@ -116,8 +116,30 @@ The checked-in vertical slice currently contains:
   The native draw loads the existing terrain color/depth targets before HUD;
    its configurable opaque path now supports shared GGX stellar/environment
    reflection, normal/metallic-roughness/AO maps and a memory-bounded three-star
-   cascade shadow atlas shared with terrain. This is **not** complete PBR,
-   atmosphere or scene-object reflection parity (doc 39, surface-lighting checkpoint). Live flight-input
+    cascade shadow atlas shared with terrain. Scene meshes can use negotiated
+    ray-query BLAS/TLAS reflections; `[atmosphere]` enables a quality-tiered
+    shared single-scattering sky field for mesh reflections/RT misses and
+    derived diffuse ambient (see doc 39's environment-radiance checkpoint).
+    RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
+    textures; bounded stellar shadow rays supplement the shared atlas on meshes
+     and reflected hits. The background now samples that same sky field at far
+     depth in the terrain pass, with no second integration, upload or render
+      target. Mesh queries can also trace the resident generated terrain grid
+      through persistent dirty-only BLASes, sharing raster material pages.
+      Over-budget partitions fall back whole, never silently drop blockers.
+       Opt-in `[ocean]` now adds a shared multiband spectral field, filtered
+       water optics and bounded near-grid displacement shared by raster/shadows/RT
+       ([doc 56](docs/56_NATIVE_SPECTRAL_OCEAN.md)); overflow is optical-only.
+       Sun disks, aerial perspective, HDR and primary terrain/ocean mesh-query
+       reflection consumers remain missing: **not** complete PBR/Bevy parity.
+     The shared shadow atlas reuses depth only for unchanged light matrices,
+     terrain and mesh casters; motion/source changes invalidate it, with no
+     quality or update-rate reduction.
+     Headless `--perf-capture target/native-perf.json` exports the existing
+     `thessa-perf` JSON/CSV format, including hardware GPU command intervals
+     where supported (explicitly unavailable otherwise). Normal runs create no
+     profiler queries/readback buffers. See docs 15/39 for measurement boundaries.
+     Live flight-input
   intents (stick/throttle/engine/precision/control-law/SAS) are owned in
    local `--flight` and `--server-flight`; remaining production game UI is missing.
   Preview requires epoch time and no

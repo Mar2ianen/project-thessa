@@ -35,7 +35,7 @@ pub struct SettingMeta {
 /// Descriptors for the core settings. Budgets editable at runtime are
 /// `restart_required: false`; backend/mode switches need restart.
 pub fn describe() -> Vec<SettingMeta> {
-    vec![
+    let mut metadata = vec![
         SettingMeta {
             path: "renderer.surface_quality",
             label: "Native material quality",
@@ -751,7 +751,106 @@ pub fn describe() -> Vec<SettingMeta> {
             restart_required: false,
             description: "Normal offset against acne on coarse mesh.",
         },
-    ]
+    ];
+    metadata.extend(
+        [
+            (
+                "ocean.enabled",
+                "Spectral ocean",
+                SettingKind::Bool,
+                "true | false",
+                "-",
+                "-",
+                "Native render-only sea; disabled allocates no field or deformation resources.",
+            ),
+            (
+                "ocean.quality",
+                "Ocean frequency sampling",
+                SettingKind::Enum,
+                "low | medium | high",
+                "-",
+                "-",
+                "32/64/128 samples per band; omitted slope variance widens the optical lobe.",
+            ),
+            (
+                "ocean.wind_speed_m_s",
+                "Ocean reference wind",
+                SettingKind::Float,
+                "0..=100",
+                "0.5",
+                "m/s",
+                "Phillips spectrum shape input, not a gameplay force or weather model.",
+            ),
+            (
+                "ocean.wind_direction_rad",
+                "Ocean planar wind angle",
+                SettingKind::Float,
+                "-1000000..=1000000",
+                "0.1",
+                "rad",
+                "Wind angle in each of the three body-fixed planar spectra.",
+            ),
+            (
+                "ocean.significant_height_m",
+                "Ocean significant height",
+                SettingKind::Float,
+                "0..=20",
+                "0.1",
+                "m",
+                "Reference ensemble significant height; identical sea state across quality tiers.",
+            ),
+            (
+                "ocean.depth_m",
+                "Ocean reference depth",
+                SettingKind::Float,
+                "0.1..=100000",
+                "1",
+                "m",
+                "Uniform finite-depth dispersion input, not terrain-derived bathymetry.",
+            ),
+            (
+                "ocean.seed",
+                "Ocean spectrum seed",
+                SettingKind::Int,
+                "0..=9223372036854775807",
+                "1",
+                "-",
+                "Deterministic Gaussian spectrum realization; simulation time controls phase.",
+            ),
+            (
+                "ocean.geometry_patches",
+                "Ocean geometry slot budget",
+                SettingKind::Int,
+                "0..=64",
+                "1",
+                "patches",
+                "Bounded shared near-field deformation; overflow uses optical-only fallback.",
+            ),
+            (
+                "ocean.geometry_distance_m",
+                "Ocean geometry radius",
+                SettingKind::Float,
+                "0..=20000",
+                "100",
+                "m",
+                "Smooth displacement fade from half radius to radius; zero is optical-only.",
+            ),
+        ]
+        .map(
+            |(path, label, kind, range, step, unit, description)| SettingMeta {
+                path,
+                label,
+                kind,
+                range,
+                step,
+                unit,
+                description,
+                advanced: true,
+                restart_required: true,
+            },
+        ),
+    );
+    metadata
 }
 
 #[cfg(test)]

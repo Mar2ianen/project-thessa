@@ -157,7 +157,7 @@ fn geometry_pairs_only_exact_revisions_in_either_delivery_order_and_rejects_reus
 #[test]
 fn fleet_membership_is_atomic_and_each_vehicle_keeps_its_own_reference_time() {
     let mut scene = replica();
-    let before = (scene.center, scene.sample, scene.input.throttle);
+    let before = (scene.center, scene.sample.clone(), scene.input.throttle);
     let samples = fleet(&scene, &[(1, 5.0), (4, 7.5)]);
     scene.accept_fleet_snapshot(&samples).unwrap();
     let rows = &scene.remote.as_ref().unwrap().fleet.rows;
@@ -450,7 +450,7 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
     scene.advance_flight(0.1, None).unwrap();
     assert!(!scene.flight_stopped());
     assert_eq!(scene.sample.time.0, 5.0);
-    let before = (scene.center, scene.sample);
+    let before = (scene.center, scene.sample.clone());
     scene.remote.as_mut().unwrap().timeout = Duration::ZERO;
     scene.advance_flight(0.1, None).unwrap();
     assert!(scene.flight_stopped());

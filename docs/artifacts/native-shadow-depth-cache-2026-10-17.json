@@ -1,0 +1,63 @@
+{
+  "date":"2026-10-17",
+  "base_commit":"da4f026",
+  "tree_boundary":"Uncommitted environment/SlotCache, textured-hit/shadow and sky/perf work followed by exact depth reuse; no full Bevy displacement or moving-frame speedup claim",
+  "scope":"Retain existing native raster shadow-atlas depth only for unchanged inputs; no quality, geometry, resolution, filter, cover, cadence or backend change",
+  "motivation":"Native hardware timestamp captures before caching reported a 6.48-6.56 ms median static atlas interval in the 349-tile X15 preview; see native-sky-performance-2026-10-17.json for per-control data and boundaries",
+  "contracts":{
+    "owner":"Existing TerrainRenderer caches the existing atlas's depth revision and optional MeshRenderer source-buffer identity/instance revision; no second scheduler/backend or new dependency",
+    "light_key":"Exact generated light matrices and source-activity flags, not intensity or ambient. Changed matrix/activity increments depth revision; unchanged data avoids atlas-uniform writes",
+    "terrain_invalidation":"Successful camera-origin changes, dirty height pages, anchor/slot/membership changes and retirements. Identical partition publications preserve depth; invalid requests do not mutate the cache",
+    "mesh_key":"Immutable renderer source identified by its instance-buffer handle; exact camera-relative instance bytes and per-primitive draw ranges change the revision, including motion, range clearing and instance removal",
+    "storage":"One prior instance-byte vector only for shadow-casting meshes; 64 bytes per actual instance, bounded by the existing 65536-instance constructor limit. No vertex/source copy; disabled shadows allocate no vector storage or atlas",
+    "reuse":"First/new inputs render every active layer; exact matches skip all atlas depth passes. No approximate hash, epsilon or update timer. Projection/view orientation/exposure alone do not change caster depth",
+    "submission":"Existing ordered-submit contract: encoders that mark rendered depth must be submitted before receivers. External source/atlas mutation must invalidate the owner. invalidate_shadows() provides an explicit diagnostic/external invalidation control, not a new graphics mode",
+    "telemetry":"shadow_active_layers counts potential active layers; shadow_rendered_passes reports actual last encoded depth passes. RT shadow queries are not cached or replaced"
+  },
+  "oracles":{
+    "command":"cargo test -p thessa-render-wgpu --test surface_lighting -- --nocapture",
+    "identity":"Cached versus forced-redraw receiver frames must be byte-identical, not a perceptual threshold",
+    "cases":["Repeated identical instance/range uploads and no-op terrain partition retain depth","Mesh motion, per-primitive range clearing and replacement source at the same instance revision refresh depth","Camera origin at zero and astronomical coordinates, stellar direction and source deactivation refresh depth","Dirty height-page update and retirement refresh depth; removed caster no longer shadows the receiver"],
+    "fixed_source":"cargo test --release -p thessa-render-wgpu --test surface_lighting fixed_source_shadow_frame_cost -- --ignored --nocapture; 1024 patches,64 mesh instances,1280x720,30 warmup+120 measured per run,three forced/cached pairs plus a disabled control. Same enabled settings and exact output image; all image readbacks/setup/source publication outside the timer",
+    "timing_boundary":"CPU encode/submit + GPU completion for the fixed-source comparison; native perf captures separately provide coarse hardware GPU command intervals. No invented CPU-derived GPU time"
+  },
+  "reproduction":{
+    "cargo_environment":"TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "silent_environment":"ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio; system audio settings unchanged",
+    "native_command":"thessa-terrain-native --vehicle-preview --no-hud --graphics target/render-batch/rt-local.toml --headless target/render-batch/cached-shadow-local.png --perf-capture target/render-batch/cached-shadow-local.json --frames 120 --prestream-seconds 3",
+    "config":"version=1,preset=high,renderer.surface_quality=high,renderer.specular_reflections=true,renderer.ray_tracing=local,shadows.enabled=true. RT-off changes ray_tracing to off; shadow-only disables specular reflections instead. Other fields inherit the shared preset/schema"
+  },
+  "fixed_source_measurement":{
+    "hardware":"AMD Radeon 880M Graphics (RADV STRIX1), Vulkan, Linux",
+    "order":["disabled","forced/cached","cached/forced","forced/cached"],
+    "disabled_median_ms":0.804,
+    "disabled_p95_ms":0.890,
+    "forced_median_ms":[23.420,24.328,24.400],
+    "cached_median_ms":[3.464,3.488,3.730],
+    "forced_p95_ms":[24.511,26.264,26.017],
+    "cached_p95_ms":[3.544,3.780,3.850],
+    "atlas_bytes_both_enabled_modes":50331648,
+    "active_layers_both_enabled_modes":12,
+    "last_depth_passes_forced":12,
+    "last_depth_passes_cached":0,
+    "output":"All six enabled forced/cached output images were byte-identical. Cached enabled remains slower than disabled because unchanged receiver shadow sampling is still active",
+    "log":"/tmp/opencode/cache-final-diagnostics.log"
+  },
+  "static_native_after_cache":{
+    "boundary":"Same static X15 /349 resident tiles /426240 drawn terrain triangles /1280x720 /no HUD /3s prestream /30 warmup+120 measured controls as the earlier sky-performance artifact, run sequentially. Hardware GPU timestamps true. Host timings use CLI upper median; GPU scope medians use statistics.median. Not a same-process native cache-toggle A/B and not a moving-camera result",
+    "off":{"frame_wall_median_ms":4.909,"frame_wall_p95_ms":5.481,"gpu_span_median_ms":4.611382,"gpu_shadow_median_ms":0.001803,"gpu_shadow_p95_ms":0.001844,"gpu_terrain_sky_median_ms":4.271877,"gpu_mesh_rt_median_ms":0.324657},
+    "local":{"frame_wall_median_ms":7.766,"frame_wall_p95_ms":8.547,"gpu_span_median_ms":7.323314,"gpu_shadow_median_ms":0.001643,"gpu_shadow_p95_ms":0.001723,"gpu_terrain_sky_median_ms":4.024727,"gpu_mesh_rt_median_ms":3.275143},
+    "shadow_only":{"frame_wall_median_ms":3.892,"frame_wall_p95_ms":4.621,"gpu_span_median_ms":3.598798,"gpu_shadow_median_ms":0.001763,"gpu_shadow_p95_ms":0.001844,"gpu_terrain_sky_median_ms":2.830578,"gpu_mesh_rt_median_ms":0.746859},
+    "steady_state":"All modes retained 12 active shadow layers and issued 0 last-frame atlas passes; Local/shadow-only kept 2 TLAS instances,78465 traced triangles and 0 last-frame AS builds. The nonzero empty-shadow GPU interval includes timestamp/command overhead, not hidden atlas rendering",
+    "sources":"target/render-batch/cached-shadow-{off,local,shadow-only}.{json,csv,png}; /tmp/opencode/cache-final-app-{off,local,shadow-only}.log",
+    "comparison":"Pre-cache Local host upper median was 15.025 ms and its GPU atlas median was 6.560946 ms. Static after-cache Local host upper median is 7.766 ms and atlas median 0.001643 ms. Source shader quality/geometry unchanged; this is not a claim for moving cameras/casters or whole-game FPS"
+  },
+  "final_verification":{
+    "checks":"All local checks listed in native-sky-performance-2026-10-17.json passed after the cache implementation:fmt,workspace all-target/all-feature clippy,native no-default clippy,1858 lib/bin tests,80 integration tests,24 Bevy-CBT GPU tests,1 mesh-emission test,10 native ignored diagnostics,1 executable capture hardware test,5 display tests,3 release render diagnostics,release build,architecture guard and5 agent-QA tests. No hardware SKIP messages",
+    "moving_control":"Release 5km terrain survey --sweep,no vehicle,120 measured frames. Final atlas has12 active layers and12 rendered passes, not cached. GPU atlas p50/p95=8.464342/11.330769 ms; host median/p95=13.851/20.281 ms. Streaming cover changed to370 resident tiles,373248 drawn triangles; not a static-X15 workload or a moving-scene speedup claim",
+    "disabled_atmosphere_control":"Release Local-RT X15 still retains12 active atlas layers and0 rendered passes with atmosphere disabled. No grid allocation/upload or sky draw. GPU atlas p50/p95=0.001723/0.001844 ms; this remains an empty command interval with profiler overhead",
+    "logs":"/tmp/opencode/native-close-*.log; raw control captures target/render-batch/native-close-{moving,disabled}.{json,csv,png}",
+    "acceptance_limits":"No cross-platform runtime, blind preference or whole-renderer production-parity acceptance"
+  },
+  "limitations":["Benefits require unchanged caster/depth inputs; moving camera/origin, light, mesh or terrain refreshes depth conservatively","No layer-by-layer damage tracking or asynchronous cache scheduler","RT shadow/reflection costs, atlas off-cover residency and RT terrain/ocean membership remain unsolved by this optimization","Raw native before/after captures are sequential measurements, not a controlled same-process cache-toggle comparison; the fixed-source forced/cached diagnostic is that control","No isolated upload/publication-clone cost, cross-platform runtime validation, blind aesthetic acceptance or whole-renderer/Bevy parity claim"]
+}

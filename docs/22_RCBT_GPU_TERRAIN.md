@@ -849,4 +849,102 @@ visual and numeric acceptance remains outstanding. No server or authoritative
    closed (within noise, stays bench-only). Untested and still worthwhile:
    native Vulkan with `HOST_VISIBLE | DEVICE_LOCAL` backing, persistent
    mapped/shared memory, explicit CPU/GPU ownership and sync — motivated
-   by single residency (memory/power on APU/mobile), not by FPS alone.
+    by single residency (memory/power on APU/mobile), not by FPS alone.
+
+## 21. Material slot-cache CPU baseline and indexed policy (2026-10-17)
+
+The BRUTAL comparison review identified repeated linear residency/protection
+lookups in `SlotCache::update_retaining`. The finding was verified locally,
+not taken as a reason to replace wgpu or import BRUTAL code. A permanent
+standard-library benchmark now measures warm, cold and 1-in-16 churn at
+64/256/1024/4096 pages:
+
+```sh
+cargo bench -p thessa-rcbt-core --bench material_cache
+```
+
+Set `THESSA_CACHE_BENCH_SAMPLES` to change the default 31 samples. Request
+construction, cache setup and residency validation are outside the timer;
+allocations inside the update are included. Churn alternates two full demand
+sets sharing 15/16 of their IDs. Warm changes nothing; cold starts empty.
+Each result is checked for generation, upload count and complete residency.
+p99 of 31 samples is effectively the observed maximum, not a stable tail
+latency estimate. This is **CPU slot assignment**, not upload time or FPS.
+
+The implementation now retains the ordered slot `Vec`, adds a `HashMap` used
+**only for lookup**, deduplicates the priority prefix with a `HashSet`, and
+computes free/LRU candidates once per update. Empty slots remain ascending;
+occupied candidates are sorted by `(last_requested, slot)`. No decision
+depends on randomized hash iteration. New pages still emit changes in request
+priority order; protected residents keep their slots; source-generation changes
+still reupload in place. A deliberately slow original-policy oracle checks
+240-step mixed warm/eager replays at capacities 1, 4, 64 and 256, including
+zero IDs, duplicates, oversubscription, generation changes and cloned caches.
+
+Expected complexity changes from repeated nested scans to expected O(n)
+lookup/dedup plus O(n log n) candidate sorting. This adds an O(capacity) index
+and temporary selection/candidate storage, increases `SlotCache::clone` work,
+and can lose at tiny capacities. It does **not** remove the transactional
+residency clone in `publish_partition`. Allocation counts and full publication
+cost remain unmeasured. Measurements, including the small-cache regression,
+are in
+[`artifacts/material-slot-cache-2026-10-17.json`](artifacts/material-slot-cache-2026-10-17.json).
+
+The rest of the review is explicitly still open: `StagingBelt` versus existing
+queue writes (including texture-row alignment and GPU completion lifetime),
+combining submissions, finer GPU timestamp breakdown and publication-clone /
+allocation costs. Native headless `thessa-perf` JSON/CSV capture and coarse GPU
+command intervals have since landed (doc 39's sky/perf checkpoint); they do not
+isolate upload, sky, AS builds or individual ray-tracing work yet.
+No staging, allocator or Vulkan-backend change was made
+without its own measurement. BRUTAL was not run and no source was copied;
+its licensing obligations have not been analyzed for code reuse.
+
+Final indexed rerun without a concurrent agent build (nanoseconds converted
+to milliseconds below; baseline and indexed use the same benchmark):
+
+| Capacity | Warm median, scan → indexed | Cold median, scan → indexed | 1/16 churn median, scan → indexed |
+|---:|---:|---:|---:|
+| 64 | 0.001022 → 0.001382 | 0.002304 → 0.001472 | 0.003106 → 0.001282 |
+| 256 | 0.019336 → 0.004609 | 0.038232 → 0.005200 | 0.155950 → 0.004969 |
+| 1024 | 0.277898 → 0.019216 | 0.493920 → 0.020538 | 7.816333 → 0.020188 |
+| 4096 | 3.715298 → 0.080470 | 8.352091 → 0.080860 | 458.188317 → 0.082453 |
+
+The initial indexed run overlapped a native release build and is retained
+separately in the artifact. Neither run pinned affinity/clocks. The 64-slot
+warm regression remains; large-cache complexity improvements must not be
+advertised as a uniform win at every size or an end-to-end rendering result.
+
+## 22. Generated terrain ray membership and ocean direction (2026-10-17)
+
+The owned native mesh ray scene now borrows the generated terrain vertex pool:
+persistent per-slot BLASes reuse the 33×33 full grid, rebuilding dirty slots only.
+Material pages/directory are shared with raster. Camera-only changes update the
+TLAS; unrelated mesh-source replacement adopts unchanged terrain BLASes. Budget
+overflow removes the whole terrain contribution with a reported raster fallback,
+not an arbitrary partial set of occluders. This is **surface membership in mesh
+queries**, not a new GPU bisector topology/update pipeline or a `large_cbt`
+replacement. Primary terrain RT receivers and displaced ocean waves remain open.
+
+The same 1024-patch/2.1-million-triangle release diagnostic measures cached,
+one-dirty and all-dirty cases with identical output; rebuilding all BLASes costs
+roughly 73–74 ms of GPU AS+mesh/RT time on the 880M, versus ~0.77–0.78 ms cached.
+This specifically rules out treating this full rebuild path as a cheap per-frame
+small-ripple ocean update. See doc 39's resident-terrain checkpoint and
+[`artifacts/native-terrain-ray-membership-2026-10-17.json`](artifacts/native-terrain-ray-membership-2026-10-17.json)
+for measured boundaries, hardware, controls and omissions.
+
+The upstream ocean demo was inspected for its separation of multi-band FFT
+fields, active-CBT displacement and mipmapped surface gradients. Its implementation
+is not licensed for copying into runtime; no code/dependency was imported.
+Doc 39 records an independent future direction with local gravity/depth/wind,
+simulation-time phase, shared body-fixed geometry/optics and bounded ray-update
+error. This is a design direction, not an implemented FFT ocean or a measured
+whole-renderer advantage over the upstream demo.
+
+Implemented follow-up: [doc 56](56_NATIVE_SPECTRAL_OCEAN.md) now defines the
+independent native spectral field, filtered gradients/moments and bounded shared
+near-grid deformation. It reuses this terrain pool/classifier/ray membership,
+not `large_cbt` bisector topology. The earlier absent-ocean statements are
+superseded only for that render-only slice; nonlinear/bathymetric/whole-planet
+displaced ray surfaces and complete topology/renderer parity remain open.

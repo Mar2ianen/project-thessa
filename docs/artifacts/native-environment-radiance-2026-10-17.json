@@ -1,0 +1,135 @@
+{
+  "date": "2026-10-17",
+  "base_commit": "da4f026",
+  "scope": "Physical single-scattering sky environment for native mesh raster reflections, RT-chain misses and local-radial hemispherical diffuse ambient; not complete atmosphere or Bevy replacement",
+  "hardware": {
+    "cpu": "AMD Ryzen AI 9 H 365, 10 cores / 20 logical CPUs",
+    "gpu": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan",
+    "other_backends_tested": false
+  },
+  "reproduction": {
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "silent": "ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio; native has no audio subsystem",
+    "silent_alsa_file_contents": "pcm.!default { type null }\n",
+    "cpu_cost_error": "cargo test --release -p thessa-terrain-native sky_grid_cost_and_error -- --ignored --nocapture",
+    "gpu_oracles": "cargo test -p thessa-render-wgpu --test ray_scene -- --nocapture",
+    "preview": "thessa-terrain-native --vehicle-preview --graphics target/render-batch/rt-local.toml --headless target/render-batch/native-env-preview-rt-local.png --frames 120 --prestream-seconds 3",
+    "preview_off": "same command with renderer.ray_tracing=off and a separate output path",
+    "config": "version=1, preset=high, renderer.surface_quality=high, renderer.specular_reflections=true, renderer.ray_tracing=local|off, shadows.enabled=true; atmosphere settings use preset defaults"
+  },
+  "contract": {
+    "field": "Backend-neutral validated equirectangular direction grid in body axes; azimuth wraps, elevation clamps, bilinear sampling; padded RGB texels use 16 bytes each",
+    "physical_inputs": "Baked body radius/mu/surface pressure/mixture gas constant, flight-authority reference T=288.15 K, shared N2/O2 optics baseline, ephemeris-derived stellar directions and inverse-square irradiance; 93 lm/W presentation scale",
+    "ambient": "Cosine-weighted local-radial hemisphere quadrature normalized to PI for uniform radiance. A single ambient for all diffuse normals is the existing isotropic-diffuse approximation",
+    "disabled": "No integration or grid upload; explicit ambient/PI fallback. Previously bound grid released, retaining 32-byte metadata and a 16-byte placeholder",
+    "updates": "First evaluation and changed budgets immediate; otherwise camera displacement >250 m, source direction >0.002 rad or weighted RGB change >1%, subject to quality frame interval. Every source is compared independently",
+    "multi_star": "Resolved multi_star=false selects the brightest stellar irradiance; true uses all sources",
+    "density": "Resolved density_scale multiplies scattering beta only, not absorption or authoritative atmosphere; resolved airglow independently controls the shared model's weak emission term",
+    "rt_correction": "Miss uses environment radiance(direction) * accumulated throughput * AO. Previous throughput * preweighted_environment double-applied primary Fresnel. The white-metal test could not detect it; dielectric/roughness/AO oracle now does"
+  },
+  "quality_tiers": [
+    {"quality": "low", "grid": [8, 4], "view_steps_cap": 8, "sun_steps_cap": 4, "minimum_refresh_frames": 8, "grid_bytes": 512},
+    {"quality": "medium", "grid": [16, 8], "view_steps_cap": 12, "sun_steps_cap": 6, "minimum_refresh_frames": 4, "grid_bytes": 2048},
+    {"quality": "high", "grid": [32, 16], "view_steps_cap": 32, "sun_steps": "clamp(view_steps/3,2,8)", "minimum_refresh_frames": 2, "grid_bytes": 8192}
+  ],
+  "cpu_cost_error": {
+    "scenario": "Camera 1 km above radius 3200 km, mu=5.02e13, 120 kPa N2/O2 reference, 1000 W/m2 white star at (0.6,0.8,0), 24 requested view steps; 21 samples after warm-up; row-parallel existing Rayon",
+    "reference": "128 view / 64 solar steps at 128 upper-hemisphere directions including near-horizon; absolute RGB radiance error divided by direct stellar E/PI, not by sky radiance",
+    "rows": [
+      {"quality": "low", "median_ms": 0.071, "p95_ms": 0.096, "max_error_vs_direct_e_pi": 0.141794, "mean_error_vs_direct_e_pi": 0.027661},
+      {"quality": "medium", "median_ms": 0.240, "p95_ms": 0.282, "max_error_vs_direct_e_pi": 0.118275, "mean_error_vs_direct_e_pi": 0.020992},
+      {"quality": "high", "median_ms": 1.017, "p95_ms": 1.751, "max_error_vs_direct_e_pi": 0.094580, "mean_error_vs_direct_e_pi": 0.010381}
+    ],
+    "asserted_envelope": "max error <0.25*direct E/PI for this fixed fixture only",
+    "limitations": "Not a global angular/altitude/time error bound. Coarse horizon and forward Mie lobes remain underresolved. Frequency cap is not a latency guarantee"
+  },
+  "preview_diagnostic": {
+    "rt_local": {"frame_median_ms": 13.170, "frame_p95_ms": 14.835, "evaluation_ms": 3.84},
+    "rt_off": {"frame_median_ms": 12.063, "frame_p95_ms": 13.562, "evaluation_ms": 4.95},
+    "both": {"grid": [32, 16], "grid_bytes": 8192, "evaluations": 1, "renderer_uploads": 1, "ambient_lux": [1454.14, 924.08, 545.73]},
+    "measurement_boundary": "One run per mode; mixes terrain streaming and renderer work, NOT isolated RT cost or a frame-time win. Pre-stream repeatedly ticks selection before the 30 warm-up +120 measured frames",
+    "captures": [
+      {"path": "native-environment-rt-local-2026-10-17.png", "sha256": "3176f055917f26d6b94461f513c31062fccd0b1dd2a1284728329628ce6103d9"},
+      {"path": "native-environment-rt-off-2026-10-17.png", "sha256": "0486f890fd0463c031b5c1b86732be837a99d36422479440af477f2f511a9620"}
+    ],
+    "pixel_diagnostic": {"changed_pixels": 173, "max_channel_delta": 51, "pixels_delta_gt_5": 137},
+    "capture_limit": "Not a deterministic geometry oracle, no same-config noise measurement for these new captures, no blind subjective review; shader oracles are correctness evidence"
+  },
+  "final_application_checks": {
+    "disabled": {
+      "command": "thessa-terrain-native --vehicle-preview --graphics target/render-batch/rt-no-atmosphere.toml --headless target/render-batch/native-env-disabled.png --frames 120 --prestream-seconds 3",
+      "config": "Same high/local preview config, plus [atmosphere] enabled=false",
+      "renderer_grid_enabled": false,
+      "renderer_grid_bytes": 0,
+      "renderer_uploads": 0,
+      "sky_integration": false,
+      "rt_instances": 2,
+      "steady_state_as_builds": 0,
+      "frame_median_ms": 12.877,
+      "frame_p95_ms": 14.175
+    },
+    "moving_survey": {
+      "command": "thessa-terrain-native --sweep --graphics target/render-batch/rt-local.toml --headless target/render-batch/native-env-moving.png --frames 120 --prestream-seconds 3",
+      "scene": "Default 5 km surface-survey camera, orbit advanced by 0.006 rad/frame; NO vehicle-preview mesh. Final orbit=0.894 rad; 30 warm-up +120 measured frames",
+      "grid": [32, 16],
+      "evaluations_including_prestream": 17,
+      "last_evaluation_ms": 3.05,
+      "final_ambient_lux": [3240.62, 5349.15, 8147.26],
+      "grid_bytes": 8192,
+      "measured_geometry_publications": 34,
+      "frame_median_ms": 12.984,
+      "frame_p95_ms": 19.548,
+      "scope": "Validates position-triggered sky refresh under live streaming. No mesh environment upload/RT scene in this survey; not an RT benchmark or a same-workload comparison against the static vehicle preview. Last-evaluation latency is not an average"
+    },
+    "telemetry_assertions": "Disabled grid/storage/uploads=0 and no integration; moving evaluation count >1 and <=76, final orbit 0.894 rad. Both application exit codes 0; captures retained locally under target/render-batch, not used as subjective/parity evidence"
+  },
+  "oracles": [
+    "Uniform field samples identically including seam and poles; ambient uniform normalization; texel-centre roundtrip; malformed grids rejected",
+    "Local-up hemisphere integration distinguishes +Y/-Y/+X; airless body has no field",
+    "Cadence reuses unchanged inputs; secondary source motion invalidates; density change and disable invalidate immediately; independent airglow setting respected at zero scattering",
+    "Unset renderer equals explicit disabled; uniform field versus isotropic fallback measured 0 changed bytes",
+    "Directional mirror samples the reflected side, not just any field colour",
+    "White-mirror directional RT miss equals raster bytes; dielectric F0/roughness/AO agrees within 1/255",
+    "Binding growth/shrink/disable/repeated disable preserves rendering and releases grid storage",
+    "Native GPU regression: initial grid published immediately, repeated static scene uploads once, replacement renderer receives current field, disabling releases mesh grid and restores explicit ambient",
+    "Direct light composition reads the current adopted sample, without waiting for sky-cache refresh"
+  ],
+  "verification": {
+    "result": "All listed checks passed locally; final release rebuild and the disabled/moving application scenarios exited 0",
+    "counts": {
+      "workspace_lib_bin_passed": 1856,
+      "workspace_lib_bin_ignored_in_default_run": 39,
+      "workspace_integration_passed": 67,
+      "workspace_integration_ignored_in_default_run": 7,
+      "bevy_cbt_gpu_passed": 24,
+      "mesh_emission_gpu_passed": 1,
+      "native_ignored_passed": 10,
+      "native_window_passed": 5,
+      "release_render_diagnostics_passed": 2,
+      "agent_qa_passed": 5
+    },
+    "workspace": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+      "cargo test --workspace --lib --bins",
+      "cargo test --workspace --test '*'"
+    ],
+    "hardware": [
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+      "cargo test -p thessa-bevy-rcbt --features render,mesh-shaders --lib gpu_mesh_emission_initializes_every_vertex_and_primitive -- --ignored",
+      "cargo test -p thessa-terrain-native --bin thessa-terrain-native -- --ignored",
+      "cargo test -p thessa-terrain-native --test window_exit -- --ignored",
+      "cargo test --release -p thessa-render-wgpu --tests -- --ignored --nocapture"
+    ],
+    "agent_qa": "python3 tools/agent-qa/check_architecture.py: 12 guarded crates; PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/agent-qa/tests -v: 5 tests",
+    "scope": "Local checks only; not remote CI or visual parity. Native ignored set includes the CPU sky-grid diagnostic as well as hardware/server tests. Unrelated ignored wall-clock physics diagnostics were not run"
+  },
+  "known_gaps": [
+    "Physical sky-background rendering, directional terrain/ocean environment consumers, ground radiance and sun disks",
+    "Aerial perspective, multiple scattering and external eclipse visibility in native presentation",
+    "Texture/UV/normal/AO sampling in RT hits; hit roughness still unused; rough-environment prefiltering and denoising",
+    "Terrain/ocean/cloud/landmark RT scene membership, RT shadow rays, HDR/tonemapping/auto-exposure",
+    "Cross-platform runtime validation and complete Bevy parity"
+  ]
+}

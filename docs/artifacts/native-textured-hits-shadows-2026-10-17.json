@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-17",
+  "base_commit": "da4f026",
+  "subsequent_checkpoint": "native-sky-performance-2026-10-17.json adds the sky-grid background, shared GPU publication, opt-in native timestamp/perf capture and first-hit/back-lit shadow-query reduction. Missing-background/profiling statements here describe the pre-follow-up boundary",
+  "baseline_boundary": "Working tree also contains the preceding single-scattering environment and SlotCache slices. This artifact records the subsequent textured-hit/shadow work; no before/after isolated texture-cost or renderer-parity claim",
+  "scope": "Opaque native scene-object textured reflections and stellar shadow visibility on primary mesh surfaces and reflected hits; terrain visibility still uses the shared raster atlas",
+  "hardware": "AMD Ryzen AI 9 H 365, Radeon 880M Graphics (RADV STRIX1), Vulkan; no other-backend runtime claim",
+  "contracts": {
+    "inputs": "Existing MeshAsset vertices/materials/images/samplers, live rigid instances and per-primitive ranges, resolved surface quality/shadows/RT budgets, shared lighting/environment/atlas",
+    "hit_lookup": "Primitive-indexed 48-byte vertex records (position/normal/UV vec4s) and 48-byte material records; barycentric UV/smooth-normal interpolation, camera-relative rigid/uniform-scale transforms",
+    "texture_ownership": "Raster TextureViews are reused through the existing material cache, with sRGB and linear roles kept separate. No image repacking, duplicate image upload, resize or optional bindless feature; samplers use the same wrap/filter constructor",
+    "sampling": "Base colour is sRGB at every quality; High additionally samples linear MR (G roughness/B metallic), normal and AO. Low/Medium retain factor-only map fallbacks. Explicit LOD 0: no ray differentials/cones or mip chains",
+    "normal_frame": "One shared tangent-frame function takes screen derivatives for raster or triangle position/UV edges for hits; includes mirrored-UV handedness and degenerate-UV fallback",
+    "shading": "Shared GGX stellar BRDF, Fresnel/metallic diffuse partition, AO on indirect only; primary AO applies once to the full reflected chain (including directly lit secondary hits), not only misses. Hit roughness fades mirror continuation into the same directional environment approximation as raster. Single-direction rough-lobe approximation, not convolution or converged path tracing",
+    "shadow_visibility": "One surface_visibility hook per source reused by diffuse and GGX. An opaque scene RT blocker returns zero; otherwise existing atlas visibility is retained, so RT cannot unshadow terrain. Stars are directional; shadow range uses resolved rt_max_distance_m and origin uses resolved rt_ray_bias_m",
+    "disabled": "shadow_enabled=false issues no shadow rays. Specular off still permits shadow-only RT; both consumers disabled or RT off allocates/builds no RT scene. Shadow-only uses 16-byte positions and no reflection attribute/material/range/pair GPU tables or hit texture bindings",
+    "fallback": "Static texture/sampler switch uses device limits with 5 slots reserved for the raster material/atlas. Excess hit bindings or RT storage/budget limits reject the whole reflection scene with rt_reason and raster fallback, never truncate. Shadow-only is independent of hit-material binding exhaustion",
+    "planning_bytes": "Reflections: vertices*48 + indices*4 + primitives*(16 ranges +48 materials +256 BLAS estimate) + instance_capacity*(64 TLAS estimate +64 pairs). Shadow-only: vertices*16 + indices*4 + primitives*256 + instance_capacity*64. These are planning bytes, not driver allocation queries; shared raster textures excluded"
+  },
+  "oracles": {
+    "gpu_suite": "cargo test -p thessa-render-wgpu --test ray_scene -- --nocapture",
+    "numeric_tolerance": "Independent analytic normal-incidence diffuse/GGX/sRGB fixtures compare each channel within 2/255; not just a nonzero image delta",
+    "white_star_red_dielectric": "At roughness 1 and exposure 0.5: expected linear RGB=(0.485,0.005,0.005). White GGX lobe is required; the old pure-red threshold was invalid after direct GGX hit shading was added",
+    "new_cases": [
+      "Non-central barycentric UV=(0.5,0.25), sRGB decode before bilinear filtering",
+      "Clamp/repeat/mirror addressing for positive and negative UVs",
+      "Same source image/texture sampled as sRGB base colour and linear MR",
+      "G roughness/B metallic channels, Low/Medium map omission",
+      "Rough hit consumes environment approximation; smooth hit continues the bounded ray chain",
+      "Primary AO zero/half strength attenuates the full reflected-hit chain once; hit AO affects indirect terms, not that hit's direct star term; normal map turns hit away from star; degenerate UV retains smooth normal",
+      "Off-camera blocker shadows a primary receiver with reflections off and no atlas; shadows-off and RT-off controls remain lit; distance cap excludes farther blocker",
+      "Separate blocker shadows a reflected hit without blocking the reflection ray",
+      "Binding exhaustion reports raster reflection fallback while shadow-only remains feasible",
+      "Two-quad planning bytes: 1584 textured reflection versus 944 shadow-only"
+    ],
+    "retained_cases": "The prior white-mirror and dielectric/AO environment misses, directional field and disabled/rebind oracles remain in the same suite"
+  },
+  "reproduction": {
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "silent_environment": "ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio; null ALSA PCM; system audio settings unchanged",
+    "fixed_source_cost": "cargo test --release -p thessa-render-wgpu --test ray_scene fixed_source_ray_query_frame_cost -- --ignored --nocapture",
+    "preview": "thessa-terrain-native --vehicle-preview --graphics target/render-batch/rt-local.toml --headless target/render-batch/native-textured-hit-preview.png --frames 120 --prestream-seconds 3"
+  },
+  "pre_sky_native_runs": {
+    "boundary": "Sequential silent release runs, no concurrent builds. 349 canonical tiles, 426240 drawn terrain triangles, static X15 preview, 1280x720, 3s prestream, 30 warmup +120 measured. Host selection/publication+render+GPU completion, not isolated GPU timestamps or an equal-reflection-work comparison for shadow-only",
+    "local": {"median_ms":15.891,"p95_ms":21.687,"p99_ms":22.293,"max_ms":23.479,"rt_instances":2,"rt_triangles":78465,"rt_planning_bytes":5080748,"steady_state_as_builds":0},
+    "off": {"median_ms":12.359,"p95_ms":18.245,"p99_ms":18.963,"max_ms":20.365},
+    "shadow_only": {"median_ms":11.195,"p95_ms":12.451,"p99_ms":15.896,"max_ms":16.206,"rt_instances":2,"rt_triangles":78465,"rt_planning_bytes":2321644,"steady_state_as_builds":0},
+    "environment": "All three modes evaluated/uploaded the 32x16 /8192-byte field once. No equal-config noise run or blind preference review; do not infer a speedup for shadow-only versus RT-off with reflections",
+    "logs":"/tmp/opencode/rt-close-app-{local,off,shadow-only}.log"
+  },
+  "known_gaps": [
+    "Terrain/ocean/cloud/landmark RT membership; terrain outside atlas cover still has no visibility oracle",
+    "Hard opaque directional-star shadows, no finite-disk soft penumbra or transparent/alpha-tested shadow transmittance; ray intersections remain two-sided opaque even for a single-sided raster material",
+    "LOD-zero material samples; no mip chains, ray footprint, anisotropic reflection filtering or rough-environment prefiltering",
+    "Single mirror sample and 1-4 bounded bounces; truncation is not energy convergence, no denoising/reservoir policy",
+    "Physical sky-background rendering, aerial perspective, HDR/tonemapping/auto-exposure and complete Bevy/client parity",
+    "Cross-platform runtime validation, production quality acceptance and blind subjective preference review"
+  ]
+}

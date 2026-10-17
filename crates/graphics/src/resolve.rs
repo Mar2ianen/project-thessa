@@ -151,6 +151,8 @@ impl Capabilities {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    pub ocean: crate::settings::OceanSettings,
+    pub ocean_size: u32,
     pub rt_scene_memory_bytes: u64,
     pub rt_max_instances: u32,
     pub rt_reflection_bounces: u32,
@@ -325,6 +327,12 @@ impl ResolvedGraphicsSettings {
             ));
         }
         Self {
+            ocean: requested.ocean.clone(),
+            ocean_size: match requested.ocean.quality {
+                Quality::Low => 32,
+                Quality::Medium => 64,
+                Quality::High => 128,
+            },
             preset_label: requested.effective_preset_label().to_string(),
             rt_scene_memory_bytes: u64::from(requested.raytracing.scene_memory_mib.clamp(1, 128))
                 * 1024
@@ -558,6 +566,16 @@ impl ResolvedGraphicsSettings {
         map.insert("fleet_meshes".into(), self.fleet_meshes.to_string());
         map.insert("fleet_min_pixels".into(), self.fleet_min_pixels.to_string());
         map.insert("auto_exposure".into(), self.auto_exposure.to_string());
+        map.insert("ocean".into(), self.ocean.enabled.to_string());
+        map.insert("ocean_size".into(), self.ocean_size.to_string());
+        map.insert(
+            "ocean_geometry_patches".into(),
+            self.ocean.geometry_patches.to_string(),
+        );
+        map.insert(
+            "ocean_geometry_distance_m".into(),
+            self.ocean.geometry_distance_m.to_string(),
+        );
         map.insert("preset".to_string(), self.preset_label.clone());
         map.insert("backend".to_string(), self.backend.name.clone());
         map.insert("terrain".to_string(), self.terrain.as_str().to_string());

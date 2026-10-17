@@ -37,7 +37,7 @@ material_storage = "rgba_array" # rgba_array | microstore_compact; compact holds
 # sampling (texture format, mips, filtering); storage/upload tradeoff, never visual
 resolution_scale = 1.0
 vsync = false
-hdr = true
+hdr = true # native RGBA16Float + Reinhard to SDR; false is direct LDR, no extra target/pass
 bloom = false # bright-light glow; off by default to preserve terrain contrast
 auto_exposure = false # AE metering curve untuned; deterministic manual EV for now
 exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false

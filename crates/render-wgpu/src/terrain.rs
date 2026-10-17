@@ -1587,6 +1587,25 @@ impl OffscreenTarget {
     pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     pub fn new(backend: &Backend, width: u32, height: u32) -> Result<Self, BackendError> {
+        Self::with_format(backend, width, height, Self::FORMAT)
+    }
+
+    /// RGBA8 capture target. The unorm variant tests shader-side SDR transfer;
+    /// read_rgba8 returns stored bytes without inserting a color transform.
+    pub fn with_format(
+        backend: &Backend,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<Self, BackendError> {
+        if !matches!(
+            format,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
+        ) {
+            return Err(BackendError::Device(
+                "offscreen capture requires RGBA8 output".into(),
+            ));
+        }
         let max = backend.device.limits().max_texture_dimension_2d;
         if width == 0 || height == 0 || width > max || height > max {
             return Err(BackendError::Device("invalid offscreen extent".into()));
@@ -1608,7 +1627,7 @@ impl OffscreenTarget {
             })
         };
         let texture = make(
-            Self::FORMAT,
+            format,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
         let depth = make(

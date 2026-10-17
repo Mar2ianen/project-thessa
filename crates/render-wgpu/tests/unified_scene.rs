@@ -30,6 +30,7 @@ impl Scene {
         ocean: bool,
         patch_count: u32,
         mesh_count: u32,
+        format: wgpu::TextureFormat,
     ) -> Self {
         let mut requested = RequestedGraphics::default();
         requested.renderer.ray_tracing = mode;
@@ -57,7 +58,7 @@ impl Scene {
         let mut terrain = TerrainRenderer::with_capacity_lighting_and_ocean(
             backend,
             &patches,
-            OffscreenTarget::FORMAT,
+            format,
             TerrainCapacity {
                 patches: patch_count,
                 height_grid_size: 2,
@@ -110,7 +111,7 @@ impl Scene {
             backend,
             &source,
             SurfaceSettings {
-                format: OffscreenTarget::FORMAT,
+                format,
                 capacity: mesh_count as usize,
                 quality: Quality::High,
                 reflections: true,
@@ -173,14 +174,23 @@ impl Scene {
         target: &OffscreenTarget,
         unified: bool,
     ) {
+        self.encode_views(encoder, &target.color, &target.depth, unified);
+    }
+    fn encode_views(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        unified: bool,
+    ) {
         self.terrain.encode_shadows(encoder, Some(&self.mesh));
         if unified {
             self.mesh.encode_rt(encoder);
             self.terrain
-                .encode_scene(encoder, &target.color, &target.depth, Some(&self.mesh));
+                .encode_scene(encoder, color, depth, Some(&self.mesh));
         } else {
-            self.terrain.encode(encoder, &target.color, &target.depth);
-            self.mesh.encode(encoder, &target.color, &target.depth);
+            self.terrain.encode(encoder, color, depth);
+            self.mesh.encode(encoder, color, depth);
         }
     }
     fn pixels(&mut self, backend: &Backend, target: &OffscreenTarget, unified: bool) -> Vec<u8> {
@@ -199,7 +209,7 @@ fn split_and_unified_match_with_live_and_empty_meshes() {
     let backend = Backend::bring_up_for_graphics(&request).unwrap();
     for mode in [RayTracingRequest::Off, RayTracingRequest::Local] {
         for ocean in [false, true] {
-            let mut scene = Scene::new(&backend, mode, ocean, 1, 1);
+            let mut scene = Scene::new(&backend, mode, ocean, 1, 1, OffscreenTarget::FORMAT);
             for size in [129, 256] {
                 let target = OffscreenTarget::new(&backend, size, size).unwrap();
                 for (translation, rotation) in [
@@ -261,7 +271,14 @@ fn fixed_resident_split_unified_cost() {
     let mut request = RequestedGraphics::default();
     request.renderer.ray_tracing = RayTracingRequest::Off;
     let backend = Backend::bring_up_for_graphics_profiled(&request).unwrap();
-    let mut scene = Scene::new(&backend, RayTracingRequest::Off, false, 1024, 64);
+    let mut scene = Scene::new(
+        &backend,
+        RayTracingRequest::Off,
+        false,
+        1024,
+        64,
+        OffscreenTarget::FORMAT,
+    );
     let target = OffscreenTarget::new(&backend, 1280, 720).unwrap();
     let gpu = GpuIntervals::new(&backend, 2).expect("hardware diagnostic needs timestamps");
     for moving in [false, true] {
@@ -323,6 +340,70 @@ fn fixed_resident_split_unified_cost() {
                 times[570],
                 times[594]
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "hardware: native HDR split/unified scene with actual sky, mesh, RT and ocean"]
+fn hdr_scene_preserves_pass_equivalence_and_exposure() {
+    let mut request = RequestedGraphics::default();
+    request.renderer.ray_tracing = RayTracingRequest::Local;
+    let backend = Backend::bring_up_for_graphics(&request).unwrap();
+    let settings = backend.resolve_graphics(&request);
+    let display = thessa_render_wgpu::display::DisplayTransform::new(
+        &backend,
+        &settings,
+        OffscreenTarget::FORMAT,
+        129,
+        129,
+    )
+    .unwrap();
+    assert!(display.enabled());
+    for mode in [RayTracingRequest::Off, RayTracingRequest::Local] {
+        for ocean in [false, true] {
+            let mut scene = Scene::new(&backend, mode, ocean, 1, 1, display.scene_format());
+            let target = OffscreenTarget::new(&backend, 129, 129).unwrap();
+            let mut reference = None;
+            for exposure in [0.5, 0.25, 0.5] {
+                scene.view.exposure = exposure;
+                scene.update(&backend);
+                let mut a = None;
+                for unified in [true, false, true, false] {
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    scene.encode_views(
+                        &mut encoder,
+                        display.scene_color(&target.color),
+                        &target.depth,
+                        unified,
+                    );
+                    display.encode(&mut encoder, &target.color);
+                    backend.queue.submit([encoder.finish()]);
+                    let b = target.read_rgba8(&backend).unwrap();
+                    if let Some(a) = &a {
+                        assert_eq!(a, &b);
+                    } else {
+                        a = Some(b);
+                    }
+                }
+                let a = a.unwrap();
+                if exposure == 0.5 {
+                    if let Some(reference) = &reference {
+                        assert_eq!(
+                            reference, &a,
+                            "manual exposure rewind must be deterministic"
+                        );
+                    } else {
+                        reference = Some(a);
+                    }
+                } else {
+                    assert_ne!(
+                        reference.as_ref().unwrap(),
+                        &a,
+                        "manual exposure must actually affect the scene"
+                    );
+                }
+            }
         }
     }
 }

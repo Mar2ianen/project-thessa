@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod display;
 pub mod environment;
 pub mod material;
 pub mod mesh;
@@ -441,6 +442,14 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        hdr_render_target_supported: Some(
+            adapter
+                .get_texture_format_features(wgpu::TextureFormat::Rgba16Float)
+                .allowed_usages
+                .contains(
+                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                ),
+        ),
         terrain_mesh_supported: Some(mesh),
         ray_query_supported: Some(features.contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)),
         is_discrete_gpu: Some(adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu),

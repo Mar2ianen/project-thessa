@@ -13,7 +13,7 @@ impl HeadlessPerf {
     pub fn new(backend: &Backend) -> Self {
         Self {
             collector: PerfCollector::with_default_capacity(),
-            gpu: GpuIntervals::new(backend, 5),
+            gpu: GpuIntervals::new(backend, 6),
         }
     }
 
@@ -50,6 +50,7 @@ impl HeadlessPerf {
                     "render.shadows",
                     "render.rt_as_build",
                     "render.scene_classify_and_raster",
+                    "render.display_transform",
                     "render.ui",
                 ];
                 GpuFrame {
@@ -86,6 +87,7 @@ impl HeadlessPerf {
         path: &std::path::Path,
         backend: &Backend,
         scene: &Scene,
+        display: &thessa_render_wgpu::display::DisplayTransform,
         scenario: String,
     ) -> std::io::Result<()> {
         let mut meta = default_capture_metadata();
@@ -108,8 +110,32 @@ impl HeadlessPerf {
         );
         meta.graphics
             .resolved
-            .insert("gpu_scope_layout".into(), "unified-scene-v2".into());
-        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: shadows; rt_as_build (mesh/terrain AS only); scene_classify_and_raster (terrain classification then shared terrain/opaque-mesh/sky raster pass); ui. These replace the old terrain_and_sky/mesh_and_rt boundaries and are not directly comparable to those historical scopes. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
+            .insert("gpu_scope_layout".into(), "native-display-v3".into());
+        for (key, value) in [
+            ("native_hdr", display.enabled().to_string()),
+            (
+                "native_hdr_target_bytes",
+                display.target_bytes().to_string(),
+            ),
+            (
+                "native_scene_format",
+                format!("{:?}", display.scene_format()),
+            ),
+            (
+                "native_tonemapping",
+                if display.enabled() {
+                    "reinhard"
+                } else {
+                    "none"
+                }
+                .into(),
+            ),
+            ("native_auto_exposure_applied", "false".into()),
+            ("native_bloom_applied", "false".into()),
+        ] {
+            meta.graphics.resolved.insert(key.into(), value);
+        }
+        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: shadows; rt_as_build; scene_classify_and_raster; display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Scene raster uses RGBA16Float when native_hdr=true; compare quality/format as well as scope names with older captures. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);

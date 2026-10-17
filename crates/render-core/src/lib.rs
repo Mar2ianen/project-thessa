@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use glam::{DMat4, DQuat, DVec3};
+pub mod display;
 pub mod environment;
 pub mod mesh;
 pub mod ocean;

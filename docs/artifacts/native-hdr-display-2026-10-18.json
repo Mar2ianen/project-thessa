@@ -1,0 +1,77 @@
+{
+  "date":"2026-10-18",
+  "base_commit":"a65c4a4",
+  "pre_slice_publication":"Committed and pushed a65c4a4 (native flight deck, transactional RayScene recovery, reviewed unified scene pass) to origin/feat/render-pipeline-optimizations at the user's request before this next slice. Author Mar2ianen, no rewritten history or laptop push.",
+  "scope":"Manual pre-exposed RGBA16Float scene -> per-channel Reinhard -> SDR/sRGB -> display-referred egui/FastNavball. Reuses existing graphics hdr/exposure requests and existing scene pipelines/lighting. Not a complete native renderer, legacy tonemapper match, auto exposure, bloom, HDR-monitor output or temporal AA.",
+  "hardware":"AMD Radeon 880M Graphics (RADV STRIX1), Linux, Vulkan / radv / Mesa 26.2.4-arch1.1",
+  "settings":"RequestedGraphics.renderer.hdr -> active adapter RGBA16Float render/sample usage capability -> ResolvedGraphicsSettings.hdr. False/known unsupported -> direct LDR, zero extra persistent target bytes and no display pass. Unknown pre-init/legacy capability retains request; native resolves before construction. Manual EV clamps to [-16,32], invalid ->13; actual native auto exposure/bloom application is explicitly false even if shared settings request true. No new environment-variable graphics toggles.",
+  "representation":"Optional 8 bytes per physical pixel float color target, reusing scene depth. Existing terrain/mesh/sky shaders apply exposure once, display uses exact-pixel textureLoad and Reinhard x/(1+x). Hardware sRGB attachment transfer or explicit equivalent on unorm SDR output, never both. Target/bind replace on valid size change, pipelines remain; invalid resize leaves existing resources intact. No per-frame uniform, host image or readback.",
+  "error_boundary":"Finite normal half-float rounding about <=2^-11 relative before mapping, underflow near zero and saturation beyond 65504 are limitations. Combined finite-pattern storage/operator/sRGB/8-bit comparison pinned within one output code per channel, not a complete physical/perceptual envelope or approximation bound for atmosphere/ocean. Negative/NaN components are contained to black by the display math; positive overflow clamps to finite half-float maximum.",
+  "initial_executed_checks":{
+    "core_and_graphics":"cargo test -p thessa-render-core -p thessa-graphics --lib; passed /tmp/opencode/hdr-focused-tests.log",
+    "pixel_oracle":"Actual display pass vs neutral CPU formula, HDR and exact direct-LDR identity, black/toe/middlegray/unity/4x/16x/colored/finite-limit patterns, both sRGB hardware transfer and unorm explicit transfer, non-square odd sizes, grow/shrink/invalid resize and repeated paused output. /tmp/opencode/hdr-display-oracle.log passed.",
+    "HDR_scene_oracle":"Actual terrain+mesh+sky split/unified render with RT and ocean off/on, exposure halving/rewind; exact RGBA comparisons. /tmp/opencode/hdr-scene-oracle.log passed.",
+    "UI_oracle":"Actual shared-device egui overlay after HDR or direct LDR over black: exact stored UI pixel comparison and white=255; /tmp/opencode/hdr-UI-oracle.log passed. Initial test used an obsolete egui method; fixed to the repository's run_ui/Id::unique API, no production behavior changed by that development error.",
+    "scoped_clippy":"cargo clippy -p thessa-render-core -p thessa-graphics -p thessa-render-wgpu -p thessa-terrain-native --all-targets --all-features -- -D warnings; passed /tmp/opencode/hdr-clippy.log",
+    "release":"cargo build --release -p thessa-terrain-native passed; cargo test --release -p thessa-render-wgpu --test display -- --ignored --nocapture --test-threads=1 passed both tests."
+  },
+  "standalone_display_cost":{
+    "log":"/tmp/opencode/hdr-release-display.log",
+    "command":"cargo test --release -p thessa-render-wgpu --test display -- --ignored --nocapture --test-threads=1",
+    "samples_per_resolution":200,"warmup_per_resolution":30,
+    "runs":[
+      {"extent":[1280,720],"target_bytes":7372800,"GPU_p50_ms":0.14559663541030884,"GPU_p95_ms":0.17112513988494876,"GPU_p99_ms":0.19180443079376222,"host_wait_p50_ms":0.24068900000000001},
+      {"extent":[1920,1080],"target_bytes":16588800,"GPU_p50_ms":0.34914337673950196,"GPU_p95_ms":0.3994389389305115,"GPU_p99_ms":0.43566777416610725,"host_wait_p50_ms":0.42539200000000005},
+      {"extent":[2560,1440],"target_bytes":29491200,"GPU_p50_ms":0.600380730823517,"GPU_p95_ms":0.6749624369888306,"GPU_p99_ms":0.715439343612671,"host_wait_p50_ms":0.69781}
+    ],
+    "boundary":"One HDR texture sample+Reinhard+sRGB output pass; fixed synthetic source prefilled once. GPU hardware command intervals include barriers/scheduling; CPU wait includes encode/submit/GPU completion, not isolated CPU shader cost. Excludes source raster/uploads/UI/setup/readback. Sequential job, no concurrent agent GPU task, clocks/caches/desktop not locked. This is added quality/cost, not an optimization, matched-quality LDR A/B or game-FPS gain.",
+    "budget":"Initial development 1080p pass budget <0.5 ms GPU met by this run, including its p99. Not a cross-platform guarantee, hardware timing test assertion or adaptive controller."
+  },
+  "reproduction_environment":"Every cargo invocation: TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target. Audio-bearing tests/captures additionally ALSA_CONFIG_PATH=$PWD/target/render-batch/silent-alsa.conf PULSE_SERVER=unix:$PWD/target/render-batch/no-pulse-server PIPEWIRE_REMOTE=thessa-test-no-audio. Shared cargo target, no system audio changes.",
+  "capture_reproduction":{
+    "executable":"/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+    "args":"--flight --chase --hud --graphics target/render-batch/MODE.toml --headless target/render-batch/MODE.png --perf-capture target/render-batch/MODE.json --frames 120 --prestream-seconds 10",
+    "common_TOML":"version=1\npreset=\"high\"\n[renderer]\nhdr=HDR\nauto_exposure=false\nbloom=false\nexposure_ev100=EV\nray_tracing=\"off\"\n[shadows]\nenabled=false\n[instruments]\nlayout=\"LAYOUT\"\nnavball_renderer=\"analytic\"\n",
+    "modes":[{"MODE":"hdr-rocket","HDR":true,"EV":13.0,"LAYOUT":"rocket"},{"MODE":"ldr-rocket","HDR":false,"EV":13.0,"LAYOUT":"rocket"},{"MODE":"hdr-aircraft","HDR":true,"EV":13.0,"LAYOUT":"aircraft"},{"MODE":"hdr-rocket-ev12","HDR":true,"EV":12.0,"LAYOUT":"rocket"}],
+    "boundary":"Fixed-step local authority, not an interpolated remote client. These app captures include async streaming and all HUD work, so they illustrate applied display settings and authority invariance, not a matched-quality optimization/FPS result. Raw target files are ignored scratch; exact common config and substitutions are retained here."
+  },
+  "final_checks_and_captures":{
+    "verification":{
+      "workspace_lib_bins":{"passed":1870,"failed":0,"ignored":45,"log":"/tmp/opencode/hdr-final-workspace-tests.log"},
+      "workspace_integration":{"passed":90,"failed":0,"ignored":17,"log":"/tmp/opencode/hdr-final-workspace-integration.log"},
+      "workspace_clippy":"passed cargo clippy --workspace --all-targets --all-features -- -D warnings; /tmp/opencode/hdr-final-workspace-clippy.log",
+      "native_no_default_clippy":"passed cargo clippy -p thessa-terrain-native --all-targets --no-default-features -- -D warnings; /tmp/opencode/hdr-final-no-default-clippy.log",
+      "fmt":"passed cargo fmt --all -- --check; /tmp/opencode/hdr-final-fmt.log",
+      "hardware":{"native_ignored_including_UI_oracle_and_real_server":14,"Bevy_CBT_GPU":24,"perf_capture_both_HDR_states":1,"origin_cache":1,"release_display_pixel_oracle_and_cost":2,"release_HDR_RT_ocean_scene_oracle":1},
+      "hardware_commands":["cargo test -p thessa-terrain-native --bin thessa-terrain-native -- --ignored --nocapture --test-threads=1","cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored","cargo test -p thessa-terrain-native --test perf_capture -- --ignored --nocapture","cargo test -p thessa-render-wgpu --lib unchanged_origin_does_not_serialize -- --ignored --nocapture","cargo test --release -p thessa-render-wgpu --test display -- --ignored --nocapture --test-threads=1","cargo test --release -p thessa-render-wgpu --test unified_scene hdr_scene -- --ignored --nocapture"],
+      "hardware_logs":"/tmp/opencode/hdr-final-{native-ignored,bevy-gpu,perf-capture,origin-cache,release-display,release-scene}.log",
+      "additional":"release native executable build passed; 12-crate architecture guard and five agent-QA Python tests passed; git diff --check and new documentation local links/JSON validation passed.",
+      "boundary":"All listed jobs actually finished with exit 0 on this machine. Broad-command ignored counts are not presented as executed; the named hardware checks were separately run. No remote CI or cross-platform runtime result. This new HDR slice remains uncommitted; only its base a65c4a4 was committed/pushed before starting."
+    },
+    "final_standalone_display_cost":{
+      "log":"/tmp/opencode/hdr-final-release-display.log","samples_per_resolution":200,"warmup_per_resolution":30,
+      "runs":[
+        {"extent":[1280,720],"target_bytes":7372800,"GPU_p50_ms":0.15120729573440556,"GPU_p95_ms":0.18907925292205813,"GPU_p99_ms":0.19769562413406372,"host_wait_p50_ms":0.222274},
+        {"extent":[1920,1080],"target_bytes":16588800,"GPU_p50_ms":0.3618875909042359,"GPU_p95_ms":0.42901513406753544,"GPU_p99_ms":0.4698527259979248,"host_wait_p50_ms":0.426033},
+        {"extent":[2560,1440],"target_bytes":29491200,"GPU_p50_ms":0.6215008593292236,"GPU_p95_ms":0.6966436315269471,"GPU_p99_ms":0.7338743703918458,"host_wait_p50_ms":0.690886}
+      ],
+      "interpretation":"Same isolated synthetic pass and boundaries as initial diagnostic. Final 1080p p50/p95/p99 remain below the initial 0.5 ms development-pass budget. Not a production-FPS gain or controlled clock/thermal benchmark."
+    },
+    "native_captures":{
+      "measured_frames_per_run":120,"warmup_frames":30,"prestream_s":10,"extent":[1280,720],
+      "runs":[
+        {"mode":"hdr-rocket","host_p50_ms":3.41847,"host_p95_ms":5.253101,"display_GPU_p50_ms":0.12984671035766604,"UI_GPU_p50_ms":0.033944494960784916,"PNG_sha256":"c4afec38d4916c97813df5e1081bfa221d0c36b7e5e601d6dce090a7965189e3"},
+        {"mode":"ldr-rocket","host_p50_ms":3.0257885,"host_p95_ms":4.7742189999999995,"display_GPU_p50_ms":0.006792906606674195,"UI_GPU_p50_ms":0.030838593709945683,"PNG_sha256":"0889ed42aa73c2825322f279051c88d4178b5725d27ca486d6fb1f1800e31213"},
+        {"mode":"hdr-aircraft","host_p50_ms":2.9666185,"host_p95_ms":4.2964400000000005,"display_GPU_p50_ms":0.12461677341270447,"UI_GPU_p50_ms":0.03378419038009644,"PNG_sha256":"d824c8acc985d41b022d4cfdbdcd8adf0c74e4cfceaf621b34cd1b3cee1a8766"},
+        {"mode":"hdr-rocket-ev12","host_p50_ms":3.0601175,"host_p95_ms":4.730277,"display_GPU_p50_ms":0.13267207859230043,"UI_GPU_p50_ms":0.0347460178642273,"PNG_sha256":"0e35bb2f7c8167c5f655cf3c8ab1b85d96cbb7ad5069048a935b297c453686e7"}
+      ],
+      "metadata":"All report gpu_scope_layout=native-display-v3 and auto_exposure_applied/bloom_applied=false. HDR runs report Rgba16Float, reinhard and 7372800 target bytes; LDR reports Rgba8UnormSrgb, none and 0 target bytes. The LDR display interval is empty timestamp/scheduling overhead, not an actual post pass.",
+      "authority_identity":"All four end at presentation time 2.5 s and body inertial position [4821999341525.126,110259115.18622804,192817.30653965616]. No physics/control change from the display configuration.",
+      "navball_application_pixel_check":"Pillow-decoded RGBA8; circle (x-640)^2+(y-520)^2 <132^2 in 1280x720 screenshots, 54689 sphere-interior pixels. HDR EV13 vs LDR EV13: 0 changed interior pixels, max channel diff 0. HDR EV13 vs HDR EV12: also 0/max0. Whole-frame changes are respectively 820596/824647 pixels, so this is not an equality between unchanged world images. This mask excludes the antialiased sphere rim and translucent deck background; it does not assert whole-HUD pixel identity over a changing world.",
+      "review":"All four screenshots inspected by the implementer as integration evidence, not a blind aesthetic preference test or a claim of subjective superiority. UI/source authority remained coherent; no new asset/lighting/atmosphere physics is attributed to the display transform.",
+      "raw":"target/render-batch/{hdr-rocket,ldr-rocket,hdr-aircraft,hdr-rocket-ev12}.{toml,png,json,csv}; /tmp/opencode/hdr-final-capture-MODE.log",
+      "boundary":"Sequential after other agent GPU jobs; async streaming, normal host/desktop noise and whole UI remain in these captures. Different world tone mapping is intentionally not matched output quality. Host/frame/UI differences do not isolate an optimization or imply an application-FPS improvement."
+    }
+  },
+  "known_gaps":["Native auto exposure/metering/adaptation and bloom unapplied", "No ACES/AgX/Bevy tonemapper match or color grading", "No HDR-monitor colorspace/output", "No temporal AA/upscaling", "No blind subjective or cross-platform runtime acceptance", "No primary terrain/ocean mesh-query reflections or atmosphere/cloud membership added by this slice"]
+}

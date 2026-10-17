@@ -113,7 +113,8 @@ The checked-in vertical slice currently contains:
   pose through the owned pilot camera (quaternion orbit, 8–180 m zoom, pan,
   optional chase framing). The old pilot now converts the same neutral
   mesh/material source instead of loading this model through Bevy `WorldAsset`.
-  The native draw loads the existing terrain color/depth targets before HUD;
+   Native terrain and meshes share scene color/depth; HUD loads the final SDR
+   target after the optional HDR display transform;
    its configurable opaque path now supports shared GGX stellar/environment
    reflection, normal/metallic-roughness/AO maps and a memory-bounded three-star
     cascade shadow atlas shared with terrain. Scene meshes can use negotiated
@@ -130,7 +131,7 @@ The checked-in vertical slice currently contains:
        Opt-in `[ocean]` now adds a shared multiband spectral field, filtered
        water optics and bounded near-grid displacement shared by raster/shadows/RT
        ([doc 56](docs/56_NATIVE_SPECTRAL_OCEAN.md)); overflow is optical-only.
-       Sun disks, aerial perspective, HDR and primary terrain/ocean mesh-query
+        Sun disks, aerial perspective, auto exposure/bloom and primary terrain/ocean mesh-query
        reflection consumers remain missing: **not** complete PBR/Bevy parity.
      The shared shadow atlas reuses depth only for unchanged light matrices,
      terrain and mesh casters; motion/source changes invalidate it, with no
@@ -170,6 +171,11 @@ The checked-in vertical slice currently contains:
    opaque meshes and sky share one pass, with AS builds timed separately;
    [doc 58](docs/58_NATIVE_PIPELINE_REVIEW.md) records the optimization review,
    fixed-resident comparisons and limits of the supplied performance claims.
+   Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
+   RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
+   `hdr=false` or an unsupported target uses the direct LDR fallback without an
+   extra target/pass. Native auto exposure and bloom remain unapplied; captures
+   state this explicitly ([doc 59](docs/59_NATIVE_HDR_DISPLAY.md)).
   `--chase` selects the
   chase framing that follows craft attitude; window keys `V`/`Backquote` toggle
    chase/reset, arrows orbit/zoom, right/middle-drag orbit/pan, wheel zooms.

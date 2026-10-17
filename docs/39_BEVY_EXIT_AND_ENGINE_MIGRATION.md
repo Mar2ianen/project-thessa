@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-17 (native opaque material lighting and shared terrain/mesh raster shadows)
+**Updated:** 2026-10-18 (native flight deck, reviewed unified pass, manual HDR display)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -3547,6 +3547,25 @@ mesh-query reflections, exact displaced far-ocean intersections, bathymetry,
 nonlinear waves, foam/wakes and authoritative water physics are still absent.
 Full state/consumer contracts, tolerances, resource/quality budgets and evidence:
 [`56_NATIVE_SPECTRAL_OCEAN.md`](56_NATIVE_SPECTRAL_OCEAN.md).
+
+### Native manual HDR display (2026-10-18)
+
+[Doc 59](59_NATIVE_HDR_DISPLAY.md) supersedes the earlier direct-LDR/no-tonemapping
+limitation without rewriting those dated measurements. Both window and headless
+paths now consume resolved `[renderer].hdr`: supported HDR renders the existing
+terrain/opaque-mesh/sky pass into one pre-exposed RGBA16Float target, then applies
+RGB Reinhard and a single SDR/sRGB output transfer **before** egui/FastNavball.
+Exposure remains the existing manual EV100 convention and is not multiplied
+again by the display pass. Ray-hit/material/environment transport is unchanged.
+
+HDR off, or a known unsupported render/sample target, retains the direct output
+path without an intermediate allocation, pass, copy or shader. Resize retains
+pipelines and updates only the float target/binding, alongside the existing
+depth/surface lifecycle. No temporal render state or readback is added to normal
+window frames. The new `render.display_transform` GPU interval is separate from
+scene raster and UI; v3 metadata records format/bytes/actual application, not
+just requested settings. This is SDR presentation, **not** HDR-monitor output,
+AgX/ACES/Bevy parity, automatic exposure, bloom or temporal AA/upscaling.
 
 ## 15. FastRT
 

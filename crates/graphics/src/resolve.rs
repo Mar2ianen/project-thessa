@@ -182,6 +182,8 @@ pub struct Capabilities {
     pub ray_query_supported: Option<bool>,
     /// `Some(true)` when the adapter is a discrete GPU.
     pub is_discrete_gpu: Option<bool>,
+    /// RGBA16Float can be rendered and sampled for a native HDR scene target.
+    pub hdr_render_target_supported: Option<bool>,
 }
 
 impl Capabilities {
@@ -190,6 +192,7 @@ impl Capabilities {
             ray_query_supported: None,
             is_discrete_gpu: None,
             terrain_mesh_supported: None,
+            hdr_render_target_supported: None,
         }
     }
 }
@@ -295,6 +298,12 @@ impl ResolvedGraphicsSettings {
     /// with an explanatory note, everything else degrades cleanly.
     pub fn from_requested(requested: &RequestedGraphics, caps: &Capabilities) -> Self {
         let mut notes = Vec::new();
+        let hdr = requested.renderer.hdr && caps.hdr_render_target_supported != Some(false);
+        if requested.renderer.hdr && !hdr {
+            notes.push(
+                "HDR scene target unsupported: using direct LDR without postprocessing".into(),
+            );
+        }
 
         let backend_name = match requested.renderer.backend {
             BackendRequest::Auto => "auto".to_string(),
@@ -420,16 +429,20 @@ impl ResolvedGraphicsSettings {
             ray_tracing,
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
-            hdr: requested.renderer.hdr,
+            hdr,
             bloom: requested.renderer.bloom,
-            exposure_ev100: requested.renderer.exposure_ev100,
+            exposure_ev100: if requested.renderer.exposure_ev100.is_finite() {
+                requested.renderer.exposure_ev100.clamp(-16.0, 32.0)
+            } else {
+                13.0
+            },
             fleet_meshes: requested.renderer.fleet_meshes,
             fleet_min_pixels: match requested.renderer.fleet_quality {
                 Quality::Low => 8.0,
                 Quality::Medium => 2.0,
                 Quality::High => 0.5,
             },
-            auto_exposure: requested.renderer.auto_exposure && requested.renderer.hdr,
+            auto_exposure: requested.renderer.auto_exposure && hdr,
             atmosphere_enabled: requested.atmosphere.enabled,
             atmosphere_quality: requested.atmosphere.quality,
             atmosphere_steps: requested.atmosphere.ray_steps,
@@ -804,6 +817,44 @@ mod tests {
         let resolved =
             ResolvedGraphicsSettings::from_requested(&RequestedGraphics::default(), &caps);
         assert_eq!(resolved.ray_tracing, ResolvedRayTracing::Local);
+    }
+
+    #[test]
+    fn hdr_capability_fallback_and_exposure_validation() {
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.auto_exposure = true;
+        for enabled in [false, true] {
+            for supported in [None, Some(false), Some(true)] {
+                requested.renderer.hdr = enabled;
+                let caps = Capabilities {
+                    hdr_render_target_supported: supported,
+                    ..Default::default()
+                };
+                let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+                let expected = enabled && supported != Some(false);
+                assert_eq!(resolved.hdr, expected);
+                assert_eq!(resolved.auto_exposure, expected);
+                assert_eq!(
+                    resolved
+                        .notes
+                        .iter()
+                        .any(|n| n.contains("HDR scene target unsupported")),
+                    enabled && !expected
+                );
+            }
+        }
+        for (input, expected) in [
+            (f32::NAN, 13.0),
+            (f32::INFINITY, 13.0),
+            (-100.0, -16.0),
+            (50.0, 32.0),
+            (13.5, 13.5),
+        ] {
+            requested.renderer.exposure_ev100 = input;
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+            assert_eq!(resolved.exposure_ev100, expected);
+        }
     }
 
     #[test]

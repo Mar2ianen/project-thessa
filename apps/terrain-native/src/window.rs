@@ -17,6 +17,7 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     backend: Backend,
     renderer: TerrainRenderer,
+    display: thessa_render_wgpu::display::DisplayTransform,
     mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
     drawable: bool,
@@ -75,9 +76,25 @@ impl State {
             wgpu::PresentMode::AutoNoVsync
         };
         let exposure = crate::manual_exposure(resolved.exposure_ev100);
+        if scene.requested.renderer.hdr && !resolved.hdr {
+            eprintln!("native HDR target unsupported: using direct LDR fallback");
+        }
         surface.configure(&backend.device, &config);
-        let renderer = scene.renderer(&backend, config.format)?;
-        let mesh_renderer = scene.mesh_renderer_with_shadows(&backend, config.format, &renderer)?;
+        let display = thessa_render_wgpu::display::DisplayTransform::new(
+            &backend,
+            &resolved,
+            config.format,
+            config.width,
+            config.height,
+        )?;
+        let renderer = scene.renderer(&backend, display.scene_format())?;
+        let mesh_renderer =
+            scene.mesh_renderer_with_shadows(&backend, display.scene_format(), &renderer)?;
+        eprintln!(
+            "native display: hdr={} target_bytes={} manual exposure; auto exposure and bloom not applied",
+            display.enabled(),
+            display.target_bytes()
+        );
         let depth = depth(&backend, config.width, config.height);
         #[cfg(feature = "hud")]
         let hud = hud_enabled.then(|| {
@@ -99,6 +116,7 @@ impl State {
             config,
             backend,
             renderer,
+            display,
             mesh_renderer,
             depth,
             drawable: size.width > 0 && size.height > 0,
@@ -114,6 +132,11 @@ impl State {
     fn resize(&mut self, width: u32, height: u32) {
         self.drawable = width > 0 && height > 0;
         if !self.drawable {
+            return;
+        }
+        if let Err(error) = self.display.resize(&self.backend, width, height) {
+            self.drawable = false;
+            eprintln!("display resize rejected: {error}");
             return;
         }
         self.config.width = width;
@@ -248,12 +271,13 @@ impl State {
         }
         self.renderer.encode_scene(
             &mut encoder,
-            &color,
+            self.display.scene_color(&color),
             &self.depth,
             self.mesh_renderer
                 .as_ref()
                 .and_then(crate::scene::SceneMeshes::opaque),
         );
+        self.display.encode(&mut encoder, &color);
         #[cfg(feature = "hud")]
         let commands = if let (Some(hud), Some(output)) = (&mut self.hud, hud_output) {
             hud.gpu.encode(

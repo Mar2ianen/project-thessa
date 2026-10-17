@@ -271,12 +271,33 @@ fn main() -> Result<(), Box<dyn Error>> {
             .as_ref()
             .map(|_| perf::HeadlessPerf::new(&backend));
         let target = OffscreenTarget::new(&backend, 1280, 720)?;
-        let mut renderer = scene.renderer(&backend, OffscreenTarget::FORMAT)?;
+        let resolved = backend.resolve_graphics(&scene.requested);
+        if scene.requested.renderer.hdr && !resolved.hdr {
+            eprintln!("native HDR target unsupported: using direct LDR fallback");
+        }
+        let display = thessa_render_wgpu::display::DisplayTransform::new(
+            &backend,
+            &resolved,
+            OffscreenTarget::FORMAT,
+            1280,
+            720,
+        )?;
+        let mut renderer = scene.renderer(&backend, display.scene_format())?;
         let mut mesh_renderer =
-            scene.mesh_renderer_with_shadows(&backend, OffscreenTarget::FORMAT, &renderer)?;
+            scene.mesh_renderer_with_shadows(&backend, display.scene_format(), &renderer)?;
         #[cfg(feature = "hud")]
         let mut hud = hud_enabled.then(|| hud::Hud::new(&backend, OffscreenTarget::FORMAT));
-        let resolved = backend.resolve_graphics(&scene.requested);
+        println!(
+            "native_display hdr={} scene_format={:?} target_bytes={} tonemapping={} exposure=manual auto_exposure_applied=false bloom_applied=false",
+            display.enabled(),
+            display.scene_format(),
+            display.target_bytes(),
+            if display.enabled() {
+                "reinhard"
+            } else {
+                "none"
+            }
+        );
         let exposure = manual_exposure(resolved.exposure_ev100);
         let stream_started = Instant::now();
         while stream_started.elapsed().as_secs_f64() < prestream_seconds {
@@ -384,12 +405,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             renderer.encode_scene(
                 &mut encoder,
-                &target.color,
+                display.scene_color(&target.color),
                 &target.depth,
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
             );
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 3);
+            }
+            display.encode(&mut encoder, &target.color);
+            if let Some(perf) = &perf {
+                perf.mark(&mut encoder, 4);
             }
             #[cfg(feature = "hud")]
             let commands = if let (Some(hud), Some(output)) = (&mut hud, hud_output) {
@@ -400,7 +425,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             #[cfg(not(feature = "hud"))]
             let commands = Vec::<wgpu::CommandBuffer>::new();
             if let Some(perf) = &perf {
-                perf.mark(&mut encoder, 4);
+                perf.mark(&mut encoder, 5);
                 perf.resolve(&mut encoder);
             }
             backend.queue.submit(
@@ -434,7 +459,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         timings.sort_by(f64::total_cmp);
         if let (Some(perf), Some(path)) = (&perf, &perf_capture) {
-            perf.write(path,&backend,&scene,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
+            perf.write(path,&backend,&scene,&display,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
         }
         streaming_timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];
@@ -585,5 +610,5 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Same manual-camera convention as the current Bevy PBR host (EV100).
 fn manual_exposure(ev100: f32) -> f32 {
-    1.0 / (1.2 * 2.0f32.powf(ev100))
+    thessa_render_core::display::manual_exposure(ev100)
 }

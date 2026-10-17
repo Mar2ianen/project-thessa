@@ -17,10 +17,11 @@ and sibling CSV after rendering, and negotiates stable timestamp-query plus
 encoder-timestamp features only for this diagnostic. If either feature is
 unsupported, CPU capture still works and GPU timings are explicitly unavailable.
 Ordinary native devices create no timestamp query/readback buffers or collector.
-GPU intervals (`gpu_scope_layout=unified-scene-v2`) are `render.shadows`,
+GPU intervals (`gpu_scope_layout=native-display-v3`) are `render.shadows`,
 `render.rt_as_build` (dirty mesh/terrain AS builds),
 `render.scene_classify_and_raster` (classification plus the shared terrain,
-opaque-mesh and sky pass), and `render.ui`; their sum
+opaque-mesh and sky pass), `render.display_transform` (HDR to SDR, empty on the
+direct LDR fallback), and `render.ui` (after display transform); their sum
 is the measured GPU command span. They include barriers/scheduling and exclude
 queue-write uploads before the first mark and separate egui command buffers.
 They are not isolated sky/scattering/trace costs or a complete GPU frame; an
@@ -28,6 +29,13 @@ empty AS interval still includes timestamp/scheduling overhead. Historical
 `render.terrain_and_sky` /`render.mesh_and_rt` scopes had different boundaries
 and must not be compared directly to the new scopes. See
 [doc 58](58_NATIVE_PIPELINE_REVIEW.md) for the unified-pass review and evidence.
+The v3 scene target is RGBA16Float when native HDR resolves on, otherwise the
+original RGBA8 sRGB target. Compare formats/quality, not only matching scope
+names, with historical v2 captures. Native capture metadata records actual
+`native_hdr`, target bytes, scene format and `native_tonemapping`, plus explicit
+`native_auto_exposure_applied=false` / `native_bloom_applied=false`; these two
+shared requested features are not implemented in the manual HDR slice. See
+[doc 59](59_NATIVE_HDR_DISPLAY.md).
 CPU `frame.cpu` is host wall time through submit, not processor cycles;
 frame wall includes GPU completion. Timestamp mapping and capture writing are
 outside samples, but the diagnostic can still perturb scheduling. This path

@@ -83,9 +83,13 @@ do not update in place).
 | `56_NATIVE_SPECTRAL_OCEAN.md` | 🟡 native render-only slice | independent multiband GPU FFT, simulation-time finite-depth/local-gravity waves, slope-moment filtering, bounded shared raster/atlas/mesh-RT near geometry, explicit quality/optical-only fallback, GPU oracles and scoped costs | nonlinear waves, foam/wakes, bathymetry/weather, authoritative fluid coupling, far displaced intersections, primary ocean mesh-query reflections, ray cones/environment convolution, blind visual/platform acceptance |
 | `57_NATIVE_FLIGHT_DECK.md` | 🟡 native instrument slice | native-pixel GPU FastNavball, full surface heading/pitch/roll, vector cues, aircraft /FDAI-inspired spacecraft decks, explicit disabled/quality/analytic/baked policy, scoped representation comparison; transactional ray-update recovery fix | inertial/orbit/target/maneuver frames, full FDAI rate/error needles, assist/autopilot panels, small/mobile/accessibility and blind aesthetic/platform acceptance |
 | `58_NATIVE_PIPELINE_REVIEW.md` | 🟡 reviewed native pipeline slice | shared terrain/opaque-mesh/sky pass, explicit AS-before-raster API, corrected timestamp scopes, reusable terrain staging/unchanged-origin skip and fixed shadow serialization; fixed-resident split/unified oracle and A/B diagnostic | supplied whole-application speedup/parity/allocation claims not accepted; no blind/platform acceptance or complete renderer replacement |
+| `59_NATIVE_HDR_DISPLAY.md` | 🟡 manual native HDR slice | capability-resolved pre-exposed RGBA16Float scene, Reinhard to SDR/sRGB before egui/FastNavball, resource-free direct LDR fallback, retained resize, explicit display-transform GPU scope and applied-vs-requested telemetry | auto exposure/metering/adaptation, bloom, AgX/ACES/legacy tonemapper match, HDR monitor output, temporal AA/upscaling, blind/platform acceptance |
 
 The doc 39 branch also shares the owned GPL surface-survey camera between
 clients (quaternion orbit/free look/zoom/reset and native bookmark selection).
+Doc 59 supersedes the older native no-HDR checkpoint: terrain, mesh/RT and sky
+can now retain linear highlights in a shared float target before SDR mapping.
+Automatic exposure and bloom remain unported; this is not HDR display output.
 Native survey framing is now 5 km by default rather than 30 km; prior terrain
 timings are not an equal-workload comparison. The celestial map camera remains
 in the unported remainder above.
@@ -140,7 +144,7 @@ multiband spectral field, filtered slope moments and bounded near-grid waves
 consumed by raster, the atlas and mesh RT; whole near-partition overflow is
 optical-only. See doc 56 for physical inputs, quality, bounds and scoped costs.
 This is not full replacement: primary terrain/ocean mesh-query reflection receivers, atmosphere/cloud
-traversal, HDR/tonemapping, mesh mip chains and complete material parity remain
+traversal, auto exposure/bloom, mesh mip chains and complete material parity remain
 absent. See doc 39's resident-terrain checkpoint for costs and ocean direction.
 Hit shading now interpolates UVs/smooth normals, samples the raster material's
 base colour (sRGB) and High-tier MR/normal/AO (linear), and uses the shared GGX
@@ -166,7 +170,8 @@ releases grid storage and the background consumer. The background shares the
 scene's GPU publication with mesh/RT consumers (one upload per revision), draws
 at far depth in the existing terrain pass and does not overwrite foreground
 depth. Spectral ocean reflection now samples that same directional field.
-No sun disks, aerial perspective or HDR yet.
+No sun disks or aerial perspective yet. Doc 59 adds manual pre-exposed HDR
+storage and Reinhard to SDR; it does not implement auto exposure or bloom.
 See doc 39's environment-radiance and sky/perf checkpoints for error/cost
 evidence and limitations. Shadows only
 see retained scene geometry;
@@ -177,7 +182,8 @@ Its 64/256/1024/4096-page warm/cold/churn benchmark is a CPU residency
 microbenchmark, not a renderer-FPS or GPU-upload win; see doc 22. Headless native
 `--perf-capture PATH.json` now writes `thessa-perf` JSON/CSV with host-frame /
 streaming scopes and opt-in hardware GPU command intervals for shadows,
-terrain+sky, meshes+RT and UI. Unsupported timestamps are explicitly unavailable;
+AS builds, shared scene classification/raster, HDR display transform and UI
+(`native-display-v3`). Unsupported timestamps are explicitly unavailable;
 normal devices allocate no profiler. This is serial offscreen instrumentation,
 not asynchronous window profiling, isolated sky/AS/trace timings or complete
 simulation/counter coverage. StagingBelt A/B and submission batching remain open.

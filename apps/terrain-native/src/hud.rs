@@ -1076,4 +1076,80 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    #[ignore = "hardware: display-referred egui colors must not be tone mapped with the HDR world"]
+    fn hdr_display_precedes_ui_without_changing_opaque_ui_colors() {
+        let backend = Backend::bring_up().unwrap();
+        let mut reference = None;
+        for enabled in [false, true] {
+            let mut requested = thessa_graphics::RequestedGraphics::default();
+            requested.renderer.hdr = enabled;
+            let settings = backend.resolve_graphics(&requested);
+            let display = thessa_render_wgpu::display::DisplayTransform::new(
+                &backend,
+                &settings,
+                OffscreenTarget::FORMAT,
+                320,
+                200,
+            )
+            .unwrap();
+            let target = OffscreenTarget::new(&backend, 320, 200).unwrap();
+            let mut hud = Hud::new(&backend, OffscreenTarget::FORMAT);
+            let output = hud.context.run_ui(input(320, 200, 1.0), |ui| {
+                let paint = ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::unique("display-ui-oracle"),
+                ));
+                for (i, color) in [
+                    egui::Color32::WHITE,
+                    egui::Color32::from_rgb(128, 64, 32),
+                    egui::Color32::RED,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    paint.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(20.0 + i as f32 * 80.0, 20.0),
+                            egui::vec2(60.0, 60.0),
+                        ),
+                        0.0,
+                        color,
+                    );
+                }
+            });
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: display.scene_color(&target.color),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            display.encode(&mut encoder, &target.color);
+            let mut commands =
+                hud.encode(&backend, &mut encoder, &target.color, output, [320, 200]);
+            commands.push(encoder.finish());
+            backend.queue.submit(commands);
+            let pixels = target.read_rgba8(&backend).unwrap();
+            assert_eq!(
+                &pixels[((40 * 320 + 40) * 4)..][..4],
+                &[255; 4],
+                "UI whites must remain white, not Reinhard gray"
+            );
+            if let Some(reference) = &reference {
+                assert_eq!(reference, &pixels);
+            } else {
+                reference = Some(pixels);
+            }
+        }
+    }
 }

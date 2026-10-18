@@ -124,6 +124,7 @@ pub struct TerrainRenderer {
     last_shadow_passes: usize,
     last_shadow_draws: crate::shadows::ShadowDrawStats,
     sky: Option<crate::sky::SkyBackground>,
+    sky_visible: bool,
     format: wgpu::TextureFormat,
     shadows: Option<crate::shadows::ShadowAtlas>,
     shadow_receiver: Option<wgpu::BindGroup>,
@@ -634,9 +635,17 @@ impl TerrainRenderer {
         let topology_reason = (topology_requested && !topology_supported).then(|| {
             "conforming terrain exceeds negotiated device limits; using regular patches".into()
         });
+        let mut resident_height_extent = Vec::with_capacity(capacity);
+        resident_height_extent.extend(patches.iter().map(|p| Some(height_extent(p.page))));
+        resident_height_extent.resize(capacity, None);
         let surface_source = if topology_requested && topology_supported {
             Some(crate::conforming_surface::HeightSurfaceSource::new(
-                backend, &metadata, &residuals, radius, &node_ids,
+                backend,
+                &metadata,
+                &residuals,
+                radius,
+                &node_ids,
+                &resident_height_extent,
             )?)
         } else {
             None
@@ -692,7 +701,11 @@ impl TerrainRenderer {
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState {
-                cull_mode: None,
+                cull_mode: if topology.is_some() {
+                    Some(wgpu::Face::Back)
+                } else {
+                    None
+                },
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -815,16 +828,12 @@ impl TerrainRenderer {
             })
                 .map(|i| patches.get(i).and_then(|p| ocean_height_range(p.page)))
                 .collect(),
-            resident_height_extent: {
-                let mut extents = Vec::with_capacity(capacity);
-                extents.extend(patches.iter().map(|p| Some(height_extent(p.page))));
-                extents.resize(capacity, None);
-                extents
-            },
+            resident_height_extent,
             shadow_cache: None,
             last_shadow_passes: 0,
             last_shadow_draws: Default::default(),
             sky: None,
+            sky_visible: settings.is_none_or(|s| s.sky_dome),
             format,
             shadow_receiver: shadows
                 .as_ref()
@@ -912,6 +921,11 @@ impl TerrainRenderer {
             .materials
             .prepare(backend, &self.node_ids, demand, pages)?;
         self.ocean_dirty |= upload.changed;
+        if upload.changed
+            && let Some(topology) = &self.topology
+        {
+            topology.mark_dirty();
+        }
         Ok(upload)
     }
 
@@ -1114,6 +1128,9 @@ impl TerrainRenderer {
             if patch.anchor.radius_m != self.body_radius_m {
                 return Err(fail());
             }
+            if self.surface_source.is_some() && !valid_surface_extent(patch.page) {
+                return Err(fail());
+            }
             let id = tile_node_id(&patch.anchor).ok_or_else(fail)?;
             if sources.insert(id, index).is_some() {
                 return Err(fail());
@@ -1184,6 +1201,9 @@ impl TerrainRenderer {
         if ids != self.node_ids || !dirty.is_empty() {
             self.invalidate_shadows();
             self.ocean_dirty = true;
+            if let Some(topology) = &self.topology {
+                topology.mark_dirty();
+            }
         }
         for (slot, (&old, &new)) in self.node_ids.iter().zip(&ids).enumerate() {
             if old != 0 && new == 0 {
@@ -1252,6 +1272,9 @@ impl TerrainRenderer {
         ordinals.sort_unstable();
         if ordinals.windows(2).any(|w| w[0] == w[1])
             || updates.iter().any(|(i, page)| {
+                if self.surface_source.is_some() && !valid_surface_extent(page) {
+                    return true;
+                }
                 self.page_slots
                     .get(*i as usize)
                     .is_none_or(|(_, capacity)| {
@@ -1299,6 +1322,9 @@ impl TerrainRenderer {
                 ]),
             );
         }
+        if let Some(source) = &self.surface_source {
+            source.publish_bounds(backend, &self.node_ids, &self.resident_height_extent);
+        }
         if !updates.is_empty() {
             backend
                 .queue
@@ -1314,7 +1340,11 @@ impl TerrainRenderer {
                 updates.len() as u32,
             ]),
         );
-        if updates.is_empty() || self.topology.is_some() {
+        if updates.is_empty() {
+            return;
+        }
+        if let Some(topology) = &self.topology {
+            topology.mark_dirty();
             return;
         }
         let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -1354,9 +1384,9 @@ impl TerrainRenderer {
         params: &ViewParams,
         extent: [u32; 2],
     ) -> Result<(), BackendError> {
+        let camera = params.world_position_m.to_array();
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
-        let camera = params.world_position_m.to_array();
         if let Some(topology) = &self.topology {
             let ocean_bound = if self.ocean_settings.geometry_patches > 0 {
                 self.ocean
@@ -1365,13 +1395,7 @@ impl TerrainRenderer {
             } else {
                 0.0
             };
-            topology.update_view(
-                backend,
-                &block,
-                camera,
-                extent,
-                self.height_bound_chord() * self.radius + ocean_bound,
-            )?;
+            topology.update_view(backend, &block, camera, extent, ocean_bound)?;
         }
         if camera != self.camera {
             // Projection/rotation/exposure changes do not change tile-relative
@@ -1386,7 +1410,9 @@ impl TerrainRenderer {
                     .queue
                     .write_buffer(&self.frames, 0, &self.frame_staging);
             }
-            self.invalidate_shadows();
+            if self.topology.is_none() {
+                self.invalidate_shadows();
+            }
         }
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
         self.camera = camera;
@@ -1417,7 +1443,7 @@ impl TerrainRenderer {
             );
             self.ocean_environment = Some(environment);
         }
-        if let Some(environment) = environment.filter(|field| field.enabled()) {
+        if let Some(environment) = environment.filter(|field| field.enabled() && self.sky_visible) {
             if let Some(sky) = &mut self.sky {
                 sky.rebind(&backend.device, &self.view, environment);
             } else {
@@ -1475,6 +1501,12 @@ impl TerrainRenderer {
             return Ok(());
         };
         let evolved = field.update(backend, time_s)?;
+        if evolved
+            && self.ocean_settings.geometry_patches > 0
+            && let Some(topology) = &self.topology
+        {
+            topology.mark_dirty();
+        }
         field.update_frame(
             &backend.queue,
             glam::DVec3::from_array(self.camera),
@@ -1635,6 +1667,7 @@ impl TerrainRenderer {
                 &self.residuals,
                 self.body_radius_m,
                 &self.node_ids,
+                &self.resident_height_extent,
             )?);
         }
         Ok(self.surface_source.as_ref().unwrap().clone())
@@ -1713,6 +1746,20 @@ impl TerrainRenderer {
         depth: &wgpu::TextureView,
         mesh: Option<&crate::mesh::MeshRenderer>,
     ) {
+        self.encode_scene_ops(encoder, color, depth, mesh, true);
+    }
+
+    /// Unified scene pass with explicit control over depth buffer store.
+    /// Passing `store_depth: false` configures `StoreOp::Discard` to save memory
+    /// bus bandwidth when the depth buffer is not consumed by downstream passes.
+    pub fn encode_scene_ops(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        mesh: Option<&crate::mesh::MeshRenderer>,
+        store_depth: bool,
+    ) {
         if self.topology.is_none() {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_bind_group(0, &self.classify_bind, &[]);
@@ -1747,7 +1794,11 @@ impl TerrainRenderer {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+                    store: if store_depth {
+                        wgpu::StoreOp::Store
+                    } else {
+                        wgpu::StoreOp::Discard
+                    },
                 }),
                 stencil_ops: None,
             }),
@@ -1834,9 +1885,17 @@ fn ocean_height_range(page: &HeightPage) -> Option<(f64, f64)> {
 /// the CBT LOD height bound stays conservative.
 fn height_extent(page: &HeightPage) -> (f64, f64) {
     (
-        f64::from(page.min_height_m() - page.max_residual_error_m()),
-        f64::from(page.max_height_m() + page.max_residual_error_m()),
+        f64::from(page.min_height_m()) - f64::from(page.max_residual_error_m()),
+        f64::from(page.max_height_m()) + f64::from(page.max_residual_error_m()),
     )
+}
+
+fn valid_surface_extent(page: &HeightPage) -> bool {
+    let (low, high) = height_extent(page);
+    low.is_finite()
+        && high.is_finite()
+        && low <= high
+        && low.abs().max(high.abs()) <= f64::from(f32::MAX)
 }
 
 fn frame_bytes(anchors: &[TileAnchor], camera: [f64; 3]) -> Result<Vec<u8>, BackendError> {

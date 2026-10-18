@@ -42,6 +42,7 @@ pub struct MeshRenderer {
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
     shadow_instances: Vec<u8>,
+    last_instances: Vec<thessa_render_core::mesh::MeshInstance>,
     shadow_revision: u64,
     rt: Option<crate::ray_scene::RayScene>,
     rt_reason: Option<String>,
@@ -583,6 +584,7 @@ impl MeshRenderer {
         };
         Ok(Self {
             shadow_instances: Vec::new(),
+            last_instances: Vec::new(),
             shadow_revision: 0,
             rt,
             rt_reason,
@@ -685,6 +687,11 @@ impl MeshRenderer {
             let next = ranges.map_or(0..self.count, |ranges| ranges[i].clone());
             shadow_changed |= *range != next;
             *range = next;
+        }
+        if self.last_instances.as_slice() != instances {
+            self.last_instances.clear();
+            self.last_instances.extend_from_slice(instances);
+            shadow_changed = true;
         }
         if self.shadow_caster.is_some() {
             if self.shadow_instances != self.staging {

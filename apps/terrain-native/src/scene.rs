@@ -931,7 +931,11 @@ impl Scene {
     fn update_environment(&mut self, camera_body_m: DVec3) {
         if let Some(field) = &mut self.environment {
             let revision = field.revision();
-            field.update(camera_body_m, &self.sample.environment_lights);
+            field.update_at(
+                camera_body_m,
+                &self.sample.environment_lights,
+                self.sample.time.0,
+            );
             self.lighting_dirty |= revision != field.revision();
         }
     }
@@ -2044,6 +2048,8 @@ mod tests {
         // Changed resolved policy must not let a replacement renderer bind a
         // stale enabled GPU publication even before the next ordinary tick.
         scene.requested.atmosphere.enabled = false;
+        scene.requested.upper_atmosphere.airglow = false;
+        scene.requested.upper_atmosphere.aurora = false;
         terrain = scene
             .renderer(
                 &backend,

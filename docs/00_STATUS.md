@@ -88,6 +88,8 @@ do not update in place).
 | `61_CBT_SPHERE_EXPERIMENT.md` | 🟡 phase-one topology snapshot | CPU reference reusing BisectorPool, persistent GPU OCBT-managed bisectors, conforming compatibility-chain split/diamond merge across cube faces, transactional exhaustion, pair-u32 addresses and indirect sphere-only diagnostic | single-writer limitation advanced by doc 62; canonical surface/native production selection advanced by doc 63; regular patches remain default/fallback |
 | `62_CBT_PARALLEL_TRANSACTIONS.md` | 🟡 persistent topology pipeline | bounded GPU request windows, whole-footprint deterministic conflict claims, whole-chain reservation, parallel split/merge and atomic packed-rank maintenance; exact serial byte/CPU geometry oracles; measured 128K-capacity/98K-triangle fixture; external-area actionable request selection reuses the same planner | doc 63 adds canonical sampling, emitted precision, relief-bound classification and production selection; no full large_cbt renderer replacement or equal-error/temporal acceptance claim |
 | `63_CBT_CANONICAL_SURFACE.md` | 🟡 opt-in native production-frame consumer | exact canonical addresses through heap depth 58, borrowed height/material residency and f64 precision charts; seam/residency/metric-shadow/Fourier oracles; shared-epoch RayScene hits and whole-pool fallback; resolved disabled/Low/Medium/High native topology mode now selects shared primary raster, atlas, ocean and RT geometry with emitted-revision shadow caching; actual camera-relative datum classification and actionable parallel requests with independent f64/CPU replay oracles | per-tile relief/error and convergence, optimized dynamic-ocean RT/dirty-chunk reuse, primary terrain scene-object RT reflections and equal-error/temporal/platform acceptance; regular patches remain default/fallback; full-client Bevy removal remains open |
+| `64_NATIVE_OPTIMIZATION_REVIEW.md` | 🟡 historical rejected proposal; corrective implementation in doc 63 | supplied medians/tails recomputed; GPU failures retained as audit evidence; new regression verifies zero-request quiescence, LOD wake and mesh shadow/reference equality | original performance claims remain unaccepted; matched-work measurements and wider acceptance stay open |
+| `65_NATIVE_SKY_AUDIT.md` | 🟡 audit plus first shared native emission consumer | existing Bevy/shared producers traced before reuse; shared aurora altitude/axis correction and finite-segment integration; native Low/High composed radiance, simulation-time refresh and independent disable/sky-dome gates | native stars/clouds, depth-aware orbital composition, magnetic data, high-frequency curtains, RT-light proxies and temporal/performance/visual acceptance |
 
 The doc 39 branch also shares the owned GPL surface-survey camera between
 clients (quaternion orbit/free look/zoom/reset and native bookmark selection).
@@ -95,6 +97,11 @@ Doc 63 now adds opt-in persistent canonical topology to the actual native
 window/headless frame. Shared shadows/ocean/RT use its emitted epoch rather than
 regular-grid membership; this closes consumer selection, not the wider client
 replacement, geometric-error/convergence or primary-reflection acceptance gates.
+Doc 64 retains the rejected optimization snapshot. The corrective follow-up in
+doc 63 restores current-camera coordinates, uses completed GPU zero-request/
+zero-commit feedback instead of a wave-count guess, and fixes mesh-caster and
+shadow-matrix invalidations. Its regressions now pass; original speedup claims
+are not accepted. Doc 65 audits sky/star/cloud/aurora reuse before implementation.
 Doc 59 supersedes the older native no-HDR checkpoint: terrain, mesh/RT and sky
 can now retain linear highlights in a shared float target before SDR mapping.
 Automatic exposure and bloom remain unported; this is not HDR display output.

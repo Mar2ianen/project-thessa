@@ -1,4 +1,4 @@
-//! Native environment radiance: the shared single-scattering sky evaluated
+//! Native environment radiance: shared single scattering and auroral emission
 //! onto the renderer's direction grid.
 //!
 //! This module owns the *policy* (which resolved graphics settings map to grid
@@ -26,6 +26,9 @@ const POSITION_EPSILON_M: f64 = 250.0;
 const STAR_EPSILON_RAD: f64 = 0.002;
 /// Relative threshold for each source's weighted RGB irradiance.
 const IRRADIANCE_EPSILON: f64 = 0.01;
+/// Bounded visual refresh policy in simulation time, not a proven temporal
+/// error envelope. Pausing reuses the field; forward/backward warp both wake it.
+const AURORA_REFRESH_SIM_S: f64 = 0.5;
 
 /// Atmosphere scalars read from the frozen body provider by the caller.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,14 +51,18 @@ pub struct EnvironmentBudget {
     pub density_scale: f32,
     pub multi_star: bool,
     pub airglow: bool,
+    pub scattering: bool,
+    pub aurora_steps: u32,
+    pub aurora_intensity: f32,
+    pub aurora_animate: bool,
 }
 
 impl EnvironmentBudget {
-    /// `atmosphere.enabled = false` resolves to `None`, which allocates no
-    /// grid, evaluates nothing and leaves the isotropic `ambient_lux / PI`
-    /// reflection term in place.
+    /// Disabling scattering, airglow AND aurora resolves to `None`: no grid or
+    /// evaluation, retaining the isotropic `ambient_lux / PI` fallback. Emission
+    /// toggles are independent of scattering, like the shared optical model.
     pub fn resolve(settings: &ResolvedGraphicsSettings) -> Option<Self> {
-        if !settings.atmosphere_enabled {
+        if !settings.atmosphere_enabled && !settings.airglow && !settings.aurora_shell {
             return None;
         }
         let steps = settings.atmosphere_steps.clamp(4, 32);
@@ -74,6 +81,17 @@ impl EnvironmentBudget {
             density_scale: settings.atmosphere_density_scale,
             multi_star: settings.multi_star,
             airglow: settings.airglow,
+            scattering: settings.atmosphere_enabled,
+            aurora_steps: if !settings.aurora_shell || settings.aurora_intensity == 0.0 {
+                0
+            } else {
+                match settings.aurora_quality {
+                    thessa_graphics::AuroraQuality::Low => 8,
+                    thessa_graphics::AuroraQuality::High => 32,
+                }
+            },
+            aurora_intensity: settings.aurora_intensity,
+            aurora_animate: settings.aurora_animate,
         })
     }
 }
@@ -92,6 +110,7 @@ pub struct EnvironmentStats {
     pub ambient_lux: [f32; 3],
     pub storage_bytes: u64,
     pub last_evaluation_ms: f64,
+    pub aurora_steps: u32,
 }
 
 /// Sky radiance field plus its bounded refresh policy.
@@ -106,6 +125,7 @@ pub struct EnvironmentField {
     skipped: u64,
     last_evaluation_ms: f64,
     revision: u64,
+    last_time_s: f64,
 }
 
 impl EnvironmentField {
@@ -130,6 +150,7 @@ impl EnvironmentField {
             skipped: 0,
             last_evaluation_ms: 0.0,
             revision: 0,
+            last_time_s: f64::NAN,
         })
     }
 
@@ -147,12 +168,25 @@ impl EnvironmentField {
 
     /// Evaluate when the inputs changed enough and the budget allows, then
     /// return the grid the renderers should sample.
+    #[cfg(test)]
     pub fn update(
         &mut self,
         camera_body_m: DVec3,
         lights: &[CelestialLight],
     ) -> Option<&EnvironmentRadiance> {
+        self.update_at(camera_body_m, lights, 0.0)
+    }
+
+    pub fn update_at(
+        &mut self,
+        camera_body_m: DVec3,
+        lights: &[CelestialLight],
+        sim_time_s: f64,
+    ) -> Option<&EnvironmentRadiance> {
         let budget = self.budget?;
+        if !sim_time_s.is_finite() || !camera_body_m.is_finite() {
+            return None;
+        }
         self.frames_since_evaluation = self.frames_since_evaluation.saturating_add(1);
         let lights = if budget.multi_star {
             lights
@@ -163,15 +197,20 @@ impl EnvironmentField {
                 .map_or(&[][..], std::slice::from_ref)
         };
         let moved = (camera_body_m - self.last_position_m).length() > POSITION_EPSILON_M;
-        let changed = self.grid.is_none() || moved || lights_changed(&self.last_lights, lights);
+        let animated = budget.aurora_steps > 0
+            && budget.aurora_animate
+            && (sim_time_s - self.last_time_s).abs() >= AURORA_REFRESH_SIM_S;
+        let changed =
+            self.grid.is_none() || moved || animated || lights_changed(&self.last_lights, lights);
         if !changed || self.frames_since_evaluation < budget.max_interval_frames {
             self.skipped += 1;
             return self.grid.as_ref();
         }
         let started = std::time::Instant::now();
-        self.grid = self.evaluate(camera_body_m, lights);
+        self.grid = self.evaluate_at(camera_body_m, lights, sim_time_s);
         self.last_evaluation_ms = started.elapsed().as_secs_f64() * 1000.0;
         self.last_position_m = camera_body_m;
+        self.last_time_s = sim_time_s;
         self.last_lights.clear();
         self.last_lights.extend_from_slice(lights);
         self.frames_since_evaluation = 0;
@@ -187,17 +226,32 @@ impl EnvironmentField {
     /// Texels are independent, so the grid is filled row-parallel: the result
     /// is identical to a sequential fill. The refresh interval bounds work
     /// frequency, not evaluation latency; timings are reported separately.
+    #[cfg(test)]
     fn evaluate(
         &mut self,
         camera_body_m: DVec3,
         lights: &[CelestialLight],
     ) -> Option<EnvironmentRadiance> {
+        self.evaluate_at(camera_body_m, lights, 0.0)
+    }
+
+    fn evaluate_at(
+        &self,
+        camera_body_m: DVec3,
+        lights: &[CelestialLight],
+        sim_time_s: f64,
+    ) -> Option<EnvironmentRadiance> {
         use rayon::prelude::*;
         let budget = self.budget?;
         let mut optics = self.optics.clone();
         for channel in 0..3 {
-            optics.rayleigh.beta_rgb[channel] *= f64::from(budget.density_scale);
-            optics.mie.beta_rgb[channel] *= f64::from(budget.density_scale);
+            let scale = if budget.scattering {
+                f64::from(budget.density_scale)
+            } else {
+                0.0
+            };
+            optics.rayleigh.beta_rgb[channel] *= scale;
+            optics.mie.beta_rgb[channel] *= scale;
         }
         if !budget.airglow {
             optics.emission.airglow_rgb = [0.0; 3];
@@ -230,12 +284,61 @@ impl EnvironmentField {
                     *texel = sky.radiance_rgb.map(|c| (c * LUX_PER_W_M2) as f32);
                 }
             });
-        EnvironmentRadiance::with_up(
-            budget.width,
-            budget.height,
-            texels,
-            camera_body_m.normalize_or_zero().as_vec3().to_array(),
-        )
+        let up = camera_body_m.normalize_or_zero().as_vec3().to_array();
+        let base = EnvironmentRadiance::with_up(budget.width, budget.height, texels, up)?;
+        if budget.aurora_steps == 0 {
+            return Some(base);
+        }
+        // Same analytic model as shared CPU queries, not a second painted
+        // shell. The magnetic axis is the legacy Thessa aligned-dipole proxy
+        // expressed in native body axes (+Y); no MHD claim is made.
+        let gain = f64::from(budget.aurora_intensity) * 1e-6;
+        optics.emission.aurora = Some(thessa_atmosphere::AuroraParams {
+            magnetic_pole: DVec3::Y,
+            oval_latitude_rad: 67.0f64.to_radians(),
+            oval_width_rad: 3.0f64.to_radians(),
+            altitude_min_m: 90_000.0,
+            altitude_max_m: 250_000.0,
+            activity: 0.8,
+            color_bottom_rgb: [0.2, 1.0, 0.35].map(|c| c * gain),
+            color_top_rgb: [0.9, 0.25, 0.3].map(|c| c * gain),
+        });
+        let (width, height) = if budget.aurora_steps <= 8 {
+            (64, 32)
+        } else {
+            (128, 64)
+        };
+        let time = if budget.aurora_animate {
+            sim_time_s
+        } else {
+            0.0
+        };
+        let mut output = vec![[0.0; 3]; width * height];
+        output
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(row, pixels)| {
+                let elevation = ((row as f64 + 0.5) / height as f64 - 0.5) * std::f64::consts::PI;
+                for (column, pixel) in pixels.iter_mut().enumerate() {
+                    let azimuth =
+                        ((column as f64 + 0.5) / width as f64 - 0.5) * std::f64::consts::TAU;
+                    let direction = DVec3::new(
+                        elevation.cos() * azimuth.cos(),
+                        elevation.sin(),
+                        elevation.cos() * azimuth.sin(),
+                    );
+                    let base = base.sample(direction.as_vec3().to_array());
+                    let emission = thessa_atmosphere::aurora_radiance(
+                        &optics,
+                        camera_body_m,
+                        direction,
+                        time,
+                        budget.aurora_steps,
+                    );
+                    *pixel = std::array::from_fn(|c| base[c] + (emission[c] * LUX_PER_W_M2) as f32);
+                }
+            });
+        EnvironmentRadiance::with_up(width as u32, height as u32, output, up)
     }
 
     /// Revision changes on evaluation or budget invalidation, including disable.
@@ -260,6 +363,7 @@ impl EnvironmentField {
             ambient_lux: grid.map_or([0.0; 3], EnvironmentRadiance::ambient_lux),
             storage_bytes: grid.map_or(0, EnvironmentRadiance::storage_bytes),
             last_evaluation_ms: self.last_evaluation_ms,
+            aurora_steps: budget.map_or(0, |b| b.aurora_steps),
         }
     }
 }
@@ -321,6 +425,220 @@ fn lights_changed(before: &[CelestialLight], after: &[CelestialLight]) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "benchmark: native target-size aurora grids, latency and representation error"]
+    fn aurora_grid_cost_and_error() {
+        let lat = 67.0f64.to_radians();
+        let camera = DVec3::new(lat.cos(), lat.sin(), 0.0) * 3_201_000.0;
+        let mut settings = settings(Quality::Low, 8);
+        settings.atmosphere_enabled = false;
+        settings.aurora_shell = true;
+        settings.aurora_intensity = 1.0;
+        settings.aurora_animate = false;
+        let mut field =
+            EnvironmentField::new(3_200_000.0, 5.02e13, Some(thessa_atmosphere())).unwrap();
+        let mut reference_budget = EnvironmentBudget::resolve(&settings).unwrap();
+        reference_budget.aurora_steps = 256;
+        field.set_budget(Some(reference_budget));
+        let reference = field.evaluate_at(camera, &[], 0.0).unwrap();
+        for quality in [
+            thessa_graphics::AuroraQuality::Low,
+            thessa_graphics::AuroraQuality::High,
+        ] {
+            settings.aurora_quality = quality;
+            field.set_budget(EnvironmentBudget::resolve(&settings));
+            let grid = field.evaluate_at(camera, &[], 0.0).unwrap();
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let start = std::time::Instant::now();
+                std::hint::black_box(field.evaluate_at(camera, &[], 0.0).unwrap());
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            let mut max_error = 0.0f32;
+            for index in 0..256 {
+                let y = (index as f64 + 0.5) / 128.0 - 1.0;
+                let phi = index as f64 * 2.399963229728653;
+                let r = (1.0 - y * y).sqrt();
+                let direction = [(r * phi.cos()) as f32, y as f32, (r * phi.sin()) as f32];
+                for (a, b) in grid
+                    .sample(direction)
+                    .into_iter()
+                    .zip(reference.sample(direction))
+                {
+                    max_error = max_error.max((a - b).abs());
+                }
+            }
+            println!(
+                "aurora_grid quality={quality:?} grid={}x{} p50_ms={:.6} p95_ms={:.6} max_abs_error_lux_sr_vs_256_step_128x64={max_error}",
+                grid.width(),
+                grid.height(),
+                samples[3],
+                samples[6]
+            );
+            assert!(max_error.is_finite());
+        }
+    }
+
+    #[test]
+    #[ignore = "hardware: actual native auroral publication into the shared sky background"]
+    fn aurora_field_reaches_native_sky_and_disabled_restores_fallback() {
+        use thessa_rcbt_core::{
+            HeightPage,
+            tile_anchor::{TileAnchor, TileKey},
+        };
+        use thessa_render_wgpu::{
+            Backend,
+            environment::EnvironmentBinding,
+            terrain::{OffscreenTarget, TerrainPatch, TerrainRenderer},
+            view::ViewParams,
+        };
+        let backend = Backend::bring_up().unwrap();
+        let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+        let mut terrain = TerrainRenderer::new(
+            &backend,
+            &[TerrainPatch {
+                anchor: TileAnchor::new(TileKey::new(0, 0, 0, 0).unwrap(), 3_200_000.0).unwrap(),
+                page: &page,
+            }],
+            OffscreenTarget::FORMAT,
+        )
+        .unwrap();
+        terrain.publish_partition(&backend, &[]).unwrap();
+        let target = OffscreenTarget::new(&backend, 129, 65).unwrap();
+        let lat = 67.0f64.to_radians();
+        let up = DVec3::new(lat.cos(), lat.sin(), 0.0);
+        let camera = up * 3_201_000.0;
+        let view = ViewParams {
+            world_from_view: glam::dcamera::rh::view::look_at_mat4(camera, camera + up, DVec3::Z)
+                .inverse(),
+            world_position_m: camera,
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                1.0,
+                129.0 / 65.0,
+                0.1,
+                1e7,
+            ),
+            exposure: 0.1,
+        };
+        terrain.update_view(&backend, &view).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        let mut frames = Vec::new();
+        for mode in [
+            None,
+            Some(thessa_graphics::AuroraQuality::Low),
+            Some(thessa_graphics::AuroraQuality::High),
+            None,
+        ] {
+            let mut settings = settings(Quality::Low, 8);
+            settings.atmosphere_enabled = false;
+            settings.aurora_shell = mode.is_some();
+            settings.aurora_quality = mode.unwrap_or_default();
+            settings.aurora_intensity = 1.0;
+            let mut field =
+                EnvironmentField::new(3_200_000.0, 5.02e13, Some(thessa_atmosphere())).unwrap();
+            field.set_budget(EnvironmentBudget::resolve(&settings));
+            let start = std::time::Instant::now();
+            field.update_at(camera, &[], 0.0);
+            println!(
+                "aurora_native mode={mode:?} evaluation_ms={:.6} stats={:?}",
+                start.elapsed().as_secs_f64() * 1000.0,
+                field.stats()
+            );
+            binding.update(&backend, field.grid());
+            terrain.share_environment(&backend, Some(&binding));
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            terrain.encode_scene(&mut encoder, &target.color, &target.depth, None);
+            backend.queue.submit([encoder.finish()]);
+            frames.push(target.read_rgba8(&backend).unwrap());
+            assert_eq!(terrain.sky_enabled(), mode.is_some());
+        }
+        assert_eq!(
+            frames[0], frames[3],
+            "disabled release must restore exact fallback"
+        );
+        for pixels in &frames[1..3] {
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| p[1] > p[0] + 5 && p[1] > p[2] + 5),
+                "exercise visible green emission, not an empty sky"
+            );
+            assert_ne!(pixels, &frames[0]);
+        }
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp/sky-layers");
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, pixels) in ["off", "low", "high", "off-again"].into_iter().zip(frames) {
+            let file = std::fs::File::create(directory.join(format!("aurora-{name}.png"))).unwrap();
+            let mut encoder = png::Encoder::new(file, 129, 65);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&pixels)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn aurora_is_independent_cadenced_and_disabled_without_residency() {
+        let mut settings = settings(Quality::Low, 8);
+        settings.atmosphere_enabled = false;
+        settings.airglow = false;
+        assert!(EnvironmentBudget::resolve(&settings).is_none());
+        settings.aurora_shell = true;
+        settings.aurora_intensity = 1.0;
+        settings.aurora_animate = false;
+        let budget = EnvironmentBudget::resolve(&settings).unwrap();
+        assert_eq!(budget.aurora_steps, 8);
+        let mut field =
+            EnvironmentField::new(3_200_000.0, 5.02e13, Some(thessa_atmosphere())).unwrap();
+        let lat = 67.0f64.to_radians();
+        let camera = DVec3::new(lat.cos(), lat.sin(), 0.0) * 3_201_000.0;
+        field.set_budget(Some(budget));
+        let grid = field.update_at(camera, &[], 0.0).unwrap();
+        assert_eq!((grid.width(), grid.height()), (64, 32));
+        assert!(
+            grid.texels().iter().flatten().any(|&c| c > 0.1),
+            "must exercise real emission, not roundoff"
+        );
+        let evaluated = field.stats().evaluated;
+        for _ in 0..16 {
+            field.update_at(camera, &[], 10.0);
+        }
+        assert_eq!(
+            field.stats().evaluated,
+            evaluated,
+            "animate=false ignores time"
+        );
+        let mut animated = budget;
+        animated.aurora_animate = true;
+        field.set_budget(Some(animated));
+        field.update_at(camera, &[], 10.0);
+        let evaluated = field.stats().evaluated;
+        for _ in 0..16 {
+            field.update_at(camera, &[], 11.0);
+        }
+        assert_eq!(
+            field.stats().evaluated,
+            evaluated + 1,
+            "time change wakes once, paused state reuses"
+        );
+        field.set_budget(None);
+        assert!(field.update_at(camera, &[], 20.0).is_none());
+        assert_eq!(field.stats().storage_bytes, 0);
+        assert_eq!(field.stats().aurora_steps, 0);
+        settings.aurora_quality = thessa_graphics::AuroraQuality::High;
+        assert_eq!(
+            EnvironmentBudget::resolve(&settings).unwrap().aurora_steps,
+            32
+        );
+    }
+
     fn settings(quality: Quality, steps: u32) -> ResolvedGraphicsSettings {
         ResolvedGraphicsSettings {
             atmosphere_enabled: true,
@@ -329,6 +647,8 @@ mod tests {
             atmosphere_density_scale: 1.0,
             multi_star: true,
             airglow: false,
+            aurora_shell: false,
+            aurora_intensity: 0.0,
             ..Default::default()
         }
     }

@@ -3598,6 +3598,22 @@ scene raster and UI; v3 metadata records format/bytes/actual application, not
 just requested settings. This is SDR presentation, **not** HDR-monitor output,
 AgX/ACES/Bevy parity, automatic exposure, bloom or temporal AA/upscaling.
 
+### Corrective topology/cache and sky audit follow-up (2026-10-18)
+
+[Doc 64](64_NATIVE_OPTIMIZATION_REVIEW.md) retains the rejected intermediate
+optimization's counterexamples and unaccepted timings. The corrective doc 63
+follow-up uses completed GPU full-rank zero-request/zero-commit feedback instead
+of a fixed convergence counter, restores the current camera origin for terrain,
+ocean and mesh/shadow consumers, and invalidates on actual shadow matrices and
+caster bytes. Moving views conservatively emit new geometry and rebuild RT;
+there is no new moving-camera speedup claim or dirty-chunk/refit implementation.
+
+[Doc 65](65_NATIVE_SKY_AUDIT.md) is the pre-implementation audit for richer native
+sky, background stars, clouds and aurora. Shared optics/cloud transport/emission
+already exist, but the Bevy star spheres/material shells are adapters/proxies,
+not completed portable native effects. The current coarse radiance-grid slice
+does not close high-frequency sky, cloud occlusion or auroral-curtain acceptance.
+
 ## 15. FastRT
 
 FastRT is not a path tracer and not simply a "hybrid renderer".

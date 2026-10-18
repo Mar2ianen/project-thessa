@@ -19,7 +19,7 @@ pub use clouds::{
     vertical_profile,
 };
 pub use eclipse::eclipse_visibility;
-pub use emission::aurora_emission;
+pub use emission::{aurora_emission, aurora_radiance};
 pub use lights::{CelestialLight, angular_radius, blackbody_rgb, irradiance_at_distance};
 pub use optics::{
     AbsorptionLayer, AtmosphereOptics, AuroraParams, EmissionParams, OpticsError, ScatteringLayer,

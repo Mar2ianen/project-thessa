@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-18",
+  "baseline": "e386ef02d47bc5abf41acccdd15f0dbfdb027ed2",
+  "scope": "Corrective topology/shadow/origin publication plus audited first native auroral environment consumer. Not complete native sky migration.",
+  "hardware": "Radeon 880M / Vulkan / RADV Mesa 26.2.4-arch1.1",
+  "evidence_directory": "target/test-tmp/native-correctness-final",
+  "source_manifest": "target/test-tmp/native-correctness-final/source.json",
+  "checks": {
+    "fmt_all_check": "passed",
+    "clippy_workspace_all_targets_all_features_deny_warnings": "passed; upstream libcbt C warnings excluded",
+    "clippy_native_no_default_features": "passed",
+    "workspace_lib_bins": {"passed": 1887, "failed": 0},
+    "workspace_integration": {"passed": 92, "failed": 0},
+    "bevy_gpu_render_ignored": {"passed": 24, "failed": 0},
+    "render_wgpu_release_ignored": {"passed": 30, "failed": 0},
+    "native_release_ignored_and_doc_tests": {"passed": 22, "failed": 0},
+    "architecture": "passed",
+    "agent_qa": "5 passed with python3 -m unittest discover -s tools/agent-qa/tests -v; initial runner used the parent directory and found zero tests (exit 5), not counted as a pass"
+  },
+  "correctness": {
+    "lod_sleep": "completed full-rank zero-request/zero-commit feedback; unchanged-view sleep asserted",
+    "invalidations": "resize, rotation and camera origin wake; page/material/partition/ocean generations invalidate stale feedback",
+    "mesh_shadow_shift_1m": "cached redraw equals forced reference; changed depth texels 0",
+    "page_envelopes": "CPU outward-rounding/hidden-descendant/validation tests and GPU local/global/face-seam/missing/mixed-page admission oracle passed",
+    "aurora": "explicit datum radius, exact out-of-layer zeros, magnetic basis, both shell segments and planet clipping; 64-step vacuum column within 0.02% of independent 4096-step Simpson reference",
+    "sky_dome": "resolved false suppresses background consumer while shared indirect publication remains enabled"
+  },
+  "aurora_target_size_cpu_diagnostic": {
+    "scenario": "Thessa radius 3200000m, magnetic latitude 67deg, altitude 1000m, emission only, paused simulation time, 7 warm evaluations",
+    "low": {"grid": [64,32], "steps": 8, "p50_ms": 3.916011, "p95_ms": 5.144549, "max_abs_error_lux_sr_on_256_directions_vs_256_step_128x64": 2.0384812},
+    "high": {"grid": [128,64], "steps": 32, "p50_ms": 73.650410, "p95_ms": 97.851581, "max_abs_error_lux_sr_on_256_directions_vs_256_step_128x64": 0.0034828186},
+    "limitation": "High producer latency is an explicit performance gap, not accepted frame-budget performance. These are CPU publication costs, not GPU sky time or game FPS."
+  },
+  "captures": "apps/terrain-native/target/test-tmp/sky-layers/aurora-{off,low,high,off-again}.png; deterministic 129x65 emission-only native GPU fixture; independent subjective preference not evaluated",
+  "remaining": ["native background stars", "native depth-aware clouds and shared cloud shadows/reflections", "depth-aware orbital aurora composition", "high-frequency curtains and per-body magnetic state", "RT emissive-light proxies", "High CPU producer optimization", "Metal/WebGPU execution", "independent visual acceptance"],
+  "remote_ci": "not run or claimed"
+}

@@ -552,6 +552,15 @@ aurora shells, gas-giant bands, and the engine plume are consumed by the
 renderer (not reserved). Unknown keys are ignored by
 older builds; they are not a second hidden settings system.
 
+Native migration follow-up (2026-10-18): [doc 65](65_NATIVE_SKY_AUDIT.md) audits
+the existing Bevy/shared producers before reuse. Native auroral sky emission now
+uses the corrected shared altitude-based model in the common environment field,
+with explicit Low/High budgets and simulation-time refresh. Scattering, airglow
+and aurora are independently gated; disabling all three releases that grid.
+`atmosphere.sky_dome=false` suppresses the background draw, not indirect sampling.
+This does not close native stars/clouds, depth-aware aurora over foreground
+orbital terrain, RT-light proxies or the wider visual/performance acceptance.
+
 The native migration host (doc 39) additionally consumes resolved
 `renderer.fleet_meshes` (default true) and `renderer.fleet_quality`
 (`low` / `medium` / `high`). The retained opaque body-shell effect needs no

@@ -5,7 +5,24 @@ use crate::{
     conforming_surface::{ConformingSurface, HeightSurfaceSource},
     view::ViewUniformBlock,
 };
+use std::{
+    cell::Cell,
+    sync::{Arc, Mutex},
+};
 use thessa_rcbt_wgpu::sphere::SphereGpu;
+
+#[derive(Clone, Copy, PartialEq)]
+struct ViewPolicy {
+    clip: [f32; 16],
+    camera: [f64; 3],
+    extent: [u32; 2],
+    extra_height_m: f32,
+}
+#[derive(Default)]
+struct Completion {
+    pending: bool,
+    settled_generation: Option<u64>,
+}
 
 pub(crate) struct TerrainTopology {
     pub gpu: SphereGpu,
@@ -14,9 +31,13 @@ pub(crate) struct TerrainTopology {
     classify: wgpu::ComputePipeline,
     bind: wgpu::BindGroup,
     policy: wgpu::Buffer,
+    height_bounds: wgpu::Buffer,
     waves: u32,
     split: f32,
-    view_ready: std::cell::Cell<bool>,
+    view: Cell<Option<ViewPolicy>>,
+    generation: Cell<u64>,
+    completion: Arc<Mutex<Completion>>,
+    readback: wgpu::Buffer,
 }
 impl TerrainTopology {
     pub fn new(
@@ -70,7 +91,7 @@ impl TerrainTopology {
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("canonical-topology-classification"),
                 layout: &classify.get_bind_group_layout(0),
-                entries: &[&surface.vertices, &gpu.areas, &policy]
+                entries: &[&surface.vertices, &gpu.areas, &policy, &height.bounds]
                     .into_iter()
                     .enumerate()
                     .map(|(binding, b)| wgpu::BindGroupEntry {
@@ -98,10 +119,27 @@ impl TerrainTopology {
             classify,
             bind,
             policy,
+            height_bounds: height.bounds.clone(),
             waves: config.waves,
             split: config.split_area_px,
-            view_ready: std::cell::Cell::new(false),
+            view: Cell::new(None),
+            generation: Cell::new(1),
+            completion: Arc::default(),
+            readback: backend.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("topology-quiescence-feedback"),
+                size: 16,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
         })
+    }
+    pub fn mark_dirty(&self) {
+        self.generation.set(
+            self.generation
+                .get()
+                .checked_add(1)
+                .expect("topology generation exhausted"),
+        );
     }
     pub fn update_view(
         &self,
@@ -116,7 +154,17 @@ impl TerrainTopology {
                 "invalid conforming viewport/height bound".into(),
             ));
         }
+        let view = ViewPolicy {
+            clip: block.clip_from_world.to_cols_array(),
+            camera,
+            extent,
+            extra_height_m: height_bound_m,
+        };
+        if self.view.get() == Some(view) {
+            return Ok(());
+        }
         self.surface.update_camera(backend, camera)?;
+        self.mark_dirty();
         let data = block
             .clip_from_world
             .to_cols_array()
@@ -130,11 +178,15 @@ impl TerrainTopology {
             .flat_map(f32::to_le_bytes)
             .collect::<Vec<_>>();
         backend.queue.write_buffer(&self.policy, 0, &data);
-        self.view_ready.set(true);
+        self.view.set(Some(view));
         Ok(())
     }
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        if !self.view_ready.get() {
+        if self.view.get().is_none() {
+            return;
+        }
+        let generation = self.generation.get();
+        if self.completion.lock().unwrap().settled_generation == Some(generation) {
             return;
         }
         for _ in 0..self.waves {
@@ -145,6 +197,27 @@ impl TerrainTopology {
             self.gpu.encode_batch_publish(encoder);
         }
         self.surface.encode(encoder);
+        // No waits and no geometry readback. One bounded 16-byte completion
+        // record, mapped only AFTER submission. Stale generations cannot sleep
+        // a newer view/page/ocean publication; failed mapping fails open.
+        let mut completion = self.completion.lock().unwrap();
+        if !completion.pending {
+            completion.pending = true;
+            encoder.copy_buffer_to_buffer(&self.gpu.state, 0, &self.readback, 0, 16);
+            let buffer = self.readback.clone();
+            let state = self.completion.clone();
+            encoder.map_buffer_on_submit(&self.readback, wgpu::MapMode::Read, .., move |result| {
+                let settled = result.is_ok()
+                    && buffer.get_mapped_range(..).is_ok_and(|data| {
+                        let words = data.as_chunks::<4>().0;
+                        u32::from_le_bytes(words[1]) == 0 && u32::from_le_bytes(words[2]) == 0
+                    });
+                buffer.unmap();
+                let mut state = state.lock().unwrap();
+                state.pending = false;
+                state.settled_generation = settled.then_some(generation);
+            });
+        }
     }
     fn encode_classification(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -153,13 +226,146 @@ impl TerrainTopology {
         pass.dispatch_workgroups(self.surface.slot_count().div_ceil(64), 1, 1);
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.gpu.storage_bytes() + self.surface.storage_bytes() + self.policy.size()
+        self.gpu.storage_bytes()
+            + self.surface.storage_bytes()
+            + self.policy.size()
+            + self.height_bounds.size()
+            + self.readback.size()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "hardware: page-local envelope admission, hidden descendants and conservative fallback"]
+    fn classifier_selects_conservative_page_envelopes() {
+        use wgpu::util::DeviceExt;
+        let backend = Backend::bring_up().unwrap();
+        let device = &backend.device;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(include_str!("terrain_topology.wgsl").into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &module,
+            entry_point: Some("classify"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        // Parent slot 0 has flat corner samples but a hidden tall child in slot
+        // 1. Slot 2 is an unrelated face. Seam/mixed/missing corners stay global.
+        let cases = [
+            ([0, 0, 0], [0, 0, 0]),
+            ([2, 2, 2], [1, 1, 1]),
+            ([0, 2, 0], [0, 0, 0]),
+            ([2, 2, 2], [1, 0, 1]),
+            ([u32::MAX; 3], [1, 1, 1]),
+            ([1, 1, 1], [0, 0, 0]),
+        ];
+        let mut vertices = Vec::new();
+        for (slots, faces) in cases {
+            for (index, position) in [
+                [0.0f32, 0.0, 0.0, 0.0],
+                [0.5, 0.0, 0.0, 0.0],
+                [0.0, 0.5, 0.0, 0.0],
+            ]
+            .iter()
+            .enumerate()
+            {
+                vertices.extend(
+                    position
+                        .iter()
+                        .chain([0.0, 0.0, 1.0, faces[index] as f32].iter())
+                        .flat_map(|v| v.to_le_bytes()),
+                );
+                vertices.extend(
+                    [0, 0, slots[index], 0]
+                        .into_iter()
+                        .flat_map(u32::to_le_bytes),
+                );
+            }
+        }
+        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &vertices,
+            usage: storage,
+        });
+        let output = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 24,
+            usage: storage | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let policy = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &glam::Mat4::IDENTITY
+                .to_cols_array()
+                .into_iter()
+                .chain([100.0, 100.0, 2.0, 256.0])
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bounds = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: storage,
+            mapped_at_creation: false,
+        });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[&input, &output, &policy, &bounds]
+                .into_iter()
+                .enumerate()
+                .map(|(binding, b)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 24,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        for peak in [100.0000001, 20.0, 200.0] {
+            let h = thessa_rcbt_core::conforming_surface::resident_height_bounds(
+                &[8, 32, 9],
+                &[Some((0.0, 0.0)), Some((0.0, peak)), Some((-5.0, 4.0))],
+            )
+            .unwrap();
+            backend.queue.write_buffer(
+                &bounds,
+                0,
+                &h.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
+            );
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 24);
+            backend.queue.submit([encoder.finish()]);
+            let data = crate::terrain::map_buffer(&backend, &readback).unwrap();
+            for (index, bytes) in data.as_chunks::<4>().0.iter().enumerate() {
+                let height = if index == 1 { 5.0 } else { f64::from(h[0]) };
+                let expected = 312.5 * (1.0 + 2.0 * (height + 2.0) / 0.5f64.hypot(0.5)).powi(2);
+                let measured = f64::from(f32::from_le_bytes(*bytes));
+                assert!(
+                    (measured - expected).abs() < expected * 1e-6,
+                    "case {index}: {measured} vs {expected}"
+                );
+            }
+        }
+    }
     #[test]
     fn classifier_is_portable() {
         let s = include_str!("terrain_topology.wgsl");

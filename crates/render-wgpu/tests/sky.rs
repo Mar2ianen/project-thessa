@@ -88,6 +88,42 @@ fn srgb(value: f32) -> u8 {
 }
 
 #[test]
+fn sky_dome_off_keeps_shared_indirect_field_without_a_background_consumer() {
+    let backend = Backend::bring_up().unwrap();
+    let mut requested = thessa_graphics::RequestedGraphics::default();
+    requested.atmosphere.sky_dome = false;
+    let settings = backend.resolve_graphics(&requested);
+    let anchor = TileAnchor::new(TileKey::new(4, 0, 0, 0).unwrap(), 6_000_000.0).unwrap();
+    let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &[TerrainPatch {
+            anchor,
+            page: &page,
+        }],
+        OffscreenTarget::FORMAT,
+        thessa_render_wgpu::terrain::TerrainCapacity {
+            patches: 1,
+            height_grid_size: 2,
+            material_layers: 1,
+        },
+        Some(&settings),
+    )
+    .unwrap();
+    let mut binding = EnvironmentBinding::new(&backend.device);
+    binding.update(&backend, Some(&field(8, 4)));
+    terrain.share_environment(&backend, Some(&binding));
+    assert!(
+        binding.enabled(),
+        "indirect publication is independent of the sky draw"
+    );
+    assert!(
+        !terrain.sky_enabled(),
+        "resolved sky_dome=false must allocate no sky consumer"
+    );
+}
+
+#[test]
 fn sky_matches_cpu_directional_sampler_under_rotation_projection_and_large_translation() {
     let Some(backend) = backend() else {
         return;

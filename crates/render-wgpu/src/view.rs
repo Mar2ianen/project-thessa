@@ -43,10 +43,19 @@ impl ViewUniformBlock {
     /// yet, so `unjittered_clip_from_world` equals `clip_from_world` by
     /// construction (kept as a separate field for shader compatibility).
     pub fn new(params: &ViewParams) -> Option<Self> {
+        Self::new_relative(params, params.world_position_m)
+    }
+
+    /// Derive matrices relative to a geometry anchor. When `anchor_m == params.world_position_m`,
+    /// this produces identical results to [`Self::new`]. When `anchor_m` differs,
+    /// vertices in `(point - anchor_m)` coordinates are transformed into view/clip space
+    /// correctly without re-anchoring vertex buffers.
+    pub fn new_relative(params: &ViewParams, anchor_m: glam::DVec3) -> Option<Self> {
         if params.world_from_view.determinant().abs() <= f64::MIN_POSITIVE
             || !is_finite_mat4(&params.world_from_view)
             || !is_finite_mat4(&params.clip_from_view)
             || !params.world_position_m.is_finite()
+            || !anchor_m.is_finite()
             || !params.exposure.is_finite()
         {
             return None;
@@ -65,9 +74,8 @@ impl ViewUniformBlock {
         if origin_error > origin_tolerance || affine_error > 16.0 * f64::EPSILON {
             return None;
         }
-        // The supplied f64 camera position is authoritative. Do not retain
-        // tiny translation residue from an absolute look-at matrix inverse.
-        world_from_view.w_axis = glam::DVec4::W;
+        let offset = params.world_position_m - anchor_m;
+        world_from_view.w_axis = glam::dvec4(offset.x, offset.y, offset.z, 1.0);
         let view_from_world = world_from_view.inverse();
         let clip_from_view = params.clip_from_view;
         let clip_from_world = clip_from_view * view_from_world;
@@ -87,7 +95,7 @@ impl ViewUniformBlock {
             view_from_world: narrow(view_from_world)?,
             clip_from_view: narrow(clip_from_view)?,
             view_from_clip: narrow(view_from_clip)?,
-            world_position: Vec3::ZERO,
+            world_position: offset.as_vec3(),
             exposure: params.exposure,
         })
     }

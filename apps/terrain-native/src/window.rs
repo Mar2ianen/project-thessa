@@ -40,6 +40,8 @@ impl State {
         event_loop: &ActiveEventLoop,
         scene: &mut Scene,
         hud_enabled: bool,
+        width: u32,
+        height: u32,
     ) -> Result<Self, Box<dyn Error>> {
         #[cfg(not(feature = "hud"))]
         let _ = hud_enabled;
@@ -48,7 +50,7 @@ impl State {
                 Window::default_attributes()
                     .with_title("Thessa — owned terrain migration viewer")
                     .with_decorations(true)
-                    .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720)),
+                    .with_inner_size(winit::dpi::PhysicalSize::new(width, height)),
             )?,
         );
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
@@ -271,13 +273,14 @@ impl State {
         if let Some(mesh) = &mut self.mesh_renderer {
             mesh.encode_rt(&mut encoder);
         }
-        self.renderer.encode_scene(
+        self.renderer.encode_scene_ops(
             &mut encoder,
             self.display.scene_color(&color),
             &self.depth,
             self.mesh_renderer
                 .as_ref()
                 .and_then(crate::scene::SceneMeshes::opaque),
+            false,
         );
         self.display.encode(&mut encoder, &color);
         #[cfg(feature = "hud")]
@@ -338,6 +341,8 @@ struct App {
     frames: u32,
     started: Option<Instant>,
     hud_enabled: bool,
+    width: u32,
+    height: u32,
     right_held: bool,
     middle_held: bool,
     right_consumed: bool,
@@ -351,7 +356,13 @@ impl ApplicationHandler for App {
         if self.state.is_some() {
             return;
         }
-        match State::new(event_loop, &mut self.scene, self.hud_enabled) {
+        match State::new(
+            event_loop,
+            &mut self.scene,
+            self.hud_enabled,
+            self.width,
+            self.height,
+        ) {
             Ok(state) => {
                 self.state = Some(state);
                 // Selection history survives surface suspension in Scene; its
@@ -689,6 +700,8 @@ pub fn run(
     scene: Scene,
     frame_limit: Option<u32>,
     hud_enabled: bool,
+    width: u32,
+    height: u32,
 ) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let mut app = App {
@@ -699,6 +712,8 @@ pub fn run(
         frames: 0,
         started: None,
         hud_enabled,
+        width,
+        height,
         right_held: false,
         middle_held: false,
         right_consumed: false,

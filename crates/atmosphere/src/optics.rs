@@ -49,10 +49,13 @@ pub struct AuroraParams {
     pub magnetic_pole: DVec3,
     pub oval_latitude_rad: f64,
     pub oval_width_rad: f64,
+    /// Lower altitude above the datum; never an absolute planet-centric radius.
     pub altitude_min_m: f64,
+    /// Upper altitude above the datum. Emission is zero at/outside the faces.
     pub altitude_max_m: f64,
     /// 0..=1 activity amplitude.
     pub activity: f64,
+    /// Volumetric RGB emission amplitude (radiance units per metre).
     pub color_bottom_rgb: [f64; 3],
     pub color_top_rgb: [f64; 3],
 }

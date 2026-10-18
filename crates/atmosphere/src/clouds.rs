@@ -102,7 +102,12 @@ pub fn vertical_profile(h01: f64) -> f64 {
 // Validity guards must reject NaN: `!(x >= 0.0)` catches NaN while the lint's
 // suggested `x < 0.0` would accept it. The negated form is deliberate.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn sphere_interval(origin: DVec3, dir: DVec3, center: DVec3, radius: f64) -> Option<(f64, f64)> {
+pub(crate) fn sphere_interval(
+    origin: DVec3,
+    dir: DVec3,
+    center: DVec3,
+    radius: f64,
+) -> Option<(f64, f64)> {
     let oc = origin - center;
     let b = oc.dot(dir);
     let c = oc.length_squared() - radius * radius;

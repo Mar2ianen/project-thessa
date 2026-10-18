@@ -197,6 +197,10 @@ The checked-in vertical slice currently contains:
      planetary f32 coordinates, and reuses bounded deterministic CBT transactions.
      Per-tile error/convergence, temporal/equal-error acceptance and wider native
      client/effect migration remain incomplete; this is not full Bevy removal.
+     The [rejected optimization audit](docs/64_NATIVE_OPTIMIZATION_REVIEW.md)
+     now has corrective GPU quiescence/origin/cache regressions (doc 63), not
+     accepted speedup claims. [Sky migration audit](docs/65_NATIVE_SKY_AUDIT.md)
+     inventories existing sky, star, cloud and aurora producers before porting.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

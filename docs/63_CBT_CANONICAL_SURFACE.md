@@ -1,6 +1,28 @@
 # 63 — Canonical height/material surface from persistent bisectors
 
 **Status (2026-10-18): opt-in native production-frame consumer; acceptance incomplete.**
+The original verified selection snapshot is `e386ef0`.
+[Review 64](64_NATIVE_OPTIMIZATION_REVIEW.md) preserves the rejected intermediate
+optimization proposal. The corrective follow-up removes retained terrain origins
+and fixed-wave sleep. Geometry, ocean phases, mesh casters and shadow receivers
+again share the current f64 camera origin. A full-rank GPU transaction wave
+reports outstanding requests and commits; only completed zero/zero feedback may
+sleep the same generation. Rejections/exhaustion are not convergence. One bounded
+16-byte asynchronous readback fails open, without a per-frame wait; a new view
+matrix, position, extent, wave envelope, height/partition/material publication or
+ocean geometry sample wakes the work. Encoders must still be submitted in order;
+discarded encoders cannot certify quiescence. No geometric-error guarantee or
+unchanged-chunk RT optimization is implied.
+
+Page-local height envelopes include resident descendants and round outwards to
+f32. Mixed pages, seams and missing-page corners retain the global fallback;
+the optional wave envelope is added independently. The synthetic GPU classifier
+oracle checks local/global admission and updated hidden-descendant heights.
+The audit regression checks actual GPU quiescence, resize/rotation wakeup and
+cached/reference mesh-shadow equality after camera motion. Back-face culling is
+restricted to conforming primary geometry; callers may explicitly discard final
+scene depth when no downstream consumer reads it. The old performance percentages
+remain unaccepted; moving views conservatively re-emit/rebuild as before.
 Builds on [`61`](61_CBT_SPHERE_EXPERIMENT.md) (sphere topology) and
 [`62`](62_CBT_PARALLEL_TRANSACTIONS.md) (parallel transaction waves) from
 baseline `1ff4b3a`. This phase removes the last "pure sphere" qualifier from

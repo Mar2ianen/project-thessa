@@ -14,6 +14,7 @@ use wgpu::util::DeviceExt;
 /// clones retain resources but do not pin old page contents or revisions.
 #[derive(Debug, Clone)]
 pub struct HeightSurfaceSource {
+    pub(crate) bounds: wgpu::Buffer,
     directory: wgpu::Buffer,
     info: wgpu::Buffer,
     metadata: wgpu::Buffer,
@@ -27,9 +28,18 @@ impl HeightSurfaceSource {
         residuals: &wgpu::Buffer,
         radius_m: f64,
         ids: &[u64],
+        extents: &[Option<(f64, f64)>],
     ) -> Result<Self, BackendError> {
         let data = directory(ids)?;
+        let bounds = height_bounds(ids, extents)?;
         Ok(Self {
+            bounds: backend
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("canonical-height-envelopes"),
+                    contents: &bounds,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                }),
             info: backend
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -58,6 +68,20 @@ impl HeightSurfaceSource {
             .write_buffer(&self.info, 0, &directory_extent(ids).to_le_bytes());
         Ok(())
     }
+    pub(crate) fn publish_bounds(
+        &self,
+        backend: &Backend,
+        ids: &[u64],
+        extents: &[Option<(f64, f64)>],
+    ) {
+        let data = height_bounds(ids, extents).expect("validated canonical height publication");
+        backend.queue.write_buffer(&self.bounds, 0, &data);
+    }
+}
+fn height_bounds(ids: &[u64], extents: &[Option<(f64, f64)>]) -> Result<Vec<u8>, BackendError> {
+    thessa_rcbt_core::conforming_surface::resident_height_bounds(ids, extents)
+        .map(|bounds| bounds.into_iter().flat_map(f32::to_le_bytes).collect())
+        .ok_or_else(|| BackendError::Device("invalid canonical height envelopes".into()))
 }
 fn directory_extent(ids: &[u64]) -> u32 {
     ids.iter()

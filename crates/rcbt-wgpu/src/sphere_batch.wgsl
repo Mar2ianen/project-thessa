@@ -211,9 +211,11 @@ fn commit_serial() {
 @compute @workgroup_size(1)
 fn finish_transactions() {
     var committed = 0u;
+    var requested = 0u;
     for (var i = 0u; i < plans[1]; i++) {
         let base = plan_base(i);
         let status = plans[base + 5u];
+        if (status != 0u) { requested++; }
         if (status == 2u) { state.counters.w++; }
         if (status != 1u) { continue; }
         committed++;
@@ -227,6 +229,9 @@ fn finish_transactions() {
     }
     plans[2] = committed;
     plans[0] = (plans[0] + plans[1]) % rank_count(1u);
-    state.request = vec4(2u, committed, 0u, 0u);
+    // External-area mode scans ALL active ranks in disjoint subsets. Only a
+    // completed wave with no requests AND no commits certifies quiescence.
+    // Rejection/exhaustion/conflict is not convergence. Preserve other ABIs.
+    state.request = vec4(2u, committed, select(0u,requested,p.config.z==4u), 0u);
     state.draw = vec4(rank_count(1u) * 3u, 1u, 0u, 0u);
 }

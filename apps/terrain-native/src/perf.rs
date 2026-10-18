@@ -82,12 +82,15 @@ impl HeadlessPerf {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn write(
         &self,
         path: &std::path::Path,
         backend: &Backend,
         scene: &Scene,
         display: &thessa_render_wgpu::display::DisplayTransform,
+        width: u32,
+        height: u32,
         scenario: String,
     ) -> std::io::Result<()> {
         let mut meta = default_capture_metadata();
@@ -95,8 +98,8 @@ impl HeadlessPerf {
         meta.platform.gpu = Some(info.name);
         meta.platform.backend =
             format!("{:?}; {}; {}", info.backend, info.driver, info.driver_info);
-        meta.display.width = 1280;
-        meta.display.height = 720;
+        meta.display.width = width;
+        meta.display.height = height;
         meta.display.vsync = false;
         meta.graphics.preset = format!("{:?}", scene.requested.preset);
         let resolved = backend.resolve_graphics(&scene.requested);

@@ -1,0 +1,51 @@
+{
+  "status": "not accepted; reproduced correctness failures",
+  "date": "2026-10-18",
+  "verified_baseline": "e386ef02d47bc5abf41acccdd15f0dbfdb027ed2",
+  "reviewed_uncommitted_patch_sha256": "8502c5c13124fb7ae3d61a52a9c2b1a11a4b77c4c1d74692b4cbd761bb3d0ad7",
+  "snapshot": "target/test-tmp/optimization-review/snapshot.json",
+  "hardware": "AMD Radeon 880M Graphics; Vulkan; RADV Mesa 26.2.4-arch1.1",
+  "scope": "Supplied local optimization edits plus in-progress local page-height-envelope binding. The GPU counterexample uses zero-height pages and RT off; this is not a byte-identical original Gemini build or a performance test.",
+  "gpu_counterexamples": {
+    "test": "optimization_review_reproduces_lod_and_shadow_invalidations",
+    "exit_code": 101,
+    "log": "target/test-tmp/optimization-review/reproducer.log",
+    "log_sha256": "138ad543b43a7f939e2fc5bf7309b55dda196f5ef03a8256568877f1e149ee9f",
+    "settled_epoch": 9,
+    "viewport_transition": {"before": [257, 257], "after": [4096, 4096], "result_epoch": 9},
+    "orientation_transition": {"rotation_degrees": 180, "position_unchanged": true, "result_epoch": 9},
+    "shadow_transition": {"fixed_world_mesh": true, "camera_shift_m": 1, "cached_shadow_passes": 0, "forced_reference_changed_depth_texels": 510},
+    "older_production_consumer_test": "passed; does not cover the failing post-budget and camera-relative-caster cases"
+  },
+  "code_findings_not_gpu_verified": [
+    "Fixed convergence_budget exhaustion is not a GPU remaining-work/convergence certificate.",
+    "Primary conforming ocean positions relative to retained anchor A are sampled with camera residues from C, giving a C-A phase offset; RT hit positions independently use C."
+  ],
+  "capture_review": {
+    "directory": "target/test-tmp/native-topology/",
+    "frames_per_capture": 120,
+    "warmups_already_excluded": 30,
+    "quantile_definition": "sort all measured samples, index min(floor(N*p),N-1), seconds multiplied by 1000",
+    "pairs_have_different_prestream_seconds": [1, 3],
+    "all_build_commits": "unknown",
+    "reported_raster_13_7019_to_10_4597_ms": "frame 10, not capture medians",
+    "measured_raster_p50_before_after_ms": [15.848632598201753, 11.93615884962845],
+    "captures": [
+      {"label": "final-preview-2560-sweep", "wall_p50_ms": 18.6575, "wall_p95_ms": 40.1829, "wall_p99_ms": 43.3651, "surface_shadow_frames_over_1ms": 40, "sha256": "d5b69ea3d14ef3f8f85c0aa39fe1762e47db2bcb8e9dff80e9750e2bb7e8eb8f"},
+      {"label": "pass3-2560-sweep", "wall_p50_ms": 14.555862, "wall_p95_ms": 34.072791, "wall_p99_ms": 38.260919, "surface_shadow_frames_over_1ms": 39, "sha256": "6782df66dc7209240fcb6849868b3ffd5c914abaeaa72f34705d20c4dcfd0c65"},
+      {"label": "final-preview-720p-sweep", "wall_p50_ms": 6.666172, "wall_p95_ms": 30.948954, "wall_p99_ms": 33.569353, "surface_shadow_frames_over_1ms": 39, "sha256": "a10198899c9b29bf89da7a60ee4ea795d43678a6f4ce7d8278fdbedcbdc3d817"},
+      {"label": "pass3-720p-sweep", "wall_p50_ms": 5.078826, "wall_p95_ms": 26.175717, "wall_p99_ms": 31.649088, "surface_shadow_frames_over_1ms": 38, "sha256": "7a8effd1395f08fd8a4c4e6013d61407fac0f964d488c296b5af88e39d4d8012"},
+      {"label": "final-preview-2560-static", "wall_p50_ms": 14.482135, "wall_p95_ms": 15.86535, "wall_p99_ms": 17.499893, "sha256": "824288f914bcc197b92289f09a91610f1d9d8b48f4b64cf3764fa1f0a78869c7"},
+      {"label": "pass3-2560-static", "wall_p50_ms": 10.293576, "wall_p95_ms": 11.141865, "wall_p99_ms": 16.743996, "sha256": "e27da6a4e0dbf5f59af988a57cdb9bfc440555bc22b92b1ac13a9fce9ac0ed99"},
+      {"label": "final-preview-720p-static", "wall_p50_ms": 4.217121, "wall_p95_ms": 5.061614, "wall_p99_ms": 5.719369, "sha256": "92891149666bd73c05eb763c8aacc10157c7186e476b5ae99253b1f65615c74b"},
+      {"label": "pass3-720p-static", "wall_p50_ms": 3.364093, "wall_p95_ms": 3.894712, "wall_p99_ms": 4.210059, "sha256": "bde30d424a7b829338bc59f4a4d16a20255fc8039a087c413ae8f1dae940a1d5"}
+    ],
+    "limitations": "No matched fixed-resident A/B rerun or isolated culling-versus-discard benchmark performed. Supplied build/source provenance does not establish attribution to 1e86e72, which has no conforming topology module. These are serial offscreen timings, not sustained game FPS."
+  },
+  "image_review": {
+    "2560_sweep": {"mean_absolute_component_delta": 0.09938397216796875, "maximum_component_delta": 26, "changed_rgb_pixels": 817234},
+    "720p_sweep": {"mean_absolute_component_delta": 0.14761067708333334, "maximum_component_delta": 25, "changed_rgb_pixels": 234381},
+    "acceptance": "not established; small global means do not localize error or prove temporal/shadow correctness; no blind subjective review"
+  },
+  "remote_ci": "not run or claimed"
+}

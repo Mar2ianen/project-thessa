@@ -187,7 +187,7 @@ mod tests {
 
 /// A rigid source instance. Translation and camera share one f64 frame;
 /// scale is a positive uniform asset-to-SI conversion, never a force input.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshInstance {
     pub position_m: DVec3,
     pub rotation: DQuat,

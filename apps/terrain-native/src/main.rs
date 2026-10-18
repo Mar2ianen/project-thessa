@@ -35,8 +35,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut throttle_preset = None;
     let mut engine_on = false;
     let mut flight_step = None;
+    let mut width = 1280u32;
+    let mut height = 720u32;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--width" => {
+                width = args.next().ok_or("--width requires pixels")?.parse()?;
+            }
+            "--height" => {
+                height = args.next().ok_or("--height requires pixels")?.parse()?;
+            }
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
             "--perf-capture" => {
                 perf_capture = Some(std::path::PathBuf::from(
@@ -270,7 +278,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut perf = perf_capture
             .as_ref()
             .map(|_| perf::HeadlessPerf::new(&backend));
-        let target = OffscreenTarget::new(&backend, 1280, 720)?;
+        let target = OffscreenTarget::new(&backend, width, height)?;
         let resolved = backend.resolve_graphics(&scene.requested);
         if scene.requested.renderer.hdr && !resolved.hdr {
             eprintln!("native HDR target unsupported: using direct LDR fallback");
@@ -279,8 +287,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             &backend,
             &resolved,
             OffscreenTarget::FORMAT,
-            1280,
-            720,
+            width,
+            height,
         )?;
         let mut renderer = scene.renderer(&backend, display.scene_format())?;
         let mut mesh_renderer =
@@ -304,8 +312,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             scene.tick(
                 &backend,
                 &mut renderer,
-                1280,
-                720,
+                width,
+                height,
                 exposure,
                 stream_started.elapsed().as_secs_f64(),
             )?;
@@ -356,7 +364,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(1280.0, 720.0),
+                            egui::vec2(width as f32, height as f32),
                         )),
                         time: Some(stream_started.elapsed().as_secs_f64()),
                         ..Default::default()
@@ -369,25 +377,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             let update = scene.tick(
                 &backend,
                 &mut renderer,
-                1280,
-                720,
+                width,
+                height,
                 exposure,
                 stream_started.elapsed().as_secs_f64(),
             )?;
             let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
             renderer.update_view_for_extent(
                 &backend,
-                &scene.view(1280, 720, exposure),
-                [1280, 720],
+                &scene.view(width, height, exposure),
+                [width, height],
             )?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
             renderer.update_shadows(
                 &backend,
-                scene.view(1280, 720, exposure).world_position_m,
+                scene.view(width, height, exposure).world_position_m,
                 &scene.lighting(),
             )?;
             if let Some(mesh) = &mut mesh_renderer {
-                scene.update_mesh(&backend, mesh, 1280, 720, exposure)?;
+                scene.update_mesh(&backend, mesh, width, height, exposure)?;
                 mesh.sync_rt_terrain(&backend, &renderer)?;
             }
             let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -408,11 +416,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 2);
             }
-            renderer.encode_scene(
+            renderer.encode_scene_ops(
                 &mut encoder,
                 display.scene_color(&target.color),
                 &target.depth,
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
+                false,
             );
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 3);
@@ -423,7 +432,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             #[cfg(feature = "hud")]
             let commands = if let (Some(hud), Some(output)) = (&mut hud, hud_output) {
-                hud.encode(&backend, &mut encoder, &target.color, output, [1280, 720])
+                hud.encode(
+                    &backend,
+                    &mut encoder,
+                    &target.color,
+                    output,
+                    [width, height],
+                )
             } else {
                 Vec::new()
             };
@@ -464,7 +479,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         timings.sort_by(f64::total_cmp);
         if let (Some(perf), Some(path)) = (&perf, &perf_capture) {
-            perf.write(path,&backend,&scene,&display,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
+            perf.write(path,&backend,&scene,&display,width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
         }
         streaming_timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];
@@ -472,8 +487,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pixels = target.read_rgba8(&backend)?;
         let mut png = png::Encoder::new(
             std::io::BufWriter::new(std::fs::File::create(&path)?),
-            1280,
-            720,
+            width,
+            height,
         );
         png.set_color(png::ColorType::Rgba);
         png.set_depth(png::BitDepth::Eight);
@@ -488,7 +503,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             1000.0 / median
         );
         println!(
-            "Live canonical stream, 1280x720 offscreen: selection/poll/publication + camera upload + classify + raster + optional HUD + GPU completion; excludes setup/{prestream_seconds}s pre-stream/30 warmup frames/readback; NOT game FPS. sweep={sweep} hud={hud_enabled}"
+            "Live canonical stream, {width}x{height} offscreen: selection/poll/publication + camera upload + classify + raster + optional HUD + GPU completion; excludes setup/{prestream_seconds}s pre-stream/30 warmup frames/readback; NOT game FPS. sweep={sweep} hud={hud_enabled}"
         );
         println!(
             "terrain_topology={} topology_bytes={} topology_revision={} fallback={}; conforming drawn_triangles includes zero-area free/virtual allocation slots, not live-leaf count",
@@ -593,7 +608,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         match scene.environment_stats() {
             Some(field) if field.enabled => println!(
-                "environment=enabled grid={}x{} view_steps={} sun_steps={} ambient_lux=[{:.2},{:.2},{:.2}] evaluations={} skipped={} storage_bytes={} last_evaluation_ms={:.2}; shared single-scattering sky, sampled by background, raster and RT reflection terms",
+                "environment=enabled grid={}x{} view_steps={} sun_steps={} ambient_lux=[{:.2},{:.2},{:.2}] evaluations={} skipped={} storage_bytes={} last_evaluation_ms={:.2} aurora_steps={}; shared sky/emission field, sampled by background, raster and RT reflection terms",
                 field.width,
                 field.height,
                 field.view_steps,
@@ -604,7 +619,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 field.evaluated,
                 field.skipped,
                 field.storage_bytes,
-                field.last_evaluation_ms
+                field.last_evaluation_ms,
+                field.aurora_steps
             ),
             Some(_) => println!(
                 "environment=disabled; isotropic ambient_lux/PI reflection term, no sky integration"
@@ -624,7 +640,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
-    window::run(scene, frame_limit, hud_enabled)
+    window::run(scene, frame_limit, hud_enabled, width, height)
 }
 
 /// Same manual-camera convention as the current Bevy PBR host (EV100).

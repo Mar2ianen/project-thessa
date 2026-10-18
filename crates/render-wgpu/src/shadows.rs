@@ -353,14 +353,17 @@ impl ShadowAtlas {
         }
         let mut matrices = [[0.0f32; 16]; 12];
         let mut active = [false; 3];
-        for sun in 0..3 {
-            active[sun] = lights.colors_lux[sun][..3].iter().any(|&c| c > 0.0);
-            if !active[sun] {
+        for (sun, is_active) in active.iter_mut().enumerate() {
+            *is_active = lights.colors_lux[sun][..3].iter().any(|&c| c > 0.0);
+        }
+        for (sun, &is_active) in active.iter().enumerate() {
+            if !is_active {
                 continue;
             }
             let d = lights.directions[sun];
             let direction = glam::DVec3::new(f64::from(d[0]), f64::from(d[1]), f64::from(d[2]));
             for (i, &radius) in self.radii.iter().enumerate() {
+                let idx = sun * self.radii.len() + i;
                 let matrix = thessa_render_core::shadow::directional_clip(
                     camera,
                     direction,
@@ -370,7 +373,7 @@ impl ShadowAtlas {
                 )
                 .ok_or_else(|| BackendError::Device("invalid shadow projection".into()))?
                 .as_mat4();
-                matrices[sun * self.radii.len() + i] = matrix.to_cols_array();
+                matrices[idx] = matrix.to_cols_array();
             }
         }
         if self.matrices.as_ref() != Some(&matrices) || active != self.active {

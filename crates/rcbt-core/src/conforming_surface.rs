@@ -74,6 +74,57 @@ pub fn page_id(tile: TileKey) -> Option<u64> {
     Some(id)
 }
 
+/// Absolute height envelopes over the live canonical publication. Entry zero
+/// is the whole-publication fallback; slot `i` uses entry `i + 1`. Each resident
+/// ancestor includes every resident descendant, even if none of a triangle's
+/// vertices happens to sample that descendant. No topology or residency policy
+/// is introduced. Empty/missing regions still have the explicit datum height.
+pub fn resident_height_bounds(ids: &[u64], extents: &[Option<(f64, f64)>]) -> Option<Vec<f32>> {
+    if ids.len() != extents.len() {
+        return None;
+    }
+    let mut slots = std::collections::HashMap::new();
+    for (slot, &id) in ids.iter().enumerate().filter(|(_, id)| **id != 0) {
+        let depth = id.ilog2();
+        if depth < 3
+            || (depth - 3) % 2 != 0
+            || (depth - 3) / 2 > u32::from(SURFACE_PAGE_LEVEL_MAX)
+            || !(8..=13).contains(&(id >> (depth - 3)))
+            || slots.insert(id, slot).is_some()
+        {
+            return None;
+        }
+    }
+    let mut bounds = vec![0.0f64; ids.len() + 1];
+    for (&id, extent) in ids.iter().zip(extents).filter(|(id, _)| **id != 0) {
+        let (low, high) = (*extent)?;
+        if !low.is_finite() || !high.is_finite() || low > high {
+            return None;
+        }
+        let height = low.abs().max(high.abs());
+        bounds[0] = bounds[0].max(height);
+        let mut ancestor = id;
+        while ancestor >= 8 {
+            if let Some(&slot) = slots.get(&ancestor) {
+                bounds[slot + 1] = bounds[slot + 1].max(height);
+            }
+            ancestor >>= 2;
+        }
+    }
+    bounds
+        .into_iter()
+        .map(|bound| {
+            let rounded = bound as f32;
+            let rounded = if f64::from(rounded) < bound {
+                rounded.next_up()
+            } else {
+                rounded
+            };
+            rounded.is_finite().then_some(rounded)
+        })
+        .collect()
+}
+
 /// Six camera-local precision charts reuse TileAnchor's f64 subtraction and
 /// stable bend formula, independently of which height pages happen to reside.
 /// All duplicate cube vertices select the same chart, even across root faces.
@@ -118,6 +169,42 @@ mod tests {
         Node,
         conforming::{SphereTopology, cube_vertices},
     };
+    #[test]
+    fn local_height_envelopes_include_hidden_descendants_and_round_outwards() {
+        // A flat resident parent does not hide an interior mountain represented
+        // only by a more detailed resident child. Another face stays local.
+        let ids = [8, 32, 9, 0];
+        let extents = [
+            Some((-2.0, 3.0)),
+            Some((10.0, 100.0000001)),
+            Some((-5.0, 4.0)),
+            None,
+        ];
+        let bounds = resident_height_bounds(&ids, &extents).unwrap();
+        assert_eq!(bounds.len(), 5);
+        assert!(f64::from(bounds[0]) >= 100.0000001);
+        assert_eq!(bounds[0], bounds[1]);
+        assert_eq!(bounds[1], bounds[2]);
+        assert_eq!(bounds[3], 5.0);
+        assert_eq!(bounds[4], 0.0);
+        let permuted =
+            resident_height_bounds(&[9, 0, 32, 8], &[extents[2], None, extents[1], extents[0]])
+                .unwrap();
+        assert_eq!(permuted, [bounds[0], bounds[3], 0.0, bounds[2], bounds[1]]);
+        assert_eq!(
+            resident_height_bounds(&[8, 9], &[extents[0], extents[2]]).unwrap(),
+            [5.0, 3.0, 5.0]
+        );
+        assert_eq!(resident_height_bounds(&[0], &[None]).unwrap(), [0.0, 0.0]);
+        for ids in [&[8, 8][..], &[14, 0], &[16, 0], &[u64::MAX, 0]] {
+            assert!(resident_height_bounds(ids, &[Some((0.0, 1.0)); 2]).is_none());
+        }
+        assert!(resident_height_bounds(&[8], &[]).is_none());
+        assert!(resident_height_bounds(&[8], &[None]).is_none());
+        assert!(resident_height_bounds(&[8], &[Some((f64::NAN, 0.0))]).is_none());
+        assert!(resident_height_bounds(&[8], &[Some((0.0, f64::MAX))]).is_none());
+        assert!(resident_height_bounds(&[8], &[Some((1.0, 0.0))]).is_none());
+    }
     #[test]
     fn exact_addresses_match_canonical_projection_and_deep_samples() {
         let mut mesh = SphereTopology::new(1024, 58).unwrap();

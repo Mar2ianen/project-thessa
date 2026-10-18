@@ -5,6 +5,15 @@ use thessa_graphics::ResolvedGraphicsSettings;
 use thessa_rcbt_core::lighting::SurfaceLighting;
 use wgpu::util::DeviceExt;
 
+/// Last actual depth encoding, summed over active layers. Candidate slots count
+/// the admitted slot extent (including holes); cache hits report all zeroes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ShadowDrawStats {
+    pub candidate_slots: u64,
+    pub submitted_slots: u64,
+    pub draw_calls: u64,
+}
+
 #[derive(Clone)]
 pub struct ShadowAtlas {
     pub(crate) mesh_pipeline: wgpu::RenderPipeline,
@@ -12,6 +21,7 @@ pub struct ShadowAtlas {
     pub(crate) mesh_layout: wgpu::BindGroupLayout,
     pub(crate) terrain_layout: wgpu::BindGroupLayout,
     texture: wgpu::TextureView,
+    depth_texture: wgpu::Texture,
     sampler: wgpu::Sampler,
     frame: wgpu::Buffer,
     layers: Vec<(wgpu::TextureView, wgpu::Buffer, wgpu::BindGroup)>,
@@ -75,7 +85,9 @@ impl ShadowAtlas {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let matrix_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -206,6 +218,7 @@ impl ShadowAtlas {
                 dimension: Some(wgpu::TextureViewDimension::D2Array),
                 ..Default::default()
             }),
+            depth_texture: depth,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 compare: Some(wgpu::CompareFunction::LessEqual),
                 ..Default::default()
@@ -238,6 +251,48 @@ impl ShadowAtlas {
     /// Conservative enclosing sphere for the finite light-view caster volume.
     pub fn caster_distance_m(&self) -> f64 {
         3.0 * self.radii.last().copied().unwrap_or(0.0)
+    }
+    fn layer_matrix(&self, layer: usize) -> Option<glam::Mat4> {
+        self.matrices
+            .as_ref()
+            .and_then(|m| m.get(layer))
+            .map(glam::Mat4::from_cols_array)
+    }
+    /// Explicit diagnostic readback of all Depth32Float atlas layers, little-
+    /// endian raw f32 bytes. Never called by ordinary window/headless frames.
+    pub fn read_depth(&self, backend: &Backend) -> Result<Vec<u8>, BackendError> {
+        let bytes = u64::from(self.size) * u64::from(self.size) * self.layers.len() as u64 * 4;
+        let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow-depth-oracle"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        // Power-of-two atlas size >=64: four-byte rows are already 256-aligned.
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.depth_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.size * 4),
+                    rows_per_image: Some(self.size),
+                },
+            },
+            wgpu::Extent3d {
+                width: self.size,
+                height: self.size,
+                depth_or_array_layers: self.layers.len() as u32,
+            },
+        );
+        backend.queue.submit([encoder.finish()]);
+        crate::terrain::map_buffer(backend, &staging)
     }
     pub(crate) fn receiver(
         &self,
@@ -332,6 +387,17 @@ impl ShadowAtlas {
         terrain: &TerrainRenderer,
         meshes: Option<&MeshRenderer>,
     ) {
+        self.encode_casters(encoder, terrain, meshes, true);
+    }
+
+    pub(crate) fn encode_casters(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        terrain: &TerrainRenderer,
+        meshes: Option<&MeshRenderer>,
+        cull: bool,
+    ) -> ShadowDrawStats {
+        let mut total = ShadowDrawStats::default();
         for (i, (view, _, bind)) in self.layers.iter().enumerate() {
             if !self.active[i / self.radii.len()] {
                 continue;
@@ -350,10 +416,18 @@ impl ShadowAtlas {
                 ..Default::default()
             });
             pass.set_bind_group(0, bind, &[]);
-            terrain.cast_shadow(&mut pass, self);
+            let stats = terrain.cast_shadow(
+                &mut pass,
+                self,
+                if cull { self.layer_matrix(i) } else { None },
+            );
+            total.candidate_slots += stats.candidate_slots;
+            total.submitted_slots += stats.submitted_slots;
+            total.draw_calls += stats.draw_calls;
             if let Some(meshes) = meshes {
                 meshes.cast_shadow(&mut pass, self);
             }
         }
+        total
     }
 }

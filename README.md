@@ -170,7 +170,10 @@ The checked-in vertical slice currently contains:
    High-level assist/autopilot panels are not ported yet. Native terrain,
    opaque meshes and sky share one pass, with AS builds timed separately;
    [doc 58](docs/58_NATIVE_PIPELINE_REVIEW.md) records the optimization review,
-   fixed-resident comparisons and limits of the supplied performance claims.
+    fixed-resident comparisons and limits of the supplied performance claims.
+    Native non-ocean terrain also rejects conservative out-of-atlas casters;
+    [doc 60](docs/60_NATIVE_SHADOW_CASTER_REVIEW.md) records full-caster depth/image
+    oracles and the isolated performance boundary. Ocean retains full coverage.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

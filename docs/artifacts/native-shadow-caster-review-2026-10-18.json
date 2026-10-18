@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-18",
+  "base_commit": "12e70ad",
+  "branch": "feat/render-pipeline-optimizations",
+  "scope": "Independently review imported per-cascade terrain caster culling, retain the useful work-elimination finding with conservative bounds, direct full-caster depth/image oracles, lifecycle tests, and scoped same-tree performance evidence. No new renderer or simulation behavior.",
+  "supplied_patch_backup": "/tmp/opencode/shadow-culling-imported.patch",
+  "supplied_claims": {
+    "GPU_reduction_percent": 76.5,
+    "FPS_increase_percent": 330,
+    "assessment": "Not accepted as demonstrated game-FPS or production-frame results. A real large isolated redraw saving is independently confirmed below, but old split/unified comparisons share the same culling and do not establish culling correctness. No demonstrated mismatch in the supplied endpoints is claimed."
+  },
+  "implementation": {
+    "bounds": "Canonical curved tile sphere: sqrt(2)*radius*half_extent + decoded absolute height envelope + f32 reconstruction allowance. Uses the full signed residual encoding range and scale, not sampled source extrema. Unknown/custom/invalid or extreme-scale bounds fail open.",
+    "culling": "Six homogeneous clip planes from the actual GPU f32 matrix promoted to f64. Camera-relative sphere and float-dot-product allowances. No camera-frustum culling; off-camera casters remain eligible. Coalesce contiguous accepted slots without a transient visible-list Vec.",
+    "lifecycle": "Bounds allocated only for shadow-enabled slot capacity. Dirty successful uploads/publications update bounds, retired slots clear them; rejected inputs preserve state. Existing depth cache retained. No additional GPU buffers, passes, quality reduction or production toggle.",
+    "fallback": "All ocean-enabled terrain submits original full caster coverage until spectral deformation bounds share this lifecycle. Mesh casters unchanged.",
+    "diagnostics": "Last-actual-depth candidate/submitted slot and draw-call counters; zero on cache hits/disabled. Diagnostic full-caster encoder and explicit raw all-layer Depth32Float readback; no ordinary-frame readback. Atlas COPY_SRC usage added without extra GPU storage.",
+    "retained_CPU_bytes_per_slot_on_this_target": 40,
+    "disabled_bound_vector_capacity": 0,
+    "allocation_boundary": "No global allocator instrumentation, zero-copy or global zero-allocation claim. wgpu/queue/driver, streaming and UI behavior not inferred from range coalescing."
+  },
+  "environment": {
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Linux/Vulkan; same local iGPU as the prior pipeline review",
+    "cargo_prefix": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "measurement_conditions": "Sequential GPU jobs; no competing agent build/test jobs during measured blocks. GPU/CPU clocks, thermal state and desktop activity not locked. Tests do not start an audio-bearing application."
+  },
+  "measurement": {
+    "command": "cargo test --release -p thessa-render-wgpu --test unified_scene -- --ignored --nocapture --test-threads=1",
+    "log": "/tmp/opencode/shadow-cull-final-unified.log",
+    "scope": "full_versus_culled_shadow_cost only: same-tree full/culled caster selection. Other tests in this command also reran prior split/unified diagnostics and HDR correctness; they are not the full/cull baseline.",
+    "order_cull": [false, true, false, true, true, false, true, false],
+    "resident_terrain_slots": 1024,
+    "synthetic_mesh_instances": 64,
+    "scene_resolution": [1280, 720],
+    "atlas_resolution_layers": [512, 512, 12],
+    "atlas_bytes": 12582912,
+    "requested_atlas_size_note": "Fixture requests 256 but capability/settings resolution clamps to 512; report actual storage, not requested dimensions.",
+    "RT_enabled": false,
+    "ocean_enabled": false,
+    "samples_per_block": 300,
+    "warmup_per_block": 30,
+    "total_measured_frames": 4800,
+    "GPU_scope": "depth atlas / remaining scene commands, hardware timestamps; queue writes excluded",
+    "wall_scope": "CPU update + encoding + queue submission + GPU completion; excludes timestamp readback, endpoint atlas/color readback, streaming, source publication and compilation",
+    "oracle": "All eight block endpoints per scenario have byte-identical full/cull depth atlas AND final RGBA. Static path uses the existing exact cache after warmup; moving path changes origin identically each block.",
+    "static": {
+      "total_GPU_p50_ms_by_block": [4.121030008049011, 4.128363942615509, 4.125197927146913, 4.120949855758668, 4.120989931903839, 4.128724627922059, 4.1232341960334775, 4.130127293003083],
+      "wall_p50_ms_by_block": [4.413247, 4.368924, 4.386307, 4.38795, 4.394742, 4.381398, 4.395374, 4.424057],
+      "submitted_slots_and_draw_calls_per_measured_block": 0,
+      "median_of_block_GPU_medians_ms": {"full": 4.126961277534486, "culled": 4.122112063968658},
+      "interpretation": "About 0.12% central difference, not an established static improvement. Exact cache reuse already avoids caster work."
+    },
+    "moving": {
+      "depth_GPU_p50_ms_by_block": [16.203186254539492, 0.38865845587921144, 16.53189079724121, 0.4215208949203491, 0.4249674434051514, 17.165093890960694, 0.456106608203888, 16.992165324543],
+      "total_GPU_p50_ms_by_block": [20.401963984222412, 4.610359740600587, 20.712353728580478, 4.724696982776643, 4.932772328510286, 21.43769188005066, 5.01929672593689, 21.250977119693758],
+      "total_GPU_p95_ms_by_block": [21.160284803169255, 4.694078807865144, 21.605570852176665, 5.095762010925293, 5.163170087104798, 22.211081329582218, 5.469512140800476, 22.51028982943726],
+      "total_GPU_p99_ms_by_block": [21.451678454715733, 4.7200080737915036, 22.41707271576691, 5.307323981288911, 5.357258858173371, 23.914237347106933, 5.632822432376862, 26.401282764198303],
+      "wall_p50_ms_by_block": [21.347387, 5.282266, 21.711565, 5.401316, 5.51579, 22.429943, 5.722806, 22.173685],
+      "submitted_slots_per_measured_block": [3686400, 25200, 3686400, 25200, 25200, 3686400, 25200, 3686400],
+      "draw_calls_per_measured_block": [3600, 9000, 3600, 9000, 9000, 3600, 9000, 3600],
+      "median_of_block_medians_ms": {
+        "full_depth_GPU": 16.762028060892106,
+        "culled_depth_GPU": 0.42324416916275026,
+        "full_total_GPU": 20.98166542413712,
+        "culled_total_GPU": 4.828734655643464,
+        "full_wall": 21.942625,
+        "culled_wall": 5.458553
+      },
+      "GPU_reduction_percent": 76.98593244133743,
+      "wall_reduction_percent": 75.1235187221219,
+      "per_frame_terrain_slot_submissions": {"full": 12288, "culled": 84},
+      "per_frame_draw_calls": {"full": 12, "culled": 30},
+      "interpretation": "Strong isolated same-workload redraw saving, despite visible within-run drift and more draw calls. Aggregate values are medians of four per-mode block medians, not pooled frame percentiles. Not a +330% game-FPS, production-ocean, UI, loading, simulation or complete-renderer replacement result."
+    }
+  },
+  "verification": {
+    "release_unified_suite": {"passed": 5, "failed": 0, "log": "/tmp/opencode/shadow-cull-final-unified.log"},
+    "initial_core_and_backend_lib_tests": {"passed": 39, "failed": 0, "ignored": 2, "log": "/tmp/opencode/shadow-cull-unit.log"},
+    "architecture_guard": "passed (12 foundational crates)",
+    "agent_QA": "passed (5 Python tests)",
+    "workspace_lib_bins": {"passed": 1872, "failed": 0, "ignored": 46, "log": "/tmp/opencode/shadow-cull-workspace.log"},
+    "workspace_integration": {"passed": 90, "failed": 0, "ignored": 19, "log": "/tmp/opencode/shadow-cull-integration.log"},
+    "workspace_clippy": "passed --workspace --all-targets --all-features -- -D warnings; /tmp/opencode/shadow-cull-clippy-final.log",
+    "native_no_default_clippy": "passed -p thessa-terrain-native --all-targets --no-default-features -- -D warnings; /tmp/opencode/shadow-cull-no-default-clippy.log",
+    "fmt": "passed cargo fmt --all -- --check; /tmp/opencode/shadow-cull-fmt.log",
+    "backend_ignored_lib": {"passed": 3, "failed": 0, "log": "/tmp/opencode/shadow-cull-backend-ignored.log", "scope": "Two real-adapter tests: generated bounds/disabled allocation and unchanged-origin cache; one debug CPU serialization diagnostic, not a release performance claim."},
+    "Bevy_CBT_real_adapter": {"passed": 24, "failed": 0, "log": "/tmp/opencode/shadow-cull-bevy-gpu.log"},
+    "native_ignored_bin": {"passed": 14, "failed": 0, "log": "/tmp/opencode/shadow-cull-native-ignored.log", "audio": "ALSA null config plus invalid Pulse/PipeWire remotes, as in prior capture runs"},
+    "final_lifecycle_release": {"passed": 1, "failed": 0, "log": "/tmp/opencode/shadow-cull-lifecycle-final.log", "scope": "Rerun after empty-range draw skip and stronger height-replacement fixture that visibly enters an initially excluded light-depth volume."},
+    "boundary": "All named jobs completed successfully on this machine. Broad-suite ignored counts are not reported as executed; separate named ignored jobs above did run. The measured release run preceded only the no-op empty-terrain draw skip, stronger correctness fixtures and documentation; no nonempty benchmark path changed afterward. No remote-green-CI or published commit is implied."
+  },
+  "deliberately_omitted": ["Production ocean caster culling", "Tighter decoded height extrema", "Mesh-caster culling", "Global allocator/zero-copy claim", "Blind aesthetic acceptance", "Cross-platform runtime acceptance", "Remote CI result", "Representative full-game FPS claim"]
+}

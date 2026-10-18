@@ -31,6 +31,55 @@ pub struct ResidentTerrainPatch<'a> {
     pub generation: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PatchShadowBound {
+    center_body_m: glam::DVec3,
+    radius_m: f64,
+}
+
+impl PatchShadowBound {
+    fn new(anchor: &TileAnchor, page: &HeightPage) -> Option<Self> {
+        let canonical = TileAnchor::new(anchor.tile, anchor.radius_m)?;
+        // Public custom TileAnchor frames are admitted by the renderer, but
+        // without a canonical geometric bound they must fail open here.
+        if anchor.anchor_body_m != canonical.anchor_body_m
+            || anchor.to_gpu([0.0; 3])? != canonical.to_gpu([0.0; 3])?
+        {
+            return None;
+        }
+        // On a cube face |raw|>=1: normalization is 1-Lipschitz along the
+        // center-to-sample segment; |delta|<=sqrt(2)*half_extent. Encloses the
+        // whole curved surface, unlike a sampled nine-point AABB. Bound actual
+        // residual decoding/lerps, not original pre-quantization height extrema.
+        let height = (f64::from(page.base_height_m()).abs()
+            + 32768.0 * f64::from(page.residual_scale_m()).abs())
+            * (1.0 + 32.0 * f64::from(f32::EPSILON));
+        let scale = canonical.radius_m + height;
+        if !(128.0 * f64::from(f32::MIN_POSITIVE)..f64::from(f32::MAX) / 128.0).contains(&scale) {
+            return None;
+        }
+        let radius_m = std::f64::consts::SQRT_2 * canonical.radius_m * canonical.half_extent
+            + height
+            + 64.0 * f64::from(f32::EPSILON) * scale;
+        Some(Self {
+            center_body_m: glam::DVec3::from_array(canonical.anchor_body_m),
+            radius_m,
+        })
+    }
+
+    fn intersects(&self, camera: [f64; 3], matrix: glam::Mat4) -> bool {
+        let relative = self.center_body_m - glam::DVec3::from_array(camera);
+        // Anchor/local reconstruction uncertainty, then the independently
+        // bounded f32 clip dot products. Larger error retains more casters.
+        let rounding = 64.0 * f64::from(f32::EPSILON) * relative.abs().max_element();
+        thessa_render_core::shadow::sphere_intersects_clip(
+            matrix.as_dmat4(),
+            relative,
+            self.radius_m + rounding,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TerrainCapacity {
     pub patches: u32,
@@ -60,11 +109,13 @@ pub struct TerrainRenderer {
     ocean_possible: Vec<Option<(f64, f64)>>,
     shadow_cache: Option<(u64, Option<(wgpu::Buffer, u64)>)>,
     last_shadow_passes: usize,
+    last_shadow_draws: crate::shadows::ShadowDrawStats,
     sky: Option<crate::sky::SkyBackground>,
     format: wgpu::TextureFormat,
     shadows: Option<crate::shadows::ShadowAtlas>,
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
+    shadow_bounds: Vec<Option<PatchShadowBound>>,
     residency: SlotCache,
     manual_updates: Vec<bool>,
     active_extent: usize,
@@ -703,6 +754,7 @@ impl TerrainRenderer {
                 .collect(),
             shadow_cache: None,
             last_shadow_passes: 0,
+            last_shadow_draws: Default::default(),
             sky: None,
             format,
             shadow_receiver: shadows
@@ -732,6 +784,19 @@ impl TerrainRenderer {
                     ],
                 })
             }),
+            shadow_bounds: {
+                let mut bounds = Vec::new();
+                if shadows.is_some() {
+                    bounds.reserve_exact(capacity);
+                    bounds.extend(
+                        patches
+                            .iter()
+                            .map(|p| PatchShadowBound::new(&p.anchor, p.page)),
+                    );
+                    bounds.resize(capacity, None);
+                }
+                bounds
+            },
             shadows,
             residency,
             manual_updates: vec![false; capacity],
@@ -819,7 +884,29 @@ impl TerrainRenderer {
         encoder: &mut wgpu::CommandEncoder,
         meshes: Option<&crate::mesh::MeshRenderer>,
     ) {
+        self.encode_shadows_impl(encoder, meshes, true);
+    }
+
+    /// Diagnostic oracle: force the original full resident caster draw. This
+    /// is not a graphics/quality toggle and never runs in production callers.
+    pub fn encode_shadows_reference(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        meshes: Option<&crate::mesh::MeshRenderer>,
+    ) {
+        self.invalidate_shadows();
+        self.encode_shadows_impl(encoder, meshes, false);
+        self.invalidate_shadows();
+    }
+
+    fn encode_shadows_impl(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        meshes: Option<&crate::mesh::MeshRenderer>,
+        cull: bool,
+    ) {
         self.last_shadow_passes = 0;
+        self.last_shadow_draws = Default::default();
         if let Some(shadows) = &self.shadows {
             let key = (
                 shadows.depth_revision(),
@@ -828,7 +915,7 @@ impl TerrainRenderer {
             if self.shadow_cache.as_ref() == Some(&key) {
                 return;
             }
-            shadows.encode(encoder, self, meshes);
+            self.last_shadow_draws = shadows.encode_casters(encoder, self, meshes, cull);
             self.last_shadow_passes = shadows.active_passes();
             self.shadow_cache = Some(key);
         }
@@ -838,6 +925,10 @@ impl TerrainRenderer {
     /// `ShadowAtlas::active_passes`, which counts potential active layers.
     pub fn last_shadow_passes(&self) -> usize {
         self.last_shadow_passes
+    }
+
+    pub fn last_shadow_draws(&self) -> crate::shadows::ShadowDrawStats {
+        self.last_shadow_draws
     }
 
     /// Explicit invalidation for diagnostics/external source changes. Ordinary
@@ -850,13 +941,50 @@ impl TerrainRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         atlas: &crate::shadows::ShadowAtlas,
-    ) {
+        clip: Option<glam::Mat4>,
+    ) -> crate::shadows::ShadowDrawStats {
+        if self.active_extent == 0 {
+            return Default::default();
+        }
         let Some(bind) = &self.shadow_caster else {
-            return;
+            return Default::default();
         };
         pass.set_pipeline(&atlas.terrain_pipeline);
         pass.set_bind_group(1, bind, &[]);
-        pass.draw(0..self.active_extent as u32 * 6144, 0..1);
+
+        let mut stats = crate::shadows::ShadowDrawStats {
+            candidate_slots: self.active_extent as u64,
+            ..Default::default()
+        };
+        // Spectral geometry has its own deformation envelope and lifecycle.
+        // Until integrated here, ocean-enabled terrain always draws in full.
+        let Some(clip) = clip.filter(|_| self.ocean.is_none()) else {
+            pass.draw(0..self.active_extent as u32 * 6144, 0..1);
+            stats.submitted_slots = stats.candidate_slots;
+            stats.draw_calls = 1;
+            return stats;
+        };
+        let mut range_start: Option<u32> = None;
+        for ordinal in 0..self.active_extent {
+            let visible = self.node_ids[ordinal] != 0
+                && self
+                    .shadow_bounds
+                    .get(ordinal)
+                    .and_then(Option::as_ref)
+                    .is_none_or(|bound| bound.intersects(self.camera, clip));
+            if visible {
+                range_start.get_or_insert(ordinal as u32);
+                stats.submitted_slots += 1;
+            } else if let Some(start) = range_start.take() {
+                pass.draw(start * 6144..ordinal as u32 * 6144, 0..1);
+                stats.draw_calls += 1;
+            }
+        }
+        if let Some(start) = range_start {
+            pass.draw(start * 6144..self.active_extent as u32 * 6144, 0..1);
+            stats.draw_calls += 1;
+        }
+        stats
     }
 
     /// Replace the active partition atomically after CPU validation. Retained
@@ -974,6 +1102,11 @@ impl TerrainRenderer {
         self.residency = residency;
         self.active_extent = active_extent;
         self.upload_pages(backend, &dirty);
+        for (bound, id) in self.shadow_bounds.iter_mut().zip(&self.node_ids) {
+            if *id == 0 {
+                *bound = None;
+            }
+        }
         self.manual_updates.fill(false);
         Ok(TerrainPublication {
             active: patches.len(),
@@ -1026,12 +1159,15 @@ impl TerrainRenderer {
     fn upload_pages(&mut self, backend: &Backend, updates: &[(u32, &HeightPage)]) {
         self.ocean_dirty |= !updates.is_empty();
         for (i, page) in updates {
-            if let Some(possible) = self.ocean_possible.get_mut(*i as usize) {
+            let idx = *i as usize;
+            if let Some(bound) = self.shadow_bounds.get_mut(idx) {
+                *bound = PatchShadowBound::new(&self.anchors[idx], page);
+            }
+            if let Some(possible) = self.ocean_possible.get_mut(idx) {
                 *possible = ocean_height_range(page);
             }
-            self.ray_revisions[*i as usize] =
-                self.ray_revisions[*i as usize].wrapping_add(1).max(1);
-            let (offset, _) = self.page_slots[*i as usize];
+            self.ray_revisions[idx] = self.ray_revisions[idx].wrapping_add(1).max(1);
+            let (offset, _) = self.page_slots[idx];
             let mut data = page.residual_bytes();
             data.resize(data.len().div_ceil(4) * 4, 0);
             backend.queue.write_buffer(&self.residuals, offset, &data);
@@ -1549,7 +1685,10 @@ fn read_buffer(backend: &Backend, source: &wgpu::Buffer) -> Result<Vec<u8>, Back
     map_buffer(backend, &staging)
 }
 
-fn map_buffer(backend: &Backend, staging: &wgpu::Buffer) -> Result<Vec<u8>, BackendError> {
+pub(crate) fn map_buffer(
+    backend: &Backend,
+    staging: &wgpu::Buffer,
+) -> Result<Vec<u8>, BackendError> {
     let (tx, rx) = std::sync::mpsc::channel();
     staging
         .slice(..)

@@ -542,10 +542,11 @@ impl ApplicationHandler for App {
                                 println!("{status}");
                             }
                             println!(
-                                "shadow_atlas_bytes={} shadow_active_layers={} shadow_rendered_passes={}",
+                                "shadow_atlas_bytes={} shadow_active_layers={} shadow_rendered_passes={} terrain_shadow_draws={:?}",
                                 state.renderer.shadows().map_or(0, |s| s.storage_bytes()),
                                 state.renderer.shadows().map_or(0, |s| s.active_passes()),
-                                state.renderer.last_shadow_passes()
+                                state.renderer.last_shadow_passes(),
+                                state.renderer.last_shadow_draws()
                             );
                             event_loop.exit();
                         }

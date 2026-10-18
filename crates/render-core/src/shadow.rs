@@ -64,6 +64,35 @@ pub fn directional_clip(
     )
 }
 
+/// Conservative homogeneous clip-plane test for a camera-relative sphere.
+/// Uses the actual narrowed GPU projection (promoted to f64 by the caller).
+/// Invalid or numerically unbounded inputs fail open. A small f32 dot-product
+/// envelope retains boundary casters; it is not a geometric/quality tolerance.
+pub fn sphere_intersects_clip(clip: DMat4, center: DVec3, radius: f64) -> bool {
+    if !clip.is_finite() || !center.is_finite() || !radius.is_finite() || radius < 0.0 {
+        return true;
+    }
+    let w = clip.row(3);
+    for plane in [
+        w + clip.row(0),
+        w - clip.row(0),
+        w + clip.row(1),
+        w - clip.row(1),
+        clip.row(2),
+        w - clip.row(2),
+    ] {
+        let n = plane.truncate();
+        let support = radius * n.length();
+        let distance = n.dot(center) + plane.w;
+        let error =
+            16.0 * f64::from(f32::EPSILON) * (n.abs().dot(center.abs()) + plane.w.abs() + support);
+        if distance + support < -error {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +119,53 @@ mod tests {
             );
         }
         assert!(directional_clip(camera, DVec3::ZERO, 1.0, 2.0, 512).is_none());
+    }
+
+    #[test]
+    fn sphere_planes_retain_contacts_off_camera_casters_and_invalid_input() {
+        for center in [
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::Y,
+            DVec3::Z,
+            DVec3::new(-1.0, -1.0, 0.0),
+        ] {
+            assert!(sphere_intersects_clip(DMat4::IDENTITY, center, 0.0));
+        }
+        assert!(!sphere_intersects_clip(
+            DMat4::IDENTITY,
+            DVec3::new(0.0, 0.0, -0.1),
+            0.09
+        ));
+        assert!(sphere_intersects_clip(
+            DMat4::IDENTITY,
+            DVec3::new(0.0, 0.0, -0.1),
+            0.1
+        ));
+        assert!(sphere_intersects_clip(DMat4::NAN, DVec3::ZERO, 1.0));
+        assert!(sphere_intersects_clip(DMat4::IDENTITY, DVec3::NAN, 1.0));
+        for camera in [DVec3::ZERO, DVec3::new(3e12, -2e12, 1e12)] {
+            let sun = DVec3::new(0.2, 0.7, 0.4).normalize();
+            let clip = directional_clip(camera, sun, 20.0, 200.0, 256)
+                .unwrap()
+                .as_mat4()
+                .as_dmat4();
+            // Outside a forward camera frustum is irrelevant: only the finite
+            // light-view volume may reject a caster that is behind the viewer.
+            assert!(sphere_intersects_clip(clip, sun * 150.0, 2.0));
+            assert!(!sphere_intersects_clip(clip, sun * 500.0, 2.0));
+            let inverse = clip.inverse();
+            for axis in 0..3 {
+                for sign in [-1.0, 1.0] {
+                    let mut q = DVec3::new(0.0, 0.0, 0.5);
+                    q[axis] = if axis == 2 { (sign + 1.0) / 2.0 } else { sign };
+                    assert!(sphere_intersects_clip(
+                        clip,
+                        inverse.project_point3(q),
+                        0.001
+                    ));
+                }
+            }
+        }
     }
 }

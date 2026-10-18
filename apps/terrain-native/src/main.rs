@@ -518,10 +518,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
         println!(
-            "shadow_atlas_bytes={} shadow_active_layers={} shadow_rendered_passes={} material_quality={:?} specular_reflections={}",
+            "shadow_atlas_bytes={} shadow_active_layers={} shadow_rendered_passes={} terrain_shadow_draws={:?} material_quality={:?} specular_reflections={}",
             renderer.shadows().map_or(0, |s| s.storage_bytes()),
             renderer.shadows().map_or(0, |s| s.active_passes()),
             renderer.last_shadow_passes(),
+            renderer.last_shadow_draws(),
             resolved.surface_quality,
             resolved.specular_reflections
         );

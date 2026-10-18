@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-18 (native flight deck, reviewed unified pass, manual HDR display)
+**Updated:** 2026-10-18 (native flight deck, reviewed unified pass, manual HDR display, conservative shadow casters)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -12,6 +12,11 @@
 > acknowledgement belongs to the bridge) — see §38:249-252.
 
 ## 1. Decision
+
+Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
+conservative non-ocean terrain caster rejection, independently compared with
+full-caster depth/image output. Ocean keeps full caster coverage; the isolated
+diagnostic is not evidence of a complete-client or production-FPS speedup.
 
 Bevy is no longer a long-term architectural foundation for Project Thessa.
 

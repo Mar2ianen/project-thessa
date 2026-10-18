@@ -1,5 +1,46 @@
 use super::*;
 
+#[test]
+fn shadow_sphere_encloses_dense_surface_heights_and_rejects_custom_frames() {
+    let page = HeightPage::bake(&[-200.0, 50.0, 150.0, -100.0], 2, 0.1).unwrap();
+    for radius in [1000.0, 6_000_000.0] {
+        for face in 0..6 {
+            for level in [0, 1, 5, 16] {
+                let side = 1 << level;
+                for x in [0, side / 2, side - 1] {
+                    let anchor = TileAnchor::new(
+                        thessa_rcbt_core::tile_anchor::TileKey::new(face, level, x, side - 1 - x)
+                            .unwrap(),
+                        radius,
+                    )
+                    .unwrap();
+                    let bound = PatchShadowBound::new(&anchor, &page).unwrap();
+                    for y in 0..33 {
+                        for x in 0..33 {
+                            for height in [-200.0, 150.0] {
+                                let p = glam::DVec3::from_array(anchor.project_body_m(
+                                    [f64::from(x) / 32.0, f64::from(y) / 32.0],
+                                    height,
+                                ));
+                                assert!(
+                                    p.distance(bound.center_body_m) <= bound.radius_m,
+                                    "face={face} level={level}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut anchor = anchors()[0];
+    anchor.anchor_body_m[0] += 0.001;
+    assert!(
+        PatchShadowBound::new(&anchor, &page).is_none(),
+        "unknown/custom frames must not be silently culled"
+    );
+}
+
 fn anchors() -> Vec<TileAnchor> {
     (0..1024)
         .map(|i| {
@@ -10,6 +51,90 @@ fn anchors() -> Vec<TileAnchor> {
             .unwrap()
         })
         .collect()
+}
+
+#[test]
+#[ignore = "hardware: generated f32 shadow vertices fit analytic bounds; disabled shadows retain no bounds"]
+fn generated_shadow_vertices_fit_bounds_and_disabled_has_no_bound_storage() {
+    let backend = Backend::bring_up().unwrap();
+    let page = HeightPage::bake(&[-200.0, 50.0, 150.0, -100.0], 2, 0.1).unwrap();
+    for radius in [1000.0, 6_000_000.0] {
+        let mut patches = Vec::new();
+        for face in 0..6 {
+            for level in [0, 5, 16] {
+                let side = 1 << level;
+                patches.push(TerrainPatch {
+                    anchor: TileAnchor::new(
+                        thessa_rcbt_core::tile_anchor::TileKey::new(
+                            face,
+                            level,
+                            side / 2,
+                            side / 2,
+                        )
+                        .unwrap(),
+                        radius,
+                    )
+                    .unwrap(),
+                    page: &page,
+                });
+            }
+        }
+        let mut requested = thessa_graphics::RequestedGraphics::default();
+        requested.shadows.map_size = 512;
+        requested.ocean.enabled = false;
+        let settings = backend.resolve_graphics(&requested);
+        let terrain = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &patches,
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: patches.len() as u32,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        let vertices = terrain.read_vertices(&backend).unwrap();
+        for (slot, patch) in patches.iter().enumerate() {
+            let bound = terrain.shadow_bounds[slot].unwrap();
+            for vertex in vertices[slot * VERTICES_PER_PATCH as usize * 8
+                ..(slot + 1) * VERTICES_PER_PATCH as usize * 8]
+                .as_chunks::<8>()
+                .0
+            {
+                let local = glam::DVec3::new(
+                    f64::from(vertex[0]),
+                    f64::from(vertex[1]),
+                    f64::from(vertex[2]),
+                );
+                assert!(
+                    local.length() <= bound.radius_m,
+                    "actual generated shader geometry outside bound: {:?}",
+                    patch.anchor.tile
+                );
+            }
+        }
+        requested.shadows.enabled = false;
+        let settings = backend.resolve_graphics(&requested);
+        let mut disabled = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &patches,
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: patches.len() as u32,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        assert_eq!(disabled.shadow_bounds.capacity(), 0);
+        assert!(disabled.shadows().is_none());
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        disabled.encode_shadows(&mut encoder, None);
+        assert_eq!(disabled.last_shadow_draws(), Default::default());
+    }
 }
 // Exact pre-optimization encoding oracle; intentionally keeps per-tile Vecs.
 fn legacy(anchors: &[TileAnchor], camera: [f64; 3]) -> Vec<u8> {

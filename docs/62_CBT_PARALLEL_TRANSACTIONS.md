@@ -216,11 +216,16 @@ spectral deformation, and publishes emitted revisions/origins into the existing
 of transient bisector slots and bounded RT allocation chunks. See doc 63 for
 the current publication/lifetime contract and hardware evidence.
 
-Remaining gaps include production raster/topology/shadow/ocean selection,
-per-tile relief bounds, shadow depth-cache integration, optimized dynamic-ocean
-RT and measured equal-error/temporal/platform budgets. A resolved experimental
-native mode still needs explicit disabled/cheaper fallback settings. The legacy
-patch renderer remains the production consumer until that selection exists.
+Doc 63 now also selects the topology in native production window/headless frames,
+with resolved disabled/Low/Medium/High policy, shared ocean/RT/shadow consumers
+and emitted-revision shadow cache keys. Its externally classified-area request
+policy scans disjoint strided active ranks, prioritizes the largest actionable
+split in each request's subset, then considers mergeable diamonds; it retains
+the same planner/claims/allocator and deterministic request-ordinal admission.
+The original cursor-window `set_view` experiment and its measurements above are
+unchanged. Remaining gaps include per-tile relief/error bounds and convergence,
+optimized dynamic-ocean RT and equal-error/temporal/platform acceptance. The
+regular-patch renderer remains the default/fallback, not a visual parity oracle.
 Neither Bevy visual parity nor copying its internals is required. Until those
 native consumers exist, deleting the working regular-grid path would remove
 functionality rather than complete the migration.

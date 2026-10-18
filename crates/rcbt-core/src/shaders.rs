@@ -449,10 +449,30 @@ fn shell_mesh_uv(local_dir: vec3<f32>) -> vec2<f32> {
     return vec2(u, clamp(v, 0.0, 1.0));
 }
 
+// Native may select the canonical 48-byte stream. The default preserves the
+// generated-patch ABI and all existing Bevy/indexed/mesh consumers.
+override CBT_CONFORMING: bool = false;
 @vertex
 fn vertex(
     @builtin(vertex_index) vertex_index: u32,
 ) -> VertexOutput {
+    if (CBT_CONFORMING) {
+        let position = generated_vertices[vertex_index * 3u];
+        let normal = generated_vertices[vertex_index * 3u + 1u];
+        let address = bitcast<vec4<u32>>(generated_vertices[vertex_index * 3u + 2u]);
+        var output: VertexOutput;
+        output.clip_position = vec4(2.0,2.0,2.0,1.0);
+        // Free/virtual slots have zero normal. Missing height pages instead
+        // intentionally retain canonical datum geometry and fallback material.
+        if (all(normal.xyz == vec3(0.0))) { return output; }
+        output.clip_position = view.clip_from_world * vec4(position.xyz,1.0);
+        output.normal = normal.xyz;
+        output.body_direction = material_direction(vec2<f32>(address.xy)/536870912.0,u32(normal.w));
+        output.render_position = position.xyz;
+        output.height_m = position.w;
+        output.material_slot = 0xffffffffu;
+        return output;
+    }
     return cbt_vertex(vertex_index);
 }
 

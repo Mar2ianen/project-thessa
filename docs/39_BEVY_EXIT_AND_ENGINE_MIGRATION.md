@@ -14,9 +14,9 @@
 ## 1. Decision
 
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
-conforming bisector topology from render-patch grid LOD. It is a test-only unit
-sphere, not a migrated live planet; production height/material/precision and
-shadow/ocean/RT consumers retain their existing path pending the listed gates.
+conforming bisector topology from render-patch grid LOD. The original test-only
+unit sphere is advanced by the canonical consumer and native selection below;
+it must not be mistaken for full-client migration acceptance.
 The [parallel follow-up](62_CBT_PARALLEL_TRANSACTIONS.md) now commits disjoint
 compatibility-chain/diamond transactions concurrently and measures a 128K pool.
 The [canonical surface consumer](63_CBT_CANONICAL_SURFACE.md) then converts
@@ -29,9 +29,15 @@ shared shadow atlas with an independent metric sphere oracle. A diagnostic
 ocean geometry adapter reuses the spectral field/materials and resolved ocean
 policy, with seam-safe filtering and optical-only fallback. Shared publication
 epochs now drive borrowed bisector BLASes and canonical water/material hits in
-the existing RayScene. Production topology/ocean selection and conforming shadow
-cache integration remain open native
-integration gates.
+the existing RayScene. Native `[terrain_topology]` now selects Low/Medium/High
+persistent topology for both window and headless production frames. It reuses
+the shared raster BRDF, atlas, ocean and RayScene, with one ordered emitted epoch
+before all consumers, and keys shadow reuse on that revision. Disabled or
+unsupported falls back to regular patches without topology resources/dispatches.
+The mode suppresses legacy grid generation/compaction and classifies actual
+camera-relative emitted datum geometry through the existing transaction planner.
+Per-tile error/convergence, temporal/equal-error acceptance, primary terrain RT
+reflections and the wider platform/UI/effect migration remain open. See doc 63.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with

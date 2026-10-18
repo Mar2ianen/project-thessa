@@ -18,12 +18,13 @@ pub use metadata::{SettingKind, SettingMeta, describe};
 pub use resolve::{
     ActiveCloudRepresentation, Capabilities, ResolvedBackend, ResolvedGraphicsSettings,
     ResolvedInstruments, ResolvedMaterialStorage, ResolvedRayTracing, ResolvedTerrainRender,
-    cloud_backend_override_env, resolve_cloud_integrator, resolve_instruments,
+    ResolvedTerrainTopology, cloud_backend_override_env, resolve_cloud_integrator,
+    resolve_instruments,
 };
 pub use settings::{
     AtmosphereSettings, AuroraQuality, BackendRequest, CloudIntegratorRequest, CloudSettings,
     ConfigError, DebugSettings, EnginePlumeSettings, GasGiantSettings, InstrumentLayout,
     InstrumentSettings, MaterialStorageRequest, NavballRenderer, OceanSettings, Preset, Quality,
     RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
-    ShadowSettings, TerrainRenderRequest, UpperAtmosphereSettings,
+    ShadowSettings, TerrainRenderRequest, TerrainTopologySettings, UpperAtmosphereSettings,
 };

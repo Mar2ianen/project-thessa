@@ -35,6 +35,8 @@ pub struct OceanStats {
     pub size: u32,
     pub storage_bytes: u64,
     pub height_bound_m: f64,
+    /// Generated-patch selection count; conforming candidate count is an
+    /// explicit GPU extent diagnostic, not read back in ordinary frames.
     pub deformed_patches: u32,
     pub geometry_bytes: u64,
     pub moment_scale: f32,

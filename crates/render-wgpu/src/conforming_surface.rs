@@ -240,12 +240,7 @@ impl ConformingSurface {
     /// Must follow topology publication. Page uploads and camera updates must
     /// precede submission; readbacks are diagnostic only.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind, &[]);
-            pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
-        }
+        self.encode_datum(encoder);
         if let Some(ocean) = &self.ocean {
             ocean.encode(encoder, self.capacity);
         }
@@ -259,6 +254,15 @@ impl ConformingSurface {
             origin_m: state.staged_origin_m,
             configuration_revision: state.configuration_revision,
         };
+    }
+    /// Internal classification scratch: no consumer publication and no waves.
+    pub(crate) fn encode_datum(&self, encoder: &mut wgpu::CommandEncoder) {
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind, &[]);
+            pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
+        }
     }
     pub fn publication(&self) -> SurfacePublication {
         self.publication.lock().unwrap().published
@@ -294,7 +298,7 @@ impl ConformingSurface {
             + self.charts.size()
             + self.ocean.as_ref().map_or(0, |o| o.storage_bytes())
     }
-    /// Diagnostic geometry consumer of an already-published field. Use the same
+    /// Geometry consumer of an already-published field. Use the same
     /// camera/radius/time as emission. Resolved disabled/optical-only settings
     /// remove this consumer entirely; no buffers/pipelines/work remain.
     /// One patch of geometry budget admits 2048 bisector triangles. Exceeding
@@ -335,6 +339,9 @@ impl ConformingSurface {
     /// reserved, reserved]. No CPU readback occurs during normal encoding.
     pub fn ocean_extent(&self) -> Option<&wgpu::Buffer> {
         self.ocean.as_ref().map(|o| &o.extent)
+    }
+    pub(crate) fn ocean_storage_bytes(&self) -> u64 {
+        self.ocean.as_ref().map_or(0, |o| o.storage_bytes())
     }
     /// Allocation slots covered by the emitted vertex stream (three vertices
     /// each). Diagnostic caster consumers draw the full slot range.

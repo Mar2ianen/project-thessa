@@ -1,0 +1,58 @@
+{
+  "phase": "native-conforming-topology-production-selection",
+  "date": "2026-10-18",
+  "baseline": "ee68582",
+  "doc": "docs/63_CBT_CANONICAL_SURFACE.md",
+  "hardware": {"adapter": "AMD Radeon 880M Graphics (RADV STRIX1)", "backend": "Vulkan", "driver": "Mesa 26.2.4-arch1.1"},
+  "policy": {
+    "requested": "[terrain_topology] enabled=false, quality=low|medium|high; restart required",
+    "disabled": "regular patches, zero topology resources/dispatches",
+    "fallback": "unsupported negotiated compute/storage limits use regular patches with a reason",
+    "tiers": [
+      {"quality": "low", "slots": 32768, "waves": 1, "split_area_px2": 1024, "merge_area_px2": 128},
+      {"quality": "medium", "slots": 65536, "waves": 2, "split_area_px2": 256, "merge_area_px2": 32},
+      {"quality": "high", "slots": 131072, "waves": 4, "split_area_px2": 64, "merge_area_px2": 8}
+    ],
+    "initial_local_depth": 8,
+    "maximum_heap_depth": 58,
+    "ordering": "existing canonical height/material/field/view publications -> bounded datum scratch/classification/transaction waves -> final emitted surface epoch including optional waves -> shared shadow atlas -> existing mesh RayScene AS -> shared primary terrain/mesh/sky raster -> display/UI",
+    "classifier": "actual emitted camera-relative datum positions and explicit viewport; conservative resident body-wide absolute-height bound plus shared wave envelope; same area inflation (1+2h/L)^2, not calibrated geometric screen-error acceptance",
+    "requests": "deterministic disjoint strided active-rank subsets select largest actionable split, else mergeable diamond; same existing planner/claims/reservation/allocator/parallel commit, no extra request store",
+    "residency": "borrow existing canonical page/material owner; topology quality never changes data-page identity/demand",
+    "geometry": "conforming path suppresses legacy grid generation/classification/compaction and grid-ocean backups; tiny legacy layout placeholders only; actual shared 48-byte stream feeds primary raster, shadow/ocean and RT",
+    "publication": "only final surface emission advances the consumer epoch; scratch classification does not. All new epochs conservatively rebuild chunk BLASes and invalidate shadow depth. Retained epochs permit exact reuse",
+    "gpu_scopes": "native-topology-v4; first interval render.surface_and_shadows now includes selected topology classification/transactions/emission/deformation before shadow depth"
+  },
+  "oracles": {
+    "production_test": "native_topology_settings_select_shared_production_consumers",
+    "verified": ["Earth-scale primary raster through the shared production material/lighting shader", "canonical red/green material-only changes", "retained-epoch raster identity and shadow cache reuse", "f64 camera rebase", "actual shared shadow depth and conforming slot draw accounting", "shared spectral optics change the selected primary raster", "disabled topology has zero extra resources/work"],
+    "area_and_transaction_test": "emitted_area_classifier_matches_f64_projection_and_relief_is_monotone",
+    "area_triangles": 3072,
+    "area_max_error_px2": 0.00003675850809115033,
+    "area_error_envelope_px2": 0.0629892349243164,
+    "area_envelope": "8*f32::EPSILON*257^2 for this positive-w, unclipped Earth-scale fixture; independent f64 projection of emitted vertices, not a universal error guarantee",
+    "relief": "increasing height bound never lowers classified area",
+    "cpu_replay": "80 waves, far-to-close Earth-scale rebase, every committed operation and neighbor state checked against independent SphereTopology; actual split and merge required",
+    "portable": "classifier WGSL validated without native capabilities; existing shader specialization defaults false for legacy indexed/mesh/Bevy paths"
+  },
+  "native_runs": {
+    "manifest": "target/test-tmp/native-topology/final-runs.json",
+    "manifest_sha256": "f9f7b56fb08d842d6ae118adad03a3f8b121224d3e5a84666534214de51e8d26",
+    "directory": "target/test-tmp/native-topology/",
+    "scenarios": ["regular-patch fallback", "conforming low / RT off", "conforming high / local RT requested / spectral ocean enabled", "conforming high / local RT / spectral ocean / X-15 preview mesh consumer"],
+    "frames": 120,
+    "warmup": 30,
+    "prestream_seconds": 1,
+    "extent": [1280, 720],
+    "quantiles": "sorted samples[min(floor(N*p),N-1)], milliseconds",
+    "results": [
+      {"label": "patches", "wall_p50_ms": 3.513392, "wall_p95_ms": 3.870386, "wall_p99_ms": 3.965844, "surface_shadow_gpu_p50_ms": 0.0018835788230895999, "capture_sha256": "d900519cd216d3dc5be238448b3ed2599b324a24273c3827a19245e7cc45fa23"},
+      {"label": "low", "wall_p50_ms": 3.787653, "wall_p95_ms": 4.383481, "wall_p99_ms": 5.657254, "surface_shadow_gpu_p50_ms": 1.8706342281990052, "topology_bytes": 6385948, "capture_sha256": "acb18941e8f0473b38a7c3b5ee846dbce615fede42bae9b52e5150b84436d4ae"},
+      {"label": "high-rt-ocean", "wall_p50_ms": 21.437204, "wall_p95_ms": 24.400011, "wall_p99_ms": 26.448345, "surface_shadow_gpu_p50_ms": 17.18877889275742, "topology_bytes": 24867132, "capture_sha256": "8e717bac5961fef045f6d97cc1de8ba501c122eb12e24785ad377dbef9f53c0c"},
+      {"label": "preview-rt-ocean", "wall_p50_ms": 30.109692, "wall_p95_ms": 32.884228, "wall_p99_ms": 33.61027, "surface_shadow_gpu_p50_ms": 17.692806551550866, "as_gpu_p50_ms": 6.418314877750397, "terrain_instances": 64, "tlas_instances": 66, "traced_triangles_including_degenerate_slots": 209537, "rt_bytes": 23979692, "capture_sha256": "0e5eccb68234c4d4a310a2365996e8cecd39e9d95b0e6dbd77d5c78577bc1891"}
+    ],
+    "limitations": "live asynchronous residency/convergence, serial GPU completion and diagnostic timestamp readback, unlocked clocks; scenarios differ in geometry quality/effects and are NOT equal-error comparisons, game FPS, Bevy visual parity or blind subjective acceptance. High-RT request does not imply AS work in a terrain-only scene with no mesh RT consumer. The high policy remains expensive, not a performance win; timing bundles multiple transaction waves and full shadow casting, not isolated classifier cost"
+  },
+  "checks": {"status": "passed locally", "manifest": "target/test-tmp/native-topology/final-checks.json", "manifest_sha256": "1fe2c015bde5fb4ff1d89aad5db687a8fd9ae4f0902fa068ca92f6a76828538a", "fmt": "passed", "workspace_all_target_all_feature_clippy": "passed", "native_no_default_feature_clippy": "passed", "unit_bin": 1883, "integration": 91, "bevy_gpu": 24, "native_gpu": 20, "render_wgpu_gpu": 28, "architecture": "passed", "agent_qa": "5 tests passed", "remote_ci": "not run, not claimed"},
+  "remaining": ["per-tile geometric error and convergence/temporal/equal-error acceptance", "dynamic geometry unchanged-frame/dirty-chunk and optimized ocean RT", "primary terrain/ocean scene-object RT reflections", "remaining native engine/client effects, assets, UI, world and platform integration in doc 39", "Metal/WebGPU execution and independent blind visual acceptance"]
+}

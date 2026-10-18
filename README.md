@@ -184,16 +184,19 @@ The checked-in vertical slice currently contains:
     height/material residency (no second streamer), with shared-vertex and
     depth-precision oracles plus a shared-material indirect draw, and takes a
     conservative height-bound LOD input so relief near the camera is charged for
-    the screen area it adds. The shadow atlas can also consume it through a
-    diagnostic caster checked against an independent metric sphere oracle;
-    `encode_shadows()` still uses the legacy caster. An optional diagnostic
-    ocean consumer borrows the spectral field and resolved ocean policy, with
+     the screen area it adds. Native `[terrain_topology] enabled=true` now selects
+     it for the real window/headless frame, with Low/Medium/High budgets and a
+     resource-free disabled/regular-patch fallback. The shared shadow atlas uses
+     those same vertices and their emitted revision; the ocean consumer borrows
+     the spectral field and resolved ocean policy, with
     shared-vertex filtering, non-accumulating emission and optical-only fallback.
     Shared publication epochs now feed those vertices into the existing native
     RayScene with canonical material/water hits and whole-pool budget fallback;
     optical-only phase changes do not require AS builds.
-    It does not yet drive production terrain, ocean or RT, and no
-    `graphics.toml` mode selects it.
+     Its LOD classifier projects emitted camera-relative positions, not absolute
+     planetary f32 coordinates, and reuses bounded deterministic CBT transactions.
+     Per-tile error/convergence, temporal/equal-error acceptance and wider native
+     client/effect migration remain incomplete; this is not full Bevy removal.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

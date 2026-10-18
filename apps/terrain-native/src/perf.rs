@@ -47,7 +47,7 @@ impl HeadlessPerf {
             Some(gpu) => {
                 let values = gpu.read(backend)?;
                 let names = [
-                    "render.shadows",
+                    "render.surface_and_shadows",
                     "render.rt_as_build",
                     "render.scene_classify_and_raster",
                     "render.display_transform",
@@ -110,7 +110,7 @@ impl HeadlessPerf {
         );
         meta.graphics
             .resolved
-            .insert("gpu_scope_layout".into(), "native-display-v3".into());
+            .insert("gpu_scope_layout".into(), "native-topology-v4".into());
         for (key, value) in [
             ("native_hdr", display.enabled().to_string()),
             (
@@ -135,7 +135,7 @@ impl HeadlessPerf {
         ] {
             meta.graphics.resolved.insert(key.into(), value);
         }
-        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: shadows; rt_as_build; scene_classify_and_raster; display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Scene raster uses RGBA16Float when native_hdr=true; compare quality/format as well as scope names with older captures. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
+        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster; display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Scene raster uses RGBA16Float when native_hdr=true; compare quality/format as well as scope names with older captures. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);

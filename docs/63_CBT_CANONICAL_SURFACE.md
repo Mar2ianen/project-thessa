@@ -1,15 +1,16 @@
 # 63 — Canonical height/material surface from persistent bisectors
 
-**Status (2026-10-18): isolated experimental consumer, verified on hardware.**
+**Status (2026-10-18): opt-in native production-frame consumer; acceptance incomplete.**
 Builds on [`61`](61_CBT_SPHERE_EXPERIMENT.md) (sphere topology) and
 [`62`](62_CBT_PARALLEL_TRANSACTIONS.md) (parallel transaction waves) from
 baseline `1ff4b3a`. This phase removes the last "pure sphere" qualifier from
 the geometry itself: active bisectors are converted into **planet-scale
 vertices that sample the canonical height and material pages**, using the
-existing residency/publication paths. It is still not a production terrain
-mode; a resolved topology setting remains open. Shadow/ocean consumers are
-diagnostic selections, while RT now accepts this stream through the existing
-`RayScene` terrain path rather than a second scene/geometry store.
+existing residency/publication paths. The native window/headless renderer can
+now select this topology through resolved graphics settings; raster, shared
+shadows, spectral geometry/optics and the existing `RayScene` consume the same
+encoded stream. This does not establish complete Bevy removal or equal-error,
+temporal, cross-platform or blind visual acceptance.
 
 **Bevy renderer parity is not an acceptance gate** (see doc 62 §Acceptance).
 
@@ -412,29 +413,114 @@ quality, including topology/footprint changes and static/paused controls, before
 choosing it. The old 33×33 ocean cost (0.120 ms deformation vs 1.412 ms AS at 16
 slots) motivates that experiment but does not prove its outcome for adaptive CBT.
 
+## Native production-frame selection
+
+```toml
+[terrain_topology]
+enabled = true # false: regular patches, no topology resources/work
+quality = "medium" # low | medium | high; restart required
+```
+
+The shared requested/resolved pipeline publishes explicit budgets:
+
+| Quality | Allocation slots | Transaction waves/frame | Split area (px²) | Merge area (px²) |
+|---|---:|---:|---:|---:|
+| Low | 32,768 | 1 | 1,024 | 128 |
+| Medium | 65,536 | 2 | 256 | 32 |
+| High | 131,072 | 4 | 64 | 8 |
+
+Each starts with a one-time local-depth-8 conforming seed and allows heap depth
+58. Quality changes representation and bounded convergence work, not canonical
+height/material demand or simulation. Unsupported storage/compute limits resolve
+to regular patches with a note; the native allocation boundary also checks
+negotiated device limits. Registering a plugin or enabling RT does not select
+this mode. With `enabled=false`, topology storage bytes and dispatch count are
+zero. The legacy Bevy adapter reports this native integration as unsupported.
+
+In conforming mode the legacy vertex/triangle buffers are only tiny layout
+placeholders; grid generation/classification/compaction and legacy ocean backup
+allocation/dispatches do not run. The existing canonical page/material owner
+continues uploads and directory publication. No second residency or geometry
+cache is introduced. Ordinary material, sky, HDR/display and mesh integration
+remain shared with the native renderer, not a custom diagnostic raster shader.
+
+`update_view_for_extent()` takes the actual render-target extent and stages the
+f64 camera origin. The old extent-free `update_view()` rejects conforming mode
+rather than invent a resolution. Each bounded wave emits **datum scratch**,
+classifies those camera-relative positions, then uses the existing parallel
+CBT plan/reserve/commit/publish pipeline. The classifier charges the resident
+height bound (plus the shared spectral displacement bound when geometry is
+requested) through the existing `(1+2h/L)²` area inflation. It never projects
+absolute planetary f32 coordinates. Scratch emissions are not consumer epochs.
+
+The external-area policy visits disjoint strided active-rank subsets per request,
+preferring the largest actionable split, else a mergeable diamond. It reuses
+the same bounded planner, conflict claims, deterministic ordinal priority and
+allocator. Unlike the original cursor-only window, it does not spend all request
+slots on distant non-actionable roots while close-view refinement is waiting.
+An 80-wave far-to-close Earth-scale replay compares every committed transaction
+and neighbor state against the independent CPU topology reference, including
+actual refinement and decimation. This is not an immediate-convergence guarantee.
+
+`encode_surface()` then emits the final datum and optional shared spectral
+deformation and advances one consumer epoch. Both native frame loops call it
+before shared shadows and mesh RT, then rasterize that same stream. The existing
+RT synchronization entry point accepts matching conforming resource identity
+without running legacy patch synchronization. The shadow cache keys on the
+emitted revision as well as light/mesh revisions; off-camera leaves remain
+available to casters. Retained epochs permit exact cached shadow reuse, whereas
+each new topology emission conservatively invalidates all terrain BLAS chunks
+and shadow depth. Dirty-chunk/unchanged-frame optimization is not claimed.
+
+The primary raster uses the shared `CBT_CONFORMING` shader specialization
+(default false for existing indexed/mesh/Bevy paths) and the actual 48-byte ABI,
+without legacy skirts. Diagnostic draw counts include degenerate allocation
+holes, not only live leaves. `topology_storage_bytes`, publication revision and
+fallback reason are available without per-frame GPU readback. The first native
+GPU timing interval is now `render.surface_and_shadows`, explicitly including
+classification/transactions/emission/deformation before shadow encoding.
+
+Hardware tests cover Earth-scale primary raster, canonical material-only changes,
+retained epochs, rebasing, shared shadow depth, live spectral optics and disabled
+fallback. A separate classifier oracle compares 3,072 emitted triangles against
+independent f64 projection; the fixture error bound is `8*f32::EPSILON*257²`
+px², not a universal geometric screen-error guarantee. Area policy remains a
+refinement heuristic until the equal-error/temporal acceptance below is complete.
+
+Production-selection evidence is recorded separately in
+[`artifacts/native-conforming-topology-2026-10-18.json`](artifacts/native-conforming-topology-2026-10-18.json).
+Earlier ocean/shadow and encoded-RT artifacts retain their dated scope and gap
+lists; this document and the status index describe the current implementation.
+On the Radeon 880M, four 120-frame native captures (30 warmups, 1280×720,
+manual HDR, no HUD) completed, including an X-15 preview whose existing mesh
+RayScene contains 64 conforming terrain chunks / 66 total TLAS instances.
+Their serial wall p50/p95 were 3.513/3.870 ms (patches), 3.788/4.383 ms (Low),
+21.437/24.400 ms (High plus spectral sea, no mesh RT consumer), and
+30.110/32.884 ms (High plus spectral sea and X-15 RT). These differ in quality,
+content and convergence: **not equal-error comparisons or a performance win**.
+The expensive High reference path remains an optimization/acceptance gap; its
+surface-and-shadow interval alone measured 17.189 ms p50 in the sea fixture.
+The complete local gate run passed fmt, workspace all-target/all-feature and
+native no-default-feature clippy, 1,883 unit/bin tests, 91 integration tests,
+24 Bevy + 20 native + 28 render-wgpu hardware tests, architecture and five
+agent-QA tests. No remote CI or independent subjective review is claimed.
+
 ## Known gaps (explicitly not claimed)
 
-1. **The derived bound is body-wide and unused by a mode.** `height_bound_chord()`
-   now folds the widest resident page extent, but it collapses all tiles into one
-   scalar, so it cannot express per-tile relief, and no `graphics.toml` mode or
-   classifier call site consumes it yet.
-2. **The shadow consumer is diagnostic, not selected.** The shared shadow atlas
-   can now consume the canonical surface with an independent metric sphere
-   oracle, but `encode_shadows()` still uses the
-   legacy patch caster only and nothing selects the conforming path. There is
-   also no quality/fallback tier for it in `graphics.toml`.
-3. **Ocean geometry and RT still need production topology selection.** The shared
-   triangle stream now enters the existing RayScene with publication epochs and
-   shared water-hit optics, but no terrain raster mode selects the topology, and
-   temporal/equal-error acceptance and an optimized dynamic-ocean backend remain.
-4. **No resolved production mode.** Nothing in `graphics.toml` selects this
-   path; `TerrainRenderer::encode_scene()` still draws legacy patches. No
-   disabled/cheaper fallback level exists, because there is no switch.
-5. **Publication is encoded state, not an immutable frame snapshot.** Shared
+1. **The consumed relief bound is body-wide.** It cannot yet express per-tile
+   relief; projected area is not a calibrated geometric error metric. Bounded
+   request waves do not guarantee immediate convergence at a new close camera.
+2. **Dynamic geometry is conservatively rebuilt.** All chunks and shadow depth
+   are invalidated by every final emission; optimized ocean intersections,
+   spatially coherent RT chunks and unchanged-geometry reuse remain open.
+3. **Primary terrain/ocean scene-object reflections remain a wider renderer gap.**
+   Mesh reflections trace this surface, and its primary raster uses shared sky
+   optics, but primary terrain still does not initiate scene-object RT rays.
+4. **Publication is encoded state, not an immutable frame snapshot.** Shared
    epochs/resource retention and RT configuration invalidation now exist;
    source writes, emission and consumers still require the documented ordered
-   submission. Dirty-chunk reuse and production shadow-cache integration remain.
-6. **No equal-error comparison** against the legacy patch renderer, no blind
+   submission. Concurrent/out-of-order encoders are outside its contract.
+5. **No equal-error comparison** against the legacy patch renderer, no blind
    visual review, no cross-platform acceptance, no remote CI claim.
 
 ## Reproduction
@@ -445,6 +531,7 @@ export CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target
 cargo test -p thessa-rcbt-core conforming_surface --lib
 cargo test -p thessa-render-wgpu --lib surface_shader
 cargo test --release -p thessa-render-wgpu --test cbt_sphere -- --ignored --nocapture --test-threads=1
+cargo test --release -p thessa-render-wgpu --test terrain_topology -- --ignored --nocapture --test-threads=1
 ```
 
 The `cbt_sphere` hardware suite is nine tests, including the diagnostic shadow
@@ -463,8 +550,7 @@ commands. These are local checks, not remote CI or platform/visual acceptance.
 
 ## Next
 
-Per doc 62, the remaining boundary to a real mode is: selecting a conforming
-shadow consumer behind a resolved graphics setting with explicit disabled and
-cheaper fallbacks, production ocean/RT selection and shadow-cache integration
-using the encoded revision contract, then equal-error tests before any legacy grid path is
-deleted.
+Complete geometric-error/per-tile policy and temporal/equal-error acceptance,
+optimize measured dynamic geometry costs, then close the wider renderer/client
+migration gaps tracked in doc 39. Do not delete the regular-grid fallback or
+claim complete-client Bevy replacement from this topology selection alone.

@@ -17,7 +17,9 @@ Bevy/`large_cbt` renderer replacement.
   integrates into the existing geometry, classifier, raster, shadow and mesh-ray
   publication flow. No separate mesh, topology scheduler or ray scene is added.
 - Native window/headless hosts call `update_ocean` **after** height, material and
-  view updates, **before** atlas encoding and mesh `sync_rt_terrain`. Geometry
+   view updates, **before** atlas encoding and mesh `sync_rt_terrain`. With
+   conforming topology, `encode_surface` follows those CPU publications and
+   precedes shadow/RT/raster encoding in the same stream. Geometry
   generation, field publication, deformation and AS queries are queue ordered.
 - Inputs: local surface gravity `mu/radius²` from the same baked body as terrain,
   uniform reference water depth, wind speed/planar angle, significant height,
@@ -70,15 +72,19 @@ displacement, breaking, foam, wakes, shoaling/refraction or shore interaction.
 
 ## Filtering, geometry and optical consumers
 
-2026-10-18 diagnostic follow-up: the persistent bisector surface can also
+2026-10-18 canonical-surface follow-up: the persistent bisector surface can also
 borrow this field/material residency through `ConformingSurface::set_ocean`.
 It re-emits datum, reduces a common near-field footprint, and deforms shared
 vertices identically under the existing resolved ocean settings; disabled,
 optical-only, coarse and whole-partition-overflow fallbacks are explicit.
 Its emitted triangles now feed the existing RayScene through a shared encoded
 publication contract; water hit optics reuse this field, and optical-only phase
-changes need no AS rebuild. Production terrain raster still selects generated
-patches, and that consumer below is unchanged. The AMD cage/continuous-field
+changes need no AS rebuild. Native `[terrain_topology] enabled=true` now selects
+this shared stream for production raster/shadow/ocean/RT frames. Default/disabled
+topology still uses generated patches, whose consumer below is unchanged.
+Conforming mode allocates no legacy near-grid backup; its GPU candidate/extent
+counter is a separate explicit diagnostic, not the legacy near-patch count.
+The AMD cage/continuous-field
 intersection study and its watertightness/API caveats are in doc 63.
 Numerical oracles, measured scoped costs and
 remaining temporal/platform gaps are in [doc 63](63_CBT_CANONICAL_SURFACE.md).

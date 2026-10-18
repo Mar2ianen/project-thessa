@@ -30,9 +30,11 @@ shared shadow atlas (independent metric sphere oracle). A diagnostic ocean
 geometry adapter borrows the existing spectral field/material residency and
 resolved ocean policy with seam-safe filtering and optical-only fallback.
 Encoded surface epochs now feed borrowed triangles/materials/ocean optics into
-the existing RayScene. Production topology/ocean selection, shadow-cache
-integration and optimized dynamic-ocean RT remain open,
-and neither phase provides whole-system parity.
+the existing RayScene. `[terrain_topology]` now selects this shared geometry for
+native production raster/shadow/ocean/RT frames, with explicit disabled and
+Low/Medium/High budgets and emitted-revision shadow cache keys. Per-tile error,
+convergence, optimized dynamic-ocean RT and equal-error/temporal/platform
+acceptance remain open; none of these phases establishes whole-system parity.
 
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
 logical tree and backend contract), `thessa-rcbt-ref` (portable differential

@@ -47,6 +47,7 @@ pub mod shadows;
 mod sky;
 pub mod terrain;
 pub mod terrain_ray;
+mod terrain_topology;
 pub mod timing;
 pub mod view;
 
@@ -444,6 +445,10 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        terrain_conforming_supported: Some(
+            limits.max_storage_buffers_per_shader_stage >= 8
+                && limits.max_storage_buffer_binding_size >= 131072 * 144,
+        ),
         hdr_render_target_supported: Some(
             adapter
                 .get_texture_format_features(wgpu::TextureFormat::Rgba16Float)

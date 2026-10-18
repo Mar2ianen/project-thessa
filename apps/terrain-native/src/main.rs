@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, raster shadows, textured mesh ray queries with resident terrain membership, opt-in spectral ocean with bounded shared geometry, and a shared single-scattering sky environment/background. Sun disks, aerial perspective, primary terrain/ocean RT reflection consumers, HDR/tonemapping and automatic exposure remain unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping. Sun disks, aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -224,7 +224,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     eprintln!(
-        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in spectral ocean with bounded shared geometry, and a shared single-scattering sky environment/background; sun disks, aerial perspective, primary terrain/ocean RT reflection consumers, HDR/tonemapping and automatic exposure remain unported"
+        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping; sun disks, aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
     );
     let mut scene = scene::Scene::load(requested)?;
     if let Some(site) = survey_site {
@@ -375,7 +375,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 stream_started.elapsed().as_secs_f64(),
             )?;
             let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
-            renderer.update_view(&backend, &scene.view(1280, 720, exposure))?;
+            renderer.update_view_for_extent(
+                &backend,
+                &scene.view(1280, 720, exposure),
+                [1280, 720],
+            )?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
             renderer.update_shadows(
                 &backend,
@@ -390,6 +394,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 0);
             }
+            renderer.encode_surface(&mut encoder);
             renderer.encode_shadows(
                 &mut encoder,
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
@@ -486,6 +491,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             "Live canonical stream, 1280x720 offscreen: selection/poll/publication + camera upload + classify + raster + optional HUD + GPU completion; excludes setup/{prestream_seconds}s pre-stream/30 warmup frames/readback; NOT game FPS. sweep={sweep} hud={hud_enabled}"
         );
         println!(
+            "terrain_topology={} topology_bytes={} topology_revision={} fallback={}; conforming drawn_triangles includes zero-area free/virtual allocation slots, not live-leaf count",
+            if renderer.conforming_surface().is_some() {
+                "conforming"
+            } else {
+                "patches"
+            },
+            renderer.topology_storage_bytes(),
+            renderer
+                .conforming_surface()
+                .map_or(0, |s| s.publication().revision),
+            renderer.topology_reason().unwrap_or("none")
+        );
+        println!(
             "geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} wanted={}",
             scene.publications,
             scene.regenerated,
@@ -546,7 +564,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let stats = mesh.rt_stats();
             if stats.active {
                 println!(
-                    "ray_tracing=active tlas_instances={} traced_triangles={} rt_bytes={} as_builds={} terrain_instances={} terrain_blas_builds={}; resident full-grid terrain + opaque meshes; raster atlas retained",
+                    "ray_tracing=active tlas_instances={} traced_triangles={} rt_bytes={} as_builds={} terrain_instances={} terrain_blas_builds={}; resident selected terrain + opaque meshes; raster atlas retained",
                     stats.instances,
                     stats.triangles,
                     stats.bytes,

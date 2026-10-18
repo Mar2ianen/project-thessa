@@ -176,6 +176,8 @@ impl ActiveCloudRepresentation {
 /// requests are kept and fail fast at device creation with a clear note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Capabilities {
+    /// Persistent topology's eight compute storage bindings are available.
+    pub terrain_conforming_supported: Option<bool>,
     /// Enabled mesh feature and sufficient terrain shader limits on the device.
     pub terrain_mesh_supported: Option<bool>,
     /// `Some(true)` when the adapter exposes ray-query features.
@@ -189,6 +191,7 @@ pub struct Capabilities {
 impl Capabilities {
     pub fn unknown() -> Self {
         Self {
+            terrain_conforming_supported: None,
             ray_query_supported: None,
             is_discrete_gpu: None,
             terrain_mesh_supported: None,
@@ -198,9 +201,50 @@ impl Capabilities {
 }
 
 /// Fully resolved settings consumed by the renderer and perf captures.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct ResolvedTerrainTopology {
+    /// Zero disables all persistent-topology resources and dispatches.
+    pub capacity: u32,
+    pub waves: u32,
+    pub split_area_px: f32,
+    pub merge_area_px: f32,
+}
+impl ResolvedTerrainTopology {
+    fn resolve(
+        request: crate::settings::TerrainTopologySettings,
+        supported: Option<bool>,
+        notes: &mut Vec<String>,
+    ) -> Self {
+        if !request.enabled {
+            return Self::default();
+        }
+        if supported == Some(false) {
+            notes.push(
+                "conforming terrain storage/compute limits unsupported; using regular patches"
+                    .into(),
+            );
+            return Self::default();
+        }
+        let (capacity, waves, split_area_px) = match request.quality {
+            Quality::Low => (32768, 1, 1024.0),
+            Quality::Medium => (65536, 2, 256.0),
+            Quality::High => (131072, 4, 64.0),
+        };
+        Self {
+            capacity,
+            waves,
+            split_area_px,
+            merge_area_px: split_area_px / 8.0,
+        }
+    }
+}
+
+/// Fully resolved settings consumed by the renderer and perf captures.
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    #[serde(default)]
+    pub terrain_topology: ResolvedTerrainTopology,
     pub instruments: ResolvedInstruments,
     pub ocean: crate::settings::OceanSettings,
     pub ocean_size: u32,
@@ -289,6 +333,71 @@ pub struct ResolvedGraphicsSettings {
 impl Default for ResolvedGraphicsSettings {
     fn default() -> Self {
         Self::from_requested(&RequestedGraphics::default(), &Capabilities::unknown())
+    }
+}
+
+#[cfg(test)]
+mod terrain_topology_tests {
+    use super::*;
+    #[test]
+    fn topology_intent_budgets_fallback_and_metadata_roundtrip() {
+        let request = RequestedGraphics::from_toml(
+            "version=1\n[terrain_topology]\nenabled=true\nquality='low'\n",
+        )
+        .unwrap();
+        let unknown = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+        assert_eq!(unknown.terrain_topology.capacity, 32768);
+        assert_eq!(unknown.terrain_topology.waves, 1);
+        assert_eq!(unknown.terrain_topology.split_area_px, 1024.0);
+        assert_eq!(unknown.terrain_topology.merge_area_px, 128.0);
+        let caps = Capabilities {
+            terrain_conforming_supported: Some(false),
+            ..Default::default()
+        };
+        let fallback = ResolvedGraphicsSettings::from_requested(&request, &caps);
+        assert_eq!(
+            fallback.terrain_topology,
+            ResolvedTerrainTopology::default()
+        );
+        assert!(fallback.notes.iter().any(|n| n.contains("conforming")));
+        for (quality, capacity, waves, split) in [
+            (Quality::Low, 32768, 1, 1024.0),
+            (Quality::Medium, 65536, 2, 256.0),
+            (Quality::High, 131072, 4, 64.0),
+        ] {
+            let mut request = request.clone();
+            request.terrain_topology.quality = quality;
+            let resolved = ResolvedGraphicsSettings::from_requested(
+                &request,
+                &Capabilities {
+                    terrain_conforming_supported: Some(true),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                resolved.terrain_topology,
+                ResolvedTerrainTopology {
+                    capacity,
+                    waves,
+                    split_area_px: split,
+                    merge_area_px: split / 8.0
+                }
+            );
+            request.terrain_topology.enabled = false;
+            assert_eq!(
+                ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown())
+                    .terrain_topology,
+                ResolvedTerrainTopology::default()
+            );
+            let roundtrip =
+                RequestedGraphics::from_toml(&toml::to_string(&request).unwrap()).unwrap();
+            assert_eq!(roundtrip, request);
+        }
+        assert!(
+            crate::describe()
+                .iter()
+                .any(|m| m.path == "terrain_topology.enabled" && m.restart_required)
+        );
     }
 }
 
@@ -417,6 +526,11 @@ impl ResolvedGraphicsSettings {
             specular_reflections: requested.renderer.specular_reflections,
             backend: ResolvedBackend { name: backend_name },
             terrain,
+            terrain_topology: ResolvedTerrainTopology::resolve(
+                requested.terrain_topology,
+                caps.terrain_conforming_supported,
+                &mut notes,
+            ),
             terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
             material_storage: match requested.renderer.material_storage {
                 crate::settings::MaterialStorageRequest::RgbaArray => {
@@ -647,6 +761,22 @@ impl ResolvedGraphicsSettings {
         );
         map.insert("ocean".into(), self.ocean.enabled.to_string());
         map.insert("ocean_size".into(), self.ocean_size.to_string());
+        map.insert(
+            "terrain_topology_capacity".into(),
+            self.terrain_topology.capacity.to_string(),
+        );
+        map.insert(
+            "terrain_topology_waves".into(),
+            self.terrain_topology.waves.to_string(),
+        );
+        map.insert(
+            "terrain_topology_split_area_px".into(),
+            self.terrain_topology.split_area_px.to_string(),
+        );
+        map.insert(
+            "terrain_topology_merge_area_px".into(),
+            self.terrain_topology.merge_area_px.to_string(),
+        );
         map.insert(
             "ocean_geometry_patches".into(),
             self.ocean.geometry_patches.to_string(),

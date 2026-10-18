@@ -350,6 +350,7 @@ fn resolve_terrain_capabilities(
             .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
     );
     let caps = Capabilities {
+        terrain_conforming_supported: Some(false), // Native renderer integration only.
         // Always available: without the `mesh-shaders` crate feature this
         // reports false and terrain resolves to the indexed path.
         terrain_mesh_supported: Some(thessa_bevy_rcbt::mesh_shader_supported(&device)),
@@ -360,15 +361,20 @@ fn resolve_terrain_capabilities(
     };
     let resolved = ResolvedGraphicsSettings::from_requested(&requested.0, &caps);
     graphics.0.terrain = resolved.terrain;
+    graphics.0.terrain_topology = resolved.terrain_topology;
     graphics.0.ray_tracing = resolved.ray_tracing;
     graphics.0.notes.retain(|note| {
-        !note.starts_with("terrain mesh capability") && !note.starts_with("auto: ray-query")
+        !note.starts_with("terrain mesh capability")
+            && !note.starts_with("auto: ray-query")
+            && !note.starts_with("conforming terrain")
     });
     graphics
         .0
         .notes
         .extend(resolved.notes.into_iter().filter(|note| {
-            note.starts_with("terrain mesh capability") || note.starts_with("auto: ray-query")
+            note.starts_with("terrain mesh capability")
+                || note.starts_with("auto: ray-query")
+                || note.starts_with("conforming terrain")
         }));
 }
 

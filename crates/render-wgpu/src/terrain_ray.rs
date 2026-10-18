@@ -15,7 +15,7 @@ pub(crate) const SLOT_BYTES: u64 = VERTICES_PER_PATCH as u64 * 32 + 256 + 128;
 /// Obtain from `TerrainRenderer::ray_source`; publication is synchronized via
 /// `MeshRenderer::sync_rt_terrain` after height/membership updates, before draw.
 /// `ConformingSurface::ray_source` instead follows its shared encoded epoch
-/// automatically at RayScene encoding; do not call the legacy patch sync API.
+/// automatically at RayScene encoding; the normal sync API only checks identity.
 #[derive(Debug, Clone)]
 pub struct TerrainRaySource {
     pub(crate) conforming: Option<Arc<Mutex<crate::conforming_surface::SurfacePublicationState>>>,
@@ -222,8 +222,20 @@ impl TerrainRays {
         backend: &Backend,
         terrain: &crate::terrain::TerrainRenderer,
     ) -> Result<(), BackendError> {
+        if self.source.conforming.is_some() {
+            return if terrain
+                .ray_source()
+                .is_some_and(|s| self.source.same_resources(&s))
+            {
+                Ok(())
+            } else {
+                Err(BackendError::Device(
+                    "RT conforming terrain source changed; recreate the mesh consumer".into(),
+                ))
+            };
+        }
         let (vertices, ids, revisions, anchors) = terrain.ray_publication();
-        if self.source.conforming.is_some() || vertices != &self.source.vertices {
+        if vertices != &self.source.vertices {
             return Err(BackendError::Device(
                 "RT terrain source identity changed; recreate the mesh consumer".into(),
             ));

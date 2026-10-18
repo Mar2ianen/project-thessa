@@ -455,8 +455,8 @@ impl ShadowAtlas {
 
     /// Diagnostic-only CBT caster: draw the canonical per-bisector surface
     /// vertex stream into every active layer. Emission must already be encoded
-    /// after topology publication and before this call. Not a production path;
-    /// the legacy patch caster remains the only one `encode_shadows` uses.
+    /// after topology publication and before this call. Production instead
+    /// selects the retained conforming binding in TerrainRenderer::cast_shadow.
     pub fn encode_conforming_casters(
         &self,
         backend: &Backend,

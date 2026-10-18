@@ -1,4 +1,6 @@
-//! Correctness-first persistent GPU sphere experiment; not a production backend.
+//! Correctness-first persistent GPU sphere topology and transaction pipeline.
+//! The native canonical-surface adapter opts in to this bounded reference path;
+//! this alone does not establish full terrain-renderer performance acceptance.
 //! Conflict-filtered parallel transactions + existing OCBT packed allocator ABI. CPU
 //! publishes camera/policy or a logical request, never rebuilt triangle lists.
 use thessa_rcbt_core::conforming::{Record, SphereTopology};
@@ -314,6 +316,30 @@ impl SphereGpu {
         Ok(())
     }
 
+    /// Enable automatic transactions driven by caller-published per-slot areas.
+    /// The caller owns the projection/height model, in the same ordered stream.
+    pub fn set_area_policy(
+        &self,
+        queue: &wgpu::Queue,
+        split: f32,
+        merge: f32,
+    ) -> Result<(), &'static str> {
+        if !split.is_finite() || !merge.is_finite() || merge <= 0.0 || split <= 4.0 * merge {
+            return Err("invalid sphere area thresholds");
+        }
+        queue.write_buffer(
+            &self.params,
+            0,
+            &words(&[self.capacity, u32::from(self.max_depth), 4, 2, 0, 0, 0, 0]),
+        );
+        queue.write_buffer(
+            &self.params,
+            112,
+            &words(&[split.to_bits(), merge.to_bits()]),
+        );
+        Ok(())
+    }
+
     /// No CPU readback, topology upload, full reduction or pool recreation.
     /// Three dispatches: parallel classification, one bounded serial topology
     /// transaction, parallel rank decode. Not large_cbt's parallel mutation.
@@ -365,6 +391,13 @@ impl SphereGpu {
     /// on this pool before reading/drawing or starting another update.
     pub fn encode_batch_plan(&self, encoder: &mut wgpu::CommandEncoder) {
         self.dispatch(encoder, &self.classify, self.capacity.div_ceil(64));
+        self.encode_batch_plan_from_areas(encoder);
+    }
+
+    /// Reuse the existing transaction pipeline with externally classified areas.
+    /// Every allocation slot must be written before this call; commit/publish
+    /// must follow before the next classification. No second allocator exists.
+    pub fn encode_batch_plan_from_areas(&self, encoder: &mut wgpu::CommandEncoder) {
         for (i, pipeline) in self.batch[..5].iter().enumerate() {
             let groups = match i {
                 0 => self.capacity.max(BATCH_REQUESTS).div_ceil(64),

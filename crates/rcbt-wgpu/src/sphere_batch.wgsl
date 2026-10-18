@@ -59,13 +59,38 @@ fn transaction_claims(request: u32, verify: bool) -> bool {
 @compute @workgroup_size(64)
 fn plan_transactions(@builtin(global_invocation_id) gid: vec3<u32>) {
     let request = gid.x;
-    if (request >= plans[1] || (p.config.z != 1u && p.config.z != 3u)) { return; }
+    if (request >= plans[1] || (p.config.z != 1u && p.config.z != 3u && p.config.z != 4u)) { return; }
     let base = plan_base(request);
-    let slot = indices[(plans[0] + request) % rank_count(1u)];
+    var slot = indices[(plans[0] + request) % rank_count(1u)];
+    // External canonical-area policy: each request owns disjoint strided ranks
+    // over the immutable snapshot. Prefer its largest actionable split, else
+    // one mergeable diamond. This reuses the same bounded transaction planner,
+    // claims and allocator; no racing append or second request/geometry store.
+    // Avoid spending a whole 256-request window on far-off-camera roots while
+    // a newly rebased close view waits hundreds of frames for cursor rotation.
+    if (p.config.z == 4u) {
+        var selected = NONE;var largest = -1.0;var split_found = false;
+        for (var rank = request; rank < rank_count(1u); rank += REQUESTS) {
+            let candidate = indices[(plans[0] + rank) % rank_count(1u)];
+            if (root_of(pool[candidate]) >= 12u) { continue; }
+            let area = areas[candidate];
+            if (area > p.policy.x && pool[candidate].address.z < p.config.y) {
+                if (!split_found || area > largest) { selected = candidate;largest = area;split_found = true; }
+            } else if (!split_found && selected == NONE && area < p.policy.y) {
+                let d = diamond(candidate);
+                if (d.x != NONE) {
+                    var small = true;
+                    for (var j = 0u; j < 4u; j++) { small = small && areas[d[j]] < p.policy.y; }
+                    if (small) { selected = candidate; }
+                }
+            }
+        }
+        if (selected == NONE) { return; }slot = selected;
+    }
     let t = pool[slot];
     if (root_of(t) >= 12u) { return; }
     var kind = p.config.w;
-    if (p.config.z == 1u) {
+    if (p.config.z == 1u || p.config.z == 4u) {
         kind = 2u;
         if (areas[slot] > p.policy.x) { kind = 0u; }
         else {

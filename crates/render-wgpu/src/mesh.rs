@@ -190,8 +190,8 @@ impl MeshRenderer {
     }
 
     /// Publish generated-patch membership after mesh updates, before encoding.
-    /// Conforming sources follow their emission epoch automatically and must
-    /// not be passed to this legacy patch-only synchronization method. Height
+    /// Matching conforming sources follow their emission epoch automatically;
+    /// this call only validates their identity and performs no patch sync. Height
     /// generation submissions precede these builds on the same queue.
     pub fn sync_rt_terrain(
         &mut self,

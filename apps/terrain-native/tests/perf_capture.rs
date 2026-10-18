@@ -19,19 +19,20 @@ fn capture_cli_rejects_window_mode_and_non_json_paths_before_startup() {
 #[test]
 #[ignore = "hardware: requires a wgpu adapter, serial offscreen perf capture"]
 fn native_headless_capture_exports_measured_frames_and_capability_truth() {
-    for hdr in [false, true] {
-        check_capture(hdr);
+    for (hdr, topology) in [(false, false), (true, false), (true, true)] {
+        check_capture(hdr, topology);
     }
 }
 
-fn check_capture(hdr: bool) {
+fn check_capture(hdr: bool, topology: bool) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let scratch = root
-        .join("target/test-tmp")
-        .join(format!("native-perf-{}-{hdr}", std::process::id()));
+    let scratch = root.join("target/test-tmp").join(format!(
+        "native-perf-{}-{hdr}-{topology}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&scratch).unwrap();
     let graphics = scratch.join("graphics.toml");
-    std::fs::write(&graphics,format!("version=1\n[renderer]\nhdr={hdr}\nray_tracing=\"off\"\nauto_exposure=true\nbloom=true\n")).unwrap();
+    std::fs::write(&graphics,format!("version=1\n[renderer]\nhdr={hdr}\nray_tracing=\"off\"\nauto_exposure=true\nbloom=true\n[terrain_topology]\nenabled={topology}\nquality=\"low\"\n")).unwrap();
     let json = scratch.join("capture.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
         .current_dir(root.join("../.."))
@@ -60,7 +61,7 @@ fn check_capture(hdr: bool) {
         thessa_render_wgpu::Backend::bring_up_for_graphics_profiled(&Default::default()).unwrap();
     let supported = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 6).is_some();
     let names = [
-        "render.shadows",
+        "render.surface_and_shadows",
         "render.rt_as_build",
         "render.scene_classify_and_raster",
         "render.display_transform",
@@ -99,8 +100,19 @@ fn check_capture(hdr: bool) {
             .resolved
             .get("gpu_scope_layout")
             .map(String::as_str),
-        Some("native-display-v3")
+        Some("native-topology-v4")
     );
+    if topology
+        && thessa_render_wgpu::probe_capabilities(&backend.adapter).terrain_conforming_supported
+            == Some(true)
+    {
+        let output = String::from_utf8_lossy(&output.stdout);
+        assert!(output.contains("terrain_topology=conforming"));
+        assert!(
+            output.contains("topology_revision=33"),
+            "30 warmups + 3 measured emitted publications"
+        );
+    }
     let enabled = hdr
         && thessa_render_wgpu::probe_capabilities(&backend.adapter).hdr_render_target_supported
             == Some(true);

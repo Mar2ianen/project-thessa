@@ -44,15 +44,23 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 fleet_meshes = true # native retained body meshes; false adds no fleet GPU resources/draws
 fleet_quality = "high" # low/medium/high: cull meshes below 8/2/0.5 projected pixels
 
+[terrain_topology]
+# Native persistent conforming CBT; false retains regular patches at zero extra cost.
+# Low/medium/high: 32768/65536/131072 allocation slots, 1/2/4 update waves,
+# projected split area 1024/256/64 px^2, merge at one eighth (hysteresis).
+# Shared canonical height/material residency is NOT the geometric LOD.
+enabled = false
+quality = "high"
+
 [atmosphere]
 # Native background and mesh/RT indirect terms share this quality-tiered sky
 # field and one GPU publication. Disabling releases the field/background draw;
-# no sun disks, aerial perspective or HDR postprocessing in the native path yet.
+# no sun disks or aerial perspective in the native path yet; HDR uses the shared display pass.
 # Native: shared single-scattering/airglow environment for mesh reflections and
 # derived diffuse ambient. Low/medium/high grids: 8x4 / 16x8 / 32x16; changed
 # inputs refresh at most every 8/4/2 frames. Disabled releases the grid.
-# Physical sky background, aerial perspective, multiple scattering and external
-# eclipses remain unported in native; see doc 39's environment checkpoint.
+# The physical sky background is implemented; aerial perspective, multiple
+# scattering and external eclipses remain unported in native; see doc 39.
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
 aerial_perspective = true # horizon haze on: distance fades blue like ISS photos; budgets only

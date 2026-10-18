@@ -232,9 +232,10 @@ impl State {
             self.exposure,
             now_s,
         )?;
-        self.renderer.update_view(
+        self.renderer.update_view_for_extent(
             &self.backend,
             &scene.view(self.config.width, self.config.height, self.exposure),
+            [self.config.width, self.config.height],
         )?;
         self.renderer.update_shadows(
             &self.backend,
@@ -260,6 +261,7 @@ impl State {
             .backend
             .device
             .create_command_encoder(&Default::default());
+        self.renderer.encode_surface(&mut encoder);
         self.renderer.encode_shadows(
             &mut encoder,
             self.mesh_renderer

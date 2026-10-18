@@ -95,9 +95,18 @@ pub struct TerrainPublication {
     pub dispatch_slots: usize,
 }
 
-/// Persistent GPU terrain working set. Geometry is generated at publication;
-/// camera-only frames update anchors/view and rerun classification, not geometry.
+#[derive(PartialEq)]
+struct ShadowCacheKey {
+    lights: u64,
+    meshes: Option<(wgpu::Buffer, u64)>,
+    surface: u64,
+}
+
+/// Persistent GPU terrain working set. Regular-patch geometry is generated at
+/// page publication; opt-in conforming geometry is emitted at encode_surface.
 pub struct TerrainRenderer {
+    topology: Option<crate::terrain_topology::TerrainTopology>,
+    topology_reason: Option<String>,
     ocean: Option<crate::ocean::OceanField>,
     ocean_geometry: Option<crate::ocean::OceanGeometry>,
     ocean_bind: Option<wgpu::BindGroup>,
@@ -111,7 +120,7 @@ pub struct TerrainRenderer {
     /// each page's residual error bound. Drives the conservative CBT LOD
     /// height bound; independent of transient render refinement.
     resident_height_extent: Vec<Option<(f64, f64)>>,
-    shadow_cache: Option<(u64, Option<(wgpu::Buffer, u64)>)>,
+    shadow_cache: Option<ShadowCacheKey>,
     last_shadow_passes: usize,
     last_shadow_draws: crate::shadows::ShadowDrawStats,
     sky: Option<crate::sky::SkyBackground>,
@@ -338,6 +347,13 @@ impl TerrainRenderer {
         sea: Option<thessa_render_core::ocean::SeaState>,
     ) -> Result<Self, BackendError> {
         let device = &backend.device;
+        let topology_requested = settings.is_some_and(|s| s.terrain_topology.capacity > 0);
+        let topology_supported = device.limits().max_storage_buffers_per_shader_stage >= 8
+            && settings.is_none_or(|s| {
+                u64::from(s.terrain_topology.capacity) * 144
+                    <= device.limits().max_storage_buffer_binding_size
+            });
+        let topology_enabled = topology_requested && topology_supported;
         let shadows = if let Some(settings) = settings {
             crate::shadows::ShadowAtlas::new(backend, settings)?
         } else {
@@ -370,12 +386,20 @@ impl TerrainRenderer {
         let max_storage = limits
             .max_storage_buffer_binding_size
             .min(limits.max_buffer_size);
-        let vertex_bytes = count
-            .checked_mul(VERTICES_PER_PATCH as u64 * 32)
-            .ok_or_else(|| fail("terrain size overflow"))?;
-        let triangle_bytes = count
-            .checked_mul(TRIANGLES_PER_PATCH * 16)
-            .ok_or_else(|| fail("terrain size overflow"))?;
+        let vertex_bytes = if topology_enabled {
+            32
+        } else {
+            count
+                .checked_mul(VERTICES_PER_PATCH as u64 * 32)
+                .ok_or_else(|| fail("terrain size overflow"))?
+        };
+        let triangle_bytes = if topology_enabled {
+            16
+        } else {
+            count
+                .checked_mul(TRIANGLES_PER_PATCH * 16)
+                .ok_or_else(|| fail("terrain size overflow"))?
+        };
         let residual_bytes = if let Some(size) = page_capacity {
             count.checked_mul(size)
         } else {
@@ -545,7 +569,7 @@ impl TerrainRenderer {
         });
         let geometry = pipeline(device, &module, &layout, "build_geometry", &[]);
         let mut encoder = device.create_command_encoder(&Default::default());
-        {
+        if !topology_enabled {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&geometry);
             pass.set_bind_group(0, &geometry_bind, &[]);
@@ -607,6 +631,28 @@ impl TerrainRenderer {
             )
         });
         let reflections = settings.is_none_or(|s| s.specular_reflections);
+        let topology_reason = (topology_requested && !topology_supported).then(|| {
+            "conforming terrain exceeds negotiated device limits; using regular patches".into()
+        });
+        let surface_source = if topology_requested && topology_supported {
+            Some(crate::conforming_surface::HeightSurfaceSource::new(
+                backend, &metadata, &residuals, radius, &node_ids,
+            )?)
+        } else {
+            None
+        };
+        let topology = if let Some(height) = &surface_source {
+            Some(crate::terrain_topology::TerrainTopology::new(
+                backend,
+                settings.unwrap(),
+                height,
+                &materials.binding(),
+                ocean.as_ref(),
+                shadows.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let mut hooks = format!(
             "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
@@ -639,7 +685,10 @@ impl TerrainRenderer {
             vertex: wgpu::VertexState {
                 module: &module,
                 entry_point: Some("vertex"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("CBT_CONFORMING", f64::from(topology.is_some()))],
+                    ..Default::default()
+                },
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState {
@@ -690,7 +739,13 @@ impl TerrainRenderer {
         let entries = [
             (0, view.as_entire_binding()),
             (1, transform.as_entire_binding()),
-            (2, vertices.as_entire_binding()),
+            (
+                2,
+                topology
+                    .as_ref()
+                    .map_or(&vertices, |t| &t.surface.vertices)
+                    .as_entire_binding(),
+            ),
             (3, metadata.as_entire_binding()),
             (4, params.as_entire_binding()),
             (5, triangles.as_entire_binding()),
@@ -729,6 +784,7 @@ impl TerrainRenderer {
         });
         let ocean_geometry = if let Some(field) = &ocean
             && ocean_settings.geometry_patches > 0
+            && topology.is_none()
         {
             Some(crate::ocean::OceanGeometry::new(
                 backend,
@@ -742,6 +798,8 @@ impl TerrainRenderer {
             None
         };
         Ok(Self {
+            topology,
+            topology_reason,
             ocean,
             ocean_geometry,
             ocean_bind,
@@ -831,7 +889,7 @@ impl TerrainRenderer {
             params,
             dirty,
             metadata,
-            surface_source: None,
+            surface_source,
             residuals,
             page_slots,
             radius: radius as f32,
@@ -879,6 +937,24 @@ impl TerrainRenderer {
         self.shadows.as_ref()
     }
 
+    /// Explicit ordered frame boundary: topology transactions, canonical datum
+    /// and optional ocean deformation precede shadow/RT/raster consumption.
+    /// Regular-patch mode is a no-op. Re-encoding advances the publication epoch.
+    pub fn encode_surface(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(topology) = &self.topology {
+            topology.encode(encoder);
+        }
+    }
+    pub fn conforming_surface(&self) -> Option<&crate::conforming_surface::ConformingSurface> {
+        self.topology.as_ref().map(|t| &t.surface)
+    }
+    pub fn topology_storage_bytes(&self) -> u64 {
+        self.topology.as_ref().map_or(0, |t| t.storage_bytes())
+    }
+    pub fn topology_reason(&self) -> Option<&str> {
+        self.topology_reason.as_deref()
+    }
+
     pub fn update_shadows(
         &mut self,
         backend: &Backend,
@@ -920,10 +996,14 @@ impl TerrainRenderer {
         self.last_shadow_passes = 0;
         self.last_shadow_draws = Default::default();
         if let Some(shadows) = &self.shadows {
-            let key = (
-                shadows.depth_revision(),
-                meshes.and_then(crate::mesh::MeshRenderer::shadow_key),
-            );
+            let key = ShadowCacheKey {
+                lights: shadows.depth_revision(),
+                meshes: meshes.and_then(crate::mesh::MeshRenderer::shadow_key),
+                surface: self
+                    .topology
+                    .as_ref()
+                    .map_or(0, |t| t.surface.publication().revision),
+            };
             if self.shadow_cache.as_ref() == Some(&key) {
                 return;
             }
@@ -955,6 +1035,22 @@ impl TerrainRenderer {
         atlas: &crate::shadows::ShadowAtlas,
         clip: Option<glam::Mat4>,
     ) -> crate::shadows::ShadowDrawStats {
+        if let Some(topology) = &self.topology {
+            if topology.surface.publication().revision == 0 {
+                return Default::default();
+            }
+            if let Some(bind) = &topology.shadow {
+                pass.set_pipeline(&atlas.conforming_pipeline);
+                pass.set_bind_group(1, bind, &[]);
+                pass.draw(0..topology.surface.slot_count() * 3, 0..1);
+                return crate::shadows::ShadowDrawStats {
+                    candidate_slots: u64::from(topology.surface.slot_count()),
+                    submitted_slots: u64::from(topology.surface.slot_count()),
+                    draw_calls: 1,
+                };
+            }
+            return Default::default();
+        }
         if self.active_extent == 0 {
             return Default::default();
         }
@@ -1218,7 +1314,7 @@ impl TerrainRenderer {
                 updates.len() as u32,
             ]),
         );
-        if updates.is_empty() {
+        if updates.is_empty() || self.topology.is_some() {
             return;
         }
         let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -1242,9 +1338,41 @@ impl TerrainRenderer {
         backend: &Backend,
         params: &ViewParams,
     ) -> Result<(), BackendError> {
+        if self.topology.is_some() {
+            return Err(BackendError::Device(
+                "conforming terrain requires update_view_for_extent".into(),
+            ));
+        }
+        self.update_view_for_extent(backend, params, [1, 1])
+    }
+
+    /// View and actual scaled render-target extent for persistent LOD policy.
+    /// Call after page/material publication and before encode_surface.
+    pub fn update_view_for_extent(
+        &mut self,
+        backend: &Backend,
+        params: &ViewParams,
+        extent: [u32; 2],
+    ) -> Result<(), BackendError> {
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
         let camera = params.world_position_m.to_array();
+        if let Some(topology) = &self.topology {
+            let ocean_bound = if self.ocean_settings.geometry_patches > 0 {
+                self.ocean
+                    .as_ref()
+                    .map_or(0.0, |f| f.stats().height_bound_m as f32)
+            } else {
+                0.0
+            };
+            topology.update_view(
+                backend,
+                &block,
+                camera,
+                extent,
+                self.height_bound_chord() * self.radius + ocean_bound,
+            )?;
+        }
         if camera != self.camera {
             // Projection/rotation/exposure changes do not change tile-relative
             // anchors. Publications already upload anchors at self.camera.
@@ -1318,6 +1446,9 @@ impl TerrainRenderer {
             stats.deformed_patches = geometry.selected.len() as u32;
             stats.geometry_bytes =
                 geometry.original.size() + geometry.slots.size() + geometry.params.size();
+        }
+        if let Some(topology) = &self.topology {
+            stats.geometry_bytes += topology.surface.ocean_storage_bytes();
         }
         stats
     }
@@ -1541,6 +1672,9 @@ impl TerrainRenderer {
     }
 
     pub fn ray_source(&self) -> Option<crate::terrain_ray::TerrainRaySource> {
+        if let Some(topology) = &self.topology {
+            return topology.surface.ray_source(&self.materials.binding());
+        }
         self.vertices
             .usage()
             .contains(wgpu::BufferUsages::BLAS_INPUT)
@@ -1569,6 +1703,7 @@ impl TerrainRenderer {
     /// Encode a full GPU-owned visibility/triangle-LOD/indirect raster frame,
     /// optionally drawing rigid scene meshes in the same render pass to eliminate
     /// LoadOp::Load and attachment store/load overhead.
+    /// Conforming mode requires encode_surface() first, before shadows/RT.
     /// Color formats must match both renderers; depth is single-sample
     /// Depth32Float. Call mesh.encode_rt() before opening this pass if present.
     pub fn encode_scene(
@@ -1578,7 +1713,7 @@ impl TerrainRenderer {
         depth: &wgpu::TextureView,
         mesh: Option<&crate::mesh::MeshRenderer>,
     ) {
-        {
+        if self.topology.is_none() {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_bind_group(0, &self.classify_bind, &[]);
             for (i, pipeline) in self.classify.iter().enumerate() {
@@ -1628,7 +1763,13 @@ impl TerrainRenderer {
         if let Some(ocean) = &self.ocean_bind {
             pass.set_bind_group(2, ocean, &[]);
         }
-        pass.draw_indirect(&self.draw, 0);
+        if let Some(topology) = &self.topology {
+            if topology.surface.publication().revision != 0 {
+                pass.draw(0..topology.surface.slot_count() * 3, 0..1);
+            }
+        } else {
+            pass.draw_indirect(&self.draw, 0);
+        }
         if let Some(mesh) = mesh {
             mesh.draw_into_pass(&mut pass);
         }
@@ -1639,7 +1780,8 @@ impl TerrainRenderer {
         }
     }
 
-    /// Encode a full GPU-owned visibility/triangle-LOD/indirect raster frame.
+    /// Raster the current publication. Conforming mode requires encode_surface
+    /// before any shadows/RT/raster consumers; regular mode classifies here.
     /// Target format must match construction; depth must be Depth32Float.
     pub fn encode(
         &self,
@@ -1650,18 +1792,29 @@ impl TerrainRenderer {
         self.encode_scene(encoder, color, depth, None);
     }
 
-    /// Diagnostic only: tile-local xyz/w followed by normal xyz/height.
+    /// Diagnostic only: legacy tile-local xyz/w + normal xyz/height, or the
+    /// canonical 48-byte ABI when conforming_surface() is present.
     pub fn read_vertices(&self, backend: &Backend) -> Result<Vec<f32>, BackendError> {
-        Ok(read_buffer(backend, &self.vertices)?
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect())
+        Ok(read_buffer(
+            backend,
+            self.topology
+                .as_ref()
+                .map_or(&self.vertices, |t| &t.surface.vertices),
+        )?
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect())
     }
 
     /// Diagnostic only; never needed to submit an ordinary frame.
     pub fn read_draw(&self, backend: &Backend) -> Result<Vec<u32>, BackendError> {
+        if let Some(topology) = &self.topology {
+            // Submitted allocation triangles include zero-area free slots;
+            // callers must not describe this count as the live-leaf count.
+            return Ok(vec![topology.surface.slot_count() * 3, 1, 0, 0]);
+        }
         Ok(read_buffer(backend, &self.draw)?
             .as_chunks::<4>()
             .0

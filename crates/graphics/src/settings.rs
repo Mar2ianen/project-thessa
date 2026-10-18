@@ -699,9 +699,28 @@ impl Default for InstrumentSettings {
     }
 }
 
+/// Native topology quality changes representation budgets, never simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerrainTopologySettings {
+    /// Native persistent conforming bisectors; false keeps regular patches.
+    pub enabled: bool,
+    pub quality: Quality,
+}
+impl Default for TerrainTopologySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quality: Quality::High,
+        }
+    }
+}
+
 /// Requested graphics configuration as parsed from `graphics.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestedGraphics {
+    #[serde(default)]
+    pub terrain_topology: TerrainTopologySettings,
     #[serde(default)]
     pub instruments: InstrumentSettings,
     #[serde(default)]
@@ -739,6 +758,7 @@ fn default_config_version() -> u32 {
 impl Default for RequestedGraphics {
     fn default() -> Self {
         Self {
+            terrain_topology: TerrainTopologySettings::default(),
             instruments: InstrumentSettings::default(),
             ocean: OceanSettings::default(),
             version: 1,
@@ -960,6 +980,7 @@ impl RequestedGraphics {
                 _ => Quality::High,
             };
             self.instruments.quality = self.ocean.quality;
+            self.terrain_topology.quality = self.ocean.quality;
         }
         match preset {
             Preset::Low => {

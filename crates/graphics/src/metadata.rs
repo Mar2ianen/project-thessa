@@ -37,6 +37,28 @@ pub struct SettingMeta {
 pub fn describe() -> Vec<SettingMeta> {
     let mut metadata = vec![
         SettingMeta {
+            path: "terrain_topology.enabled",
+            label: "Native conforming terrain",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Persistent conforming CBT geometry with shared raster/shadow/ocean/RT publication. Disabled uses regular patches with no topology allocation or dispatch.",
+        },
+        SettingMeta {
+            path: "terrain_topology.quality",
+            label: "Native topology quality",
+            kind: SettingKind::Enum,
+            range: "low | medium | high",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "32K/64K/128K slots, 1/2/4 bounded transaction waves, split area 1024/256/64 pixels squared; canonical page residency is independent.",
+        },
+        SettingMeta {
             path: "renderer.surface_quality",
             label: "Native material quality",
             kind: SettingKind::Enum,

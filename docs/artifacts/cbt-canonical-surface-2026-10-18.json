@@ -72,7 +72,15 @@
         "allocator_mirror_valid": true,
         "invalid_bounds_rejected": ["negative", "NaN", "infinite"]
       },
-      "limits": "conservative inflation of the LOD measure only, not a bound on rendered height error; the chord bound is a manual API input and is not yet derived from canonical page min/max"
+      "canonical_derivation": {
+        "api": "TerrainRenderer::height_bound_chord()",
+        "source": "per-slot resident height extent (min_height_m - max_residual_error_m, max_height_m + max_residual_error_m), tracked alongside shadow and ocean bounds, cleared on slot eviction",
+        "folding": "widest active extent -> max|h| / body_radius_m, clamped to one chord",
+        "test": "height_bound_chord_follows_resident_page_extent_and_clears_on_eviction",
+        "verified": ["100 m page -> exact max|height +/- residual| / radius", "manual update to -4 km page widens the bound", "republishing the same page holds it", "eviction returns it to zero"],
+        "limits": "body-wide scalar, cannot express per-tile relief; no production mode or classifier call site consumes it yet"
+      },
+      "limits": "conservative inflation of the LOD measure only, not a bound on rendered height error"
     },
     "batch_recheck_same_state": {
       "test": "target_pool_parallel_commit_cost_and_exact_control",
@@ -101,7 +109,7 @@
     "remote_ci": "not run, not claimed"
   },
   "known_gaps": [
-    "height bound is a manual chord input, not derived from canonical HeightPage min/max for a live planet",
+    "derived height bound is body-wide (one scalar over the widest extent), cannot express per-tile relief, and no production mode consumes it yet",
     "no shadow caster: the shared shadow atlas still consumes the legacy patch-grid vertex stream",
     "no ocean geometry consumer and no RT/BLAS publication for bisectors",
     "no resolved production mode: nothing in graphics.toml selects this path and TerrainRenderer::encode_scene() still draws legacy patches",

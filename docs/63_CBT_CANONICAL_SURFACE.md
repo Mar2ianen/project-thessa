@@ -162,8 +162,17 @@ inflates a triangle's measured screen area by `(1 + 2h/L)^2`, where `L` is the
 triangle's longest chord edge: a raised corner moves on screen by at most that
 bound relative to the triangle's own extent. The same inflated value feeds both
 the split and merge thresholds, so a larger bound can only refine earlier and
-decimate later. It is a bounded LOD policy input; it does not change emitted
-geometry, and zero (the default) leaves the classifier on plain chords.
+decimate later. Zero (the default) leaves the classifier on plain chords, and it
+is a bounded LOD policy input, not a change to emitted geometry.
+
+`TerrainRenderer::height_bound_chord()` derives that bound from canonical data
+rather than a manual guess. `publish_partition`/`update_pages` track a per-slot
+resident height extent (`min_height_m - max_residual_error_m`,
+`max_height_m + max_residual_error_m`) alongside the existing shadow and ocean
+bounds; the accessor folds the widest active extent into `max |h| / radius`,
+clamped to one chord. Extent is cleared when a slot is evicted, and it is
+independent of transient render refinement, so the bound tracks canonical page
+residency and nothing else.
 
 Verified on the same Radeon 880M (`height_bound_conservatively_refines_without_changing_the_oracle`):
 
@@ -177,18 +186,24 @@ Verified on the same Radeon 880M (`height_bound_conservatively_refines_without_c
   bound `0.05` committed 240 transactions with GPU records matching the CPU
   replay at every frame and a valid OCBT allocator mirror afterwards.
 - Negative, NaN and infinite bounds are rejected at the API.
+- **Bound derives from canonical residency.** `height_bound_chord_follows_resident_page_extent_and_clears_on_eviction`
+  publishes a 100 m page and checks the accessor returns exactly
+  `max|height ± residual_error| / radius`; a manual update to a −4 km page widens
+  it, republishing the same page holds it, and evicting the slot returns it to
+  zero. The bound tracks page residency, not render refinement.
 
 This closes the earlier gap where a mountain or a near-camera surface was not
 charged for the screen area its height adds. It is a **conservative inflation of
-the LOD measure**, not a bound on the actual rendered height error: the bound is
-supplied by the caller and must still be derived from canonical page data; no
-such derivation is wired into a production mode yet.
+the LOD measure**, not a bound on the actual rendered height error: it uses the
+widest page extent as a single body-wide value, so it cannot express per-tile
+relief, and nothing yet feeds it into a production mode.
 
 ## Known gaps (explicitly not claimed)
 
-1. **Height bound is a manual policy input.** `set_height_bound` is not yet fed
-   from the canonical page min/max heights, so nothing derives the correct chord
-   bound from resident `HeightPage` data for a live planet.
+1. **The derived bound is body-wide and unused by a mode.** `height_bound_chord()`
+   now folds the widest resident page extent, but it collapses all tiles into one
+   scalar, so it cannot express per-tile relief, and no `graphics.toml` mode or
+   classifier call site consumes it yet.
 2. **No shadow caster.** The shared shadow atlas still consumes the legacy
    patch-grid vertex stream; the CBT surface is not published to it.
 3. **No ocean geometry consumer and no RT/BLAS publication** for bisectors.

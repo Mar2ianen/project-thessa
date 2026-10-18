@@ -107,6 +107,10 @@ pub struct TerrainRenderer {
     ocean_last_camera: Option<[f64; 3]>,
     ocean_reason: Option<String>,
     ocean_possible: Vec<Option<(f64, f64)>>,
+    /// Per-slot resident height extent (min, max) in body metres, including
+    /// each page's residual error bound. Drives the conservative CBT LOD
+    /// height bound; independent of transient render refinement.
+    resident_height_extent: Vec<Option<(f64, f64)>>,
     shadow_cache: Option<(u64, Option<(wgpu::Buffer, u64)>)>,
     last_shadow_passes: usize,
     last_shadow_draws: crate::shadows::ShadowDrawStats,
@@ -753,6 +757,12 @@ impl TerrainRenderer {
             })
                 .map(|i| patches.get(i).and_then(|p| ocean_height_range(p.page)))
                 .collect(),
+            resident_height_extent: {
+                let mut extents = Vec::with_capacity(capacity);
+                extents.extend(patches.iter().map(|p| Some(height_extent(p.page))));
+                extents.resize(capacity, None);
+                extents
+            },
             shadow_cache: None,
             last_shadow_passes: 0,
             last_shadow_draws: Default::default(),
@@ -1112,6 +1122,11 @@ impl TerrainRenderer {
                 *bound = None;
             }
         }
+        for (extent, id) in self.resident_height_extent.iter_mut().zip(&self.node_ids) {
+            if *id == 0 {
+                *extent = None;
+            }
+        }
         self.manual_updates.fill(false);
         Ok(TerrainPublication {
             active: patches.len(),
@@ -1171,6 +1186,7 @@ impl TerrainRenderer {
             if let Some(possible) = self.ocean_possible.get_mut(idx) {
                 *possible = ocean_height_range(page);
             }
+            self.resident_height_extent[idx] = Some(height_extent(page));
             self.ray_revisions[idx] = self.ray_revisions[idx].wrapping_add(1).max(1);
             let (offset, _) = self.page_slots[idx];
             let mut data = page.residual_bytes();
@@ -1499,6 +1515,31 @@ impl TerrainRenderer {
         self.materials.binding()
     }
 
+    /// Conservative surface-height bound for CBT LOD classification, in
+    /// unit-sphere chord units (`height_m / body_radius_m`). Derived from the
+    /// widest resident page extent including residual error, so relief is
+    /// charged for the screen area it adds. Zero when no page is resident, and
+    /// clamped to one chord because the classifier works on a unit sphere.
+    pub fn height_bound_chord(&self) -> f32 {
+        let radius = self.body_radius_m;
+        if !radius.is_finite() || radius <= 0.0 {
+            return 0.0;
+        }
+        let widest = self.resident_height_extent.iter().flatten().fold(
+            None,
+            |acc: Option<(f64, f64)>, &(low, high)| {
+                Some(match acc {
+                    None => (low, high),
+                    Some((a, b)) => (a.min(low), b.max(high)),
+                })
+            },
+        );
+        let Some((low, high)) = widest else {
+            return 0.0;
+        };
+        (low.abs().max(high.abs()) / radius).min(1.0) as f32
+    }
+
     pub fn ray_source(&self) -> Option<crate::terrain_ray::TerrainRaySource> {
         self.vertices
             .usage()
@@ -1632,6 +1673,15 @@ fn ocean_height_range(page: &HeightPage) -> Option<(f64, f64)> {
     let min = f64::from(page.min_height_m() - page.max_residual_error_m());
     let max = f64::from(page.max_height_m() + page.max_residual_error_m()).min(1.0);
     (min < 1.0).then_some((min, max))
+}
+
+/// Resident height extent for one page, including its residual error bound so
+/// the CBT LOD height bound stays conservative.
+fn height_extent(page: &HeightPage) -> (f64, f64) {
+    (
+        f64::from(page.min_height_m() - page.max_residual_error_m()),
+        f64::from(page.max_height_m() + page.max_residual_error_m()),
+    )
 }
 
 fn frame_bytes(anchors: &[TileAnchor], camera: [f64; 3]) -> Result<Vec<u8>, BackendError> {

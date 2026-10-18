@@ -525,3 +525,49 @@ fn owned_dirty_page_updates_preserve_clean_geometry_and_validate_atomically() {
         .collect::<Vec<_>>();
     assert!(TerrainRenderer::new(&backend, &oversized, OffscreenTarget::FORMAT).is_err());
 }
+
+#[test]
+fn height_bound_chord_follows_resident_page_extent_and_clears_on_eviction() {
+    let Some(backend) = backend() else { return };
+    let radius = 6_371_000.0;
+    let a = anchor(4, 10, 512, 512);
+    let low = HeightPage::bake(&[100.0; 4], 2, 0.01).unwrap();
+    let mut renderer = TerrainRenderer::with_capacity(
+        &backend,
+        &[TerrainPatch {
+            anchor: a,
+            page: &low,
+        }],
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 1,
+            height_grid_size: 2,
+            material_layers: 1,
+        },
+    )
+    .unwrap();
+    let expected = |page: &HeightPage| {
+        (f64::from(page.max_height_m() + page.max_residual_error_m())
+            .max(f64::from(page.min_height_m() - page.max_residual_error_m()).abs())
+            / radius) as f32
+    };
+    assert_eq!(renderer.height_bound_chord(), expected(&low));
+
+    // A taller resident page widens the bound through the manual update path.
+    let tall = HeightPage::bake(&[-4_000.0; 4], 2, 0.5).unwrap();
+    renderer.update_pages(&backend, &[(0, &tall)]).unwrap();
+    assert_eq!(renderer.height_bound_chord(), expected(&tall));
+    // The bound reflects the ~4 km relief, not a flattened radius-sized value.
+    assert!(renderer.height_bound_chord() > 4_000.0 / 6_371_000.0 * 0.5);
+
+    // Republishing the same page keeps the bound; eviction clears it to zero.
+    let resident = ResidentTerrainPatch {
+        anchor: a,
+        page: &tall,
+        generation: 1,
+    };
+    renderer.publish_partition(&backend, &[resident]).unwrap();
+    assert_eq!(renderer.height_bound_chord(), expected(&tall));
+    renderer.publish_partition(&backend, &[]).unwrap();
+    assert_eq!(renderer.height_bound_chord(), 0.0);
+}

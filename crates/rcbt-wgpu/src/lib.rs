@@ -9,6 +9,8 @@
 //! kernels below stay only as a dispatch bring-up target. [`ocbt`] and the
 //! compact core buffers are transport layouts; they do not replace the
 //! authoritative CPU topology.
+//! [`sphere`] is a separate correctness experiment with GPU-owned conforming
+//! sphere topology; its single-writer mutation is not the production renderer.
 
 pub mod bench_support;
 pub mod heap;
@@ -16,6 +18,7 @@ pub mod microstore;
 pub mod microstore_sample;
 pub mod ocbt;
 pub mod shaders;
+pub mod sphere;
 
 use std::borrow::Cow;
 use std::num::NonZeroU64;

@@ -222,6 +222,12 @@ impl BisectorPool {
         self.slots.len() - self.active_count
     }
 
+    /// Generation of an allocated or free slot, for a backend snapshot that
+    /// must preserve stale-handle rejection across later slot reuse.
+    pub fn slot_generation(&self, slot: usize) -> Option<u32> {
+        self.slots.get(slot).map(|slot| slot.generation)
+    }
+
     pub const fn is_full(&self) -> bool {
         self.active_count == self.slots.len()
     }

@@ -13,6 +13,11 @@
 
 ## 1. Decision
 
+The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
+conforming bisector topology from render-patch grid LOD. It is a test-only unit
+sphere, not a migrated live planet; production height/material/precision and
+shadow/ocean/RT consumers retain their existing path pending the listed gates.
+
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with
 full-caster depth/image output. Ocean keeps full caster coverage; the isolated

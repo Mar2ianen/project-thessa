@@ -17,6 +17,7 @@ wgpu.workspace = true
 pollster = "0.4"
 
 [dev-dependencies]
+thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
 thessa-render-assets = { path = "../render-assets" }
 png = "0.18"
 

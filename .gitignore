@@ -2,6 +2,7 @@
 /apps/terrain-native/target/
 /apps/server/target/
 /crates/flight-net/target/
+/crates/render-wgpu/target/
 /tools/worldgen-rocky/target/
 /perf-*.csv
 /perf-*.json

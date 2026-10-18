@@ -6471,6 +6471,7 @@ dependencies = [
  "pollster",
  "thessa-graphics",
  "thessa-rcbt-core",
+ "thessa-rcbt-wgpu",
  "thessa-render-assets",
  "thessa-render-core",
  "thessa-wgpu-exp",

@@ -3,13 +3,21 @@
 Status: architecture baseline (§§1–18) normative; current mesh/indexed consumer
 integration is tracked in `47_RCBT_RENDER_AUDIT_2026_10_01.md`; §19 baseline and §20
 follow-ups archival as of 2026-09-15 — indexed raster, page provider,
-extraction, and indirect draw shipped opt-in; persistent GPU topology and
+extraction, and indirect draw shipped opt-in; production persistent GPU topology and
 neighbor propagation remain future. The mesh-shader GPU test pins production
 bindings 0–16 and the 256-wide fan-out (any renumber fails it); GPU tests are
 `#[ignore]`d without hardware runners, so the mesh path has no default-CI
 signal yet.
 
 Status: **implementation baseline / performance target**.
+
+2026-10-18 experimental follow-up: [doc 61](61_CBT_SPHERE_EXPERIMENT.md)
+implements a persistent, conforming pure-sphere GPU prototype and independent
+CPU oracle. It uses the existing pool/OCBT contracts, pair-u32 geometric IDs,
+parallel classification/indexation and single-writer split/merge transactions.
+It is not integrated production terrain, concurrent multi-request propagation,
+height/material sampling, planetary precision, shadow/ocean/RT publication or
+whole-system parity with `large_cbt`. The production gaps below remain open.
 
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
 logical tree and backend contract), `thessa-rcbt-ref` (portable differential

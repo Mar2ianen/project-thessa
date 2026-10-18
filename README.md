@@ -189,6 +189,9 @@ The checked-in vertical slice currently contains:
     `encode_shadows()` still uses the legacy caster. An optional diagnostic
     ocean consumer borrows the spectral field and resolved ocean policy, with
     shared-vertex filtering, non-accumulating emission and optical-only fallback.
+    Shared publication epochs now feed those vertices into the existing native
+    RayScene with canonical material/water hits and whole-pool budget fallback;
+    optical-only phase changes do not require AS builds.
     It does not yet drive production terrain, ocean or RT, and no
     `graphics.toml` mode selects it.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in

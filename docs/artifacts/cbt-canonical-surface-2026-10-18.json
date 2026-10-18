@@ -1,5 +1,7 @@
 {
  "phase": "cbt-canonical-surface",
+ "snapshot_commit": "2851a9f (ocean/shadow stage; retained measurements and checks below)",
+ "follow_up": "conforming-ray-publication-2026-10-18.json",
  "date": "2026-10-18",
  "doc": "docs/63_CBT_CANONICAL_SURFACE.md",
  "baseline": "1ff4b3a (parallel conforming CBT transactions, docs 61/62)",

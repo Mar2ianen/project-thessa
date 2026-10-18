@@ -167,6 +167,11 @@ is implied by deterministic topology and capture tests.
 
 ## Next migration gates (not implemented)
 
+This list is the original experiment boundary. Subsequent implementation and
+remaining gates are tracked in [doc 62](62_CBT_PARALLEL_TRANSACTIONS.md) and
+[doc 63](63_CBT_CANONICAL_SURFACE.md), including canonical surface precision,
+resident-derived relief bounds and shared-epoch RT publication.
+
 1. Parallel multi-request planning/reservation/conflict resolution with the same
    transactional exhaustion semantics; benchmark at the intended 128K pool size.
 2. Canonical surface sampling through the existing height/material cache and

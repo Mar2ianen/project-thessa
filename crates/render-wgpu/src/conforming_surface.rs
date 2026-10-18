@@ -1,6 +1,7 @@
 //! Experimental persistent-bisector surface consumer. Borrows the existing
 //! terrain page publication; no second height allocator, streamer or grid LOD.
 use crate::{Backend, BackendError};
+use std::sync::{Arc, Mutex};
 use thessa_rcbt_core::{
     conforming_surface::precision_charts,
     material_cache::{SlotEntry, material_directory_with_capacity},
@@ -93,6 +94,22 @@ fn directory(ids: &[u64]) -> Result<Vec<u8>, BackendError> {
 }
 
 pub const VERTEX_BYTES: u64 = 48;
+/// Encoded publication, not a frozen copy or proof of queue completion. All
+/// consumers must follow emission in the same ordered command stream. Retained
+/// sources share resource identity and this epoch; they do not pin old contents.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SurfacePublication {
+    pub revision: u64,
+    pub origin_m: [f64; 3],
+    pub configuration_revision: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SurfacePublicationState {
+    pub published: SurfacePublication,
+    pub configuration_revision: u64,
+    staged_origin_m: [f64; 3],
+}
 /// Per allocation slot: three 48-byte vertices (position+height, normal+face,
 /// exact UV numerators+source slot+level). No culled or regular-grid geometry.
 pub struct ConformingSurface {
@@ -103,6 +120,8 @@ pub struct ConformingSurface {
     capacity: u32,
     radius_m: f64,
     ocean: Option<crate::conforming_ocean::ConformingOcean>,
+    ocean_field: Option<crate::ocean::OceanBinding>,
+    publication: Arc<Mutex<SurfacePublicationState>>,
 }
 impl ConformingSurface {
     pub fn new(
@@ -124,7 +143,17 @@ impl ConformingSurface {
         let vertices = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("persistent-cbt-surface"),
             size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | if backend
+                    .device
+                    .features()
+                    .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+                {
+                    wgpu::BufferUsages::BLAS_INPUT
+                } else {
+                    wgpu::BufferUsages::empty()
+                },
             mapped_at_creation: false,
         });
         let charts = backend.device.create_buffer(&wgpu::BufferDescriptor {
@@ -179,6 +208,8 @@ impl ConformingSurface {
             capacity,
             radius_m: source.radius_m,
             ocean: None,
+            ocean_field: None,
+            publication: Arc::default(),
         };
         surface.update_camera(backend, [0.0; 3])?;
         Ok(surface)
@@ -203,6 +234,7 @@ impl ConformingSurface {
             );
         }
         backend.queue.write_buffer(&self.charts, 0, &data);
+        self.publication.lock().unwrap().staged_origin_m = camera;
         Ok(())
     }
     /// Must follow topology publication. Page uploads and camera updates must
@@ -217,6 +249,45 @@ impl ConformingSurface {
         if let Some(ocean) = &self.ocean {
             ocean.encode(encoder, self.capacity);
         }
+        let mut state = self.publication.lock().unwrap();
+        state.published = SurfacePublication {
+            revision: state
+                .published
+                .revision
+                .checked_add(1)
+                .expect("surface epoch exhausted"),
+            origin_m: state.staged_origin_m,
+            configuration_revision: state.configuration_revision,
+        };
+    }
+    pub fn publication(&self) -> SurfacePublication {
+        self.publication.lock().unwrap().published
+    }
+    /// Borrow the emitted stream for the existing RayScene. Allocation chunks
+    /// are bounded groups of 2048 triangles, not canonical data pages. Free and
+    /// virtual slots are zero-area triangles. Emission (including ocean) MUST
+    /// precede RayScene::encode in the same ordered stream. Each new publication
+    /// invalidates all chunk BLASes; a repeated consumer without emission reuses
+    /// them. Every successful set_ocean invalidates existing sources; obtain a
+    /// replacement afterwards. Recreate consumers if material identity changes.
+    pub fn ray_source(
+        &self,
+        materials: &crate::material::MaterialBinding,
+    ) -> Option<crate::terrain_ray::TerrainRaySource> {
+        self.vertices
+            .usage()
+            .contains(wgpu::BufferUsages::BLAS_INPUT)
+            .then(|| crate::terrain_ray::TerrainRaySource {
+                ocean: self.ocean_field.clone(),
+                vertices: self.vertices.clone(),
+                directory: materials.directory.clone(),
+                material: materials.texture.clone(),
+                sampler: materials.sampler.clone(),
+                radius_m: self.radius_m,
+                capacity: self.capacity.div_ceil(2048) as usize,
+                conforming: Some(self.publication.clone()),
+                conforming_configuration: self.publication.lock().unwrap().configuration_revision,
+            })
     }
     pub fn storage_bytes(&self) -> u64 {
         self.vertices.size()
@@ -228,6 +299,9 @@ impl ConformingSurface {
     /// remove this consumer entirely; no buffers/pipelines/work remain.
     /// One patch of geometry budget admits 2048 bisector triangles. Exceeding
     /// the whole near-partition budget falls back to the undeformed surface.
+    /// An enabled field remains available to RT optics even with zero geometry
+    /// budget. Successful reconfiguration invalidates existing ray sources until
+    /// their consumers are recreated and this configuration has been emitted.
     pub fn set_ocean(
         &mut self,
         backend: &Backend,
@@ -235,6 +309,11 @@ impl ConformingSurface {
         field: Option<&crate::ocean::OceanField>,
         materials: &crate::material::MaterialBinding,
     ) -> Result<(), BackendError> {
+        if settings.ocean.enabled && field.is_some_and(|f| f.stats().size != settings.ocean_size) {
+            return Err(BackendError::Device(
+                "conforming ocean field/resolved size mismatch".into(),
+            ));
+        }
         self.ocean = crate::conforming_ocean::ConformingOcean::new(
             backend,
             &self.vertices,
@@ -242,6 +321,14 @@ impl ConformingSurface {
             field,
             materials,
         )?;
+        self.ocean_field = field
+            .filter(|_| settings.ocean.enabled)
+            .map(|f| f.binding().clone());
+        let mut state = self.publication.lock().unwrap();
+        state.configuration_revision = state
+            .configuration_revision
+            .checked_add(1)
+            .expect("surface configuration epoch exhausted");
         Ok(())
     }
     /// Explicit diagnostic readback: [f32 footprint bits, candidate triangles,

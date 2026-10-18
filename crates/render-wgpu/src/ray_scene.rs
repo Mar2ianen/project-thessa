@@ -369,8 +369,8 @@ pub fn plan_with_terrain(
         let available = settings
             .rt_scene_memory_bytes
             .saturating_sub(plan.bytes)
-            .saturating_sub(crate::terrain_ray::INDEX_BYTES);
-        let slots = (available / crate::terrain_ray::SLOT_BYTES)
+            .saturating_sub(terrain.index_bytes());
+        let slots = (available / terrain.slot_bytes())
             .min(terrain.capacity as u64)
             .min(u64::from(
                 settings.rt_max_instances.saturating_sub(plan.instances),
@@ -399,8 +399,7 @@ pub fn plan_with_terrain(
             );
         } else {
             plan.instances += slots as u32;
-            plan.bytes +=
-                slots as u64 * crate::terrain_ray::SLOT_BYTES + crate::terrain_ray::INDEX_BYTES;
+            plan.bytes += slots as u64 * terrain.slot_bytes() + terrain.index_bytes();
             plan.terrain = Some((terrain.clone(), slots));
         }
     }
@@ -441,8 +440,9 @@ pub fn shader(plan: &Plan) -> String {
         && plan.reflections
     {
         sampling.push_str(&format!(
-            "const RT_TERRAIN_RADIUS:f32={};\n",
-            terrain.radius_m as f32
+            "const RT_TERRAIN_RADIUS:f32={};\nconst RT_TERRAIN_CONFORMING:bool={};\n",
+            terrain.radius_m as f32,
+            terrain.conforming.is_some()
         ));
         let [r, g, b, _] = crate::terrain::FALLBACK_ALBEDO;
         sampling.push_str(&format!(
@@ -783,11 +783,7 @@ impl RayScene {
         RayStats {
             active: self.built && !self.transforms.is_empty(),
             instances: self.transforms.len() as u32,
-            triangles: self.triangles
-                + self
-                    .terrain
-                    .as_ref()
-                    .map_or(0, |t| t.active.len() as u64 * 2048),
+            triangles: self.triangles + self.terrain.as_ref().map_or(0, |t| t.triangle_count()),
             bytes: self.bytes,
             passes: self.passes,
             terrain_instances: self.terrain.as_ref().map_or(0, |t| t.active.len() as u32),
@@ -820,7 +816,10 @@ impl RayScene {
         let (Some(next), Some(old)) = (&self.terrain, &previous.terrain) else {
             return false;
         };
-        if next.source.vertices != old.source.vertices || old.active.len() > next.capacity {
+        if !next.source.same_resources(&old.source)
+            || old.active.len() > next.capacity
+            || (old.source.conforming.is_some() && old.capacity < next.capacity)
+        {
             return false;
         }
         let capacity = next.capacity;
@@ -882,12 +881,15 @@ impl RayScene {
     }
 
     fn prepare(&mut self) {
+        if let Some(terrain) = &mut self.terrain {
+            terrain.sync_conforming();
+        }
         self.transforms.truncate(self.mesh_count);
         self.primitives.truncate(self.mesh_count);
         if let Some(terrain) = &self.terrain {
-            for &(slot, anchor) in &terrain.active {
+            for (slot, anchor) in &terrain.active {
                 let translation =
-                    (glam::DVec3::from_array(anchor.anchor_body_m) - self.camera_m).as_vec3();
+                    (glam::DVec3::from_array(anchor.origin_m) - self.camera_m).as_vec3();
                 self.transforms.push([
                     1.0,
                     0.0,
@@ -902,7 +904,7 @@ impl RayScene {
                     1.0,
                     translation.z,
                 ]);
-                self.primitives.push(TERRAIN_TAG | slot as u32);
+                self.primitives.push(TERRAIN_TAG | *slot as u32);
             }
         }
         if self.transforms != self.previous
@@ -938,7 +940,7 @@ impl RayScene {
                     if primitive & TERRAIN_TAG != 0 {
                         let pool = self.terrain.as_ref().unwrap();
                         let (_, anchor) = &pool.active[slot - self.mesh_count];
-                        staging.extend(f32_bytes(anchor.normal.map(|v| v as f32)));
+                        staging.extend(f32_bytes(anchor.radial));
                     } else {
                         staging.extend_from_slice(&[0; 12]);
                     }

@@ -1552,6 +1552,8 @@ impl TerrainRenderer {
                 sampler: self.materials.sampler.clone(),
                 radius_m: self.body_radius_m,
                 capacity: self.node_ids.len(),
+                conforming: None,
+                conforming_configuration: 0,
             })
     }
 

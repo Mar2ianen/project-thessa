@@ -1,0 +1,108 @@
+{
+  "phase": "conforming-ray-publication",
+  "date": "2026-10-18",
+  "baseline": "2851a9f (canonical surface, diagnostic shadow and spectral geometry)",
+  "doc": "docs/63_CBT_CANONICAL_SURFACE.md",
+  "hardware": {
+    "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan",
+    "driver": "Mesa 26.2.4-arch1.1"
+  },
+  "contract": {
+    "publication": "monotonic encoded emission epoch, f64 body-fixed camera origin and configuration revision; staged camera is not published until emission",
+    "ordering": "source writes/topology -> emission including optional ocean -> existing RayScene AS build -> consumers in an ordered stream; encoding is not queue completion; discarded or out-of-order encoders are outside the contract",
+    "lifetime": "shared GPU buffers/material/field handles and publication identity retained by source clones, not frozen old contents/page snapshots",
+    "configuration": "successful set_ocean invalidates old ray consumers; replacements wait for emission of their configuration; invalid settings leave existing state intact",
+    "geometry": "borrowed 48-byte vertices, non-indexed groups of at most 2048 allocation triangles per BLAS, degenerate virtual/free slots; no expansion, GPU readback, second scene, vertex cache or streamer",
+    "budgets": "existing resolved RT instance/memory limits, whole-pool fallback rather than arbitrary truncated blockers; planning charge excludes driver-owned AS memory",
+    "invalidation": "new emission rebuilds every chunk; retained publication builds nothing; dry material shading and optical-only field phases need no geometry publication/AS work"
+  },
+  "oracles": {
+    "test": "conforming_publications_feed_existing_ray_scene_without_stale_blas",
+    "fixture": "actual mesh mirror reflecting six canonical face pages at R=1000 m, local depth 8, 4096 allocation slots, 3072 initial live triangles, two BLAS chunks, ray interval 20 m",
+    "verified": [
+      "not-yet-emitted sources contribute no blockers",
+      "red/green canonical pages reach actual reflected pixels, including dielectric GGX dark channels",
+      "dry material-only changes require zero BLAS builds",
+      "-50 m height moves the intersection outside the ray interval; restoring pages restores reflection bytes",
+      "staged vs emitted camera origins, camera rebase, committed GPU split and rebuilt chunks",
+      "paused/reused publication yields exact bytes and no AS work",
+      "insufficient budget omits both chunks and reports fallback",
+      "RT disabled has zero scene bytes/builds",
+      "reconfiguration retires old contribution and new configuration waits for emission",
+      "shared ocean time changes affect reflected hits; rewind restores exact bytes",
+      "optical-only phase changes affect reflection bytes without a new emission or BLAS/TLAS build",
+      "retained consumer still renders exact bytes after all geometry/material/field producers are dropped"
+    ]
+  },
+  "scoped_cost": {
+    "scenario": "AS-only timestamps after fresh canonical emission each sample; existing RayScene, full rebuild stress/reference backend, no ocean deformation in target fixture",
+    "live_triangles": 98304,
+    "allocation_triangles": 131072,
+    "chunks": 64,
+    "samples": 20,
+    "warmup": 5,
+    "p50_ms": 5.6654444145469665,
+    "p95_ms": 5.900651310562134,
+    "raw_ms": [5.687927131988526, 5.811281506828308, 5.767197747138978, 5.735377287872315, 5.757459243862153, 5.6654444145469665, 5.900651310562134, 5.88185559847641, 5.543773237804413, 5.507223793407441, 5.623404538261414, 5.696383198619843, 5.488548309757233, 5.574752098022461, 5.533674049221039, 5.453521758876801, 5.786995362854005, 5.511471864795685, 5.490151355564118, 5.480332699996948],
+    "quantiles": "higher order statistic ceil(q*(N-1))",
+    "raw_csv": "crates/render-wgpu/target/test-tmp/conforming-ray/as-build-ms.csv (ignored, regenerable)",
+    "raw_csv_sha256": "ccef49d24b2491ed9cb619986f15dfcbf99f0a17cc03545ab4498b25f4135f74",
+    "cached_control": "same retained publication: zero BLAS builds and zero AS passes",
+    "limitations": "unlocked clocks, serial diagnostic readbacks; not a full frame, FPS, equal-error legacy comparison, AS-memory measurement, cage/procedural/refit performance claim"
+  },
+  "research": {
+    "primary_demo": "https://gpuopen.com/learn/how-tetrahedral-cages-significantly-reduce-bvh-memory-usage/",
+    "technical_blog": "https://gpuopen.com/learn/ray-tracing-massive-amounts-animated-geometry/",
+    "paper": "https://gpuopen.com/download/TetrahedralMeshes_AuthorsVersion.pdf",
+    "doi": "10.1145/3820014",
+    "decision": "cages deferred to a measured connectivity-preserving repeated-asset/vegetation backend, not inserted into adaptive ocean topology",
+    "critical_limit": "fast affine-instance variant does not guarantee watertightness; overlap mitigation is not a shared-edge proof. Paper Table 2 strict variant costs 19-80x more render time in its fixtures",
+    "api_inventory": "local wgpu-types 30.0.1 exposes AABB geometry; Naga 30.0.1 WGSL lowering recognizes rayQueryGetCandidateIntersection/rayQueryGenerateIntersection/rayQueryConfirmIntersection; no procedural-ocean execution was tested",
+    "ocean_candidate": "conservative time-independent wave bounds plus shared-field intersection needs nearest-hit/multiple-root/grazing/shore/filter/raster-error oracles and complete same-quality cost comparison; no extra FFT or second wave model"
+  },
+  "checks": {
+    "status": "all listed local checks passed, direct exit-status manifest",
+    "manifest": "target/test-tmp/conforming-ray-checks/results.json",
+    "environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp", "CARGO_TARGET_DIR": "/home/chechulin/Projects/project-thessa-fastrt/target", "PYTHONDONTWRITEBYTECODE": "1"},
+    "commands": [
+      {"command": "cargo fmt --all -- --check", "exit_code": 0},
+      {"command": "cargo clippy --workspace --all-targets --all-features -- -D warnings", "exit_code": 0},
+      {"command": "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings", "exit_code": 0},
+      {"command": "cargo test --workspace --lib --bins", "exit_code": 0, "passed": 1881},
+      {"command": "cargo test --workspace --test '*'", "exit_code": 0, "passed": 91},
+      {"command": "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored", "exit_code": 0, "passed": 24},
+      {"command": "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1", "exit_code": 0, "passed": 20},
+      {"command": "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1", "exit_code": 0, "passed": 26},
+      {"command": "python3 tools/agent-qa/check_architecture.py", "exit_code": 0},
+      {"command": "python3 -m unittest discover -s tools/agent-qa/tests", "exit_code": 0, "passed": 5},
+      {"command": "git diff --check", "exit_code": 0}
+    ],
+    "hardware_suite_scope": "26 render-wgpu ignored tests include the nine CBT tests, new conforming-ray oracle and three backend library tests, not additive to them; ordinary workspace runs retain default ignored suites",
+    "log_sha256": {
+      "clippy": "ea5a37a536960fce30b5522ca5538aea026ab1de8c312d398a3faa3093037037",
+      "native-clippy": "7ac862b0d81d6d33ddc3cea11448f121b35a85e7f1efb1b7548e3f203e2aad99",
+      "workspace-unit": "36e8fa18e15449cf286f0ac89389f93e9d439c64f172b77db3a3c698f8662a12",
+      "workspace-integration": "5825b8494a3f4a4f2034753d97f5a5f10b137e152a98a900977ce85702d6504f",
+      "bevy-gpu": "393e0d58c4011e8d5559783f3d7b05ad99e8c090e8d4cb11a6c507f8b7b68755",
+      "native-gpu": "796b04a9f81910f052f3268d355e08e8d797a0de792c3fe9c1853384459d1be3",
+      "render-gpu": "8b4852f6335a8a998526b4c0070e3ab7a02f362defb32e55d1f30b553a73311a",
+      "architecture": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+      "agent-qa": "baf49b59538192f3e136ca0404cac516ecb8dd2fe5ba1416604056f3080fa49c"
+    },
+    "remote_ci": "not run, not claimed"
+  },
+  "source_sha256": {
+    "crates/render-wgpu/src/conforming_surface.rs": "6a625eb1050e33b62c8b2e3dd9a52bf629441c1a6f72b1a1ed6de2979d161801",
+    "crates/render-wgpu/src/terrain_ray.rs": "94b479da41434e18f4838b74c5cbd93003d7047b2cede039d6248a9a4c671084",
+    "crates/render-wgpu/src/terrain_ray.wgsl": "1c9f7266829febd6fd6a3cac3601fc60ff88cbba7bf0469acc5cfd1f6524a3a5",
+    "crates/render-wgpu/src/ray_scene.rs": "4a28e3777ead385101ddfe89f894b03b5e3a63b1b2f3d1d59a191e3ad70c67a1",
+    "crates/render-wgpu/tests/ray_scene.rs": "80a6f3aed16262e1a8faa0b064393e0253e04bf75a06d6971ca7494fc08d2630"
+  },
+  "remaining": [
+    "production terrain topology/raster/ocean/shadow-cache selection through resolved graphics settings",
+    "per-tile height error/LOD integration, dirty-chunk reuse and temporal/equal-error acceptance",
+    "optimized dynamic-ocean intersections and representative build+traversal comparison",
+    "cross-platform runtime and blind subjective acceptance"
+  ]
+}

@@ -28,8 +28,10 @@ oracles. A conservative height-bound LOD input now charges relief for the
 screen area it adds, and a diagnostic caster publishes the surface into the
 shared shadow atlas (independent metric sphere oracle). A diagnostic ocean
 geometry adapter borrows the existing spectral field/material residency and
-resolved ocean policy with seam-safe filtering and optical-only fallback;
-production ocean/RT publication and shadow consumer selection remain open,
+resolved ocean policy with seam-safe filtering and optical-only fallback.
+Encoded surface epochs now feed borrowed triangles/materials/ocean optics into
+the existing RayScene. Production topology/ocean selection, shadow-cache
+integration and optimized dynamic-ocean RT remain open,
 and neither phase provides whole-system parity.
 
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust

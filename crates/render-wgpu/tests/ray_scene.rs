@@ -410,6 +410,385 @@ fn resident_terrain_hits_share_materials_and_dirty_only_blas() {
 }
 
 #[test]
+#[ignore = "hardware: persistent CBT surface -> existing RayScene, epochs, residency and whole-pool admission"]
+fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
+    use thessa_rcbt_core::material_page::CbtMaterialPage;
+    use thessa_rcbt_wgpu::sphere::SphereGpu;
+    use thessa_render_wgpu::conforming_surface::ConformingSurface;
+    let backend =
+        Backend::bring_up_for_graphics_profiled(&requested(RayTracingRequest::Local)).unwrap();
+    let mut settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
+    settings.rt_max_distance_m = 20.0;
+    let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let patches = (0..6)
+        .map(|face| TerrainPatch {
+            anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), 1000.0).unwrap(),
+            page: &page,
+        })
+        .collect::<Vec<_>>();
+    let mut owner = TerrainRenderer::with_capacity(
+        &backend,
+        &patches,
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 6,
+            height_grid_size: 2,
+            material_layers: 6,
+        },
+    )
+    .unwrap();
+    let demand = (8..14).collect::<Vec<_>>();
+    let pages = |rgba: [u8; 4], generation| {
+        demand
+            .iter()
+            .map(|&id| {
+                (
+                    id,
+                    (
+                        generation,
+                        CbtMaterialPage::from_rgba8(rgba.repeat(128 * 128)).unwrap(),
+                    ),
+                )
+            })
+            .collect()
+    };
+    owner
+        .update_materials(&backend, &demand, &pages([255, 0, 0, 255], 1))
+        .unwrap();
+    let binding = owner.material_binding();
+    let height = owner.height_surface_source(&backend).unwrap();
+    let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 16, 8).unwrap();
+    let mut surface = ConformingSurface::new(&backend, &gpu.pool, &height).unwrap();
+    let origin = DVec3::new(1003.0, 0.0, 2.0);
+    surface.update_camera(&backend, origin.to_array()).unwrap();
+    assert_eq!(surface.publication().revision, 0);
+    let rays = surface.ray_source(&binding).unwrap();
+    let make = |settings: &ResolvedGraphicsSettings,
+                rays: &thessa_render_wgpu::terrain_ray::TerrainRaySource| {
+        MeshRenderer::with_surface_and_terrain(
+            &backend,
+            &source(),
+            SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality: settings.surface_quality,
+                reflections: settings.specular_reflections,
+                shadows: None,
+                ray_tracing: Some(settings),
+            },
+            Some(rays),
+        )
+        .unwrap()
+    };
+    let mut mesh = make(&settings, &rays);
+    let mut placed = instances();
+    placed.truncate(1);
+    placed[0].position_m += origin;
+    let capture =
+        |surface: &ConformingSurface, mesh: &mut MeshRenderer, emit: bool, view: &ViewParams| {
+            let target = OffscreenTarget::new(&backend, SIZE, SIZE).unwrap();
+            mesh.update_selected(
+                &backend,
+                view,
+                &lighting([0.0; 3]),
+                &placed,
+                Some(&[0..1, 0..0]),
+            )
+            .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            if emit {
+                surface.encode(&mut encoder);
+            }
+            clear_target(&mut encoder, &target);
+            mesh.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()
+        };
+    let view = camera(origin);
+    let empty = capture(&surface, &mut mesh, false, &view);
+    assert_eq!(center(&empty), [0; 3]);
+    assert_eq!(mesh.rt_stats().terrain_blas_builds, 0);
+    assert!(
+        mesh.rt_terrain_reason()
+            .unwrap()
+            .contains("not been emitted")
+    );
+    let red = capture(&surface, &mut mesh, true, &view);
+    assert!(
+        (183..=187).contains(&center(&red)[0]) && (13..=17).contains(&center(&red)[1]),
+        "canonical diffuse + dielectric GGX reflection {:?}",
+        center(&red)
+    );
+    assert_eq!(surface.publication().revision, 1);
+    assert_eq!(surface.publication().origin_m, origin.to_array());
+    assert_eq!(mesh.rt_stats().terrain_instances, 2);
+    assert_eq!(mesh.rt_stats().terrain_blas_builds, 2);
+    assert_eq!(red, capture(&surface, &mut mesh, false, &view));
+    assert_eq!(
+        mesh.rt_stats().terrain_blas_builds,
+        0,
+        "no new emission means no AS rebuild"
+    );
+    owner
+        .update_materials(&backend, &demand, &pages([0, 255, 0, 255], 2))
+        .unwrap();
+    let green = capture(&surface, &mut mesh, false, &view);
+    assert!(
+        (183..=187).contains(&center(&green)[1]) && (13..=17).contains(&center(&green)[0]),
+        "shared material {:?}",
+        center(&green)
+    );
+    assert_eq!(
+        mesh.rt_stats().terrain_blas_builds,
+        0,
+        "dry material shading does not mutate geometry"
+    );
+    let hole = HeightPage::bake(&[-50.0; 4], 2, 0.001).unwrap();
+    owner
+        .update_pages(
+            &backend,
+            &(0..6).map(|slot| (slot, &hole)).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    let beyond = capture(&surface, &mut mesh, true, &view);
+    assert_eq!(
+        center(&beyond),
+        [0; 3],
+        "new surface lies beyond the 20 m ray interval"
+    );
+    assert_eq!(mesh.rt_stats().terrain_blas_builds, 2);
+    owner
+        .update_pages(
+            &backend,
+            &(0..6).map(|slot| (slot, &page)).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    assert_eq!(
+        green,
+        capture(&surface, &mut mesh, true, &view),
+        "restoring height must restore actual reflection bytes"
+    );
+    let next = origin + DVec3::new(0.0, 0.0, 0.25);
+    surface.update_camera(&backend, next.to_array()).unwrap();
+    assert_eq!(
+        surface.publication().origin_m,
+        origin.to_array(),
+        "staged camera is not published geometry"
+    );
+    let rebased = capture(&surface, &mut mesh, true, &camera(next));
+    assert_eq!(surface.publication().origin_m, next.to_array());
+    assert!(center(&rebased)[1] > 64);
+    assert_eq!(mesh.rt_stats().terrain_blas_builds, 2);
+    // A valid GPU split mutates topology without touching canonical pages.
+    gpu.set_request(&backend.queue, 0, 16 << 8);
+    let status = backend.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("conforming-split-status"),
+        size: 16,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    gpu.encode(&mut encoder);
+    encoder.copy_buffer_to_buffer(&gpu.state, 0, &status, 0, 16);
+    backend.queue.submit([encoder.finish()]);
+    status
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    backend
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    assert_eq!(
+        u32::from_le_bytes(
+            status.slice(..).get_mapped_range().unwrap()[12..16]
+                .try_into()
+                .unwrap()
+        ),
+        1,
+        "GPU split must actually commit"
+    );
+    status.unmap();
+    let epoch = surface.publication().revision;
+    capture(&surface, &mut mesh, true, &camera(next));
+    assert_eq!(surface.publication().revision, epoch + 1);
+    assert_eq!(mesh.rt_stats().terrain_blas_builds, 2);
+    // The existing instance budget admits only ONE of two allocation chunks;
+    // it must omit the whole partition instead of leaving arbitrary blockers.
+    let mut bounded = settings.clone();
+    bounded.rt_max_instances = 3;
+    let mut fallback = make(&bounded, &rays);
+    let image = capture(&surface, &mut fallback, false, &camera(next));
+    assert_eq!(center(&image), [0; 3]);
+    assert_eq!(fallback.rt_stats().terrain_instances, 0);
+    assert_eq!(fallback.rt_stats().terrain_blas_builds, 0);
+    assert!(fallback.rt_terrain_reason().unwrap().contains("chunks"));
+    let mut off = settings.clone();
+    off.ray_tracing = backend
+        .resolve_graphics(&requested(RayTracingRequest::Off))
+        .ray_tracing;
+    let mut disabled = make(&off, &rays);
+    capture(&surface, &mut disabled, false, &view);
+    assert_eq!(disabled.rt_stats().bytes, 0);
+    assert_eq!(disabled.rt_stats().passes, 0);
+    // Field-only and geometry revisions are separate dependencies. Full wave
+    // geometry follows emission, whereas optical-only phase updates need no AS.
+    use thessa_render_core::ocean::SeaState;
+    use thessa_render_wgpu::ocean::OceanField;
+    let mut water = settings.clone();
+    water.ocean.enabled = true;
+    water.ocean_size = 32;
+    water.ocean.geometry_patches = 2;
+    water.ocean.geometry_distance_m = 2000.0;
+    let mut field = OceanField::new(
+        &backend,
+        SeaState {
+            gravity_m_s2: 6.4,
+            depth_m: 80.0,
+            wind_speed_m_s: 12.0,
+            wind_direction_rad: 0.3,
+            significant_height_m: 1.5,
+            seed: 19,
+        },
+        32,
+    )
+    .unwrap();
+    field.update_frame(&backend.queue, next, 1000.0).unwrap();
+    field.update(&backend, 0.0).unwrap();
+    owner
+        .update_materials(&backend, &demand, &pages([20, 40, 80, 30], 3))
+        .unwrap();
+    surface
+        .set_ocean(&backend, &water, Some(&field), &binding)
+        .unwrap();
+    assert_eq!(
+        center(&capture(&surface, &mut mesh, false, &camera(next))),
+        [0; 3]
+    );
+    assert!(
+        mesh.rt_terrain_reason()
+            .unwrap()
+            .contains("configuration changed")
+    );
+    let water_rays = surface.ray_source(&binding).unwrap();
+    let mut waves = make(&water, &water_rays);
+    assert_eq!(
+        center(&capture(&surface, &mut waves, false, &camera(next))),
+        [0; 3],
+        "new configuration must be emitted before admission"
+    );
+    let wave0 = capture(&surface, &mut waves, true, &camera(next));
+    assert_eq!(waves.rt_stats().terrain_blas_builds, 2);
+    assert_eq!(wave0, capture(&surface, &mut waves, false, &camera(next)));
+    assert_eq!(waves.rt_stats().terrain_blas_builds, 0);
+    field.update(&backend, 0.5).unwrap();
+    let wave1 = capture(&surface, &mut waves, true, &camera(next));
+    assert_ne!(
+        wave0, wave1,
+        "shared ocean field must affect actual reflected hits"
+    );
+    assert_eq!(waves.rt_stats().terrain_blas_builds, 2);
+    field.update(&backend, 0.0).unwrap();
+    assert_eq!(wave0, capture(&surface, &mut waves, true, &camera(next)));
+    water.ocean.geometry_patches = 0;
+    surface
+        .set_ocean(&backend, &water, Some(&field), &binding)
+        .unwrap();
+    let optical_rays = surface.ray_source(&binding).unwrap();
+    let mut optical = make(&water, &optical_rays);
+    let optical0 = capture(&surface, &mut optical, true, &camera(next));
+    assert_eq!(optical.rt_stats().terrain_blas_builds, 2);
+    let publication = surface.publication();
+    field.update(&backend, 0.5).unwrap();
+    let optical1 = capture(&surface, &mut optical, false, &camera(next));
+    assert_ne!(
+        optical0, optical1,
+        "optical phase is live without changing intersection geometry"
+    );
+    assert_eq!(surface.publication(), publication);
+    assert_eq!(optical.rt_stats().terrain_blas_builds, 0);
+    assert_eq!(optical.rt_stats().passes, 0);
+    // Scoped target-size AS cost, not a renderer comparison. Include capacity
+    // holes as degenerate triangles; no readback/compaction of live leaves.
+    let large =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 20, 13).unwrap();
+    let target_surface = ConformingSurface::new(&backend, &large.pool, &height).unwrap();
+    target_surface
+        .update_camera(&backend, next.to_array())
+        .unwrap();
+    let target_rays = target_surface.ray_source(&binding).unwrap();
+    let mut large_settings = settings.clone();
+    large_settings.rt_max_instances = 128;
+    let mut target_mesh = make(&large_settings, &target_rays);
+    target_mesh
+        .update_selected(
+            &backend,
+            &camera(next),
+            &lighting([0.0; 3]),
+            &placed,
+            Some(&[0..1, 0..0]),
+        )
+        .unwrap();
+    let timer = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 2).unwrap();
+    let mut costs = Vec::new();
+    for frame in 0..25 {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        target_surface.encode(&mut encoder);
+        timer.mark(&mut encoder, 0);
+        target_mesh.encode_rt(&mut encoder);
+        timer.mark(&mut encoder, 1);
+        timer.resolve(&mut encoder);
+        backend.queue.submit([encoder.finish()]);
+        let ms = timer.read(&backend).unwrap()[0] * 1000.0;
+        assert_eq!(target_mesh.rt_stats().terrain_blas_builds, 64);
+        if frame >= 5 {
+            costs.push(ms);
+        }
+    }
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp/conforming-ray");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("as-build-ms.csv"),
+        costs.iter().map(|v| format!("{v}\n")).collect::<String>(),
+    )
+    .unwrap();
+    costs.sort_by(f64::total_cmp);
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    target_mesh.encode_rt(&mut encoder);
+    backend.queue.submit([encoder.finish()]);
+    assert_eq!(target_mesh.rt_stats().terrain_blas_builds, 0);
+    assert_eq!(target_mesh.rt_stats().passes, 0);
+    println!(
+        "conforming_ray_as adapter={} chunks=64 live_triangles=98304 allocation_triangles=131072 samples=20 warmup=5 p50_ms={} p95_ms={}; GPU AS-only scopes after emission, full rebuild baseline, not FPS or a cage/procedural/refit comparison",
+        backend.adapter_name, costs[10], costs[19]
+    );
+    // Source clones retain buffers and publication identity after the producer
+    // is gone, not a dangling pointer or a copy of the geometry.
+    drop(surface);
+    drop(owner);
+    drop(height);
+    drop(binding);
+    drop(rays);
+    drop(water_rays);
+    drop(optical_rays);
+    drop(field);
+    let retained = draw_at(
+        &backend,
+        &mut optical,
+        &placed,
+        &[0..1, 0..0],
+        &lighting([0.0; 3]),
+        &camera(next),
+    );
+    assert_eq!(retained, optical1);
+    assert_eq!(optical.rt_stats().terrain_blas_builds, 0);
+    println!(
+        "conforming_ray_publication adapter={} chunks=2 allocation_triangles=4096 emitted_triangles=3072 stride=48; actual mirror/material/height/rebase/lifetime/disabled/whole-partition oracles, existing RayScene; no cage/procedural-ocean or production-topology-mode claim",
+        backend.adapter_name
+    );
+}
+
+#[test]
 fn terrain_budget_rejects_whole_partition_and_recovers_without_stale_blockers() {
     let Some(backend) = backend(RayTracingRequest::Local) else {
         return;

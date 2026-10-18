@@ -27,8 +27,10 @@ not Bevy visual/implementation parity; a conservative height-bound LOD input
 now charges relief for its screen area, and a diagnostic caster reaches the
 shared shadow atlas with an independent metric sphere oracle. A diagnostic
 ocean geometry adapter reuses the spectral field/materials and resolved ocean
-policy, with seam-safe filtering and optical-only fallback. Production ocean/RT
-publication plus selection of the conforming shadow consumer remain open native
+policy, with seam-safe filtering and optical-only fallback. Shared publication
+epochs now drive borrowed bisector BLASes and canonical water/material hits in
+the existing RayScene. Production topology/ocean selection and conforming shadow
+cache integration remain open native
 integration gates.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records

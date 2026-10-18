@@ -6,24 +6,38 @@
 
 fn rt_terrain_surface(hit:RtHit,pair:RtPair,ray_direction:vec3<f32>)->RtSurface {
     let slot=pair.words.x & 0x7fffffffu;
+    var v0:vec4<f32>;var v1:vec4<f32>;var v2:vec4<f32>;
+    var n0:vec4<f32>;var n1:vec4<f32>;var n2:vec4<f32>;
+    var direction:vec3<f32>;
+    let bary=vec3(1.0-hit.barycentrics.x-hit.barycentrics.y,hit.barycentrics);
+    if(RT_TERRAIN_CONFORMING){
+        let base=(slot*2048u+hit.triangle)*9u;
+        v0=rt_terrain_vertices[base];v1=rt_terrain_vertices[base+3u];v2=rt_terrain_vertices[base+6u];
+        n0=rt_terrain_vertices[base+1u];n1=rt_terrain_vertices[base+4u];n2=rt_terrain_vertices[base+7u];
+        let d0=material_direction(vec2<f32>(bitcast<vec4<u32>>(rt_terrain_vertices[base+2u]).xy)/536870912.0,u32(n0.w));
+        let d1=material_direction(vec2<f32>(bitcast<vec4<u32>>(rt_terrain_vertices[base+5u]).xy)/536870912.0,u32(n1.w));
+        let d2=material_direction(vec2<f32>(bitcast<vec4<u32>>(rt_terrain_vertices[base+8u]).xy)/536870912.0,u32(n2.w));
+        direction=normalize(d0*bary.x+d1*bary.y+d2*bary.z);
+        n0.w=v0.w;n1.w=v1.w;n2.w=v2.w;
+    }else{
     let cell=hit.triangle/2u;
     let a=(cell/32u)*33u+cell%32u;
     var corners=vec3(a,a+1u,a+33u);
     if ((hit.triangle&1u)!=0u) { corners=vec3(a+1u,a+34u,a+33u); }
-    let v0=rt_terrain_vertices[(slot*1089u+corners.x)*2u];
-    let v1=rt_terrain_vertices[(slot*1089u+corners.y)*2u];
-    let v2=rt_terrain_vertices[(slot*1089u+corners.z)*2u];
-    let n0=rt_terrain_vertices[(slot*1089u+corners.x)*2u+1u];
-    let n1=rt_terrain_vertices[(slot*1089u+corners.y)*2u+1u];
-    let n2=rt_terrain_vertices[(slot*1089u+corners.z)*2u+1u];
-    let bary=vec3(1.0-hit.barycentrics.x-hit.barycentrics.y,hit.barycentrics);
+    v0=rt_terrain_vertices[(slot*1089u+corners.x)*2u];
+    v1=rt_terrain_vertices[(slot*1089u+corners.y)*2u];
+    v2=rt_terrain_vertices[(slot*1089u+corners.z)*2u];
+    n0=rt_terrain_vertices[(slot*1089u+corners.x)*2u+1u];
+    n1=rt_terrain_vertices[(slot*1089u+corners.y)*2u+1u];
+    n2=rt_terrain_vertices[(slot*1089u+corners.z)*2u+1u];
+    let radial=bitcast<vec3<f32>>(pair.words.yzw);
+    direction=normalize(radial*RT_TERRAIN_RADIUS+v0.xyz*bary.x+v1.xyz*bary.y+v2.xyz*bary.z);
+    }
     let local=v0.xyz*bary.x+v1.xyz*bary.y+v2.xyz*bary.z;
     let geometric=normalize(cross(v1.xyz-v0.xyz,v2.xyz-v0.xyz));
     let geometry=select(geometric,-geometric,dot(geometric,ray_direction)>0.0);
     var normal=normalize(n0.xyz*bary.x+n1.xyz*bary.y+n2.xyz*bary.z);
     normal=select(normal,-normal,dot(normal,geometry)<0.0);
-    let radial=bitcast<vec3<f32>>(pair.words.yzw);
-    let direction=normalize(radial*RT_TERRAIN_RADIUS+local);
     // Explicit zero footprint matches mesh-hit LOD zero. Ray-cone filtering is
     // future work; no primary screen derivatives are used on secondary hits.
     let sample=material_at_level(material_address(direction),vec2(0.0),vec2(0.0),17u);

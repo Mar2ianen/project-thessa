@@ -189,7 +189,9 @@ impl MeshRenderer {
             .and_then(crate::ray_scene::RayScene::terrain_reason)
     }
 
-    /// Publish terrain membership after mesh updates, before encoding. Height
+    /// Publish generated-patch membership after mesh updates, before encoding.
+    /// Conforming sources follow their emission epoch automatically and must
+    /// not be passed to this legacy patch-only synchronization method. Height
     /// generation submissions precede these builds on the same queue.
     pub fn sync_rt_terrain(
         &mut self,

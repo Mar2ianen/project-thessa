@@ -7,8 +7,9 @@ baseline `1ff4b3a`. This phase removes the last "pure sphere" qualifier from
 the geometry itself: active bisectors are converted into **planet-scale
 vertices that sample the canonical height and material pages**, using the
 existing residency/publication paths. It is still not a production terrain
-mode; RT and a resolved topology setting remain open, and the shadow and ocean
-consumers it gained are diagnostic only.
+mode; a resolved topology setting remains open. Shadow/ocean consumers are
+diagnostic selections, while RT now accepts this stream through the existing
+`RayScene` terrain path rather than a second scene/geometry store.
 
 **Bevy renderer parity is not an acceptance gate** (see doc 62 §Acceptance).
 
@@ -271,7 +272,7 @@ are preserved for classification/optical shading (no doubled wave gradients).
 Every encode re-emits datum before deformation, so repeated/paused frames do
 not accumulate waves. Caller must publish the same field time, camera and
 radius before emission, then run shadow/raster consumers afterwards. There is
-still no shared revision/lifetime contract enforcing that order.
+an encoded-publication contract below; it does not freeze earlier queue contents.
 
 Hardware test `conforming_ocean_borrows_field_without_cracks_or_accumulation`:
 
@@ -298,6 +299,119 @@ consumer for this surface, Earth-scale wave-phase accuracy, and temporal
 continuity across common-footprint changes remain unverified. Existing optical
 field publication is reused; no production ocean selection is replaced.
 
+## Encoded publication and existing RayScene integration
+
+`SurfacePublication` contains a monotonically increasing emission revision, the
+f64 camera origin used by those vertices and an ocean-configuration revision.
+`update_camera` only stages a camera; `encode` publishes it **after** recording
+datum emission and optional wave deformation. Reconfiguring ocean invalidates
+previous RT consumers; a replacement must wait for emission of that configuration.
+Failed configuration leaves the old consumer/publication intact.
+
+`ConformingSurface::ray_source(materials)` borrows the same vertex buffer,
+material texture/sampler/directory and optional spectral-field binding. It is
+unavailable on devices without enabled ray-query support. Source clones retain
+resources and shared publication identity even after producers are dropped;
+they are **not immutable snapshots**, page-content pins, or queue-completion
+tokens. Callers must order source writes, topology update/publication, emission,
+AS build and raster/shadow consumers on the same ordered stream. Encoding and
+then discarding an encoder does not publish GPU results. Concurrent mutation
+or out-of-order submission of shared publications is outside this contract.
+
+The existing `TerrainRays`/`RayScene` path now accepts bounded allocation chunks
+of up to 2048 non-indexed triangles at a 48-byte vertex stride. Canonical page
+identity is independent of these chunks. Virtual/free slots emit zero-area
+triangles; no live-leaf readback, mesh expansion, duplicate vertices, cache or
+second ray scene is introduced. Hit shading decodes the actual surface ABI and
+canonical directions; it reuses the shared material/ocean kernels. Reflections
+therefore trace the **same emitted/deformed triangles** used by other consumers.
+
+Each new emission conservatively dirties all chunks. A retained publication
+reuses its BLASes/TLAS; optical-only field phase and dry material shading can
+change without emission or AS work. Whole-pool instance/memory admission uses
+the existing resolved RT budget and omits the complete contribution on overflow.
+Before first emission or after incompatible configuration, stale geometry is
+not admitted. Retained AS adoption also checks field/material/source identity
+and does not adopt an under-allocated conforming partition into a larger budget.
+Driver-owned AS memory remains outside the existing conservative planning charge.
+
+Hardware oracle `conforming_publications_feed_existing_ray_scene_without_stale_blas`
+uses an actual mesh mirror, canonical red/green pages, a 20 m ray interval,
+height changes moving the surface out of that interval and exact restoration,
+camera rebasing, a committed GPU split, pause/reuse, whole-pool budget failure,
+RT disabled, ocean time/rewind, configuration invalidation and retained resource
+lifetime. It also checks that optical-only phase changes affect reflection
+bytes with **zero** BLAS/TLAS builds. Target-size AS timings and complete gate
+results are recorded separately in the RT artifact below.
+
+RT evidence: [`artifacts/conforming-ray-publication-2026-10-18.json`](artifacts/conforming-ray-publication-2026-10-18.json).
+The earlier canonical-surface artifact remains the `2851a9f` ocean/shadow-stage
+snapshot; its old gap list is not the current implementation status.
+
+The 98,304-live-triangle / 131,072-allocation-slot fixture rebuilds 64 chunk
+BLASes: AS-only GPU p50/p95 **5.665 / 5.901 ms** on Radeon 880M / Vulkan / RADV
+Mesa 26.2.4-arch1.1 (5 warmups, 20 samples). A retained publication then encodes
+zero AS passes. This is a full-build reference/stress result, not a performance
+win over cages, procedural water, refit, or the legacy renderer.
+
+Local final gates passed: fmt, workspace/all-target/all-feature clippy and native
+no-default-feature clippy with warnings denied; **1,881 lib/bin +91 integration**
+tests; **24 Bevy GPU +20 native ignored +26 render-wgpu ignored** tests (the
+last total includes nine CBT tests, the new RT oracle and three backend library
+tests); architecture guard, five agent-QA tests, JSON validation and diff check.
+Remote CI, Metal/WebGPU execution and blind subjective acceptance were not run.
+
+This is the triangle reference backend, not an optimized dynamic-ocean backend.
+Every emission rebuilds all chunks, including holes, and allocation chunks are
+not guaranteed spatially coherent after topology churn. No low-cost refit,
+per-chunk dirty tracking, cage reuse or continuous-wave intersection is claimed.
+
+## AMD tetrahedral cages: representation decision before RT integration
+
+Reviewed the [September 17 AMD demo](https://gpuopen.com/learn/how-tetrahedral-cages-significantly-reduce-bvh-memory-usage/),
+[technical blog](https://gpuopen.com/learn/ray-tracing-massive-amounts-animated-geometry/)
+and [authors' paper](https://gpuopen.com/download/TetrahedralMeshes_AuthorsVersion.pdf)
+(Gruen et al., DOI `10.1145/3820014`, §§3–8 and Tables 1–3).
+
+- The reported ~80 GB vs ~1.7 GB BVH requirement and >300 ms vs ~3.3 ms updates
+  belong to AMD's **specific** independently animated plant demo (~500M triangles
+  after LOD, primary+shadow rays, 1080p, RX 9070 XT). They are neither a general
+  compression ratio nor expected Thessa/Radeon 880M timings. Do not conflate this
+  September demo with the paper's separate combined-scene timing table.
+- Clip rest geometry into tetrahedra, share static mini-meshes/mini-BLASes, animate
+  cage vertices and update instance affine transforms/TLAS instead of dense BLASes.
+  The fast variant maps to ordinary triangle BLASes and affine instances; it is
+  **not intrinsically DirectX-only**. No DX12 API/dependency is introduced here.
+- A coarse cage approximates deformation, not arbitrary topology changes or
+  sub-cage waves. Clipping increased triangle count 1.3–2.3× in paper fixtures.
+  Adaptive CBT split/merge is not automatically covered by static clipped meshes.
+- Crucially, the fast variant does **not guarantee watertightness**: different
+  instance-local rays can disagree at shared edges. Small geometric overlaps
+  mitigate this in their fixtures but are not a proof suitable for a canonical
+  planetary/water surface. Their strict 4D-barycentric/software-traversal variant
+  was 19–80× slower in Table 2; it is not the free fast/watertight alternative.
+
+Decision: reserve cages for a later, measured connectivity-preserving vegetation
+or repeated-asset animation backend. Do not insert cages into the CBT surface or
+replace the canonical ocean spectrum with cage coefficients to finish migration.
+Retain the shared-triangle backend as a correctness/fallback reference and keep
+the publication contract about emitted state rather than a universal requirement
+to rebuild water BLASes for every optical-field update.
+
+Procedural water is a distinct candidate: time-independent conservative bounds
+could contain the coefficient-bounded wave envelope, with intersections evaluated
+from the **existing** field. Current wgpu/Naga 30 expose AABB geometry and candidate/
+generated ray intersections; the current Thessa `rt_trace` is still an opaque
+triangle-only committed-hit traversal. API presence is not a tested procedural
+backend. A replacement must preserve nearest-hit ordering with opaque land/meshes,
+handle multiple roots, tangent/grazing rays, shore masks, shared edges, filtering,
+distance fade and missing pages, and bound error against the raster representation.
+A single Newton solve or phase-specific AABB is not a completeness guarantee.
+Compare full build+traversal cost, memory, invalidations and hit error at equal
+quality, including topology/footprint changes and static/paused controls, before
+choosing it. The old 33×33 ocean cost (0.120 ms deformation vs 1.412 ms AS at 16
+slots) motivates that experiment but does not prove its outcome for adaptive CBT.
+
 ## Known gaps (explicitly not claimed)
 
 1. **The derived bound is body-wide and unused by a mode.** `height_bound_chord()`
@@ -309,15 +423,17 @@ field publication is reused; no production ocean selection is replaced.
    oracle, but `encode_shadows()` still uses the
    legacy patch caster only and nothing selects the conforming path. There is
    also no quality/fallback tier for it in `graphics.toml`.
-3. **Ocean geometry is diagnostic; no RT/BLAS publication** for bisectors.
-   The shared field/material adapter exists, but no production raster/optical
-   mode selects it and no temporal/equal-error acceptance is established.
+3. **Ocean geometry and RT still need production topology selection.** The shared
+   triangle stream now enters the existing RayScene with publication epochs and
+   shared water-hit optics, but no terrain raster mode selects the topology, and
+   temporal/equal-error acceptance and an optimized dynamic-ocean backend remain.
 4. **No resolved production mode.** Nothing in `graphics.toml` selects this
    path; `TerrainRenderer::encode_scene()` still draws legacy patches. No
    disabled/cheaper fallback level exists, because there is no switch.
-5. **No shared revision/lifetime contract yet** between the surface buffer and
-   consumers (shadow depth revision, RT build, ocean near-field): callers must
-   encode emission after topology publication and before any consumer reads.
+5. **Publication is encoded state, not an immutable frame snapshot.** Shared
+   epochs/resource retention and RT configuration invalidation now exist;
+   source writes, emission and consumers still require the documented ordered
+   submission. Dirty-chunk reuse and production shadow-cache integration remain.
 6. **No equal-error comparison** against the legacy patch renderer, no blind
    visual review, no cross-platform acceptance, no remote CI claim.
 
@@ -349,6 +465,6 @@ commands. These are local checks, not remote CI or platform/visual acceptance.
 
 Per doc 62, the remaining boundary to a real mode is: selecting a conforming
 shadow consumer behind a resolved graphics setting with explicit disabled and
-cheaper fallbacks, then production ocean and RT/BLAS consumers with a geometry
-revision contract, then equal-error tests before any legacy grid path is
+cheaper fallbacks, production ocean/RT selection and shadow-cache integration
+using the encoded revision contract, then equal-error tests before any legacy grid path is
 deleted.

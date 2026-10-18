@@ -75,8 +75,12 @@ borrow this field/material residency through `ConformingSurface::set_ocean`.
 It re-emits datum, reduces a common near-field footprint, and deforms shared
 vertices identically under the existing resolved ocean settings; disabled,
 optical-only, coarse and whole-partition-overflow fallbacks are explicit.
-This adapter is not selected by production raster/RT; the generated-patch
-consumer below is unchanged. Numerical oracles, measured scoped costs and
+Its emitted triangles now feed the existing RayScene through a shared encoded
+publication contract; water hit optics reuse this field, and optical-only phase
+changes need no AS rebuild. Production terrain raster still selects generated
+patches, and that consumer below is unchanged. The AMD cage/continuous-field
+intersection study and its watertightness/API caveats are in doc 63.
+Numerical oracles, measured scoped costs and
 remaining temporal/platform gaps are in [doc 63](63_CBT_CANONICAL_SURFACE.md).
 
 The shared `rgba16float` array stores height, two slopes and a scaled second

@@ -175,11 +175,16 @@ The checked-in vertical slice currently contains:
     [doc 60](docs/60_NATIVE_SHADOW_CASTER_REVIEW.md) records full-caster depth/image
     oracles and the isolated performance boundary. Ocean retains full coverage.
     A separate [CBT sphere experiment](docs/61_CBT_SPHERE_EXPERIMENT.md) tests
-    persistent conforming GPU bisectors without patch grids/skirts. It does not
-    yet replace production terrain, heights/materials, ocean, shadows or RT.
+    persistent conforming GPU bisectors without patch grids/skirts.
     Its [parallel transaction follow-up](docs/62_CBT_PARALLEL_TRANSACTIONS.md)
     adds conflict-filtered GPU split/merge waves and a measured 128K-slot fixture;
     Bevy renderer parity is not a migration gate.
+    The [canonical surface consumer](docs/63_CBT_CANONICAL_SURFACE.md) then
+    emits planet-scale bisector vertices through heap depth 58 using the existing
+    height/material residency (no second streamer), with shared-vertex and
+    depth-precision oracles plus a shared-material indirect draw. It does not yet
+    drive production terrain, classification error, ocean, shadows or RT, and no
+    `graphics.toml` mode selects it.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

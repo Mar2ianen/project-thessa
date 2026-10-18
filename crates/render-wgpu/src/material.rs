@@ -10,6 +10,15 @@ use thessa_rcbt_core::{
 
 pub use thessa_rcbt_core::material_page::MaterialPages;
 
+/// Borrowed live residency for native surface consumers. Clones share texture
+/// layers and the sparse directory; geometry allocation IDs never index them.
+#[derive(Debug, Clone)]
+pub struct MaterialBinding {
+    pub texture: wgpu::TextureView,
+    pub sampler: wgpu::Sampler,
+    pub directory: wgpu::Buffer,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialUpload {
     /// Texture bytes or sampling-directory membership changed.
@@ -31,6 +40,13 @@ pub(crate) struct MaterialArray {
 }
 
 impl MaterialArray {
+    pub fn binding(&self) -> MaterialBinding {
+        MaterialBinding {
+            texture: self.view.clone(),
+            sampler: self.sampler.clone(),
+            directory: self.directory.clone(),
+        }
+    }
     pub fn new(
         backend: &Backend,
         layers: u32,

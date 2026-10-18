@@ -23,7 +23,11 @@ pub const TILE_FRAME_WGSL: &str = include_str!("shaders/tile_frame.wgsl");
 pub const SURFACE_SAMPLE_WGSL: &str = include_str!("shaders/surface_sample.wgsl");
 
 /// Portable WGSL chunk `material_sample.wgsl`.
-pub const MATERIAL_SAMPLE_WGSL: &str = include_str!("shaders/material_sample.wgsl");
+pub const PAGE_DIRECTORY_WGSL: &str = include_str!("shaders/page_directory.wgsl");
+pub const MATERIAL_SAMPLE_WGSL: &str = concat!(
+    include_str!("shaders/page_directory.wgsl"),
+    include_str!("shaders/material_sample.wgsl")
+);
 
 /// Portable WGSL chunk `ocean.wgsl`.
 pub const OCEAN_WGSL: &str = include_str!("shaders/ocean.wgsl");
@@ -350,6 +354,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/precision.wgsl"),
     include_str!("shaders/tile_frame.wgsl"),
     include_str!("shaders/ocean.wgsl"),
+    include_str!("shaders/page_directory.wgsl"),
     include_str!("shaders/material_sample.wgsl"),
     r#"
 struct Params {

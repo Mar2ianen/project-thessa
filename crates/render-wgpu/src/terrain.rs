@@ -138,6 +138,7 @@ pub struct TerrainRenderer {
     params: wgpu::Buffer,
     dirty: wgpu::Buffer,
     metadata: wgpu::Buffer,
+    surface_source: Option<crate::conforming_surface::HeightSurfaceSource>,
     residuals: wgpu::Buffer,
     page_slots: Vec<(u64, u64)>,
     radius: f32,
@@ -820,6 +821,7 @@ impl TerrainRenderer {
             params,
             dirty,
             metadata,
+            surface_source: None,
             residuals,
             page_slots,
             radius: radius as f32,
@@ -1101,6 +1103,9 @@ impl TerrainRenderer {
         self.node_ids = ids;
         self.residency = residency;
         self.active_extent = active_extent;
+        if let Some(source) = &self.surface_source {
+            source.publish(backend, &self.node_ids)?;
+        }
         self.upload_pages(backend, &dirty);
         for (bound, id) in self.shadow_bounds.iter_mut().zip(&self.node_ids) {
             if *id == 0 {
@@ -1470,6 +1475,30 @@ impl TerrainRenderer {
         Ok(())
     }
 
+    /// Lazily borrow the existing height publication for the persistent CBT
+    /// experiment. No directory allocation or publication cost while unused.
+    pub fn height_surface_source(
+        &mut self,
+        backend: &Backend,
+    ) -> Result<crate::conforming_surface::HeightSurfaceSource, BackendError> {
+        if self.surface_source.is_none() {
+            self.surface_source = Some(crate::conforming_surface::HeightSurfaceSource::new(
+                backend,
+                &self.metadata,
+                &self.residuals,
+                self.body_radius_m,
+                &self.node_ids,
+            )?);
+        }
+        Ok(self.surface_source.as_ref().unwrap().clone())
+    }
+
+    /// Share existing canonical material residency without a geometry-specific
+    /// layer assignment, second cache or texture upload.
+    pub fn material_binding(&self) -> crate::material::MaterialBinding {
+        self.materials.binding()
+    }
+
     pub fn ray_source(&self) -> Option<crate::terrain_ray::TerrainRaySource> {
         self.vertices
             .usage()
@@ -1630,16 +1659,7 @@ fn encode_frames(
 }
 
 fn tile_node_id(anchor: &TileAnchor) -> Option<u64> {
-    let key = anchor.tile;
-    thessa_rcbt_core::tile_anchor::TileKey::new(key.face, key.level, key.x, key.y)?;
-    if key.level > thessa_rcbt_core::tile_anchor::GPU_STABLE_LEVEL_MAX {
-        return None;
-    }
-    let mut id = 8 + u64::from(key.face);
-    for bit in (0..key.level).rev() {
-        id = (id << 2) | u64::from(((key.x >> bit) & 1) * 2 + ((key.y >> bit) & 1));
-    }
-    Some(id)
+    thessa_rcbt_core::conforming_surface::page_id(anchor.tile)
 }
 
 fn solid_texture(backend: &Backend, rgba: [u8; 4], array: bool) -> wgpu::TextureView {

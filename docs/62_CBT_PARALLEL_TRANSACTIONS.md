@@ -4,7 +4,10 @@
 the committed/pushed sphere baseline `3b7bd17` ([phase one](61_CBT_SPHERE_EXPERIMENT.md)).
 The new wave path changes multiple disjoint compatibility chains/diamonds in
 parallel, with exact serial/CPU oracles and a 128K-capacity resident-pool fixture.
-It is still a pure sphere, not production height/material/shadow/ocean/RT terrain.
+It is still a pure sphere: this phase measures topology only. The
+[canonical surface phase](63_CBT_CANONICAL_SURFACE.md) subsequently attaches
+borrowed height/material residency, and shadow/ocean/RT production consumers
+remain absent.
 
 ## Acceptance boundary
 
@@ -202,19 +205,19 @@ CI, blind subjective preference or cross-platform runtime acceptance is claimed.
 
 ## Next native migration boundary
 
-The next work is canonical height/material sampling and conservative geometric
-error summaries, reusing existing residency rather than reintroducing geometry
-patch LOD. It also needs local/f64-subtracted planetary precision, then the native
-raster/shadow/ocean/RT publication contract. A resolved experimental native mode
-needs disabled/cheaper fallback settings and measured numerical/quality budgets.
-Concrete reuse points are `HeightPageStore`'s immutable revisioned snapshots,
-the existing quantized `HeightPage` decoder/publication lifecycle in
-`render-wgpu::terrain`, and `TileAnchor`'s stable local projection. The experimental
-cube frames on faces 0..3 are rotated relative to `tile_anchor::face_frame`;
-surface-page lookup needs an explicit canonical face-UV mapping, not direct
-reuse of the experiment's local triangle coordinates as page UVs. Page keys,
-height/material revisions and canonical seam ownership must remain independent
-of transient bisector slots and render refinement.
+The [canonical surface phase](63_CBT_CANONICAL_SURFACE.md) implements the
+first half of this section: exact bisector→canonical face-UV mapping, borrowed
+`HeightPageStore`/`render-wgpu::terrain` residency, shared material directory
+hashing and six f64-subtracted precision charts, all verified through heap
+depth 58. It also records what is still missing: conservative
+height-inclusive classification error, and the native raster/shadow/ocean/RT
+publication contract with a geometry revision/lifetime rule. Neither of those
+has been implemented; the legacy patch renderer remains the production and
+shadow/RT consumer. A resolved experimental native mode still needs
+disabled/cheaper fallback settings and measured numerical/quality budgets.
+Concrete remaining reuse points are the shadow atlas depth revision and
+`TerrainRaySource`'s slot/revision lifecycle, which must key on canonical page
+identity rather than transient bisector slots.
 Neither Bevy visual parity nor copying its internals is required. Until those
 native consumers exist, deleting the working regular-grid path would remove
 functionality rather than complete the migration.

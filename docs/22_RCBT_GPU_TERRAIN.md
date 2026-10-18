@@ -20,8 +20,12 @@ height/material sampling, planetary precision, shadow/ocean/RT publication or
 whole-system parity with `large_cbt`. The production gaps below remain open.
 The [parallel follow-up, doc 62](62_CBT_PARALLEL_TRANSACTIONS.md), adds bounded
 multi-request planning/reservation/conflict resolution and parallel mutation,
-with exact serial/CPU oracles and a 128K-capacity fixture. It still does not
-provide canonical height/material/precision or native shadow/ocean/RT integration.
+with exact serial/CPU oracles and a 128K-capacity fixture. The
+[canonical surface consumer, doc 63](63_CBT_CANONICAL_SURFACE.md), then emits
+planet-scale bisector vertices from the borrowed height/material residency
+through heap depth 58, with shared-vertex, residency-change and precision
+oracles. Height-aware classification error and native shadow/ocean/RT
+publication remain open; neither phase provides whole-system parity.
 
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
 logical tree and backend contract), `thessa-rcbt-ref` (portable differential

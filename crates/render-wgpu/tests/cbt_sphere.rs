@@ -867,3 +867,530 @@ fn target_pool_parallel_commit_cost_and_exact_control() {
         );
     }
 }
+
+fn surface_snapshot(
+    backend: &Backend,
+    surface: &thessa_render_wgpu::conforming_surface::ConformingSurface,
+    gpu: &SphereGpu,
+    pages: &thessa_rcbt_core::height_source::HeightPageStore,
+    radius: f64,
+    camera: [f64; 3],
+) -> (f64, f64, usize) {
+    use thessa_rcbt_core::{conforming_surface::SurfaceAddress, tile_anchor::TileAnchor};
+    surface.update_camera(backend, camera).unwrap();
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    surface.encode(&mut encoder);
+    backend.queue.submit([encoder.finish()]);
+    let raw = words(&read(backend, &surface.vertices));
+    let records = records(backend, gpu);
+    let mut duplicates = BTreeMap::new();
+    let mut near_positions = BTreeMap::new();
+    let mut max_error = 0.0f64;
+    let mut near_error = 0.0f64;
+    let mut near = 0;
+    for (slot, record) in records.iter().enumerate() {
+        let Ok(node) = Node::from_heap_id(identity(*record)) else {
+            continue;
+        };
+        let Some(t) = cube_vertices(node) else {
+            continue;
+        };
+        for (i, cube) in t.into_iter().enumerate() {
+            let data = &raw[(slot * 3 + i) * 12..(slot * 3 + i + 1) * 12];
+            if let Some(previous) = duplicates.insert(cube, data.to_vec()) {
+                assert_eq!(
+                    previous, data,
+                    "shared seam/corner/deep vertex must be bit identical"
+                );
+            }
+            let address = SurfaceAddress::from_cube(cube).unwrap();
+            assert_eq!(data[8..10], address.uv);
+            assert_eq!(f32::from_bits(data[7]), f32::from(address.face));
+            let sampled = address.sample(pages);
+            let height = sampled.map_or(0.0, |(_, _, h)| h);
+            assert!(
+                (f64::from(f32::from_bits(data[3])) - height).abs() < 0.005,
+                "shared HeightPage decoder mismatch"
+            );
+            assert_eq!(data[10] != u32::MAX, sampled.is_some());
+            if let Some((tile, _, _)) = sampled {
+                assert_eq!(data[11], u32::from(tile.level));
+            }
+            let (tile, uv) = address.tile(22).unwrap();
+            let expected = TileAnchor::new(tile, radius)
+                .unwrap()
+                .project_body_m(uv, height);
+            let error = (0..3)
+                .map(|j| (f64::from(f32::from_bits(data[j])) - (expected[j] - camera[j])).abs())
+                .fold(0.0, f64::max);
+            assert!(
+                error < 8.0,
+                "whole-planet arithmetic error {error} cube={cube:?}"
+            );
+            max_error = max_error.max(error);
+            let distance = (0..3)
+                .map(|j| (expected[j] - camera[j]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            if distance < 10_000.0 {
+                if let Some(previous) = near_positions.insert(data[..3].to_vec(), cube) {
+                    assert_eq!(
+                        previous, cube,
+                        "distinct local deep vertices must not collapse to one f32 position"
+                    );
+                }
+                assert!(error < 0.02, "near-surface error {error}");
+                near_error = near_error.max(error);
+                near += 1;
+            }
+            let normal = (0..3)
+                .map(|j| f32::from_bits(data[4 + j]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            assert!((normal - 1.0).abs() < 1e-5);
+        }
+    }
+    (max_error, near_error, near)
+}
+
+#[test]
+#[ignore = "hardware: canonical borrowed height pages, seam ownership, depth-58 local planetary precision and residency changes"]
+fn conforming_surface_borrows_canonical_pages_and_preserves_deep_precision() {
+    use thessa_rcbt_core::{
+        HeightPage,
+        conforming_surface::{SurfaceAddress, page_id},
+        height_source::HeightPageStore,
+        tile_anchor::{TileAnchor, TileKey},
+    };
+    use thessa_render_wgpu::{
+        conforming_surface::ConformingSurface,
+        terrain::{ResidentTerrainPatch, TerrainCapacity, TerrainPatch, TerrainRenderer},
+    };
+    let backend = Backend::bring_up().unwrap();
+    let radius = 6_371_000.0;
+    let gpu = SphereGpu::new(&backend.device, &backend.queue, 1024, 58).unwrap();
+    let mut node = Node::new(16, 4).unwrap();
+    for _ in 4..58 {
+        gpu.set_request(&backend.queue, 0, node.id());
+        assert_eq!(step(&backend, &gpu)[3], 1);
+        node = node.left_child().unwrap();
+    }
+    let vertex = cube_vertices(node).unwrap()[0];
+    let address = SurfaceAddress::from_cube(vertex).unwrap();
+    let (fine, _) = address.tile(22).unwrap();
+    let mut tiles = (0..6)
+        .filter(|&face| face != fine.face)
+        .map(|face| TileKey::new(face, 0, 0, 0).unwrap())
+        .collect::<Vec<_>>();
+    tiles.push(fine);
+    let mut pages = HeightPageStore::default();
+    for &tile in &tiles {
+        let mut heights = Vec::new();
+        for y in 0..33 {
+            for x in 0..33 {
+                heights.push(
+                    100.0 + f64::from(tile.face) * 20.0 + f64::from(x) * 0.25
+                        - f64::from(y) * 0.125,
+                );
+            }
+        }
+        pages.set_page(
+            page_id(tile).unwrap(),
+            HeightPage::bake(&heights, 33, 0.01).unwrap(),
+        );
+    }
+    let patches = tiles
+        .iter()
+        .map(|&tile| TerrainPatch {
+            anchor: TileAnchor::new(tile, radius).unwrap(),
+            page: pages.get(page_id(tile).unwrap()).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let mut owner = TerrainRenderer::with_capacity(
+        &backend,
+        &patches,
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 8,
+            height_grid_size: 33,
+            material_layers: 1,
+        },
+    )
+    .unwrap();
+    let source = owner.height_surface_source(&backend).unwrap();
+    let surface = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    let (tile, uv) = address.tile(22).unwrap();
+    let camera = TileAnchor::new(tile, radius)
+        .unwrap()
+        .project_body_m(uv, 1000.0);
+    let (max_error, near_error, near) =
+        surface_snapshot(&backend, &surface, &gpu, &pages, radius, camera);
+    assert!(near > 50);
+    for offset in [-5000.0, 5000.0] {
+        surface_snapshot(
+            &backend,
+            &surface,
+            &gpu,
+            &pages,
+            radius,
+            [camera[0], camera[1] + offset, camera[2] - offset],
+        );
+    }
+    for sign in [-1.0, 1.0] {
+        let d = (radius + 1000.0) / 3.0f64.sqrt();
+        surface_snapshot(&backend, &surface, &gpu, &pages, radius, [sign * d, d, -d]);
+    }
+    // Reorder/reuse source slots, generation changes and eviction are published
+    // by the EXISTING terrain owner; no new texture/residual upload path.
+    pages.set_page(
+        page_id(fine).unwrap(),
+        HeightPage::bake(&[250.0; 33 * 33], 33, 0.01).unwrap(),
+    );
+    for iteration in 0..3 {
+        if iteration == 1 {
+            pages.remove_page(page_id(fine).unwrap());
+        }
+        if iteration == 2 {
+            pages.set_page(
+                page_id(fine).unwrap(),
+                HeightPage::bake(&[300.0; 33 * 33], 33, 0.01).unwrap(),
+            );
+        }
+        let publications = tiles
+            .iter()
+            .rev()
+            .filter_map(|&tile| {
+                let id = page_id(tile).unwrap();
+                Some(ResidentTerrainPatch {
+                    anchor: TileAnchor::new(tile, radius).unwrap(),
+                    page: pages.get(id)?,
+                    generation: pages.page_version(id).unwrap(),
+                })
+            })
+            .collect::<Vec<_>>();
+        owner.publish_partition(&backend, &publications).unwrap();
+        surface_snapshot(&backend, &surface, &gpu, &pages, radius, camera);
+        let stats = owner.publish_partition(&backend, &publications).unwrap();
+        assert_eq!(stats.regenerated, 0);
+    }
+    // An entirely missing canonical face has an explicit zero-height fallback,
+    // never an out-of-bounds slot alias or a stale evicted page.
+    pages.remove_page(8);
+    pages.remove_page(page_id(fine).unwrap());
+    let publications = tiles
+        .iter()
+        .filter_map(|&tile| {
+            let id = page_id(tile).unwrap();
+            Some(ResidentTerrainPatch {
+                anchor: TileAnchor::new(tile, radius).unwrap(),
+                page: pages.get(id)?,
+                generation: pages.page_version(id).unwrap(),
+            })
+        })
+        .collect::<Vec<_>>();
+    owner.publish_partition(&backend, &publications).unwrap();
+    surface_snapshot(&backend, &surface, &gpu, &pages, radius, camera);
+    println!(
+        "cbt_surface adapter={:?} backend={:?} radius_m={radius} max_heap_depth=58 max_absolute_position_error_m={max_error} near_10km_error_m={near_error} near_vertices={near} shared_vertices_bit_identical=true quantized_height_error_bound_m=0.005 whole_planet_arithmetic_bound_m=8 near_10km_arithmetic_bound_m=0.02; no tessellation/analytic-height/astronomical-rotation guarantee",
+        backend.adapter.get_info().name,
+        backend.adapter.get_info().backend
+    );
+}
+
+fn surface_material_pipeline(
+    backend: &Backend,
+    gpu: &SphereGpu,
+    surface: &thessa_render_wgpu::conforming_surface::ConformingSurface,
+    materials: &thessa_render_wgpu::material::MaterialBinding,
+    clip: [f32; 16],
+) -> (wgpu::RenderPipeline, wgpu::BindGroup) {
+    use wgpu::util::DeviceExt;
+    let source = format!(
+        "{}\nvar<private> p:Params;\n{}\n{}",
+        thessa_rcbt_wgpu::sphere::GEOMETRY_WGSL,
+        thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
+            .replace("@group(0) @binding(16)", "@group(0) @binding(6)"),
+        r#"
+struct SurfaceVertex { position_height:vec4<f32>, normal_face:vec4<f32>, address:vec4<u32> }
+@group(0) @binding(0) var<uniform> clip:mat4x4<f32>;
+@group(0) @binding(1) var<storage,read> surface_vertices:array<SurfaceVertex>;
+@group(0) @binding(2) var<storage,read> indices:array<u32>;
+@group(0) @binding(3) var<storage,read> pool:array<Record>;
+@group(0) @binding(4) var material_texture:texture_2d_array<f32>;
+@group(0) @binding(5) var material_sampler:sampler;
+struct V { @builtin(position) clip:vec4<f32>, @location(0) direction:vec3<f32>, @location(1) normal:vec3<f32> }
+@vertex fn vertex(@builtin(vertex_index) index:u32)->V {
+    let slot=indices[index/3u];let r=pool[slot];var out:V;
+    if(root_of(r)>=12u){out.clip=vec4(2.0,2.0,2.0,1.0);return out;}
+    let v=surface_vertices[slot*3u+index%3u];
+    out.clip=clip*vec4(v.position_height.xyz,1.0);out.direction=triangle(r)[index%3u];out.normal=v.normal_face.xyz;return out;
+}
+@fragment fn fragment(in:V)->@location(0) vec4<f32> {
+    let address=material_address(normalize(in.direction));
+    let value=material_at_level(address,dpdx(address.uv),dpdy(address.uv),2u);
+    let light=0.2+0.8*max(0.0,dot(normalize(in.normal),normalize(vec3(0.3,0.5,1.0))));
+    return vec4((value.value.rgb+vec3(0.2)*(1.0-value.coverage))*light,1.0);
+}"#
+    );
+    let shader = backend
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cbt-canonical-material-diagnostic"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+    let pipeline = backend
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cbt-surface-material-oracle"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vertex"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fragment"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OffscreenTarget::FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+    let matrix = backend
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &clip
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+    let mut entries = [&matrix, &surface.vertices, &gpu.indices, &gpu.pool]
+        .into_iter()
+        .enumerate()
+        .map(|(binding, b)| wgpu::BindGroupEntry {
+            binding: binding as u32,
+            resource: b.as_entire_binding(),
+        })
+        .collect::<Vec<_>>();
+    entries.extend([
+        wgpu::BindGroupEntry {
+            binding: 4,
+            resource: wgpu::BindingResource::TextureView(&materials.texture),
+        },
+        wgpu::BindGroupEntry {
+            binding: 5,
+            resource: wgpu::BindingResource::Sampler(&materials.sampler),
+        },
+        wgpu::BindGroupEntry {
+            binding: 6,
+            resource: materials.directory.as_entire_binding(),
+        },
+    ]);
+    let bind = backend
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        });
+    (pipeline, bind)
+}
+
+#[test]
+#[ignore = "hardware: 128K-slot canonical height emission cost, indirect material raster and independent source updates"]
+fn canonical_surface_target_cost_and_shared_material_indirect_raster() {
+    use thessa_rcbt_core::{
+        HeightPage,
+        conforming_surface::page_id,
+        height_source::HeightPageStore,
+        material_page::{CbtMaterialPage, MaterialPages},
+        tile_anchor::{TileAnchor, TileKey},
+    };
+    use thessa_render_wgpu::{
+        conforming_surface::ConformingSurface,
+        terrain::{TerrainCapacity, TerrainPatch, TerrainRenderer},
+    };
+    let mut requested = thessa_graphics::RequestedGraphics::default();
+    requested.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+    let backend = Backend::bring_up_for_graphics_profiled(&requested).unwrap();
+    let radius = 6_371_000.0;
+    let gpu =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 18, 13).unwrap();
+    gpu.set_request(&backend.queue, 2, 0);
+    step(&backend, &gpu);
+    let tiles = (0..6)
+        .map(|face| TileKey::new(face, 0, 0, 0).unwrap())
+        .collect::<Vec<_>>();
+    let mut pages = HeightPageStore::default();
+    for &tile in &tiles {
+        pages.set_page(
+            page_id(tile).unwrap(),
+            HeightPage::bake(&[100.0; 33 * 33], 33, 0.01).unwrap(),
+        );
+    }
+    let patches = tiles
+        .iter()
+        .map(|&tile| TerrainPatch {
+            anchor: TileAnchor::new(tile, radius).unwrap(),
+            page: pages.get(page_id(tile).unwrap()).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let mut owner = TerrainRenderer::with_capacity(
+        &backend,
+        &patches,
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 6,
+            height_grid_size: 33,
+            material_layers: 6,
+        },
+    )
+    .unwrap();
+    let surface = ConformingSurface::new(
+        &backend,
+        &gpu.pool,
+        &owner.height_surface_source(&backend).unwrap(),
+    )
+    .unwrap();
+    let camera = [0.0, 0.0, radius * 3.0];
+    let (max_error, _, _) = surface_snapshot(&backend, &surface, &gpu, &pages, radius, camera);
+    let timer = GpuIntervals::new(&backend, 2).unwrap();
+    let mut samples = Vec::new();
+    for i in 0..50 {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        timer.mark(&mut encoder, 0);
+        surface.encode(&mut encoder);
+        timer.mark(&mut encoder, 1);
+        timer.resolve(&mut encoder);
+        backend.queue.submit([encoder.finish()]);
+        let ms = timer.read(&backend).unwrap()[0] * 1000.0;
+        if i >= 10 {
+            samples.push(ms);
+        }
+    }
+    let raw = samples.iter().map(|v| format!("{v}\n")).collect::<String>();
+    samples.sort_by(f64::total_cmp);
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp/cbt-sphere");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("surface-cost-ms.csv"), raw).unwrap();
+    let mut materials = MaterialPages::new();
+    let demand = (8..14).collect::<Vec<_>>();
+    for &id in &demand {
+        materials.insert(
+            id,
+            (
+                1,
+                CbtMaterialPage::from_rgba8([220, 20, 20, 128].repeat(128 * 128)).unwrap(),
+            ),
+        );
+    }
+    owner
+        .update_materials(&backend, &demand, &materials)
+        .unwrap();
+    let binding = owner.material_binding();
+    let clip =
+        (glam::camera::rh::proj::directx::perspective(1.0, 1.0, 100.0, (radius * 10.0) as f32)
+            * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y))
+        .to_cols_array();
+    let (pipeline, bind) = surface_material_pipeline(&backend, &gpu, &surface, &binding, clip);
+    let target = OffscreenTarget::new(&backend, 512, 512).unwrap();
+    let topology_before = read(&backend, &gpu.pool);
+    let geometry_before = read(&backend, &surface.vertices);
+    let mut totals = Vec::new();
+    for color in [[220, 20, 20, 128], [20, 220, 20, 128]] {
+        for &id in &demand {
+            materials.insert(
+                id,
+                (
+                    u64::from(color[1]),
+                    CbtMaterialPage::from_rgba8(color.repeat(128 * 128)).unwrap(),
+                ),
+            );
+        }
+        assert_eq!(
+            owner
+                .update_materials(&backend, &demand, &materials)
+                .unwrap()
+                .pages,
+            6
+        );
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        draw(&mut encoder, &gpu, &target, &pipeline, &bind);
+        backend.queue.submit([encoder.finish()]);
+        let pixels = target.read_rgba8(&backend).unwrap();
+        let sum = |channel| {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| u64::from(p[channel]))
+                .sum::<u64>()
+        };
+        totals.push([sum(0), sum(1)]);
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[0] > 40 || p[1] > 40)
+                .count()
+                > 10_000
+        );
+        let mut png = png::Encoder::new(
+            std::fs::File::create(directory.join("surface-material.png")).unwrap(),
+            512,
+            512,
+        );
+        png.set_color(png::ColorType::Rgba);
+        png.set_depth(png::BitDepth::Eight);
+        png.write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+    }
+    assert!(
+        totals[0][0] > totals[0][1] * 3 && totals[1][1] > totals[1][0] * 3,
+        "borrowed material update must change the actual indirect raster"
+    );
+    assert_eq!(topology_before, read(&backend, &gpu.pool));
+    assert_eq!(geometry_before, read(&backend, &surface.vertices));
+    assert_eq!(
+        owner
+            .update_materials(&backend, &demand, &materials)
+            .unwrap()
+            .bytes,
+        0
+    );
+    println!(
+        "cbt_surface_cost adapter={:?} backend={:?} driver={:?} initial_triangles=98304 capacity=131072 page_grid=33 root_pages=6 samples=40 warmup=10 p50_ms={} p95_ms={} surface_buffer_bytes={} absolute_coordinate_max_error_m={max_error} actual_material_indirect_draw=true raw={} capture={}; emission only, no topology classification/update/shadows/ocean/RT, not game FPS",
+        backend.adapter.get_info().name,
+        backend.adapter.get_info().backend,
+        backend.adapter.get_info().driver_info,
+        samples[20],
+        samples[38],
+        surface.storage_bytes(),
+        directory.join("surface-cost-ms.csv").display(),
+        directory.join("surface-material.png").display()
+    );
+}

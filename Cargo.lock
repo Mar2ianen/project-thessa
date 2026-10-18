@@ -6467,6 +6467,7 @@ name = "thessa-render-wgpu"
 version = "0.0.1"
 dependencies = [
  "glam 0.33.7",
+ "naga",
  "png",
  "pollster",
  "thessa-graphics",

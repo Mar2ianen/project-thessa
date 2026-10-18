@@ -12,12 +12,13 @@ thessa-render-core = { path = "../render-core" }
 thessa-graphics = { path = "../graphics" }
 thessa-wgpu-exp = { path = "../wgpu-exp" }
 thessa-rcbt-core = { path = "../rcbt-core" }
+thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
 glam.workspace = true
 wgpu.workspace = true
 pollster = "0.4"
 
 [dev-dependencies]
-thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
+naga = { version = "30", features = ["wgsl-in"] }
 thessa-render-assets = { path = "../render-assets" }
 png = "0.18"
 

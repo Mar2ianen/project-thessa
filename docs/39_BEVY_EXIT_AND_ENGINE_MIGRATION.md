@@ -19,8 +19,12 @@ sphere, not a migrated live planet; production height/material/precision and
 shadow/ocean/RT consumers retain their existing path pending the listed gates.
 The [parallel follow-up](62_CBT_PARALLEL_TRANSACTIONS.md) now commits disjoint
 compatibility-chain/diamond transactions concurrently and measures a 128K pool.
+The [canonical surface consumer](63_CBT_CANONICAL_SURFACE.md) then converts
+active bisectors into planet-scale vertices sampling the existing height and
+material residency through heap depth 58, without a second streamer or cache.
 Acceptance targets canonical surface correctness and working native consumers,
-not Bevy visual/implementation parity; those native integration gates remain open.
+not Bevy visual/implementation parity; height-aware classification and
+shadow/ocean/RT publication remain the open native integration gates.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with

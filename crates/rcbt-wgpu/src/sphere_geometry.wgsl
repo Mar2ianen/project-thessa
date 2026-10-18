@@ -20,7 +20,7 @@ fn child_id(id: vec2<u32>, right: u32) -> vec2<u32> {
 fn root_of(record: Record) -> u32 {
     return shift_right(record.address.xy, record.address.z - 4u).x - 16u;
 }
-fn triangle(record: Record) -> mat3x3<f32> {
+fn cube_triangle(record: Record) -> array<vec3<i32>,3> {
     let root = root_of(record);
     let face = root / 2u;
     let normals = array<vec3<i32>,6>(vec3(1,0,0), vec3(-1,0,0), vec3(0,1,0), vec3(0,-1,0), vec3(0,0,1), vec3(0,0,-1));
@@ -50,7 +50,11 @@ fn triangle(record: Record) -> mat3x3<f32> {
         }
         b = mid;
     }
-    return mat3x3(normalize(vec3<f32>(a)), normalize(vec3<f32>(b)), normalize(vec3<f32>(c)));
+    return array(a,b,c);
+}
+fn triangle(record: Record) -> mat3x3<f32> {
+    let t = cube_triangle(record);
+    return mat3x3(normalize(vec3<f32>(t[0])), normalize(vec3<f32>(t[1])), normalize(vec3<f32>(t[2])));
 }
 fn pixel_area(record: Record) -> f32 {
     if (record.address.z < 4u || root_of(record) >= 12u) { return 0.0; }

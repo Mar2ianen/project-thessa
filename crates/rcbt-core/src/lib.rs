@@ -18,6 +18,7 @@ const PAGE_ENCODING_VERSION: u8 = 1;
 pub mod bisector_pool;
 pub mod compact;
 pub mod conforming;
+pub mod conforming_surface;
 pub mod height_source;
 pub mod lighting;
 pub mod material_cache;

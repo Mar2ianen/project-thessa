@@ -1,0 +1,88 @@
+{
+  "phase": "cbt-canonical-surface",
+  "date": "2026-10-18",
+  "doc": "docs/63_CBT_CANONICAL_SURFACE.md",
+  "baseline": "1ff4b3a (parallel conforming CBT transactions, docs 61/62)",
+  "hardware": {
+    "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan",
+    "driver": "Mesa 26.2.4-arch1.1"
+  },
+  "acceptance": "canonical surface data, conforming topology, explicit numerical budgets and measured work. Bevy visual/implementation parity, whole-system large_cbt replacement, game FPS, remote CI and blind subjective acceptance are not claimed.",
+  "implementation": {
+    "rcbt_core_conforming_surface": "SurfaceAddress::from_cube/tile/sample: exact bisector->canonical face-UV mapping over 2^29 numerators with closed upper edge, deterministic shared-edge ownership (X, then Y, then Z), single page_id(TileKey) implementation of the existing material/height quadtree identity (legacy terrain tile_node_id now delegates), depth-58 addresses never rounded before page ownership is decided",
+    "height_borrow": "render-wgpu ConformingSurface + HeightSurfaceSource borrow the live metadata/residuals buffers and the sparse directory republished inside TerrainRenderer::publish_partition(); no second allocator, cache, uploader or streamer; reorder/generation/eviction/refill handled by the existing owner; missing face resolves to explicit zero height",
+    "material_borrow": "TerrainRenderer::material_binding() shares the existing MaterialArray texture/sampler/sparse directory; lookup helpers extracted into shared rcbt-core shaders/page_directory.wgsl (MATERIAL_SAMPLE_WGSL is that chunk plus the original body)",
+    "precision": "six camera-local TileAnchor/GpuTileFrame charts (PRECISION_LEVEL=12) chosen per vertex; f64 camera subtraction reused; local chart integer origin subtracted from exact UV numerators before f32 narrowing; shared seam/corner/deep vertices select one chart",
+    "emission": "one compute dispatch per pool: virtual roots zeroed, live leaves decode integer cube triangle, canonical height, shared normal, and write 48-byte vertex records (position+height, normal+face, UV numerators+source slot+level). VERTEX_BYTES=48"
+  },
+  "measurements": {
+    "deep_precision": {
+      "test": "conforming_surface_borrows_canonical_pages_and_preserves_deep_precision",
+      "radius_m": 6371000,
+      "max_heap_depth": 58,
+      "max_absolute_position_error_m": 0.5936899594962597,
+      "whole_planet_arithmetic_bound_m": 8,
+      "near_10km_error_m": 0.0010480568744242191,
+      "near_10km_arithmetic_bound_m": 0.02,
+      "near_vertices_compared": 1292,
+      "shared_vertices_bit_identical": true,
+      "quantized_height_error_bound_m": 0.005,
+      "residency": "reorder, generation change, eviction and refill of source pages republished by the legacy owner (second unchanged publication regenerates 0); missing face -> zero-height fallback",
+      "limits": "vertex arithmetic vs independent CPU TileAnchor::project_body_m reference over the same quantized pages; no tessellation/chord, analytic-height, silhouette or astronomical-rotation bound"
+    },
+    "target_cost_and_shared_material_raster": {
+      "test": "canonical_surface_target_cost_and_shared_material_indirect_raster",
+      "initial_triangles": 98304,
+      "capacity_slots": 131072,
+      "page_grid": 33,
+      "root_pages": 6,
+      "samples": 40,
+      "warmup": 10,
+      "emission_p50_ms": 1.0337240885696413,
+      "emission_p95_ms": 1.138883893501282,
+      "surface_buffer_bytes": 18875136,
+      "absolute_coordinate_max_error_m": 1.5638099201023579,
+      "actual_material_indirect_draw": true,
+      "material_generation_change": "all-red page generation -> red channel dominant, all-green -> green dominant in the actual indirect draw",
+      "zero_upload_republish": "third update_materials() with unchanged bytes uploads 0 bytes; topology and surface-vertex buffers byte-identical before/after",
+      "raw_csv": "crates/render-wgpu/target/test-tmp/cbt-sphere/surface-cost-ms.csv (regenerable, ignored)",
+      "raw_csv_sha256": "bfedad7456292abbddc86b49406106a737dc55eca4059c17be9773bfa95f4845",
+      "capture": "crates/render-wgpu/target/test-tmp/cbt-sphere/surface-material.png (regenerable, ignored)",
+      "limits": "emission of every active slot including zeroed virtual roots, no dirty culling or view early-out; GPU timestamps only; excludes topology, classification, page publication and initialization; not game FPS"
+    },
+    "batch_recheck_same_state": {
+      "test": "target_pool_parallel_commit_cost_and_exact_control",
+      "serial_commit_p50_ms": 0.16900110419082642,
+      "parallel_commit_p50_ms": 0.011061016067504884,
+      "serial_total_p50_ms": 0.436950210811615,
+      "parallel_total_p50_ms": 0.2783288282203674,
+      "byte_equal_serial": true,
+      "raw_csv_sha256": "94f5c60261d0e4e78d16b2aea1a478373fc00ad469b36f69b1164f4bce814979"
+    }
+  },
+  "checks": {
+    "cargo_clippy_workspace_all_targets_all_features": "passed (also no-default-features thessa-terrain-native)",
+    "cargo_fmt_all_check": "passed",
+    "rcbt_core_conforming_surface_unit": "2 passed, 0 failed (/tmp/opencode/cbt-surface-core.log)",
+    "render_wgpu_portable_shader_validation": "1 passed, 0 failed (/tmp/opencode/cbt-surface-shader.log)",
+    "workspace_lib_and_bins": "1881 passed, 0 failed (/tmp/opencode/cbt-surface-workspace.log)",
+    "workspace_integration": "90 passed, 0 failed (/tmp/opencode/cbt-surface-integration.log)",
+    "bevy_rcbt_gpu_ignored": "24 passed, 0 failed (/tmp/opencode/cbt-surface-bevy-gpu.log)",
+    "terrain_native_ignored": "20 passed, 0 failed, silent ALSA/Pulse/PipeWire, 1 thread (/tmp/opencode/cbt-surface-native-ignored.log)",
+    "render_wgpu_backend_ignored": "3 passed, 0 failed (/tmp/opencode/cbt-surface-backend-ignored.log)",
+    "cbt_sphere_gpu_ignored": "6 passed, 0 failed, 1 thread (/tmp/opencode/cbt-surface-gpu-final.log)",
+    "check_architecture": "OK, 12 guarded foundational crates (/tmp/opencode/cbt-surface-architecture.log)",
+    "agent_qa_unittest": "5 tests OK (/tmp/opencode/cbt-surface-agent-qa.log)",
+    "git_diff_check": "clean",
+    "remote_ci": "not run, not claimed"
+  },
+  "known_gaps": [
+    "classification ignores height: pixel_area() still measures unit-sphere chords, so tall relief and near-camera surfaces are not charged for screen area their height adds",
+    "no shadow caster: the shared shadow atlas still consumes the legacy patch-grid vertex stream",
+    "no ocean geometry consumer and no RT/BLAS publication for bisectors",
+    "no resolved production mode: nothing in graphics.toml selects this path and TerrainRenderer::encode_scene() still draws legacy patches",
+    "no shared revision/lifetime contract between the surface buffer and shadow/RT/ocean consumers",
+    "no equal-error comparison against the legacy patch renderer, no blind visual review, no cross-platform acceptance"
+  ]
+}

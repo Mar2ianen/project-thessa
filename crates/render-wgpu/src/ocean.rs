@@ -86,9 +86,7 @@ impl OceanGeometry {
             16,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
-        let material_kernel=thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
-            .replace("@binding(16)","@binding(7)")
-            .replace("textureSampleGrad(material_texture, material_sampler, uv, i32(layer),\n                dx * extent * (125.0 / 128.0), dy * extent * (125.0 / 128.0))", "textureSampleLevel(material_texture, material_sampler, uv, i32(layer), 0.0)");
+        let material_kernel = geometry_material_shader(7);
         let code = format!(
             "{}\n{}\n{}\n{}\n{}",
             thessa_rcbt_core::shaders::PRECISION_WGSL,
@@ -183,6 +181,14 @@ pub struct OceanField {
 
 pub fn shader(group: u32) -> String {
     include_str!("ocean_sample.wgsl").replace("@group(2)", &format!("@group({group})"))
+}
+
+/// Shared compute variant of the canonical material sampler (no implicit
+/// derivatives in a geometry pass). Both geometry consumers use the same code.
+pub(crate) fn geometry_material_shader(directory_binding: u32) -> String {
+    thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
+        .replace("@binding(16)", &format!("@binding({directory_binding})"))
+        .replace("textureSampleGrad(material_texture, material_sampler, uv, i32(layer),\n                dx * extent * (125.0 / 128.0), dy * extent * (125.0 / 128.0))", "textureSampleLevel(material_texture, material_sampler, uv, i32(layer), 0.0)")
 }
 
 impl OceanField {

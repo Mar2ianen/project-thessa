@@ -70,6 +70,15 @@ displacement, breaking, foam, wakes, shoaling/refraction or shore interaction.
 
 ## Filtering, geometry and optical consumers
 
+2026-10-18 diagnostic follow-up: the persistent bisector surface can also
+borrow this field/material residency through `ConformingSurface::set_ocean`.
+It re-emits datum, reduces a common near-field footprint, and deforms shared
+vertices identically under the existing resolved ocean settings; disabled,
+optical-only, coarse and whole-partition-overflow fallbacks are explicit.
+This adapter is not selected by production raster/RT; the generated-patch
+consumer below is unchanged. Numerical oracles, measured scoped costs and
+remaining temporal/platform gaps are in [doc 63](63_CBT_CANONICAL_SURFACE.md).
+
 The shared `rgba16float` array stores height, two slopes and a scaled second
 slope moment (a coefficient-bounded scale, up to ×1024, avoids small-moment
 subnormal loss without overflowing half-float at steep inputs). Slopes outside

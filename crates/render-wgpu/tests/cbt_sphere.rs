@@ -1537,23 +1537,17 @@ fn conforming_surface_casts_shared_shadow_depth() {
     };
     let backend = Backend::bring_up().unwrap();
     let radius = 1_000.0;
-    // Face-level tiles (~333 m at radius 1000) so the caster spans many shadow
-    // texels. A level-11 tile is ~15 m across and lands below one texel of the
-    // 1 cascade / 512 px atlas, which empties the legacy depth readback.
+    // Whole faces cover the sphere. At R=1000 a level-11 tile is only about
+    // 2R/2048 = 0.977 m wide in cube coordinates, subpixel in the old 12 km
+    // shadow cover; that fixture could not establish depth agreement.
     let tiles = (0..6)
         .map(|face| TileKey::new(face, 0, 0, 0).unwrap())
         .collect::<Vec<_>>();
     let mut pages = HeightPageStore::default();
     for &tile in &tiles {
-        let mut heights = Vec::new();
-        for y in 0..33 {
-            for x in 0..33 {
-                heights.push(20.0 + f64::from(x) * 0.1 - f64::from(y) * 0.05);
-            }
-        }
         pages.set_page(
             page_id(tile).unwrap(),
-            HeightPage::bake(&heights, 33, 0.01).unwrap(),
+            HeightPage::bake(&[20.0; 33 * 33], 33, 0.01).unwrap(),
         );
     }
     let patches = tiles
@@ -1568,6 +1562,7 @@ fn conforming_surface_casts_shared_shadow_depth() {
     request.shadows.enabled = true;
     request.shadows.cascades = 1;
     request.shadows.map_size = 512;
+    request.shadows.max_distance_m = 2_000.0;
     request.shadows.quality = Quality::Low;
     request.shadows.normal_bias_m = 0.001;
     let settings = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
@@ -1608,8 +1603,13 @@ fn conforming_surface_casts_shared_shadow_depth() {
         exposure: 1.0,
     };
     owner.update_view(&backend, &view).unwrap();
+    let directions = [
+        glam::DVec3::Z,
+        glam::DVec3::new(0.7, 0.2, 0.4).normalize(),
+        glam::DVec3::new(-0.2, 0.9, 0.3).normalize(),
+    ];
     let lights = SurfaceLighting {
-        directions: [[0.0, 0.0, 1.0, 0.0]; 3],
+        directions: directions.map(|d| [d.x as f32, d.y as f32, d.z as f32, 0.0]),
         colors_lux: [[std::f32::consts::PI; 4]; 3],
         ..Default::default()
     };
@@ -1618,10 +1618,9 @@ fn conforming_surface_casts_shared_shadow_depth() {
         .update_shadows(&backend, view.world_position_m, &lights)
         .unwrap();
 
-    // 8 uniform bisections (~1.3 m cells) matches the 33x33 patch grid the
-    // legacy caster uses at this tile size. A zero local depth would leave only
-    // depth-4 roots, which the emitter classifies as reserved virtual roots and
-    // zeroes, so the caster would draw sentinels instead of leaves.
+    // Eight local bisections give 3072 real triangles plus four virtual roots.
+    // Depth-4 roots 16..27 are real geometry even at local_depth=0; only roots
+    // 28..31 and free slots are zeroed. Page level is not bisector depth.
     let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 12, 8).unwrap();
     let source = owner.height_surface_source(&backend).unwrap();
     let surface = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
@@ -1645,7 +1644,7 @@ fn conforming_surface_casts_shared_shadow_depth() {
             .filter(|record| record.iter().any(|&b| b != 0))
             .count();
         println!("cbt_shadow_surface live_records={live}");
-        assert!(live > 0, "emitted surface must hold live records");
+        assert_eq!(live, 12 * 256 * 3);
     }
     // Legacy full-caster depth as the reference silhouette/depth bound.
     let legacy = {
@@ -1685,9 +1684,8 @@ fn conforming_surface_casts_shared_shadow_depth() {
     let legacy_f = to_f32(&legacy);
     let cbt_f = to_f32(&cbt);
     assert_eq!(legacy_f.len(), cbt_f.len());
-    // The atlas is one square layer per sun x cascade, and the readback is
-    // layer-major. Comparing across the whole buffer would pair texels of
-    // different casters, so the oracle stays inside a single layer.
+    // Readback is layer-major. A flat zip would also pair matching texels;
+    // explicit chunks additionally let us require coverage in EVERY layer.
     let layer = 512 * 512;
     let legacy_valid = legacy_f
         .chunks(layer)
@@ -1701,13 +1699,82 @@ fn conforming_surface_casts_shared_shadow_depth() {
         cbt_valid.iter().sum::<usize>() > 1000,
         "CBT caster must produce nonempty depth: {cbt_valid:?}"
     );
-    // Where both tessellations land on the same surface, their shadow depth must
-    // agree within the height/tessellation error envelope; bisector triangles and
-    // the 33x33 patch grid are not byte-identical, so this is a tolerance, not an
-    // equality oracle. Only layers both casters actually wrote are compared.
+    // Independent canonical oracle: each chord triangle of a sphere with
+    // pairwise distances <= D lies between radii sqrt(R^2-D^2/3) and R.
+    // This follows from |sum(w_i*v_i)|^2 = R^2-sum(i<j,w_i*w_j*D_ij^2)
+    // and sum(i<j,w_i*w_j)<=1/3. Test only rays through the central half-radius
+    // disk to avoid the unbounded depth sensitivity at the silhouette.
+    let outer_radius = radius + 20.0;
+    let cpu = SphereTopology::uniform(4096, 12, 8).unwrap();
+    let longest_edge = cpu
+        .records()
+        .iter()
+        .filter_map(|r| {
+            let node = Node::from_heap_id(identity(*r)).ok()?;
+            cube_vertices(node)
+        })
+        .map(|t| {
+            let v =
+                t.map(|p| glam::DVec3::from_array(p.map(|x| x as f64)).normalize() * outer_radius);
+            (v[0] - v[1])
+                .length()
+                .max((v[1] - v[2]).length())
+                .max((v[2] - v[0]).length())
+        })
+        .fold(0.0_f64, f64::max);
+    let inner_radius = (outer_radius * outer_radius - longest_edge * longest_edge / 3.0).sqrt();
+    let mut canonical_rays = 0;
+    let mut max_metric_error = 0.0_f64;
+    let mut max_metric_envelope = 0.0_f64;
     let mut both = 0;
     let mut worst = 0.0f32;
-    for (a_layer, b_layer) in legacy_f.chunks(layer).zip(cbt_f.chunks(layer)) {
+    for (sun, (a_layer, b_layer)) in legacy_f.chunks(layer).zip(cbt_f.chunks(layer)).enumerate() {
+        assert!(legacy_valid[sun] > 500 && cbt_valid[sun] > 500);
+        let d = lights.directions[sun];
+        let clip = thessa_render_core::shadow::directional_clip(
+            view.world_position_m,
+            glam::DVec3::new(f64::from(d[0]), f64::from(d[1]), f64::from(d[2])),
+            settings.shadow_max_distance_m,
+            settings.shadow_max_distance_m,
+            512,
+        )
+        .unwrap()
+        .as_mat4()
+        .as_dmat4();
+        let inverse = clip.inverse();
+        for (pixel, &depth) in b_layer.iter().enumerate() {
+            let xy = glam::DVec2::new(
+                2.0 * ((pixel % 512) as f64 + 0.5) / 512.0 - 1.0,
+                1.0 - 2.0 * ((pixel / 512) as f64 + 0.5) / 512.0,
+            );
+            let start = inverse.project_point3(xy.extend(0.0)) + view.world_position_m;
+            let delta = inverse.project_point3(xy.extend(1.0)) + view.world_position_m - start;
+            let ray_length = delta.length();
+            let ray = delta / ray_length;
+            let along = start.dot(ray);
+            let impact2 = (start.length_squared() - along * along).max(0.0);
+            if impact2 > (outer_radius * 0.5).powi(2) {
+                continue;
+            }
+            let outer = -along - (outer_radius * outer_radius - impact2).sqrt();
+            let inner = -along - (inner_radius * inner_radius - impact2).sqrt();
+            let actual = f64::from(depth) * ray_length;
+            // Two millimetres cover f32 projection/vertex arithmetic here,
+            // separate from the geometry-derived chord envelope in metres.
+            assert!(
+                depth > 0.0 && depth < 1.0,
+                "missing canonical caster sun={sun} pixel={pixel}"
+            );
+            assert!(
+                actual >= outer - 0.002 && actual <= inner + 0.002,
+                "canonical depth sun={sun} pixel={pixel}: error={} m, chord envelope={} m",
+                actual - outer,
+                inner - outer
+            );
+            canonical_rays += 1;
+            max_metric_error = max_metric_error.max((actual - outer).abs());
+            max_metric_envelope = max_metric_envelope.max(inner - outer);
+        }
         for (&a, &b) in a_layer.iter().zip(b_layer) {
             if a > 0.0 && a < 1.0 && b > 0.0 && b < 1.0 {
                 both += 1;
@@ -1715,37 +1782,522 @@ fn conforming_surface_casts_shared_shadow_depth() {
             }
         }
     }
-    let extent = |f: &[f32]| {
-        let mut seen = false;
-        let (mut x0, mut y0, mut x1, mut y1) = (0usize, 0usize, 0usize, 0usize);
-        for (i, &z) in f.iter().enumerate() {
-            if z > 0.0 && z < 1.0 {
-                let (x, y) = (i % 512, i / 512);
-                if !seen {
-                    (x0, y0, x1, y1) = (x, y, x, y);
-                    seen = true;
-                } else {
-                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
-                }
-            }
-        }
-        (x0, y0, x1, y1)
-    };
     assert!(both > 500, "both casters must overlap in depth: {both}");
+    assert!(canonical_rays > 10_000);
     println!(
-        "cbt_shadow_diag overlap={both} legacy_extent={:?} cbt_extent={:?}",
-        extent(&legacy_f),
-        extent(&cbt_f)
-    );
-    assert!(
-        worst < 0.02,
-        "CBT and legacy shadow depth must agree within envelope: {worst}"
-    );
-    println!(
-        "cbt_shadow_cast adapter={:?} slots={} draw_calls={} layers={} overlap={both} max_depth_delta={worst}; diagnostic caster only, bisector vs 33x33 patch tessellation differs, not a production mode or large_cbt/Bevy comparison",
+        "cbt_shadow_cast adapter={:?} slots={} draw_calls={} layers={} overlap={both} legacy_max_depth_delta={worst} canonical_rays={canonical_rays} max_metric_error_m={max_metric_error} max_chord_envelope_m={max_metric_envelope} arithmetic_tolerance_m=0.002 longest_edge_m={longest_edge}; canonical sphere oracle, legacy comparison diagnostic only; not a production mode or large_cbt/Bevy comparison",
         backend.adapter.get_info().name,
         stats.submitted_slots,
         stats.draw_calls,
         legacy_valid.len()
+    );
+}
+
+// Independent f64 direct Fourier sums followed by box mips, periodic bilinear
+// filtering and trilinear mip interpolation. Does not read the GPU field.
+fn ocean_height_oracle(field: &thessa_render_wgpu::ocean::OceanField, time: f64) -> Vec<Vec<f64>> {
+    let n = field.stats().size as usize;
+    let mut mips = vec![
+        (0..9 * n * n)
+            .map(|i| {
+                field.spectrum().sample_reference(
+                    i / (n * n),
+                    [(i % n) as f64 / n as f64, ((i / n) % n) as f64 / n as f64],
+                    time,
+                )[0]
+            })
+            .collect::<Vec<_>>(),
+    ];
+    let mut side = n;
+    while side > 1 {
+        let next = side / 2;
+        let old = mips.last().unwrap();
+        let mut data = Vec::new();
+        for layer in 0..9 {
+            for y in 0..next {
+                for x in 0..next {
+                    data.push(
+                        (old[layer * side * side + 2 * y * side + 2 * x]
+                            + old[layer * side * side + 2 * y * side + 2 * x + 1]
+                            + old[layer * side * side + (2 * y + 1) * side + 2 * x]
+                            + old[layer * side * side + (2 * y + 1) * side + 2 * x + 1])
+                            * 0.25,
+                    );
+                }
+            }
+        }
+        mips.push(data);
+        side = next;
+    }
+    mips
+}
+
+fn sample_ocean_oracle(
+    mips: &[Vec<f64>],
+    layer: usize,
+    position: [f64; 2],
+    period: f64,
+    footprint: f64,
+) -> f64 {
+    let n = (mips[0].len() / 9).isqrt();
+    let lod = (footprint * n as f64 / period)
+        .log2()
+        .clamp(0.0, (mips.len() - 1) as f64);
+    let sample = |mip: usize| {
+        let side = n >> mip;
+        let p = position.map(|v| (v / period + 0.5 / n as f64) * side as f64 - 0.5);
+        let base = p.map(|v| v.floor() as i64);
+        let t = p.map(|v| v - v.floor());
+        let at = |x: i64, y: i64| {
+            mips[mip][layer * side * side
+                + y.rem_euclid(side as i64) as usize * side
+                + x.rem_euclid(side as i64) as usize]
+        };
+        let mix = |a, b, t: f64| a + (b - a) * t;
+        mix(
+            mix(at(base[0], base[1]), at(base[0] + 1, base[1]), t[0]),
+            mix(at(base[0], base[1] + 1), at(base[0] + 1, base[1] + 1), t[0]),
+            t[1],
+        )
+    };
+    let lo = lod.floor() as usize;
+    let a = sample(lo);
+    a + (sample(lod.ceil() as usize) - a) * lod.fract()
+}
+
+#[test]
+#[ignore = "hardware: canonical CBT ocean geometry, Fourier oracle, seams, fallback and 98K-triangle scoped cost"]
+fn conforming_ocean_borrows_field_without_cracks_or_accumulation() {
+    use thessa_graphics::{Quality, RayTracingRequest, RequestedGraphics};
+    use thessa_rcbt_core::{
+        HeightPage,
+        material_page::CbtMaterialPage,
+        tile_anchor::{TileAnchor, TileKey},
+    };
+    use thessa_render_core::ocean::{PERIODS_M, SeaState};
+    use thessa_render_wgpu::{
+        conforming_surface::ConformingSurface,
+        ocean::OceanField,
+        terrain::{TerrainCapacity, TerrainPatch, TerrainRenderer},
+    };
+    let mut request = RequestedGraphics::default();
+    request.renderer.ray_tracing = RayTracingRequest::Off;
+    request.ocean.enabled = true;
+    request.ocean.quality = Quality::Low;
+    request.ocean.geometry_patches = 2;
+    request.ocean.geometry_distance_m = 2000.0;
+    let backend = Backend::bring_up_for_graphics_profiled(&request).unwrap();
+    let settings = backend.resolve_graphics(&request);
+    let sea = SeaState {
+        gravity_m_s2: 6.4,
+        depth_m: 80.0,
+        wind_speed_m_s: 12.0,
+        wind_direction_rad: 0.3,
+        significant_height_m: 1.5,
+        seed: 19,
+    };
+    let mut field = OceanField::new(&backend, sea, settings.ocean_size).unwrap();
+    let radius = 1000.0;
+    let camera = [0.0, 0.0, 1100.0];
+    field
+        .update_frame(&backend.queue, glam::DVec3::from_array(camera), radius)
+        .unwrap();
+    field.update(&backend, 0.0).unwrap();
+    let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let patches = (0..6)
+        .map(|face| TerrainPatch {
+            anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), radius).unwrap(),
+            page: &page,
+        })
+        .collect::<Vec<_>>();
+    let mut owner = TerrainRenderer::with_capacity(
+        &backend,
+        &patches,
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 6,
+            height_grid_size: 2,
+            material_layers: 6,
+        },
+    )
+    .unwrap();
+    let demand = (8..14).collect::<Vec<_>>();
+    let materials = |roughness: u8, generation| {
+        demand
+            .iter()
+            .map(|&id| {
+                (
+                    id,
+                    (
+                        generation,
+                        CbtMaterialPage::from_rgba8([20, 40, 80, roughness].repeat(128 * 128))
+                            .unwrap(),
+                    ),
+                )
+            })
+            .collect()
+    };
+    owner
+        .update_materials(&backend, &demand, &materials(30, 1))
+        .unwrap();
+    let binding = owner.material_binding();
+    let source = owner.height_surface_source(&backend).unwrap();
+    let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 20, 8).unwrap();
+    let datum = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    let mut water = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    for s in [&datum, &water] {
+        s.update_camera(&backend, camera).unwrap();
+    }
+    water
+        .set_ocean(&backend, &settings, Some(&field), &binding)
+        .unwrap();
+    assert_eq!(water.storage_bytes(), datum.storage_bytes() + 32);
+    let capture = |surface: &ConformingSurface| {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        surface.encode(&mut encoder);
+        backend.queue.submit([encoder.finish()]);
+        read(&backend, &surface.vertices)
+    };
+    let base = capture(&datum);
+    let displaced = capture(&water);
+    let extent = words(&read(&backend, water.ocean_extent().unwrap()));
+    let footprint = f32::from_bits(extent[0]);
+    assert!(footprint > 0.0 && footprint < 2048.0 && extent[1] > 0 && extent[1] <= 4096);
+    assert_eq!(
+        displaced,
+        capture(&water),
+        "re-emission must not accumulate waves"
+    );
+    assert!(!field.update(&backend, 0.0).unwrap());
+    assert_eq!(displaced, capture(&water), "paused field is bit stable");
+    let mips = ocean_height_oracle(&field, 0.0);
+    let base_words = words(&base);
+    let water_words = words(&displaced);
+    let mut shared = BTreeMap::new();
+    let mut duplicates = 0;
+    let mut moved = 0;
+    let mut checked = 0;
+    let mut worst = 0.0_f64;
+    for (a, b) in base_words
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .zip(water_words.as_chunks::<12>().0)
+    {
+        assert_eq!(
+            &a[3..],
+            &b[3..],
+            "datum height, normals and address must survive deformation"
+        );
+        if a.iter().all(|&x| x == 0) {
+            assert_eq!(a, b);
+            continue;
+        }
+        let key = (a[7], a[8], a[9]);
+        if let Some(old) = shared.insert(key, *b) {
+            assert_eq!(old, *b, "shared vertex must be bit-identical");
+            duplicates += 1;
+        }
+        let p = glam::DVec3::from_array(std::array::from_fn(|i| f64::from(f32::from_bits(a[i]))));
+        let q = glam::DVec3::from_array(std::array::from_fn(|i| f64::from(f32::from_bits(b[i]))));
+        let delta = (q - p).length();
+        assert!(delta <= field.spectrum().height_bound_m + 0.002);
+        if delta > 0.001 {
+            moved += 1;
+        }
+        if checked < 32 && delta > 0.001 && duplicates % 31 == 0 {
+            let radial = (p + glam::DVec3::from_array(camera)).normalize();
+            let raw = radial.abs().powf(4.0);
+            let w = raw / raw.length();
+            let body = p + glam::DVec3::from_array(camera);
+            let mut height = 0.0;
+            for (band, period) in PERIODS_M.into_iter().enumerate() {
+                height +=
+                    w.x * sample_ocean_oracle(
+                        &mips,
+                        band,
+                        [body.y, body.z],
+                        period,
+                        f64::from(footprint),
+                    ) + w.y
+                        * sample_ocean_oracle(
+                            &mips,
+                            3 + band,
+                            [body.x, body.z],
+                            period,
+                            f64::from(footprint),
+                        )
+                        + w.z
+                            * sample_ocean_oracle(
+                                &mips,
+                                6 + band,
+                                [body.x, body.y],
+                                period,
+                                f64::from(footprint),
+                            );
+            }
+            let t = ((p.length() - 1000.0) / 1000.0).clamp(0.0, 1.0);
+            height *= 1.0 - t * t * (3.0 - 2.0 * t);
+            let error = (q - p - radial * height).length();
+            worst = worst.max(error);
+            assert!(
+                error < 0.004,
+                "direct Fourier+filter displacement error={error} m"
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        duplicates > 1000 && moved > 100 && checked == 32,
+        "duplicates={duplicates} moved={moved} oracle={checked}"
+    );
+    field.update(&backend, 0.5).unwrap();
+    assert_ne!(displaced, capture(&water));
+    field.update(&backend, 0.0).unwrap();
+    assert_eq!(displaced, capture(&water));
+    owner
+        .update_materials(&backend, &demand, &materials(255, 2))
+        .unwrap();
+    assert_eq!(
+        base,
+        capture(&water),
+        "dry canonical material must not move"
+    );
+    owner
+        .update_materials(&backend, &demand, &materials(30, 3))
+        .unwrap();
+    let land = HeightPage::bake(&[5.0; 4], 2, 0.001).unwrap();
+    owner
+        .update_pages(
+            &backend,
+            &(0..6).map(|slot| (slot, &land)).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    assert_eq!(
+        capture(&datum),
+        capture(&water),
+        "elevated land must not move"
+    );
+    owner
+        .update_pages(
+            &backend,
+            &(0..6).map(|slot| (slot, &page)).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    let mut fallback = settings.clone();
+    fallback.ocean.geometry_patches = 1;
+    water
+        .set_ocean(&backend, &fallback, Some(&field), &binding)
+        .unwrap();
+    assert_eq!(
+        base,
+        capture(&water),
+        "whole-partition budget overflow must be optical-only"
+    );
+    assert!(words(&read(&backend, water.ocean_extent().unwrap()))[1] > 2048);
+    let mut invalid = settings.clone();
+    invalid.ocean.geometry_distance_m = f64::NAN;
+    assert!(
+        water
+            .set_ocean(&backend, &invalid, Some(&field), &binding)
+            .is_err()
+    );
+    assert!(
+        water
+            .set_ocean(&backend, &settings, None, &binding)
+            .is_err()
+    );
+    // Failed configuration preserves the previous optical-only budget policy.
+    assert_eq!(base, capture(&water));
+    for optical_only in [true, false] {
+        fallback = settings.clone();
+        if optical_only {
+            fallback.ocean.geometry_patches = 0;
+        } else {
+            fallback.ocean.enabled = false;
+        }
+        water
+            .set_ocean(&backend, &fallback, None, &binding)
+            .unwrap();
+        assert!(water.ocean_extent().is_none());
+        assert_eq!(datum.storage_bytes(), water.storage_bytes());
+        assert_eq!(base, capture(&water));
+    }
+    // Mixed-depth topology uses one extent too: differing incident leaf depths
+    // must not choose differing wave LODs at a common canonical vertex.
+    water
+        .set_ocean(&backend, &settings, Some(&field), &binding)
+        .unwrap();
+    let before_mixed = records(&backend, &gpu);
+    let node = before_mixed
+        .iter()
+        .find_map(|&r| {
+            let node = Node::from_heap_id(identity(r)).ok()?;
+            cube_vertices(node)?;
+            Some(node)
+        })
+        .unwrap();
+    gpu.set_request(&backend.queue, 0, node.id());
+    step(&backend, &gpu);
+    let after_mixed = records(&backend, &gpu);
+    assert!(
+        before_mixed != after_mixed,
+        "valid split must change topology"
+    );
+    let mut cpu = SphereTopology::uniform(4096, 20, 8).unwrap();
+    cpu.split(node).unwrap();
+    assert_eq!(logical(&after_mixed), logical(&cpu.records()));
+    let mixed = words(&capture(&water));
+    let mut vertices = BTreeMap::new();
+    for v in mixed.as_chunks::<12>().0 {
+        if v.iter().any(|&x| x != 0)
+            && let Some(old) = vertices.insert((v[7], v[8], v[9]), *v)
+        {
+            assert_eq!(old, *v);
+        }
+    }
+    let mut calm = OceanField::new(
+        &backend,
+        SeaState {
+            significant_height_m: 0.0,
+            ..sea
+        },
+        settings.ocean_size,
+    )
+    .unwrap();
+    calm.update_frame(&backend.queue, glam::DVec3::from_array(camera), radius)
+        .unwrap();
+    calm.update(&backend, 0.0).unwrap();
+    water
+        .set_ocean(&backend, &settings, Some(&calm), &binding)
+        .unwrap();
+    assert_eq!(
+        capture(&datum),
+        capture(&water),
+        "zero sea state is exact datum"
+    );
+    water
+        .set_ocean(&backend, &settings, Some(&field), &binding)
+        .unwrap();
+    let far = [0.0, 0.0, 10000.0];
+    field
+        .update_frame(&backend.queue, glam::DVec3::from_array(far), radius)
+        .unwrap();
+    for s in [&datum, &water] {
+        s.update_camera(&backend, far).unwrap();
+    }
+    assert_eq!(
+        capture(&datum),
+        capture(&water),
+        "outside geometry distance is exact datum"
+    );
+    assert_eq!(
+        words(&read(&backend, water.ocean_extent().unwrap()))[1],
+        0,
+        "extent resets, no stale near count"
+    );
+    field
+        .update_frame(&backend.queue, glam::DVec3::from_array(camera), radius)
+        .unwrap();
+    // Coarsest real roots are valid geometry but cannot carry resolved waves.
+    let coarse = SphereGpu::new(&backend.device, &backend.queue, 16, 20).unwrap();
+    let mut coarse_surface = ConformingSurface::new(&backend, &coarse.pool, &source).unwrap();
+    coarse_surface.update_camera(&backend, camera).unwrap();
+    let coarse_base = capture(&coarse_surface);
+    assert_eq!(
+        coarse_base
+            .as_chunks::<144>()
+            .0
+            .iter()
+            .filter(|v| v.iter().any(|&b| b != 0))
+            .count(),
+        12
+    );
+    coarse_surface
+        .set_ocean(&backend, &settings, Some(&field), &binding)
+        .unwrap();
+    assert_eq!(coarse_base, capture(&coarse_surface));
+    assert!(
+        f32::from_bits(words(&read(&backend, coarse_surface.ocean_extent().unwrap()))[0]) >= 2048.0
+    );
+    owner.publish_partition(&backend, &[]).unwrap();
+    for s in [&datum, &water] {
+        s.update_camera(&backend, camera).unwrap();
+    }
+    assert_eq!(
+        capture(&datum),
+        capture(&water),
+        "evicted height cannot acquire invented water geometry"
+    );
+    let publications = patches
+        .iter()
+        .map(|p| thessa_render_wgpu::terrain::ResidentTerrainPatch {
+            anchor: p.anchor,
+            page: p.page,
+            generation: 10,
+        })
+        .collect::<Vec<_>>();
+    owner.publish_partition(&backend, &publications).unwrap();
+    // Target-size end-to-end emission + extent + deformation timestamps. No
+    // claim about production frames, shadow/RT costs or equal-error renderers.
+    let large =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 20, 13).unwrap();
+    let mut target = ConformingSurface::new(&backend, &large.pool, &source).unwrap();
+    target.update_camera(&backend, camera).unwrap();
+    let mut large_settings = settings.clone();
+    large_settings.ocean.geometry_patches = 64;
+    target
+        .set_ocean(&backend, &large_settings, Some(&field), &binding)
+        .unwrap();
+    let target_datum = ConformingSurface::new(&backend, &large.pool, &source).unwrap();
+    target_datum.update_camera(&backend, camera).unwrap();
+    let timer = GpuIntervals::new(&backend, 2).unwrap();
+    let mut samples = Vec::new();
+    let mut baseline_samples = Vec::new();
+    for i in 0..50 {
+        for (surface, costs) in [
+            (&target_datum, &mut baseline_samples),
+            (&target, &mut samples),
+        ] {
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            timer.mark(&mut encoder, 0);
+            surface.encode(&mut encoder);
+            timer.mark(&mut encoder, 1);
+            timer.resolve(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            let ms = timer.read(&backend).unwrap()[0] * 1000.0;
+            if i >= 10 {
+                costs.push(ms);
+            }
+        }
+    }
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp/cbt-sphere");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("surface-ocean-cost-ms.csv"),
+        "datum_ms,ocean_ms\n".to_owned()
+            + &baseline_samples
+                .iter()
+                .zip(&samples)
+                .map(|(a, b)| format!("{a},{b}\n"))
+                .collect::<String>(),
+    )
+    .unwrap();
+    samples.sort_by(f64::total_cmp);
+    baseline_samples.sort_by(f64::total_cmp);
+    let large_extent = words(&read(&backend, target.ocean_extent().unwrap()));
+    assert!(large_extent[1] > 1000 && large_extent[1] <= 131072);
+    println!(
+        "cbt_ocean adapter={:?} backend={:?} oracle_vertices={checked} max_error_m={worst} bound_m=0.004 duplicate_records={duplicates} moved_records={moved} footprint_m={footprint} candidates={} target_triangles=98304 target_candidates={} target_footprint_m={} samples=40 warmup=10 emission_extent_deform_p50_ms={} p95_ms={} datum_p50_ms={} datum_p95_ms={} extra_buffer_bytes=32; paired same-source baseline, diagnostic only, no production mode or frame-FPS claim",
+        backend.adapter.get_info().name,
+        backend.adapter.get_info().backend,
+        extent[1],
+        large_extent[1],
+        f32::from_bits(large_extent[0]),
+        samples[20],
+        samples[38],
+        baseline_samples[20],
+        baseline_samples[38]
     );
 }

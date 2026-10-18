@@ -25,8 +25,10 @@ material residency through heap depth 58, without a second streamer or cache.
 Acceptance targets canonical surface correctness and working native consumers,
 not Bevy visual/implementation parity; a conservative height-bound LOD input
 now charges relief for its screen area, and a diagnostic caster reaches the
-shared shadow atlas within its tessellation envelope. Ocean/RT publication
-plus selection of the conforming shadow consumer remain the open native
+shared shadow atlas with an independent metric sphere oracle. A diagnostic
+ocean geometry adapter reuses the spectral field/materials and resolved ocean
+policy, with seam-safe filtering and optical-only fallback. Production ocean/RT
+publication plus selection of the conforming shadow consumer remain open native
 integration gates.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records

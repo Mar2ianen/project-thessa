@@ -185,8 +185,10 @@ The checked-in vertical slice currently contains:
     depth-precision oracles plus a shared-material indirect draw, and takes a
     conservative height-bound LOD input so relief near the camera is charged for
     the screen area it adds. The shadow atlas can also consume it through a
-    diagnostic caster that agrees with the legacy patch caster within its
-    tessellation envelope, but `encode_shadows()` still uses the legacy caster.
+    diagnostic caster checked against an independent metric sphere oracle;
+    `encode_shadows()` still uses the legacy caster. An optional diagnostic
+    ocean consumer borrows the spectral field and resolved ocean policy, with
+    shared-vertex filtering, non-accumulating emission and optical-only fallback.
     It does not yet drive production terrain, ocean or RT, and no
     `graphics.toml` mode selects it.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in

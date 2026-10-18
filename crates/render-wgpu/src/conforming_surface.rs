@@ -102,6 +102,7 @@ pub struct ConformingSurface {
     bind: wgpu::BindGroup,
     capacity: u32,
     radius_m: f64,
+    ocean: Option<crate::conforming_ocean::ConformingOcean>,
 }
 impl ConformingSurface {
     pub fn new(
@@ -177,6 +178,7 @@ impl ConformingSurface {
             bind,
             capacity,
             radius_m: source.radius_m,
+            ocean: None,
         };
         surface.update_camera(backend, [0.0; 3])?;
         Ok(surface)
@@ -206,13 +208,46 @@ impl ConformingSurface {
     /// Must follow topology publication. Page uploads and camera updates must
     /// precede submission; readbacks are diagnostic only.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind, &[]);
-        pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind, &[]);
+            pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
+        }
+        if let Some(ocean) = &self.ocean {
+            ocean.encode(encoder, self.capacity);
+        }
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.vertices.size() + self.charts.size()
+        self.vertices.size()
+            + self.charts.size()
+            + self.ocean.as_ref().map_or(0, |o| o.storage_bytes())
+    }
+    /// Diagnostic geometry consumer of an already-published field. Use the same
+    /// camera/radius/time as emission. Resolved disabled/optical-only settings
+    /// remove this consumer entirely; no buffers/pipelines/work remain.
+    /// One patch of geometry budget admits 2048 bisector triangles. Exceeding
+    /// the whole near-partition budget falls back to the undeformed surface.
+    pub fn set_ocean(
+        &mut self,
+        backend: &Backend,
+        settings: &thessa_graphics::ResolvedGraphicsSettings,
+        field: Option<&crate::ocean::OceanField>,
+        materials: &crate::material::MaterialBinding,
+    ) -> Result<(), BackendError> {
+        self.ocean = crate::conforming_ocean::ConformingOcean::new(
+            backend,
+            &self.vertices,
+            settings,
+            field,
+            materials,
+        )?;
+        Ok(())
+    }
+    /// Explicit diagnostic readback: [f32 footprint bits, candidate triangles,
+    /// reserved, reserved]. No CPU readback occurs during normal encoding.
+    pub fn ocean_extent(&self) -> Option<&wgpu::Buffer> {
+        self.ocean.as_ref().map(|o| &o.extent)
     }
     /// Allocation slots covered by the emitted vertex stream (three vertices
     /// each). Diagnostic caster consumers draw the full slot range.
@@ -236,14 +271,18 @@ fn shader_source() -> String {
 mod tests {
     #[test]
     fn surface_shader_requires_no_native_capabilities() {
-        let source = super::shader_source();
-        let module = naga::front::wgsl::parse_str(&source)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::empty(),
-        )
-        .validate(&module)
-        .unwrap();
+        for source in [
+            super::shader_source(),
+            crate::conforming_ocean::shader_source(),
+        ] {
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::empty(),
+            )
+            .validate(&module)
+            .unwrap();
+        }
     }
 }

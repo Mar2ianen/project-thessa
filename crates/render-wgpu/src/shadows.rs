@@ -131,7 +131,7 @@ impl ShadowAtlas {
         // The CBT caster reads one storage binding: the canonical surface
         // vertex stream. binding 0 is storage here (only binding 3 is uniform).
         let conforming_layout = storage_layout(1);
-        let pipeline = |code: String, layout: &wgpu::BindGroupLayout, mesh: bool| {
+        let pipeline = |code: String, layout: &wgpu::BindGroupLayout, mesh: bool, bias| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("shadow-caster"),
                 source: wgpu::ShaderSource::Wgsl(code.into()),
@@ -167,11 +167,7 @@ impl ShadowAtlas {
                     depth_write_enabled: Some(true),
                     depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: Default::default(),
-                    bias: wgpu::DepthBiasState {
-                        constant: 1,
-                        slope_scale: 1.0,
-                        clamp: 0.0,
-                    },
+                    bias,
                 }),
                 multisample: Default::default(),
                 fragment: None,
@@ -179,7 +175,17 @@ impl ShadowAtlas {
                 cache: None,
             })
         };
-        let mesh_pipeline = pipeline(include_str!("shadow_mesh.wgsl").into(), &mesh_layout, true);
+        let caster_bias = wgpu::DepthBiasState {
+            constant: 1,
+            slope_scale: 1.0,
+            clamp: 0.0,
+        };
+        let mesh_pipeline = pipeline(
+            include_str!("shadow_mesh.wgsl").into(),
+            &mesh_layout,
+            true,
+            caster_bias,
+        );
         let terrain_pipeline = pipeline(
             format!(
                 "{}\n{}\n{}",
@@ -189,11 +195,15 @@ impl ShadowAtlas {
             ),
             &terrain_layout,
             false,
+            caster_bias,
         );
         let conforming_pipeline = pipeline(
             include_str!("shadow_conforming.wgsl").into(),
             &conforming_layout,
             false,
+            // This diagnostic measures geometric depth against canonical
+            // data. Production mesh/patch casters retain their existing bias.
+            wgpu::DepthBiasState::default(),
         );
         let layers = (0..layer_count)
             .map(|i| {

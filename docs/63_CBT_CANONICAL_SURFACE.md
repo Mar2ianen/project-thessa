@@ -7,8 +7,8 @@ baseline `1ff4b3a`. This phase removes the last "pure sphere" qualifier from
 the geometry itself: active bisectors are converted into **planet-scale
 vertices that sample the canonical height and material pages**, using the
 existing residency/publication paths. It is still not a production terrain
-mode; ocean, RT and a resolved graphics setting remain open, and the shadow
-consumer it gained is diagnostic only.
+mode; RT and a resolved topology setting remain open, and the shadow and ocean
+consumers it gained are diagnostic only.
 
 **Bevy renderer parity is not an acceptance gate** (see doc 62 §Acceptance).
 
@@ -207,37 +207,96 @@ mesh caster pipelines, and `encode_conforming_casters(backend, encoder, surface)
 draws the emitted per-bisector vertex stream into every active layer. The
 diagnostic vertex shader reads three 48-byte records per allocation slot
 (position+height, normal+face, UV+source+level), culls only the all-zero
-sentinel the emitter writes for reserved virtual roots, and applies
-`shadow_clip * position` — the same `cbt_render_position` space the legacy
-patch caster produces, so the body-rotation matrix is identity and is inlined
-rather than retaining a buffer whose contents never change.
+sentinel the emitter writes for reserved virtual roots/free slots, and applies
+`shadow_clip * vec4(position, 1)` directly. Both position and matrix use
+camera-relative coordinates; there is no second camera/light-origin
+subtraction. This diagnostic surface assumes identity body rotation.
 
 Emission still writes **every** live leaf with no camera culling, so a caster
 behind the camera can shadow a visible point. Like `encode_shadows_reference`,
 this is an isolated diagnostic consumer: `encode_shadows()` continues to use the
 legacy patch caster only, and nothing selects the conforming path at runtime.
 
-Verified on the same Radeon 880M (`conforming_surface_casts_shared_shadow_depth`,
-face-level tiles at radius 1000, 1 cascade / 512 px atlas):
+Verified on the same Radeon 880M (`conforming_surface_casts_shared_shadow_depth`):
 
-- **Both casters agree on the silhouette.** Legacy and conforming depth extents
-  are identical on all three atlas layers — `(234, 234, 277, 1301)` — with
-  **4,404** texels overlapping, above the 500-texel floor.
-- **Depth agrees within the tessellation envelope.** Maximum per-texel depth
-  delta is **0.010754**, under the declared 0.02 bound. This is a tolerance,
-  not an equality oracle: bisector triangles and the 33×33 patch grid are not
-  byte-identical geometry.
-- The oracle compares within a single atlas layer. The readback is layer-major
-  over sun × cascade, so pairing texels across the whole buffer would compare
-  different casters against each other.
-- 9,216 live records are emitted and 12,288 slots are submitted across 3 draw
-  calls, so the caster is drawing real leaves rather than sentinels.
+- Six constant 20 m face pages, body radius 1000 m, local depth 8, 3072 live
+  triangles, 1 cascade / 512 px, 2 km cover and three distinct sun directions.
+- **Independent canonical sphere oracle:** 39,600 rays in the central half-radius
+  disks must hit between radii `R` and `sqrt(R²-D²/3)`, where `R=1020 m` and
+  `D=178.240861 m` is the longest CPU-oracle triangle edge. For barycentric
+  weights, `|Σwᵢvᵢ|²=R²-Σᵢ<ⱼwᵢwⱼDᵢⱼ²`, and `Σᵢ<ⱼwᵢwⱼ≤1/3`, giving the
+  conservative inner radius. Central rays avoid silhouette sensitivity.
+  Maximum measured depth error is **4.402674 m**, inside the geometry-derived
+  **6.014414 m** maximum ray-depth envelope, plus **0.002 m** arithmetic tolerance.
+  The diagnostic caster is unbiased so raster slope bias does not masquerade
+  as geometric error; legacy mesh/patch caster bias is unchanged.
+- Every layer must have >500 valid depth texels; 156,355 overlap legacy depth.
+  Legacy comparison is **diagnostic only**, not an acceptance oracle:
+  the maximum normalized depth delta is 0.045650303, including legacy bias.
+- 9,216 live records and 12,288 allocation slots submitted over three draws.
 
-Two scene assumptions had to be right for this to mean anything. A zero local
-depth leaves only depth-4 roots, which the emitter classifies as reserved
-virtual roots and zeroes, so the caster would draw sentinels; and a level-11
-tile is ~15 m across, which lands below one texel of this atlas and emptied the
-legacy depth readback. Both are test-scale properties, not production limits.
+This supersedes inaccurate explanations in the first shadow report. Real
+depth-4 roots 16..27 emit geometry even at local depth zero; only roots 28..31
+are virtual. A level-11 tile spans about `2R/2048=0.977 m` in cube coordinates
+at this radius, not 15 m. The previously printed `(234,234,277,1301)` was a
+concatenated-layer extent, not a per-layer assertion; flat layer-major zipping
+does pair corresponding texels. The former normalized `0.02` tolerance had no
+independently established metric tessellation envelope and is withdrawn.
+
+## Diagnostic ocean geometry consumer
+
+`ConformingSurface::set_ocean` borrows `OceanField` and the existing material
+texture/directory; it adds no spectrum, FFT, streamer, cache or datum backup.
+The existing resolved `[ocean]` policy controls this optional consumer:
+
+- Disabled or `geometry_patches=0`/`geometry_distance_m=0`: no consumer buffers,
+  pipelines or extra dispatches. Optical-only is the cheaper representation.
+- Enabled geometry: two extra compute passes after canonical emission. The
+  first reduces near-field triangle count and **twice the longest edge**; the
+  second uses that common footprint with shared `ocean_spectral` and canonical
+  `ocean_material_weight(height, roughness)`, then fades to datum over the outer
+  half of the configured distance. Each legacy 33×33 patch budget unit admits
+  2048 bisector triangles. Whole-partition overflow leaves geometry at datum.
+- A footprint at least the largest spectral period stays optical-only instead
+  of moving coarse vertices by numerical DC residue. The conservative common
+  filter includes dry near triangles; local/per-edge filtering is not claimed.
+
+The common footprint is deliberate: incident triangles at different depths
+must not choose different displacements of a shared vertex. Canonical face/UV
+ownership selects identical radial/material samples for all copies. Page level
+is never used as geometric resolution. Height remains in `position_height.w`;
+`normal_face.w` is the face, and `address.w` is the height-page level. Missing
+height pages do not acquire ocean geometry. Datum height, normal and address
+are preserved for classification/optical shading (no doubled wave gradients).
+Every encode re-emits datum before deformation, so repeated/paused frames do
+not accumulate waves. Caller must publish the same field time, camera and
+radius before emission, then run shadow/raster consumers afterwards. There is
+still no shared revision/lifetime contract enforcing that order.
+
+Hardware test `conforming_ocean_borrows_field_without_cracks_or_accumulation`:
+
+- Independent f64 direct Fourier sums, box mips and periodic bilinear/trilinear
+  sampling at 32 displaced vertices: maximum vector error **0.000094677 m**
+  under a **0.004 m** absolute arithmetic/filter tolerance. This compares the
+  same discretized spectrum, not continuous-wave tessellation fidelity.
+- 7,678 duplicate records bit-identical, 5,960 records moved; mixed-depth split
+  changes topology and matches the CPU topology oracle, with shared identity
+  preserved. Checks time change/rewind, pause/repeat, calm sea, dry material,
+  elevated land, height eviction/refill, far camera, coarse real roots,
+  budget overflow, disabled/optical-only, and rejected invalid configuration.
+- 32 bytes of extra GPU buffers (policy and extent), no CPU readback in encode.
+  Timestamp fixture: 98,304 triangles in 131,072 slots, paired same-source
+  datum/emission+extent+deformation measurements, 10 warmups + 40 samples.
+  Datum p50/p95 **1.081/1.309 ms**, ocean p50/p95 **3.541/4.303 ms** on this
+  Radeon 880M/RADV run. Exact timings and checks are recorded in the artifact;
+  this is not a
+  complete-frame, FPS, equal-error renderer or performance-win claim.
+
+The geometry kernel validates with Naga's empty native-capability set and runs
+on RADV/Vulkan here. Metal/WebGPU execution, a production optical/raster
+consumer for this surface, Earth-scale wave-phase accuracy, and temporal
+continuity across common-footprint changes remain unverified. Existing optical
+field publication is reused; no production ocean selection is replaced.
 
 ## Known gaps (explicitly not claimed)
 
@@ -246,11 +305,13 @@ legacy depth readback. Both are test-scale properties, not production limits.
    scalar, so it cannot express per-tile relief, and no `graphics.toml` mode or
    classifier call site consumes it yet.
 2. **The shadow consumer is diagnostic, not selected.** The shared shadow atlas
-   can now consume the canonical surface and agrees with the legacy caster
-   within its tessellation envelope, but `encode_shadows()` still uses the
+   can now consume the canonical surface with an independent metric sphere
+   oracle, but `encode_shadows()` still uses the
    legacy patch caster only and nothing selects the conforming path. There is
    also no quality/fallback tier for it in `graphics.toml`.
-3. **No ocean geometry consumer and no RT/BLAS publication** for bisectors.
+3. **Ocean geometry is diagnostic; no RT/BLAS publication** for bisectors.
+   The shared field/material adapter exists, but no production raster/optical
+   mode selects it and no temporal/equal-error acceptance is established.
 4. **No resolved production mode.** Nothing in `graphics.toml` selects this
    path; `TerrainRenderer::encode_scene()` still draws legacy patches. No
    disabled/cheaper fallback level exists, because there is no switch.
@@ -270,15 +331,24 @@ cargo test -p thessa-render-wgpu --lib surface_shader
 cargo test --release -p thessa-render-wgpu --test cbt_sphere -- --ignored --nocapture --test-threads=1
 ```
 
-The hardware suite is seven tests: four topology controls from docs 61/62 plus
-the three surface tests described here. Exact numbers and check logs are
+The `cbt_sphere` hardware suite is nine tests, including the diagnostic shadow
+and ocean consumers. Exact numbers and check logs are
 recorded in
 [`artifacts/cbt-canonical-surface-2026-10-18.json`](artifacts/cbt-canonical-surface-2026-10-18.json).
+
+Final local ocean/shadow-stage gates: fmt; workspace/all-target/all-feature
+clippy and native no-default-feature clippy (`-D warnings`); workspace
+lib/bin **1881 passed** and integration **91 passed**; Bevy GPU **24 passed**,
+native GPU **20 passed**, and render-wgpu ignored suite **25 passed**, including
+the **9** CBT tests (not 25+9); architecture gate and five agent-QA unittests.
+Direct exit statuses/argument vectors and logs are retained under
+`target/test-tmp/cbt-ocean-checks/`; the artifact records their hashes and
+commands. These are local checks, not remote CI or platform/visual acceptance.
 
 ## Next
 
 Per doc 62, the remaining boundary to a real mode is: selecting a conforming
 shadow consumer behind a resolved graphics setting with explicit disabled and
-cheaper fallbacks, then the ocean and RT/BLAS consumers with a geometry
+cheaper fallbacks, then production ocean and RT/BLAS consumers with a geometry
 revision contract, then equal-error tests before any legacy grid path is
 deleted.

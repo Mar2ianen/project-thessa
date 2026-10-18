@@ -16,7 +16,8 @@
   "precision_charts": "six camera-local TileAnchor/GpuTileFrame charts (PRECISION_LEVEL=12) chosen per vertex; f64 camera subtraction reused; local chart integer origin subtracted from exact UV numerators before f32 narrowing; shared seam/corner/deep vertices select one chart",
   "emission": "one compute dispatch per pool: virtual roots zeroed, live leaves decode integer cube triangle, canonical height, shared normal, and write 48-byte vertex records (position+height, normal+face, UV numerators+source slot+level). VERTEX_BYTES=48",
   "height_bound": "rcbt-wgpu SphereGpu::set_height_bound publishes a conservative surface-height chord at Params.surface (uniform offset 128) and inflates pixel_area() by (1 + 2h/L)^2, feeding both split and merge thresholds; TerrainRenderer::height_bound_chord() derives it from canonical page residency",
-  "shadow_caster": "render-wgpu ShadowAtlas owns a conforming_pipeline/conforming_layout beside the legacy terrain and mesh casters; encode_conforming_casters(backend, encoder, surface) draws the emitted vertex stream into every active layer through the diagnostic vertex shader crates/render-wgpu/src/shadow_conforming.wgsl, applying shadow_clip * position in the same cbt_render_position space as the legacy patch caster"
+   "shadow_caster": "render-wgpu ShadowAtlas owns an unbiased diagnostic conforming_pipeline/conforming_layout beside the unchanged biased legacy terrain and mesh casters; encode_conforming_casters draws emitted vertices into every active layer, applying shadow_clip * vec4(position,1) directly in camera-relative space",
+   "ocean_geometry": "ConformingSurface::set_ocean borrows OceanField/material residency using existing resolved ocean policy; emission restores datum before a near-field extent/count reduction and filtered radial deformation. One common footprint preserves duplicate vertices at mixed depths. No second FFT, cache, streamer, or datum backup. Disabled/optical-only removes the consumer entirely; budget overflow/coarse geometry keeps datum. No production mode selects it."
  },
  "measurements": {
   "deep_precision": {
@@ -93,34 +94,55 @@
    },
    "limits": "conservative inflation of the LOD measure only, not a bound on rendered height error"
   },
-  "shadow_caster_agreement": {
+   "shadow_canonical_oracle": {
    "test": "conforming_surface_casts_shared_shadow_depth",
-   "scene": "face-level tiles at body radius 1000, height grid 33, 1 cascade, 512 px atlas, quality low, normal bias 0.001",
-   "topology": "SphereGpu::with_uniform_depth(capacity 4096, max_depth 12, local_depth 8) -> ~1.3 m cells matching the 33x33 patch grid the legacy caster uses",
-   "legacy_depth_extent": [
-    234,
-    234,
-    277,
-    1301
-   ],
-   "conforming_depth_extent": [
-    234,
-    234,
-    277,
-    1301
-   ],
-   "extents_identical_all_layers": true,
-   "overlapping_texels": 4404,
+    "scene": "six constant 20 m face pages, body radius 1000 m, height grid 33, 1 cascade, 512 px atlas, 2000 m cover, three distinct sun directions",
+    "topology": "SphereGpu::with_uniform_depth(capacity 4096, max_depth 12, local_depth 8); 3072 real triangles",
+    "longest_edge_m": 178.24086108868414,
+    "canonical_rays": 39600,
+    "max_metric_error_m": 4.402674194664542,
+    "max_geometry_ray_envelope_m": 6.014414226073768,
+    "arithmetic_tolerance_m": 0.002,
+    "valid_texels_floor_each_layer": 500,
+    "overlapping_texels": 156355,
    "overlapping_texels_floor": 500,
-   "max_per_texel_depth_delta": 0.01075393,
-   "declared_depth_tolerance": 0.02,
-   "within_tolerance": true,
+    "legacy_max_normalized_depth_delta_diagnostic_only": 0.045650303,
    "live_records_emitted": 9216,
    "submitted_slots": 12288,
    "draw_calls": 3,
    "atlas_layers": 3,
-   "oracle": "layer-major readback compared within a single layer; a tolerance oracle, not an equality oracle, because bisector triangles and the 33x33 patch grid are not byte-identical geometry",
-   "limits": "diagnostic consumer only; encode_shadows() still uses the legacy patch caster and nothing selects this path"
+    "oracle": "central half-radius disk rays must hit between R and sqrt(R^2-D^2/3), R=1020 m and D=longest CPU triangle edge; geometric depth plus 0.002 m arithmetic tolerance. Unbiased diagnostic raster; legacy caster comparison no longer an acceptance gate.",
+    "corrections": "Supersedes unsupported normalized 0.02 tessellation-envelope claim and concatenated-layer extent claims. Real depth-4 roots 16..27 emit geometry at local_depth=0; only 28..31 are virtual. At R=1000, level-11 cube width is about 0.977 m, not 15 m. Flat layer-major zipping pairs matching texels.",
+    "limits": "constant-height canonical sphere, not arbitrary terrain/rotation/equal-error acceptance; diagnostic consumer only; encode_shadows() still uses the legacy patch caster"
+   },
+   "ocean_geometry": {
+    "baseline": "fafbf2d plus same-source paired datum consumer; target-size costs recorded by current hardware test",
+    "test": "conforming_ocean_borrows_field_without_cracks_or_accumulation",
+    "radius_m": 1000,
+    "spectrum_size": 32,
+    "oracle_vertices": 32,
+    "max_displacement_vector_error_m": 0.00009467684444167522,
+    "absolute_tolerance_m": 0.004,
+    "duplicate_records_bit_identical": 7678,
+    "moved_records": 5960,
+    "common_footprint_m": 349.492,
+    "near_candidates": 3064,
+    "target_triangles": 98304,
+    "target_capacity": 131072,
+    "target_candidates": 92848,
+    "target_common_footprint_m": 62.47713,
+    "samples": 40,
+    "warmup": 10,
+    "extra_buffer_bytes": 32,
+    "emission_extent_deform_p50_ms": 3.5407675021018985,
+    "emission_extent_deform_p95_ms": 4.302695174114228,
+    "paired_datum_emission_p50_ms": 1.0813746251792908,
+    "paired_datum_emission_p95_ms": 1.3088468251762393,
+    "raw_csv": "crates/render-wgpu/target/test-tmp/cbt-sphere/surface-ocean-cost-ms.csv (paired datum_ms,ocean_ms; ignored, regenerable)",
+    "raw_csv_sha256": "58334a34557cf301469a054e3b09cf10dee110ed51aff4ead0b129279d15ff59",
+    "oracle": "independent f64 direct Fourier sums, box mips, periodic bilinear/trilinear sampling and distance taper over the same discretized spectrum; not continuous-wave tessellation fidelity",
+    "verified": ["shared duplicates, including mixed-depth split matched to CPU topology", "non-accumulating repeated/paused samples", "changed time and rewind", "dry material generation", "elevated land", "height eviction/refill", "calm sea", "far camera resets extent", "coarse real roots optical-only", "whole-partition overflow", "disabled and optical-only remove consumer", "invalid configuration preserves old consumer"],
+    "limits": "diagnostic geometry consumer, no production raster/optical selection or RT publication; common filter includes dry near triangles; no Earth-scale phase, temporal footprint, Metal/WebGPU execution, game-FPS or equal-error claim"
   },
   "batch_recheck_same_state": {
    "test": "target_pool_parallel_commit_cost_and_exact_control",
@@ -132,17 +154,28 @@
    "raw_csv_sha256": "94f5c60261d0e4e78d16b2aea1a478373fc00ad469b36f69b1164f4bce814979"
   }
  },
- "checks": {
-  "cargo_clippy_workspace_all_targets_all_features": "passed (also no-default-features thessa-terrain-native)",
-  "cargo_fmt_all_check": "passed",
-  "rcbt_core_conforming_surface_unit": "2 passed, 0 failed",
-  "render_wgpu_portable_shader_validation": "1 passed, 0 failed",
-  "workspace_lib_and_bins": "1881 passed, 0 failed",
-  "workspace_integration": "91 passed, 0 failed",
-  "bevy_rcbt_gpu_ignored": "24 passed, 0 failed",
-  "terrain_native_ignored": "20 passed, 0 failed, 1 thread",
-  "render_wgpu_backend_ignored": "3 passed, 0 failed, 1 thread",
-  "cbt_sphere_gpu_ignored": "8 passed, 0 failed, 1 thread",
+  "checks": {
+   "scope": "final local ocean/shadow stage based on fafbf2d; every listed command exited 0, individual exit statuses captured directly without shell pipelines",
+   "cargo_clippy_workspace_all_targets_all_features": "passed (also no-default-features thessa-terrain-native)",
+   "cargo_fmt_all_check": "passed",
+   "rcbt_core_conforming_surface_unit": "covered by workspace lib tests",
+   "render_wgpu_portable_shader_validation": "covered by workspace lib tests; surface and ocean shaders with empty Naga native-capability set",
+   "workspace_lib_and_bins": "1881 passed, 0 failed, 46 ignored; cargo test --workspace --lib --bins",
+   "workspace_integration": "91 passed, 0 failed, 28 ignored; cargo test --workspace --test '*'",
+   "bevy_rcbt_gpu_ignored": "24 passed, 0 failed",
+   "terrain_native_ignored": "20 passed, 0 failed, 1 thread",
+   "render_wgpu_all_ignored": "25 passed, 0 failed, 1 thread; INCLUDES 3 backend library tests, 9 cbt_sphere tests, and 13 other integration tests; do not add those subsets again",
+   "cbt_sphere_gpu_ignored_subset": "9 passed, 0 failed, included in the 25 render-wgpu total",
+   "gpu_commands": [
+    "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+    "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1",
+    "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1"
+   ],
+   "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+   "logs": "target/test-tmp/cbt-ocean-checks/{fmt,clippy,native-clippy,workspace-unit,workspace-integration,bevy-gpu,native-gpu,render-gpu,architecture,agent-qa,diff}.log (ignored, regenerable)",
+   "exit_status_manifest": "target/test-tmp/cbt-ocean-checks/results.json (ignored, regenerable; exact argument vectors and totals)",
+   "exit_status_manifest_sha256": "ecadc5b37437066b67e90b1d18f749b96bf7f5b291fa6c447aacc2e999504e01",
+   "render_gpu_log_sha256": "41bc9d01197b6a962bd5dc4079029fcaa18b202130c63771a872074c0c3c2ecb",
   "check_architecture": "OK, 12 guarded foundational crates",
   "agent_qa_unittest": "5 tests OK",
   "git_diff_check": "clean",
@@ -151,7 +184,7 @@
  "known_gaps": [
   "derived height bound is body-wide (one scalar over the widest extent), cannot express per-tile relief, and no production mode consumes it yet",
   "shadow consumer is diagnostic only: encode_shadows() still uses the legacy patch caster, nothing selects the conforming path, and it has no quality or fallback tier in graphics.toml",
-  "no ocean geometry consumer and no RT/BLAS publication for bisectors",
+   "ocean geometry is diagnostic, no production optical/raster selection or RT/BLAS publication for bisectors",
   "no resolved production mode: nothing in graphics.toml selects this path and TerrainRenderer::encode_scene() still draws legacy patches",
   "no shared revision/lifetime contract between the surface buffer and shadow/RT/ocean consumers",
   "no equal-error comparison against the legacy patch renderer, no blind visual review, no cross-platform acceptance and no remote CI claim"

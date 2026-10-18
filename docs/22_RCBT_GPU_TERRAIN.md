@@ -26,9 +26,11 @@ planet-scale bisector vertices from the borrowed height/material residency
 through heap depth 58, with shared-vertex, residency-change and precision
 oracles. A conservative height-bound LOD input now charges relief for the
 screen area it adds, and a diagnostic caster publishes the surface into the
-shared shadow atlas within its tessellation envelope; ocean/RT publication and
-shadow consumer selection remain open, and neither phase provides
-whole-system parity.
+shared shadow atlas (independent metric sphere oracle). A diagnostic ocean
+geometry adapter borrows the existing spectral field/material residency and
+resolved ocean policy with seam-safe filtering and optical-only fallback;
+production ocean/RT publication and shadow consumer selection remain open,
+and neither phase provides whole-system parity.
 
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
 logical tree and backend contract), `thessa-rcbt-ref` (portable differential

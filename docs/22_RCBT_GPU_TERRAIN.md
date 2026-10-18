@@ -24,8 +24,9 @@ with exact serial/CPU oracles and a 128K-capacity fixture. The
 [canonical surface consumer, doc 63](63_CBT_CANONICAL_SURFACE.md), then emits
 planet-scale bisector vertices from the borrowed height/material residency
 through heap depth 58, with shared-vertex, residency-change and precision
-oracles. Height-aware classification error and native shadow/ocean/RT
-publication remain open; neither phase provides whole-system parity.
+oracles. A conservative height-bound LOD input now charges relief for the
+screen area it adds; native shadow/ocean/RT publication remains open, and
+neither phase provides whole-system parity.
 
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
 logical tree and backend contract), `thessa-rcbt-ref` (portable differential

@@ -23,8 +23,9 @@ The [canonical surface consumer](63_CBT_CANONICAL_SURFACE.md) then converts
 active bisectors into planet-scale vertices sampling the existing height and
 material residency through heap depth 58, without a second streamer or cache.
 Acceptance targets canonical surface correctness and working native consumers,
-not Bevy visual/implementation parity; height-aware classification and
-shadow/ocean/RT publication remain the open native integration gates.
+not Bevy visual/implementation parity; a conservative height-bound LOD input
+now charges relief for its screen area, while shadow/ocean/RT publication
+remains the open native integration gate.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with

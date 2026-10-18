@@ -7,6 +7,8 @@ use wgpu::util::DeviceExt;
 pub const GEOMETRY_WGSL: &str = include_str!("sphere_geometry.wgsl");
 pub const BATCH_REQUESTS: u32 = 256;
 pub const PLAN_WORDS: usize = 200;
+/// `Params.surface` follows the 128-byte config/request/clip/camera/policy block.
+const SURFACE_PARAMS_OFFSET: u64 = 128;
 
 fn shader_source() -> String {
     format!(
@@ -31,7 +33,8 @@ pub struct SphereGpu {
     claims: wgpu::Buffer,
     batch: [wgpu::ComputePipeline; 7],
     serial_commit: wgpu::ComputePipeline,
-    areas: wgpu::Buffer,
+    /// Per-slot classified screen area from the last `classify` dispatch.
+    pub areas: wgpu::Buffer,
     classify: wgpu::ComputePipeline,
     update: wgpu::ComputePipeline,
     index: wgpu::ComputePipeline,
@@ -114,7 +117,7 @@ impl SphereGpu {
             &[0; 48],
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
         );
-        let params = make("sphere-policy", &[0; 128], wgpu::BufferUsages::UNIFORM);
+        let params = make("sphere-policy", &[0; 144], wgpu::BufferUsages::UNIFORM);
         let plans = make(
             "sphere-transaction-plans",
             &vec![0; (4 + BATCH_REQUESTS as usize * PLAN_WORDS) * 4],
@@ -248,8 +251,10 @@ impl SphereGpu {
         );
     }
 
-    /// Unit sphere only. Callers supply an ordinary world→clip matrix and
-    /// outside-sphere camera. Error/height/planet precision are NOT implemented.
+    /// Callers supply an ordinary world→clip matrix and an outside-sphere
+    /// camera. Geometric/tessellation and astronomical-frame error bounds are
+    /// NOT implemented; `set_height_bound` is a separate conservative policy
+    /// input and does not change the emitted geometry.
     pub fn set_view(
         &self,
         queue: &wgpu::Queue,
@@ -284,6 +289,28 @@ impl SphereGpu {
             (size[1] as f32).to_bits(),
         ]));
         queue.write_buffer(&self.params, 0, &data);
+        Ok(())
+    }
+
+    /// Conservative surface height bound, expressed in unit-sphere chord units
+    /// (`height_m / body_radius_m`). Zero (the default) leaves the classifier
+    /// on plain unit-sphere chords. A positive bound inflates the measured
+    /// screen area of a triangle whose chord is shorter than the bound, so the
+    /// classifier refines earlier and decimates later; it never changes
+    /// emitted geometry, only the LOD decision.
+    pub fn set_height_bound(
+        &self,
+        queue: &wgpu::Queue,
+        height_chord: f32,
+    ) -> Result<(), &'static str> {
+        if !height_chord.is_finite() || !(0.0..=1.0).contains(&height_chord) {
+            return Err("invalid height bound");
+        }
+        queue.write_buffer(
+            &self.params,
+            SURFACE_PARAMS_OFFSET,
+            &height_chord.to_bits().to_le_bytes(),
+        );
         Ok(())
     }
 

@@ -209,12 +209,13 @@ The [canonical surface phase](63_CBT_CANONICAL_SURFACE.md) implements the
 first half of this section: exact bisector→canonical face-UV mapping, borrowed
 `HeightPageStore`/`render-wgpu::terrain` residency, shared material directory
 hashing and six f64-subtracted precision charts, all verified through heap
-depth 58. It also records what is still missing: conservative
-height-inclusive classification error, and the native raster/shadow/ocean/RT
-publication contract with a geometry revision/lifetime rule. Neither of those
-has been implemented; the legacy patch renderer remains the production and
-shadow/RT consumer. A resolved experimental native mode still needs
-disabled/cheaper fallback settings and measured numerical/quality budgets.
+depth 58. That phase also added a conservative height-bound LOD input, so the
+remaining gaps are the native raster/shadow/ocean/RT publication contract with
+a geometry revision/lifetime rule, and deriving that height bound from
+canonical page min/max instead of a manual chord value. Neither has been
+implemented; the legacy patch renderer remains the production and shadow/RT
+consumer. A resolved experimental native mode still needs disabled/cheaper
+fallback settings and measured numerical/quality budgets.
 Concrete remaining reuse points are the shadow atlas depth revision and
 `TerrainRaySource`'s slot/revision lifecycle, which must key on canonical page
 identity rather than transient bisector slots.

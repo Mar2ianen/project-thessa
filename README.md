@@ -182,9 +182,10 @@ The checked-in vertical slice currently contains:
     The [canonical surface consumer](docs/63_CBT_CANONICAL_SURFACE.md) then
     emits planet-scale bisector vertices through heap depth 58 using the existing
     height/material residency (no second streamer), with shared-vertex and
-    depth-precision oracles plus a shared-material indirect draw. It does not yet
-    drive production terrain, classification error, ocean, shadows or RT, and no
-    `graphics.toml` mode selects it.
+    depth-precision oracles plus a shared-material indirect draw, and takes a
+    conservative height-bound LOD input so relief near the camera is charged for
+    the screen area it adds. It does not yet drive production terrain, ocean,
+    shadows or RT, and no `graphics.toml` mode selects it.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

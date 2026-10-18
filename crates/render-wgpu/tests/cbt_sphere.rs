@@ -551,6 +551,131 @@ fn autonomous_sphere_indirect_capture_and_scoped_cost() {
     );
 }
 
+#[test]
+#[ignore = "hardware: conservative height-bound classification policy control"]
+fn height_bound_conservatively_refines_without_changing_the_oracle() {
+    let mut requested = thessa_graphics::RequestedGraphics::default();
+    requested.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+    let backend = Backend::bring_up_for_graphics_profiled(&requested).unwrap();
+    let capacity = 4096u32;
+    let max_depth = 30u8;
+
+    // (1) Deterministic per-slot monotonicity on one identical topology.
+    // classify runs before update mutates the pool, so a single encode on two
+    // identically seeded pools measures the same triangles twice and the only
+    // difference is the height bound. Inflated area must never fall below the
+    // plain unit-sphere area, which is what makes the bound conservative.
+    let seed = |device: &wgpu::Device, queue: &wgpu::Queue| {
+        SphereGpu::with_uniform_depth(device, queue, capacity, max_depth, 4).unwrap()
+    };
+    let plain = seed(&backend.device, &backend.queue);
+    let bounded = seed(&backend.device, &backend.queue);
+    bounded.set_height_bound(&backend.queue, 0.05).unwrap();
+    assert!(bounded.set_height_bound(&backend.queue, -1.0).is_err());
+    assert!(bounded.set_height_bound(&backend.queue, f32::NAN).is_err());
+    assert!(
+        bounded
+            .set_height_bound(&backend.queue, f32::INFINITY)
+            .is_err()
+    );
+    let camera = Vec3::new(0.0, 0.0, 2.0);
+    let clip = glam::camera::rh::proj::directx::perspective(1.0, 1.0, 0.1, 100.0)
+        * glam::camera::rh::view::look_at_mat4(camera, Vec3::ZERO, Vec3::Y);
+    // classify runs before update mutates the pool, and both pools are seeded
+    // from the same uniform topology, so the two `areas` buffers measure the
+    // identical triangles and the only difference is the height bound.
+    assert_eq!(
+        read(&backend, &plain.pool),
+        read(&backend, &bounded.pool),
+        "identical seeded topology"
+    );
+    let mut areas_plain = Vec::new();
+    let mut areas_bounded = Vec::new();
+    // set_view writes only the first 128 bytes, so the height bound at
+    // SURFACE_PARAMS_OFFSET survives; classify needs view mode (config.z == 1).
+    for gpu in [&plain, &bounded] {
+        gpu.set_view(
+            &backend.queue,
+            clip.to_cols_array(),
+            camera.to_array(),
+            [512, 512],
+            400.0,
+            25.0,
+        )
+        .unwrap();
+    }
+    for (gpu, sink) in [(&plain, &mut areas_plain), (&bounded, &mut areas_bounded)] {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        gpu.encode(&mut encoder);
+        backend.queue.submit([encoder.finish()]);
+        *sink = words(&read(&backend, &gpu.areas));
+    }
+    let mut strictly_larger = 0u32;
+    let mut nonzero = 0u32;
+    for (a, b) in areas_plain.iter().zip(&areas_bounded) {
+        let a = f32::from_bits(*a);
+        let b = f32::from_bits(*b);
+        assert!(
+            b >= a || (a == 0.0 && b == 0.0),
+            "height bound must never lower measured area: plain={a} bounded={b}"
+        );
+        nonzero += u32::from(a > 0.0);
+        strictly_larger += u32::from(b > a);
+    }
+    let leaves = records(&backend, &plain)
+        .iter()
+        .filter(|r| r.address[0] != 0)
+        .count();
+    println!(
+        "cbt_height_bound monotonicity leaves={leaves} nonzero_visible_plain={nonzero} strictly_larger={strictly_larger} of {}",
+        areas_plain.len()
+    );
+    assert!(
+        nonzero > 0 && strictly_larger == nonzero,
+        "every visible triangle must be inflated: visible={nonzero} grew={strictly_larger}"
+    );
+
+    // (2) The autonomous policy stays stable and oracle-exact under a nonzero
+    // bound: CPU replay still matches GPU bytes and the allocator stays valid.
+    let gpu = SphereGpu::new(&backend.device, &backend.queue, 8192, max_depth).unwrap();
+    gpu.set_height_bound(&backend.queue, 0.05).unwrap();
+    let mut cpu = SphereTopology::new(8192, max_depth).unwrap();
+    let mut applied = 0;
+    for frame in 0..240 {
+        gpu.set_view(
+            &backend.queue,
+            clip.to_cols_array(),
+            camera.to_array(),
+            [512, 512],
+            400.0,
+            25.0,
+        )
+        .unwrap();
+        let state = step(&backend, &gpu);
+        if state[3] == 1 {
+            let n = Node::from_heap_id(u64::from(state[1]) | (u64::from(state[2]) << 32)).unwrap();
+            if state[0] == 0 {
+                cpu.split(n).unwrap();
+            } else {
+                cpu.merge(n).unwrap();
+            }
+            applied += 1;
+        }
+        assert_eq!(
+            logical(&records(&backend, &gpu)),
+            logical(&cpu.records()),
+            "bounded autonomous frame={frame}"
+        );
+    }
+    cpu.validate().unwrap();
+    assert!(applied > 20, "bounded sweep must actually commit work");
+    assert_allocator(&backend, &gpu, &records(&backend, &gpu));
+    println!(
+        "cbt_height_bound capacity=8192 max_heap_depth={max_depth} height_chord=0.05 camera_distance_radii=2.0 frames=240 committed={applied} inflated_slots={strictly_larger}/{}; conservative LOD policy only, per-leaf emission formula unchanged, no tessellation/analytic-height/large_cbt/Bevy comparison",
+        areas_plain.len()
+    );
+}
+
 fn assert_batch_bytes(backend: &Backend, a: &SphereGpu, b: &SphereGpu, full: bool) {
     for (left, right) in [
         (&a.state, &b.state),

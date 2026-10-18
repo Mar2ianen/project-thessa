@@ -151,12 +151,44 @@ roots, with no dirty culling and no view-dependent early-out. It is a topology
 size cost, not a production frame cost, and not a game-FPS, Bevy or
 `large_cbt` comparison.
 
+## Height-aware classification (added after phase three)
+
+The classifier no longer measures unit-sphere chords alone.
+`rcbt-wgpu::SphereGpu::set_height_bound(height_chord)` publishes a conservative
+surface-height bound in unit-sphere chord units (`height_m / body_radius_m`) at
+the `Params.surface` uniform (offset 128; `set_view` writes only the first 128
+bytes, so the bound survives each per-frame policy update). `pixel_area()` then
+inflates a triangle's measured screen area by `(1 + 2h/L)^2`, where `L` is the
+triangle's longest chord edge: a raised corner moves on screen by at most that
+bound relative to the triangle's own extent. The same inflated value feeds both
+the split and merge thresholds, so a larger bound can only refine earlier and
+decimate later. It is a bounded LOD policy input; it does not change emitted
+geometry, and zero (the default) leaves the classifier on plain chords.
+
+Verified on the same Radeon 880M (`height_bound_conservatively_refines_without_changing_the_oracle`):
+
+- **Deterministic per-slot monotonicity.** Two identically seeded pools (uniform
+  depth 4, 198 leaves) are classified once, one with bound `0` and one with
+  `0.05` chord at camera distance 2.0 radii. `classify` runs before `update`
+  mutates the pool, so both `areas` buffers measure the identical triangles:
+  all 56 back-face- and frustum-visible triangles grew, **none** shrank
+  (`b >= a` for every one of 4096 slots, 0 underflows).
+- **Autonomous policy stays oracle-exact under a bound.** A 240-frame sweep with
+  bound `0.05` committed 240 transactions with GPU records matching the CPU
+  replay at every frame and a valid OCBT allocator mirror afterwards.
+- Negative, NaN and infinite bounds are rejected at the API.
+
+This closes the earlier gap where a mountain or a near-camera surface was not
+charged for the screen area its height adds. It is a **conservative inflation of
+the LOD measure**, not a bound on the actual rendered height error: the bound is
+supplied by the caller and must still be derived from canonical page data; no
+such derivation is wired into a production mode yet.
+
 ## Known gaps (explicitly not claimed)
 
-1. **Classification ignores height.** `pixel_area()` still measures unit-sphere
-   chords; a tall mountain or a near-camera surface is not charged for the
-   screen area its height adds. A conservative height/error term is required
-   before the LOD decision can be trusted near the ground.
+1. **Height bound is a manual policy input.** `set_height_bound` is not yet fed
+   from the canonical page min/max heights, so nothing derives the correct chord
+   bound from resident `HeightPage` data for a live planet.
 2. **No shadow caster.** The shared shadow atlas still consumes the legacy
    patch-grid vertex stream; the CBT surface is not published to it.
 3. **No ocean geometry consumer and no RT/BLAS publication** for bisectors.
@@ -185,8 +217,8 @@ in [`artifacts/cbt-canonical-surface-2026-10-18.json`](artifacts/cbt-canonical-s
 
 ## Next
 
-Per doc 62, the remaining boundary to a real mode is: conservative
-height-aware classification error, then shadow/ocean/RT publication with a
+Per doc 62, the remaining boundary to a real mode is: deriving the height bound
+from canonical page min/max, then shadow/ocean/RT publication with a
 geometry revision contract, then a resolved graphics setting with explicit
 disabled/cheaper fallbacks and equal-error tests before any legacy grid path
 is deleted.

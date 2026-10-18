@@ -8,6 +8,7 @@ struct Params {
     clip: mat4x4<f32>,
     camera: vec4<f32>,
     policy: vec4<f32>, // split area, merge area, viewport width/height
+    surface: vec4<f32>, // conservative |height| bound in unit-sphere chord units
 }
 fn shift_right(id: vec2<u32>, n: u32) -> vec2<u32> {
     if (n == 0u) { return id; }
@@ -67,5 +68,20 @@ fn pixel_area(record: Record) -> f32 {
     if (min(a.w, min(b.w, c.w)) <= 0.0) { return 0.0; }
     let u = b.xy / b.w - a.xy / a.w;
     let v = c.xy / c.w - a.xy / a.w;
-    return abs(u.x * v.y - u.y * v.x) * p.policy.z * p.policy.w / 8.0;
+    var area = abs(u.x * v.y - u.y * v.x) * p.policy.z * p.policy.w / 8.0;
+    // Conservative height inflation. The canonical surface corners may sit up
+    // to p.surface.x chord units off the sphere, so a raised corner moves on
+    // screen by up to that bound relative to the triangle's own chord length;
+    // the bounding screen area therefore grows by at most (1 + 2h/L)^2. The
+    // same inflated value feeds both split and merge decisions, so a larger
+    // bound can only refine earlier and decimate later.
+    if (p.surface.x > 0.0) {
+        let edge = max(
+            length(t[1] - t[0]),
+            max(length(t[2] - t[1]), length(t[0] - t[2])),
+        );
+        let ratio = min(p.surface.x / max(edge, 1e-9), 6.0e5);
+        area *= (1.0 + 2.0 * ratio) * (1.0 + 2.0 * ratio);
+    }
+    return area;
 }

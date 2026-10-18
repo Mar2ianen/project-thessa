@@ -51,6 +51,29 @@
       "capture": "crates/render-wgpu/target/test-tmp/cbt-sphere/surface-material.png (regenerable, ignored)",
       "limits": "emission of every active slot including zeroed virtual roots, no dirty culling or view early-out; GPU timestamps only; excludes topology, classification, page publication and initialization; not game FPS"
     },
+    "height_bound_classification": {
+      "test": "height_bound_conservatively_refines_without_changing_the_oracle",
+      "api": "rcbt-wgpu::SphereGpu::set_height_bound(height_chord) -> Params.surface at uniform offset 128; set_view writes only the first 128 bytes",
+      "inflation": "pixel_area *= (1 + 2h/L)^2, L = longest chord edge; same value feeds split and merge thresholds",
+      "monotonicity": {
+        "seed": "uniform depth 4, 198 leaves, capacity 4096",
+        "bound_chord": 0.05,
+        "camera_distance_radii": 2.0,
+        "visible_triangles_increased": 56,
+        "visible_triangles_decreased": 0,
+        "slots_compared": 4096,
+        "all_visible_increased": true
+      },
+      "autonomous_stability": {
+        "frames": 240,
+        "committed_transactions": 240,
+        "bound_chord": 0.05,
+        "cpu_replay_matches_every_frame": true,
+        "allocator_mirror_valid": true,
+        "invalid_bounds_rejected": ["negative", "NaN", "infinite"]
+      },
+      "limits": "conservative inflation of the LOD measure only, not a bound on rendered height error; the chord bound is a manual API input and is not yet derived from canonical page min/max"
+    },
     "batch_recheck_same_state": {
       "test": "target_pool_parallel_commit_cost_and_exact_control",
       "serial_commit_p50_ms": 0.16900110419082642,
@@ -71,14 +94,14 @@
     "bevy_rcbt_gpu_ignored": "24 passed, 0 failed (/tmp/opencode/cbt-surface-bevy-gpu.log)",
     "terrain_native_ignored": "20 passed, 0 failed, silent ALSA/Pulse/PipeWire, 1 thread (/tmp/opencode/cbt-surface-native-ignored.log)",
     "render_wgpu_backend_ignored": "3 passed, 0 failed (/tmp/opencode/cbt-surface-backend-ignored.log)",
-    "cbt_sphere_gpu_ignored": "6 passed, 0 failed, 1 thread (/tmp/opencode/cbt-surface-gpu-final.log)",
+    "cbt_sphere_gpu_ignored": "7 passed, 0 failed, 1 thread (/tmp/opencode/cbt-height-gpu.log)",
     "check_architecture": "OK, 12 guarded foundational crates (/tmp/opencode/cbt-surface-architecture.log)",
     "agent_qa_unittest": "5 tests OK (/tmp/opencode/cbt-surface-agent-qa.log)",
     "git_diff_check": "clean",
     "remote_ci": "not run, not claimed"
   },
   "known_gaps": [
-    "classification ignores height: pixel_area() still measures unit-sphere chords, so tall relief and near-camera surfaces are not charged for screen area their height adds",
+    "height bound is a manual chord input, not derived from canonical HeightPage min/max for a live planet",
     "no shadow caster: the shared shadow atlas still consumes the legacy patch-grid vertex stream",
     "no ocean geometry consumer and no RT/BLAS publication for bisectors",
     "no resolved production mode: nothing in graphics.toml selects this path and TerrainRenderer::encode_scene() still draws legacy patches",

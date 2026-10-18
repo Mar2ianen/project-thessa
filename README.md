@@ -177,6 +177,9 @@ The checked-in vertical slice currently contains:
     A separate [CBT sphere experiment](docs/61_CBT_SPHERE_EXPERIMENT.md) tests
     persistent conforming GPU bisectors without patch grids/skirts. It does not
     yet replace production terrain, heights/materials, ocean, shadows or RT.
+    Its [parallel transaction follow-up](docs/62_CBT_PARALLEL_TRANSACTIONS.md)
+    adds conflict-filtered GPU split/merge waves and a measured 128K-slot fixture;
+    Bevy renderer parity is not a migration gate.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

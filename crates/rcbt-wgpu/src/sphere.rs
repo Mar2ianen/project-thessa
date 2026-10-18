@@ -1,10 +1,22 @@
 //! Correctness-first persistent GPU sphere experiment; not a production backend.
-//! Single-writer conforming updates + existing OCBT packed allocator ABI. CPU
+//! Conflict-filtered parallel transactions + existing OCBT packed allocator ABI. CPU
 //! publishes camera/policy or a logical request, never rebuilt triangle lists.
 use thessa_rcbt_core::conforming::{Record, SphereTopology};
 use wgpu::util::DeviceExt;
 
 pub const GEOMETRY_WGSL: &str = include_str!("sphere_geometry.wgsl");
+pub const BATCH_REQUESTS: u32 = 256;
+pub const PLAN_WORDS: usize = 200;
+
+fn shader_source() -> String {
+    format!(
+        "{}\n{}\n{}\n{}\nconst REQUESTS: u32 = {BATCH_REQUESTS}u;",
+        GEOMETRY_WGSL,
+        include_str!("ocbt_pool.wgsl"),
+        include_str!("sphere_update.wgsl"),
+        include_str!("sphere_batch.wgsl")
+    )
+}
 
 pub struct SphereGpu {
     pub pool: wgpu::Buffer,
@@ -13,6 +25,12 @@ pub struct SphereGpu {
     pub params: wgpu::Buffer,
     pub ranks: wgpu::Buffer,
     pub bits: wgpu::Buffer,
+    /// Explicit diagnostic readback: four header words then PLAN_WORDS per
+    /// request. Kind/address/status identify each committed CPU replay operation.
+    pub plans: wgpu::Buffer,
+    claims: wgpu::Buffer,
+    batch: [wgpu::ComputePipeline; 7],
+    serial_commit: wgpu::ComputePipeline,
     areas: wgpu::Buffer,
     classify: wgpu::ComputePipeline,
     update: wgpu::ComputePipeline,
@@ -29,10 +47,21 @@ impl SphereGpu {
         capacity: u32,
         max_depth: u8,
     ) -> Result<Self, &'static str> {
+        Self::with_uniform_depth(device, queue, capacity, max_depth, 0)
+    }
+
+    /// One-time uniform conforming seed. Not a per-frame CPU geometry path.
+    pub fn with_uniform_depth(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        capacity: u32,
+        max_depth: u8,
+        local_depth: u8,
+    ) -> Result<Self, &'static str> {
         if capacity > 131072 {
             return Err("prototype pool exceeds existing OCBT-128K layout");
         }
-        let initial = SphereTopology::new(capacity as usize, max_depth)?;
+        let initial = SphereTopology::uniform(capacity as usize, max_depth, local_depth)?;
         let records = initial.records();
         let mut allocator = crate::ocbt::OcbtPoolMirror::new(17).map_err(|_| "OCBT init")?;
         for (slot, record) in records.iter().enumerate() {
@@ -86,9 +115,19 @@ impl SphereGpu {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
         );
         let params = make("sphere-policy", &[0; 128], wgpu::BufferUsages::UNIFORM);
+        let plans = make(
+            "sphere-transaction-plans",
+            &vec![0; (4 + BATCH_REQUESTS as usize * PLAN_WORDS) * 4],
+            wgpu::BufferUsages::STORAGE,
+        );
+        let claims = make(
+            "sphere-record-claims",
+            &vec![0; capacity as usize * 4],
+            wgpu::BufferUsages::STORAGE,
+        );
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sphere-update-layout"),
-            entries: &(0..7)
+            entries: &(0..9)
                 .map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -110,12 +149,7 @@ impl SphereGpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let source = format!(
-            "{}\n{}\n{}",
-            GEOMETRY_WGSL,
-            include_str!("ocbt_pool.wgsl"),
-            include_str!("sphere_update.wgsl")
-        );
+        let source = shader_source();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("independent-conforming-sphere"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -133,17 +167,30 @@ impl SphereGpu {
         let update = pipeline("update");
         let index = pipeline("index_pool");
         let classify = pipeline("classify");
+        let batch = [
+            "clear_claims",
+            "plan_transactions",
+            "validate_claims",
+            "reserve_transactions",
+            "allocate_transactions",
+            "commit_parallel",
+            "finish_transactions",
+        ]
+        .map(pipeline);
+        let serial_commit = pipeline("commit_serial");
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &layout,
-            entries: &[&params, &pool, &ranks, &bits, &indices, &state, &areas]
-                .into_iter()
-                .enumerate()
-                .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                    binding: binding as u32,
-                    resource: buffer.as_entire_binding(),
-                })
-                .collect::<Vec<_>>(),
+            entries: &[
+                &params, &pool, &ranks, &bits, &indices, &state, &areas, &plans, &claims,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                binding: binding as u32,
+                resource: buffer.as_entire_binding(),
+            })
+            .collect::<Vec<_>>(),
         });
         let gpu = Self {
             pool,
@@ -152,6 +199,10 @@ impl SphereGpu {
             params,
             ranks,
             bits,
+            plans,
+            claims,
+            batch,
+            serial_commit,
             areas,
             classify,
             update,
@@ -178,6 +229,21 @@ impl SphereGpu {
                 (id >> 32) as u32,
                 0,
                 0,
+            ]),
+        );
+    }
+
+    /// Diagnostic policy: request splits or diamond merges in each scanned
+    /// window, independent of pixel area. Bounded by the same depth/pool rules.
+    pub fn set_sweep(&self, queue: &wgpu::Queue, merge: bool) {
+        queue.write_buffer(
+            &self.params,
+            0,
+            &words(&[
+                self.capacity,
+                u32::from(self.max_depth),
+                3,
+                u32::from(merge),
             ]),
         );
     }
@@ -245,6 +311,66 @@ impl SphereGpu {
         }
     }
 
+    /// Parallel planning/claiming, a bounded serial admission prefix, parallel
+    /// predecode + commit, then final counters and active-index publication.
+    /// Uses `set_view` or diagnostic `set_sweep`; manual addresses use `encode`.
+    /// `parallel_commit=false` executes IDENTICAL accepted plans serially for
+    /// deterministic byte-oracles and same-workload mutation measurements.
+    pub fn encode_batch(&self, encoder: &mut wgpu::CommandEncoder, parallel_commit: bool) {
+        self.encode_batch_plan(encoder);
+        self.encode_batch_commit(encoder, parallel_commit);
+        self.encode_batch_publish(encoder);
+    }
+
+    fn dispatch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::ComputePipeline,
+        groups: u32,
+    ) {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &self.bind, &[]);
+        pass.dispatch_workgroups(groups, 1, 1);
+    }
+
+    /// Explicit profiling boundary. Must be followed by commit, then publish,
+    /// on this pool before reading/drawing or starting another update.
+    pub fn encode_batch_plan(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.dispatch(encoder, &self.classify, self.capacity.div_ceil(64));
+        for (i, pipeline) in self.batch[..5].iter().enumerate() {
+            let groups = match i {
+                0 => self.capacity.max(BATCH_REQUESTS).div_ceil(64),
+                3 => 1,
+                _ => BATCH_REQUESTS.div_ceil(64),
+            };
+            self.dispatch(encoder, pipeline, groups);
+        }
+    }
+
+    /// Complete the previously planned/reserved transaction wave.
+    pub fn encode_batch_commit(&self, encoder: &mut wgpu::CommandEncoder, parallel: bool) {
+        self.dispatch(
+            encoder,
+            if parallel {
+                &self.batch[5]
+            } else {
+                &self.serial_commit
+            },
+            if parallel {
+                BATCH_REQUESTS.div_ceil(64)
+            } else {
+                1
+            },
+        );
+    }
+
+    /// Publish counters, cursor, indirect command and the new active indices.
+    pub fn encode_batch_publish(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.dispatch(encoder, &self.batch[6], 1);
+        self.dispatch(encoder, &self.index, self.capacity.div_ceil(64));
+    }
+
     pub fn storage_bytes(&self) -> u64 {
         [
             &self.pool,
@@ -254,6 +380,8 @@ impl SphereGpu {
             &self.state,
             &self.params,
             &self.areas,
+            &self.plans,
+            &self.claims,
         ]
         .iter()
         .map(|b| b.size())
@@ -276,12 +404,7 @@ fn words(values: &[u32]) -> Vec<u8> {
 mod tests {
     #[test]
     fn independent_sphere_shader_validates_without_hardware() {
-        let source = format!(
-            "{}\n{}\n{}",
-            super::GEOMETRY_WGSL,
-            include_str!("ocbt_pool.wgsl"),
-            include_str!("sphere_update.wgsl")
-        );
+        let source = super::shader_source();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

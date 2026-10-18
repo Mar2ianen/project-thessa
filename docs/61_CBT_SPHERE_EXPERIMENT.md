@@ -1,5 +1,10 @@
 # 61 — Persistent conforming CBT sphere experiment
 
+Phase-one snapshot (`3b7bd17`). [Phase two](62_CBT_PARALLEL_TRANSACTIONS.md)
+adds conflict-filtered parallel transaction waves and a target-capacity pool
+fixture; its current implementation/measurements supersede the single-writer
+and buffer-size limitations below. Production surface-consumer gaps remain.
+
 **Status (2026-10-18): isolated CPU/GPU correctness prototype, not a production
 terrain migration or `large_cbt` replacement.** Baseline `ff6a31f` (the reviewed
 shadow optimization was committed and pushed before this experiment).

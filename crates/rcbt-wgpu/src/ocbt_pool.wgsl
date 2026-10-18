@@ -1,5 +1,5 @@
 // Independent portable GPU implementation of this crate's OcbtPoolMirror ABI.
-// Correctness prototype: one writer, incremental packed ancestor updates.
+// Atomic packed ancestor deltas support disjoint concurrent slot transactions.
 // OcbtPoolMirror(depth=17): packed levels 0..10, virtual 128-bit groups.
 fn location(node: u32) -> vec3<u32> {
     let level = 31u - countLeadingZeros(node);
@@ -19,7 +19,7 @@ fn rank_count(node: u32) -> u32 {
     let level = 31u - countLeadingZeros(node);
     if (level < 11u) {
         let p = location(node);
-        return (ranks[p.x] >> p.y) & mask_bits(p.z);
+        return (atomicLoad(&ranks[p.x]) >> p.y) & mask_bits(p.z);
     }
     let span = 1u << (17u - level);
     let first = (node - (1u << level)) * span;
@@ -27,7 +27,7 @@ fn rank_count(node: u32) -> u32 {
     var cursor = first;
     while (cursor < first + span) {
         let width = min(32u - cursor % 32u, first + span - cursor);
-        result += countOneBits((bits[cursor / 32u] >> (cursor % 32u)) & mask_bits(width));
+        result += countOneBits((atomicLoad(&bits[cursor / 32u]) >> (cursor % 32u)) & mask_bits(width));
         cursor += width;
     }
     return result;
@@ -51,14 +51,15 @@ fn decode_rank(ordinal: u32, occupied: bool) -> u32 {
 }
 fn set_occupied(slot: u32, value: bool) {
     let mask = 1u << (slot % 32u);
-    if (value) { bits[slot / 32u] |= mask; } else { bits[slot / 32u] &= ~mask; }
+    if (value) { atomicOr(&bits[slot / 32u], mask); } else { atomicAnd(&bits[slot / 32u], ~mask); }
     var node = 1024u + (slot >> 7u);
     while (node > 0u) {
         let p = location(node);
-        let mask = mask_bits(p.z);
-        let old = (ranks[p.x] >> p.y) & mask;
-        let count = old + select(0xffffffffu, 1u, value);
-        ranks[p.x] = (ranks[p.x] & ~(mask << p.y)) | ((count & mask) << p.y);
+        // A field never exceeds its subtree slot count, which fits its packed
+        // width, and a free removes an occupied bit exactly once. Consequently
+        // +/- one field unit neither carries nor borrows into adjacent fields.
+        let delta = 1u << p.y;
+        atomicAdd(&ranks[p.x], select(0u - delta, delta, value));
         node /= 2u;
     }
 }

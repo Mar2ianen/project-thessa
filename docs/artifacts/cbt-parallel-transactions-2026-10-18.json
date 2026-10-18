@@ -1,0 +1,148 @@
+{
+  "date": "2026-10-18",
+  "baseline_commit": "3b7bd17",
+  "branch": "feat/render-pipeline-optimizations",
+  "status": "isolated parallel GPU sphere topology; not integrated production terrain",
+  "acceptance": {
+    "bevy_visual_or_implementation_parity_required": false,
+    "reference": "canonical surface, conforming topology, numerical budgets and working native consumers",
+    "legacy_client": "preserved as a runnable client, not the new renderer's visual oracle"
+  },
+  "implementation": {
+    "request_window": 256,
+    "maximum_compatibility_chain": 64,
+    "maximum_new_slots_per_request": 128,
+    "candidate_selection": "rotating active-index window; conservative deterministic atomic-min whole-record claims",
+    "reservation": "bounded serial admission prefix over the request window; whole-chain free-rank reservations before any pool write",
+    "mutation": "parallel non-conflicting compatibility-chain split or four-leaf diamond merge",
+    "shared_allocator_abi": "existing OcbtPoolMirror depth 17; atomic u32 bitfield and packed ancestor deltas",
+    "packed_atomic_invariant": "each distinct free/allocated bit changes once; subtree counts remain within packed widths, preventing cross-field borrow/carry",
+    "gpu_storage_bindings": 8,
+    "gpu_uniform_bindings": 1,
+    "global_shader_spin_or_barrier": false,
+    "full_rank_reduction": false,
+    "ordinary_update_cpu_topology_upload_or_readback": false,
+    "cpu_seed": "existing Tree and BisectorPool; known child handles avoid repeated pool scans",
+    "cpu_partition_oracle": "sorted exact max-depth intervals, plus exact reversed-edge and root-coverage checks",
+    "surface": "unit sphere only; pair-u32 geometric addresses and exact integer cube decoder retained",
+    "production_graphics_mode_added": false,
+    "upstream_runtime_code_imported": false
+  },
+  "correctness": {
+    "small_fixture": {
+      "capacity": 2048,
+      "uniform_local_seed_depth": 4,
+      "maximum_heap_depth": 30,
+      "waves": 360,
+      "maximum_committed_per_wave": 61,
+      "forced_chains": 737,
+      "conflicts": 33663,
+      "capacity_rejections": 5578,
+      "merges": 1976,
+      "commits_after_teleport": 1589,
+      "complete_decimation_to_twelve_roots_checked": true,
+      "byte_comparison_every_wave": ["pool records/generations", "plans", "packed ranks", "allocation bits", "active indices", "counters/indirect command"],
+      "cpu_reference_replay_every_committed_gpu_request": true,
+      "capacity_rejected_chain_entire_old_record_footprint_unchanged": true,
+      "geometry": "exact reverse-edge pairing including cube seams, complete root area, Euler characteristic two"
+    },
+    "large_fixture": {
+      "capacity": 131072,
+      "initial_triangles": 98304,
+      "final_triangles": 98936,
+      "byte_comparison_every_wave": ["plans", "packed ranks", "allocation bits", "counters/indirect command"],
+      "pool_and_active_index_full_byte_comparison": "every 16 waves and final wave",
+      "final_raw_gpu_geometry_oracle": "exact reversed edges/neighbors, root area and Euler characteristic two",
+      "final_allocator_oracle": "packed ranks/allocation bits/active indices against existing OcbtPoolMirror"
+    },
+    "decoder_absolute_per_coordinate_bound_unit_sphere": 0.000001,
+    "observed_parallel_decoder_max_error": 5.119392920693855e-8,
+    "shared_vertices_bit_identical": true,
+    "indirect_raster": "256x256 nonempty parallel output matches same-topology serialized control RGBA bytes exactly",
+    "numerical_scope": "decoder arithmetic, not chord-to-sphere approximation, screen-space height error or planetary metre/cm precision"
+  },
+  "hardware": {
+    "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan",
+    "driver": "radv",
+    "driver_info": "Mesa 26.2.4-arch1.1"
+  },
+  "performance": {
+    "log": "/tmp/opencode/cbt-batch-gpu-final.log",
+    "raw_csv": "crates/render-wgpu/target/test-tmp/cbt-sphere/batch-cost.csv",
+    "raw_csv_sha256": "b67c8b6123da27bcf338228827fd071a843aeb1dbb90b78f992b412a852f6152",
+    "policy": "diagnostic split/merge sweep alternating every 16 waves",
+    "projected_area_classification": "dispatch present, inactive under diagnostic sweep policy",
+    "comparison": "identical GPU plans and reservations, serial versus parallel execution of accepted transactions",
+    "execution_order": "paired ABBA, same initial independent GPU pools",
+    "warmup_waves": 30,
+    "measured_samples_per_control": 100,
+    "percentile_convention": "sorted sample indices 50 and 95; total is sum of consecutive intervals per sample",
+    "committed_requests_per_control_during_measurement": 2219,
+    "maximum_committed_per_wave_in_target_fixture": 29,
+    "resident_gpu_buffer_bytes_per_control": 5991868,
+    "serial_commit_control": {
+      "plan_admit_allocate_p50_ms": 0.13389440102005007,
+      "commit_p50_ms": 0.16715760151290895,
+      "commit_p95_ms": 0.21120128505706787,
+      "publish_index_p50_ms": 0.12275323266220094,
+      "total_p50_ms": 0.42921551479339604,
+      "total_p95_ms": 0.5458370972442628
+    },
+    "parallel_commit": {
+      "plan_admit_allocate_p50_ms": 0.13429516247177123,
+      "commit_p50_ms": 0.011101092212677003,
+      "commit_p95_ms": 0.02432622011947632,
+      "publish_index_p50_ms": 0.12387536472702028,
+      "total_p50_ms": 0.27183649270248417,
+      "total_p95_ms": 0.34830177769088755
+    },
+    "excluded_from_gpu_timestamps": ["initialization", "compilation", "CPU readback/oracle comparisons"],
+    "excluded_features": ["active view classification", "raster", "height/material sampling", "shadow", "ocean", "RT"],
+    "claim_boundary": "one paired isolated campaign; not game FPS, Bevy/large_cbt/full-renderer parity or original one-request loop comparison"
+  },
+  "reproduction": {
+    "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp",
+    "CARGO_TARGET_DIR": "/home/chechulin/Projects/project-thessa-fastrt/target",
+    "commands": [
+      "cargo test --release -p thessa-rcbt-core --lib",
+      "cargo test -p thessa-rcbt-wgpu sphere::tests",
+      "cargo test --release -p thessa-render-wgpu --test cbt_sphere -- --ignored --nocapture --test-threads=1"
+    ],
+    "native_regressions_audio_environment": {
+      "ALSA_CONFIG_PATH": "$PWD/target/render-batch/silent-alsa.conf",
+      "PULSE_SERVER": "unix:$PWD/target/render-batch/no-pulse-server",
+      "PIPEWIRE_REMOTE": "thessa-test-no-audio"
+    }
+  },
+  "checks": {
+    "core_release": {"passed": 64, "log": "/tmp/opencode/cbt-batch-core.log"},
+    "portable_shader_validation": {"passed": 1, "log": "/tmp/opencode/cbt-batch-shader.log"},
+    "gpu_suite_release": {"passed": 4, "explicit_hardware_run": true, "log": "/tmp/opencode/cbt-batch-gpu-final.log"},
+    "workspace_lib_bins": {"passed": 1878, "ignored_by_default": 46, "command": "cargo test --workspace --lib --bins", "log": "/tmp/opencode/cbt-batch-workspace.log"},
+    "workspace_integration": {"passed": 90, "ignored_by_default": 23, "command": "cargo test --workspace --test '*'", "log": "/tmp/opencode/cbt-batch-integration.log"},
+    "bevy_render_gpu": {"passed": 24, "command": "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored", "log": "/tmp/opencode/cbt-batch-bevy-gpu.log", "scope": "legacy regression safety, not renderer parity"},
+    "native_ignored": {"passed": 20, "command": "cargo test -p thessa-terrain-native -- --ignored --test-threads=1", "log": "/tmp/opencode/cbt-batch-native-ignored.log", "breakdown": "14 unit, 1 perf capture integration, 5 window-exit integration"},
+    "backend_ignored": {"passed": 3, "command": "cargo test -p thessa-render-wgpu --lib -- --ignored", "log": "/tmp/opencode/cbt-batch-backend-ignored.log"},
+    "native_no_default_clippy_D_warnings": {"status": "passed", "log": "/tmp/opencode/cbt-batch-no-default-clippy.log"},
+    "architecture": {"status": "passed", "guarded_foundational_crates": 12, "log": "/tmp/opencode/cbt-batch-architecture.log"},
+    "agent_qa": {"passed": 5, "log": "/tmp/opencode/cbt-batch-agent-qa.log"},
+    "strengthened_indirect_raster_oracle": {"passed": 1, "command": "cargo test --release -p thessa-render-wgpu --test cbt_sphere parallel_waves -- --ignored --nocapture --test-threads=1", "log": "/tmp/opencode/cbt-batch-raster-final.log"},
+    "workspace_all_target_all_feature_clippy_D_warnings": {"status": "passed", "log": "/tmp/opencode/cbt-batch-clippy.log"},
+    "cargo_fmt_all_check": {"status": "passed", "log": "/tmp/opencode/cbt-batch-fmt.log"},
+    "git_diff_check": "passed",
+    "raw_csv_recalculation": "100 samples/control, identical 2219 commits, independently recomputed total and commit p50/p95 match evidence",
+    "new_document_links_and_json": "passed"
+  },
+  "known_gaps": [
+    "non-maximal conflict admission and no formal arbitrary-camera convergence/fairness bound",
+    "one bounded diagnostic request-window size, not resolved production quality budgets",
+    "generation rebase/reset after headroom exhaustion",
+    "canonical height/material residency sampling and conservative surface error summaries",
+    "f64 body/camera subtraction and local planetary geometry transport",
+    "conservative near-plane/silhouette view policy",
+    "native raster/shadow/ocean/RT publication and revision lifetimes",
+    "resolved experimental production mode and cheaper/disabled fallbacks",
+    "cross-platform runtime acceptance, blind subjective preference and remote CI"
+  ]
+}

@@ -154,11 +154,13 @@ impl BisectorPool {
     ///
     /// This is the hand-off point for an adapter migrating from the topology
     /// only [`crate::Tree`]. The capacity check is enforced by the same split
-    /// path used for later updates; a failed build simply returns the partial
-    /// pool and leaves the caller's tree untouched.
+    /// path used for later updates; a failed build drops the private candidate
+    /// and leaves the caller's tree untouched. Known child handles avoid a
+    /// repeated slot lookup while materializing the partition.
     pub fn from_tree(tree: &crate::Tree, capacity: usize) -> Result<Self, BisectorPoolError> {
         let mut pool = Self::new(tree.max_depth(), capacity)?;
-        materialize_pool_from_tree(&mut pool, tree, Node::root())?;
+        let root = pool.root_handle();
+        materialize_pool_from_tree(&mut pool, tree, root)?;
         Ok(pool)
     }
 
@@ -200,7 +202,8 @@ impl BisectorPool {
         candidate.active_count = 1;
         candidate.slots[0].value = Some(Bisector { node: Node::root() });
 
-        materialize_pool_from_tree(&mut candidate, tree, Node::root())?;
+        let root = candidate.root_handle();
+        materialize_pool_from_tree(&mut candidate, tree, root)?;
         debug_assert!(candidate.is_valid_partition());
         *self = candidate;
         Ok(())
@@ -292,14 +295,17 @@ impl BisectorPool {
         if active_count != self.active_count {
             return false;
         }
-        fn complete(pool: &BisectorPool, node: Node) -> Option<usize> {
-            if pool.handle_for(node).is_some() {
-                return Some(1);
+        // Exact max-depth intervals avoid a linear handle lookup at every
+        // internal node (quadratic for a target-sized uniform pool).
+        let mut cursor = 1u64 << self.max_depth;
+        for node in self.nodes() {
+            let remaining = self.max_depth - node.depth();
+            if node.id() << remaining != cursor {
+                return false;
             }
-            let [left, right] = node.children()?;
-            Some(complete(pool, left)? + complete(pool, right)?)
+            cursor += 1u64 << remaining;
         }
-        complete(self, Node::root()) == Some(self.active_count)
+        cursor == 2u64 << self.max_depth
     }
 
     /// Splits the bisector addressed by `handle` and returns both child
@@ -430,14 +436,16 @@ impl BisectorPool {
 fn materialize_pool_from_tree(
     pool: &mut BisectorPool,
     tree: &crate::Tree,
-    node: Node,
+    handle: BisectorHandle,
 ) -> Result<(), BisectorPoolError> {
+    let node = pool
+        .get(handle)
+        .expect("live materialization handle")
+        .node();
     if tree.contains(node) {
         return Ok(());
     }
-    let children = pool.split_node(node)?;
-    let left = pool.get(children[0]).expect("new child handle").node();
-    let right = pool.get(children[1]).expect("new child handle").node();
+    let [left, right] = pool.split(handle)?;
     materialize_pool_from_tree(pool, tree, left)?;
     materialize_pool_from_tree(pool, tree, right)
 }
@@ -567,5 +575,24 @@ mod tests {
         assert_ne!(new_left, old_right);
         assert_ne!(new_right, old_right);
         assert!(pool.split(old_right).is_err());
+    }
+
+    #[test]
+    fn interval_partition_check_rejects_gaps_overlaps_and_wrong_counts() {
+        let tree = Tree::at_depth(58, 3).unwrap();
+        let pool = BisectorPool::from_tree(&tree, 8).unwrap();
+        assert!(pool.is_valid_partition());
+        let mut invalid = pool.clone();
+        invalid.slots[1].value = invalid.slots[0].value;
+        assert!(!invalid.is_valid_partition());
+        invalid.slots[1].value = Some(Bisector { node: Node::root() });
+        assert!(!invalid.is_valid_partition());
+        invalid = pool.clone();
+        invalid.slots[1].value = None;
+        invalid.active_count -= 1;
+        assert!(!invalid.is_valid_partition());
+        invalid = pool;
+        invalid.active_count -= 1;
+        assert!(!invalid.is_valid_partition());
     }
 }

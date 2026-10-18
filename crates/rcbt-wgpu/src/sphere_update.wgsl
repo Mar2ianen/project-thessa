@@ -1,5 +1,6 @@
-// HPG 2024 §2 refinement/decimation ideas, independently implemented. A bounded
-// single writer is an explicit correctness baseline, NOT the parallel paper.
+// HPG 2024 §2 refinement/decimation ideas, independently implemented. Shared
+// transaction primitives and the one-request control; see sphere_batch for
+// conflict-filtered parallel waves. This is not the upstream GPU implementation.
 struct State {
     request: vec4<u32>,  // kind, address low/high, status (1=committed)
     counters: vec4<u32>, // changed leaves, split requests, merges, exhaustion
@@ -7,8 +8,8 @@ struct State {
 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read_write> pool: array<Record>;
-@group(0) @binding(2) var<storage, read_write> ranks: array<u32>;
-@group(0) @binding(3) var<storage, read_write> bits: array<u32>;
+@group(0) @binding(2) var<storage, read_write> ranks: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> bits: array<atomic<u32>>;
 @group(0) @binding(4) var<storage, read_write> indices: array<u32>;
 @group(0) @binding(5) var<storage, read_write> state: State;
 @group(0) @binding(6) var<storage, read_write> areas: array<f32>;
@@ -96,7 +97,7 @@ fn diamond(a: u32) -> vec4<u32> {
     }
     return vec4(a, ar, b, br);
 }
-fn decimate(a: u32) -> u32 {
+fn merge_diamond(a: u32) -> u32 {
     let d = diamond(a);
     if (d.x == NONE) { return 4u; }
     for (var i = 0u; i < 4u; i++) {
@@ -114,9 +115,12 @@ fn decimate(a: u32) -> u32 {
     pool[d.w] = Record(vec4(0u, 0u, 0u, v.address.w + 1u), vec4(NONE));
     set_occupied(d.y, false);
     set_occupied(d.w, false);
-    state.counters.x += 2u;
-    state.counters.z++;
     return 1u;
+}
+fn decimate(a: u32) -> u32 {
+    let result = merge_diamond(a);
+    if (result == 1u) { state.counters.x += 2u; state.counters.z++; }
+    return result;
 }
 @compute @workgroup_size(1)
 fn update() {

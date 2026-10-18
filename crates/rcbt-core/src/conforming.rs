@@ -29,32 +29,58 @@ pub struct SphereTopology {
 
 impl SphereTopology {
     pub fn new(capacity: usize, max_depth: u8) -> Result<Self, &'static str> {
+        Self::uniform(capacity, max_depth, 0)
+    }
+
+    /// One-time conforming seed, also used by target-sized GPU diagnostics.
+    /// Virtual roots remain reserved rather than geometrically subdivided.
+    pub fn uniform(capacity: usize, max_depth: u8, local_depth: u8) -> Result<Self, &'static str> {
         if capacity < 16 || !(ROOT_DEPTH..=crate::MAX_SUPPORTED_DEPTH).contains(&max_depth) {
             return Err("sphere needs capacity >=16 and total heap depth 4..=58");
         }
         // Preserve the existing single-domain allocator contract: 12 sphere
         // roots + four reserved virtual roots form one complete binary domain.
-        let tree = Tree::at_depth(max_depth, ROOT_DEPTH).map_err(|_| "invalid depth")?;
+        if local_depth > max_depth - ROOT_DEPTH
+            || local_depth >= usize::BITS as u8
+            || (1usize
+                .checked_shl(u32::from(local_depth))
+                .and_then(|n| n.checked_mul(12))
+                .and_then(|n| n.checked_add(4)))
+            .is_none_or(|n| n > capacity)
+        {
+            return Err("uniform seed exceeds depth or capacity");
+        }
+        let mut tree = Tree::at_depth(max_depth, ROOT_DEPTH).map_err(|_| "invalid depth")?;
+        for _ in 0..local_depth {
+            for node in tree
+                .leaves()
+                .into_iter()
+                .filter(|n| root_index(*n).is_some())
+            {
+                tree.split(node).map_err(|_| "uniform seed split")?;
+            }
+        }
         let pool = BisectorPool::from_tree(&tree, capacity).map_err(|_| "invalid capacity")?;
         let mut mesh = Self {
             pool,
             neighbors: vec![[NONE; 3]; capacity],
         };
         let handles = mesh.handles();
+        let mut edges = std::collections::HashMap::new();
         for h in &handles {
             let a = cube_vertices(mesh.node(*h)).ok_or("invalid root")?;
             for e in 0..3 {
-                let matches: Vec<_> = handles
-                    .iter()
-                    .filter(|other| {
-                        let b = cube_vertices(mesh.node(**other)).unwrap();
-                        (0..3).any(|f| a[e] == b[(f + 1) % 3] && a[(e + 1) % 3] == b[f])
-                    })
-                    .collect();
-                if matches.len() != 1 {
-                    return Err("root surface is not a closed oriented manifold");
+                if edges.insert((a[e], a[(e + 1) % 3]), h.slot()).is_some() {
+                    return Err("duplicate seed edge");
                 }
-                mesh.neighbors[h.slot() as usize][e] = matches[0].slot();
+            }
+        }
+        for h in &handles {
+            let a = cube_vertices(mesh.node(*h)).unwrap();
+            for e in 0..3 {
+                mesh.neighbors[h.slot() as usize][e] = *edges
+                    .get(&(a[(e + 1) % 3], a[e]))
+                    .ok_or("seed is not closed")?;
             }
         }
         Ok(mesh)
@@ -260,18 +286,18 @@ impl SphereTopology {
             areas[root_index(n).unwrap() as usize] += denominator >> (n.depth() - ROOT_DEPTH);
             for e in 0..3 {
                 vertices.insert(v[e]);
-                if edges.insert((v[e], v[(e + 1) % 3]), h.slot()).is_some() {
+                if edges
+                    .insert((v[e], v[(e + 1) % 3]), (h.slot(), e))
+                    .is_some()
+                {
                     return Err("duplicate directed edge");
                 }
             }
         }
-        for (&(a, b), &slot) in &edges {
-            let Some(&other) = edges.get(&(b, a)) else {
+        for (&(a, b), &(slot, e)) in &edges {
+            let Some(&(other, _)) = edges.get(&(b, a)) else {
                 return Err("open edge or T-junction");
             };
-            let n = self.node(self.handle_at(slot)?);
-            let v = cube_vertices(n).unwrap();
-            let e = (0..3).find(|&e| v[e] == a && v[(e + 1) % 3] == b).unwrap();
             if self.neighbors[slot as usize][e] != other {
                 return Err("neighbor does not match geometric reverse edge");
             }
@@ -399,5 +425,14 @@ mod tests {
         let before = mesh.records();
         assert!(mesh.split(node).is_err());
         assert_eq!(before, mesh.records());
+    }
+
+    #[test]
+    fn uniform_seed_uses_existing_pool_and_is_closed_at_target_size() {
+        let mesh = SphereTopology::uniform(131072, 30, 13).unwrap();
+        assert_eq!(mesh.triangle_count(), 98304);
+        mesh.validate().unwrap();
+        assert!(SphereTopology::uniform(16, 30, 1).is_err());
+        assert!(SphereTopology::uniform(512, 6, 3).is_err());
     }
 }

@@ -6,7 +6,7 @@ use thessa_rcbt_core::{
     Node,
     conforming::{Record, SphereTopology, cube_vertices, root_index},
 };
-use thessa_rcbt_wgpu::sphere::SphereGpu;
+use thessa_rcbt_wgpu::sphere::{BATCH_REQUESTS, PLAN_WORDS, SphereGpu};
 use thessa_render_wgpu::{Backend, terrain::OffscreenTarget, timing::GpuIntervals};
 
 fn read(backend: &Backend, buffer: &wgpu::Buffer) -> Vec<u8> {
@@ -549,4 +549,321 @@ fn autonomous_sphere_indirect_capture_and_scoped_cost() {
         state[6] - baseline_counters[1],
         state[7] - baseline_counters[2]
     );
+}
+
+fn assert_batch_bytes(backend: &Backend, a: &SphereGpu, b: &SphereGpu, full: bool) {
+    for (left, right) in [
+        (&a.state, &b.state),
+        (&a.plans, &b.plans),
+        (&a.ranks, &b.ranks),
+        (&a.bits, &b.bits),
+    ] {
+        assert_eq!(
+            read(backend, left),
+            read(backend, right),
+            "serialized and parallel commits must publish the same bytes"
+        );
+    }
+    if full {
+        assert_eq!(read(backend, &a.pool), read(backend, &b.pool));
+        assert_eq!(read(backend, &a.indices), read(backend, &b.indices));
+    }
+}
+
+fn assert_rejected_chain_unchanged(plan: &[u32], before: &[Record], after: &[Record]) {
+    let mut touched = std::collections::BTreeSet::new();
+    for &slot in &plan[8..8 + plan[2] as usize] {
+        let twin = before[slot as usize].neighbors[2];
+        for current in [slot, twin] {
+            touched.insert(current);
+            touched.extend(before[current as usize].neighbors[..3].iter().copied());
+        }
+    }
+    for slot in touched {
+        assert_eq!(
+            before[slot as usize], after[slot as usize],
+            "capacity-rejected whole chain must remain unchanged"
+        );
+    }
+}
+
+#[test]
+#[ignore = "hardware: conflict-filtered parallel split/merge waves versus serial byte oracle and CPU geometry"]
+fn parallel_waves_match_serial_bytes_and_cpu_topology() {
+    let backend = Backend::bring_up().unwrap();
+    let parallel =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 2048, 30, 4).unwrap();
+    let serial =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 2048, 30, 4).unwrap();
+    let mut cpu = SphereTopology::uniform(2048, 30, 4).unwrap();
+    let mut max_committed = 0;
+    let mut chains = 0;
+    let mut conflicts = 0;
+    let mut exhausted = 0;
+    let mut merged = 0;
+    let mut after_teleport = 0;
+    for frame in 0..360 {
+        for gpu in [&parallel, &serial] {
+            if frame < 80 {
+                gpu.set_sweep(&backend.queue, false);
+            } else if frame < 160 {
+                gpu.set_sweep(&backend.queue, true);
+            } else {
+                let camera = if frame < 260 {
+                    Vec3::new(0.0, 0.0, 2.0)
+                } else {
+                    Vec3::new(-1.5, 0.3, -1.5)
+                };
+                let clip = glam::camera::rh::proj::directx::perspective(1.0, 1.0, 0.1, 100.0)
+                    * glam::camera::rh::view::look_at_mat4(camera, Vec3::ZERO, Vec3::Y);
+                gpu.set_view(
+                    &backend.queue,
+                    clip.to_cols_array(),
+                    camera.to_array(),
+                    [512, 512],
+                    60.0,
+                    3.0,
+                )
+                .unwrap();
+            }
+        }
+        let before = records(&backend, &parallel);
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        parallel.encode_batch(&mut encoder, true);
+        serial.encode_batch(&mut encoder, false);
+        backend.queue.submit([encoder.finish()]);
+        assert_batch_bytes(&backend, &parallel, &serial, true);
+        let plans = words(&read(&backend, &parallel.plans));
+        let after = records(&backend, &parallel);
+        max_committed = max_committed.max(plans[2]);
+        for plan in plans[4..]
+            .as_chunks::<PLAN_WORDS>()
+            .0
+            .iter()
+            .take(plans[1] as usize)
+        {
+            match plan[5] {
+                1 => {
+                    let n = Node::from_heap_id(u64::from(plan[6]) | (u64::from(plan[7]) << 32))
+                        .unwrap();
+                    if plan[0] == 0 {
+                        assert_eq!(cpu.split(n).unwrap(), plan[3] as usize);
+                        chains += u32::from(plan[2] > 1);
+                    } else {
+                        cpu.merge(n).unwrap();
+                        merged += 1;
+                    }
+                    after_teleport += u32::from(frame >= 260);
+                }
+                2 => {
+                    exhausted += 1;
+                    assert_rejected_chain_unchanged(plan, &before, &after);
+                }
+                7 => conflicts += 1,
+                0 | 3 | 4 | 5 => {}
+                status => panic!("unpublished batch status {status}"),
+            }
+        }
+        cpu.validate().unwrap();
+        assert_eq!(
+            logical(&after),
+            logical(&cpu.records()),
+            "parallel frame {frame}"
+        );
+        if frame == 159 {
+            assert_eq!(
+                cpu.triangle_count(),
+                12,
+                "batch decimation must recover the root sphere"
+            );
+        }
+        if frame % 20 == 0 {
+            assert_allocator(&backend, &parallel, &after);
+        }
+    }
+    assert!(
+        max_committed > 1
+            && chains > 0
+            && conflicts > 0
+            && exhausted > 0
+            && merged > 0
+            && after_teleport > 0,
+        "max_committed={max_committed} chains={chains} conflicts={conflicts} exhausted={exhausted} merged={merged} after_teleport={after_teleport}"
+    );
+    assert_geometry(&backend, &parallel);
+    let parallel_target = OffscreenTarget::new(&backend, 256, 256).unwrap();
+    let serial_target = OffscreenTarget::new(&backend, 256, 256).unwrap();
+    let (parallel_pipeline, parallel_bind) = render_pipeline(&backend, &parallel);
+    let (serial_pipeline, serial_bind) = render_pipeline(&backend, &serial);
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    draw(
+        &mut encoder,
+        &parallel,
+        &parallel_target,
+        &parallel_pipeline,
+        &parallel_bind,
+    );
+    draw(
+        &mut encoder,
+        &serial,
+        &serial_target,
+        &serial_pipeline,
+        &serial_bind,
+    );
+    backend.queue.submit([encoder.finish()]);
+    let pixels = parallel_target.read_rgba8(&backend).unwrap();
+    assert_eq!(
+        pixels,
+        serial_target.read_rgba8(&backend).unwrap(),
+        "parallel indirect raster must match the same-topology serial control"
+    );
+    assert!(
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[1] > 40)
+            .count()
+            > 2000
+    );
+    println!(
+        "parallel_sphere_oracle frames=360 max_committed_per_wave={max_committed} forced_chains={chains} conflicts={conflicts} rejected_capacity={exhausted} merges={merged} commits_after_teleport={after_teleport} byte_equal_serial=true cpu_closed=true"
+    );
+}
+
+// Target-size raw GPU snapshot oracle, independent of the planner's links.
+fn assert_closed_snapshot(snapshot: &[Record]) {
+    let mut edges = BTreeMap::new();
+    let mut vertices = std::collections::BTreeSet::new();
+    let mut areas = [0u128; 12];
+    let mut triangles = 0;
+    for (slot, &r) in snapshot.iter().enumerate() {
+        let Ok(node) = Node::from_heap_id(identity(r)) else {
+            continue;
+        };
+        let Some(v) = cube_vertices(node) else {
+            continue;
+        };
+        let root = root_index(node).unwrap();
+        areas[root as usize] += 1u128 << (58 - node.depth());
+        triangles += 1;
+        for e in 0..3 {
+            vertices.insert(v[e]);
+            assert!(edges.insert((v[e], v[(e + 1) % 3]), (slot, e)).is_none());
+        }
+    }
+    for (&(a, b), &(slot, e)) in &edges {
+        let &(other, _) = edges
+            .get(&(b, a))
+            .expect("GPU snapshot must not contain open edges or T-junctions");
+        assert_eq!(snapshot[slot].neighbors[e] as usize, other);
+    }
+    assert_eq!(areas, [1u128 << 54; 12]);
+    assert_eq!(
+        vertices.len() as isize - (edges.len() / 2) as isize + triangles,
+        2
+    );
+}
+
+#[test]
+#[ignore = "hardware: 128K-capacity resident pool, same-workload serial/parallel commit cost and topology oracle"]
+fn target_pool_parallel_commit_cost_and_exact_control() {
+    let mut requested = thessa_graphics::RequestedGraphics::default();
+    requested.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+    let backend = Backend::bring_up_for_graphics_profiled(&requested).unwrap();
+    let parallel =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 18, 13).unwrap();
+    let serial =
+        SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 18, 13).unwrap();
+    let timing = GpuIntervals::new(&backend, 4).unwrap();
+    let mut samples: [Vec<[f64; 3]>; 2] = Default::default();
+    let mut measured_commits = [0u64; 2];
+    let mut max_commits = 0;
+    let mut csv = String::from("frame,parallel,plan_ms,commit_ms,publish_index_ms,committed\n");
+    for frame in 0..130 {
+        for gpu in [&parallel, &serial] {
+            gpu.set_sweep(&backend.queue, (frame / 16) % 2 == 1);
+        }
+        // ABBA order, paired identical initial state and exactly identical plans.
+        for parallel_first in if frame % 4 == 0 || frame % 4 == 3 {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let gpu = if parallel_first { &parallel } else { &serial };
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            timing.mark(&mut encoder, 0);
+            gpu.encode_batch_plan(&mut encoder);
+            timing.mark(&mut encoder, 1);
+            gpu.encode_batch_commit(&mut encoder, parallel_first);
+            timing.mark(&mut encoder, 2);
+            gpu.encode_batch_publish(&mut encoder);
+            timing.mark(&mut encoder, 3);
+            timing.resolve(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            let elapsed = timing.read(&backend).unwrap();
+            let plans = words(&read(&backend, &gpu.plans));
+            max_commits = max_commits.max(plans[2]);
+            if frame >= 30 {
+                let mode = usize::from(parallel_first);
+                let ms = [
+                    elapsed[0] * 1000.0,
+                    elapsed[1] * 1000.0,
+                    elapsed[2] * 1000.0,
+                ];
+                samples[mode].push(ms);
+                measured_commits[mode] += u64::from(plans[2]);
+                csv.push_str(&format!(
+                    "{frame},{parallel_first},{},{},{},{}\n",
+                    ms[0], ms[1], ms[2], plans[2]
+                ));
+            }
+        }
+        assert_batch_bytes(
+            &backend,
+            &parallel,
+            &serial,
+            frame % 16 == 0 || frame == 129,
+        );
+    }
+    assert!(max_commits > 1 && measured_commits[1] > 100);
+    assert_eq!(measured_commits[0], measured_commits[1]);
+    let final_records = records(&backend, &parallel);
+    assert_closed_snapshot(&final_records);
+    assert_allocator(&backend, &parallel, &final_records);
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp/cbt-sphere");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("batch-cost.csv");
+    std::fs::write(&path, csv).unwrap();
+    let info = backend.adapter.get_info();
+    for (mode, sample) in samples.iter().enumerate() {
+        let percentile = |scope: usize, index| {
+            let mut values = sample
+                .iter()
+                .map(|s| if scope < 3 { s[scope] } else { s.iter().sum() })
+                .collect::<Vec<_>>();
+            values.sort_by(f64::total_cmp);
+            values[index]
+        };
+        println!(
+            "cbt_batch_cost parallel={} adapter={:?} backend={:?} driver={:?} capacity=131072 initial_triangles=98304 final_triangles={} request_window={} storage_bytes={} samples=100 warmup=30 committed={} max_per_wave={} plan_p50_ms={} commit_p50_ms={} commit_p95_ms={} publish_index_p50_ms={} total_p50_ms={} total_p95_ms={} raw={} byte_equal_serial=true; diagnostic alternating split/merge sweep, classification dispatch inactive, no raster/heights/materials/shadows/ocean/RT, not a game FPS/large_cbt/Bevy comparison",
+            mode == 1,
+            info.name,
+            info.backend,
+            info.driver_info,
+            words(&read(&backend, &parallel.state))[8] / 3 - 4,
+            BATCH_REQUESTS,
+            parallel.storage_bytes(),
+            measured_commits[mode],
+            max_commits,
+            percentile(0, 50),
+            percentile(1, 50),
+            percentile(1, 95),
+            percentile(2, 50),
+            percentile(3, 50),
+            percentile(3, 95),
+            path.display()
+        );
+    }
 }

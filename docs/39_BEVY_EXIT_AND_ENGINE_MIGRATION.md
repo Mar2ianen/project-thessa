@@ -17,6 +17,10 @@ The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. It is a test-only unit
 sphere, not a migrated live planet; production height/material/precision and
 shadow/ocean/RT consumers retain their existing path pending the listed gates.
+The [parallel follow-up](62_CBT_PARALLEL_TRANSACTIONS.md) now commits disjoint
+compatibility-chain/diamond transactions concurrently and measures a 128K pool.
+Acceptance targets canonical surface correctness and working native consumers,
+not Bevy visual/implementation parity; those native integration gates remain open.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with

@@ -10,7 +10,8 @@
 //! compact core buffers are transport layouts; they do not replace the
 //! authoritative CPU topology.
 //! [`sphere`] is a separate correctness experiment with GPU-owned conforming
-//! sphere topology; its single-writer mutation is not the production renderer.
+//! sphere topology, including conflict-filtered parallel transaction waves.
+//! It is not integrated production terrain or a complete large_cbt renderer.
 
 pub mod bench_support;
 pub mod heap;

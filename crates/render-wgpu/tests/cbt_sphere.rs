@@ -1519,3 +1519,233 @@ fn canonical_surface_target_cost_and_shared_material_indirect_raster() {
         directory.join("surface-material.png").display()
     );
 }
+
+#[test]
+#[ignore = "hardware: CBT surface casts into the shared shadow atlas"]
+fn conforming_surface_casts_shared_shadow_depth() {
+    use thessa_graphics::{Capabilities, Quality, RequestedGraphics, ResolvedGraphicsSettings};
+    use thessa_rcbt_core::{
+        HeightPage,
+        conforming_surface::page_id,
+        height_source::HeightPageStore,
+        lighting::SurfaceLighting,
+        tile_anchor::{TileAnchor, TileKey},
+    };
+    use thessa_render_wgpu::{
+        conforming_surface::ConformingSurface,
+        terrain::{ResidentTerrainPatch, TerrainCapacity, TerrainPatch, TerrainRenderer},
+    };
+    let backend = Backend::bring_up().unwrap();
+    let radius = 1_000.0;
+    // Face-level tiles (~333 m at radius 1000) so the caster spans many shadow
+    // texels. A level-11 tile is ~15 m across and lands below one texel of the
+    // 1 cascade / 512 px atlas, which empties the legacy depth readback.
+    let tiles = (0..6)
+        .map(|face| TileKey::new(face, 0, 0, 0).unwrap())
+        .collect::<Vec<_>>();
+    let mut pages = HeightPageStore::default();
+    for &tile in &tiles {
+        let mut heights = Vec::new();
+        for y in 0..33 {
+            for x in 0..33 {
+                heights.push(20.0 + f64::from(x) * 0.1 - f64::from(y) * 0.05);
+            }
+        }
+        pages.set_page(
+            page_id(tile).unwrap(),
+            HeightPage::bake(&heights, 33, 0.01).unwrap(),
+        );
+    }
+    let patches = tiles
+        .iter()
+        .map(|&tile| TerrainPatch {
+            anchor: TileAnchor::new(tile, radius).unwrap(),
+            page: pages.get(page_id(tile).unwrap()).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let mut request = RequestedGraphics::default();
+    request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+    request.shadows.enabled = true;
+    request.shadows.cascades = 1;
+    request.shadows.map_size = 512;
+    request.shadows.quality = Quality::Low;
+    request.shadows.normal_bias_m = 0.001;
+    let settings = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+    let mut owner = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &patches,
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 8,
+            height_grid_size: 33,
+            material_layers: 1,
+        },
+        Some(&settings),
+    )
+    .unwrap();
+    let publications = tiles
+        .iter()
+        .map(|&tile| ResidentTerrainPatch {
+            anchor: TileAnchor::new(tile, radius).unwrap(),
+            page: pages.get(page_id(tile).unwrap()).unwrap(),
+            generation: pages.page_version(page_id(tile).unwrap()).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    owner.publish_partition(&backend, &publications).unwrap();
+    let camera_tile = tiles[4];
+    let camera = TileAnchor::new(camera_tile, radius)
+        .unwrap()
+        .project_body_m([0.5, 0.5], 300.0);
+    let view = thessa_render_wgpu::view::ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(
+            glam::DVec3::from_array(camera),
+            glam::DVec3::ZERO,
+            glam::DVec3::Y,
+        )
+        .inverse(),
+        world_position_m: glam::DVec3::from_array(camera),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.0, 1.0, 1e6),
+        exposure: 1.0,
+    };
+    owner.update_view(&backend, &view).unwrap();
+    let lights = SurfaceLighting {
+        directions: [[0.0, 0.0, 1.0, 0.0]; 3],
+        colors_lux: [[std::f32::consts::PI; 4]; 3],
+        ..Default::default()
+    };
+    owner.update_lighting(&backend, &lights).unwrap();
+    owner
+        .update_shadows(&backend, view.world_position_m, &lights)
+        .unwrap();
+
+    // 8 uniform bisections (~1.3 m cells) matches the 33x33 patch grid the
+    // legacy caster uses at this tile size. A zero local depth would leave only
+    // depth-4 roots, which the emitter classifies as reserved virtual roots and
+    // zeroes, so the caster would draw sentinels instead of leaves.
+    let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 12, 8).unwrap();
+    let source = owner.height_surface_source(&backend).unwrap();
+    let surface = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    surface.update_camera(&backend, camera).unwrap();
+
+    assert!(owner.shadows().is_some());
+    // Emit first: the vertex buffer is written by the surface dispatch, so a
+    // readback before it observes an unwritten buffer rather than a topology.
+    {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        surface.encode(&mut encoder);
+        backend.queue.submit([encoder.finish()]);
+        let bytes = read(&backend, &surface.vertices);
+        // The emitter zeroes an entire record for a reserved virtual root and
+        // never writes an all-zero record for a live leaf, so the sentinel the
+        // caster culls is exactly the all-zero record.
+        let live = bytes
+            .as_chunks::<48>()
+            .0
+            .iter()
+            .filter(|record| record.iter().any(|&b| b != 0))
+            .count();
+        println!("cbt_shadow_surface live_records={live}");
+        assert!(live > 0, "emitted surface must hold live records");
+    }
+    // Legacy full-caster depth as the reference silhouette/depth bound.
+    let legacy = {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        owner.encode_shadows_reference(&mut encoder, None);
+        backend.queue.submit([encoder.finish()]);
+        println!(
+            "cbt_shadow_legacy_draws passes={} stats={:?}",
+            owner.last_shadow_passes(),
+            owner.last_shadow_draws()
+        );
+        owner.shadows().unwrap().read_depth(&backend).unwrap()
+    };
+
+    // CBT caster: emit surface, then cast the vertex stream into the atlas.
+    let stats = {
+        let atlas = owner.shadows().unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        surface.encode(&mut encoder);
+        let stats = atlas.encode_conforming_casters(&backend, &mut encoder, &surface);
+        backend.queue.submit([encoder.finish()]);
+        stats
+    };
+    let cbt = owner.shadows().unwrap().read_depth(&backend).unwrap();
+
+    assert!(
+        stats.draw_calls > 0 && stats.submitted_slots > 0,
+        "CBT caster must submit slots"
+    );
+    let to_f32 = |b: &[u8]| {
+        b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect::<Vec<_>>()
+    };
+    let legacy_f = to_f32(&legacy);
+    let cbt_f = to_f32(&cbt);
+    assert_eq!(legacy_f.len(), cbt_f.len());
+    // The atlas is one square layer per sun x cascade, and the readback is
+    // layer-major. Comparing across the whole buffer would pair texels of
+    // different casters, so the oracle stays inside a single layer.
+    let layer = 512 * 512;
+    let legacy_valid = legacy_f
+        .chunks(layer)
+        .map(|c| c.iter().filter(|&&z| z > 0.0 && z < 1.0).count())
+        .collect::<Vec<_>>();
+    let cbt_valid = cbt_f
+        .chunks(layer)
+        .map(|c| c.iter().filter(|&&z| z > 0.0 && z < 1.0).count())
+        .collect::<Vec<_>>();
+    assert!(
+        cbt_valid.iter().sum::<usize>() > 1000,
+        "CBT caster must produce nonempty depth: {cbt_valid:?}"
+    );
+    // Where both tessellations land on the same surface, their shadow depth must
+    // agree within the height/tessellation error envelope; bisector triangles and
+    // the 33x33 patch grid are not byte-identical, so this is a tolerance, not an
+    // equality oracle. Only layers both casters actually wrote are compared.
+    let mut both = 0;
+    let mut worst = 0.0f32;
+    for (a_layer, b_layer) in legacy_f.chunks(layer).zip(cbt_f.chunks(layer)) {
+        for (&a, &b) in a_layer.iter().zip(b_layer) {
+            if a > 0.0 && a < 1.0 && b > 0.0 && b < 1.0 {
+                both += 1;
+                worst = worst.max((a - b).abs());
+            }
+        }
+    }
+    let extent = |f: &[f32]| {
+        let mut seen = false;
+        let (mut x0, mut y0, mut x1, mut y1) = (0usize, 0usize, 0usize, 0usize);
+        for (i, &z) in f.iter().enumerate() {
+            if z > 0.0 && z < 1.0 {
+                let (x, y) = (i % 512, i / 512);
+                if !seen {
+                    (x0, y0, x1, y1) = (x, y, x, y);
+                    seen = true;
+                } else {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        (x0, y0, x1, y1)
+    };
+    assert!(both > 500, "both casters must overlap in depth: {both}");
+    println!(
+        "cbt_shadow_diag overlap={both} legacy_extent={:?} cbt_extent={:?}",
+        extent(&legacy_f),
+        extent(&cbt_f)
+    );
+    assert!(
+        worst < 0.02,
+        "CBT and legacy shadow depth must agree within envelope: {worst}"
+    );
+    println!(
+        "cbt_shadow_cast adapter={:?} slots={} draw_calls={} layers={} overlap={both} max_depth_delta={worst}; diagnostic caster only, bisector vs 33x33 patch tessellation differs, not a production mode or large_cbt/Bevy comparison",
+        backend.adapter.get_info().name,
+        stats.submitted_slots,
+        stats.draw_calls,
+        legacy_valid.len()
+    );
+}

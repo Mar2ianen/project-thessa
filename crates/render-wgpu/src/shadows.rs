@@ -18,8 +18,10 @@ pub struct ShadowDrawStats {
 pub struct ShadowAtlas {
     pub(crate) mesh_pipeline: wgpu::RenderPipeline,
     pub(crate) terrain_pipeline: wgpu::RenderPipeline,
+    pub(crate) conforming_pipeline: wgpu::RenderPipeline,
     pub(crate) mesh_layout: wgpu::BindGroupLayout,
     pub(crate) terrain_layout: wgpu::BindGroupLayout,
+    pub(crate) conforming_layout: wgpu::BindGroupLayout,
     texture: wgpu::TextureView,
     depth_texture: wgpu::Texture,
     sampler: wgpu::Sampler,
@@ -126,6 +128,9 @@ impl ShadowAtlas {
         };
         let mesh_layout = storage_layout(1);
         let terrain_layout = storage_layout(4);
+        // The CBT caster reads one storage binding: the canonical surface
+        // vertex stream. binding 0 is storage here (only binding 3 is uniform).
+        let conforming_layout = storage_layout(1);
         let pipeline = |code: String, layout: &wgpu::BindGroupLayout, mesh: bool| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("shadow-caster"),
@@ -185,6 +190,11 @@ impl ShadowAtlas {
             &terrain_layout,
             false,
         );
+        let conforming_pipeline = pipeline(
+            include_str!("shadow_conforming.wgsl").into(),
+            &conforming_layout,
+            false,
+        );
         let layers = (0..layer_count)
             .map(|i| {
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -212,8 +222,10 @@ impl ShadowAtlas {
         Ok(Some(Self {
             mesh_pipeline,
             terrain_pipeline,
+            conforming_pipeline,
             mesh_layout,
             terrain_layout,
+            conforming_layout,
             texture: depth.create_view(&wgpu::TextureViewDescriptor {
                 dimension: Some(wgpu::TextureViewDimension::D2Array),
                 ..Default::default()
@@ -427,6 +439,56 @@ impl ShadowAtlas {
             if let Some(meshes) = meshes {
                 meshes.cast_shadow(&mut pass, self);
             }
+        }
+        total
+    }
+
+    /// Diagnostic-only CBT caster: draw the canonical per-bisector surface
+    /// vertex stream into every active layer. Emission must already be encoded
+    /// after topology publication and before this call. Not a production path;
+    /// the legacy patch caster remains the only one `encode_shadows` uses.
+    pub fn encode_conforming_casters(
+        &self,
+        backend: &Backend,
+        encoder: &mut wgpu::CommandEncoder,
+        surface: &crate::conforming_surface::ConformingSurface,
+    ) -> ShadowDrawStats {
+        let mut total = ShadowDrawStats::default();
+        for (i, (view, _, matrix_bind)) in self.layers.iter().enumerate() {
+            if !self.active[i / self.radii.len()] {
+                continue;
+            }
+            // Per-layer bind group 0 already wraps that layer's matrix uniform.
+            let caster = backend
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("cbt-shadow-caster"),
+                    layout: &self.conforming_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: surface.vertices.as_entire_binding(),
+                    }],
+                });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cbt-shadow-layer"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, matrix_bind, &[]);
+            pass.set_pipeline(&self.conforming_pipeline);
+            pass.set_bind_group(1, &caster, &[]);
+            pass.draw(0..surface.slot_count() * 3, 0..1);
+            total.candidate_slots += u64::from(surface.slot_count());
+            total.submitted_slots += u64::from(surface.slot_count());
+            total.draw_calls += 1;
         }
         total
     }

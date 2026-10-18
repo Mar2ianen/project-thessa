@@ -7,7 +7,8 @@ baseline `1ff4b3a`. This phase removes the last "pure sphere" qualifier from
 the geometry itself: active bisectors are converted into **planet-scale
 vertices that sample the canonical height and material pages**, using the
 existing residency/publication paths. It is still not a production terrain
-mode; shadows, ocean, RT and a resolved graphics setting remain open.
+mode; ocean, RT and a resolved graphics setting remain open, and the shadow
+consumer it gained is diagnostic only.
 
 **Bevy renderer parity is not an acceptance gate** (see doc 62 §Acceptance).
 
@@ -198,14 +199,57 @@ the LOD measure**, not a bound on the actual rendered height error: it uses the
 widest page extent as a single body-wide value, so it cannot express per-tile
 relief, and nothing yet feeds it into a production mode.
 
+## Diagnostic shadow caster (added after phase three)
+
+The shared shadow atlas can now consume the canonical surface. `ShadowAtlas`
+owns a `conforming_pipeline`/`conforming_layout` beside the legacy terrain and
+mesh caster pipelines, and `encode_conforming_casters(backend, encoder, surface)`
+draws the emitted per-bisector vertex stream into every active layer. The
+diagnostic vertex shader reads three 48-byte records per allocation slot
+(position+height, normal+face, UV+source+level), culls only the all-zero
+sentinel the emitter writes for reserved virtual roots, and applies
+`shadow_clip * position` — the same `cbt_render_position` space the legacy
+patch caster produces, so the body-rotation matrix is identity and is inlined
+rather than retaining a buffer whose contents never change.
+
+Emission still writes **every** live leaf with no camera culling, so a caster
+behind the camera can shadow a visible point. Like `encode_shadows_reference`,
+this is an isolated diagnostic consumer: `encode_shadows()` continues to use the
+legacy patch caster only, and nothing selects the conforming path at runtime.
+
+Verified on the same Radeon 880M (`conforming_surface_casts_shared_shadow_depth`,
+face-level tiles at radius 1000, 1 cascade / 512 px atlas):
+
+- **Both casters agree on the silhouette.** Legacy and conforming depth extents
+  are identical on all three atlas layers — `(234, 234, 277, 1301)` — with
+  **4,404** texels overlapping, above the 500-texel floor.
+- **Depth agrees within the tessellation envelope.** Maximum per-texel depth
+  delta is **0.010754**, under the declared 0.02 bound. This is a tolerance,
+  not an equality oracle: bisector triangles and the 33×33 patch grid are not
+  byte-identical geometry.
+- The oracle compares within a single atlas layer. The readback is layer-major
+  over sun × cascade, so pairing texels across the whole buffer would compare
+  different casters against each other.
+- 9,216 live records are emitted and 12,288 slots are submitted across 3 draw
+  calls, so the caster is drawing real leaves rather than sentinels.
+
+Two scene assumptions had to be right for this to mean anything. A zero local
+depth leaves only depth-4 roots, which the emitter classifies as reserved
+virtual roots and zeroes, so the caster would draw sentinels; and a level-11
+tile is ~15 m across, which lands below one texel of this atlas and emptied the
+legacy depth readback. Both are test-scale properties, not production limits.
+
 ## Known gaps (explicitly not claimed)
 
 1. **The derived bound is body-wide and unused by a mode.** `height_bound_chord()`
    now folds the widest resident page extent, but it collapses all tiles into one
    scalar, so it cannot express per-tile relief, and no `graphics.toml` mode or
    classifier call site consumes it yet.
-2. **No shadow caster.** The shared shadow atlas still consumes the legacy
-   patch-grid vertex stream; the CBT surface is not published to it.
+2. **The shadow consumer is diagnostic, not selected.** The shared shadow atlas
+   can now consume the canonical surface and agrees with the legacy caster
+   within its tessellation envelope, but `encode_shadows()` still uses the
+   legacy patch caster only and nothing selects the conforming path. There is
+   also no quality/fallback tier for it in `graphics.toml`.
 3. **No ocean geometry consumer and no RT/BLAS publication** for bisectors.
 4. **No resolved production mode.** Nothing in `graphics.toml` selects this
    path; `TerrainRenderer::encode_scene()` still draws legacy patches. No
@@ -226,14 +270,15 @@ cargo test -p thessa-render-wgpu --lib surface_shader
 cargo test --release -p thessa-render-wgpu --test cbt_sphere -- --ignored --nocapture --test-threads=1
 ```
 
-The hardware suite is six tests: four topology controls from docs 61/62 plus
-the two surface tests described here. Exact numbers and check logs are recorded
-in [`artifacts/cbt-canonical-surface-2026-10-18.json`](artifacts/cbt-canonical-surface-2026-10-18.json).
+The hardware suite is seven tests: four topology controls from docs 61/62 plus
+the three surface tests described here. Exact numbers and check logs are
+recorded in
+[`artifacts/cbt-canonical-surface-2026-10-18.json`](artifacts/cbt-canonical-surface-2026-10-18.json).
 
 ## Next
 
-Per doc 62, the remaining boundary to a real mode is: deriving the height bound
-from canonical page min/max, then shadow/ocean/RT publication with a
-geometry revision contract, then a resolved graphics setting with explicit
-disabled/cheaper fallbacks and equal-error tests before any legacy grid path
-is deleted.
+Per doc 62, the remaining boundary to a real mode is: selecting a conforming
+shadow consumer behind a resolved graphics setting with explicit disabled and
+cheaper fallbacks, then the ocean and RT/BLAS consumers with a geometry
+revision contract, then equal-error tests before any legacy grid path is
+deleted.

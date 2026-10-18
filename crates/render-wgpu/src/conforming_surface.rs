@@ -214,6 +214,11 @@ impl ConformingSurface {
     pub fn storage_bytes(&self) -> u64 {
         self.vertices.size() + self.charts.size()
     }
+    /// Allocation slots covered by the emitted vertex stream (three vertices
+    /// each). Diagnostic caster consumers draw the full slot range.
+    pub fn slot_count(&self) -> u32 {
+        self.capacity
+    }
 }
 fn shader_source() -> String {
     format!(

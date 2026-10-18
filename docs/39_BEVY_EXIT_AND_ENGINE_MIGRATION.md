@@ -24,8 +24,10 @@ active bisectors into planet-scale vertices sampling the existing height and
 material residency through heap depth 58, without a second streamer or cache.
 Acceptance targets canonical surface correctness and working native consumers,
 not Bevy visual/implementation parity; a conservative height-bound LOD input
-now charges relief for its screen area, while shadow/ocean/RT publication
-remains the open native integration gate.
+now charges relief for its screen area, and a diagnostic caster reaches the
+shared shadow atlas within its tessellation envelope. Ocean/RT publication
+plus selection of the conforming shadow consumer remain the open native
+integration gates.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with

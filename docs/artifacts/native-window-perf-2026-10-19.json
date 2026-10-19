@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-19",
+  "baseline": "8434867",
+  "scope": "Direct native port of the retained pilot's F4 performance overlay, Shift+F4 short capture and F5 profiling level over the existing shared thessa_perf collector; no new collector, capture schema, dependency or physics path.",
+  "contract": {
+    "ownership": "apps/terrain-native/src/perf.rs::WindowPerf adapts the same thessa_perf::PerfCollector the headless --perf-capture path already uses: F4 toggles a passive egui overlay (frame wall/CPU p50/p95/p99/max, sim budget with the server sample flag, terrain/streaming/RT counters, RSS, level, capture status); Shift+F4 starts/stops a JSON+CSV capture of ring contents since the capture start (frames/events retained from the start index, exactly like the legacy client); F5 cycles Off/Normal/Detailed with an explicit push event.",
+    "level_policy": "Frame records are always kept (wall/CPU only at Off); scopes (frame.cpu, sim.total, render.total, render.ui) run only while the overlay is visible or a capture is active, unless F5 forced a level, which survives overlay close until cycled back through Detailed to Off.",
+    "gpu_boundary": "The windowed overlay never presents CPU submit as GPU time: the shared GpuIntervals readback is a serial blocking poll that would stall the live present loop, so the overlay text explicitly reports GPU unavailability and deterministic GPU measurement stays the headless --perf-capture path (same as the legacy client without its opt-in RenderDiagnostics plugin).",
+    "frame_loop": "draw() records every presented frame (sim total from advance_flight, render total from tick..display encode, ui from HUD run+encode, frame.cpu before submit; wall includes present/vsync wait like the legacy time.delta sample). Dormant/occluded frames insert no samples; ring history resets with a recreated window surface, the same session-only contract as the HUD state.",
+    "capture_writes": "stop_capture takes caller-built metadata (window vsync + shared requested->resolved graphics correlation) and a base directory; the window path keeps the legacy relative capture-stem cwd contract. Writes are synchronous small ring snapshots; status surfaces in the overlay and on stderr for hidden-overlay captures.",
+    "bindings": "F4/Shift+F4/F5 are consumed-gated like the other runtime shortcuts; Shift is tracked through map/help/consumed paths via its own edge state. The overlay window blocks no scene input and is hidden while help or the system map owns the view.",
+    "not_carried": "THESSA_AUTOBENCH (warp-ladder measurement scripting bound to the old client's pilot/surface views) is explicitly not carried; deterministic native measurement remains the headless --perf-capture path."
+  },
+  "verification": {
+    "status": "all 25 final local gates passed",
+    "source_manifest_sha256": "12c997a351fbe3b76cf58f8ff68df77e908a936daa283c6c6a2a7f7cf21b00b6",
+    "compiled_inputs": 600,
+    "compiled_inputs_unchanged": true,
+    "passed_tests": {
+      "workspace_lib_bins": 1945,
+      "workspace_lib_bins_ignored": 61,
+      "workspace_integration": 95,
+      "native_feature_off": 69,
+      "native_feature_off_ignored": 19,
+      "bevy_gpu": 24,
+      "renderer_ignored": 31,
+      "native_ignored": 35,
+      "agent_qa": 5,
+      "release_focused_and_cli": 70,
+      "window_perf_release_focused": 4
+    },
+    "other_gates": "fmt, workspace all-features Clippy, native feature-off Clippy, architecture check, release viewer/server build, git diff check, muted 8-frame Wayland flight/HUD smoke through the new begin/end wiring, muted headless flight-deck capture, readout cost diagnostic, inherited flyby/maneuver release and CLI suites",
+    "focused_checks": "WindowPerf regressions pin: Off keeps wall/CPU ring stats while silently dropping scopes, F4 activation raises Normal and closing returns Off, F5 forced level survives overlay close until cycled Off, capture retains exactly the frames/events from its start index and writes readable JSON (PerfCapture::from_json) plus CSV, capture status/status lines and level labels. window::tests::perf_keys pins the F4/Shift+F4/F5 mapping and non-matching keys. A pre-existing test-side busy-wait loop (std::thread::yield_now against a spawned local server) starved the child under full-chain load and flaked once; all four wait loops now sleep 2 ms, and the final chain is green with no flakes.",
+    "directory": "target/test-tmp/native-perf-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "source_boundary": "Previous 600-input maneuver manifest plus perf.rs, window.rs and hud.rs; docs/evidence edits outside compiled inputs. No asset or dependency changes.",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "limitations": [
+    "Windowed overlay wall time includes present/vsync wait (same definition as the legacy time.delta sample); frame.cpu stops before submit and never masquerades as GPU time",
+    "No GPU timestamps in the windowed overlay (choose headless --perf-capture for GPU intervals); no async window profiler",
+    "Overlay hidden while help or the map owns the view; close button is intentionally absent (F4 toggles) and ring history resets with a recreated surface, matching the HUD session-only contract",
+    "THESSA_AUTOBENCH not carried (old-client measurement scripting); windowed capture writes synchronously instead of the IoTaskPool async path",
+    "Bevy retirement remains incomplete: guidance/target inputs, docking/contact inspection, optics/render consumers and packaging/tooling still need replacement"
+  ]
+}

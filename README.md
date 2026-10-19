@@ -141,7 +141,12 @@ The checked-in vertical slice currently contains:
      Headless `--perf-capture target/native-perf.json` exports the existing
      `thessa-perf` JSON/CSV format, including hardware GPU command intervals
      where supported (explicitly unavailable otherwise). Normal runs create no
-     profiler queries/readback buffers. See docs 15/39 for measurement boundaries.
+     profiler queries/readback buffers. Windowed `F4` now opens the shared
+     collector as a passive overlay, `Shift+F4` writes a JSON+CSV capture and
+     `F5` cycles the profiling level; scopes enable only while the overlay is
+     visible or a capture runs, and the windowed overlay never presents CPU
+     submit as GPU time (GPU intervals stay the headless path). See docs 15/39
+     for measurement boundaries.
      Live flight-input
   intents (stick/throttle/engine/precision/control-law/SAS) are owned in
    local `--flight` and `--server-flight`; remaining production game UI is missing.

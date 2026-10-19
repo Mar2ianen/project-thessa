@@ -239,3 +239,29 @@ All 20 final local gates passed on 600 unchanged compiled inputs (1,939
 workspace lib/bin + 95 integration + 66 feature-off + 34 native ignored +
 24 Bevy GPU + 31 renderer ignored + QA/smokes). Commands/results:
 `artifacts/native-flyby-2026-10-19.json`.
+
+## Windowed performance overlay: direct native port
+
+The retained pilot's `F4`/`Shift+F4`/`F5` runtime-control row now runs in the
+native window (`apps/terrain-native/src/perf.rs` `WindowPerf`) over the same
+shared `thessa_perf::PerfCollector` the headless `--perf-capture` path adapts
+— no second collector or capture schema. `F4` toggles a passive egui overlay
+(frame wall/CPU p50/p95/p99/max, sim budget with the server sample flag,
+terrain/streaming/RT counters, RSS, level, capture status), `Shift+F4`
+starts/stops a JSON+CSV capture of ring contents since the capture start, and
+`F5` cycles the profiling level; when cycled off, overlay/capture activation
+raises the level again, but an explicit F5 level survives overlay close until
+cycled back through `Detailed` to `Off`.
+
+Frame records are always kept (cheap wall/CPU only at `Off`); scopes
+(`sim.total`, `render.total`, `render.ui`, `frame.cpu`) are recorded only
+while the overlay is visible or a capture runs. The windowed overlay never
+presents CPU submit as GPU time: the shared `GpuIntervals` readback is a
+serial blocking poll that would stall the live present loop, so the overlay
+explicitly reports GPU unavailability and deterministic GPU measurement stays
+the headless `--perf-capture` path. Window dormant frames (occluded/suspended
+surface) insert no samples; ring history resets with a recreated window
+surface, the same session-only contract as the HUD state. `FocusLoss`
+behavior needs no special case: the overlay is display-only and blocks no
+input. The legacy `THESSA_AUTOBENCH` warp-ladder harness is measurement
+scripting bound to the old client's pilot/surface views and is not carried.

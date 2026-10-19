@@ -35,7 +35,7 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 | `audio.rs` | `audio-core`, `audio-synth`, native `audio.rs` | native engine/device adapter, exterior/cabin routing and RCS/GPWS/boom fixtures now have consumers; docking event integration remains; captures/tests stay silent and missing audio hardware does not prevent rendering |
 | `contact_gizmos.rs`, `docking_demo.rs` | `collision`, shared docking state machine, native `contact_preview.rs` | preserve actual solved contact/docking inspection and deterministic replay; a static mesh preview is not a solved docking replacement |
 | Bevy bloom/exposure/AA, Solari | native `DisplayTransform`, `RayScene`, FastRT | manual HDR/display and scene-object rays exist; remaining settings must be implemented or explicitly resolved to documented fallbacks, not falsely marked applied |
-| `perf.rs`, Bevy BRP integration | `perf`, native capture schema, agent-QA tools | preserve measured CPU/GPU attribution and useful capture/control operations; never relabel CPU submit as GPU time |
+| `perf.rs`, Bevy BRP integration | `perf`, native capture schema, agent-QA tools | the retainer's F4/`Shift+F4`/F5 overlay, short capture and profiling level now run in the native window over the same shared collector (windowed overlays never fabricate GPU time; GPU timestamps stay the headless `--perf-capture` path), and `THESSA_AUTOBENCH` remains an old-client measurement harness superseded there by the deterministic headless capture |
 
 ## Working order and deletion gate
 

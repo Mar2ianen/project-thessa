@@ -170,6 +170,7 @@ pub struct Stats {
     pub regenerated: u64,
     pub upload_bytes: u64,
     pub capacity_rejections: u64,
+    pub perf: Option<String>,
 }
 
 impl Stats {
@@ -210,6 +211,7 @@ impl Stats {
             regenerated: scene.regenerated,
             upload_bytes: scene.material_upload_bytes,
             capacity_rejections: scene.capacity_rejections,
+            perf: None,
         }
     }
 }
@@ -395,6 +397,29 @@ impl View {
     }
 }
 
+/// F4 overlay window mirroring the legacy pilot's text overlay. It is a
+/// passive consumer of the shared collector text; it never blocks scene
+/// input and stays hidden while help or the map owns the view.
+fn perf_overlay(context: &egui::Context, stats: &Stats) {
+    let Some(text) = &stats.perf else {
+        return;
+    };
+    egui::Window::new("Thessa | performance (F4)")
+        .default_pos([420.0, 16.0])
+        .default_width(540.0)
+        .resizable(true)
+        .collapsible(false)
+        .show(context, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(360.0)
+                .show(ui, |ui| {
+                    for line in text.lines() {
+                        ui.label(line.to_owned());
+                    }
+                });
+        });
+}
+
 fn help(context: &egui::Context, open: &mut bool) {
     egui::Window::new("Thessa | controls (F1)").open(open)
         .order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER,[0.0,0.0])
@@ -403,6 +428,7 @@ fn help(context: &egui::Context, open: &mut bool) {
                 ui.heading("Native scene and flight controls");
                 for (keys,action) in [
                     ("F1 / F2 / F3","Help / flight HUD visibility / telemetry and fleet panels"),
+                    ("F4, Shift+F4, F5","Performance overlay, JSON+CSV capture start/stop, profiling level (Normal/Detailed/Off; scopes enable while visible or capturing)"),
                     ("M","System map / scene; requires enabled HUD"),
                     ("W S A D Q E","Manual pitch / yaw / roll; takes over Mouse Aim"),
                     ("Shift / Ctrl, X / Z","Throttle slew, cut / full"),
@@ -441,7 +467,11 @@ fn widgets(
             view.map.show(context,&mut controls.map_open,data);
             return;
         }
-        if !view.visible {return;}
+        if !view.visible {
+            perf_overlay(context, stats);
+            return;
+        }
+        perf_overlay(context, stats);
         if view.telemetry {
         egui::Window::new("Thessa | terrain migration")
             .default_open(!stats.live_flight)

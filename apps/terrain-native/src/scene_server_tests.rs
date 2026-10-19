@@ -640,7 +640,7 @@ fn authoritative_stop_keeps_the_link_for_bounded_remote_relaunch() {
     while scene.server_snapshot_count() == Some(0) {
         scene.advance_flight(0.0, None).unwrap();
         assert!(Instant::now() < deadline);
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(2));
     }
     assert!(scene.flight_stopped());
     assert!(
@@ -725,7 +725,7 @@ fn maneuver_kick_is_one_typed_wire_intent_without_local_steps_or_fabricated_burn
     while scene.server_snapshot_count() == Some(0) {
         scene.advance_flight(0.0, None).unwrap();
         assert!(Instant::now() < deadline);
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(2));
     }
     let before = scene.flight.as_ref().unwrap().state;
     assert!(scene.request_maneuver_kick(250.0).unwrap());
@@ -796,7 +796,7 @@ fn maneuver_kick_waits_for_motion_and_never_fires_on_a_stopped_replica() {
     while scene.server_snapshot_count() == Some(0) {
         scene.advance_flight(0.0, None).unwrap();
         assert!(Instant::now() < deadline);
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(2));
     }
     assert!(!scene.request_maneuver_kick(250.0).unwrap());
     assert!(scene.remote.as_ref().unwrap().commands.is_empty());
@@ -840,7 +840,7 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
     while scene.server_snapshot_count() == Some(0) {
         scene.advance_flight(0.1, None).unwrap();
         assert!(Instant::now() < deadline);
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(2));
     }
     // A received sample supersedes the startup clock, even without another
     // generation arriving. Its reader timestamp, not host polling, sets age.

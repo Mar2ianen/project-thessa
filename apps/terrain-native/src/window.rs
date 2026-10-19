@@ -23,6 +23,7 @@ struct State {
     depth: wgpu::TextureView,
     drawable: bool,
     exposure: f32,
+    perf: crate::perf::WindowPerf,
     #[cfg(feature = "hud")]
     hud: Option<WindowHud>,
     submitted_frames: u64,
@@ -126,12 +127,27 @@ impl State {
             depth,
             drawable: size.width > 0 && size.height > 0,
             exposure,
+            perf: crate::perf::WindowPerf::new(),
             #[cfg(feature = "hud")]
             hud,
             submitted_frames: 0,
             previous_cpu_ms: 0.0,
             last_flight_wall_s: None,
         })
+    }
+
+    /// Stop any active window capture and write it with this window's
+    /// platform/display metadata. Shared with the Shift+F4 key path.
+    fn stop_window_capture(&mut self, scene: &Scene) -> String {
+        let mut metadata = crate::perf::base_capture_metadata(
+            &self.backend,
+            scene,
+            &self.display,
+            &self.sky_layers,
+        );
+        metadata.display.vsync = scene.requested.renderer.vsync;
+        // Empty base preserves the legacy relative "stem.json" cwd contract.
+        self.perf.stop_capture(metadata, std::path::Path::new(""))
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -181,14 +197,34 @@ impl State {
                 return Err("surface validation failure".into());
             }
         };
+        let view_name: &'static str = if scene.map_active() {
+            "MAP"
+        } else if scene.vehicle_preview() {
+            "VEHICLE"
+        } else {
+            "SURFACE"
+        };
+        self.perf.begin_frame(
+            view_name,
+            scene.requested.renderer.vsync,
+            self.config.width,
+            self.config.height,
+        );
         if scene.live_flight() {
             let elapsed = self
                 .last_flight_wall_s
                 .replace(now_s)
                 .map_or(0.0, |last| (now_s - last).clamp(0.0, 0.1));
+            let sim_started = Instant::now();
             scene.push_live_input(elapsed, throttle_up, throttle_down);
             scene.advance_flight(elapsed, Some(std::time::Duration::from_millis(8)))?;
+            self.perf.record_scope(
+                thessa_perf::scopes::SIM_TOTAL,
+                sim_started.elapsed().as_secs_f64(),
+            );
         }
+        #[cfg(feature = "hud")]
+        let ui_started = Instant::now();
         #[cfg(feature = "hud")]
         let hud_output = if let Some(hud) = &mut self.hud {
             egui_winit::update_viewport_info(
@@ -203,10 +239,13 @@ impl State {
             );
             let mut controls = crate::hud::Controls::from_scene(scene);
             let before = controls;
+            let mut stats =
+                crate::hud::Stats::from_scene(scene, self.submitted_frames, self.previous_cpu_ms);
+            stats.perf = self.perf.overlay_text(flight_stop_status(scene));
             let mut output = hud.gpu.run(
                 hud.input.take_egui_input(&self.window),
                 &mut controls,
-                &crate::hud::Stats::from_scene(scene, self.submitted_frames, self.previous_cpu_ms),
+                &stats,
             );
             controls.apply(scene);
             hud.input
@@ -229,6 +268,7 @@ impl State {
         } else {
             None
         };
+        let render_started = Instant::now();
         scene.tick(
             &self.backend,
             &mut self.renderer,
@@ -299,20 +339,30 @@ impl State {
             &self.depth,
         );
         self.display.encode(&mut encoder, &color);
+        self.perf.record_scope(
+            thessa_perf::scopes::RENDER_TOTAL,
+            render_started.elapsed().as_secs_f64(),
+        );
         #[cfg(feature = "hud")]
         let commands = if let (Some(hud), Some(output)) = (&mut self.hud, hud_output) {
-            hud.gpu.encode(
+            let commands = hud.gpu.encode(
                 &self.backend,
                 &mut encoder,
                 &color,
                 output,
                 [self.config.width, self.config.height],
-            )
+            );
+            self.perf.record_scope(
+                thessa_perf::scopes::RENDER_UI,
+                ui_started.elapsed().as_secs_f64(),
+            );
+            commands
         } else {
             Vec::new()
         };
         #[cfg(not(feature = "hud"))]
         let commands = Vec::<wgpu::CommandBuffer>::new();
+        let cpu_s = cpu_started.elapsed().as_secs_f64();
         self.window.pre_present_notify();
         self.backend.queue.submit(
             commands
@@ -321,7 +371,15 @@ impl State {
         );
         self.backend.queue.present(frame);
         self.submitted_frames += 1;
-        self.previous_cpu_ms = cpu_started.elapsed().as_secs_f64() * 1000.0;
+        // Overlay wall includes present/vsync wait (same definition as the
+        // legacy client's `time.delta` sample); CPU stops before submit.
+        let wall_s = cpu_started.elapsed().as_secs_f64();
+        let budget = scene.flight_budget(wall_s);
+        let sim_time_s = scene.sample.time.0;
+        let counters = crate::perf::world_counters(scene, self.mesh_renderer.as_ref());
+        self.perf
+            .end_frame(wall_s, cpu_s, sim_time_s, budget, counters);
+        self.previous_cpu_ms = wall_s * 1000.0;
         if reconfigure {
             self.resize(self.config.width, self.config.height);
         }
@@ -366,6 +424,7 @@ struct App {
     last_cursor: Option<(f64, f64)>,
     pointer_consumed: bool,
     held: HashSet<KeyCode>,
+    shift_held: bool,
     audio_options: crate::audio::Options,
     audio: Option<crate::audio::NativeAudio>,
 }
@@ -385,6 +444,7 @@ impl App {
         self.middle_held = false;
         self.last_cursor = None;
         self.pointer_consumed = false;
+        self.shift_held = false;
         if let Some(state) = &mut self.state {
             state.last_flight_wall_s = None;
         }
@@ -499,6 +559,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed
+                    && let PhysicalKey::Code(code) = event.physical_key
+                    && matches!(code, KeyCode::ShiftLeft | KeyCode::ShiftRight)
+                {
+                    self.shift_held = true;
+                }
                 #[cfg(feature = "hud")]
                 if !event.repeat
                     && event.state == ElementState::Pressed
@@ -511,6 +577,25 @@ impl ApplicationHandler for App {
                     self.last_cursor = None;
                     self.right_held = false;
                     self.middle_held = false;
+                }
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && !consumed
+                    && let Some(action) = perf_key(event.physical_key, self.shift_held)
+                {
+                    match action {
+                        PerfKey::Overlay => state.perf.toggle_overlay(),
+                        PerfKey::Level => state.perf.cycle_level(),
+                        PerfKey::Capture => {
+                            let status = if state.perf.capturing() {
+                                state.stop_window_capture(&self.scene)
+                            } else {
+                                state.perf.start_capture();
+                                state.perf.status().to_owned()
+                            };
+                            eprintln!("{status}");
+                        }
+                    }
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
                     if event.state == ElementState::Pressed && !consumed && !self.scene.map_active()
@@ -785,6 +870,43 @@ fn hud_action(key: PhysicalKey, repeat: bool, consumed: bool) -> Option<crate::h
     }
 }
 
+/// `F4` toggles the overlay, `Shift+F4` starts/stops a short capture, `F5`
+/// cycles the profiling level (shared bindings with the legacy pilot).
+/// Pure mapping; the window state applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PerfKey {
+    Overlay,
+    Capture,
+    Level,
+}
+
+fn perf_key(key: PhysicalKey, shift: bool) -> Option<PerfKey> {
+    match key {
+        PhysicalKey::Code(KeyCode::F4) => Some(if shift {
+            PerfKey::Capture
+        } else {
+            PerfKey::Overlay
+        }),
+        PhysicalKey::Code(KeyCode::F5) => Some(PerfKey::Level),
+        _ => None,
+    }
+}
+
+/// One-word overlay status line, mirroring the legacy overlay's stop/pause
+/// flag. Live flight is assumed; stopped sessions keep the last presentation.
+#[cfg(feature = "hud")]
+fn flight_stop_status(scene: &Scene) -> Option<&'static str> {
+    if scene.flight_stopped() {
+        Some("stopped")
+    } else if scene.flight_clock().is_some_and(|clock| {
+        clock.authority_paused.is_some_and(|paused| paused) || clock.requested_paused
+    }) {
+        Some("paused")
+    } else {
+        None
+    }
+}
+
 /// Discrete flight inputs sharing factors with the old pilot. Repeats never
 /// re-fire presets or toggles; slew and stick read the held set every frame
 /// instead. Free function so the event arm can borrow the scene while the
@@ -972,6 +1094,7 @@ pub fn run(
         last_cursor: None,
         pointer_consumed: false,
         held: HashSet::new(),
+        shift_held: false,
         audio_options,
         audio: None,
     };
@@ -1215,6 +1338,7 @@ mod tests {
             last_cursor: Some((10.0, 20.0)),
             pointer_consumed: false,
             held: [KeyCode::KeyW, KeyCode::ShiftLeft].into_iter().collect(),
+            shift_held: true,
             audio_options: Default::default(),
             audio: None,
         };
@@ -1237,6 +1361,23 @@ mod tests {
             "focus loss must not invent an engine cut"
         );
         assert_eq!(app.scene.sample.time, time);
+    }
+
+    #[test]
+    fn perf_keys_map_f4_shift_f4_and_f5() {
+        assert_eq!(
+            perf_key(PhysicalKey::Code(KeyCode::F4), false),
+            Some(PerfKey::Overlay)
+        );
+        assert_eq!(
+            perf_key(PhysicalKey::Code(KeyCode::F4), true),
+            Some(PerfKey::Capture)
+        );
+        assert_eq!(
+            perf_key(PhysicalKey::Code(KeyCode::F5), false),
+            Some(PerfKey::Level)
+        );
+        assert_eq!(perf_key(PhysicalKey::Code(KeyCode::F3), false), None);
     }
 
     #[test]

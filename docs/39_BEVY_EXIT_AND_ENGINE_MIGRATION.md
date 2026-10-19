@@ -1777,11 +1777,23 @@ Headless `--throttle 0..=1` and `--engine-on` preset intent deterministically
 keys, so default runs reproduce the previous trajectory exactly. The HUD
 mirrors throttle/engine/precision/SAS plus a one-shot law-cycle button and a
 stick readout in live mode only. Telemetry reports `throttle/engine/
-control_mode/sas` alongside authority/presentation time. RCS, landing gear,
-chute and other part commands still cross only the old client's wire; flyby
-assist is now a direct native port (F7/`--flyby`/HUD, demands-only with
-takeover/focus-loss cancellation), while mouse-aim and the mode HUD are also
-native — only part commands stay old-client-only.
+control_mode/sas` alongside authority/presentation time. All retained pilot
+wire intents are now native: part commands (RCS/wheels/gear/chutes) cross the
+normal server wire through the shared queue with transactional overflow stop,
+flyby assist is a direct port (F7/`--flyby`/HUD, demands-only with
+takeover/focus-loss cancellation), the typed `ExecuteManeuver` kick is
+`--maneuver-kick`, and mouse-aim and the mode HUD are also native.
+
+The runtime-control row is native too: window `F4` overlays the shared
+`thessa_perf::PerfCollector` (frame wall/CPU p50/p95/p99/max, sim budget,
+world/streaming counters, memory, level, capture status), `Shift+F4` writes
+the standard JSON+CSV capture of ring contents since the start, `F5` cycles
+the profiling level, and scopes only run while the overlay is visible or a
+capture is active (otherwise the per-frame cost is a wall/CPU record). The
+windowed overlay never presents CPU submit as GPU time — hardware GPU
+intervals stay the serial headless `--perf-capture` path; the legacy
+`THESSA_AUTOBENCH` warp-ladder script is an old-client view harness that is
+not carried.
 
 ```sh
 cargo run --release -p thessa-terrain-native -- --flight

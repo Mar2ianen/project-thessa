@@ -179,7 +179,12 @@ normal wire, server-executed; see doc 66), so map/guidance input integration
 is the next step; coastal flyby is likewise a direct native intent adapter
 (`apps/terrain-native/src/flyby.rs`, F7/`--flyby`/HUD) that mutates only pilot
 demands and never fabricates physics; an interactive maneuver editor is
-broader future work, not an implemented old-map feature.
+broader future work, not an implemented old-map feature. The legacy F4
+performance overlay is now native (`apps/terrain-native/src/perf.rs`
+`WindowPerf` + F4/`Shift+F4`/F5 bindings over the shared `thessa_perf`
+collector), so the retained runtime-control surface of the old pilot is
+native; deterministic GPU measurement remains the headless `--perf-capture`
+path and `THESSA_AUTOBENCH` is an old-client harness that is not carried.
 Remote executable-trajectory transport, guidance panels, secondary-fleet map markers and
 generalized trajectory error/pixel adaptation remain open. Tiny/mobile layouts and dense-system
 navigation require usability acceptance. Do not remove the old map or its

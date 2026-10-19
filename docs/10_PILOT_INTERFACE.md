@@ -54,6 +54,17 @@ toggle): it writes only pilot demands and cancels on takeover, map/help/focus
 loss, pause/warp/relaunch or link loss without auto-resume. See
 [doc 57](57_NATIVE_FLIGHT_DECK.md).
 
+The native window also honors the F4 row: it overlays the shared
+`thessa-perf` collector (frame wall/CPU p50/p95/p99/max, sim budget, world
+counters, memory), `Shift+F4` writes the same JSON+CSV capture format ring
+contents since the start, and `F5` cycles Off/Normal/Detailed scopes. Scopes
+run only while the overlay is visible or a capture is active; windowed
+overlays report GPU time as unavailable instead of passing CPU submit off,
+and deterministic GPU measurement remains the headless `--perf-capture` path.
+The legacy `THESSA_AUTOBENCH` warp-ladder harness is not carried; it is
+measurement scripting for the old client's views (deterministic native
+measurement exists headless).
+
 The UI also exposes buttons for SAS, RCS, reaction wheels, gear, parachutes,
 engine, camera, map, and pause. Green indicates an enabled state. Extra data is
 hidden by default.

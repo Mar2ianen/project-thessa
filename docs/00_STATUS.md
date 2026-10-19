@@ -258,7 +258,11 @@ AS builds, shared scene classification/raster, HDR display transform and UI
 (`native-display-v3`). Unsupported timestamps are explicitly unavailable;
 normal devices allocate no profiler. This is serial offscreen instrumentation,
 not asynchronous window profiling, isolated sky/AS/trace timings or complete
-simulation/counter coverage. StagingBelt A/B and submission batching remain open.
+simulation/counter coverage. The windowed F4 overlay/capture/profile adapter
+over the same collector is native now: always-kept wall/CPU frame records
+with scopes only while visible/capturing, GPU time reported unavailable in
+the window (the blocking interval readback would stall the live present
+loop). StagingBelt A/B and submission batching remain open.
 The shared link now caps complete pending command packets at the protocol's
 64-command limit (all variants and state votes), and worker pipe/encode
 failures close the input side visibly. Stalled-peer heartbeat/reconnect and

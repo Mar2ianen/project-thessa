@@ -798,6 +798,11 @@ fn apply_discrete_flight_input(scene: &mut Scene, key: PhysicalKey, repeat: bool
         return;
     }
     match key {
+        PhysicalKey::Code(KeyCode::F7) => {
+            if let Err(error) = scene.set_flyby(!scene.flyby.active) {
+                eprintln!("{error}");
+            }
+        }
         PhysicalKey::Code(KeyCode::F8) => {
             if let Some(clock) = scene.flight_clock() {
                 scene.request_pause(!clock.requested_paused);
@@ -820,9 +825,18 @@ fn apply_discrete_flight_input(scene: &mut Scene, key: PhysicalKey, repeat: bool
                 eprintln!("{error}");
             }
         }
-        PhysicalKey::Code(KeyCode::KeyX) => scene.input.cut(),
-        PhysicalKey::Code(KeyCode::KeyZ) => scene.input.full(),
-        PhysicalKey::Code(KeyCode::Space) => scene.input.toggle_engine(),
+        PhysicalKey::Code(KeyCode::KeyX) => {
+            scene.cancel_flyby();
+            scene.input.cut();
+        }
+        PhysicalKey::Code(KeyCode::KeyZ) => {
+            scene.cancel_flyby();
+            scene.input.full();
+        }
+        PhysicalKey::Code(KeyCode::Space) => {
+            scene.cancel_flyby();
+            scene.input.toggle_engine();
+        }
         PhysicalKey::Code(KeyCode::KeyC) => scene.cycle_control_mode(),
         PhysicalKey::Code(KeyCode::KeyT) => scene.toggle_sas(),
         PhysicalKey::Code(KeyCode::CapsLock) => scene.input.toggle_precision(),
@@ -971,6 +985,28 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn flyby_key_is_an_edge_and_discrete_manual_takeover_is_not_overwritten() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        let key = PhysicalKey::Code(KeyCode::F7);
+        apply_discrete_flight_input(&mut scene, key, true, false);
+        assert!(!scene.flyby.active);
+        apply_discrete_flight_input(&mut scene, key, false, true);
+        assert!(!scene.flyby.active);
+        apply_discrete_flight_input(&mut scene, key, false, false);
+        assert!(scene.flyby.active);
+        apply_discrete_flight_input(&mut scene, key, true, false);
+        assert!(scene.flyby.active);
+        apply_discrete_flight_input(&mut scene, PhysicalKey::Code(KeyCode::KeyX), false, false);
+        scene.push_live_input(0.1, false, false);
+        assert!(!scene.flyby.active && scene.input.throttle == 0.0);
+        apply_discrete_flight_input(&mut scene, key, false, false);
+        assert!(scene.flyby.active);
+        apply_discrete_flight_input(&mut scene, PhysicalKey::Code(KeyCode::Space), false, false);
+        scene.push_live_input(0.1, false, false);
+        assert!(!scene.flyby.active && !scene.input.engine_active);
+    }
     #[test]
     #[cfg(feature = "hud")]
     fn help_hud_telemetry_keys_are_edges_and_keep_existing_camera_and_flight_bindings() {

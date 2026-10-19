@@ -5,6 +5,7 @@ mod celestial;
 #[cfg(feature = "hud")]
 mod contact_preview;
 mod environment;
+mod flyby;
 #[cfg(feature = "hud")]
 mod hud;
 #[cfg(feature = "hud")]
@@ -45,12 +46,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut audio = audio::Options::default();
     let mut warp = None;
     let mut paused = false;
+    let mut flyby = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--mute" => audio.muted = true,
             "--audio-cabin" => audio.cabin = true,
             "--audio-demo" => audio.demo = true,
             "--paused" => paused = true,
+            "--flyby" => flyby = true,
             "--warp" => {
                 warp = Some(
                     args.next()
@@ -172,6 +175,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "Flight instruments: dominant-body readouts; session-only Surface/Air/Orbital/Target speed cues and Datum/AGL selectors. Attitude stays local. Air/load/orbit and wheel/canopy details are available in the deck; absent remote air/force observations remain unavailable. Foreign bodies never borrow home rotation/air/terrain. Target inputs are not supplied yet."
                 );
+                println!(
+                    "Coastal flyby: --flyby requires unpaused x1 --flight or --server-flight without --map; F7 / HUD toggles. Captures datum target and shore heading, selects Navball/SAS/engine/chase, writes normal pilot stick/throttle only. Manual takeover, map/help/focus loss, pause/warp/relaunch or failed/stale flight cancels without auto-resume. Not obstacle avoidance or a general autopilot."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -215,6 +221,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     let live_flight = live_flight || server_flight;
+    if flyby && (!live_flight || paused || warp.is_some_and(|w| w != 1.0) || map_open) {
+        return Err(
+            "--flyby requires unpaused x1 --flight or --server-flight without --map".into(),
+        );
+    }
     if (paused || warp.is_some()) && !live_flight {
         return Err("--paused/--warp require --flight or --server-flight".into());
     }
@@ -316,6 +327,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         // running child would keep constructor throttle until the first draw.
         scene.push_live_input(0.0, false, false);
         scene.advance_flight(0.0, None)?;
+    }
+    if flyby {
+        // One-shot startup request, never recurring environment auto-engage.
+        if server_flight {
+            let deadline = Instant::now() + std::time::Duration::from_secs_f64(server_timeout);
+            while scene.server_snapshot_count() == Some(0) && !scene.flight_stopped() {
+                scene.push_live_input(0.0, false, false);
+                scene.advance_flight(0.0, None)?;
+                if Instant::now() >= deadline {
+                    return Err("flyby waiting for first server snapshot timed out".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        scene.set_flyby(true)?;
     }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",

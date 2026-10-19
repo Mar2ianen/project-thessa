@@ -49,6 +49,11 @@ observations remain available. This is presentation only, not a wire change.
 | `F7` | coastal beauty flyby on the live craft (any stick/throttle key takes over) |
 | RMB / MMB / wheel | orbit/pan/zoom |
 
+The native deck now honors the same F7 contract (plus `--flyby` and a HUD
+toggle): it writes only pilot demands and cancels on takeover, map/help/focus
+loss, pause/warp/relaunch or link loss without auto-resume. See
+[doc 57](57_NATIVE_FLIGHT_DECK.md).
+
 The UI also exposes buttons for SAS, RCS, reaction wheels, gear, parachutes,
 engine, camera, map, and pause. Green indicates an enabled state. Extra data is
 hidden by default.

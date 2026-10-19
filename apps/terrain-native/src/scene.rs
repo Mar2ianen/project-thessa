@@ -26,6 +26,7 @@ pub struct Scene {
     flight: Option<thessa_flight_authority::FlightAuthority>,
     remote: Option<RemoteFlight>,
     clock: FlightClock,
+    pub flyby: crate::flyby::Flyby,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -154,6 +155,7 @@ impl Scene {
         self.release_manual_input();
     }
     pub fn release_manual_input(&mut self) {
+        self.cancel_flyby();
         self.input.keys = Default::default();
         self.input.mouse_direction = glam::Vec3::NEG_Z;
         self.input.sas_inverted = false;
@@ -253,6 +255,9 @@ impl Scene {
     }
 
     pub fn request_pause(&mut self, paused: bool) {
+        if paused {
+            self.cancel_flyby();
+        }
         if self.live_flight() {
             self.clock.requested_paused = paused;
         }
@@ -266,12 +271,16 @@ impl Scene {
             return Err("warp requires live flight".into());
         }
         self.clock.requested_warp = factor;
+        if factor != 1.0 {
+            self.cancel_flyby();
+        }
         Ok(())
     }
 
     /// Reset existing authoritative launch state, preserving time. A remote
     /// request never clears a stopped replica or invents an acknowledged pose.
     pub fn reset_flight(&mut self) -> Result<(), String> {
+        self.cancel_flyby();
         if let Some(remote) = &mut self.remote {
             if remote.link.as_ref().is_none_or(|link| link.is_closed()) {
                 return Err("server link unavailable; restart the server flight session".into());
@@ -472,6 +481,7 @@ impl Scene {
             sample,
             lighting_dirty: false,
             clock: FlightClock::default(),
+            flyby: Default::default(),
         };
         scene.select_site(1);
         eprintln!(
@@ -726,12 +736,12 @@ impl Scene {
         Ok(())
     }
 
-    #[cfg(any(feature = "hud", test))]
     pub fn server_snapshot_count(&self) -> Option<u64> {
         self.remote.as_ref().map(|remote| remote.snapshots)
     }
 
     fn stop_server_flight(&mut self, error: String) {
+        self.cancel_flyby();
         if let Some(remote) = &mut self.remote {
             remote.link.take(); // Kill/reap our child, retaining the server-mode guard.
         }
@@ -937,6 +947,7 @@ impl Scene {
             elapsed_s * self.clock.requested_warp,
             budget,
         ) {
+            self.flyby.cancel();
             flight.engine_active = false;
             flight.control_input = DVec3::ZERO;
             flight.accumulator_s = 0.0;
@@ -956,7 +967,7 @@ impl Scene {
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
-            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?} sas_requested={} sas_temporary_inversion={}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp,self.input.sas_enabled,self.input.sas_inverted);
+            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?} sas_requested={} sas_temporary_inversion={} flyby_active={} flyby_target_alt_m={} flyby_target_speed_mps={} flyby_heading_rad={:?}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp,self.input.sas_enabled,self.input.sas_inverted,self.flyby.active,self.flyby.target_alt_datum_m,self.flyby.target_speed_mps,self.flyby.target_heading_rad);
             let data = self.flight_data();
             format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0} display_body={:?} air_observed={} loads_observed={}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.map_or(f64::NAN,|d|d.surface_speed_mps),data.map_or(f64::NAN,|d|d.vertical_speed_mps),data.map_or(f64::NAN,|d|d.altitude_datum_m),data.and_then(|d|d.altitude_agl_m).unwrap_or(f64::NAN),data.map(|d|d.display_body),data.is_some_and(|d|d.air.is_some()),data.is_some_and(|d|d.loads.is_some()))})
     }
@@ -998,11 +1009,34 @@ impl Scene {
     /// Inputs stay live even after a flight error, like the old client; the
     /// advance itself still stops on error.
     pub fn push_live_input(&mut self, dt_s: f64, throttle_up: bool, throttle_down: bool) {
+        if self.flyby.active
+            && (self.input.keys.any()
+                || throttle_up
+                || throttle_down
+                || self.input.sas_inverted
+                || !self.flyby_ready())
+        {
+            self.cancel_flyby();
+        }
+        let slew = if self.flyby.active {
+            self.flight
+                .as_ref()
+                .and_then(|flight| self.flyby.update(flight, self.celestial.ephemeris()))
+        } else {
+            None
+        };
+        if self.flyby.active && slew.is_none() {
+            self.cancel_flyby();
+        }
         let axes = self.control_axes();
         let Some(flight) = &mut self.flight else {
             return;
         };
-        self.input.slew(dt_s, throttle_up, throttle_down);
+        self.input.slew(
+            dt_s,
+            slew.map_or(throttle_up, |s| s > 0.0),
+            slew.map_or(throttle_down, |s| s < 0.0),
+        );
         if self.remote.is_none() {
             flight.throttle = self.input.throttle;
             flight.engine_active = self.input.engine_active;
@@ -1014,6 +1048,8 @@ impl Scene {
     pub fn control_axes(&self) -> DVec3 {
         if self.map_active() || self.clock.requested_paused || self.clock.requested_warp == 0.0 {
             DVec3::ZERO
+        } else if self.flyby.active {
+            thessa_flight_authority::input::apply_precision(self.flyby.axes, self.input.precision)
         } else {
             self.input
                 .command_scaled(self.control_mode == thessa_flight_authority::ControlMode::MouseAim)
@@ -1024,10 +1060,12 @@ impl Scene {
     /// Window `C` key and HUD button share this; the old client owns the same
     /// cycle through its mode HUD.
     pub fn cycle_control_mode(&mut self) {
+        self.cancel_flyby();
         self.control_mode = self.control_mode.next();
     }
 
     pub fn toggle_sas(&mut self) {
+        self.cancel_flyby();
         self.input.sas_enabled = !self.input.sas_enabled;
         if let Some(flight) = &mut self.flight {
             flight.sas_enabled = self.input.effective_sas();
@@ -1041,10 +1079,52 @@ impl Scene {
 
     #[cfg(feature = "hud")]
     pub fn set_sas(&mut self, enabled: bool) {
+        if enabled != self.input.sas_enabled {
+            self.cancel_flyby();
+        }
         self.input.sas_enabled = enabled;
         if let Some(flight) = &mut self.flight {
             flight.sas_enabled = self.input.effective_sas();
         }
+    }
+
+    pub fn cancel_flyby(&mut self) {
+        self.flyby.cancel();
+    }
+
+    fn flyby_ready(&self) -> bool {
+        self.live_flight()
+            && !self.flight_stopped()
+            && !self.map_active()
+            && !self.clock.requested_paused
+            && self.clock.requested_warp == 1.0
+            && self.remote.as_ref().is_none_or(|remote| {
+                remote.snapshots > 0
+                    && !remote.fleet.stale
+                    && remote.link.as_ref().is_some_and(|link| {
+                        !link.is_closed()
+                            && link.snapshot_age().is_some_and(|age| age <= remote.timeout)
+                    })
+            })
+    }
+
+    pub fn set_flyby(&mut self, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            self.cancel_flyby();
+            return Ok(());
+        }
+        if !self.flyby_ready() {
+            return Err("flyby requires fresh, unpaused x1 flight outside the map".into());
+        }
+        let flyby =
+            crate::flyby::Flyby::engage(self.flight.as_ref().unwrap(), self.celestial.ephemeris())?;
+        self.release_manual_input();
+        self.flyby = flyby;
+        self.control_mode = thessa_flight_authority::ControlMode::Navball;
+        self.input.sas_enabled = true;
+        self.input.engine_active = true;
+        self.camera.set_chase(true);
+        Ok(())
     }
 
     /// Live subsystem states `(rcs, wheels, gear_down, chutes_armed)`.
@@ -1570,6 +1650,10 @@ impl Scene {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "scene_flyby_tests.rs"]
+mod flyby_tests;
 
 #[cfg(test)]
 #[path = "scene_server_tests.rs"]

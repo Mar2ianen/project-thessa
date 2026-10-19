@@ -173,9 +173,12 @@ projection. These are isolated producer costs, not a paired speedup or game FPS.
 ## Remaining obligations
 
 Generalized powered/live JIT futures and richer celestial/ring appearance
-remain. The legacy pilot's one-shot server `ExecuteManeuver` fixture and
-coastal flyby intent adapter still need native entry points; an interactive
-maneuver editor is broader future work, not an implemented old-map feature.
+remain. The legacy pilot's one-shot server `ExecuteManeuver` fixture still needs
+a native entry point; coastal flyby is now a direct native intent adapter
+(`apps/terrain-native/src/flyby.rs`, F7/`--flyby`/HUD) that mutates only pilot
+demands and never fabricates physics, so map/guidance input integration is the
+next step, not flyby; an interactive maneuver editor is broader future work, not
+an implemented old-map feature.
 Remote executable-trajectory transport, guidance panels, secondary-fleet map markers and
 generalized trajectory error/pixel adaptation remain open. Tiny/mobile layouts and dense-system
 navigation require usability acceptance. Do not remove the old map or its

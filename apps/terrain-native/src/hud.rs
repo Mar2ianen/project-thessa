@@ -19,6 +19,7 @@ pub struct Controls {
     pub precision: bool,
     pub sas: bool,
     pub cycle_mode: bool,
+    pub flyby: bool,
     pub rcs: bool,
     pub wheels: bool,
     pub gear: bool,
@@ -46,6 +47,7 @@ impl Controls {
             precision: scene.input.precision,
             sas: scene.sas_enabled(),
             cycle_mode: false,
+            flyby: scene.flyby.active,
             rcs: scene.part_states().unwrap_or((true, true, true, false)).0,
             wheels: scene.part_states().unwrap_or((true, true, true, false)).1,
             gear: scene.part_states().unwrap_or((true, true, true, false)).2,
@@ -64,6 +66,7 @@ impl Controls {
 
     /// Graphics edits remain requests and must go through capability resolution.
     pub fn apply(self, scene: &mut crate::scene::Scene) {
+        let flyby_changed = self.flyby != scene.flyby.active;
         if self.map_open != scene.map_active() {
             scene.set_map_open(self.map_open);
         }
@@ -98,12 +101,18 @@ impl Controls {
                 }
                 return;
             }
+            if self.throttle != scene.input.throttle || self.engine != scene.input.engine_active {
+                scene.cancel_flyby();
+            }
             scene.input.set_throttle(self.throttle);
             scene.input.engine_active = self.engine;
             scene.input.precision = self.precision;
             scene.set_sas(self.sas);
             if self.cycle_mode {
                 scene.cycle_control_mode();
+            }
+            if flyby_changed && let Err(error) = scene.set_flyby(self.flyby) {
+                eprintln!("{error}");
             }
             use crate::scene::PartToggle;
             for (toggle, enabled) in [
@@ -137,6 +146,7 @@ pub struct Stats {
     pub instruments: thessa_graphics::ResolvedInstruments,
     pub fleet: Option<crate::scene::FleetObserver>,
     pub live_flight: bool,
+    pub flyby: crate::flyby::Flyby,
     pub server_snapshots: Option<u64>,
     pub primary_appearance: &'static str,
     pub flight_stopped: bool,
@@ -171,6 +181,7 @@ impl Stats {
             clock: scene.flight_clock(),
             submitted_frames: frames,
             live_flight: scene.live_flight(),
+            flyby: scene.flyby,
             server_snapshots: scene.server_snapshot_count(),
             primary_appearance: scene.primary_appearance_status(),
             fleet: scene.fleet_observer().cloned(),
@@ -399,6 +410,7 @@ fn help(context: &egui::Context, open: &mut bool) {
                     ("C, T, hold F","Control law, SAS base demand, temporary SAS inversion"),
                     ("R Y G P","RCS / reaction wheels / landing gear / parachutes"),
                     ("F8, [ / ], Backspace","Pause vote, warp half / double, canonical relaunch without rewinding time"),
+                    ("F7 / Flyby","Coastal photo-flight fixture; selects Navball/SAS/engine/chase. Manual takeover, help/map/focus loss, pause/warp/relaunch cancels; no auto-resume"),
                     ("Arrows, V, Backquote","Scene camera orbit / zoom, chase toggle, reset camera"),
                     ("Right / middle drag, wheel","Scene orbit / vehicle pan, zoom (outside widgets)"),
                     ("F6, Shift + right drag","Survey site cycle, survey free look"),
@@ -534,6 +546,7 @@ fn widgets(
                             controls.cycle_mode = true;
                         }
                         ui.small("WASDQE stick · Shift/Ctrl slew · X/Z presets · Space engine · C law · T SAS");
+                        ui.checkbox(&mut controls.flyby, "Coastal flyby (F7, x1 only)");
                     });
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut controls.rcs, "RCS");
@@ -687,6 +700,7 @@ fn flight_deck(
                         ui.selectable_value(&mut view.altitude_frame, AltitudeFrame::Datum, "DATUM");
                         ui.selectable_value(&mut view.altitude_frame, AltitudeFrame::Agl, "AGL");
                         ui.checkbox(&mut controls.paused, "PAUSE");
+                        ui.checkbox(&mut controls.flyby, "FLYBY (F7)");
                         if ui.small_button("RELAUNCH").clicked() {
                             controls.reset_flight = true;
                         }
@@ -695,6 +709,7 @@ fn flight_deck(
                         }
                     });
                     navball.frame.prograde = data.velocity_body(view.speed_frame).and_then(|v| v.try_normalize());
+                    if stats.flyby.active { ui.small(format!("FLYBY · target datum {:.0} m · {:.0} m/s · {} · manual stick/throttle cancels",stats.flyby.target_alt_datum_m,stats.flyby.target_speed_mps,stats.flyby.target_heading_rad.map_or_else(|| "gentle-arc fallback".into(),|h|format!("shore {:.0}°",h.to_degrees().rem_euclid(360.0))))); }
                     ui.small(format!("Frame: {} · local attitude / {} velocity cues{}",stats.display_body_name.as_deref().unwrap_or("body-relative"),view.speed_frame.label(),if data.at_reference_body {""} else {" · rotation provider unavailable; SURFACE = body-relative"}));
                     if let Some(clock) = stats.clock {
                         ui.small(format!(
@@ -1007,6 +1022,7 @@ mod tests {
             sas: true,
             cycle_mode: false,
             rcs: true,
+            flyby: false,
             wheels: true,
             gear: true,
             chutes: false,

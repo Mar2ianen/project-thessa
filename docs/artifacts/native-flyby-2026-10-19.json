@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-19",
+  "baseline": "4116231",
+  "scope": "Direct native port of the retained coastal flyby guidance fixture (F7/--flyby/HUD), demands-only over the shared authority, plus the two-deck bank-hold sign correction; no new physics, shader, dependency or wire payload.",
+  "contract": {
+    "ownership": "apps/terrain-native/src/flyby.rs ports the retained pilot laws (altitude P-law with vertical-speed damping/deadband/speed governor, bank-to-turn from heading error, throttle governor over the shared slew helper) and writes only existing pilot stick/throttle/SAS/engine/chase demands through flight-authority::input. Pose, forces and authoritative state are never mutated; the authority/controller owns all motion.",
+    "engagement": "F7 edge, startup --flyby (validated: requires unpaused x1 --flight/--server-flight without --map; rejected otherwise) or the HUD checkbox. Fresh flight required: startup replica poses, stopped/errored flight, vacuum/foreign-body kinematics and stale authority refuse engagement without moving state. Target is captured once: datum altitude clamp(alt+250, 400, 900) m, 200 m/s speed, shore heading from an 8-point/16-heading one-shot terrain trace with a gentle-arc fallback when no heading is observable.",
+    "lifecycle": "Any manual stick/throttle key, map open, help open, focus loss/suspend, pause, warp change, relaunch, control-mode/SAS/engine change, stale flight or lost server link cancels guidance without auto-resume. F7 is an edge; discrete manual takeover is not overwritten by the frame input copy.",
+    "remote": "In server mode flyby is an intent over acknowledged pose/reference-world kinematics and the normal wire input path: no local physics step (accumulator stays 0), no local integration, and missing air/thrust/TWR/g-load observations remain unavailable rather than fabricated from the replica. A lost link withdraws guidance.",
+    "sign_fix": "craft_bank_rad negated the body-right/up dot product in both decks: the bank hold inched a right-roll command into an ever-growing roll above the 300 m/s turn leg, masked by an absolute-value assertion. Both decks now define positive bank as right roll, pinned by a direct-roll sign test and a closed-loop high-speed shore turn through the real six-DoF authority (final heading error 0.245097 rad, bank 0.216145 rad, roll command 0).",
+    "hud": "HUD shows a coastal-flyby checkbox and, when active, target datum altitude/speed and shore heading or the gentle-arc fallback, with manual-takeover note; flight telemetry reports flyby_active/targets. Stats carry the fixture by copy, never authoritative state."
+  },
+  "verification": {
+    "status": "all 20 final local gates passed",
+    "source_manifest_sha256": "d769e657af39a462874419823a17366f1838c809e75758890d47ac1b245a00b5",
+    "compiled_inputs": 600,
+    "compiled_inputs_unchanged": true,
+    "passed_tests": {
+      "workspace_lib_bins": 1939,
+      "workspace_integration": 95,
+      "native_feature_off": 66,
+      "bevy_gpu": 24,
+      "renderer_ignored": 31,
+      "native_ignored": 34,
+      "agent_qa": 5,
+      "flyby_release_focused": 11,
+      "flyby_release_ignored": 2,
+      "flyby_cli_ignored_capture": 1
+    },
+    "other_gates": "fmt, workspace all-features Clippy, native feature-off Clippy, architecture check, release viewer/server build, git diff check, muted 8-frame Wayland flight/HUD smoke, muted headless flight-deck capture, readout cost diagnostic, muted headless --flyby capture (flyby_active=true, throttle 0.440, engine=true, Navball, chase)",
+    "diagnostics": {
+      "flyby_guidance_cost_us": { "engage": 274.301, "update": 7.209, "batch64": 461.409 },
+      "flyby_cost_scenario": "release, single-run CPU diagnostic; no stepping/GPU or game-FPS/speedup claim",
+      "closed_loop_18s": "min altitude 601.913 m, max 972.901 m, max stick 0.000000 at end (settled), canonical launch through the real FlightAuthority",
+      "shore_turn": "initial heading error 0.25 rad -> 0.245097 rad at capture, final altitude 610.900 m, speed 356.715 m/s, through the real actuators"
+    },
+    "directory": "target/test-tmp/native-flyby-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "source_boundary": "Previous 598-input readout manifest plus flyby.rs, scene_flyby_tests.rs and the eight touched native/retained files; docs/evidence edits outside compiled inputs. No asset or dependency changes.",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "limitations": [
+    "Not obstacle avoidance or a general autopilot: coastal photo-flight only, with a gentle-arc fallback when no shore heading is observable",
+    "No target/maneuver/guidance semantic inputs; the server ExecuteManeuver fixture and interactive maneuver editor remain unported",
+    "Remote air/force/TWR/g-load observations stay unavailable; flyby reads acknowledged pose/kinematics only",
+    "Whole-frame visual acceptance and independent blind aesthetic/usability acceptance are not claimed; captures are integration evidence",
+    "No WASM/Metal runtime acceptance, OS-level input injection or remote CI claim",
+    "Guidance cost is a single-run CPU diagnostic, not a paired improvement or game FPS",
+    "Bevy retirement remains incomplete: part commands, remaining optics/render consumers and packaging/tooling still need replacement"
+  ]
+}

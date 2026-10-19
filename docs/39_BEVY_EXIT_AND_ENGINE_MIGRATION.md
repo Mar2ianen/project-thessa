@@ -1779,7 +1779,9 @@ mirrors throttle/engine/precision/SAS plus a one-shot law-cycle button and a
 stick readout in live mode only. Telemetry reports `throttle/engine/
 control_mode/sas` alongside authority/presentation time. RCS, landing gear,
 chute and other part commands still cross only the old client's wire; flyby
-assist, mouse-aim and the mode HUD stay old-client-only.
+assist is now a direct native port (F7/`--flyby`/HUD, demands-only with
+takeover/focus-loss cancellation), while mouse-aim and the mode HUD are also
+native — only part commands stay old-client-only.
 
 ```sh
 cargo run --release -p thessa-terrain-native -- --flight

@@ -204,3 +204,38 @@ covers NaN, late capacity failure, out-of-bounds/reversed ranges and count/camer
 errors, both with an already built scene and a valid update pending encoding.
 Recovery reuses the same acceleration structures and unchanged instances rebuild
 nothing. No GPU scene/resource reallocation is introduced by this fix.
+
+## Coastal flyby guidance: direct native port
+
+The retained pilot's typed `CraftFlightIntent::Flyby` fixture is now a direct
+native port in `apps/terrain-native/src/flyby.rs`, reachable by window `F7`,
+startup `--flyby` (valid only with unpaused x1 `--flight`/`--server-flight`
+without `--map`) and the HUD checkbox. Engagement captures the launch datum and
+shore heading, selects Navball control law plus SAS/engine/chase, and each frame
+writes only the existing pilot demands (stick/throttle/SAS/engine/chase) through
+the shared `flight-authority::input` helpers; it never touches pose, forces or
+authoritative state. The control laws are the retained ones: pitch governor with
+speed-dependent authority, bank hold from heading error with a deadband and a
+gentle-arc fallback when no shore heading is observable, and a throttle governor
+over the shared slew law.
+
+Lifecycle is strict: fresh unpaused x1 flight outside the map is required, and
+any manual stick/throttle key, map/help/focus loss, pause/warp/relaunch,
+control-mode/SAS/engine change, stale flight or lost server link cancels the
+guidance without auto-resume. In server mode flyby stays an intent over
+acknowledged pose/reference-world kinematics: no local physics step, no
+accumulator, and missing air/force observations remain unavailable rather than
+fabricated.
+
+One retained defect was found and fixed in both decks: `craft_bank_rad`
+negated the body-right/up dot product, so the legacy bank hold inched a
+right-roll command into an ever-growing roll above the 300 m/s turn leg; an
+absolute-value assertion masked it. Both decks now agree on positive = right
+bank, pinned by a direct-roll sign test and a closed-loop high-speed shore
+turn through the real six-DoF authority (final heading error 0.245 rad, bank
+0.216 rad, roll command 0). Release CPU diagnostic: engage 274 µs, update
+7.2 µs, 64-frame batch 461 µs (single-run cost, no stepping/GPU or FPS claim).
+All 20 final local gates passed on 600 unchanged compiled inputs (1,939
+workspace lib/bin + 95 integration + 66 feature-off + 34 native ignored +
+24 Bevy GPU + 31 renderer ignored + QA/smokes). Commands/results:
+`artifacts/native-flyby-2026-10-19.json`.

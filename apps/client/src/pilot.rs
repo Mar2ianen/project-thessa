@@ -590,7 +590,12 @@ pub(crate) fn craft_bank_rad(
     radial_up_inertial: DVec3,
 ) -> f64 {
     let right = orientation_body_to_inertial * DVec3::Y;
-    (-right.dot(radial_up_inertial)).clamp(-1.0, 1.0).asin()
+    // Positive bank is a right roll: the body right axis (R_Y) tilted toward
+    // surface up. The historical negative inched a right-roll command into an
+    // ever-growing roll because the bank hold negated it again; an
+    // absolute-value assertion masked it. The native port pins both signs
+    // (direct-roll and closed-loop turn tests in thessa-terrain-native).
+    right.dot(radial_up_inertial).clamp(-1.0, 1.0).asin()
 }
 
 /// Shore-frame basis at the sub-craft point, in the body-fixed spin frame

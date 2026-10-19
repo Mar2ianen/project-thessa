@@ -845,6 +845,66 @@ fn server_part_events_are_ordered_bounded_and_not_rebuilt_from_acknowledgements(
 
 #[test]
 #[ignore = "requires a built thessa-server executable beside the native viewer"]
+fn real_server_flyby_uses_intents_not_replica_steps_or_fabricated_load_observations() {
+    let server = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(format!("thessa-server{}", std::env::consts::EXE_SUFFIX));
+    let mut scene = Scene::load(Default::default()).unwrap();
+    scene
+        .enable_server_flight(Some(&server), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        scene.set_flyby(true).is_err(),
+        "startup replica is not a flight observation"
+    );
+    scene.input.cut();
+    scene.input.engine_active = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while scene.server_snapshot_count().unwrap() < 2
+        || scene.flight.as_ref().unwrap().throttle != 0.0
+    {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline && !scene.flight_stopped());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let before = scene.flight.as_ref().unwrap().state;
+    scene.set_flyby(true).unwrap();
+    scene.push_live_input(0.1, false, false);
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+    assert_eq!(
+        scene.flight.as_ref().unwrap().throttle,
+        0.0,
+        "flyby is an intent, not a local server acknowledgement"
+    );
+    assert!((scene.input.throttle - 0.055).abs() < 1e-12);
+    while scene.flight.as_ref().unwrap().throttle < 0.01
+        || !scene.flight.as_ref().unwrap().engine_active
+    {
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline && !scene.flight_stopped());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(scene.flight.as_ref().unwrap().accumulator_s, 0.0);
+    assert!(scene.flight_data().unwrap().loads.is_none());
+    scene.cancel_flyby();
+    scene.push_live_input(0.0, false, false);
+    assert_eq!(scene.control_axes(), DVec3::ZERO);
+    scene.set_flyby(true).unwrap();
+    scene.remote.as_mut().unwrap().link = None;
+    scene.push_live_input(0.0, false, false);
+    assert!(
+        !scene.flyby.active,
+        "a lost link withdraws guidance without local integration or automatic fallback"
+    );
+}
+
+#[test]
+#[ignore = "requires a built thessa-server executable beside the native viewer"]
 fn real_server_adoption_advances_and_acknowledges_input_without_local_steps() {
     let server = std::env::current_exe()
         .unwrap()

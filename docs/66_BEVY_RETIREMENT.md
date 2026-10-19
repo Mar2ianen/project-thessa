@@ -67,7 +67,15 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
   pausing or cutting thrust; hidden instruments release their GPU callback.
   Map remains usable independently of flight-HUD visibility. Guidance-specific
   manual-takeover behavior still belongs to the remaining adapter below;
-- opt-in coastal flyby guidance and server-side maneuver execution fixtures.
+- **Implemented follow-up:** opt-in coastal flyby guidance (`F7`, `--flyby`, HUD
+  toggle) is a direct native port in `apps/terrain-native/src/flyby.rs`: it
+  mutates only stick/throttle/SAS/engine/chase demands, requires fresh unpaused
+  x1 flight outside the map, cancels on manual input/map/help/focus loss/
+  pause/warp/relaunch/mode-change/link loss without auto-resume, and in server
+  mode stays an acknowledged-pose intent with no local stepping or fabricated
+  air/force observations. The bank-hold sign defect of the retained client
+  (`craft_bank_rad` negated the right-roll convention) is fixed in both decks.
+  Remaining: server-side maneuver execution fixtures.
 
 Source inspection distinguishes retained functionality from future UI: the
 legacy map had orbit/apsis/wake readouts and asked the existing BakeQueue for a
@@ -108,8 +116,10 @@ display-reconstructed `last_forces`. Wheel torque and checked canopy loads are
 retained from the newest accepted snapshot; rejected canopy observations do not
 reuse prior replica loads. Foreign bodies never borrow home rotation/air/terrain,
 and acoustics stays in the source's reference atmosphere. See doc 57 and
-`artifacts/native-flight-readouts-2026-10-19.json` for checks/cost. Guidance/target
-inputs, flyby/maneuver fixtures and broader platform/visual acceptance remain.
+`artifacts/native-flight-readouts-2026-10-19.json` for checks/cost. The opt-in
+coastal flyby fixture is now ported natively (see the retirement list above and
+doc 57); guidance/target inputs, the server maneuver fixture and broader
+platform/visual acceptance remain.
 F1/F2/F3 visibility and display preferences are session-owned UI policy, never
 authoritative state or acknowledgement.
 

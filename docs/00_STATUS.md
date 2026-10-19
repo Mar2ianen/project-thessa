@@ -137,7 +137,13 @@ a new control law or completion of map/help/guidance migration.
 The native continuation also restores F1 help, F2 flight-HUD visibility and F3
 telemetry/fleet visibility. Help captures manual/camera input without pausing or
 cutting thrust; hidden navball callbacks are released, and map UI remains usable.
-These are session-only UI adapters; remaining guidance/readout migration is open.
+These are session-only UI adapters. Opt-in coastal flyby guidance is now a
+direct native port (F7/`--flyby`/HUD): demands-only pilot input over the
+acknowledged authority — with takeover, focus-loss, pause/warp and link-loss
+cancellation and no auto-resume — and in server mode intents only, never local
+steps or fabricated air/force observations. The retained client's negated
+bank-hold sign is fixed in both decks. Remaining guidance/target and the
+server maneuver fixture stay open.
 The map now reads the physics optimizer's existing JIT cache, through shared
 execution eligibility/interval/geometry guards; it neither requests a bake nor
 substitutes a hypothetical zero-force coast during powered/live flight. Only

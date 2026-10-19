@@ -188,6 +188,17 @@ The checked-in vertical slice currently contains:
     and `F3` toggles telemetry/fleet panels. Help suppresses manual/camera input
     without pausing or cutting thrust; F1 restores visible help from a hidden HUD.
     Hiding instruments releases their navball callback resource, not the scene.
+    `F7` (or `--flyby`, or the HUD checkbox) engages opt-in coastal flyby
+    guidance on the live craft: a direct port of the retained pilot's typed
+    fixture that captures the launch datum/shore heading and writes only normal
+    pilot demands (stick/throttle/SAS/engine/chase, Navball control law) —
+    never pose, forces or authoritative state. It requires fresh unpaused x1
+    `--flight`/`--server-flight` outside the map; any manual stick/throttle key,
+    map/help/focus loss, pause/warp/relaunch, control-mode/SAS/engine change,
+    stale flight or link loss cancels it without auto-resume. In server mode it
+    stays an intent over acknowledged pose/kinematics: no local physics step and
+    no fabricated air/force observations. It is not obstacle avoidance or a
+    general autopilot; see [doc 57](docs/57_NATIVE_FLIGHT_DECK.md).
    Both flight decks now consume shared dominant-body SI/f64 instrument data.
    Native session-only selectors choose Surface/Air/Orbital/Target speed cues and
    Datum/AGL altitude without changing attitude reference or flight controls.
@@ -445,6 +456,7 @@ The headless server also supports stdio and TCP transports; run
 | `F1` | controls and HUD legend |
 | `F2` | hide / show UI |
 | `F3` | extra telemetry |
+| `F7` | coastal flyby guidance (manual input takes over) |
 | RMB / MMB / wheel | orbit / pan / zoom |
 
 The pilot interface contract is documented in

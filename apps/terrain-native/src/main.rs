@@ -169,6 +169,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "HUD keys (with HUD feature/enabled): F1 controls help, F2 flight HUD visibility (map remains usable), F3 telemetry/fleet panels. Help owns manual/camera input without pausing or cutting the engine; F1 restores visible help from hidden HUD. Hidden flight instruments release their GPU callback resource. These are session-only visibility changes, not graphics requests or authority acknowledgements."
                 );
+                println!(
+                    "Flight instruments: dominant-body readouts; session-only Surface/Air/Orbital/Target speed cues and Datum/AGL selectors. Attitude stays local. Air/load/orbit and wheel/canopy details are available in the deck; absent remote air/force observations remain unavailable. Foreign bodies never borrow home rotation/air/terrain. Target inputs are not supplied yet."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),

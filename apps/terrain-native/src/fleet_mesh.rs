@@ -652,6 +652,7 @@ mod tests {
             timeout: std::time::Duration::from_secs(5),
             snapshots: 1,
             last_tick: Some(0),
+            parachutes: None,
             fleet: FleetObserver {
                 rows: vec![thessa_flight_net::presentation::FleetPose {
                     vehicle_id: VehicleId::new(1),
@@ -1096,6 +1097,7 @@ mod tests {
             timeout: std::time::Duration::from_secs(5),
             snapshots: 1,
             last_tick: Some(0),
+            parachutes: None,
             fleet: FleetObserver {
                 rows,
                 updates: 1,

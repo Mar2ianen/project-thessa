@@ -15,6 +15,13 @@ law. See [doc 57](57_NATIVE_FLIGHT_DECK.md) for the current native scope,
 representation comparison, tests and costs. The controls below still describe
 the legacy prototype; they are not a claim of native input/UI parity.
 
+Both hosts now consume `flight-authority::instruments` for dominant-body
+kinematics, air/load and osculating diagnostics. The native deck has session-only
+speed/altitude selectors and subsystem details (doc 57). Server replicas omit
+air, thrust/TWR and g-load observations absent from the lean snapshot; a local
+display reconstruction is not a transmitted measurement. Checked wheel/canopy
+observations remain available. This is presentation only, not a wire change.
+
 ## 10.1. Modes and controls
 
 | Input | Current action |
@@ -79,6 +86,13 @@ The HUD supports independent speed-reference selection:
 - `AIR`: air-relative velocity;
 - `ORBITAL`: velocity relative to the selected body’s inertial frame;
 - `TARGET`: target-relative display when a target is available.
+
+The implemented display-body hint follows the strongest local gravitational
+pull, not map zoom or a physics SOI switch. Surface rotation/air providers are
+currently installed only for the launch world: elsewhere Surface explicitly
+falls back to dominant-body-relative velocity, with no launch-world rotation
+correction and no borrowed air data. Target input is not yet supplied in the
+native deck; selecting it displays unavailable speed/cues, not a synthetic target.
 
 The navball speed label cycles these frames when clicked. Speed frame is a
 display/control reference and does not rewrite the physics state.

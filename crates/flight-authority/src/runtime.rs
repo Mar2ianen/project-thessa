@@ -1258,12 +1258,11 @@ impl FlightAuthority {
             })
     }
 
-    /// Adopt the server's latest per-canopy state into an embedded client.
-    /// A mismatched or malformed vector is ignored rather than resizing a
-    /// vehicle from untrusted snapshot data.
-    pub fn adopt_parachute_telemetry(&mut self, loads: &[ParachuteLoad]) {
-        if loads.len() != self.vehicle.parachutes.len()
-            || loads.iter().any(|load| {
+    /// Shared validation for adopting and displaying observed canopy loads.
+    /// A wire vector must match the installed vehicle; no resizing from telemetry.
+    pub fn parachute_telemetry_valid(&self, loads: &[ParachuteLoad]) -> bool {
+        loads.len() == self.vehicle.parachutes.len()
+            && !loads.iter().any(|load| {
                 !load.deployment_fraction.is_finite()
                     || !(0.0..=1.0).contains(&load.deployment_fraction)
                     || !load.dynamic_pressure_pa.is_finite()
@@ -1273,7 +1272,11 @@ impl FlightAuthority {
                     || !load.state.inflation_elapsed_s.is_finite()
                     || load.state.inflation_elapsed_s < 0.0
             })
-        {
+    }
+
+    /// Adopt the server's latest per-canopy state, ignoring invalid vectors.
+    pub fn adopt_parachute_telemetry(&mut self, loads: &[ParachuteLoad]) {
+        if !self.parachute_telemetry_valid(loads) {
             return;
         }
         self.last_parachute_loads.copy_from_slice(loads);

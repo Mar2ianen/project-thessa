@@ -37,10 +37,11 @@ pub(super) enum ClientViewMode {
     Pilot,
 }
 
+#[cfg(test)]
+use thessa_flight_authority::conventional_angle_of_attack_deg;
 use thessa_flight_authority::{BakeQueue, BakedRails, RailsBakeRequest};
 pub(super) use thessa_flight_authority::{
     ControlMode, FlightAuthority, FlightRegime, X15_STALL_ANGLE_DEG,
-    conventional_angle_of_attack_deg, local_air_kinematics,
 };
 
 /// Client-owned flight resource: authoritative stepping plus render-view
@@ -65,6 +66,7 @@ pub(super) struct PilotFlightRuntime {
     pub(super) server_compute_s: f64,
     pub(super) server_wall_s: f64,
     pub(super) server_effective_warp: f64,
+    observed_parachutes: Option<thessa_flight_authority::instruments::ParachuteSummary>,
 }
 
 impl std::ops::Deref for PilotFlightRuntime {
@@ -101,6 +103,7 @@ impl PilotFlightRuntime {
             server_compute_s: 0.0,
             server_wall_s: 0.0,
             server_effective_warp: 0.0,
+            observed_parachutes: None,
         })
     }
 
@@ -269,49 +272,7 @@ impl BakeQueue for BevyBakeQueue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SpeedFrame {
-    Surface,
-    Air,
-    Orbital,
-    Target,
-}
-
-impl SpeedFrame {
-    const ALL: [Self; 4] = [Self::Surface, Self::Air, Self::Orbital, Self::Target];
-
-    fn next(self) -> Self {
-        let index = Self::ALL
-            .iter()
-            .position(|frame| *frame == self)
-            .unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Surface => "SURFACE",
-            Self::Air => "AIR",
-            Self::Orbital => "ORBITAL",
-            Self::Target => "TARGET",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AltitudeFrame {
-    Datum,
-    Agl,
-}
-
-impl AltitudeFrame {
-    fn toggle(self) -> Self {
-        match self {
-            Self::Datum => Self::Agl,
-            Self::Agl => Self::Datum,
-        }
-    }
-}
+pub(super) use thessa_flight_authority::instruments::{AltitudeFrame, SpeedFrame};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1040,6 +1001,10 @@ fn adopt_snapshot(
     runtime.server_compute_s = snapshot.server_compute_s;
     runtime.server_wall_s = snapshot.server_wall_s;
     runtime.server_effective_warp = snapshot.effective_warp;
+    runtime.observed_parachutes = thessa_flight_authority::instruments::ParachuteSummary::checked(
+        runtime,
+        &snapshot.parachutes,
+    );
     runtime.sync_view();
 }
 /// Build one server-bound input from live client state. Single
@@ -1547,18 +1512,35 @@ fn pilot_input(
 }
 
 fn update_flight_ui_state(
-    clock: Res<SimulationClock>,
     map: Res<MapState>,
     runtime: Res<RuntimeEphemeris>,
     flight_runtime: Res<PilotFlightRuntime>,
+    link: Option<Res<crate::embedded::EmbeddedLink>>,
     terrain: Res<terrain::WorldTerrain>,
     mut state: ResMut<PilotHudState>,
 ) {
-    state.flight = live_flight_ui_state(&flight_runtime, &runtime.ephemeris, clock.sim_seconds);
-    let origin = DVec3::from_array(flight_runtime.terrain_origin());
-    let body_dir = DQuat::from_rotation_y(-flight_runtime.terrain_spin()) * origin.normalize();
-    let ground = terrain.field.height_m(body_dir.to_array(), 32.0).max(0.0);
-    state.flight.altitude_agl_m = Some(origin.length() - terrain.field.params.radius_m - ground);
+    use thessa_flight_authority::instruments::Source;
+    state.flight = live_flight_ui_state(
+        &flight_runtime,
+        &runtime.ephemeris,
+        if link.is_some() {
+            Source::Replica
+        } else {
+            Source::LocalAuthority
+        },
+    );
+    if crate::orbits::craft_display_body(
+        &runtime.ephemeris,
+        &flight_runtime,
+        SimTime(flight_runtime.flight_time_s),
+    ) == flight_runtime.reference_body
+    {
+        let origin = DVec3::from_array(flight_runtime.terrain_origin());
+        let body_dir = DQuat::from_rotation_y(-flight_runtime.terrain_spin()) * origin.normalize();
+        let ground = terrain.field.height_m(body_dir.to_array(), 32.0).max(0.0);
+        state.flight.altitude_agl_m =
+            Some(origin.length() - terrain.field.params.radius_m - ground);
+    }
     // `map` remains in the signature deliberately: the flight HUD and map
     // share the same body selection resource, but a pilot always flies the
     // selected playable world rather than the current map zoom focus.
@@ -1568,102 +1550,31 @@ fn update_flight_ui_state(
 fn live_flight_ui_state(
     flight: &PilotFlightRuntime,
     ephemeris: &BakedEphemeris,
-    _map_time_s: f64,
+    source: thessa_flight_authority::instruments::Source,
 ) -> FlightUiState {
-    let time = SimTime(flight.flight_time_s);
-    // Display frame follows the strongest local pull, not the launch site:
-    // near Nereid the speeds, datum and apsides read relative to Nereid.
-    // Display-only hint — the solver keeps integrating against reference_body.
-    let display_body = ephemeris
-        .dominant_body(flight.state.position_inertial_m, time)
-        .unwrap_or(flight.reference_body);
-    let at_home = display_body == flight.reference_body;
-    let Ok(body_state) = ephemeris.body_state(display_body, time) else {
+    use thessa_flight_authority::instruments;
+    let Some(mut data) = instruments::sample(flight, ephemeris, source) else {
         return FlightUiState::default();
     };
-    let Ok(body) = ephemeris.body(display_body) else {
+    if source == instruments::Source::Replica {
+        data.parachutes = flight.observed_parachutes;
+    }
+    let Ok(body) = ephemeris.body(data.display_body) else {
         return FlightUiState::default();
     };
-    let Ok(kinematics) =
-        local_air_kinematics(flight.atmosphere, flight.state, body_state, body.radius_m)
-    else {
-        return FlightUiState::default();
-    };
-    let relative_position = kinematics.relative_position_inertial_m;
-    let radial_up = kinematics.radial_up;
-    let velocity_relative_inertial = kinematics.relative_velocity_inertial_mps;
-    // The atmosphere model belongs to the home world: its rotation correction
-    // is only valid there. Away from home the surface speed is the plain
-    // dominant-relative speed and air data is unavailable, not extrapolated.
-    let velocity_surface = if at_home {
-        kinematics.surface_velocity_inertial_mps
-    } else {
-        velocity_relative_inertial
-    };
-    let forces = flight.last_forces.as_ref();
-    let environment = forces.map(|forces| forces.environment);
-    // The solver's environment contains body translation plus body rotation;
-    // use the same explicitly separated terms for the HUD. This prevents the
-    // moon's orbital velocity from appearing as a 40 km/s airspeed sample.
-    let air_velocity = kinematics.air_velocity_body_mps;
-    let air_speed = if at_home {
-        Some(air_velocity.length())
-    } else {
-        None
-    };
-    let surface_speed = velocity_surface.length();
-    let forward = flight.state.orientation_body_to_inertial * DVec3::X;
-    let right = flight.state.orientation_body_to_inertial * DVec3::Y;
-    let up = flight.state.orientation_body_to_inertial * DVec3::Z;
-    let heading_deg = forward.x.atan2(forward.y).to_degrees().rem_euclid(360.0);
-    let pitch_deg = forward.dot(radial_up).clamp(-1.0, 1.0).asin().to_degrees();
-    let roll_deg = right.dot(radial_up).atan2(up.dot(radial_up)).to_degrees();
-    let altitude_m = kinematics.altitude_m;
-    let vertical_speed = velocity_surface.dot(radial_up);
-    let gravity = body.mu / relative_position.length().max(1.0).powi(2);
-    let force_magnitude = forces
-        .map(|forces| forces.total_force_inertial_n.length())
-        .unwrap_or_else(|| flight.thrust_n());
-    let g_load = (force_magnitude / flight.vehicle.mass_properties.mass_kg / 9.80665).max(0.0);
-    let parachute_loads = flight.parachute_telemetry();
-    let armed_count = parachute_loads
-        .iter()
-        .filter(|load| load.state.phase == thessa_sim_core::ParachutePhase::Armed)
-        .count();
-    let open_count = parachute_loads
-        .iter()
-        .filter(|load| {
-            matches!(
-                load.state.phase,
-                thessa_sim_core::ParachutePhase::Reefed | thessa_sim_core::ParachutePhase::Deployed
-            )
-        })
-        .count();
-    let failed_count = parachute_loads
-        .iter()
-        .filter(|load| load.state.phase == thessa_sim_core::ParachutePhase::Failed)
-        .count();
-    let parachute_drag_n = parachute_loads
-        .iter()
-        .map(|load| load.force_body_n.length())
-        .sum::<f64>();
-    let parachute_dynamic_pressure_pa = parachute_loads
-        .iter()
-        .map(|load| load.dynamic_pressure_pa)
-        .fold(0.0, f64::max);
-    let parachute_status = if parachute_loads.is_empty() {
-        "none installed".to_string()
-    } else {
-        format!(
-            "{armed_count} armed / {open_count} open / {failed_count} failed · {:.0} N · q {:.0} Pa",
-            parachute_drag_n, parachute_dynamic_pressure_pa
-        )
-    };
-    let (apoapsis_altitude_m, periapsis_altitude_m) = estimate_orbit_altitudes(
-        relative_position,
-        velocity_relative_inertial,
-        body.mu,
-        body.radius_m,
+    let attitude = data.attitude();
+    let parachute_status = data.parachutes.map_or_else(
+        || "unavailable".into(),
+        |p| {
+            if p.installed == 0 {
+                "none installed".into()
+            } else {
+                format!(
+                    "{} armed / {} open / {} failed · {:.0} N · q {:.0} Pa",
+                    p.armed, p.open, p.failed, p.drag_n, p.dynamic_pressure_pa
+                )
+            }
+        },
     );
 
     FlightUiState {
@@ -1678,79 +1589,48 @@ fn live_flight_ui_state(
         attitude_frame: AttitudeFrame::Local,
         environment: FlightEnvironment {
             reference_body: Some(body.name.to_uppercase()),
-            atmosphere_available: true,
+            atmosphere_available: data.air.is_some(),
             terrain_available: false,
-            pressure_pa: if at_home {
-                environment.map(|environment| {
-                    // The atmosphere sample is deterministic; q and Mach come
-                    // from the same environment, avoiding a second atmosphere
-                    // approximation in the display path.
-                    environment.density_kg_m3 * environment.speed_of_sound_mps.powi(2)
-                        / flight.atmosphere.heat_capacity_ratio
-                })
-            } else {
-                None
-            },
-            density_kg_m3: if at_home {
-                environment.map(|environment| environment.density_kg_m3)
-            } else {
-                None
-            },
+            pressure_pa: data.air.and_then(|air| air.pressure_pa),
+            density_kg_m3: data.air.and_then(|air| air.density_kg_m3),
         },
-        surface_velocity_mps: velocity_surface,
-        orbital_velocity_mps: velocity_relative_inertial,
+        surface_velocity_mps: flight.state.orientation_body_to_inertial
+            * data.surface_velocity_body,
+        orbital_velocity_mps: flight.state.orientation_body_to_inertial
+            * data.orbital_velocity_body,
         gravity_acceleration_mps2: flight.last_gravity_acceleration_inertial_mps2,
-        local_up_body: flight.state.orientation_body_to_inertial.inverse() * radial_up,
-        surface_speed_m_s: Some(surface_speed),
-        air_speed_m_s: air_speed,
-        orbital_speed_m_s: Some(velocity_relative_inertial.length()),
+        local_up_body: data.local_up_body,
+        surface_speed_m_s: Some(data.surface_speed_mps),
+        air_speed_m_s: data.speed(SpeedFrame::Air),
+        orbital_speed_m_s: Some(data.orbital_speed_mps),
         target_speed_m_s: None,
-        altitude_datum_m: Some(altitude_m.max(0.0)),
+        altitude_datum_m: Some(data.altitude_datum_m),
         // The spherical safety boundary is not a terrain/radar measurement.
         altitude_agl_m: None,
-        vertical_speed_m_s: Some(vertical_speed),
-        heading_deg: Some(heading_deg),
-        pitch_deg: Some(pitch_deg),
-        roll_deg: Some(roll_deg),
-        mach: if at_home {
-            forces.map(|forces| forces.aero.mach)
-        } else {
-            None
-        },
-        dynamic_pressure_pa: if at_home {
-            forces.map(|forces| forces.aero.dynamic_pressure_pa)
-        } else {
-            None
-        },
-        angle_of_attack_deg: if at_home {
-            Some(conventional_angle_of_attack_deg(
-                kinematics.air_velocity_body_mps,
-            ))
-        } else {
-            None
-        },
-        sideslip_deg: if at_home {
-            Some(
-                kinematics
-                    .air_velocity_body_mps
-                    .y
-                    .atan2(kinematics.air_velocity_body_mps.x.abs().max(1.0e-6))
-                    .to_degrees(),
-            )
-        } else {
-            None
-        },
-        apoapsis_altitude_m: Some(apoapsis_altitude_m),
-        periapsis_altitude_m: Some(periapsis_altitude_m),
+        vertical_speed_m_s: Some(data.vertical_speed_mps),
+        heading_deg: attitude.heading_rad.map(f64::to_degrees),
+        pitch_deg: Some(data.local_up_body.x.clamp(-1.0, 1.0).asin().to_degrees()),
+        roll_deg: (data.local_up_body.y.hypot(data.local_up_body.z) > 1e-6).then(|| {
+            data.local_up_body
+                .y
+                .atan2(data.local_up_body.z)
+                .to_degrees()
+        }),
+        mach: data.air.and_then(|air| air.mach),
+        dynamic_pressure_pa: data.air.and_then(|air| air.dynamic_pressure_pa),
+        angle_of_attack_deg: data.air.map(|air| air.angle_of_attack_deg),
+        sideslip_deg: data.air.map(|air| air.sideslip_deg),
+        apoapsis_altitude_m: data.apoapsis_altitude_m,
+        periapsis_altitude_m: data.periapsis_altitude_m,
         time_to_apoapsis_s: None,
         time_to_periapsis_s: None,
         target_name: None,
         target_distance_m: None,
         target_closing_speed_m_s: None,
         throttle: Some(flight.throttle),
-        thrust_n: Some(flight.thrust_n()),
-        twr: Some(flight.thrust_n() / (flight.vehicle.mass_properties.mass_kg * gravity)),
-        g_load: Some(g_load),
+        thrust_n: data.loads.map(|loads| loads.thrust_n),
+        twr: data.loads.map(|loads| loads.twr),
+        g_load: data.loads.map(|loads| loads.g_load),
         reaction_wheel_torque_body_nm: flight.reaction_wheel_telemetry(),
         parachute_status,
         sas_enabled: flight.sas_enabled,
@@ -1771,44 +1651,21 @@ fn live_flight_ui_state(
                 warnings.push(format!("FLIGHT STOPPED: {error}"));
                 warnings.push("BACKSPACE resets flight".into());
             }
-            if at_home
-                && forces.is_some_and(|forces| forces.aero.dynamic_pressure_pa >= 100.0)
-                && conventional_angle_of_attack_deg(air_velocity).abs() >= X15_STALL_ANGLE_DEG
-            {
+            if data.air.is_some_and(|air| {
+                air.dynamic_pressure_pa.is_some_and(|q| q >= 100.0)
+                    && air.angle_of_attack_deg.abs() >= X15_STALL_ANGLE_DEG
+            }) {
                 warnings.push("HIGH ANGLE OF ATTACK".into());
             }
             if flight.actuator_saturated {
                 warnings.push("CONTROL LIMIT".into());
             }
-            if altitude_m < 100.0 && vertical_speed < -1.0 {
+            if data.altitude_datum_m < 100.0 && data.vertical_speed_mps < -1.0 {
                 warnings.push("LOW ALTITUDE / DESCENDING".into());
             }
             warnings
         },
     }
-}
-
-fn estimate_orbit_altitudes(
-    position: DVec3,
-    velocity: DVec3,
-    mu: f64,
-    radius_m: f64,
-) -> (f64, f64) {
-    let distance = position.length();
-    let specific_energy = velocity.length_squared() * 0.5 - mu / distance.max(1.0);
-    if specific_energy >= 0.0 {
-        let eccentricity =
-            (velocity.cross(position.cross(velocity)) / mu - position / distance).length();
-        let periapsis = position.cross(velocity).length_squared() / (mu * (1.0 + eccentricity));
-        return (f64::INFINITY, periapsis - radius_m);
-    }
-    let semi_major_axis = -mu / (2.0 * specific_energy);
-    let eccentricity_vector = velocity.cross(position.cross(velocity)) / mu - position / distance;
-    let eccentricity = eccentricity_vector.length().clamp(0.0, 0.999_999);
-    (
-        semi_major_axis * (1.0 + eccentricity) - radius_m,
-        semi_major_axis * (1.0 - eccentricity) - radius_m,
-    )
 }
 
 fn primary_speed(flight: &FlightUiState, frame: SpeedFrame) -> Option<f64> {
@@ -2600,7 +2457,11 @@ mod tests {
             giant.position_inertial + DVec3::Z * (giant_body.radius_m + 100_000.0);
         flight.state.velocity_inertial_mps = giant.velocity_inertial;
         flight.flight_time_s = 0.0;
-        let ui = live_flight_ui_state(&flight, &ephemeris, 0.0);
+        let ui = live_flight_ui_state(
+            &flight,
+            &ephemeris,
+            thessa_flight_authority::instruments::Source::LocalAuthority,
+        );
         assert_eq!(ui.environment.reference_body.as_deref(), Some("NEREID"));
         // Orbital readout is giant-relative (rest), not Thessa-relative.
         assert!(

@@ -1,6 +1,6 @@
 # 57 — Native flight deck and FastNavball
 
-**Status (2026-10-18): implemented native instrument slice, not full pilot/UI parity.**
+**Status (2026-10-19): implemented native instrument/readout slice, not full pilot/UI parity.**
 The native HUD now has separate aircraft and spacecraft layouts and an app-owned,
 native-pixel GPU attitude sphere. The legacy Bevy HUD remains runnable and retains
 its shared CPU128 instrument. No external instrument code, KSA/Apollo artwork,
@@ -15,6 +15,12 @@ FDAI-inspired black/white display, not an Apollo gimbal/error-needle simulation.
   surface-relative velocity in vehicle coordinates, sampled from the same shared
   kinematics/authority state as speed and altitude. Body axes are nose **+X**,
   screen-right **−Y**, screen-up **+Z**. No camera orientation drives the instrument.
+- Both hosts now consume `flight-authority::instruments::sample`: a read-only
+  newest-authority SI/f64 sample in the dominant-pull display-body frame. The
+  solver reference, summed gravity, state and control laws do not change. Native
+  AGL is added only for matching home terrain and uses the exact inertial sample
+  at its own epoch, not cached/interpolated render coordinates. Acoustics still
+  samples the source's reference atmosphere, never the instrument display body.
 - Projected north is the rotation pole projected onto the tangent plane; east is
   `north × up`. A pole/vertical-nose degeneracy explicitly makes heading unavailable.
   A deterministic tangent keeps the disk finite; it is not a fabricated compass
@@ -63,9 +69,9 @@ navigation/autopilot system.
 
 ## Layouts and controls
 
-- **Aircraft:** blue/brown sphere, surface-speed and datum-altitude tapes,
+- **Aircraft:** blue/brown sphere, selected speed/altitude tapes,
   datum/AGL/vertical-speed readouts, throttle, engine/SAS and RCS/gear controls.
-  Speed is explicitly **surface speed**, not an invented IAS/Mach sensor.
+   Missing speed/altitude omits the tape; no invented IAS or radar sensor.
 - **Spacecraft / FDAI:** black/white sphere, scalar vertical/horizontal surface
   velocity decomposition, altitude, explicit pitch/roll, throttle and RCS/reaction
   wheel switches. Undefined vertical-nose Euler roll is displayed as unavailable.
@@ -74,6 +80,28 @@ navigation/autopilot system.
   not a separately defined mission/launch timer.
 - Layout buttons change **display only**. They never select a spacecraft control
   law, change authoritative physics, spawn a rocket or reinterpret stick axes.
+- Native session-only selectors choose **Surface / Air / Orbital / Target**
+  speed and velocity cues, plus **Datum / AGL** altitude. Attitude remains local
+  in every case: selecting Orbital changes the velocity marker, not the ball's
+  attitude frame. Target has no supplied semantic input and is unavailable.
+  Vertical/horizontal spacecraft decomposition remains explicitly surface-
+  referenced regardless of the selected scalar speed. Preferences persist in
+  the HUD view until recreation, not graphics.toml or server commands.
+- Away from the launch body the legacy body-relative fallback is retained and
+  labelled: Surface has no installed foreign rotation provider. The launch
+  body's air/rotation/terrain cannot be applied to the display body. AGL is
+  unavailable there; the local grid uses the baked system's +Z polar axis.
+- Mach, dynamic pressure, angle of attack/sideslip, thrust, central-body TWR and
+  non-gravitational g-load have native readouts. Expand **Air / orbit / subsystem
+  details** for pressure/density, instantaneous two-body Ap/Pe, actual wheel
+  torque and canopy phase/load summary. A sub-datum Pe is a diagnostic, not a
+  solved impact or JIT curve. No new target, sensor, force or atmosphere model.
+- Air/force fields are local-authority observations only. Remote snapshots do
+  not transmit them or sufficient resources for authoritative reconstruction;
+  display-only `last_forces` on a replica is deliberately ignored. Remote wheel
+  torque and checked canopy loads come from the newest accepted snapshot. A
+  malformed/mismatched canopy vector becomes unavailable, never the previous
+  replica-local load. Both hosts reuse the authority's existing canopy validator.
 - The existing detailed migration/debug/control window is collapsed by default
   during flight, and remains available. Survey/fleet controls remain intact.
 - `--hud`/`--no-hud` retain their host meaning. `[instruments] enabled=false`
@@ -142,6 +170,23 @@ and passive command preservation. Captures are inspected integration evidence,
 Final stacked gates passed **1,867 workspace lib/bin +90 integration tests**,
 workspace/no-default clippy, **24 Bevy-CBT GPU** and **13 native ignored** checks,
 plus the new-scope perf-capture, unified-scene and origin-cache hardware checks.
+
+Those counts and timings describe the original 2026-10-18 instrument stage.
+The 2026-10-19 shared-readout follow-up additionally tests two own epochs over
+Thessa/Nereid with 0.001 m altitude / 0.001 m/s velocity and 0.02 m circular-apsis
+bounds, no physics/reference mutation, replica provenance and checked canopy
+withdrawal. Native regressions cover display-body/terrain/audio separation,
+observed subsystem adoption, session-only selectors and unavailable formatting.
+The real-adapter deck fixture exercises Surface/Air/Orbital/Target and Datum/AGL
+at 800×600 and 1280×900 / 1× and 1.5× DPI, passive flight-command preservation,
+outside-overlay pixels and disabled/help resource release. A release 64-craft
+read-model diagnostic records local/replica CPU cost without stepping physics.
+Follow-up commands/results: `artifacts/native-flight-readouts-2026-10-19.json`.
+All 16 final local follow-up gates passed on 598 unchanged compiled inputs:
+1,928 workspace lib/bin, 95 integration, 56 feature-off, 24 Bevy GPU, 31 renderer
+and 31 native ignored tests, plus QA, build and muted window/headless smoke.
+The release 64-craft read-model cost was 18.519 µs/craft local and 16.331 µs/craft
+replica (single-run diagnostic, not a paired win or game FPS).
 
 Reproduction, raw measures and actual check results:
 [`artifacts/native-flight-deck-2026-10-18.json`](artifacts/native-flight-deck-2026-10-18.json).

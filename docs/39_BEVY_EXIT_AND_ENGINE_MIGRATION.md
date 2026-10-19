@@ -39,8 +39,11 @@ apsis/escape/wake readouts with the legacy host. Both maps now consume the
 optimizer's executable cached coast interval using shared solver guards;
 neither map requests a conditional zero-thrust/zero-aero forecast. Generalized
 powered/live JIT futures remain unimplemented, not replaced by coast curves.
-Instrument display-body choices and remaining flight-command/appearance
-adapters still prevent full host retirement.
+The shared-instrument follow-up (doc 57) now supplies dominant-body kinematics,
+air/load/apsis and wheel/canopy details to both decks. Native speed/cue and
+Datum/AGL selectors are session-only; missing remote observations stay
+unavailable rather than masquerading as reconstructed forces. Remaining
+guidance/flight-command/appearance adapters still prevent full host retirement.
 
 Native F1/F2/F3 now provide controls help, flight-HUD visibility and telemetry/
 fleet visibility. Help temporarily replaces other widgets and captures manual/

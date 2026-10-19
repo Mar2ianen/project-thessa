@@ -77,6 +77,7 @@ struct RemoteFlight {
     timeout: std::time::Duration,
     snapshots: u64,
     last_tick: Option<u64>,
+    parachutes: Option<thessa_flight_authority::instruments::ParachuteSummary>,
     fleet: FleetObserver,
 }
 
@@ -133,21 +134,7 @@ impl Default for FlightClock {
     }
 }
 
-/// Read-only live flight data for the production-HUD path. Reference body
-/// only: unlike the old client's display-body switching near other worlds,
-/// the native viewer always reads relative to the flown reference body.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FlightData {
-    pub surface_speed_mps: f64,
-    pub vertical_speed_mps: f64,
-    pub altitude_datum_m: f64,
-    pub altitude_agl_m: f64,
-    /// Local up in the vehicle body frame (nose +X), driving the navball.
-    /// Mirrors the old client's instrument input, not a new attitude model.
-    pub local_up_body: DVec3,
-    pub pole_body: DVec3,
-    pub surface_velocity_body: DVec3,
-}
+pub use thessa_flight_authority::instruments::FlightInstruments as FlightData;
 
 impl Scene {
     pub fn map_active(&self) -> bool {
@@ -321,7 +308,19 @@ impl Scene {
         }
         let flight = self.flight.as_ref()?;
         let data = self.flight_data()?;
-        let sample = flight.atmosphere.sample(data.altitude_datum_m).ok()?;
+        // Acoustics stays in the source's reference atmosphere. Instrument
+        // display-body selection must never move that medium to another world.
+        let body_state = self
+            .celestial
+            .ephemeris()
+            .body_state(
+                flight.reference_body,
+                thessa_sim_core::SimTime(flight.flight_time_s),
+            )
+            .ok()?;
+        let altitude = (flight.state.position_inertial_m - body_state.position_inertial).length()
+            - flight.planet_radius_m;
+        let sample = flight.atmosphere.sample(altitude.max(0.0)).ok()?;
         let medium = if sample.density_kg_m3 > 0.0 {
             thessa_audio_core::AcousticMedium::gas(
                 sample.density_kg_m3,
@@ -352,11 +351,9 @@ impl Scene {
             gpws_warning: data.altitude_datum_m < 100.0 && data.vertical_speed_mps < -1.0,
         })
     }
-    /// Sample surface speed, vertical speed and datum/AGL altitude from the
-    /// existing authority state through the shared kinematics (the same
-    /// function the old client's HUD consumes). `None` without live flight
-    /// or on a failed ephemeris/atmosphere sample; the HUD omits that readout.
-    /// Server telemetry reads the newest replica, not the interpolated pose.
+    /// Shared newest-authority instruments, never the interpolated world pose.
+    /// Only matching terrain and actually transmitted subsystem observations
+    /// are added here; replica-reconstructed air/force data stays unavailable.
     pub fn flight_data(&self) -> Option<FlightData> {
         if self
             .remote
@@ -367,53 +364,45 @@ impl Scene {
         }
         let flight = self.flight.as_ref()?;
         let time = thessa_sim_core::SimTime(flight.flight_time_s);
-        let body_state = self
-            .celestial
+        use thessa_flight_authority::instruments::{self, Source};
+        let mut data = instruments::sample(
+            flight,
+            self.celestial.ephemeris(),
+            if self.remote.is_some() {
+                Source::Replica
+            } else {
+                Source::LocalAuthority
+            },
+        )?;
+        if data.at_reference_body {
+            let body_state = self
+                .celestial
+                .ephemeris()
+                .body_state(flight.reference_body, time)
+                .ok()?;
+            let relative = flight.state.position_inertial_m - body_state.position_inertial;
+            let origin = DVec3::new(relative.x, relative.z, -relative.y);
+            let body_dir =
+                DQuat::from_rotation_y(-flight.terrain_spin()) * origin.try_normalize()?;
+            let ground = self
+                .stream
+                .field()
+                .height_m(body_dir.to_array(), 32.0)
+                .max(0.0);
+            data.altitude_agl_m = Some((data.altitude_datum_m - ground).max(0.0));
+        }
+        if let Some(remote) = &self.remote {
+            data.parachutes = remote.parachutes;
+        }
+        Some(data)
+    }
+    #[cfg(feature = "hud")]
+    pub fn body_name(&self, id: thessa_sim_core::BodyId) -> Option<&str> {
+        self.celestial
             .ephemeris()
-            .body_state(flight.reference_body, time)
-            .ok()?;
-        let kinematics = thessa_flight_authority::local_air_kinematics(
-            flight.atmosphere,
-            flight.state,
-            body_state,
-            flight.planet_radius_m,
-        )
-        .ok()?;
-        let surface_speed_mps = kinematics.surface_velocity_inertial_mps.length();
-        let vertical_speed_mps = kinematics
-            .surface_velocity_inertial_mps
-            .dot(kinematics.radial_up);
-        let altitude_datum_m = kinematics.altitude_m.max(0.0);
-        // Ground lookup mirrors the old client's AGL readout verbatim
-        // (render-axes origin, spin-undo, same height call): the field frame
-        // needs the mapped direction, not the raw inertial one.
-        let origin = DVec3::new(
-            flight.relative_position_m.x,
-            flight.relative_position_m.z,
-            -flight.relative_position_m.y,
-        );
-        let body_dir = DQuat::from_rotation_y(-flight.terrain_spin()) * origin.normalize();
-        let ground = self
-            .stream
-            .field()
-            .height_m(body_dir.to_array(), 32.0)
-            .max(0.0);
-        Some(FlightData {
-            surface_speed_mps,
-            vertical_speed_mps,
-            altitude_datum_m,
-            altitude_agl_m: (altitude_datum_m - ground).max(0.0),
-            local_up_body: flight.state.orientation_body_to_inertial.inverse()
-                * kinematics.radial_up,
-            pole_body: flight.state.orientation_body_to_inertial.inverse()
-                * flight
-                    .atmosphere
-                    .body_rotation_rad_s
-                    .try_normalize()
-                    .unwrap_or(DVec3::Z),
-            surface_velocity_body: flight.state.orientation_body_to_inertial.inverse()
-                * kinematics.surface_velocity_inertial_mps,
-        })
+            .body(id)
+            .ok()
+            .map(|body| body.name.as_str())
     }
     pub fn vehicle_preview(&self) -> bool {
         self.vehicle.is_some()
@@ -634,6 +623,7 @@ impl Scene {
             timeout,
             snapshots: 0,
             last_tick: None,
+            parachutes: None,
             fleet: FleetObserver::default(),
         });
         self.clock.authority_paused = None;
@@ -778,6 +768,10 @@ impl Scene {
             snapshot,
         )?;
         remote.last_tick = Some(snapshot.tick);
+        remote.parachutes = thessa_flight_authority::instruments::ParachuteSummary::checked(
+            flight,
+            &snapshot.parachutes,
+        );
         self.last_primary_revision = snapshot.geometry_revision;
         self.last_primary_frame_revision = snapshot.appearance_frame_revision;
         remote.snapshots += 1;
@@ -963,8 +957,8 @@ impl Scene {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
             let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?} sas_requested={} sas_temporary_inversion={}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp,self.input.sas_enabled,self.input.sas_inverted);
-            let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN, pole_body:DVec3::NAN,surface_velocity_body:DVec3::NAN });
-            format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
+            let data = self.flight_data();
+            format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0} display_body={:?} air_observed={} loads_observed={}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.map_or(f64::NAN,|d|d.surface_speed_mps),data.map_or(f64::NAN,|d|d.vertical_speed_mps),data.map_or(f64::NAN,|d|d.altitude_datum_m),data.and_then(|d|d.altitude_agl_m).unwrap_or(f64::NAN),data.map(|d|d.display_body),data.is_some_and(|d|d.air.is_some()),data.is_some_and(|d|d.loads.is_some()))})
     }
 
     pub fn primary_appearance_status(&self) -> &'static str {
@@ -1633,6 +1627,37 @@ fn elevated_view(
 mod tests {
     use super::*;
     use glam::DQuat;
+
+    #[test]
+    fn instruments_follow_dominant_body_without_moving_home_terrain_or_audio() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        let e = scene.celestial.ephemeris();
+        let id = e.body_id("nereid").unwrap();
+        let time = thessa_sim_core::SimTime(12345.0);
+        let body = e.body(id).unwrap();
+        let origin = e.body_state(id, time).unwrap();
+        let flight = scene.flight.as_mut().unwrap();
+        let reference = flight.reference_body;
+        flight.flight_time_s = time.0;
+        flight.state.position_inertial_m =
+            origin.position_inertial + DVec3::X * (body.radius_m + 500_000.0);
+        flight.state.velocity_inertial_mps = origin.velocity_inertial;
+        // Deliberately retain the launch body's old render/terrain origin:
+        // instruments must read the exact inertial snapshot, not this cache.
+        let before = flight.state;
+        let data = scene.flight_data().unwrap();
+        assert_eq!(data.display_body, id);
+        assert!((data.altitude_datum_m - 500_000.0).abs() < 0.001);
+        assert!(data.orbital_speed_mps < 0.001);
+        assert!(data.air.is_none() && data.altitude_agl_m.is_none());
+        assert_eq!(scene.flight.as_ref().unwrap().state, before);
+        assert_eq!(scene.flight.as_ref().unwrap().reference_body, reference);
+        assert_eq!(
+            scene.audio_frame().unwrap().medium,
+            thessa_audio_core::AcousticMedium::VACUUM
+        );
+    }
 
     #[test]
     #[cfg(feature = "hud")]
@@ -2410,10 +2435,10 @@ mod tests {
         assert_eq!(scene.flight_data(), None);
         scene.enable_live_flight().unwrap();
         let data = scene.flight_data().unwrap();
-        assert!((data.altitude_agl_m - 500.0).abs() < 1.0);
+        assert!((data.altitude_agl_m.unwrap() - 500.0).abs() < 1.0);
         assert!((150.0..250.0).contains(&data.surface_speed_mps));
         assert!((-10.0..10.0).contains(&data.vertical_speed_mps));
-        assert!(data.altitude_datum_m > data.altitude_agl_m);
+        assert!(data.altitude_datum_m > data.altitude_agl_m.unwrap());
         for _ in 0..600 {
             scene.push_live_input(1.0 / 60.0, false, false);
             scene.advance_flight(1.0 / 60.0, None).unwrap();

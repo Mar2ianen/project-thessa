@@ -26,8 +26,8 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 | `main.rs` lifecycle, scheduling, assets, window/input | `terrain-native/{main,window}.rs`, `render-assets`, winit/egui | promote a complete native client entry point; preserve packaged asset discovery and useful CLI scenarios |
 | `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
 | `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | pause/warp/relaunch and focus release now have native consumers; reconcile remaining flight deck commands and reference/display-body choices; do not fabricate authoritative state in UI |
-| `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared instrument settings | audit every retained readout/control; native flight deck exists but not all old widgets/commands have replacements |
-| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards, dominant-body apsis/escape/wake readouts; powered/live JIT futures, instrument display-body choices and appearance/usability acceptance remain |
+| `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared `flight-authority::instruments` and instrument settings | dominant-body kinematics, air/load/orbit and wheel/canopy details plus speed/altitude selectors now have native consumers; guidance/target semantic inputs and remaining command fixtures still need replacement |
+| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards and dominant-body apsis/escape/wake readouts; powered/live JIT futures, remaining guidance/event inputs and appearance/usability acceptance remain |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
 | `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
 | `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core` source/profile/medium/optics | native resolved Low/Medium/High field consumer and diagnostics; keep provisional nozzle inputs explicit and never make mesh shape authoritative |
@@ -97,15 +97,21 @@ consumer covers certified coast batches only. Generalized powered/live JIT
 execution futures (doc 07 §7.10) and their remote publication are unfinished;
 unavailable is explicit, never a disguised gravity-only prediction. See doc 67.
 
-The remaining instrument audit is concrete: `pilot::live_flight_ui_state`
-derives dominant-body-relative orbital/surface readouts, apsides, air data,
-load/propulsion and parachute summaries; `craft_orbit_summary` adds scheduler
-wakes/notices. Native `FlightData` currently supplies reference-body speed,
-datum/AGL and navball inputs, not all of those fields. Missing remote force/air
-observations must remain unavailable rather than be inferred from a lean
-snapshot as if acknowledged. F1/F2/F3 visibility now has native consumers;
-remaining mode/readout actions still need reconciliation. The visibility state
-is session-owned UI policy, never authoritative state or an acknowledgement.
+The readout follow-up extracts dominant-body-relative orbital/surface kinematics,
+air data, load/propulsion, osculating apsides and canopy summaries into shared
+`flight-authority::instruments`; both decks consume it. Native `FlightData` is
+that read model, with matching-home-terrain AGL and checked transmitted canopy
+observations added by the host. Session-only speed/altitude selectors change
+scalar readouts/cues, never the local attitude frame or controls. Missing remote
+air/force/resource observations remain unavailable even if a replica contains
+display-reconstructed `last_forces`. Wheel torque and checked canopy loads are
+retained from the newest accepted snapshot; rejected canopy observations do not
+reuse prior replica loads. Foreign bodies never borrow home rotation/air/terrain,
+and acoustics stays in the source's reference atmosphere. See doc 57 and
+`artifacts/native-flight-readouts-2026-10-19.json` for checks/cost. Guidance/target
+inputs, flyby/maneuver fixtures and broader platform/visual acceptance remain.
+F1/F2/F3 visibility and display preferences are session-owned UI policy, never
+authoritative state or acknowledgement.
 
 The visibility adapter keeps telemetry collection and server observation running
 when F3 hides their panels; it is not a profiler/transport toggle. F2 suppresses

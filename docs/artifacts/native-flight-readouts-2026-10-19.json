@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-19",
+  "baseline": "e58a800",
+  "scope": "Shared dominant-body flight read model and native speed/altitude, air/load/orbit and subsystem readouts; no new physics, shader, dependency or wire payload.",
+  "contract": {
+    "ownership": "flight-authority::instruments borrows existing authority kinematics, OsculatingElements, navball frame math and the existing canopy adoption validator. Both decks consume it; no independent flight, atmosphere, orbit propagator or target model.",
+    "epoch": "Newest authority state/time, never interpolated render coordinates; dominant-body display hint does not mutate reference body, state, gravity or controls. Matching-home-terrain AGL only; acoustics keeps the source's reference atmosphere.",
+    "frames": "Native HUD-session Surface/Air/Orbital/Target speed/cue and Datum/AGL choices do not edit flight or graphics requests. The attitude grid stays local, spacecraft vertical/horizontal decomposition stays surface-referenced, missing input suppresses speed/tapes/cues. No target input is supplied yet.",
+    "foreign_body": "Surface explicitly falls back to dominant-body-relative velocity where no rotation provider is installed. No launch-body rotation/air/terrain is applied there. The local grid uses the baked system's polar axis, not a fabricated foreign rotation measurement.",
+    "provenance": "Replica last_forces reconstructed by display_loads is not a server observation: air, thrust/TWR and g-load remain unavailable. Actual wheel torque and checked canopy observations are retained from the newest accepted snapshot. Rejected canopy vectors become unavailable instead of reusing previous/local replica loads.",
+    "diagnostics": "Ap/Pe are instantaneous two-body diagnostics, not JIT futures or solved impacts. TWR retains the pilot's central-body gravity reference. g-load is non-gravitational force / mass / standard gravity. These do not change simulation laws."
+  },
+  "verification": {
+    "status": "all 16 final local gates passed",
+    "source_manifest_sha256": "679a425c90902c0e9bb1d59ab13bb71801715e60aab0fc024717a6b4f75e93ed",
+    "compiled_inputs": 598,
+    "compiled_inputs_unchanged": true,
+    "passed_tests": { "workspace_lib_bins": 1928, "workspace_integration": 95, "native_feature_off": 56, "bevy_gpu": 24, "renderer_ignored": 31, "native_ignored": 31, "agent_qa": 5, "read_model_release_diagnostic": 1 },
+    "other_gates": "fmt, workspace all-features Clippy, native feature-off Clippy, architecture check, release viewer/server build, diff check, muted 8-presentation Wayland flight/HUD smoke, muted 1280x800 headless flight-deck capture",
+    "cost_us_per_craft": { "local_authority": 18.519, "replica": 16.331 },
+    "cost_scenario": "release, 64 craft x100 passes; 1185.217/1045.192 us per batch. Single-run read-model CPU diagnostic, not paired improvement or game FPS.",
+    "directory": "target/test-tmp/native-flight-readouts-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "source_boundary": "Previous complete manifest plus new instruments.rs; documentation/evidence edits outside compiled inputs. No asset or dependency changes.",
+    "focused_checks": "Three core read-model tests, two native instrument/provenance tests, session-only UI test and extended actual-adapter flight-deck fixture passed before the final full gate run.",
+    "numerical_bounds": "Own epochs 0 and 12345 seconds over Thessa and Nereid: altitude <0.001 m, velocity <0.001 m/s and circular-apsis <0.02 m absolute errors. Proper-load regression pins zero-force free fall to 0 g and one standard-gravity non-gravitational force to 1 g within 1e-12. No new numerical physics model.",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "limitations": [
+    "No target/maneuver semantic inputs, inertial/orbit/target attitude frames, FDAI rate/error needles or guidance panel",
+    "No foreign-body surface rotation/air/terrain provider; body-relative fallback is explicit",
+    "No authoritative air/force/resource wire extension; absent remote fields stay unavailable",
+    "Instrument preferences are HUD-session-only, reset on recreation; native arbitrary instrument-body selection is not introduced",
+    "No OS-level input injection, independent blind aesthetic/usability acceptance, Metal/WebGPU execution or remote CI claim",
+    "CPU diagnostic is scoped read-model cost, not a paired improvement, solver throughput or game FPS",
+    "Bevy retirement remains incomplete; flight/event fixtures, remaining optics/render consumers and packaging/tooling still need replacement"
+  ]
+}

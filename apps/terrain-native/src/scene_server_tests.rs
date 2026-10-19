@@ -44,9 +44,65 @@ fn replica() -> Scene {
         timeout: Duration::from_secs(5),
         snapshots: 0,
         last_tick: None,
+        parachutes: None,
         fleet: FleetObserver::default(),
     });
     scene
+}
+
+#[test]
+fn remote_instruments_keep_observed_wheels_and_canopies_but_not_model_loads() {
+    let mut scene = replica();
+    let flight = scene.flight.as_mut().unwrap();
+    flight.vehicle.parachutes = vec![thessa_sim_core::ParachuteSpec {
+        name: "test-canopy".into(),
+        reference_area_m2: 20.0,
+        drag_coefficient: 1.5,
+        reefed_area_fraction: 0.1,
+        inflation_time_s: 2.0,
+        deploy_pressure_pa: 10000.0,
+        max_deploy_dynamic_pressure_pa: 2000.0,
+        max_canopy_load_n: 100000.0,
+        pack_mass_kg: 12.0,
+        repack_time_s: 30.0,
+        position_body_m: DVec3::ZERO,
+        inertia_body_kg_m2: glam::DMat3::IDENTITY,
+        lines: None,
+        deformation: None,
+    }];
+    flight.set_parachutes_armed(false);
+    assert!(scene.flight_data().is_none());
+    let mut wire = snapshot(&scene, 2.0);
+    wire.reaction_wheel_torque_body_nm = [1.0, 2.0, 3.0];
+    wire.parachutes = scene
+        .flight
+        .as_ref()
+        .unwrap()
+        .parachute_telemetry()
+        .to_vec();
+    wire.parachutes[0].state.phase = thessa_sim_core::ParachutePhase::Deployed;
+    wire.parachutes[0].force_body_n = DVec3::new(3.0, 4.0, 0.0);
+    scene.accept_server_snapshot(&wire).unwrap();
+    assert!(
+        scene.flight.as_ref().unwrap().last_forces.is_some(),
+        "existing replica reconstructions remain separate"
+    );
+    let before = scene.flight.as_ref().unwrap().state;
+    let data = scene.flight_data().unwrap();
+    assert!(data.air.is_none() && data.loads.is_none());
+    assert_eq!(
+        data.reaction_wheel_torque_body_nm,
+        DVec3::new(1.0, 2.0, 3.0)
+    );
+    assert_eq!(data.parachutes.unwrap().drag_n, 5.0);
+    assert_eq!(data.parachutes.unwrap().open, 1);
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+    wire.parachutes[0].dynamic_pressure_pa = f64::NAN;
+    scene.accept_server_snapshot(&wire).unwrap();
+    assert!(
+        scene.flight_data().unwrap().parachutes.is_none(),
+        "rejected observation must not reuse the previous replica canopy load"
+    );
 }
 
 #[test]
@@ -578,6 +634,7 @@ fn authoritative_stop_keeps_the_link_for_bounded_remote_relaunch() {
         snapshots: 0,
         last_tick: None,
         fleet: Default::default(),
+        parachutes: None,
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.server_snapshot_count() == Some(0) {
@@ -651,6 +708,7 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
         snapshots: 0,
         last_tick: None,
         fleet: FleetObserver::default(),
+        parachutes: None,
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.server_snapshot_count() == Some(0) {
@@ -713,6 +771,7 @@ fn fleet_silence_does_not_reuse_primary_age_or_infer_despawn() {
         snapshots: 0,
         last_tick: None,
         fleet: FleetObserver::default(),
+        parachutes: None,
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.remote.as_ref().unwrap().fleet.updates == 0

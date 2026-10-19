@@ -182,17 +182,20 @@ The checked-in vertical slice currently contains:
     and are shown as unavailable, not replaced by a coast curve. The map also
     includes dominant-body osculating Ap/Pe/escape and local wake countdowns;
     remote snapshots carry no JIT curve or
-    next-wake queue, only observed wake notices. Maneuver interaction and
-    instrument display-body switching remain unported.
+     next-wake queue, only observed wake notices. Maneuver interaction remains unported.
     See [doc 67](docs/67_NATIVE_SYSTEM_MAP.md).
     `F1` opens controls help, `F2` hides/shows the flight HUD (not the map),
     and `F3` toggles telemetry/fleet panels. Help suppresses manual/camera input
     without pausing or cutting thrust; F1 restores visible help from a hidden HUD.
     Hiding instruments releases their navball callback resource, not the scene.
-  The live HUD also reads speed, datum/AGL altitude and vertical speed from
-  the same shared kinematics the old client's instruments consume
-  (reference-body readout; the old client's dominant-body display switching
-   stays out of scope). Native `[instruments]` now selects aircraft or
+   Both flight decks now consume shared dominant-body SI/f64 instrument data.
+   Native session-only selectors choose Surface/Air/Orbital/Target speed cues and
+   Datum/AGL altitude without changing attitude reference or flight controls.
+   Air/loads, instantaneous Ap/Pe, wheel torque and canopy details have native
+   readouts; missing remote air/force observations remain unavailable. AGL uses
+   only matching home terrain; away from home, Surface explicitly falls back to
+   body-relative velocity without applying the launch world's rotation.
+   Native `[instruments]` selects aircraft or
    FDAI-inspired spacecraft decks with a native-pixel GPU navball, full surface
    heading/pitch/roll and live vector cues; no 128 px/30 Hz CPU image rebuild.
    An optional static-grid bake was measured against the default analytic path

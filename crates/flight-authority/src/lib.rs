@@ -16,6 +16,7 @@ pub mod camera;
 pub mod contact;
 pub(crate) mod control;
 pub mod input;
+pub mod instruments;
 pub mod launch_site;
 pub mod mode;
 pub mod navball;

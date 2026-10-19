@@ -172,8 +172,7 @@ projection. These are isolated producer costs, not a paired speedup or game FPS.
 
 ## Remaining obligations
 
-Generalized powered/live JIT futures, instrument reference/display-body choices
-and richer celestial/ring appearance
+Generalized powered/live JIT futures and richer celestial/ring appearance
 remain. The legacy pilot's one-shot server `ExecuteManeuver` fixture and
 coastal flyby intent adapter still need native entry points; an interactive
 maneuver editor is broader future work, not an implemented old-map feature.

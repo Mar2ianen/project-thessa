@@ -147,6 +147,7 @@ pub struct Stats {
     pub stick: [f64; 3],
     pub parts: (bool, bool, bool, bool),
     pub data: Option<crate::scene::FlightData>,
+    pub display_body_name: Option<String>,
     pub survey_label: &'static str,
     pub survey_distance: f64,
     pub submitted_frames: u64,
@@ -163,6 +164,7 @@ pub struct Stats {
 
 impl Stats {
     pub fn from_scene(scene: &crate::scene::Scene, frames: u64, cpu_ms: f64) -> Self {
+        let data = scene.flight_data();
         Self {
             map: scene.map_snapshot(),
             instruments: thessa_graphics::resolve_instruments(scene.requested.instruments),
@@ -179,7 +181,9 @@ impl Stats {
             control_mode: scene.live_flight().then_some(scene.control_mode),
             stick: scene.control_axes().to_array(),
             parts: scene.part_states().unwrap_or((true, true, true, false)),
-            data: scene.flight_data(),
+            data,
+            display_body_name: data
+                .and_then(|data| scene.body_name(data.display_body).map(str::to_owned)),
             survey_label: scene
                 .sites
                 .get(scene.site)
@@ -349,6 +353,8 @@ pub struct View {
     pub help: bool,
     pub telemetry: bool,
     map: crate::map::View,
+    speed_frame: thessa_flight_authority::instruments::SpeedFrame,
+    altitude_frame: thessa_flight_authority::instruments::AltitudeFrame,
 }
 impl Default for View {
     fn default() -> Self {
@@ -357,6 +363,8 @@ impl Default for View {
             help: false,
             telemetry: true,
             map: Default::default(),
+            speed_frame: Default::default(),
+            altitude_frame: Default::default(),
         }
     }
 }
@@ -494,10 +502,10 @@ fn widgets(
                     }
                     if let Some(data) = stats.data {
                         ui.label(format!(
-                            "Speed {:.1} m/s · Alt {:.0} m (AGL {:.0} m) · V/S {:+.1} m/s",
+                            "Speed {:.1} m/s · Alt {:.0} m (AGL {} m) · V/S {:+.1} m/s",
                             data.surface_speed_mps,
                             data.altitude_datum_m,
-                            data.altitude_agl_m,
+                            optional(data.altitude_agl_m, 0),
                             data.vertical_speed_mps,
                         ));
                     }
@@ -591,7 +599,7 @@ fn widgets(
                 );
             });
         }
-        if let (Some(navball),Some(data))=(navball,stats.data){flight_deck(context,navball,data,controls,stats);}
+        if let (Some(navball),Some(data))=(navball,stats.data){flight_deck(context,navball,data,controls,stats,view);}
         if view.telemetry && let Some(fleet) = &stats.fleet {
             egui::Window::new("Fleet | authoritative observer")
                 .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
@@ -644,8 +652,11 @@ fn flight_deck(
     data: crate::scene::FlightData,
     controls: &mut Controls,
     stats: &Stats,
+    view: &mut View,
 ) {
+    use thessa_flight_authority::instruments::{AltitudeFrame, SpeedFrame};
     use thessa_graphics::InstrumentLayout;
+    let mut navball = navball;
     let screen = context.content_rect();
     let side = (navball.settings.diameter_points as f32)
         .min((screen.height() - 85.0).max(80.0))
@@ -658,6 +669,7 @@ fn flight_deck(
                 .corner_radius(12.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
+                    ui.set_max_width((screen.width() - 40.0).max(280.0));
                     ui.horizontal(|ui| {
                         ui.selectable_value(
                             &mut controls.instrument_layout,
@@ -669,7 +681,11 @@ fn flight_deck(
                             InstrumentLayout::Rocket,
                             "FDAI",
                         );
-                        ui.small("SURFACE");
+                        egui::ComboBox::from_id_salt("instrument-speed-frame").selected_text(view.speed_frame.label()).show_ui(ui, |ui| {
+                            for frame in SpeedFrame::ALL {ui.selectable_value(&mut view.speed_frame, frame, frame.label());}
+                        });
+                        ui.selectable_value(&mut view.altitude_frame, AltitudeFrame::Datum, "DATUM");
+                        ui.selectable_value(&mut view.altitude_frame, AltitudeFrame::Agl, "AGL");
                         ui.checkbox(&mut controls.paused, "PAUSE");
                         if ui.small_button("RELAUNCH").clicked() {
                             controls.reset_flight = true;
@@ -678,6 +694,8 @@ fn flight_deck(
                             ui.colored_label(egui::Color32::RED, "DATA FROZEN");
                         }
                     });
+                    navball.frame.prograde = data.velocity_body(view.speed_frame).and_then(|v| v.try_normalize());
+                    ui.small(format!("Frame: {} · local attitude / {} velocity cues{}",stats.display_body_name.as_deref().unwrap_or("body-relative"),view.speed_frame.label(),if data.at_reference_body {""} else {" · rotation provider unavailable; SURFACE = body-relative"}));
                     if let Some(clock) = stats.clock {
                         ui.small(format!(
                             "T+{:.3}s · request x{:.3} · authority pause {:?}, rate {:?}",
@@ -693,26 +711,26 @@ fn flight_deck(
                             if navball.settings.layout == InstrumentLayout::Aircraft {
                                 instrument_readout(
                                     ui,
-                                    "SURF m/s",
-                                    format!("{:06.1}", data.surface_speed_mps),
+                                    view.speed_frame.label(),
+                                    optional(data.speed(view.speed_frame), 1),
                                 );
-                                tape(ui, data.surface_speed_mps, 10.0, "m/s");
+                                if let Some(speed) = data.speed(view.speed_frame) { tape(ui, speed, 10.0, "m/s"); }
                             } else {
                                 instrument_readout(
                                     ui,
-                                    "VELOCITY m/s",
-                                    format!("{:06.1}", data.surface_speed_mps),
+                                    view.speed_frame.label(),
+                                    optional(data.speed(view.speed_frame), 1),
                                 );
                                 instrument_readout(
                                     ui,
-                                    "VERT m/s",
+                                    "SURF VERT m/s",
                                     format!("{:+.1}", data.vertical_speed_mps),
                                 );
                                 let horizontal = (data.surface_speed_mps.powi(2)
                                     - data.vertical_speed_mps.powi(2))
                                 .max(0.0)
                                 .sqrt();
-                                instrument_readout(ui, "HORIZ m/s", format!("{horizontal:.1}"));
+                                instrument_readout(ui, "SURF HORIZ m/s", format!("{horizontal:.1}"));
                             }
                             ui.separator();
                             ui.small(format!("THR {:03.0}%", stats.throttle * 100.0));
@@ -738,13 +756,14 @@ fn flight_deck(
                             ui.set_width(100.0);
                             instrument_readout(
                                 ui,
-                                "DATUM m",
-                                format!("{:07.0}", data.altitude_datum_m),
+                                    if view.altitude_frame == AltitudeFrame::Datum {"DATUM m"} else {"AGL m"},
+                                    optional(data.altitude(view.altitude_frame), 0),
                             );
-                            if navball.settings.layout == InstrumentLayout::Aircraft {
-                                tape(ui, data.altitude_datum_m, 100.0, "m");
+                            if navball.settings.layout == InstrumentLayout::Aircraft
+                                && let Some(altitude) = data.altitude(view.altitude_frame) {
+                                tape(ui, altitude, 100.0, "m");
                             }
-                            instrument_readout(ui, "AGL m", format!("{:.0}", data.altitude_agl_m));
+                            instrument_readout(ui, "AGL m", optional(data.altitude_agl_m, 0));
                             if navball.settings.layout == InstrumentLayout::Aircraft {
                                 instrument_readout(
                                     ui,
@@ -780,8 +799,46 @@ fn flight_deck(
                             ui.small(format!("SIM {:.1} s", stats.sim_time_s));
                         });
                     });
+                    flight_readouts(ui, data);
                 });
         });
+}
+
+fn optional(value: Option<f64>, digits: usize) -> String {
+    value
+        .filter(|v| v.is_finite())
+        .map_or_else(|| "—".into(), |v| format!("{v:.digits$}"))
+}
+
+fn flight_readouts(ui: &mut egui::Ui, data: crate::scene::FlightData) {
+    ui.small(format!(
+        "Mach {} · q {} Pa · AoA {}° · beta {}°",
+        optional(data.air.and_then(|a| a.mach), 2),
+        optional(data.air.and_then(|a| a.dynamic_pressure_pa), 0),
+        optional(data.air.map(|a| a.angle_of_attack_deg), 1),
+        optional(data.air.map(|a| a.sideslip_deg), 1)
+    ));
+    ui.small(format!(
+        "Thrust {} N · TWR {} (central-body g) · load {} g (non-gravitational)",
+        optional(data.loads.map(|l| l.thrust_n), 0),
+        optional(data.loads.map(|l| l.twr), 2),
+        optional(data.loads.map(|l| l.g_load), 2)
+    ));
+    egui::CollapsingHeader::new("Air / orbit / subsystem details").show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            if let Some(air) = data.air {
+                ui.small(format!("Air {} m/s · p {} Pa · density {} kg/m³", optional(Some(air.velocity_body_mps.length()),1), optional(air.pressure_pa,0), optional(air.density_kg_m3,4)));
+            } else { ui.small("Air unavailable: no matching local atmosphere observation; replica model loads are not server observations."); }
+            if data.loads.is_none() {ui.small("Thrust / TWR / g-load unavailable: not in the lean server snapshot or no local force sample yet.");}
+            ui.small(format!("Instantaneous two-body: Ap {} km · Pe {} km (not a JIT path or solved impact)", optional(data.apoapsis_altitude_m.map(|v|v/1000.0),1), optional(data.periapsis_altitude_m.map(|v|v/1000.0),1)));
+            ui.small(format!("Reaction-wheel torque {:?} N·m · latest authority sample", data.reaction_wheel_torque_body_nm.to_array()));
+            match data.parachutes {
+                Some(p) if p.installed == 0 => {ui.small("Parachutes: none installed / transmitted");}
+                Some(p) => {ui.small(format!("Parachutes: {} armed / {} open / {} failed · {:.0} N · q {:.0} Pa",p.armed,p.open,p.failed,p.drag_n,p.dynamic_pressure_pa));}
+                None => {ui.small("Parachute observation unavailable or rejected; no replica-local substitute");}
+            }
+        });
+    });
 }
 
 fn instrument_readout(ui: &mut egui::Ui, label: &str, value: String) {
@@ -833,6 +890,75 @@ fn tape(ui: &mut egui::Ui, value: f64, step: f64, unit: &str) {
 mod tests {
     use super::*;
     use thessa_render_wgpu::terrain::OffscreenTarget;
+
+    fn instrument_fixture(vertical_speed_mps: f64) -> crate::scene::FlightData {
+        use thessa_flight_authority::{
+            FlightAuthority,
+            instruments::{self, Source},
+        };
+        let config: thessa_sim_core::SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let e = config.bake().unwrap();
+        let flight = FlightAuthority::new(&e, e.body_id("thessa").unwrap()).unwrap();
+        crate::scene::FlightData {
+            surface_speed_mps: 180.0,
+            vertical_speed_mps,
+            altitude_datum_m: 602.0,
+            altitude_agl_m: Some(500.0),
+            local_up_body: glam::DVec3::Z,
+            pole_body: glam::DVec3::X,
+            surface_velocity_body: glam::DVec3::X * 180.0,
+            ..instruments::sample(&flight, &e, Source::LocalAuthority).unwrap()
+        }
+    }
+
+    #[test]
+    fn display_frames_are_session_only_and_unavailable_readouts_stay_explicit() {
+        use thessa_flight_authority::instruments::{AltitudeFrame, SpeedFrame};
+        let context = context();
+        let before = controls();
+        let mut controls = before;
+        let data = instrument_fixture(2.0);
+        let stats = Stats {
+            live_flight: true,
+            data: Some(data),
+            display_body_name: Some("NEREID".into()),
+            ..Default::default()
+        };
+        let paint = fastnavball::Paint {
+            frame: data.attitude(),
+            settings: stats.instruments,
+            format: OffscreenTarget::FORMAT,
+        };
+        for frame in SpeedFrame::ALL {
+            let mut view = View {
+                speed_frame: frame,
+                altitude_frame: AltitudeFrame::Agl,
+                ..Default::default()
+            };
+            for _ in 0..3 {
+                widgets(
+                    &context,
+                    input(800, 600, 1.0),
+                    &mut controls,
+                    &stats,
+                    "test GPU",
+                    Some(paint),
+                    &mut view,
+                )
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(view.speed_frame, frame);
+            assert_eq!(view.altitude_frame, AltitudeFrame::Agl);
+            assert_eq!(
+                controls, before,
+                "instrument choices must not write flight demands or graphics settings"
+            );
+        }
+        assert_eq!(optional(None, 1), "—");
+        assert_eq!(optional(Some(f64::NAN), 1), "—");
+        assert_eq!(optional(Some(f64::INFINITY), 1), "—");
+    }
 
     fn fleet_with_contact_geometry() -> crate::scene::FleetObserver {
         let geometry = std::sync::Arc::new(thessa_flight_net::geometry::FleetGeometry {
@@ -1028,7 +1154,6 @@ mod tests {
 
     #[test]
     fn navball_branch_renders_without_touching_controls() {
-        use crate::scene::FlightData;
         let context = context();
         let navball = fastnavball::Paint {
             frame: thessa_flight_authority::navball::InstrumentFrame::new(
@@ -1041,15 +1166,7 @@ mod tests {
         };
         let stats = Stats {
             live_flight: true,
-            data: Some(FlightData {
-                surface_speed_mps: 180.0,
-                vertical_speed_mps: -2.0,
-                altitude_datum_m: 602.0,
-                altitude_agl_m: 500.0,
-                local_up_body: glam::DVec3::Z,
-                pole_body: glam::DVec3::X,
-                surface_velocity_body: glam::DVec3::X * 180.0,
-            }),
+            data: Some(instrument_fixture(-2.0)),
             ..Stats::default()
         };
         let before = controls();
@@ -1163,18 +1280,24 @@ mod tests {
                     navball_renderer: renderer,
                     ..Default::default()
                 }),
-                data: Some(crate::scene::FlightData {
-                    surface_speed_mps: 180.0,
-                    vertical_speed_mps: 2.0,
-                    altitude_datum_m: 602.0,
-                    altitude_agl_m: 500.0,
-                    local_up_body: glam::DVec3::Z,
-                    pole_body: glam::DVec3::X,
-                    surface_velocity_body: glam::DVec3::X * 180.0,
-                }),
+                data: Some(instrument_fixture(2.0)),
                 ..Default::default()
             };
-            for (width, height, scale) in [(800, 600, 1.0), (1280, 900, 1.5)] {
+            use thessa_flight_authority::instruments::{AltitudeFrame, SpeedFrame};
+            for (width, height, scale, speed, altitude) in [
+                (800, 600, 1.0, SpeedFrame::Surface, AltitudeFrame::Datum),
+                (1280, 900, 1.5, SpeedFrame::Orbital, AltitudeFrame::Datum),
+                (800, 600, 1.0, SpeedFrame::Air, AltitudeFrame::Agl),
+                (1280, 900, 1.5, SpeedFrame::Target, AltitudeFrame::Agl),
+            ] {
+                hud.view.speed_frame = speed;
+                hud.view.altitude_frame = altitude;
+                if speed == SpeedFrame::Target {
+                    let data = stats.data.as_mut().unwrap();
+                    data.air = None;
+                    data.loads = None;
+                    data.altitude_agl_m = None;
+                }
                 let target = OffscreenTarget::new(&backend, width, height).unwrap();
                 for _ in 0..3 {
                     let output = hud.run(input(width, height, scale), &mut controls, &stats);

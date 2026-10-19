@@ -18,6 +18,8 @@ mod fleet_mesh;
 pub use fleet_mesh::SceneMeshes;
 
 pub struct Scene {
+    #[cfg(feature = "hud")]
+    pub map: crate::map::Source,
     primary_presentation: Option<(u64, thessa_flight_authority::presentation::FlightPose)>,
     last_primary_revision: u64,
     last_primary_frame_revision: u64,
@@ -148,6 +150,62 @@ pub struct FlightData {
 }
 
 impl Scene {
+    pub fn map_active(&self) -> bool {
+        #[cfg(feature = "hud")]
+        {
+            self.map.open
+        }
+        #[cfg(not(feature = "hud"))]
+        {
+            false
+        }
+    }
+    #[cfg(feature = "hud")]
+    pub fn set_map_open(&mut self, open: bool) {
+        self.map.set_open(open, self.celestial.ephemeris());
+        // Transition cannot leave stale key/cursor/SAS demands in the authority.
+        self.input.keys = Default::default();
+        self.input.mouse_direction = glam::Vec3::NEG_Z;
+        self.input.sas_inverted = false;
+    }
+    #[cfg(feature = "hud")]
+    pub fn map_snapshot(&self) -> Option<crate::map::Snapshot> {
+        let ephemeris = self.celestial.ephemeris();
+        let flight = self
+            .flight
+            .as_ref()
+            .filter(|_| !self.remote.as_ref().is_some_and(|r| r.snapshots == 0));
+        // The map is a newest-authority instrument, not the interpolated 3D
+        // scene. Sample its celestial bodies at that SAME epoch: mixing a
+        // newer inertial craft with older planets can invent kilometres of
+        // apparent altitude from their common orbital velocity alone.
+        let time = flight.map_or(self.sample.time, |f| {
+            thessa_sim_core::SimTime(f.flight_time_s)
+        });
+        let mut snapshot = self.map.sample(ephemeris, time)?;
+        if let Some(flight) = flight {
+            let time = thessa_sim_core::SimTime(flight.flight_time_s);
+            let craft = flight.inertial_state_m().0;
+            snapshot.craft = Some((craft, time));
+            if self.remote.is_none()
+                && let Some(path) = flight.rails.path()
+                && let Ok(reference) = ephemeris.body_state(flight.reference_body, time)
+            {
+                let projected = thessa_flight_authority::navigation::project_rails_path(
+                    ephemeris,
+                    path,
+                    flight.reference_body,
+                    time,
+                    craft,
+                    f64::INFINITY,
+                );
+                if !projected.points.is_empty() {
+                    snapshot.trajectory = Some((reference.position_inertial, projected));
+                }
+            }
+        }
+        Some(snapshot)
+    }
     pub fn flight_clock(&self) -> Option<FlightClock> {
         self.live_flight().then(|| {
             let mut clock = self.clock;
@@ -384,6 +442,8 @@ impl Scene {
             last_primary_revision: 0,
             last_primary_frame_revision: 0,
             flight: None,
+            #[cfg(feature = "hud")]
+            map: crate::map::Source::default(),
             remote: None,
             launch_site: sites[0].0,
             vehicle: None,
@@ -940,7 +1000,7 @@ impl Scene {
     }
 
     pub fn control_axes(&self) -> DVec3 {
-        if self.clock.requested_paused || self.clock.requested_warp == 0.0 {
+        if self.map_active() || self.clock.requested_paused || self.clock.requested_warp == 0.0 {
             DVec3::ZERO
         } else {
             self.input

@@ -120,6 +120,7 @@ impl HeadlessPerf {
             .insert("gpu_scope_layout".into(), "native-topology-v5-sky".into());
         meta.graphics.resolved.extend(sky_layers.metadata());
         for (key, value) in [
+            ("native_map_open", scene.map_active().to_string()),
             ("native_hdr", display.enabled().to_string()),
             (
                 "native_hdr_target_bytes",

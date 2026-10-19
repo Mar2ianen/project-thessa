@@ -479,8 +479,22 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                #[cfg(feature = "hud")]
+                if !event.repeat
+                    && event.state == ElementState::Pressed
+                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyM)
+                    && !consumed
+                    && state.hud.is_some()
+                {
+                    self.scene.set_map_open(!self.scene.map_active());
+                    self.held.clear();
+                    self.last_cursor = None;
+                    self.right_held = false;
+                    self.middle_held = false;
+                }
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if event.state == ElementState::Pressed && !consumed {
+                    if event.state == ElementState::Pressed && !consumed && !self.scene.map_active()
+                    {
                         self.held.insert(code);
                     } else {
                         self.held.remove(&code);
@@ -488,7 +502,7 @@ impl ApplicationHandler for App {
                 }
                 if event.state == ElementState::Pressed {
                     let vehicle = self.scene.vehicle_preview();
-                    match camera_shortcut(event.physical_key, consumed) {
+                    match camera_shortcut(event.physical_key, consumed || self.scene.map_active()) {
                         Some(Shortcut::Exit) => event_loop.exit(),
                         Some(Shortcut::Orbit(delta)) => {
                             if vehicle {
@@ -524,11 +538,21 @@ impl ApplicationHandler for App {
                         }
                         _ => {}
                     }
+                    let clock_key = matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(
+                            KeyCode::F8
+                                | KeyCode::BracketLeft
+                                | KeyCode::BracketRight
+                                | KeyCode::Backspace
+                        )
+                    );
+                    let flight_consumed = consumed || (self.scene.map_active() && !clock_key);
                     apply_discrete_flight_input(
                         &mut self.scene,
                         event.physical_key,
                         event.repeat,
-                        consumed,
+                        flight_consumed,
                     );
                 }
             }
@@ -555,7 +579,15 @@ impl ApplicationHandler for App {
                 let (x, y) = (position.x, position.y);
                 if let Some((last_x, last_y)) = self.last_cursor {
                     let (dx, dy) = ((x - last_x) as f32, (y - last_y) as f32);
-                    if drag_delta(self.right_held, self.right_consumed, true, dx, dy).is_some() {
+                    if drag_delta(
+                        self.right_held,
+                        self.right_consumed,
+                        !self.scene.map_active(),
+                        dx,
+                        dy,
+                    )
+                    .is_some()
+                    {
                         if self.scene.vehicle_preview() {
                             self.scene.camera.drag_orbit(dx, dy);
                         } else {
@@ -567,7 +599,7 @@ impl ApplicationHandler for App {
                     if drag_delta(
                         self.middle_held,
                         self.middle_consumed,
-                        self.scene.vehicle_preview(),
+                        self.scene.vehicle_preview() && !self.scene.map_active(),
                         dx,
                         dy,
                     )
@@ -582,7 +614,7 @@ impl ApplicationHandler for App {
                 self.last_cursor = None;
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if !consumed {
+                if !consumed && !self.scene.map_active() {
                     if self.scene.vehicle_preview() {
                         self.scene.camera.zoom(wheel_lines(delta));
                     } else {
@@ -591,6 +623,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let map_was_active = self.scene.map_active();
                 #[allow(unused_mut)]
                 let mut keyboard_blocked = !state.window.has_focus();
                 #[allow(unused_mut)]
@@ -616,6 +649,13 @@ impl ApplicationHandler for App {
                     throttle_down,
                 ) {
                     Ok(true) => {
+                        if map_was_active != self.scene.map_active() {
+                            // HUD transitions have the same release contract as M.
+                            self.held.clear();
+                            self.last_cursor = None;
+                            self.right_held = false;
+                            self.middle_held = false;
+                        }
                         if let Some(audio) = &mut self.audio {
                             let frame = self.scene.audio_frame().or_else(|| {
                                 (self.audio_options.demo && !self.scene.live_flight()).then(|| {
@@ -753,6 +793,8 @@ fn condition_flight_input(
     pointer_blocked: bool,
     camera_gesture: bool,
 ) -> (bool, bool) {
+    let keyboard_blocked = keyboard_blocked || scene.map_active();
+    let pointer_blocked = pointer_blocked || scene.map_active();
     let (keys, up, down) = held_flight_keys(held);
     scene.input.keys = if keyboard_blocked {
         Default::default()
@@ -879,6 +921,49 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(feature = "hud")]
+    fn map_owns_input_without_pausing_relaunching_or_moving_the_flight_camera() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        scene.control_mode = thessa_flight_authority::ControlMode::MouseAim;
+        scene.input.set_throttle(0.4);
+        scene.input.mouse_direction = glam::Vec3::X;
+        scene.input.sas_inverted = true;
+        let camera = scene.camera;
+        let time = scene.sample.time;
+        scene.set_map_open(true);
+        let held = [KeyCode::KeyW, KeyCode::KeyF, KeyCode::ShiftLeft]
+            .into_iter()
+            .collect();
+        let slew = condition_flight_input(
+            &mut scene,
+            &held,
+            Some([1000.0, 500.0]),
+            [1000.0, 1000.0],
+            false,
+            false,
+            false,
+        );
+        scene.push_live_input(0.1, slew.0, slew.1);
+        assert_eq!(slew, (false, false));
+        assert_eq!(scene.control_axes(), glam::DVec3::ZERO);
+        assert!(scene.input.effective_sas());
+        assert_eq!(scene.input.throttle, 0.4);
+        assert_eq!(scene.sample.time, time);
+        assert_eq!(scene.camera, camera);
+        scene.advance_flight(0.025, None).unwrap();
+        assert!(
+            scene.sample.time.0 > time.0,
+            "map must not pause the authority"
+        );
+        let data = scene.map_snapshot().unwrap();
+        assert!(data.craft.is_some());
+        scene.set_map_open(false);
+        assert_eq!(scene.control_axes(), glam::DVec3::ZERO);
+        assert!(scene.map_snapshot().is_none());
+        assert_eq!(scene.camera, camera);
+    }
 
     #[test]
     fn mouse_aim_and_sas_have_exclusive_camera_widget_and_focus_ownership() {

@@ -6,6 +6,7 @@ mod fastnavball;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
+    pub map_open: bool,
     pub instrument_layout: thessa_graphics::InstrumentLayout,
     pub vehicle_preview: bool,
     pub chase: bool,
@@ -32,6 +33,7 @@ pub struct Controls {
 impl Controls {
     pub fn from_scene(scene: &crate::scene::Scene) -> Self {
         Self {
+            map_open: scene.map_active(),
             instrument_layout: scene.requested.instruments.layout,
             vehicle_preview: scene.vehicle_preview(),
             chase: scene.camera.chase(),
@@ -62,6 +64,9 @@ impl Controls {
 
     /// Graphics edits remain requests and must go through capability resolution.
     pub fn apply(self, scene: &mut crate::scene::Scene) {
+        if self.map_open != scene.map_active() {
+            scene.set_map_open(self.map_open);
+        }
         scene.requested.instruments.layout = self.instrument_layout;
         scene.camera.set_chase(self.chase);
         if let Some(site) = self.survey_site {
@@ -127,6 +132,7 @@ impl Controls {
 
 #[derive(Default)]
 pub struct Stats {
+    pub map: Option<crate::map::Snapshot>,
     pub clock: Option<crate::scene::FlightClock>,
     pub instruments: thessa_graphics::ResolvedInstruments,
     pub fleet: Option<crate::scene::FleetObserver>,
@@ -158,6 +164,7 @@ pub struct Stats {
 impl Stats {
     pub fn from_scene(scene: &crate::scene::Scene, frames: u64, cpu_ms: f64) -> Self {
         Self {
+            map: scene.map_snapshot(),
             instruments: thessa_graphics::resolve_instruments(scene.requested.instruments),
             clock: scene.flight_clock(),
             submitted_frames: frames,
@@ -193,6 +200,7 @@ impl Stats {
 }
 
 pub struct Hud {
+    map: crate::map::View,
     pub context: egui::Context,
     renderer: egui_wgpu::Renderer,
     adapter: String,
@@ -203,6 +211,7 @@ impl Hud {
     pub fn new(backend: &Backend, format: wgpu::TextureFormat) -> Self {
         let context = context();
         Self {
+            map: crate::map::View::default(),
             context,
             renderer: egui_wgpu::Renderer::new(
                 &backend.device,
@@ -222,7 +231,7 @@ impl Hud {
     ) -> egui::FullOutput {
         let navball = stats
             .data
-            .filter(|_| stats.live_flight && stats.instruments.enabled)
+            .filter(|_| stats.live_flight && stats.instruments.enabled && !controls.map_open)
             .map(|data| fastnavball::Paint {
                 frame: thessa_flight_authority::navball::InstrumentFrame::new(
                     data.local_up_body,
@@ -244,6 +253,7 @@ impl Hud {
             stats,
             &self.adapter,
             navball,
+            &mut self.map,
         )
     }
 
@@ -301,7 +311,7 @@ impl Hud {
     }
 }
 
-fn context() -> egui::Context {
+pub(super) fn context() -> egui::Context {
     let context = egui::Context::default();
     context.set_visuals(egui::Visuals::dark());
     // Reuse the shipped game's OFL-1.1 font instead of relying on egui's
@@ -328,9 +338,14 @@ fn widgets(
     stats: &Stats,
     adapter: &str,
     navball: Option<fastnavball::Paint>,
+    map: &mut crate::map::View,
 ) -> egui::FullOutput {
     context.run_ui(input, |root| {
         let context = root.ctx();
+        if controls.map_open && let Some(data)=&stats.map {
+            map.show(context,&mut controls.map_open,data);
+            return;
+        }
         egui::Window::new("Thessa | terrain migration")
             .default_open(!stats.live_flight)
             .default_pos([16.0, 16.0])
@@ -338,6 +353,7 @@ fn widgets(
             .resizable(false)
             .show(context, |ui| {
                 ui.label("Owned renderer · shared-device egui HUD");
+                if ui.button("System map (M)").clicked() {controls.map_open=true;}
                 ui.small(adapter);
                 ui.label(format!("Presentation time: {:.3} s", stats.sim_time_s));
                 if stats.live_flight {
@@ -772,6 +788,7 @@ mod tests {
 
     fn controls() -> Controls {
         Controls {
+            map_open: false,
             instrument_layout: thessa_graphics::InstrumentLayout::Aircraft,
             vehicle_preview: false,
             chase: false,
@@ -819,6 +836,7 @@ mod tests {
             &Stats::default(),
             "test",
             None,
+            &mut crate::map::View::default(),
         )
         .drop_without_applying_deltas();
         assert_eq!(controls.distance, 32.0);
@@ -860,6 +878,7 @@ mod tests {
             &stats,
             "test GPU",
             Some(navball),
+            &mut crate::map::View::default(),
         )
         .drop_without_applying_deltas();
         assert_eq!(controls, before);
@@ -894,6 +913,7 @@ mod tests {
                 &Stats::default(),
                 "test GPU",
                 None,
+                &mut crate::map::View::default(),
             )
             .drop_without_applying_deltas();
         }
@@ -918,6 +938,7 @@ mod tests {
             &Stats::default(),
             "test GPU",
             None,
+            &mut crate::map::View::default(),
         )
         .drop_without_applying_deltas();
         assert!(context.egui_wants_pointer_input());
@@ -932,6 +953,7 @@ mod tests {
             &Stats::default(),
             "test GPU",
             None,
+            &mut crate::map::View::default(),
         )
         .drop_without_applying_deltas();
         assert!(!context.egui_wants_pointer_input());
@@ -1040,10 +1062,17 @@ mod tests {
     fn shared_device_hud_loads_existing_color_across_resize_dpi_and_recreation() {
         let backend = Backend::bring_up().expect("hardware HUD regression needs an adapter");
         // Recreate the complete egui context/renderer as window suspension does.
-        for fleet in [false, true] {
+        let mut map_scene = crate::scene::Scene::load(Default::default()).unwrap();
+        map_scene.set_map_open(true);
+        for (fleet, map) in [(false, false), (true, false), (false, true)] {
             for _ in 0..2 {
                 let mut hud = Hud::new(&backend, OffscreenTarget::FORMAT);
-                for (width, height, scale) in [(800, 600, 1.0), (1280, 900, 1.5), (960, 720, 1.0)] {
+                let sizes = if map {
+                    [(1280, 900, 1.0), (1920, 1440, 1.5), (1400, 1000, 1.0)]
+                } else {
+                    [(800, 600, 1.0), (1280, 900, 1.5), (960, 720, 1.0)]
+                };
+                for (width, height, scale) in sizes {
                     let target = OffscreenTarget::new(&backend, width, height).unwrap();
                     let mut encoder = backend.device.create_command_encoder(&Default::default());
                     {
@@ -1068,11 +1097,13 @@ mod tests {
                     backend.queue.submit([encoder.finish()]);
                     let before = target.read_rgba8(&backend).unwrap();
                     let mut controls = controls();
+                    controls.map_open = map;
                     for _ in 0..3 {
                         let output = hud.run(
                             input(width, height, scale),
                             &mut controls,
                             &Stats {
+                                map: map.then(|| map_scene.map_snapshot().unwrap()),
                                 fleet: fleet.then(fleet_with_contact_geometry),
                                 ..Default::default()
                             },
@@ -1107,12 +1138,12 @@ mod tests {
                     // near the top/right edge. Keep the original full-column
                     // oracle without it; with it, test a 32x32 lower-right patch
                     // outside BOTH windows and shadows, without a color tolerance.
-                    let ys = if fleet {
+                    let ys = if fleet || map {
                         height - 32..height
                     } else {
                         0..height
                     };
-                    let xs = if fleet {
+                    let xs = if fleet || map {
                         width - 32..width
                     } else {
                         width - 1..width

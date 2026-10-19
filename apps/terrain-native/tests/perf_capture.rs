@@ -1,6 +1,115 @@
 //! Native adapter contract: reuse the portable schema, never label CPU submit
 //! as GPU time; no temporary files outside the crate's ignored target tree.
 #[test]
+fn map_cli_requires_an_available_enabled_hud_before_loading_the_world() {
+    let mut cases = vec![
+        vec!["--map", "--no-hud"],
+        vec!["--map", "--headless", "unused.png"],
+    ];
+    if !cfg!(feature = "hud") {
+        cases.push(vec!["--map", "--hud"]);
+    }
+    for args in cases {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("requires"), "{error}");
+        assert!(!error.contains("canonical Thessa:"));
+    }
+}
+
+#[test]
+#[cfg(feature = "hud")]
+#[ignore = "hardware: native map through actual silent CLI, HUD pixels and authoritative clock counters"]
+fn native_map_cli_renders_real_system_overlay_without_pausing_or_opening_audio() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = root
+        .join("target/test-tmp")
+        .join(format!("native-map-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let graphics = scratch.join("graphics.toml");
+    std::fs::write(&graphics,"version=1\npreset=\"custom\"\n[renderer]\nray_tracing=\"off\"\nhdr=false\n[atmosphere]\nenabled=false\nsky_dome=false\nstars=false\n[upper_atmosphere]\naurora=false\nairglow=false\n[clouds]\nenabled=false\n[ocean]\nenabled=false\n[shadows]\nenabled=false\n").unwrap();
+    let image = scratch.join("map.png");
+    let json = scratch.join("map.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
+        .current_dir(root.join("../.."))
+        .args([
+            "--map",
+            "--hud",
+            "--flight",
+            "--flight-step",
+            "0.025",
+            "--frames",
+            "2",
+            "--width",
+            "1280",
+            "--height",
+            "800",
+            "--mute",
+            "--prestream-seconds",
+            "0",
+            "--graphics",
+        ])
+        .arg(graphics)
+        .arg("--headless")
+        .arg(&image)
+        .arg("--perf-capture")
+        .arg(&json)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("native_audio=active"));
+    let capture =
+        thessa_perf::PerfCapture::from_json(&std::fs::read_to_string(json).unwrap()).unwrap();
+    assert_eq!(
+        capture.metadata.graphics.resolved["native_map_open"],
+        "true"
+    );
+    assert_eq!(capture.frames.len(), 2);
+    for frame in &capture.frames {
+        assert_eq!(frame.sim.steps_this_frame, 3);
+        assert!((frame.sim.sim_time_advanced_s - 0.025).abs() < 1e-12);
+    }
+    assert!((capture.frames[1].sim_time_s - 0.8).abs() < 1e-10);
+    let mut reader = png::Decoder::new(std::io::BufReader::new(
+        std::fs::File::open(&image).unwrap(),
+    ))
+    .read_info()
+    .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    let canvas_pixels = pixels[..info.buffer_size()]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        // egui's display dithering may change the encoded value by one LSB;
+        // this is a map-presence oracle, not an exact shader-color contract.
+        .filter(|p| {
+            p[..3]
+                .iter()
+                .zip([5_u8, 9, 18])
+                .all(|(a, b)| a.abs_diff(b) <= 1)
+        })
+        .count();
+    assert!(
+        canvas_pixels > 30000,
+        "actual map canvas absent: {canvas_pixels}"
+    );
+    println!(
+        "native_map_cli canvas_pixels={canvas_pixels} time_s=0.8 fixed_steps_per_frame=3 audio=silent image={}",
+        image.display()
+    );
+}
+
+#[test]
 fn flight_time_cli_rejects_invalid_or_nonflight_requests_before_startup() {
     for args in [
         vec!["--paused"],

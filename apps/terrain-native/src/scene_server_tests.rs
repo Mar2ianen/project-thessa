@@ -50,6 +50,52 @@ fn replica() -> Scene {
 }
 
 #[test]
+#[cfg(feature = "hud")]
+fn map_uses_own_time_authoritative_primary_without_creating_remote_predictions() {
+    let mut scene = replica();
+    scene.set_map_open(true);
+    assert!(scene.map_snapshot().unwrap().craft.is_none());
+    for time in [2.0, 3.0] {
+        let wire = snapshot(&scene, time);
+        scene.accept_server_snapshot(&wire).unwrap();
+        let before = scene.flight.as_ref().unwrap().state;
+        let map = scene.map_snapshot().unwrap();
+        assert_eq!(
+            map.craft,
+            Some((
+                wire.state.position_inertial_m,
+                thessa_sim_core::SimTime(time)
+            ))
+        );
+        assert_eq!(map.time, thessa_sim_core::SimTime(time));
+        let reference = scene.flight.as_ref().unwrap().reference_body;
+        let map_body = map.bodies.iter().find(|body| body.id == reference).unwrap();
+        let expected = scene
+            .celestial
+            .ephemeris()
+            .body_state(reference, map.time)
+            .unwrap();
+        assert_eq!(map_body.position_m, expected.position_inertial);
+        let older = scene
+            .celestial
+            .ephemeris()
+            .body_state(reference, scene.sample.time)
+            .unwrap();
+        assert!(
+            map_body.position_m.distance(older.position_inertial) > 1000.0,
+            "fixture must expose the older-planet/newer-craft altitude error"
+        );
+        assert!(
+            map.trajectory.is_none(),
+            "lean snapshots contain no rails; never bake a client forecast"
+        );
+        assert_eq!(scene.flight.as_ref().unwrap().state, before);
+        assert!(scene.flight.as_ref().unwrap().rails.is_empty());
+        assert_eq!(scene.control_axes(), DVec3::ZERO);
+    }
+}
+
+#[test]
 fn clock_acknowledgement_never_replaces_pending_intent_or_steps_locally() {
     let mut scene = replica();
     assert_eq!(scene.flight_clock().unwrap().authority_paused, None);

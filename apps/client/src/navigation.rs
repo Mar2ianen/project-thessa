@@ -464,18 +464,7 @@ pub(super) fn visible_physical_body_ids(ephemeris: &BakedEphemeris, map: &MapSta
         .collect()
 }
 
-pub(super) fn cycle_body(bodies: &[BodyId], selected: BodyId, reverse: bool) -> Option<BodyId> {
-    if bodies.is_empty() {
-        return None;
-    }
-    let index = bodies.iter().position(|body| *body == selected);
-    Some(match index {
-        Some(index) if reverse => bodies[(index + bodies.len() - 1) % bodies.len()],
-        Some(index) => bodies[(index + 1) % bodies.len()],
-        None if reverse => *bodies.last().expect("non-empty body list"),
-        None => bodies[0],
-    })
-}
+pub(super) use thessa_flight_authority::navigation::cycle_body;
 
 pub(super) fn request_fit_scope(navigation: &mut NavigationState) {
     navigation.request = NavigationRequest::FitScope;

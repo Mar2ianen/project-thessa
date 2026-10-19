@@ -27,7 +27,7 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 | `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
 | `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | pause/warp/relaunch and focus release now have native consumers; reconcile remaining flight deck commands and reference/display-body choices; do not fabricate authoritative state in UI |
 | `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared instrument settings | audit every retained readout/control; native flight deck exists but not all old widgets/commands have replacements |
-| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, `flight-authority` trajectory/navigation, native `celestial.rs` | native system map/body selection, orbit/trajectory drawing and maneuver interaction remain; reuse shared ephemeris/prediction instead of porting scaled Bevy transforms |
+| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, selection/follow, cached Kepler curves and available shared local rails; conditional powered-flight forecast requests, apsis/wake readouts, display-body choices and broader appearance/usability acceptance remain |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
 | `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
 | `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core` source/profile/medium/optics | native resolved Low/Medium/High field consumer and diagnostics; keep provisional nozzle inputs explicit and never make mesh shape authoritative |
@@ -56,12 +56,31 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
 - **Implemented follow-up:** pause and warp requests, with acknowledged server
   pause/effective warp distinct from client intent, no second client clock in
   server mode, explicit bindings F8 / brackets / Backspace and CLI/HUD controls;
-- map/pilot switching and camera-versus-flight input capture;
+- **Implemented follow-up:** map/pilot switching (M / HUD / `--map`) and exclusive
+  camera-versus-flight input capture; the existing authority continues with
+  neutral manual axes and retained throttle/base SAS, not a second map clock;
 - **Implemented follow-up:** Mouse Aim and held temporary SAS inversion share
   the shipped neutral input helpers; focus loss and suspension release held
   axes/gestures, cursor steering and the SAS override and send neutral input;
 - help/telemetry/HUD visibility and manual-takeover behavior;
 - opt-in coastal flyby guidance and server-side maneuver execution fixtures.
+
+Source inspection distinguishes retained functionality from future UI: the
+legacy map has orbit/apsis/wake readouts and asks the existing BakeQueue for a
+conditional coast forecast even during powered flight. Its `bound_prediction_arc`
+helper is test-only, not another production forecast to port. The pilot's
+`maneuver_kick_mps` sends a one-shot typed `ExecuteManeuver`; there is no shipped
+interactive maneuver-node editor to preserve. Do not inflate that fixture into
+an editor-completion claim or make the whole future editor a host-deletion gate.
+
+The remaining instrument audit is likewise concrete: `pilot::live_flight_ui_state`
+derives dominant-body-relative orbital/surface readouts, apsides, air data,
+load/propulsion and parachute summaries; `craft_orbit_summary` adds scheduler
+wakes/notices. Native `FlightData` currently supplies reference-body speed,
+datum/AGL and navball inputs, not all of those fields. Missing remote force/air
+observations must remain unavailable rather than be inferred from a lean
+snapshot as if acknowledged. F1/F2/F3 help/HUD/telemetry visibility and the
+existing mode/readout actions are retained host behavior still to reconcile.
 
 Unmarked items remain replacement obligations, not features certified by the
 existing native flight deck. Native arrow keys still control the camera;

@@ -168,7 +168,15 @@ The checked-in vertical slice currently contains:
    Mouse Aim now consumes the cursor through the same 6% deadband as the old
    pilot; keyboard stick takes precedence and diagonal demand is unit-limited
    before precision scaling. Orbit/pan and UI gestures never also steer.
-   Hold `F` to invert the retained SAS demand temporarily; release restores it.
+    Hold `F` to invert the retained SAS demand temporarily; release restores it.
+    With HUD enabled, `M` switches between the scene and native system map (`--map` starts
+    there; headless captures also require `--hud`). Six scopes use baked
+    ephemerides, f64 framing and cached Kepler geometry; select/frame/follow a
+    body or frame PRIMARY, right-drag orbit, middle-drag pan and wheel zoom.
+    Flight continues with neutral manual axes and retained throttle/SAS.
+    Available local rails reuse the authority's bake; remote snapshots carry no
+    forecast. Maneuver interaction and display-body switching remain unported.
+    See [doc 67](docs/67_NATIVE_SYSTEM_MAP.md).
   The live HUD also reads speed, datum/AGL altitude and vertical speed from
   the same shared kinematics the old client's instruments consume
   (reference-body readout; the old client's dominant-body display switching

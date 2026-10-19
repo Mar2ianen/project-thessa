@@ -69,39 +69,7 @@ const SPHERE_POLE_TO_WORLD_UP: Quat = Quat::from_xyzw(
     std::f32::consts::FRAC_1_SQRT_2,
 );
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MapMode {
-    SystemOverview,
-    Asterion,
-    Nereid,
-    Orthea,
-    Vesper,
-    Binary,
-}
-
-impl MapMode {
-    fn focus_name(self) -> &'static str {
-        match self {
-            Self::SystemOverview => "system_barycenter",
-            Self::Asterion => "asterion_a",
-            Self::Nereid => "nereid",
-            Self::Orthea => "orthea",
-            Self::Vesper => "vesper",
-            Self::Binary => "bc_barycenter",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::SystemOverview => "SYSTEM OVERVIEW",
-            Self::Asterion => "ASTERION A SYSTEM",
-            Self::Nereid => "NEREID MOON SYSTEM",
-            Self::Orthea => "ORTHEA MOON SYSTEM",
-            Self::Vesper => "VESPER MOON SYSTEM",
-            Self::Binary => "ASTERION B/C BINARY",
-        }
-    }
-}
+use thessa_flight_authority::navigation::MapMode;
 
 #[derive(Resource)]
 struct MapState {
@@ -1065,17 +1033,7 @@ fn map_position_anchored(
 }
 
 fn is_visible_in_view(ephemeris: &BakedEphemeris, map: &MapState, id: BodyId) -> bool {
-    if map.mode == MapMode::SystemOverview {
-        return true;
-    }
-    let mut current = Some(id);
-    while let Some(current_id) = current {
-        if current_id == map.focus {
-            return true;
-        }
-        current = ephemeris.body(current_id).ok().and_then(|body| body.parent);
-    }
-    false
+    thessa_flight_authority::navigation::visible(ephemeris, map.mode, map.focus, id)
 }
 
 fn local_position(ephemeris: &BakedEphemeris, focus: BodyId, id: BodyId, time: SimTime) -> Vec3 {

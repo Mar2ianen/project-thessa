@@ -558,44 +558,15 @@ fn project_rails_path(
     view_cut_m: f64,
     cache: &mut CraftPredictionCache,
 ) {
-    let Ok(home_now) = ephemeris.body_state(display, time) else {
-        return;
-    };
-    let initial_radius = (r_craft - home_now.position_inertial).length().max(1.0);
-    let cut_m = (initial_radius * 25.0).max(view_cut_m);
-    // Do not redraw flown history or submit 40,000 gizmo vertices every
-    // refresh. Keep the current craft point and a bounded future polyline.
-    cache.points.push(r_craft - home_now.position_inertial);
-    let mut reached_end = false;
-    for index in future_path_indices(&path.times, time, 1024) {
-        let Ok(home) = ephemeris.body_state(display, path.times[index]) else {
-            break;
-        };
-        let relative = path.positions[index] - home.position_inertial;
-        if relative.length() > cut_m {
-            break;
-        }
-        cache.points.push(relative);
-        reached_end = index + 1 == path.positions.len();
-    }
-    if matches!(path.end, thessa_sim_core::SampledPathEnd::Impact(_)) && reached_end {
-        cache.impact = cache.points.last().copied();
-    }
+    let projected = thessa_flight_authority::navigation::project_rails_path(
+        ephemeris, path, display, time, r_craft, view_cut_m,
+    );
+    cache.points = projected.points;
+    cache.impact = projected.impact;
 }
 
-fn future_path_indices(times: &[SimTime], now: SimTime, budget: usize) -> Vec<usize> {
-    let first = times.partition_point(|time| time.0 <= now.0);
-    if first == times.len() || budget < 2 {
-        return Vec::new();
-    }
-    let stride = (times.len() - first).div_ceil(budget - 1);
-    let mut indices: Vec<_> = (first..times.len()).step_by(stride).collect();
-    let last = times.len() - 1;
-    if indices.last() != Some(&last) {
-        indices.push(last);
-    }
-    indices
-}
+#[cfg(test)]
+use thessa_flight_authority::navigation::future_path_indices;
 
 fn orbit_fade_factor(camera_distance: f32, distance_from_selection: f32) -> f32 {
     let close_zoom = smoothstep(
@@ -621,98 +592,14 @@ pub(super) fn kepler_orbit_points_f64(
     orbit: KeplerOrbit,
     segments: usize,
 ) -> Vec<bevy::math::DVec3> {
-    let period = orbit.period_s();
-    let base_segments = segments.clamp(24, 64);
-    let max_segments = segments.clamp(base_segments, 512);
-    let tolerance = orbit_tessellation_tolerance(orbit) as f64;
-    let mut points = Vec::with_capacity(max_segments + 1);
-    let first = orbit_point_at_fraction_f64(orbit, period, 0.0);
-    points.push(first);
-
-    for index in 0..base_segments {
-        let start_fraction = index as f64 / base_segments as f64;
-        let end_fraction = (index + 1) as f64 / base_segments as f64;
-        let start = if index == 0 {
-            first
-        } else {
-            *points.last().expect("adaptive orbit has a previous point")
-        };
-        let end = orbit_point_at_fraction_f64(orbit, period, end_fraction);
-        append_adaptive_orbit_interval_f64(
-            orbit,
-            period,
-            start_fraction,
-            end_fraction,
-            start,
-            end,
-            tolerance,
-            max_segments,
-            &mut points,
-        );
-    }
-    points
-}
-
-fn orbit_point_at_fraction_f64(
-    orbit: KeplerOrbit,
-    period: f64,
-    fraction: f64,
-) -> bevy::math::DVec3 {
-    let (position, _) = orbit
-        .state_relative_at(SimTime(period * fraction))
-        .expect("baked orbit path must be evaluable");
-    render_position_f64(position)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_adaptive_orbit_interval_f64(
-    orbit: KeplerOrbit,
-    period: f64,
-    start_fraction: f64,
-    end_fraction: f64,
-    start: bevy::math::DVec3,
-    end: bevy::math::DVec3,
-    tolerance: f64,
-    max_segments: usize,
-    points: &mut Vec<bevy::math::DVec3>,
-) {
-    let midpoint_fraction = (start_fraction + end_fraction) * 0.5;
-    let midpoint = orbit_point_at_fraction_f64(orbit, period, midpoint_fraction);
-    let chord_midpoint = start.lerp(end, 0.5);
-    let should_subdivide =
-        midpoint.distance(chord_midpoint) > tolerance && points.len() < max_segments;
-
-    if should_subdivide {
-        append_adaptive_orbit_interval_f64(
-            orbit,
-            period,
-            start_fraction,
-            midpoint_fraction,
-            start,
-            midpoint,
-            tolerance,
-            max_segments,
-            points,
-        );
-        append_adaptive_orbit_interval_f64(
-            orbit,
-            period,
-            midpoint_fraction,
-            end_fraction,
-            midpoint,
-            end,
-            tolerance,
-            max_segments,
-            points,
-        );
-    } else {
-        points.push(end);
-    }
-}
-
-fn orbit_tessellation_tolerance(orbit: KeplerOrbit) -> f32 {
-    let radius = (orbit.semi_major_axis_m / DISTANCE_UNIT_M) as f32;
-    (radius * 0.00075).max(0.0015)
+    thessa_flight_authority::navigation::kepler_polyline(
+        orbit,
+        segments,
+        (orbit.semi_major_axis_m * 0.00075).max(DISTANCE_UNIT_M * 0.0015),
+    )
+    .into_iter()
+    .map(render_position_f64)
+    .collect()
 }
 
 pub(super) fn ring_points(radius: f32, segments: usize) -> Vec<Vec3> {

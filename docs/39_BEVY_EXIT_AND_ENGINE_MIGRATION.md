@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-19 (native sky/audio, shared shadow receiver, local/server flight-clock controls)
+**Updated:** 2026-10-19 (native sky/audio, shadow receiver, flight-clock/input controls, system map)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -27,6 +27,15 @@ transport framing and time-based sky/audio remain their owners; no new physics
 clock or local server fallback is added. Native capture now reports fixed-step,
 rails and debt counters with explicit scripted-time versus frame-wall semantics.
 See doc 66 and `artifacts/native-flight-clock-2026-10-19.json` for checks and gaps.
+
+The [native system-map follow-up](67_NATIVE_SYSTEM_MAP.md) supersedes earlier
+old-client-only map-camera snapshots below. Both hosts share neutral scope,
+selection, Kepler and rails-projection helpers; native egui adds six scopes,
+f64 framing/orbit/pan/zoom, body/PRIMARY tracking and exclusive map/flight input
+ownership. Its bodies and PRIMARY use one newest-authority epoch, separate from
+3D scene interpolation. Only available local rails are drawn; conditional
+powered-flight forecast requests, apsis/wake readouts, display-body choices and
+remaining flight-command/appearance adapters still prevent full host retirement.
 
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only

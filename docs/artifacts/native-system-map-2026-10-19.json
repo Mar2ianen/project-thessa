@@ -1,0 +1,87 @@
+{
+  "date": "2026-10-19",
+  "baseline": "05ceb1b",
+  "scope": "Native six-scope system map, shared renderer-neutral navigation helpers, retained available local rails, explicit map/flight input ownership and reproducible headless UI timing. Not complete Bevy retirement.",
+  "contract": {
+    "owners": "BakedEphemeris owns celestial states; FlightAuthority owns craft and available rails. Both hosts consume flight-authority::navigation scope/cycle/Kepler/rails helpers. The native map does not integrate, request a second forecast, alter physics dt or create another clock/renderer/device/transport.",
+    "time": "Map bodies and PRIMARY use one newest-authority SimTime; a remote marker is withheld before the first valid snapshot. The interpolated 3D scene may lag but its older planets are never mixed into the newer map. Survey maps use scene presentation time. Future rails subtract reference-body positions at each sample's own epoch.",
+    "input": "M/HUD switch map and scene. Manual axes, cursor steering, throttle slew and held SAS inversion are neutral in map mode; base SAS, throttle/engine intent and authority advancement remain. Pilot/survey cameras do not receive map gestures. Clock/relaunch keys remain available outside focused-widget capture. Map transitions release held input.",
+    "representation": "f64 SI camera subtraction and line clipping precede toolkit pixels. Lazy cached parent-relative Kepler curves, body/PRIMARY framing/follow, orbit/pan/zoom, selector/marker picking and collision-filtered labels. Three-pixel body markers are UI outlines, not enlarged physical bodies.",
+    "disabled": "No map catalogue before first open; no map samples/toolkit draws while closed. Reopen retains the small immutable CPU catalogue. Shared egui buffers are reused; no separate GPU map renderer. Terrain and flight keep updating behind the map.",
+    "capture": "--map requires an enabled HUD; headless needs --map --hud. Headless toolkit animation time is scripted at 60 presentation frames/s including warmup, independently of physics/sky/audio SimTime. native_map_open is recorded in performance metadata. Capture remains silent."
+  },
+  "numeric_oracles": {
+    "physical_scope_counts": [30, 17, 9, 3, 3, 13],
+    "camera": "A 1e13 m origin retains the checked 0.03125/0.0625 m offsets; invalid inputs fail closed. A 10000-step orbit sweep preserves a unit frame within 1e-12. Astronomical segments are clipped in f64 before f32 raster vertices.",
+    "kepler": "All baked orbits checked against 2048 dense exact samples each: sampled point-to-segment error <0.001*a metres, closure error <1e-12*a, <=513 vertices per curve. The shared split budget fixes the legacy budget overrun across base intervals. Not a universal arbitrary-orbit or deep-zoom pixel guarantee.",
+    "rails": "4000-sample moving-reference fixture: future-only projection within 1 mm, <=1025 points including current craft, terminal impact retention, clipped/expired/malformed rejection. Remote mode never creates a local forecast."
+  },
+  "verification": {
+    "status": "all fourteen final local gates passed on unchanged source inputs",
+    "directory": "target/test-tmp/native-system-map-final",
+    "source_count": 596,
+    "source_manifest_sha256": "e52ec44a2442426e40578b77e0850a1e408a2d8f71041ce46c8daff12690f90c",
+    "source_boundary": "Rust, manifests and shader inputs recorded in source.json; no asset changes in this stage. Final documentation/artifact edits do not change that source set.",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "checks": {
+      "cargo_fmt_all_check": "passed",
+      "workspace_all_target_all_feature_clippy_D_warnings": "passed",
+      "native_no_default_all_target_clippy_D_warnings": "passed",
+      "workspace_lib_bins_passed": 1915,
+      "workspace_integration_passed": 95,
+      "native_no_default_unit_passed": 54,
+      "bevy_render_gpu_passed": 24,
+      "release_native_and_server_build": "passed",
+      "render_wgpu_release_ignored_passed": 31,
+      "native_release_ignored_passed": 31,
+      "architecture": "passed; 12 guarded foundational crates",
+      "agent_qa_passed": 5,
+      "diff_whitespace": "passed",
+      "muted_wayland_map_flight_smoke": "passed"
+    },
+    "commands": "Exact argv, exit codes, durations and log hashes for all fourteen gates are in gates.json. Includes cargo test --workspace --lib --bins; cargo test --workspace --test '*'; cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored; cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1; cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1.",
+    "native_map_cli": {
+      "scenario": "Actual --map --hud --flight --flight-step 0.025 --frames 2 --width 1280 --height 800 --mute --prestream-seconds 0 with generated minimal graphics; 30 warmup frames",
+      "canvas_pixels_within_one_encoded_lsb": 514603,
+      "fixed_dt_s": 0.008333333333333333,
+      "steps_per_frame": 3,
+      "final_sim_time_s": 0.8,
+      "image": "apps/terrain-native/target/test-tmp/native-map-3933076/map.png",
+      "audio": "no device opened"
+    },
+    "window_smoke": {
+      "command": "thessa-terrain-native --map --hud --flight --throttle 0 --frames 8 --width 1280 --height 800 --mute",
+      "presentations": 8,
+      "authority_time_s": 0.7,
+      "capacity_rejections": 0,
+      "flight_stopped": false,
+      "boundary": "Native lifecycle/render execution only; no OS-level input injection, independent visual acceptance or game-FPS claim"
+    },
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "target_size_cost_diagnostic": {
+    "command": "cargo test --release -p thessa-terrain-native map_target_size_cost -- --ignored --nocapture --test-threads=1",
+    "from_final_suite": true,
+    "bodies": 32,
+    "orbit_vertices": 3999,
+    "orbit_payload_bytes": 95976,
+    "catalog_first_open_ms": 1.691,
+    "snapshot_mean_us_over_1000": 12.416,
+    "toolkit_and_tessellation_mean_us_over_100": 631.761,
+    "toolkit_mesh_vertices": 34928,
+    "closed_dispatch_mean_ns_over_10000": 5.896,
+    "boundary": "Single serial CPU producer/toolkit diagnostic, no full-flight/rails cost isolation, paired old-client baseline, throughput improvement or game-FPS claim"
+  },
+  "diagnostic_history": [
+    "Preflight clippy rejected chunks_exact with constant width in the new pixel test; replaced with as_chunks. Preserved under target/test-tmp/native-system-map-preflight.",
+    "First full run failed the new exact-color pixel oracle although the map was present: wall-time egui fade and display dithering made capture machine-speed-dependent. Scripted headless UI animation time and admitted one encoded LSB of dither. Preserved under native-system-map-first-final.",
+    "A later fourteen-command run passed but scene.rs and its remote epoch regression changed during execution; native-system-map-epoch-diagnostic is diagnostic only. The final unchanged-source run supersedes it."
+  ],
+  "remaining": [
+    "Conditional powered/aero coast-forecast request lifecycle, apsis/wake readouts and instrument display-body choices",
+    "Legacy coastal flyby and one-shot server maneuver fixture adapters, help/HUD visibility, retained optical/plume/contact consumers and packaging/tooling retirement",
+    "Richer celestial/ring appearance, remote forecast transport and secondary-fleet map markers",
+    "Pixel-adaptive orbit error, tiny/mobile layouts, OS input injection and independent usability/visual acceptance",
+    "No Metal/WebGPU execution, remote CI or complete Bevy-free full-client claim"
+  ]
+}

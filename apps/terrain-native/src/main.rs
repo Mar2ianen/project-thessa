@@ -7,6 +7,8 @@ mod contact_preview;
 mod environment;
 #[cfg(feature = "hud")]
 mod hud;
+#[cfg(feature = "hud")]
+mod map;
 mod perf;
 mod scene;
 mod sky_layers;
@@ -25,6 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut prestream_seconds = 3.0;
     let mut sweep = false;
     let mut hud_override = None;
+    let mut map_open = false;
     let mut sim_time = 0.0_f64;
     let mut sim_step = 0.0_f64;
     let mut vehicle_preview = false;
@@ -127,6 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .parse()?
             }
             "--hud" => hud_override = Some(true),
+            "--map" => map_open = true,
             "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
@@ -158,6 +162,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 println!(
                     "Flight time: --paused and --warp 0..131072 require --flight or --server-flight. Pause/warp scale admitted simulation time, never solver dt. Window: F8 pause, [/] warp half/double, Backspace relaunch at the canonical site without rewinding time. Arrow keys remain camera controls; Space remains engine toggle. HUD separates intent from server acknowledgement. Lost server links require restarting the session, not a local reset."
+                );
+                println!(
+                    "Map: --map starts the native egui system map (requires HUD). M toggles map/pilot ownership; flight continues with neutral manual axes and retained throttle/SAS. Six baked scopes, body selection/framing/follow, orbit/pan/zoom, PRIMARY and available shared local rails. Remote rails are not transmitted; no client forecast is fabricated. Maneuver interaction is not yet ported."
                 );
                 return Ok(());
             }
@@ -255,6 +262,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("--sweep, --prestream-seconds and --sim-step require --headless".into());
     }
     let hud_enabled = hud_override.unwrap_or(cfg!(feature = "hud") && headless.is_none());
+    if map_open && !hud_enabled {
+        return Err("--map requires HUD; use --hud for headless map captures".into());
+    }
     if hud_enabled && !cfg!(feature = "hud") {
         return Err("--hud requires the hud Cargo feature (enabled by default)".into());
     }
@@ -265,6 +275,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
     );
     let mut scene = scene::Scene::load(requested)?;
+    #[cfg(feature = "hud")]
+    scene.set_map_open(map_open);
     if let Some(site) = survey_site {
         scene.select_site(site);
     }
@@ -406,7 +418,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                             egui::Pos2::ZERO,
                             egui::vec2(width as f32, height as f32),
                         )),
-                        time: Some(stream_started.elapsed().as_secs_f64()),
+                        // Script the presentation-only UI clock as well: wall
+                        // speed must not leave a captured window half faded.
+                        // This never advances physics, sky or audio SimTime.
+                        time: Some(frame as f64 / 60.0),
                         ..Default::default()
                     },
                     &mut controls,

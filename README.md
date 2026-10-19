@@ -67,7 +67,8 @@ The checked-in vertical slice currently contains:
   rendering, terrain streaming, a temporary audio adapter, and an embedded
   authoritative-server path;
 - `thessa-audio-core` and `thessa-audio-synth`: backend-neutral propagation
-  semantics and procedural engine DSP, consumed by the temporary Bevy adapter;
+  semantics and procedural engine DSP, consumed by both the legacy Bevy and
+  native rodio adapters; headless captures/tests do not open audio devices;
 - `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
   landmarks, LOD, obstacle reports, and client texture export. Recipe conformance
   is partial; authored ocean bounds now reach canonical datum calibration.
@@ -177,6 +178,10 @@ The checked-in vertical slice currently contains:
     Available local rails reuse the authority's bake; remote snapshots carry no
     forecast. Maneuver interaction and display-body switching remain unported.
     See [doc 67](docs/67_NATIVE_SYSTEM_MAP.md).
+    `F1` opens controls help, `F2` hides/shows the flight HUD (not the map),
+    and `F3` toggles telemetry/fleet panels. Help suppresses manual/camera input
+    without pausing or cutting thrust; F1 restores visible help from a hidden HUD.
+    Hiding instruments releases their navball callback resource, not the scene.
   The live HUD also reads speed, datum/AGL altitude and vertical speed from
   the same shared kinematics the old client's instruments consume
   (reference-body readout; the old client's dominant-body display switching

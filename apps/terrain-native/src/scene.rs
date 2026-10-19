@@ -164,6 +164,9 @@ impl Scene {
     pub fn set_map_open(&mut self, open: bool) {
         self.map.set_open(open, self.celestial.ephemeris());
         // Transition cannot leave stale key/cursor/SAS demands in the authority.
+        self.release_manual_input();
+    }
+    pub fn release_manual_input(&mut self) {
         self.input.keys = Default::default();
         self.input.mouse_direction = glam::Vec3::NEG_Z;
         self.input.sas_inverted = false;

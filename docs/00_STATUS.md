@@ -133,6 +133,10 @@ stick takeover, unit-clamped diagonal demand and exclusive camera/UI ownership.
 Held F temporarily inverts retained SAS intent and releases safely on focus loss;
 the lean wire snapshot does not acknowledge SAS. This is input integration, not
 a new control law or completion of map/help/guidance migration.
+The native continuation also restores F1 help, F2 flight-HUD visibility and F3
+telemetry/fleet visibility. Help captures manual/camera input without pausing or
+cutting thrust; hidden navball callbacks are released, and map UI remains usable.
+These are session-only UI adapters; remaining guidance/readout migration is open.
 The transport retains its stdio handshake, receive timestamps/inbox, input
 mailbox and child cleanup;
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot

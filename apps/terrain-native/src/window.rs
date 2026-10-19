@@ -373,9 +373,7 @@ struct App {
 impl App {
     fn release_held_input(&mut self) {
         self.held.clear();
-        self.scene.input.keys = Default::default();
-        self.scene.input.mouse_direction = glam::Vec3::NEG_Z;
-        self.scene.input.sas_inverted = false;
+        self.scene.release_manual_input();
         self.scene.push_live_input(0.0, false, false);
         if self.scene.server_flight() {
             // Deliver neutral axes before a suspended window stops polling.
@@ -464,6 +462,28 @@ impl ApplicationHandler for App {
             .is_some_and(|hud| hud.input.on_window_event(&state.window, &event).consumed);
         #[cfg(not(feature = "hud"))]
         let consumed = false;
+        #[cfg(feature = "hud")]
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.state == ElementState::Pressed
+            && let Some(action) = hud_action(event.physical_key, event.repeat, consumed)
+            && let Some(hud) = &mut state.hud
+        {
+            let was_blocked = hud.gpu.view.blocks_scene_input();
+            hud.gpu.view.apply(action);
+            if was_blocked != hud.gpu.view.blocks_scene_input() {
+                self.held.clear();
+                self.last_cursor = None;
+                self.right_held = false;
+                self.middle_held = false;
+                self.scene.release_manual_input();
+            }
+        }
+        #[cfg(feature = "hud")]
+        let consumed = consumed
+            || state
+                .hud
+                .as_ref()
+                .is_some_and(|hud| hud.gpu.view.blocks_scene_input());
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
@@ -624,6 +644,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let map_was_active = self.scene.map_active();
+                #[cfg(feature = "hud")]
+                let help_was_active = state
+                    .hud
+                    .as_ref()
+                    .is_some_and(|hud| hud.gpu.view.blocks_scene_input());
                 #[allow(unused_mut)]
                 let mut keyboard_blocked = !state.window.has_focus();
                 #[allow(unused_mut)]
@@ -631,7 +656,9 @@ impl ApplicationHandler for App {
                 #[cfg(feature = "hud")]
                 if let Some(hud) = &state.hud {
                     keyboard_blocked |= hud.gpu.context.egui_wants_keyboard_input();
+                    keyboard_blocked |= hud.gpu.view.blocks_scene_input();
                     pointer_blocked |= hud.gpu.context.egui_wants_pointer_input();
+                    pointer_blocked |= hud.gpu.view.blocks_scene_input();
                 }
                 let (throttle_up, throttle_down) = condition_flight_input(
                     &mut self.scene,
@@ -649,12 +676,22 @@ impl ApplicationHandler for App {
                     throttle_down,
                 ) {
                     Ok(true) => {
-                        if map_was_active != self.scene.map_active() {
-                            // HUD transitions have the same release contract as M.
+                        #[cfg(feature = "hud")]
+                        let help_changed = help_was_active
+                            != state
+                                .hud
+                                .as_ref()
+                                .is_some_and(|hud| hud.gpu.view.blocks_scene_input());
+                        #[cfg(not(feature = "hud"))]
+                        let help_changed = false;
+                        if map_was_active != self.scene.map_active() || help_changed {
+                            // Window close buttons have the same release contract
+                            // as M/F1, including any cursor sampled over the UI.
                             self.held.clear();
                             self.last_cursor = None;
                             self.right_held = false;
                             self.middle_held = false;
+                            self.scene.release_manual_input();
                         }
                         if let Some(audio) = &mut self.audio {
                             let frame = self.scene.audio_frame().or_else(|| {
@@ -731,6 +768,19 @@ fn part_toggle_for_key(key: PhysicalKey) -> Option<crate::scene::PartToggle> {
         PhysicalKey::Code(KeyCode::KeyY) => Some(PartToggle::ReactionWheels),
         PhysicalKey::Code(KeyCode::KeyG) => Some(PartToggle::Gear),
         PhysicalKey::Code(KeyCode::KeyP) => Some(PartToggle::Parachutes),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "hud")]
+fn hud_action(key: PhysicalKey, repeat: bool, consumed: bool) -> Option<crate::hud::Action> {
+    if repeat || consumed {
+        return None;
+    }
+    match key {
+        PhysicalKey::Code(KeyCode::F1) => Some(crate::hud::Action::Help),
+        PhysicalKey::Code(KeyCode::F2) => Some(crate::hud::Action::Visibility),
+        PhysicalKey::Code(KeyCode::F3) => Some(crate::hud::Action::Telemetry),
         _ => None,
     }
 }
@@ -921,6 +971,55 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(feature = "hud")]
+    fn help_hud_telemetry_keys_are_edges_and_keep_existing_camera_and_flight_bindings() {
+        for (key, expected) in [
+            (KeyCode::F1, crate::hud::Action::Help),
+            (KeyCode::F2, crate::hud::Action::Visibility),
+            (KeyCode::F3, crate::hud::Action::Telemetry),
+        ] {
+            let key = PhysicalKey::Code(key);
+            assert_eq!(hud_action(key, false, false), Some(expected));
+            assert_eq!(hud_action(key, true, false), None);
+            assert_eq!(hud_action(key, false, true), None);
+            assert_eq!(camera_shortcut(key, false), None);
+        }
+        assert_eq!(
+            hud_action(PhysicalKey::Code(KeyCode::F8), false, false),
+            None
+        );
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        scene.input.set_throttle(0.4);
+        scene.input.engine_active = true;
+        scene.input.sas_inverted = true;
+        scene.input.keys.nose_up = true;
+        scene.release_manual_input();
+        assert_eq!(scene.control_axes(), glam::DVec3::ZERO);
+        assert_eq!(scene.input.throttle, 0.4);
+        assert!(scene.input.engine_active && scene.input.effective_sas());
+        let held = [KeyCode::KeyW, KeyCode::KeyF, KeyCode::ShiftLeft]
+            .into_iter()
+            .collect();
+        let mut view = crate::hud::View::default();
+        view.apply(crate::hud::Action::Help);
+        let gate = view.blocks_scene_input();
+        let slew = condition_flight_input(
+            &mut scene,
+            &held,
+            Some([1000.0, 500.0]),
+            [1000.0, 1000.0],
+            gate,
+            gate,
+            false,
+        );
+        scene.push_live_input(0.1, slew.0, slew.1);
+        assert_eq!(scene.control_axes(), glam::DVec3::ZERO);
+        assert_eq!(slew, (false, false));
+        assert_eq!(scene.input.throttle, 0.4);
+        assert!(scene.input.engine_active && scene.input.effective_sas());
+    }
     #[test]
     #[cfg(feature = "hud")]
     fn map_owns_input_without_pausing_relaunching_or_moving_the_flight_camera() {

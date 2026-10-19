@@ -166,6 +166,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "Map: --map starts the native egui system map (requires HUD). M toggles map/pilot ownership; flight continues with neutral manual axes and retained throttle/SAS. Six baked scopes, body selection/framing/follow, orbit/pan/zoom, PRIMARY and available shared local rails. Remote rails are not transmitted; no client forecast is fabricated. Maneuver interaction is not yet ported."
                 );
+                println!(
+                    "HUD keys (with HUD feature/enabled): F1 controls help, F2 flight HUD visibility (map remains usable), F3 telemetry/fleet panels. Help owns manual/camera input without pausing or cutting the engine; F1 restores visible help from hidden HUD. Hidden flight instruments release their GPU callback resource. These are session-only visibility changes, not graphics requests or authority acknowledgements."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),

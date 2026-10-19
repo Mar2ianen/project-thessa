@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-19",
+  "baseline": "2117033",
+  "scope": "Native F1 controls help, F2 flight-HUD visibility and F3 telemetry/fleet-panel visibility; shared manual-input release on ownership transitions. No new physics, graphics mode, wire payload or dependency.",
+  "contract": {
+    "help": "Visible help replaces other HUD/map widgets and suppresses native manual/camera input. F1 restores visible help from hidden UI. Opening/closing via hotkey or close button releases held manual/cursor/SAS-override demands, without pausing, cutting thrust or changing retained throttle/base SAS.",
+    "visibility": "Ordinary F2/F3 changes preserve held pilot keys. F2 suppresses flight HUD meshes and releases the navball callback resource; active map stays usable. F3 hides panels, not telemetry collection or transport. Visibility is session-only and resets on window-HUD recreation.",
+    "resources": "Help and hidden flight instruments release FastNavball. Same egui renderer/device/target retained; scene rendering and authority advancement continue.",
+    "feature_off": "No-default-features remains supported; HUD keys are absent without an enabled HUD."
+  },
+  "verification": {
+    "status": "all fourteen local gates passed on unchanged source inputs",
+    "directory": "target/test-tmp/native-hud-visibility-final",
+    "source_count": 596,
+    "source_manifest_sha256": "34c7c553da007f13c207db59f76bb6aeb9241f554d48ee1453a8cd9c449e440e",
+    "source_boundary": "Rust, manifests and shader inputs in source.json; no asset changes. Final documentation/evidence edits do not change this set.",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "checks": {
+      "fmt_all_check": "passed",
+      "workspace_all_targets_all_features_clippy_D_warnings": "passed",
+      "native_no_default_all_targets_clippy_D_warnings": "passed",
+      "workspace_lib_bins_passed": 1918,
+      "workspace_integration_passed": 95,
+      "native_no_default_unit_passed": 54,
+      "bevy_render_gpu_passed": 24,
+      "release_native_server_build": "passed",
+      "render_wgpu_release_ignored_passed": 31,
+      "native_release_ignored_passed": 31,
+      "architecture": "passed; 12 guarded foundational crates",
+      "agent_qa_passed": 5,
+      "diff_whitespace": "passed",
+      "muted_wayland_map_flight_smoke": "passed; 8 presentations, 0.7 simulation seconds, zero capacity rejections, no flight stop"
+    },
+    "commands": "Exact argv, exit codes, durations and log hashes are in gates.json. Includes cargo test --workspace --lib --bins; cargo test --workspace --test '*'; cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored; cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1; cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1.",
+    "new_regressions": "Visibility/help state transitions; hidden flight HUD produces no toolkit meshes; help restores from hidden UI; hidden flight HUD retains visible map; presentation flags do not edit scene/flight requests; hotkeys are edges, respect widget capture and do not collide with camera/clock bindings; help neutralizes manual demand while retaining throttle/engine/base SAS. Existing shared-device GPU fixture additionally checks callback release when hidden or help-visible.",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "diagnostics": "An initial new CPU visibility test inspected first-frame hidden egui-window output before layout convergence; warmed toolkit layout before asserting restored visibility. The corrected tests and all final gates passed. No product workaround or skipped test.",
+  "limitations": [
+    "No OS-level F-key/pointer injection or independent usability/visual acceptance; native window smoke does not exercise those keys",
+    "No paired performance improvement or game-FPS claim; no new shader/physics numerical model requiring a new numeric-error envelope",
+    "No Metal/WebGPU execution or remote CI claim",
+    "Bevy retirement remains incomplete: readouts, guidance/event fixtures, optical/render consumers and packaging/tooling still need replacement"
+  ]
+}

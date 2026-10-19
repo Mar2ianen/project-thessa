@@ -62,7 +62,11 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
 - **Implemented follow-up:** Mouse Aim and held temporary SAS inversion share
   the shipped neutral input helpers; focus loss and suspension release held
   axes/gestures, cursor steering and the SAS override and send neutral input;
-- help/telemetry/HUD visibility and manual-takeover behavior;
+- **Implemented follow-up:** F1 controls help, F2 flight HUD visibility and F3
+  telemetry/fleet panels. Help exclusively owns scene/manual input without
+  pausing or cutting thrust; hidden instruments release their GPU callback.
+  Map remains usable independently of flight-HUD visibility. Guidance-specific
+  manual-takeover behavior still belongs to the remaining adapter below;
 - opt-in coastal flyby guidance and server-side maneuver execution fixtures.
 
 Source inspection distinguishes retained functionality from future UI: the
@@ -79,8 +83,21 @@ load/propulsion and parachute summaries; `craft_orbit_summary` adds scheduler
 wakes/notices. Native `FlightData` currently supplies reference-body speed,
 datum/AGL and navball inputs, not all of those fields. Missing remote force/air
 observations must remain unavailable rather than be inferred from a lean
-snapshot as if acknowledged. F1/F2/F3 help/HUD/telemetry visibility and the
-existing mode/readout actions are retained host behavior still to reconcile.
+snapshot as if acknowledged. F1/F2/F3 visibility now has native consumers;
+remaining mode/readout actions still need reconciliation. The visibility state
+is session-owned UI policy, never authoritative state or an acknowledgement.
+
+The visibility adapter keeps telemetry collection and server observation running
+when F3 hides their panels; it is not a profiler/transport toggle. F2 suppresses
+flight HUD meshes and releases the navball callback without changing graphics
+requests, engine/throttle/base SAS, map ownership or scene rendering. F1 restores
+visible help even from hidden UI. Help temporarily replaces the other HUD/map
+widgets, so neither toolkit map gestures nor native camera/manual commands can
+leak through it. Opening/closing help releases held demands; an ordinary F2/F3
+visibility edit does not discard a held flight key. These flags persist during
+normal resizing but are currently reset with a recreated window HUD, not saved
+to graphics.toml. No OS-level key injection or independent usability acceptance
+is claimed. Evidence is in `artifacts/native-hud-visibility-2026-10-19.json`.
 
 Unmarked items remain replacement obligations, not features certified by the
 existing native flight deck. Native arrow keys still control the camera;

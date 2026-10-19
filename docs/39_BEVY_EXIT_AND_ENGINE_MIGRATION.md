@@ -37,6 +37,14 @@ ownership. Its bodies and PRIMARY use one newest-authority epoch, separate from
 powered-flight forecast requests, apsis/wake readouts, display-body choices and
 remaining flight-command/appearance adapters still prevent full host retirement.
 
+Native F1/F2/F3 now provide controls help, flight-HUD visibility and telemetry/
+fleet visibility. Help temporarily replaces other widgets and captures manual/
+camera input without pausing the authority or cutting thrust; ordinary visibility
+edits retain held pilot keys. Hidden instruments release their navball callback,
+and F2 leaves an active map usable. These are session-only presentation flags,
+not new graphics requests or authoritative acknowledgements. See doc 66 for the
+remaining readout/guidance adapters and visibility evidence.
+
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only
 unit sphere is advanced by the canonical consumer and native selection below;

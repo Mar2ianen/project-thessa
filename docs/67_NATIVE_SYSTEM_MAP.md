@@ -93,13 +93,17 @@ display dithering). The target-size ignored benchmark
 records catalogue cost/bytes, open snapshot and toolkit/tessellation costs and
 closed-map dispatch, not game FPS or an old-client performance win.
 
-All fourteen final local gates passed on 596 unchanged source inputs, including
+The map stage's fourteen final local gates passed on 596 unchanged source inputs, including
 1,915 workspace lib/bin tests, 95 integration tests, 24 Bevy GPU tests, 31 native
 and 31 render-wgpu ignored hardware/diagnostic tests. Actual commands, hardware,
 cost measurements and the retained failed/during-edit diagnostics are recorded
 in `artifacts/native-system-map-2026-10-19.json`. No independent
 visual/usability review, OS-level key/pointer injection, Metal/WebGPU execution,
 remote CI or complete Bevy retirement is implied.
+
+The subsequent F1/F2/F3 HUD-visibility adapter is tracked separately in doc 66:
+F2 never hides the active map; visible help temporarily replaces its widgets
+until closed, retaining map navigation state and exclusive flight-input gating.
 
 ## Remaining obligations
 

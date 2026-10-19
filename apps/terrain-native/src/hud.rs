@@ -200,7 +200,7 @@ impl Stats {
 }
 
 pub struct Hud {
-    map: crate::map::View,
+    pub view: View,
     pub context: egui::Context,
     renderer: egui_wgpu::Renderer,
     adapter: String,
@@ -211,7 +211,7 @@ impl Hud {
     pub fn new(backend: &Backend, format: wgpu::TextureFormat) -> Self {
         let context = context();
         Self {
-            map: crate::map::View::default(),
+            view: View::default(),
             context,
             renderer: egui_wgpu::Renderer::new(
                 &backend.device,
@@ -231,7 +231,13 @@ impl Hud {
     ) -> egui::FullOutput {
         let navball = stats
             .data
-            .filter(|_| stats.live_flight && stats.instruments.enabled && !controls.map_open)
+            .filter(|_| {
+                stats.live_flight
+                    && stats.instruments.enabled
+                    && !controls.map_open
+                    && self.view.visible
+                    && !self.view.help
+            })
             .map(|data| fastnavball::Paint {
                 frame: thessa_flight_authority::navball::InstrumentFrame::new(
                     data.local_up_body,
@@ -253,7 +259,7 @@ impl Hud {
             stats,
             &self.adapter,
             navball,
-            &mut self.map,
+            &mut self.view,
         )
     }
 
@@ -331,6 +337,74 @@ pub(super) fn context() -> egui::Context {
     context
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Help,
+    Visibility,
+    Telemetry,
+}
+
+pub struct View {
+    pub visible: bool,
+    pub help: bool,
+    pub telemetry: bool,
+    map: crate::map::View,
+}
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            help: false,
+            telemetry: true,
+            map: Default::default(),
+        }
+    }
+}
+impl View {
+    pub fn apply(&mut self, action: Action) {
+        match action {
+            Action::Help => {
+                self.help = !self.visible || !self.help;
+                self.visible = true;
+            }
+            Action::Visibility => self.visible = !self.visible,
+            Action::Telemetry => self.telemetry = !self.telemetry,
+        }
+    }
+    pub fn blocks_scene_input(&self) -> bool {
+        self.visible && self.help
+    }
+}
+
+fn help(context: &egui::Context, open: &mut bool) {
+    egui::Window::new("Thessa | controls (F1)").open(open)
+        .order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER,[0.0,0.0])
+        .default_width(600.0).resizable(true).show(context,|ui| {
+            egui::ScrollArea::vertical().max_height(500.0).show(ui,|ui| {
+                ui.heading("Native scene and flight controls");
+                for (keys,action) in [
+                    ("F1 / F2 / F3","Help / flight HUD visibility / telemetry and fleet panels"),
+                    ("M","System map / scene; requires enabled HUD"),
+                    ("W S A D Q E","Manual pitch / yaw / roll; takes over Mouse Aim"),
+                    ("Shift / Ctrl, X / Z","Throttle slew, cut / full"),
+                    ("Space, CapsLock","Engine intent, precision controls"),
+                    ("C, T, hold F","Control law, SAS base demand, temporary SAS inversion"),
+                    ("R Y G P","RCS / reaction wheels / landing gear / parachutes"),
+                    ("F8, [ / ], Backspace","Pause vote, warp half / double, canonical relaunch without rewinding time"),
+                    ("Arrows, V, Backquote","Scene camera orbit / zoom, chase toggle, reset camera"),
+                    ("Right / middle drag, wheel","Scene orbit / vehicle pan, zoom (outside widgets)"),
+                    ("F6, Shift + right drag","Survey site cycle, survey free look"),
+                    ("Map canvas","Right-drag orbit, middle-drag pan, wheel zoom; selector/click selects; Frame body / PRIMARY follows"),
+                    ("Escape","Exit scene when input is not captured; use M or the close button to leave the map"),
+                ] {ui.horizontal_wrapped(|ui| {ui.strong(keys);ui.label(action);});}
+                ui.separator();
+                ui.label("Help owns scene/flight input but does not pause the authority or cut thrust. Close it with F1 or the window close button. F2 hides the flight HUD, not the system map; F1 always restores visible help.");
+                ui.label("Mouse Aim uses a 6% cursor deadband. Camera gestures and widgets do not steer. Focus loss releases manual input and temporary SAS inversion without changing base SAS/throttle/engine intent.");
+                ui.label("Server requests are not acknowledgements. A lost link freezes the last presentation; it never starts local physics. Remote rails/force data are not fabricated. This viewer is not complete client parity.");
+            });
+        });
+}
+
 fn widgets(
     context: &egui::Context,
     input: egui::RawInput,
@@ -338,14 +412,17 @@ fn widgets(
     stats: &Stats,
     adapter: &str,
     navball: Option<fastnavball::Paint>,
-    map: &mut crate::map::View,
+    view: &mut View,
 ) -> egui::FullOutput {
     context.run_ui(input, |root| {
         let context = root.ctx();
+        if view.visible && view.help {help(context,&mut view.help);return;}
         if controls.map_open && let Some(data)=&stats.map {
-            map.show(context,&mut controls.map_open,data);
+            view.map.show(context,&mut controls.map_open,data);
             return;
         }
+        if !view.visible {return;}
+        if view.telemetry {
         egui::Window::new("Thessa | terrain migration")
             .default_open(!stats.live_flight)
             .default_pos([16.0, 16.0])
@@ -353,6 +430,7 @@ fn widgets(
             .resizable(false)
             .show(context, |ui| {
                 ui.label("Owned renderer · shared-device egui HUD");
+                ui.small("F1 help · F2 HUD · F3 telemetry");
                 if ui.button("System map (M)").clicked() {controls.map_open=true;}
                 ui.small(adapter);
                 ui.label(format!("Presentation time: {:.3} s", stats.sim_time_s));
@@ -512,8 +590,9 @@ fn widgets(
                     "Migration viewer, not the complete game client.",
                 );
             });
+        }
         if let (Some(navball),Some(data))=(navball,stats.data){flight_deck(context,navball,data,controls,stats);}
-        if let Some(fleet) = &stats.fleet {
+        if view.telemetry && let Some(fleet) = &stats.fleet {
             egui::Window::new("Fleet | authoritative observer")
                 .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
                 .default_width(330.0)
@@ -814,6 +893,110 @@ mod tests {
     }
 
     #[test]
+    fn visibility_and_help_are_presentation_only_and_hidden_hud_has_no_meshes() {
+        let context = context();
+        let mut view = View::default();
+        let mut controls = controls();
+        let before = controls;
+        view.apply(Action::Help);
+        assert!(view.blocks_scene_input());
+        view.apply(Action::Visibility);
+        assert!(!view.blocks_scene_input());
+        for _ in 0..3 {
+            let output = widgets(
+                &context,
+                input(1280, 720, 1.0),
+                &mut controls,
+                &Stats::default(),
+                "test",
+                None,
+                &mut view,
+            );
+            let empty = context
+                .tessellate(output.shapes.clone(), output.pixels_per_point)
+                .is_empty();
+            output.drop_without_applying_deltas();
+            assert!(empty);
+        }
+        view.apply(Action::Help);
+        assert!(view.visible && view.help);
+        for _ in 0..3 {
+            widgets(
+                &context,
+                input(1280, 720, 1.0),
+                &mut controls,
+                &Stats::default(),
+                "test",
+                None,
+                &mut view,
+            )
+            .drop_without_applying_deltas();
+        }
+        let output = widgets(
+            &context,
+            input(1280, 720, 1.0),
+            &mut controls,
+            &Stats::default(),
+            "test",
+            None,
+            &mut view,
+        );
+        let empty = context
+            .tessellate(output.shapes.clone(), output.pixels_per_point)
+            .is_empty();
+        output.drop_without_applying_deltas();
+        assert!(!empty);
+        view.apply(Action::Help);
+        assert!(!view.blocks_scene_input());
+        view.apply(Action::Telemetry);
+        assert!(!view.telemetry);
+        assert_eq!(
+            controls, before,
+            "visibility must not edit flight/camera/graphics requests"
+        );
+    }
+
+    #[test]
+    fn hiding_flight_hud_never_hides_the_map_or_changes_its_input_ownership() {
+        let context = context();
+        let mut view = View::default();
+        view.apply(Action::Visibility);
+        let mut scene = crate::scene::Scene::load(Default::default()).unwrap();
+        scene.set_map_open(true);
+        let mut controls = Controls::from_scene(&scene);
+        let before = controls;
+        for _ in 0..3 {
+            widgets(
+                &context,
+                input(1280, 800, 1.0),
+                &mut controls,
+                &Stats::from_scene(&scene, 0, 0.0),
+                "test",
+                None,
+                &mut view,
+            )
+            .drop_without_applying_deltas();
+        }
+        let output = widgets(
+            &context,
+            input(1280, 800, 1.0),
+            &mut controls,
+            &Stats::from_scene(&scene, 0, 0.0),
+            "test",
+            None,
+            &mut view,
+        );
+        let visible = !context
+            .tessellate(output.shapes.clone(), output.pixels_per_point)
+            .is_empty();
+        output.drop_without_applying_deltas();
+        assert!(visible);
+        assert!(scene.map_active());
+        assert_eq!(controls, before);
+        assert!(!view.visible && !view.blocks_scene_input());
+    }
+
+    #[test]
     fn vehicle_hud_reset_restores_shared_camera_and_preserves_survey() {
         let context = context();
         let input = egui::RawInput {
@@ -836,7 +1019,7 @@ mod tests {
             &Stats::default(),
             "test",
             None,
-            &mut crate::map::View::default(),
+            &mut View::default(),
         )
         .drop_without_applying_deltas();
         assert_eq!(controls.distance, 32.0);
@@ -878,7 +1061,7 @@ mod tests {
             &stats,
             "test GPU",
             Some(navball),
-            &mut crate::map::View::default(),
+            &mut View::default(),
         )
         .drop_without_applying_deltas();
         assert_eq!(controls, before);
@@ -913,7 +1096,7 @@ mod tests {
                 &Stats::default(),
                 "test GPU",
                 None,
-                &mut crate::map::View::default(),
+                &mut View::default(),
             )
             .drop_without_applying_deltas();
         }
@@ -938,7 +1121,7 @@ mod tests {
             &Stats::default(),
             "test GPU",
             None,
-            &mut crate::map::View::default(),
+            &mut View::default(),
         )
         .drop_without_applying_deltas();
         assert!(context.egui_wants_pointer_input());
@@ -953,7 +1136,7 @@ mod tests {
             &Stats::default(),
             "test GPU",
             None,
-            &mut crate::map::View::default(),
+            &mut View::default(),
         )
         .drop_without_applying_deltas();
         assert!(!context.egui_wants_pointer_input());
@@ -1045,6 +1228,31 @@ mod tests {
                     "passive presentation must not change flight commands"
                 );
             }
+            hud.view.visible = false;
+            let output = hud.run(input(800, 600, 1.0), &mut controls, &stats);
+            assert!(
+                hud.context
+                    .tessellate(output.shapes.clone(), output.pixels_per_point)
+                    .is_empty()
+            );
+            output.drop_without_applying_deltas();
+            assert!(
+                hud.renderer
+                    .callback_resources
+                    .get::<fastnavball::FastNavball>()
+                    .is_none()
+            );
+            hud.view.visible = true;
+            hud.view.help = true;
+            let output = hud.run(input(800, 600, 1.0), &mut controls, &stats);
+            output.drop_without_applying_deltas();
+            assert!(
+                hud.renderer
+                    .callback_resources
+                    .get::<fastnavball::FastNavball>()
+                    .is_none()
+            );
+            hud.view.help = false;
             stats.instruments.enabled = false;
             hud.run(input(800, 600, 1.0), &mut controls, &stats)
                 .drop_without_applying_deltas();

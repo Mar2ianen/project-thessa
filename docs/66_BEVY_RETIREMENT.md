@@ -75,7 +75,14 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
   mode stays an acknowledged-pose intent with no local stepping or fabricated
   air/force observations. The bank-hold sign defect of the retained client
   (`craft_bank_rad` negated the right-roll convention) is fixed in both decks.
-  Remaining: server-side maneuver execution fixtures.
+- **Implemented follow-up:** the pilot's one-shot typed `ExecuteManeuver`
+  fixture is ported as native `--maneuver-kick MPS` (1<dv<=2000 m/s, requires
+  `--server-flight`): one prograde node at authority time + 20 s over the
+  normal wire, sent at most once per session after the first acknowledged
+  moving snapshot, with no local stepping or fabricated burn observations.
+  Local mode has no executor and stays rejected; a rejected plan surfaces in
+  the server wake notice. No interactive maneuver-node editor exists to
+  preserve, and none is claimed.
 
 Source inspection distinguishes retained functionality from future UI: the
 legacy map had orbit/apsis/wake readouts and asked the existing BakeQueue for a
@@ -118,8 +125,10 @@ reuse prior replica loads. Foreign bodies never borrow home rotation/air/terrain
 and acoustics stays in the source's reference atmosphere. See doc 57 and
 `artifacts/native-flight-readouts-2026-10-19.json` for checks/cost. The opt-in
 coastal flyby fixture is now ported natively (see the retirement list above and
-doc 57); guidance/target inputs, the server maneuver fixture and broader
-platform/visual acceptance remain.
+doc 57); guidance/target inputs and broader platform/visual acceptance remain.
+The one-shot typed `ExecuteManeuver` fixture is now the native
+`--maneuver-kick` (see the retirement list above); an interactive maneuver
+editor is future work, not a retained feature.
 F1/F2/F3 visibility and display preferences are session-owned UI policy, never
 authoritative state or acknowledgement.
 

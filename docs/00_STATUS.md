@@ -142,8 +142,9 @@ direct native port (F7/`--flyby`/HUD): demands-only pilot input over the
 acknowledged authority — with takeover, focus-loss, pause/warp and link-loss
 cancellation and no auto-resume — and in server mode intents only, never local
 steps or fabricated air/force observations. The retained client's negated
-bank-hold sign is fixed in both decks. Remaining guidance/target and the
-server maneuver fixture stay open.
+bank-hold sign is fixed in both decks. The one-shot typed server
+`ExecuteManeuver` fixture is likewise ported (see below); remaining
+guidance/target semantic inputs stay open.
 The map now reads the physics optimizer's existing JIT cache, through shared
 execution eligibility/interval/geometry guards; it neither requests a bake nor
 substitutes a hypothetical zero-force coast during powered/live flight. Only
@@ -161,6 +162,9 @@ to a foreign display body; acoustics keeps the source's reference atmosphere.
 Lean replicas withhold absent air/thrust/TWR/g-load even when display-only force
 reconstructions exist. Checked transmitted canopy/wheel loads remain observable.
 Target/guidance semantic inputs and remaining flight/event fixtures stay open.
+The one-shot typed server `ExecuteManeuver` fixture is ported as native
+`--maneuver-kick MPS` (server-flight only, one prograde node on the normal
+wire, one session maximum); local mode has no executor and stays rejected.
 The transport retains its stdio handshake, receive timestamps/inbox, input
 mailbox and child cleanup;
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot

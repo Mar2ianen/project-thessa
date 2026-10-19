@@ -33,6 +33,24 @@ fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
         (vec!["--flight", "--flyby", "--map"], "--flyby requires"),
         (vec!["--site"], "--site requires"),
         (vec!["--site", "3"], "--site requires"),
+        (vec!["--maneuver-kick"], "--maneuver-kick requires"),
+        (
+            vec!["--flight", "--maneuver-kick", "250"],
+            "--maneuver-kick requires",
+        ),
+        (vec!["--maneuver-kick", "abc"], "ParseFloatError"),
+        (
+            vec!["--server-flight", "--maneuver-kick", "1.0"],
+            "--maneuver-kick dv must be finite",
+        ),
+        (
+            vec!["--server-flight", "--maneuver-kick", "2001"],
+            "--maneuver-kick dv must be finite",
+        ),
+        (
+            vec!["--server-flight", "--maneuver-kick", "NaN"],
+            "--maneuver-kick dv must be finite",
+        ),
         (vec!["--site", "0", "--flight"], "--site is survey-only"),
         (
             vec!["--site", "1", "--vehicle-preview"],
@@ -137,6 +155,8 @@ fn help_exposes_presentation_sampling_and_warmup_boundary() {
         "--flyby",
         "F7",
         "without auto-resume",
+        "--maneuver-kick",
+        "ExecuteManeuver",
         "WASDQE",
         "COAST",
         "--site",

@@ -687,6 +687,132 @@ fn authoritative_stop_keeps_the_link_for_bounded_remote_relaunch() {
 
 #[cfg(unix)]
 #[test]
+fn maneuver_kick_is_one_typed_wire_intent_without_local_steps_or_fabricated_burn_state() {
+    let mut scene = replica();
+    // Local mode has no maneuver executor: rejected, never faked locally.
+    let mut local = Scene::load(Default::default()).unwrap();
+    local.setup_flight().unwrap();
+    assert!(local.request_maneuver_kick(250.0).is_err());
+    // Bounds match the retained fixture: finite, strictly above 1 m/s.
+    for dv in [0.5, 1.0, 2001.0, f64::NAN, f64::INFINITY] {
+        assert!(scene.request_maneuver_kick(dv).is_err(), "dv {dv}");
+    }
+    // No live link: not sendable yet, and nothing is queued or invented.
+    assert!(!scene.request_maneuver_kick(250.0).unwrap());
+    assert!(scene.remote.as_ref().unwrap().commands.is_empty());
+    assert!(!scene.maneuver_kick_sent);
+
+    let good = snapshot(&scene, 2.0);
+    let body = scene
+        .celestial
+        .ephemeris()
+        .body_state(
+            scene.flight.as_ref().unwrap().reference_body,
+            thessa_sim_core::SimTime(2.0),
+        )
+        .unwrap();
+    let bytes: String = thessa_flight_net::encode_snapshot(&good)
+        .unwrap()
+        .iter()
+        .map(|byte| format!("\\{byte:03o}"))
+        .collect();
+    let path = peer(&format!("printf '{bytes}'; exec sleep 30"));
+    let link =
+        thessa_flight_net::embedded::EmbeddedLink::spawn_server(&path, Duration::from_secs(5))
+            .unwrap();
+    scene.remote.as_mut().unwrap().link = Some(link);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while scene.server_snapshot_count() == Some(0) {
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let before = scene.flight.as_ref().unwrap().state;
+    assert!(scene.request_maneuver_kick(250.0).unwrap());
+    let commands = scene.remote.as_ref().unwrap().commands.clone();
+    assert_eq!(commands.len(), 1, "one node, one send, no re-arm");
+    let node = match &commands[0] {
+        Command::ExecuteManeuver { nodes } => {
+            assert_eq!(nodes.len(), 1);
+            nodes[0]
+        }
+        other => panic!("expected ExecuteManeuver, got {other:?}"),
+    };
+    // Epoch is authority time plus the retained 20 s lead, prograde along the
+    // acknowledged relative velocity; the server owns the plan from here.
+    assert_eq!(node.epoch_s, 2.0 + 20.0);
+    let dv = DVec3::from_array(node.delta_v_mps);
+    assert!((dv.length() - 250.0).abs() < 1e-9);
+    assert!(
+        dv.normalize()
+            .dot((before.velocity_inertial_mps - body.velocity_inertial).normalize())
+            > 1.0 - 1e-9
+    );
+    assert!(scene.maneuver_kick_sent);
+    // One-shot: a repeated request returns success without queueing again.
+    assert!(scene.request_maneuver_kick(900.0).unwrap());
+    assert_eq!(scene.remote.as_ref().unwrap().commands, commands);
+    // Intent is never local physics: state, clock and axes stay untouched.
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+    assert_eq!(scene.flight.as_ref().unwrap().accumulator_s, 0.0);
+    assert_eq!(scene.control_axes(), DVec3::ZERO);
+    // The next input drains the command over the wire; no re-queue follows.
+    scene.push_live_input(0.0, false, false);
+    scene.advance_flight(0.0, None).unwrap();
+    assert!(scene.remote.as_ref().unwrap().commands.is_empty());
+    assert!(scene.maneuver_kick_sent);
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+    scene.stop_server_flight("fixture complete".into());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn maneuver_kick_waits_for_motion_and_never_fires_on_a_stopped_replica() {
+    let mut scene = replica();
+    let rest = snapshot(&scene, 2.0);
+    let body = scene
+        .celestial
+        .ephemeris()
+        .body_state(
+            scene.flight.as_ref().unwrap().reference_body,
+            thessa_sim_core::SimTime(2.0),
+        )
+        .unwrap();
+    let mut stopped = rest.clone();
+    // Co-rotating craft: no prograde direction exists yet, so the kick waits.
+    stopped.state.velocity_inertial_mps = body.velocity_inertial;
+    let bytes: String = thessa_flight_net::encode_snapshot(&stopped)
+        .unwrap()
+        .iter()
+        .map(|byte| format!("\\{byte:03o}"))
+        .collect();
+    let path = peer(&format!("printf '{bytes}'; exec sleep 30"));
+    let link =
+        thessa_flight_net::embedded::EmbeddedLink::spawn_server(&path, Duration::from_secs(5))
+            .unwrap();
+    scene.remote.as_mut().unwrap().link = Some(link);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while scene.server_snapshot_count() == Some(0) {
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(!scene.request_maneuver_kick(250.0).unwrap());
+    assert!(scene.remote.as_ref().unwrap().commands.is_empty());
+    // A stopped authoritative flight never re-arms or fabricates a plan.
+    let mut failed = stopped.clone();
+    failed.flight_error = Some("fixture: authoritative stop".into());
+    scene.accept_server_snapshot(&failed).unwrap();
+    assert!(!scene.request_maneuver_kick(250.0).unwrap());
+    assert!(scene.remote.as_ref().unwrap().commands.is_empty());
+    assert!(!scene.maneuver_kick_sent);
+    scene.stop_server_flight("fixture complete".into());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene() {
     let mut scene = Scene::load(Default::default()).unwrap();
     scene.setup_flight().unwrap();
@@ -901,6 +1027,61 @@ fn real_server_flyby_uses_intents_not_replica_steps_or_fabricated_load_observati
         !scene.flyby.active,
         "a lost link withdraws guidance without local integration or automatic fallback"
     );
+}
+
+#[test]
+#[ignore = "requires a built thessa-server executable beside the native viewer"]
+fn real_server_maneuver_kick_is_one_wire_intent_the_server_executes() {
+    let server = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(format!("thessa-server{}", std::env::consts::EXE_SUFFIX));
+    let mut scene = Scene::load(Default::default()).unwrap();
+    scene
+        .enable_server_flight(Some(&server), Duration::from_secs(10))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while scene.server_snapshot_count().unwrap() < 2 {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline && !scene.flight_stopped());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // One typed ExecuteManeuver crosses the wire; the acknowledged craft is
+    // untouched until the server's own scheduler runs the plan.
+    assert!(scene.request_maneuver_kick(250.0).unwrap());
+    let before = scene.flight.as_ref().unwrap().state;
+    scene.push_live_input(0.0, false, false);
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+    assert_eq!(scene.flight.as_ref().unwrap().accumulator_s, 0.0);
+    // Warp is the shared server-owned time scale: it carries the authority
+    // clock to the 20 s node epoch without any local stepping.
+    scene.request_warp(128.0).unwrap();
+    let epoch_deadline = Instant::now() + Duration::from_secs(10);
+    while scene.flight.as_ref().unwrap().flight_time_s <= 20.5 {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < epoch_deadline && !scene.flight_stopped());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // The server-owned executor, never the client, drives the burn: the
+    // acknowledged engine/throttle state must show the plan running.
+    let burn_deadline = Instant::now() + Duration::from_secs(10);
+    while scene.flight.as_ref().unwrap().throttle < 0.05
+        || !scene.flight.as_ref().unwrap().engine_active
+    {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < burn_deadline && !scene.flight_stopped());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(scene.flight.as_ref().unwrap().accumulator_s, 0.0);
+    assert!(scene.flight_data().unwrap().loads.is_none());
+    scene.request_warp(1.0).unwrap();
+    scene.stop_server_flight("fixture complete".into());
 }
 
 #[test]

@@ -27,6 +27,9 @@ pub struct Scene {
     remote: Option<RemoteFlight>,
     clock: FlightClock,
     pub flyby: crate::flyby::Flyby,
+    /// One-shot prograde kick already queued on the wire (retained
+    /// `ExecuteManeuver` fixture semantics: never re-sent in a session).
+    maneuver_kick_sent: bool,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -459,6 +462,7 @@ impl Scene {
             remote: None,
             launch_site: sites[0].0,
             vehicle: None,
+            maneuver_kick_sent: false,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
             input: thessa_flight_authority::input::FlightInput::default(),
             control_mode: thessa_flight_authority::ControlMode::Navball,
@@ -967,7 +971,7 @@ impl Scene {
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
-            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?} sas_requested={} sas_temporary_inversion={} flyby_active={} flyby_target_alt_m={} flyby_target_speed_mps={} flyby_heading_rad={:?}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp,self.input.sas_enabled,self.input.sas_inverted,self.flyby.active,self.flyby.target_alt_datum_m,self.flyby.target_speed_mps,self.flyby.target_heading_rad);
+            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?} sas_requested={} sas_temporary_inversion={} flyby_active={} flyby_target_alt_m={} flyby_target_speed_mps={} flyby_heading_rad={:?} maneuver_kick_sent={}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp,self.input.sas_enabled,self.input.sas_inverted,self.flyby.active,self.flyby.target_alt_datum_m,self.flyby.target_speed_mps,self.flyby.target_heading_rad,self.maneuver_kick_sent);
             let data = self.flight_data();
             format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0} display_body={:?} air_observed={} loads_observed={}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.map_or(f64::NAN,|d|d.surface_speed_mps),data.map_or(f64::NAN,|d|d.vertical_speed_mps),data.map_or(f64::NAN,|d|d.altitude_datum_m),data.and_then(|d|d.altitude_agl_m).unwrap_or(f64::NAN),data.map(|d|d.display_body),data.is_some_and(|d|d.air.is_some()),data.is_some_and(|d|d.loads.is_some()))})
     }
@@ -1156,6 +1160,54 @@ impl Scene {
             PartToggle::Parachutes => (toggle, !chutes),
         };
         self.set_part_state(toggle, enabled);
+    }
+
+    /// One-shot typed prograde kick over the normal wire (retained
+    /// `ExecuteManeuver` fixture): the server executes the plan; the client
+    /// only sends intent. Requires an acknowledged server flight with
+    /// relative motion above 1 m/s; a rejected plan surfaces in the server's
+    /// wake notice, never as client state. Returns `false` while not yet
+    /// sendable (caller may retry); sends at most once per session.
+    pub fn request_maneuver_kick(&mut self, dv_mps: f64) -> Result<bool, String> {
+        if !dv_mps.is_finite() || dv_mps <= 1.0 || dv_mps > 2000.0 {
+            return Err("maneuver kick dv must be finite and within 1<dv<=2000 m/s".into());
+        }
+        if self.maneuver_kick_sent {
+            return Ok(true);
+        }
+        let Some(remote) = &mut self.remote else {
+            return Err("maneuver kick requires server flight; local mode has no executor".into());
+        };
+        if remote.link.as_ref().is_none_or(|link| link.is_closed()) {
+            return Ok(false);
+        }
+        let flight = self.flight.as_ref().ok_or("missing flight replica")?;
+        if flight.flight_error.is_some() {
+            return Ok(false);
+        }
+        let time = thessa_sim_core::SimTime(flight.flight_time_s);
+        let body = self
+            .celestial
+            .ephemeris()
+            .body_state(flight.reference_body, time)
+            .map_err(|e| e.to_string())?;
+        let rel = flight.state.velocity_inertial_mps - body.velocity_inertial;
+        if !rel.is_finite() || rel.length() <= 1.0 {
+            return Ok(false);
+        }
+        // Reserve the two warp/pause votes emitted by poll_server_inner.
+        if remote.commands.len() + 3 > thessa_flight_net::MAX_COMMANDS_PER_INPUT {
+            return Err("server command queue full; kick was not queued".into());
+        }
+        let node = thessa_flight_net::ManeuverNodeCommand {
+            epoch_s: flight.flight_time_s + 20.0,
+            delta_v_mps: (rel.normalize() * dv_mps).to_array(),
+        };
+        remote
+            .commands
+            .push(thessa_flight_net::Command::ExecuteManeuver { nodes: vec![node] });
+        self.maneuver_kick_sent = true;
+        Ok(true)
     }
 
     /// Absolute subsystem demand for HUD checkboxes.

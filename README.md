@@ -199,6 +199,11 @@ The checked-in vertical slice currently contains:
     stays an intent over acknowledged pose/kinematics: no local physics step and
     no fabricated air/force observations. It is not obstacle avoidance or a
     general autopilot; see [doc 57](docs/57_NATIVE_FLIGHT_DECK.md).
+    `--maneuver-kick MPS` (requires `--server-flight`, 1<dv<=2000 m/s) queues
+    one typed `ExecuteManeuver` prograde node at authority time + 20 s over the
+    normal wire after the first acknowledged moving snapshot, at most once per
+    session: the server executes the plan, local mode has no executor and is
+    rejected, and a rejected plan surfaces in the server wake notice.
    Both flight decks now consume shared dominant-body SI/f64 instrument data.
    Native session-only selectors choose Surface/Air/Orbital/Target speed cues and
    Datum/AGL altitude without changing attitude reference or flight controls.

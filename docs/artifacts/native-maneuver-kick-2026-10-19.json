@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-19",
+  "baseline": "8380976",
+  "scope": "Direct native port of the retained one-shot typed server ExecuteManeuver fixture as --maneuver-kick MPS; no new physics, autopilot block, shader, dependency or wire payload.",
+  "contract": {
+    "ownership": "apps/terrain-native/src/scene.rs::request_maneuver_kick queues exactly one thessa_flight_net::Command::ExecuteManeuver node (prograde along the acknowledged relative velocity, epoch = authority time + 20 s, 1<dv<=2000 m/s) through the existing remote command queue and normal wire input. The server validates and executes the plan on its own scheduler; the client never steps physics, fabricates burn observations or re-sends in a session.",
+    "eligibility": "Requires --server-flight (local mode has no executor and is rejected, never silently no-op). Sendable only with a live link, a healthy acknowledged flight and relative motion above 1 m/s; otherwise Ok(false) and the caller may retry. A stopped/stale replica never re-arms.",
+    "one_shot": "Sent at most once per session (maneuver_kick_sent); a repeated request returns success without queueing again. CLI startup waits for the first acknowledged moving snapshot within --server-timeout, then queues once.",
+    "provenance": "No local stepping (accumulator stays 0), no pose/force mutation and no fabricated air/force/load observations; a rejected plan surfaces in the server wake notice, never as client state. Warp, if requested, remains the shared server-owned time scale.",
+    "cli": "--maneuver-kick MPS: parsed before asset/GPU load; requires --server-flight; bounds (finite, 1<dv<=2000) validated at startup. Telemetry reports maneuver_kick_sent."
+  },
+  "verification": {
+    "status": "all 22 final local gates passed",
+    "source_manifest_sha256": "138b90689ebf5afafb01f45c66b428935289410d476a66fb94163fc15bdd26da",
+    "compiled_inputs": 600,
+    "compiled_inputs_unchanged": true,
+    "passed_tests": {
+      "workspace_lib_bins": 1941,
+      "workspace_integration": 95,
+      "native_feature_off": 68,
+      "bevy_gpu": 24,
+      "renderer_ignored": 31,
+      "native_ignored": 35,
+      "agent_qa": 5,
+      "flyby_release_focused": 11,
+      "flyby_release_ignored": 2,
+      "flyby_cli_ignored_capture": 1,
+      "maneuver_release_focused": 2,
+      "maneuver_real_server_ignored": 1
+    },
+    "other_gates": "fmt, workspace all-features Clippy, native feature-off Clippy, architecture check, release viewer/server build, git diff check, muted 8-frame Wayland flight/HUD smoke, muted headless flight-deck capture, readout cost diagnostic, muted headless --flyby capture",
+    "focused_checks": "Wire regressions pin: local-mode rejection, retained bounds (0.5/1.0/2001/NaN/inf), not-yet-sent without a link, exact node content (epoch = authority + 20, prograde direction within 1e-9, |dv| exact), one-shot no-re-arm, zero local state/axis mutation, wire drain without re-queue, and waiting on a co-rotating/stopped replica. CLI regressions pin --maneuver-kick rejection without --server-flight, bad-value errors and help text. The ignored real-server test sends one kick through the real thessa-server, uses the shared warp to reach the 20 s epoch, and observes the server-owned executor driving engine/throttle with accumulator 0 and no fabricated loads.",
+    "directory": "target/test-tmp/native-maneuver-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "source_boundary": "Previous 600-input flyby manifest plus main.rs, scene.rs, scene_server_tests.rs and presentation_args.rs; docs/evidence edits outside compiled inputs. No asset or dependency changes.",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "limitations": [
+    "One-shot prograde kick fixture only: no maneuver-plan editing, node list UI, node removal or interactive editor (none existed in the retained client)",
+    "No local maneuver executor: --flight cannot run plans and is rejected instead of silently doing nothing",
+    "Guidance/target semantic inputs, ascent/landing/rendezvous blocks and remote trajectory transport remain unported",
+    "No WASM/Metal runtime acceptance, OS-level input injection or remote CI claim",
+    "Bevy retirement remains incomplete: part commands, remaining optics/render consumers and packaging/tooling still need replacement"
+  ]
+}

@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut warp = None;
     let mut paused = false;
     let mut flyby = false;
+    let mut maneuver_kick = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--mute" => audio.muted = true,
@@ -54,6 +55,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--audio-demo" => audio.demo = true,
             "--paused" => paused = true,
             "--flyby" => flyby = true,
+            "--maneuver-kick" => {
+                maneuver_kick = Some(
+                    args.next()
+                        .ok_or("--maneuver-kick requires a prograde dv in m/s")?
+                        .parse::<f64>()?,
+                )
+            }
             "--warp" => {
                 warp = Some(
                     args.next()
@@ -178,6 +186,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "Coastal flyby: --flyby requires unpaused x1 --flight or --server-flight without --map; F7 / HUD toggles. Captures datum target and shore heading, selects Navball/SAS/engine/chase, writes normal pilot stick/throttle only. Manual takeover, map/help/focus loss, pause/warp/relaunch or failed/stale flight cancels without auto-resume. Not obstacle avoidance or a general autopilot."
                 );
+                println!(
+                    "--maneuver-kick MPS queues one typed ExecuteManeuver prograde kick (1<dv<=2000 m/s, requires --server-flight) after the first acknowledged snapshot. The server executes the plan; the client never steps locally or fabricates burn observations. A rejected plan surfaces in the server wake notice. Sent at most once per session; local flight has no executor and is rejected."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -225,6 +236,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(
             "--flyby requires unpaused x1 --flight or --server-flight without --map".into(),
         );
+    }
+    if let Some(dv) = maneuver_kick {
+        // Retained fixture semantics: embedded wire only; the server executes
+        // the plan. Local mode has no maneuver executor, so it stays rejected
+        // instead of silently doing nothing.
+        if !server_flight {
+            return Err(
+                "--maneuver-kick requires --server-flight; local mode has no executor".into(),
+            );
+        }
+        if !dv.is_finite() || dv <= 1.0 || dv > 2000.0 {
+            return Err("--maneuver-kick dv must be finite and within 1<dv<=2000 m/s".into());
+        }
     }
     if (paused || warp.is_some()) && !live_flight {
         return Err("--paused/--warp require --flight or --server-flight".into());
@@ -342,6 +366,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         scene.set_flyby(true)?;
+    }
+    if let Some(dv) = maneuver_kick {
+        // One-shot typed ExecuteManeuver over the wire; the server owns the
+        // plan. Wait for the first acknowledged snapshot, then retry only
+        // while the link is alive and the craft has relative motion.
+        let deadline = Instant::now() + std::time::Duration::from_secs_f64(server_timeout);
+        loop {
+            if scene.flight_stopped() {
+                return Err("flight stopped before the maneuver kick could be sent".into());
+            }
+            match scene.request_maneuver_kick(dv) {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(error) => return Err(error.into()),
+            }
+            scene.push_live_input(0.0, false, false);
+            scene.advance_flight(0.0, None)?;
+            if Instant::now() >= deadline {
+                return Err(
+                    "maneuver kick waiting for an acknowledged moving flight timed out".into(),
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        eprintln!("maneuver kick queued: prograde {dv:.1} m/s, server-executed plan");
     }
     eprintln!(
         "canonical CPU scene build: {:.2}s (excluded from frame benchmark)",

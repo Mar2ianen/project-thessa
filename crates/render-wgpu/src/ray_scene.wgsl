@@ -123,7 +123,7 @@ fn rt_reflection(
 ) -> vec3<f32> {
     // Same operand order as the raster environment term, so `mirror = 0`
     // reproduces it exactly instead of approximately.
-    let env = env_radiance(reflect(-eye, normal), ambient) * fresnel * occlusion;
+    let env = env_radiance_from(position,reflect(-eye, normal), ambient) * fresnel * occlusion;
     // A single mirror-direction sample cannot represent a wide specular lobe;
     // above the cutoff the estimate yields to the shared environment
     // exactly (mirror = 0 reproduces the raster term bit-for-bit).
@@ -141,10 +141,13 @@ fn rt_reflection(
             // The miss contributes the environment radiance of that direction
             // through the accumulated chain weight, matching the raster term's
             // operand order (`radiance * fresnel * occlusion`).
-            radiance += env_radiance(direction, ambient) * throughput;
+            radiance += env_radiance_from(origin,direction, ambient) * throughput;
             break;
         }
         let surface = rt_surface(hit, direction);
+        let column=cloud_transport(origin,direction,length(surface.position-origin));
+        radiance+=column.rgb*throughput;
+        throughput*=column.a;
         var illuminance = light.ambient.rgb;
         var visibility:array<f32,3>;
         for (var i = 0u; i < 3u; i++) {
@@ -172,7 +175,7 @@ fn rt_reflection(
         }
         let reflected = reflect(direction,surface.normal);
         let continuation = clamp((RT_ROUGHNESS_CUTOFF-surface.roughness)/RT_ROUGHNESS_CUTOFF,0.0,1.0);
-        radiance += throughput*hit_fresnel*env_radiance(reflected,ambient)*surface.occlusion*(1.0-continuation);
+        radiance += throughput*hit_fresnel*env_radiance_from(surface.position,reflected,ambient)*surface.occlusion*(1.0-continuation);
         throughput *= hit_fresnel*continuation*surface.occlusion;
         origin = surface.position + surface.geometry * RT_BIAS;
         direction = reflected;

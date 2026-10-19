@@ -663,14 +663,16 @@ impl TerrainRenderer {
             None
         };
         let mut hooks = format!(
-            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
+            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun)*cloud_sun_visibility(p,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
         hooks.push_str(if ocean.is_some(){include_str!("ocean_raster.wgsl")}else{
             "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32)->vec4<f32>{return vec4(0.0);}"
         });
         if ocean.is_some() {
             hooks.push_str(&crate::ocean::shader(2));
-            hooks.push_str(&include_str!("environment.wgsl").replace("@group(0)", "@group(2)"));
+            hooks.push_str(&crate::environment::shader(2));
+        } else {
+            hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
         }
         let raster_source =
             shaders::CBT_RASTER_WGSL.replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1);
@@ -783,18 +785,23 @@ impl TerrainRenderer {
             layout: &raster_layout,
             entries: &entries,
         });
-        let ocean_environment = ocean
-            .as_ref()
-            .map(|_| crate::environment::EnvironmentBinding::new(device));
-        let ocean_bind = ocean.as_ref().map(|field| {
-            let mut entries = field.binding().entries().to_vec();
-            entries.extend(ocean_environment.as_ref().unwrap().entries());
+        let environment = crate::environment::EnvironmentBinding::new(device);
+        let ocean_bind = Some({
+            let mut entries = ocean
+                .as_ref()
+                .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
+            if ocean.is_some() {
+                entries.extend(environment.entries());
+            } else {
+                entries.extend(environment.cloud_entries());
+            }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ocean-raster"),
                 layout: &raster.get_bind_group_layout(2),
                 entries: &entries,
             })
         });
+        let ocean_environment = Some(environment);
         let ocean_geometry = if let Some(field) = &ocean
             && ocean_settings.geometry_patches > 0
             && topology.is_none()
@@ -1426,12 +1433,19 @@ impl TerrainRenderer {
         backend: &Backend,
         environment: Option<&crate::environment::EnvironmentBinding>,
     ) {
-        if let Some(field) = &self.ocean {
+        {
             let environment = environment
                 .cloned()
                 .unwrap_or_else(|| crate::environment::EnvironmentBinding::new(&backend.device));
-            let mut entries = field.binding().entries().to_vec();
-            entries.extend(environment.entries());
+            let mut entries = self
+                .ocean
+                .as_ref()
+                .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
+            if self.ocean.is_some() {
+                entries.extend(environment.entries());
+            } else {
+                entries.extend(environment.cloud_entries());
+            }
             self.ocean_bind = Some(
                 backend
                     .device
@@ -2055,7 +2069,7 @@ impl OffscreenTarget {
         );
         let depth = make(
             wgpu::TextureFormat::Depth32Float,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         )
         .create_view(&Default::default());
         let color = texture.create_view(&Default::default());

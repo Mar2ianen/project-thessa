@@ -17,6 +17,7 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     backend: Backend,
     renderer: TerrainRenderer,
+    sky_layers: crate::sky_layers::SkyLayers,
     display: thessa_render_wgpu::display::DisplayTransform,
     mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
@@ -89,7 +90,8 @@ impl State {
             config.width,
             config.height,
         )?;
-        let renderer = scene.renderer(&backend, display.scene_format())?;
+        let mut renderer = scene.renderer(&backend, display.scene_format())?;
+        let sky_layers = scene.sky_layers(&backend, display.scene_format(), &mut renderer);
         let mesh_renderer =
             scene.mesh_renderer_with_shadows(&backend, display.scene_format(), &renderer)?;
         eprintln!(
@@ -118,6 +120,7 @@ impl State {
             config,
             backend,
             renderer,
+            sky_layers,
             display,
             mesh_renderer,
             depth,
@@ -248,6 +251,13 @@ impl State {
         )?;
         self.renderer
             .update_ocean(&self.backend, scene.sample.time.0)?;
+        scene.update_sky_layers(
+            &self.backend,
+            &self.sky_layers,
+            self.config.width,
+            self.config.height,
+            self.exposure,
+        )?;
         if let Some(mesh) = &mut self.mesh_renderer {
             scene.update_mesh(
                 &self.backend,
@@ -280,7 +290,13 @@ impl State {
             self.mesh_renderer
                 .as_ref()
                 .and_then(crate::scene::SceneMeshes::opaque),
-            false,
+            self.sky_layers.enabled(),
+        );
+        self.sky_layers.encode(
+            &self.backend,
+            &mut encoder,
+            self.display.scene_color(&color),
+            &self.depth,
         );
         self.display.encode(&mut encoder, &color);
         #[cfg(feature = "hud")]
@@ -327,7 +343,7 @@ fn depth(backend: &Backend, width: u32, height: u32) -> wgpu::TextureView {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
         .create_view(&Default::default())
@@ -349,6 +365,8 @@ struct App {
     middle_consumed: bool,
     last_cursor: Option<(f64, f64)>,
     held: HashSet<KeyCode>,
+    audio_options: crate::audio::Options,
+    audio: Option<crate::audio::NativeAudio>,
 }
 
 impl ApplicationHandler for App {
@@ -365,6 +383,13 @@ impl ApplicationHandler for App {
         ) {
             Ok(state) => {
                 self.state = Some(state);
+                self.audio = match crate::audio::NativeAudio::open(self.audio_options) {
+                    Ok(audio) => audio,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        None
+                    }
+                };
                 // Selection history survives surface suspension in Scene; its
                 // monotonic clock must survive too, or debounce can stall
                 // demand until a reset clock catches the previous timestamp.
@@ -378,6 +403,7 @@ impl ApplicationHandler for App {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.audio = None;
         self.state = None;
     }
 
@@ -386,6 +412,7 @@ impl ApplicationHandler for App {
         // consumes/destroys EventLoop, while App itself lives beyond it, so
         // teardown must happen here while the display is still valid.
         self.state = None;
+        self.audio = None;
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -408,6 +435,9 @@ impl ApplicationHandler for App {
             WindowEvent::Occluded(occluded) => {
                 if occluded {
                     state.drawable = false;
+                    if let Some(audio) = &mut self.audio {
+                        audio.update(None);
+                    }
                 } else {
                     let size = state.window.inner_size();
                     state.resize(size.width, size.height);
@@ -533,6 +563,16 @@ impl ApplicationHandler for App {
                     throttle_down,
                 ) {
                     Ok(true) => {
+                        if let Some(audio) = &mut self.audio {
+                            let frame = self.scene.audio_frame().or_else(|| {
+                                (self.audio_options.demo && !self.scene.live_flight()).then(|| {
+                                    crate::audio::Frame::demo_at(thessa_sim_core::SimTime(
+                                        self.started.unwrap().elapsed().as_secs_f64(),
+                                    ))
+                                })
+                            });
+                            audio.update(frame);
+                        }
                         self.frames += 1;
                         if self.frame_limit.is_some_and(|n| self.frames >= n) {
                             let seconds = self.started.unwrap().elapsed().as_secs_f64();
@@ -564,7 +604,11 @@ impl ApplicationHandler for App {
                             event_loop.exit();
                         }
                     }
-                    Ok(false) => {}
+                    Ok(false) => {
+                        if let Some(audio) = &mut self.audio {
+                            audio.update(None);
+                        }
+                    }
                     Err(e) => {
                         self.error = Some(e.to_string());
                         event_loop.exit();
@@ -702,6 +746,7 @@ pub fn run(
     hud_enabled: bool,
     width: u32,
     height: u32,
+    audio_options: crate::audio::Options,
 ) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let mut app = App {
@@ -720,6 +765,8 @@ pub fn run(
         middle_consumed: false,
         last_cursor: None,
         held: HashSet::new(),
+        audio_options,
+        audio: None,
     };
     event_loop.run_app(&mut app)?;
     if let Some(error) = app.error {

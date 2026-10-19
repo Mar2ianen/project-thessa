@@ -42,7 +42,7 @@ fn env_ambient_lux(fallback_lux: vec3<f32>) -> vec3<f32> {
 
 // Reflected radiance arriving from `direction`, in the same scale as the
 // direct light colours. Disabled reproduces the legacy term exactly.
-fn env_radiance(direction: vec3<f32>, fallback_lux: vec3<f32>) -> vec3<f32> {
+fn env_base_radiance(direction: vec3<f32>, fallback_lux: vec3<f32>) -> vec3<f32> {
     let ambient = env_ambient_lux(fallback_lux);
     if (!env_enabled()) {
         return ambient / OCEAN_PI;
@@ -70,4 +70,12 @@ fn env_radiance(direction: vec3<f32>, fallback_lux: vec3<f32>) -> vec3<f32> {
     let top = mix(env_texels[y0c * width + x0w].rgb, env_texels[y0c * width + x1w].rgb, tx);
     let bottom = mix(env_texels[y1c * width + x0w].rgb, env_texels[y1c * width + x1w].rgb, tx);
     return mix(top, bottom, ty);
+}
+
+fn env_radiance_from(position:vec3<f32>,direction:vec3<f32>,fallback_lux:vec3<f32>)->vec3<f32> {
+    let column=cloud_transport(position,direction,1e30);
+    return env_base_radiance(direction,fallback_lux)*column.a+column.rgb;
+}
+fn env_radiance(direction:vec3<f32>,fallback_lux:vec3<f32>)->vec3<f32> {
+    return env_radiance_from(vec3(0.0),direction,fallback_lux);
 }

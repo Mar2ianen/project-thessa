@@ -19,7 +19,9 @@ pub use clouds::{
     vertical_profile,
 };
 pub use eclipse::eclipse_visibility;
-pub use emission::{aurora_emission, aurora_radiance};
+pub use emission::{aurora_emission, aurora_phase, aurora_radiance, aurora_radiance_to};
+/// Backend-neutral GPU mirror of analytic emission and finite optical transport.
+pub const AURORA_WGSL: &str = include_str!("aurora.wgsl");
 pub use lights::{CelestialLight, angular_radius, blackbody_rgb, irradiance_at_distance};
 pub use optics::{
     AbsorptionLayer, AtmosphereOptics, AuroraParams, EmissionParams, OpticsError, ScatteringLayer,

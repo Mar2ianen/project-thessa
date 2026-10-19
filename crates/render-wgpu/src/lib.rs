@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod clouds;
 mod conforming_ocean;
 pub mod conforming_surface;
 pub mod display;

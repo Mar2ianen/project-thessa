@@ -265,13 +265,14 @@ fn plan_inner(
         }
     }
     // Static texture/sampler switches need no optional bindless features.
-    // Reserve the primary material's four maps and the shadow atlas. Reject
+    // Reserve the primary material's four maps, shadow atlas and shared cloud
+    // weather, including its constant-size disabled placeholder. Reject
     // rather than silently sampling another material if the scene cannot fit.
-    if textures.len() as u32 + 5 > limits.max_sampled_textures_per_shader_stage
-        || textures.len() as u32 + 5 > limits.max_samplers_per_shader_stage
+    if textures.len() as u32 + 6 > limits.max_sampled_textures_per_shader_stage
+        || textures.len() as u32 + 6 > limits.max_samplers_per_shader_stage
     {
         return Enable::Unavailable(format!(
-            "RT material bindings need {} textures/samplers plus 5 raster/shadow bindings, exceeding device limits",
+            "RT material bindings need {} textures/samplers plus 6 raster/shadow/cloud bindings, exceeding device limits",
             textures.len()
         ));
     }
@@ -385,9 +386,9 @@ pub fn plan_with_terrain(
                 Some("RT terrain has no instance/memory capacity; raster terrain fallback".into());
         } else if reflections
             && (limits.max_storage_buffers_per_shader_stage < 9
-                || plan.textures.len() as u32 + 6 + u32::from(terrain.ocean.is_some())
+                || plan.textures.len() as u32 + 7 + u32::from(terrain.ocean.is_some())
                     > limits.max_sampled_textures_per_shader_stage
-                || plan.textures.len() as u32 + 6 + u32::from(terrain.ocean.is_some())
+                || plan.textures.len() as u32 + 7 + u32::from(terrain.ocean.is_some())
                     > limits.max_samplers_per_shader_stage)
         {
             plan.terrain_reason = Some(
@@ -495,11 +496,11 @@ pub fn shader(plan: &Plan) -> String {
 /// change unreflected shading. `env_radiance` is the shared environment field
 /// (a real sky radiance grid when one is bound, the isotropic `ambient_lux /
 /// PI` otherwise).
-const REFLECTION_FALLBACK: &str = "fn rt_reflection(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,fresnel:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32>{return env_radiance(reflect(-eye,normal),ambient)*fresnel*occlusion;}\n";
+const REFLECTION_FALLBACK: &str = "fn rt_reflection(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,fresnel:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32>{return env_radiance_from(position,reflect(-eye,normal),ambient)*fresnel*occlusion;}\n";
 
 pub fn fallback_shader() -> String {
     format!(
-        "{REFLECTION_FALLBACK}fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32{{return shadow_visibility(position,normal,sun);}}\n"
+        "{REFLECTION_FALLBACK}fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32{{return shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);}}\n"
     )
 }
 

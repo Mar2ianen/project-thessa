@@ -89,7 +89,18 @@ do not update in place).
 | `62_CBT_PARALLEL_TRANSACTIONS.md` | 🟡 persistent topology pipeline | bounded GPU request windows, whole-footprint deterministic conflict claims, whole-chain reservation, parallel split/merge and atomic packed-rank maintenance; exact serial byte/CPU geometry oracles; measured 128K-capacity/98K-triangle fixture; external-area actionable request selection reuses the same planner | doc 63 adds canonical sampling, emitted precision, relief-bound classification and production selection; no full large_cbt renderer replacement or equal-error/temporal acceptance claim |
 | `63_CBT_CANONICAL_SURFACE.md` | 🟡 opt-in native production-frame consumer | exact canonical addresses through heap depth 58, borrowed height/material residency and f64 precision charts; seam/residency/metric-shadow/Fourier oracles; shared-epoch RayScene hits and whole-pool fallback; resolved disabled/Low/Medium/High native topology mode now selects shared primary raster, atlas, ocean and RT geometry with emitted-revision shadow caching; actual camera-relative datum classification and actionable parallel requests with independent f64/CPU replay oracles | per-tile relief/error and convergence, optimized dynamic-ocean RT/dirty-chunk reuse, primary terrain scene-object RT reflections and equal-error/temporal/platform acceptance; regular patches remain default/fallback; full-client Bevy removal remains open |
 | `64_NATIVE_OPTIMIZATION_REVIEW.md` | 🟡 historical rejected proposal; corrective implementation in doc 63 | supplied medians/tails recomputed; GPU failures retained as audit evidence; new regression verifies zero-request quiescence, LOD wake and mesh shadow/reference equality | original performance claims remain unaccepted; matched-work measurements and wider acceptance stay open |
-| `65_NATIVE_SKY_AUDIT.md` | 🟡 audit plus first shared native emission consumer | existing Bevy/shared producers traced before reuse; shared aurora altitude/axis correction and finite-segment integration; native Low/High composed radiance, simulation-time refresh and independent disable/sky-dome gates | native stars/clouds, depth-aware orbital composition, magnetic data, high-frequency curtains, RT-light proxies and temporal/performance/visual acceptance |
+| `65_NATIVE_SKY_AUDIT.md` | 🟡 audited native sky consumers | shared aurora altitude/axis and incremental optical transport; native Low/High emission field with simulation-time refresh; flux-normalized background stars/source discs; depth-clipped clouds with shared weather/geometry/phase and terrain/mesh/ocean shadows plus reflected-ray transport; primary aurora with finite-depth clipping and ordered cloud extinction; separate clear primary/total indirect publications; independent disable and numerical GPU oracles | secondary-origin clear-sky/auroral parallax, partial stellar discs/eclipses, magnetic/weather data, richer curtains, cloud diffuse coupling/multiple scattering, RT-light proxies and temporal/performance/visual/platform acceptance |
+
+The full source-to-consumer Bevy retirement ledger is
+[doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must
+be replaced before removing `apps/client` and `crates/bevy-rcbt`; a clean native
+terrain dependency graph alone is not full-client replacement.
+
+The 2026-10-19 sky/audio stage passed its twelve local stable-source gates.
+Its combined-flight capture nevertheless exposed triangular holes in opt-in
+conforming terrain (also with ocean disabled, absent on regular patches).
+Doc 66 and the sky/audio artifact retain that rejected-frame evidence; no
+whole-frame visual acceptance follows from the passing numeric effect tests.
 
 The doc 39 branch also shares the owned GPL surface-survey camera between
 clients (quaternion orbit/free look/zoom/reset and native bookmark selection).

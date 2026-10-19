@@ -25,7 +25,7 @@ pub fn hg_phase(asymmetry_g: f64, cos_theta: f64) -> f64 {
 }
 
 /// Total extinction coefficient (scattering + absorption) at a point, per RGB.
-fn extinction_rgb(optics: &AtmosphereOptics, point_m: DVec3) -> [f64; 3] {
+pub(crate) fn extinction_rgb(optics: &AtmosphereOptics, point_m: DVec3) -> [f64; 3] {
     let mut sigma = [0.0; 3];
     let dr = optics.density_factor(optics.rayleigh.scale_height_m, point_m);
     let dm = optics.density_factor(optics.mie.scale_height_m, point_m);
@@ -223,7 +223,9 @@ pub fn sky_radiance(
 }
 
 /// Aerial perspective between two points: surviving fraction plus inscatter
-/// toward `light`. Used for distant terrain haze.
+/// toward `light`. Used for distant terrain haze. Integration is restricted
+/// to the optical shell and stops at the solid surface; callers own geometric
+/// visibility, so the returned transmittance describes the atmospheric segment.
 pub fn aerial_perspective(
     optics: &AtmosphereOptics,
     from_m: DVec3,
@@ -237,13 +239,20 @@ pub fn aerial_perspective(
         return ([1.0; 3], [0.0; 3]);
     }
     let dir = delta / dist;
+    let Some((t0, t1)) = intersect_atmosphere(optics, from_m, dir) else {
+        return ([1.0; 3], [0.0; 3]);
+    };
+    let t1 = t1.min(dist);
+    if t1 <= t0 {
+        return ([1.0; 3], [0.0; 3]);
+    }
     let n = steps.clamp(1, 256) as usize;
-    let dt = dist / n as f64;
+    let dt = (t1 - t0) / n as f64;
     let w = light.weighted_rgb();
     let mut tau = [0.0_f64; 3];
     let mut inscatter = [0.0; 3];
     for i in 0..n {
-        let p = from_m + dir * ((i as f64 + 0.5) * dt);
+        let p = from_m + dir * (t0 + (i as f64 + 0.5) * dt);
         let sigma = extinction_rgb(optics, p);
         let t_here = tau.map(|t| (-t).exp());
         if w != [0.0; 3] {

@@ -18,5 +18,5 @@ struct SkyVertex { @builtin(position) position:vec4<f32>, @location(0) ndc:vec2<
     // there. Translation is explicitly excluded; the field is body-fixed.
     let point=sky_view.inverse_projection*vec4(in.ndc,0.5,1.0);
     let direction=(sky_view.world_from_view*vec4(point.xyz/point.w,0.0)).xyz;
-    return vec4(env_radiance(direction,vec3(0.0))*sky_view.exposure,1.0);
+    return vec4(env_base_radiance(direction,vec3(0.0))*sky_view.exposure,1.0);
 }

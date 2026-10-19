@@ -2,6 +2,31 @@
 
 Status: first semantic slice implemented; backend calibration and full source integration remain.
 
+Native host follow-up (2026-10-19): `apps/terrain-native/src/audio.rs` adapts
+the same `audio-core` routing and `audio-synth` engine PCM to rodio 0.22.2
+(MIT/Apache-2.0, playback only; no new decoder or sound asset). The native window
+owns the device lifetime, releases it on suspend/exit and continues silently
+if no output device is available. Headless capture never opens a device.
+`--mute` bypasses device creation; unattended window regression tests pass it.
+`--audio-cabin` selects the explicit diagnostic cabin attached to PRIMARY, not
+a modeled pressure volume. Exterior vacuum has no airborne engine route;
+connected cabin structure and headset GPWS can remain audible in vacuum.
+
+Native engine controls read the same adopted primary flight observation as the
+instruments, with no local simulation in server mode. RCS command and GPWS
+warning edges reuse the old diagnostic's conditions and authored tones.
+`--flight --audio-demo` schedules the existing supersonic-segment fixture from
+simulation-time crossings, so pause does not retrigger it and reverse replay
+can re-arm a later forward crossing. Standalone `--audio-demo` uses an isolated
+elapsed-time fixture clock, as the old diagnostic did; it does not advance the
+world or pretend an event happened in the authoritative simulation. No sound
+is emitted by offline PCM tests.
+The original adapter's constant authored listening levels are retained, not
+claimed as calibrated power, distance attenuation, Doppler, delay-line engine
+transport or structural material transfer. Per-source/pressure-volume mixing,
+docking event integration remain retirement work; see
+[doc 66](66_BEVY_RETIREMENT.md).
+
 This document defines the semantic boundary for sound before the current Bevy
 client host is replaced. Audio presentation must not become coupled to Bevy,
 the render backend, or a particular mixer library.

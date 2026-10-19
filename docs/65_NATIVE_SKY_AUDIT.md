@@ -102,7 +102,7 @@ indirect field. Tests exercise these independent states and real emission rather
 than roundoff. Diagnostics expose applied emission steps, actual grid dimensions,
 storage and evaluation latency.
 
-**Still not closed:** native background stars and clouds; high-frequency auroral
+**Still not closed after this first emission slice:** native background stars and clouds (implemented by the follow-up below); high-frequency auroral
 curtains, depth-aware emission composition in front of orbit-view terrain,
 per-body magnetic input, emissive RT-light proxies (`aurora_lighting`), cloud
 shadow/volume transport, temporal/equal-error budgets and independent visual
@@ -117,3 +117,142 @@ In the polar emission-only CPU fixture, Low/High publication p50 was **3.916 /
 budget. The deterministic native GPU fixture writes disabled/Low/High/disabled
 captures and verifies visible emission and exact fallback restoration; this is
 not independent aesthetic acceptance.
+
+## Native stars and shared cloud follow-up
+
+`apps/terrain-native/src/sky_layers.rs` is now called by both window and headless
+frames, before the shared display transform/HUD. It consumes resolved settings,
+not plugin presence. `[atmosphere].stars` independently enables a fixed synthetic
+500-star catalogue and up to three actual source discs. The synthetic catalogue
+is illustrative, not measured astronomy; actual source direction, angular radius,
+colour and irradiance come from the existing celestial sample. Background
+directions rotate from inertial to body space with the same f64 frame as the
+camera and lighting; they have no camera parallax. Solid-body occultation is
+independent of scattering and resident terrain coverage. Low/Medium/High retain
+the catalogue/flux and use 8/16/32 shared atmospheric-transmission samples.
+Point flux is distributed over a fixed pixel PSF with solid-angle normalization;
+resolved discs use source radiance, not a screen-size brightness multiplier.
+The source-disc limb currently uses centre-ray atmospheric/body visibility,
+not partial-disc eclipse integration. Discs and the distant catalogue share
+the `stars` switch; authoritative stellar lighting does not depend on it.
+
+Clouds reuse the canonical `bake_clouds` coverage/opacity source and vertical
+sine profile, Beer-Lambert law and dual-HG phase contract. Native decks are
+3–6 km and, when requested, 9–10 km above the datum; they are explicit
+presentation/weather proxies, not yet authoritative meteorology. Every consumer
+uses these same radii, extinction, density texture and simulation-time phase.
+`render-wgpu::clouds::CloudBinding` publishes one frame/weather binding;
+`clouds.wgsl` is the **single** native transport implementation used by:
+
+- the fullscreen primary pass clipped against stored scene depth;
+- direct-light visibility for terrain, ocean, opaque meshes and RT hits;
+- reflected environment misses, ocean reflections, and finite RT hit segments.
+
+Opaque depth remains authoritative for foreground occlusion. Both hollow-shell
+segments and both decks are sorted along the ray, with solid-body termination;
+inside-deck and orbital rays do not use the old exaggerated shell radius or
+3000-m-only shadow parallax. `cast_shadows=false` skips the direct receiver
+queries, without removing cloud view/reflection extinction or self-shadowing.
+Each deck's differential phase is independently wrapped in f64 before upload;
+pause, reverse warp and a low-deck period crossing do not jump the high deck.
+Disabled clouds allocate no weather bake or cloud transport work;
+shared receiver layouts retain only constant-size zero-state placeholders. The
+primary volume pipeline can still be required by independently enabled aurora.
+Disabled stars allocate no catalogue/buffer/pipeline and run no transmission
+queries. Disable stars, clouds and aurora and `SkyLayers` has zero effect
+storage/work.
+
+Low/non-volumetric cloud fallback uses one midpoint column and no self-shadow
+taps. Medium/High use the common resolved view-step budget (currently capped
+at 24) and 2/4 self-shadow taps per shell piece. Direct receiver shadows use at
+least 8 column samples. Quality changes representation, not deck geometry or
+stellar flux; a one-column fallback is not an equal-error certificate. Native
+`stochastic` requests report deterministic march fallback in startup diagnostics
+and actual capture metadata. No cloud AS or separate generic ray pipeline is
+introduced. Clouds consume current-camera-relative origins for secondary rays;
+the underlying clear-sky/auroral directional grid still has camera-local
+parallax/transport limitations.
+
+Numerical tests execute the real WGSL: point-source integrated flux at 129x65
+and 257x129 is within **3%** of the input flux; a uniform-weather cloud column
+matches the shared f64 oracle within **0.005 linear display units** (including
+8-bit readback). Shared primary/shadow/reflected queries from below, inside,
+orbit and the limb match independent f64 shell integration within **0.003
+absolute transmittance/radiance units** for the ambient-only fixture. These
+are fixture bounds, not guarantees for arbitrary weather, phase or thin details.
+GPU tests verify foreground depth, no star parallax, disabled allocations and
+portable WGSL validation. Deterministic example captures live under
+`apps/terrain-native/target/test-tmp/sky-layers/native-{stars,clouds}.png`.
+The ignored target-size cost test measures 1280x720 RGBA16Float GPU intervals
+separately from CPU publication and host submit/wait time. It is not game FPS.
+
+Aurora publication now advances optical depth along each shell instead of
+re-integrating camera-to-sample transport at every midpoint. Its shared finite
+atmospheric segment is explicitly clipped to the optical shell; vacuum tails
+do not attenuate light. Vacuum and nearly uniform absorbing-column tests compare
+against independent 4096-step Simpson integration within **0.02%** at 64 samples.
+The original timing artifact above remains the historical pre-optimization
+baseline; new timing is recorded separately, never substituted into that record.
+
+**Remaining acceptance after the cloud follow-up:** depth-aware aurora over foreground orbital terrain (closed by the primary-volume follow-up below),
+high-frequency curtains, per-body magnetic/weather state, partial stellar discs
+at the limb/eclipses, atmosphere/cloud multiple scattering and cloud diffuse
+irradiance coupling, shadow/temporal/equal-error performance tuning, filtered
+rough reflection lobes, Metal/WebGPU execution and independent blind visual
+review. Native stars/clouds are no longer absent; complete volumetric sky/client
+migration is still not claimed.
+
+## Depth-aware primary aurora
+
+Both native frame paths now integrate the shared analytic emission up to the
+actual opaque depth, including orbital foreground terrain and objects inside
+the emitting shell. `thessa-atmosphere::AURORA_WGSL` mirrors the CPU altitude,
+magnetic basis, oval and curtain model; `aurora_phase` supplies common f64
+absolute-time activity/phases. The pole has an explicit zero-longitude limit,
+avoiding backend-dependent `atan2(0,0)`. The finite CPU query
+`aurora_radiance_to` is the independent primary-segment oracle.
+
+The environment producer retains a separate **clear primary background** from
+the same scattering/airglow evaluation, while diffuse irradiance and reflected
+misses retain the total clear-plus-aurora field. This is a split publication of
+one model, not a second sky gradient. The primary volume pass adds emission at
+each sample's distance with atmospheric and cloud extinction up to that sample;
+it cannot double-add the environment's aurora. A cloud behind an orbital emitter
+does not erase it, while a foreground cloud attenuates it. Background suppression
+(`sky_dome`) and volumetric emission (`upper_atmosphere.aurora`) are independent.
+No atmosphere provider means no invented aurora volume. Disable clouds and
+aurora to remove the volume pass/pipeline; disable stars too for zero layer work.
+
+GPU fixtures cover an opaque hit before/inside/after the auroral shell, plus
+ground/orbital cloud-emitter ordering. The finite f64 reference agrees within
+**0.006 linear display units** including RGBA8/sRGB readback. Conventional
+forward-Z depth remains quantized at orbital distances; the oracle uses the
+representable depth and actual narrowed projection coefficients. The primary
+consumer inverts those coefficients directly, avoiding additional cancellation
+from homogeneous inverse-matrix reconstruction. A fixed 33x33 orbital fixture
+is saved as `aurora-orbit-depth.png` alongside the other sky-layer captures.
+Portable WGSL validation and the target-size diagnostic include the combined
+cloud/aurora path and both aurora tiers.
+
+For disjoint altitude bands the cloud column before an auroral shell interval
+is constant on that interval. The primary consumer integrates that prefix once
+per interval; overlapping bands retain per-emitter transport. This removes
+repeated identical density queries without changing geometry, optical law,
+sample counts or the shared weather state. The same depth/order oracles exercise
+the optimized path. The 1280x720 combined-High diagnostic decreased from about
+32.81 to 4.21 ms GPU p50 in the local before/after runs; individual effect rows
+use different camera orientations and must not be added as a common frame cost.
+These are isolated sky-layer intervals, not game FPS or an accepted total budget.
+
+**Current gaps:** per-body magnetic/weather inputs, richer emission structure,
+secondary-origin clear-sky/auroral field parallax, partial discs/eclipses,
+atmosphere/cloud multiple scattering and cloud diffuse irradiance coupling,
+filtered rough reflection lobes, temporal/equal-error performance tuning,
+Metal/WebGPU execution and independent blind visual review. Primary depth-aware
+aurora is no longer an absent consumer; full client/platform migration remains
+outside this verified effect slice.
+
+The follow-up measurements, numerical bounds and stable-source verification
+record are in
+[`native-sky-audio-2026-10-19.json`](artifacts/native-sky-audio-2026-10-19.json).
+Its verification status distinguishes pending runs from completed evidence.

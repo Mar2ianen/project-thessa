@@ -8,6 +8,21 @@ use glam::DVec3;
 
 use crate::optics::AuroraParams;
 
+/// Absolute-time activity and longitude phases, shared with GPU adapters.
+pub fn aurora_phase(params: &AuroraParams, time_s: f64) -> [f64; 3] {
+    let tau = std::f64::consts::TAU;
+    let activity = params.activity.clamp(0.0, 1.0)
+        * (0.55
+            + 0.30 * (time_s * tau / 31_680.0).sin()
+            + 0.15 * (time_s * tau / 1_370.0 + 1.7).sin())
+        .max(0.0);
+    [
+        activity,
+        (time_s * 0.002).rem_euclid(tau),
+        (-time_s * 0.005).rem_euclid(tau),
+    ]
+}
+
 /// Integrate the shared volumetric emission over both visible portions of its
 /// spherical altitude band. Colour inputs are emission per metre per steradian;
 /// output is radiance in the same units as the atmosphere. This is an analytic
@@ -20,6 +35,18 @@ pub fn aurora_radiance(
     sim_time_s: f64,
     steps: u32,
 ) -> [f64; 3] {
+    aurora_radiance_to(optics, camera_m, view_dir, 1e30, sim_time_s, steps)
+}
+
+/// Finite camera segment, clipped by an actual opaque hit (SI metres).
+pub fn aurora_radiance_to(
+    optics: &crate::AtmosphereOptics,
+    camera_m: DVec3,
+    view_dir: DVec3,
+    distance_m: f64,
+    sim_time_s: f64,
+    steps: u32,
+) -> [f64; 3] {
     let Some(params) = &optics.emission.aurora else {
         return [0.0; 3];
     };
@@ -27,6 +54,8 @@ pub fn aurora_radiance(
     if !camera_m.is_finite()
         || !sim_time_s.is_finite()
         || dir == DVec3::ZERO
+        || !distance_m.is_finite()
+        || distance_m <= 0.0
         || !params.altitude_min_m.is_finite()
         || params.altitude_min_m <= 0.0
         || !params.altitude_max_m.is_finite()
@@ -52,23 +81,35 @@ pub fn aurora_radiance(
     };
     let mut radiance = [0.0; 3];
     for (a, b) in intervals {
-        let Some((a, b)) =
-            crate::clip_to_planet(a, b, camera_m, dir, DVec3::ZERO, optics.inner_radius_m)
-        else {
+        let Some((a, b)) = crate::clip_to_planet(
+            a,
+            b.min(distance_m),
+            camera_m,
+            dir,
+            DVec3::ZERO,
+            optics.inner_radius_m,
+        ) else {
             continue;
         };
         let count = steps.clamp(1, 256);
         let dt = (b - a) / f64::from(count);
+        // Integrate the foreground once, then advance the same optical depth
+        // along the shell. Re-integrating camera->sample at every point was
+        // quadratic in the quality budget and caused long High publications.
+        let (mut transmission, _) =
+            crate::aerial_perspective(optics, camera_m, camera_m + dir * a, &dark, count);
         for i in 0..count {
             let point = camera_m + dir * (a + (f64::from(i) + 0.5) * dt);
             let emission = aurora_emission(params, optics.inner_radius_m, point, sim_time_s);
-            if emission == [0.0; 3] {
-                continue;
-            }
-            let (transmission, _) =
-                crate::aerial_perspective(optics, camera_m, point, &dark, count);
+            let sigma = if point.length() <= optics.outer_radius_m {
+                crate::scattering::extinction_rgb(optics, point)
+            } else {
+                [0.0; 3]
+            };
             for channel in 0..3 {
-                radiance[channel] += emission[channel] * transmission[channel] * dt;
+                let absorb = (-sigma[channel] * dt).exp();
+                radiance[channel] += emission[channel] * transmission[channel] * absorb.sqrt() * dt;
+                transmission[channel] *= absorb;
             }
         }
     }
@@ -127,11 +168,7 @@ pub fn aurora_emission(
     }
     // Activity: slow diurnal-ish term plus a faster substorm-ish term, both
     // pure functions of absolute simulation time (warp-safe).
-    let activity = params.activity.clamp(0.0, 1.0)
-        * (0.55_f64
-            + 0.30 * (sim_time_s * 2.0 * std::f64::consts::PI / 31_680.0).sin()
-            + 0.15 * (sim_time_s * 2.0 * std::f64::consts::PI / 1_370.0 + 1.7).sin())
-        .max(0.0);
+    let [activity, phase3, phase7] = aurora_phase(params, sim_time_s);
     // Curtains: a few static longitude octaves sliding slowly with time.
     // Longitude about the magnetic axis, not an unrelated world-Y axis.
     let helper = if pole.dot(DVec3::Y).abs() < 0.9 {
@@ -141,10 +178,13 @@ pub fn aurora_emission(
     };
     let right = helper.cross(pole).normalize();
     let forward = pole.cross(right);
-    let lon = dir.dot(forward).atan2(dir.dot(right));
-    let curtain = 0.6
-        + 0.25 * (3.0 * lon + sim_time_s * 0.002).sin()
-        + 0.15 * (7.0 * lon - sim_time_s * 0.005).sin();
+    let horizontal = glam::DVec2::new(dir.dot(right), dir.dot(forward));
+    let lon = if horizontal.length_squared() <= 1e-12 {
+        0.0
+    } else {
+        horizontal.y.atan2(horizontal.x)
+    };
+    let curtain = 0.6 + 0.25 * (3.0 * lon + phase3).sin() + 0.15 * (7.0 * lon + phase7).sin();
     let intensity = oval * alt_window * activity * curtain.max(0.0);
     [
         params.color_bottom_rgb[0] * (1.0 - frac) + params.color_top_rgb[0] * frac,
@@ -269,6 +309,46 @@ mod tests {
         assert_eq!(
             aurora_radiance(&optics, camera, DVec3::Z, 0.0, 64),
             [0.0; 3]
+        );
+    }
+
+    #[test]
+    fn incremental_emission_transport_matches_independent_absorbing_column() {
+        let radius = 3_200_000.0;
+        let mut optics = crate::nitrogen_oxygen_optics(radius, 0.0, 8000.0).unwrap();
+        optics.absorption.clear();
+        optics.outer_radius_m = radius + 1_000_000.0;
+        optics.rayleigh.beta_rgb = [3e-6; 3];
+        optics.rayleigh.scale_height_m = 1e15;
+        let mut params = oval_params();
+        params.oval_latitude_rad = std::f64::consts::FRAC_PI_2;
+        params.color_bottom_rgb = [1e-6; 3];
+        params.color_top_rgb = [1e-6; 3];
+        optics.emission.aurora = Some(params.clone());
+        let reference = crate::clouds::integrate_slab_unclamped_simpson(
+            |alt| {
+                aurora_emission(&params, radius, DVec3::Z * (radius + alt), 0.0)[0]
+                    * (-3e-6 * (alt - 1.0)).exp()
+            },
+            params.altitude_min_m,
+            params.altitude_max_m,
+            4096,
+            1.0,
+        )
+        .1;
+        let measured = aurora_radiance(&optics, DVec3::Z * (radius + 1.0), DVec3::Z, 0.0, 64)[0];
+        assert!(
+            (measured - reference).abs() < reference * 0.0002,
+            "{measured} vs {reference}"
+        );
+        // Outside the optical shell, transport must remain exactly vacuum,
+        // even if the mathematical exponential still has a nonzero tail.
+        optics.outer_radius_m = radius + 1.0;
+        let vacuum = aurora_radiance(&optics, DVec3::Z * (radius + 2.0), DVec3::Z, 0.0, 64);
+        optics.rayleigh.beta_rgb = [0.0; 3];
+        assert_eq!(
+            vacuum,
+            aurora_radiance(&optics, DVec3::Z * (radius + 2.0), DVec3::Z, 0.0, 64)
         );
     }
 }

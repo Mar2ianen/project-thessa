@@ -55,7 +55,7 @@ quality = "high"
 [atmosphere]
 # Native background and mesh/RT indirect terms share this quality-tiered sky
 # field and one GPU publication. Disabling releases the field/background draw;
-# no sun disks or aerial perspective in the native path yet; HDR uses the shared display pass.
+# HDR uses the shared display pass; native stellar discs use the catalogue pass.
 # Native: shared single-scattering/airglow environment for mesh reflections and
 # derived diffuse ambient. Low/medium/high grids: 8x4 / 16x8 / 32x16; changed
 # inputs refresh at most every 8/4/2 frames. Disabled releases the grid.
@@ -73,6 +73,8 @@ eclipses = true
 multi_star = true
 limb_scattering = true
 sky_dome = true
+stars = true # native distant catalogue + physical source discs, independent of scattering
+stars_quality = "high" # 8/16/32 atmospheric transmission samples; same flux/catalogue
 ray_steps = 24 # view-march steps for CPU queries (4..128)
 
 [clouds]
@@ -81,6 +83,10 @@ ray_steps = 24 # view-march steps for CPU queries (4..128)
 # bake + shader detail, sun self-shadow), cirrus stays a thin shell in both
 # paths. CBT tile keys share the terrain LOD address space
 # (see tools/worldgen-rocky lod::cbt_node_for_tile).
+# Native: the same coverage bake drives spherical decks at 3..6 and 9..10 km,
+# depth-clipped composition, terrain/mesh/ocean shadows and reflected rays.
+# Low/non-volumetric uses a one-column fallback; medium/high use resolved steps.
+# No native stochastic integrator, atmospheric multi-scatter, or cloud RT AS.
 enabled = true
 quality = "high" # low = 512px bake + shell fallback; medium = 1024px; high = 2048px
 volumetric = true # true = march the low deck (medium/high); false = shell impostors
@@ -104,7 +110,7 @@ intensity = 1.0 # 0..2 emissive gain over the mask
 [upper_atmosphere]
 airglow = true
 aurora = true
-aurora_quality = "low" # low = static emissive shell; high = animated curtains
+aurora_quality = "low" # native 64x32/8-step or 128x64/32-step field; animation is independent
 aurora_lighting = false # RT emissive proxy (later)
 aurora_intensity = 1.0 # 0..4 emission gain over the analytic oval
 aurora_animate = true # slide curtains with sim time; off = static oval

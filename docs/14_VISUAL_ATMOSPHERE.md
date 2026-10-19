@@ -17,8 +17,12 @@ The Bevy-free native viewer consumes resolved materials, shared raster/mesh RT
 shadows and a shared single-scattering sky field for background, mesh/RT misses
 and opt-in spectral ocean reflection. Native mesh ray queries include resident
 terrain and bounded near-ocean geometry. It does not yet consume the Bevy LUT,
-cloud or aerial-perspective paths described here. See doc 39's migration
-checkpoints and doc 56's spectral-ocean contract for current scope and evidence.
+or aerial-perspective paths described here. Native stars/source discs and
+depth-clipped clouds have separate consumers; cloud shadows/reflected rays use
+the same native field as the primary pass, and shared aurora enters the sky
+environment and depth-clipped primary volume. See doc 65 for numerical evidence
+and remaining secondary-origin/transport gaps, doc 39 for migration checkpoints,
+and doc 56 for ocean scope.
 
 Scope: rocky planets and rocky moons first, with gas-giant bands already
 shipped as CPU-baked shells (`beauty.rs`). Full gas-giant volumetric
@@ -558,7 +562,10 @@ uses the corrected shared altitude-based model in the common environment field,
 with explicit Low/High budgets and simulation-time refresh. Scattering, airglow
 and aurora are independently gated; disabling all three releases that grid.
 `atmosphere.sky_dome=false` suppresses the background draw, not indirect sampling.
-This does not close native stars/clouds, depth-aware aurora over foreground
+Native stars/source discs and depth-aware clouds now have consumers, including
+shared cloud direct visibility and reflected-ray transport (doc 65). The primary
+pass also clips aurora against foreground depth with ordered cloud extinction.
+It does not close secondary-origin auroral parallax over
 orbital terrain, RT-light proxies or the wider visual/performance acceptance.
 
 The native migration host (doc 39) additionally consumes resolved

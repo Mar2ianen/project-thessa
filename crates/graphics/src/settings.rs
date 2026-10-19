@@ -257,6 +257,11 @@ pub struct AtmosphereSettings {
     pub limb_scattering: bool,
     #[serde(default = "default_true")]
     pub sky_dome: bool,
+    /// Native deterministic distant-star catalogue, independent of scattering.
+    #[serde(default = "default_true")]
+    pub stars: bool,
+    #[serde(default)]
+    pub stars_quality: Quality,
     #[serde(default = "default_ray_steps")]
     pub ray_steps: u32,
     /// Visual optical-depth multiplier for the scattering medium only
@@ -285,6 +290,8 @@ impl Default for AtmosphereSettings {
             multi_star: true,
             limb_scattering: true,
             sky_dome: true,
+            stars: true,
+            stars_quality: Quality::Medium,
             ray_steps: 24,
             density_scale: 1.0,
         }
@@ -990,6 +997,7 @@ impl RequestedGraphics {
                 self.renderer.ray_tracing = RayTracingRequest::Off;
                 self.renderer.terrain_mesh_cells = 16;
                 self.atmosphere.quality = Quality::Low;
+                self.atmosphere.stars_quality = Quality::Low;
                 self.atmosphere.ray_steps = 8;
                 self.atmosphere.aerial_perspective = false;
                 self.atmosphere.limb_scattering = true;
@@ -1020,6 +1028,7 @@ impl RequestedGraphics {
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
                 self.renderer.terrain_mesh_cells = 20;
                 self.atmosphere.quality = Quality::Medium;
+                self.atmosphere.stars_quality = Quality::Medium;
                 self.atmosphere.ray_steps = 16;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
@@ -1048,6 +1057,7 @@ impl RequestedGraphics {
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
                 self.renderer.terrain_mesh_cells = 24;
                 self.atmosphere.quality = Quality::High;
+                self.atmosphere.stars_quality = Quality::High;
                 self.atmosphere.ray_steps = 24;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
@@ -1078,6 +1088,7 @@ impl RequestedGraphics {
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
                 self.renderer.terrain_mesh_cells = 32;
                 self.atmosphere.quality = Quality::High;
+                self.atmosphere.stars_quality = Quality::High;
                 self.atmosphere.ray_steps = 32;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;

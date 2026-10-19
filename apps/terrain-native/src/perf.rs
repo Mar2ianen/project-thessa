@@ -89,6 +89,7 @@ impl HeadlessPerf {
         backend: &Backend,
         scene: &Scene,
         display: &thessa_render_wgpu::display::DisplayTransform,
+        sky_layers: &crate::sky_layers::SkyLayers,
         width: u32,
         height: u32,
         scenario: String,
@@ -113,7 +114,8 @@ impl HeadlessPerf {
         );
         meta.graphics
             .resolved
-            .insert("gpu_scope_layout".into(), "native-topology-v4".into());
+            .insert("gpu_scope_layout".into(), "native-topology-v5-sky".into());
+        meta.graphics.resolved.extend(sky_layers.metadata());
         for (key, value) in [
             ("native_hdr", display.enabled().to_string()),
             (

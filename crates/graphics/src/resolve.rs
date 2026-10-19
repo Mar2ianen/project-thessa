@@ -281,6 +281,8 @@ pub struct ResolvedGraphicsSettings {
     pub multi_star: bool,
     pub limb_scattering: bool,
     pub sky_dome: bool,
+    pub stars: bool,
+    pub stars_quality: Quality,
     pub atmosphere_density_scale: f32,
     pub airglow: bool,
     pub aurora_shell: bool,
@@ -566,6 +568,8 @@ impl ResolvedGraphicsSettings {
             multi_star: requested.atmosphere.multi_star,
             limb_scattering: requested.atmosphere.limb_scattering,
             sky_dome: requested.atmosphere.sky_dome,
+            stars: requested.atmosphere.stars,
+            stars_quality: requested.atmosphere.stars_quality,
             atmosphere_density_scale: requested.atmosphere.density_scale.clamp(0.0, 2.0),
             airglow: requested.upper_atmosphere.airglow,
             aurora_shell: requested.upper_atmosphere.aurora,
@@ -820,6 +824,11 @@ impl ResolvedGraphicsSettings {
             self.atmosphere_steps.to_string(),
         );
         map.insert("eclipses".to_string(), self.eclipses.to_string());
+        map.insert("stars".into(), self.stars.to_string());
+        map.insert(
+            "stars_quality".into(),
+            format!("{:?}", self.stars_quality).to_lowercase(),
+        );
         map.insert("multi_star".to_string(), self.multi_star.to_string());
         map.insert(
             "rt_max_distance_m".to_string(),

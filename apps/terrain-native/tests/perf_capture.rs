@@ -42,7 +42,14 @@ fn check_capture(hdr: bool, topology: bool) {
         .arg(scratch.join("image.png"))
         .args(["--perf-capture"])
         .arg(&json)
-        .args(["--frames", "3", "--prestream-seconds", "0"])
+        .args([
+            "--frames",
+            "3",
+            "--prestream-seconds",
+            "0",
+            "--audio-cabin",
+            "--audio-demo",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -100,7 +107,7 @@ fn check_capture(hdr: bool, topology: bool) {
             .resolved
             .get("gpu_scope_layout")
             .map(String::as_str),
-        Some("native-topology-v4")
+        Some("native-topology-v5-sky")
     );
     if topology
         && thessa_render_wgpu::probe_capabilities(&backend.adapter).terrain_conforming_supported

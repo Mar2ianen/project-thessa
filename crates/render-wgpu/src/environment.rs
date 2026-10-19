@@ -20,6 +20,8 @@ const PLACEHOLDER_TEXELS: u64 = 1;
 /// consumers must re-adopt its clone after growth/release or metadata changes.
 #[derive(Clone)]
 pub struct EnvironmentBinding {
+    clouds: crate::clouds::CloudBinding,
+    background: Option<Background>,
     meta: wgpu::Buffer,
     texels: wgpu::Buffer,
     enabled: bool,
@@ -28,6 +30,13 @@ pub struct EnvironmentBinding {
     ambient_lux: [f32; 3],
     capacity_texels: u64,
     uploads: u64,
+}
+
+#[derive(Clone)]
+struct Background {
+    meta: wgpu::Buffer,
+    texels: wgpu::Buffer,
+    count: u64,
 }
 
 impl EnvironmentBinding {
@@ -41,6 +50,8 @@ impl EnvironmentBinding {
             "environment-texels",
         );
         Self {
+            clouds: crate::clouds::CloudBinding::disabled(device),
+            background: None,
             meta,
             texels,
             enabled: false,
@@ -61,6 +72,7 @@ impl EnvironmentBinding {
         field: Option<&EnvironmentRadiance>,
     ) -> bool {
         let Some(field) = field else {
+            self.background = None;
             if !self.enabled {
                 return false;
             }
@@ -110,7 +122,7 @@ impl EnvironmentBinding {
     }
 
     /// Bind group entries 3 and 4 of the shared frame group.
-    pub fn entries(&self) -> [wgpu::BindGroupEntry<'_>; 2] {
+    pub fn base_entries(&self) -> [wgpu::BindGroupEntry<'_>; 2] {
         [
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -123,8 +135,78 @@ impl EnvironmentBinding {
         ]
     }
 
+    /// Optional primary-only clear field. Reflections and irradiance continue
+    /// sampling the total field; the primary volume pass supplies ordered emission.
+    pub fn update_background(
+        &mut self,
+        backend: &crate::Backend,
+        field: Option<&EnvironmentRadiance>,
+    ) {
+        let Some(field) = field else {
+            self.background = None;
+            return;
+        };
+        let count = field.texels().len() as u64;
+        let background = self.background.get_or_insert_with(|| Background {
+            meta: buffer(&backend.device, META_BYTES, "background-meta"),
+            texels: buffer(&backend.device, count * TEXEL_BYTES, "background-texels"),
+            count,
+        });
+        if background.count != count {
+            background.texels = buffer(&backend.device, count * TEXEL_BYTES, "background-texels");
+            background.count = count;
+        }
+        let data: Vec<_> = field
+            .texels()
+            .iter()
+            .flat_map(|t| t.iter().copied().chain([0.0]))
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        backend.queue.write_buffer(&background.texels, 0, &data);
+        backend.queue.write_buffer(
+            &background.meta,
+            0,
+            &meta_bytes(true, field.width(), field.height(), field.ambient_lux()),
+        );
+    }
+
+    pub fn background_entries(&self) -> [wgpu::BindGroupEntry<'_>; 2] {
+        self.background.as_ref().map_or_else(
+            || self.base_entries(),
+            |b| {
+                [
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: b.meta.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: b.texels.as_entire_binding(),
+                    },
+                ]
+            },
+        )
+    }
+
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn entries(&self) -> Vec<wgpu::BindGroupEntry<'_>> {
+        self.base_entries()
+            .into_iter()
+            .chain(self.clouds.entries())
+            .collect()
+    }
+
+    /// Consumers must rebind after replacing handles; same-size frame writes
+    /// are visible to all adopted clones without another publication.
+    pub fn set_clouds(&mut self, binding: crate::clouds::CloudBinding) {
+        self.clouds = binding;
+    }
+
+    pub fn cloud_entries(&self) -> [wgpu::BindGroupEntry<'_>; 3] {
+        self.clouds.entries()
     }
 
     /// Bound grid dimensions, `(0, 0)` while disabled.
@@ -141,6 +223,10 @@ impl EnvironmentBinding {
     pub fn storage_bytes(&self) -> u64 {
         if self.enabled {
             self.capacity_texels * TEXEL_BYTES
+                + self
+                    .background
+                    .as_ref()
+                    .map_or(0, |b| b.count * TEXEL_BYTES + META_BYTES)
         } else {
             0
         }
@@ -151,6 +237,15 @@ impl EnvironmentBinding {
     pub fn uploads(&self) -> u64 {
         self.uploads
     }
+}
+
+pub(crate) fn shader(group: u32) -> String {
+    format!(
+        "{}\n{}",
+        include_str!("environment.wgsl"),
+        crate::clouds::SHADER
+    )
+    .replace("@group(0)", &format!("@group({group})"))
 }
 
 fn meta_bytes(enabled: bool, width: u32, height: u32, ambient_lux: [f32; 3]) -> [u8; 32] {

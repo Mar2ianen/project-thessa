@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-19",
+  "baseline": "e4d01ba",
+  "scope": "Native stars/source discs, shared primary/shadow/reflected cloud transport, depth-clipped primary aurora, incremental CPU auroral transport, and shared native audio adapter. Not full Bevy retirement.",
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1) / Vulkan / RADV Mesa 26.2.4-arch1.1",
+  "verification": {
+    "status": "all twelve local gates passed on unchanged compiled sources",
+    "sources_unchanged": true,
+    "source_count": 594,
+    "source_manifest_sha256": "9429d3c49d8c0dbfbc37d15c6840e85fdc2b9e6aa049304a447fc84af66c6199",
+    "checks": {"fmt":"passed", "workspace_all_feature_clippy":"passed; libcbt C warnings are not rustc lints", "native_no_default_clippy":"passed", "workspace_lib_bins_passed":1898, "workspace_integration_passed":93, "native_no_default_unit_passed":47, "bevy_gpu_ignored_passed":24, "render_wgpu_release_ignored_passed":30, "native_release_ignored_passed":28, "architecture":"passed", "agent_qa_passed":5, "diff_whitespace":"passed"},
+    "directory": "target/test-tmp/native-sky-audio-stable",
+    "source_manifest": "target/test-tmp/native-sky-audio-stable/source.json",
+    "targeted_directory": "target/test-tmp/native-audio-sky-targeted",
+    "targeted_results": "native all-feature and no-default-feature clippy passed; 5 silent offline audio tests and 9 sky-layer tests including hardware/reference/cost tests passed",
+    "earlier_complete_directory": "target/test-tmp/native-sky-complete",
+    "earlier_complete_limitation": "All ten commands passed, but the source manifest changed while running. This is diagnostic evidence, not the final tree certificate."
+  },
+  "numeric_oracles": {
+    "star_integrated_flux_lux": {"expected": 0.000001, "129x65": 0.0000009926369881977506, "257x129": 0.0000009924242543189533, "fixture_relative_bound": 0.03},
+    "cloud_vertical_column_linear_readback": {"measured": 0.3564001441459435, "f64_reference": 0.3562661661387072, "absolute_bound": 0.005},
+    "shared_cloud_transport": "Below/inside/orbit/limb and rebased-origin GPU queries agree with independent f64 hollow-shell integration within 0.003 absolute transmittance/radiance in the ambient-only fixture.",
+    "aurora_finite_primary_linear_readback": [
+      {"requested_hit_m": 50000, "representable_hit_m": 50840.04924242424, "measured": 0.0, "f64_reference": 0.0},
+      {"requested_hit_m": 200000, "representable_hit_m": 209715.203125, "measured": 0.09758734714186246, "f64_reference": 0.09724779496475562},
+      {"requested_hit_m": 400000, "representable_hit_m": 419430.40625, "measured": 0.31854677812509186, "f64_reference": 0.3177289884582693}
+    ],
+    "aurora_finite_primary_absolute_bound": 0.006,
+    "aurora_cloud_order": "Opaque-before/inside/after emission shell and foreground-versus-background cloud ordering passed. Conventional forward-Z quantization is included by using the representable depth, not the requested distance.",
+    "aurora_columns": "64-sample vacuum and near-uniform absorbing columns agree with independent 4096-step Simpson integration within 0.02% for their specified fixtures."
+  },
+  "aurora_cpu_grid_diagnostic": {
+    "source": "target/test-tmp/native-sky-complete/gate-7.log",
+    "scenario": "Emission only, radius 3200000m, magnetic latitude 67deg, altitude 1000m, paused time, seven warm evaluations; absolute error on 256 directions against 256-step 128x64 field.",
+    "low": {"grid": [64,32], "steps": 8, "p50_ms": 0.405335, "p95_ms": 0.547309, "max_abs_error_lux_sr": 2.039369},
+    "high": {"grid": [128,64], "steps": 32, "p50_ms": 3.364735, "p95_ms": 3.516778, "max_abs_error_lux_sr": 0.0027432442},
+    "historical_baseline": "native-corrective-sky-2026-10-18.json retains the original 3.916/73.650 ms Low/High p50; do not overwrite that dated evidence or infer general image error from these fixture bounds."
+  },
+  "sky_layer_gpu_diagnostic": {
+    "source": "target/test-tmp/native-audio-sky-targeted/gate-3.log",
+    "scenario": "1280x720 RGBA16Float scene; five warmup and twenty measured frames per mode. Timestamps bracket sky encoding only; clear and readback are outside the GPU scope. CPU producer includes sky frame/star/aurora uniform staging. Host wall scope includes submit and GPU completion. Different modes can use different camera orientation; do not sum the rows.",
+    "rows": [
+      {"mode":"disabled", "gpu_p50_ms":0.0297365, "gpu_p95_ms":0.0606352, "producer_p50_ms":0.000030, "host_submit_wait_p50_ms":0.125223, "effect_storage_bytes":0},
+      {"mode":"stars-low", "gpu_p50_ms":0.0448853, "gpu_p95_ms":0.0504559, "producer_p50_ms":0.160108, "host_submit_wait_p50_ms":0.354140, "effect_storage_bytes":16736},
+      {"mode":"stars-high", "gpu_p50_ms":0.0426410, "gpu_p95_ms":0.0490131, "producer_p50_ms":0.482960, "host_submit_wait_p50_ms":0.672111, "effect_storage_bytes":16736},
+      {"mode":"clouds-low", "gpu_p50_ms":0.2901914, "gpu_p95_ms":0.3192466, "producer_p50_ms":0.001734, "host_submit_wait_p50_ms":0.458764, "effect_storage_bytes":525124},
+      {"mode":"clouds-medium", "gpu_p50_ms":4.2855827, "gpu_p95_ms":4.4578299, "producer_p50_ms":0.002004, "host_submit_wait_p50_ms":4.485171, "effect_storage_bytes":2097988},
+      {"mode":"clouds-high", "gpu_p50_ms":7.0543233, "gpu_p95_ms":7.3884381, "producer_p50_ms":0.002635, "host_submit_wait_p50_ms":7.405629, "effect_storage_bytes":8389444},
+      {"mode":"aurora-low", "gpu_p50_ms":0.6438633, "gpu_p95_ms":0.6734796, "producer_p50_ms":0.002735, "host_submit_wait_p50_ms":0.799138, "effect_storage_bytes":836},
+      {"mode":"aurora-high", "gpu_p50_ms":2.2672278, "gpu_p95_ms":2.3721070, "producer_p50_ms":0.003045, "host_submit_wait_p50_ms":2.435245, "effect_storage_bytes":836},
+      {"mode":"combined-high", "gpu_p50_ms":4.2145677, "gpu_p95_ms":4.3473400, "producer_p50_ms":0.484683, "host_submit_wait_p50_ms":4.921343, "effect_storage_bytes":8405540}
+    ],
+    "disjoint_column_optimization": {"before_source":"target/test-tmp/native-sky-complete/gate-7.log", "before_combined_high_gpu_p50_ms":32.8101397, "after_combined_high_gpu_p50_ms":4.2145677, "change":"Reuse exactly constant cloud transmission within geometrically disjoint auroral shell intervals; overlapping shells retain per-emitter queries. No physical law, deck, weather phase or step budget changed."},
+    "limitation": "Isolated native sky effects, not game FPS, equal-error temporal acceptance, or an accepted whole-client frame budget."
+  },
+  "audio": {
+    "backend":"rodio 0.22.2 playback-only, MIT OR Apache-2.0; existing audio-core and audio-synth remain backend-neutral",
+    "offline_tests":"Exterior medium/connected-cabin routing, GPWS/RCS edge behavior, mute/non-finite/missing input, pause/reverse/forward boom crossings and bounded/muting PCM passed without an output device. A scene test pins the observed primary clock/state without a second simulation.",
+    "offline_cost": {"samples_per_block":48000,"blocks":9,"exterior_p50_ms":1.696659,"cabin_p50_ms":1.712158,"limitation":"Silent CPU PCM generation, not end-to-end device latency or auditory acceptance."},
+    "lifetime":"Only window resume may open the device; suspend/exit releases it. Headless never opens one, --mute returns before device creation, absent output hardware degrades silently.",
+    "limitation":"No auditory/device playback acceptance was attempted. Listening levels remain the legacy authored proxy, not calibrated power, delayed/Doppler engine propagation or per-node structural transfer. Docking event consumer still requires its native fixture."
+  },
+  "captures":"apps/terrain-native/target/test-tmp/sky-layers/native-{stars,clouds}.png, aurora-{off,low,high,off-again}.png, aurora-orbit-depth.png; deterministic numeric fixtures inspected, not blind preference acceptance",
+  "combined_frame_replay": {"directory":"apps/terrain-native/target/test-tmp/sky-stage", "scenario":"1280x720 local flight, throttle 0.3, engine on, three measured frames after thirty warmup; shared sky High, conforming topology Low, spectral ocean Low, no HUD/audio. combined.toml records requests.", "exit_code":0, "visual_acceptance":"REJECTED: regular triangular gaps on conforming terrain. no-ocean replay retains the defect; patches replay does not. Existing conforming raster acceptance gap must be fixed separately; this capture is not visual parity or a full-client pass.", "flight_stopped":false, "capacity_rejections":0, "ocean_near_deformed_patches":0, "limitation":"Ocean field is enabled but this camera admits no near deformed patches. Three samples with live residency are not a benchmark comparison. The first startup diagnostic still has an outdated sun-disc-unported label; applied metadata and later diagnostic report the actual consumer."},
+  "remaining":["Full native map/navigation and remaining flight deck controls", "Native plume and game optical consumers", "Docking/contact event fixtures", "Finite atmospheric perspective and richer sky/cloud transport", "Secondary-origin clear-sky/auroral parallax", "Partial source discs/eclipses", "Per-body magnetic/weather state", "Temporal/equal-error and complete-client performance acceptance", "Metal/WebGPU execution and independent blind visual review", "Final Bevy host/bridge retirement, packaging and tool cleanup"],
+  "remote_ci":"not run or claimed"
+}

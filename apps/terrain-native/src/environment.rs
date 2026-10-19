@@ -30,6 +30,20 @@ const IRRADIANCE_EPSILON: f64 = 0.01;
 /// error envelope. Pausing reuses the field; forward/backward warp both wake it.
 const AURORA_REFRESH_SIM_S: f64 = 0.5;
 
+pub(crate) fn aurora_params(intensity: f32) -> thessa_atmosphere::AuroraParams {
+    let gain = f64::from(intensity) * 1e-6;
+    thessa_atmosphere::AuroraParams {
+        magnetic_pole: DVec3::Y,
+        oval_latitude_rad: 67.0f64.to_radians(),
+        oval_width_rad: 3.0f64.to_radians(),
+        altitude_min_m: 90_000.0,
+        altitude_max_m: 250_000.0,
+        activity: 0.8,
+        color_bottom_rgb: [0.2, 1.0, 0.35].map(|v| v * gain),
+        color_top_rgb: [0.9, 0.25, 0.3].map(|v| v * gain),
+    }
+}
+
 /// Atmosphere scalars read from the frozen body provider by the caller.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BodyAtmosphere {
@@ -118,6 +132,7 @@ pub struct EnvironmentField {
     optics: AtmosphereOptics,
     budget: Option<EnvironmentBudget>,
     grid: Option<EnvironmentRadiance>,
+    background: Option<EnvironmentRadiance>,
     last_position_m: DVec3,
     last_lights: Vec<CelestialLight>,
     frames_since_evaluation: u64,
@@ -143,6 +158,7 @@ impl EnvironmentField {
             optics: base,
             budget: None,
             grid: None,
+            background: None,
             last_position_m: DVec3::ZERO,
             last_lights: Vec::new(),
             frames_since_evaluation: u64::MAX,
@@ -162,6 +178,7 @@ impl EnvironmentField {
         }
         self.budget = budget;
         self.grid = None;
+        self.background = None;
         self.frames_since_evaluation = u64::MAX;
         self.revision += 1;
     }
@@ -207,7 +224,9 @@ impl EnvironmentField {
             return self.grid.as_ref();
         }
         let started = std::time::Instant::now();
-        self.grid = self.evaluate_at(camera_body_m, lights, sim_time_s);
+        let evaluated = self.evaluate_components_at(camera_body_m, lights, sim_time_s);
+        (self.grid, self.background) =
+            evaluated.map_or((None, None), |(grid, background)| (Some(grid), background));
         self.last_evaluation_ms = started.elapsed().as_secs_f64() * 1000.0;
         self.last_position_m = camera_body_m;
         self.last_time_s = sim_time_s;
@@ -235,12 +254,23 @@ impl EnvironmentField {
         self.evaluate_at(camera_body_m, lights, 0.0)
     }
 
+    #[cfg(test)]
     fn evaluate_at(
         &self,
         camera_body_m: DVec3,
         lights: &[CelestialLight],
         sim_time_s: f64,
     ) -> Option<EnvironmentRadiance> {
+        self.evaluate_components_at(camera_body_m, lights, sim_time_s)
+            .map(|(grid, _)| grid)
+    }
+
+    fn evaluate_components_at(
+        &self,
+        camera_body_m: DVec3,
+        lights: &[CelestialLight],
+        sim_time_s: f64,
+    ) -> Option<(EnvironmentRadiance, Option<EnvironmentRadiance>)> {
         use rayon::prelude::*;
         let budget = self.budget?;
         let mut optics = self.optics.clone();
@@ -287,22 +317,12 @@ impl EnvironmentField {
         let up = camera_body_m.normalize_or_zero().as_vec3().to_array();
         let base = EnvironmentRadiance::with_up(budget.width, budget.height, texels, up)?;
         if budget.aurora_steps == 0 {
-            return Some(base);
+            return Some((base, None));
         }
         // Same analytic model as shared CPU queries, not a second painted
         // shell. The magnetic axis is the legacy Thessa aligned-dipole proxy
         // expressed in native body axes (+Y); no MHD claim is made.
-        let gain = f64::from(budget.aurora_intensity) * 1e-6;
-        optics.emission.aurora = Some(thessa_atmosphere::AuroraParams {
-            magnetic_pole: DVec3::Y,
-            oval_latitude_rad: 67.0f64.to_radians(),
-            oval_width_rad: 3.0f64.to_radians(),
-            altitude_min_m: 90_000.0,
-            altitude_max_m: 250_000.0,
-            activity: 0.8,
-            color_bottom_rgb: [0.2, 1.0, 0.35].map(|c| c * gain),
-            color_top_rgb: [0.9, 0.25, 0.3].map(|c| c * gain),
-        });
+        optics.emission.aurora = Some(aurora_params(budget.aurora_intensity));
         let (width, height) = if budget.aurora_steps <= 8 {
             (64, 32)
         } else {
@@ -339,6 +359,7 @@ impl EnvironmentField {
                 }
             });
         EnvironmentRadiance::with_up(width as u32, height as u32, output, up)
+            .map(|grid| (grid, Some(base)))
     }
 
     /// Revision changes on evaluation or budget invalidation, including disable.
@@ -348,6 +369,42 @@ impl EnvironmentField {
 
     pub fn grid(&self) -> Option<&EnvironmentRadiance> {
         self.grid.as_ref()
+    }
+
+    pub fn background_grid(&self) -> Option<&EnvironmentRadiance> {
+        self.background.as_ref()
+    }
+
+    pub fn aurora_input(&self) -> Option<(AtmosphereOptics, u32, bool)> {
+        let budget = self.budget?;
+        if budget.aurora_steps == 0 {
+            return None;
+        }
+        let mut optics = self.optics.clone();
+        let scale = if budget.scattering {
+            f64::from(budget.density_scale)
+        } else {
+            0.0
+        };
+        for channel in 0..3 {
+            optics.rayleigh.beta_rgb[channel] *= scale;
+            optics.mie.beta_rgb[channel] *= scale;
+        }
+        optics.emission.aurora = Some(aurora_params(budget.aurora_intensity));
+        Some((optics, budget.aurora_steps, budget.aurora_animate))
+    }
+
+    pub fn star_optics(&self) -> Option<AtmosphereOptics> {
+        let budget = self.budget?;
+        if !budget.scattering {
+            return None;
+        }
+        let mut optics = self.optics.clone();
+        for channel in 0..3 {
+            optics.rayleigh.beta_rgb[channel] *= f64::from(budget.density_scale);
+            optics.mie.beta_rgb[channel] *= f64::from(budget.density_scale);
+        }
+        Some(optics)
     }
 
     pub fn stats(&self) -> EnvironmentStats {
@@ -361,7 +418,11 @@ impl EnvironmentField {
             view_steps: budget.map_or(0, |b| b.view_steps),
             sun_steps: budget.map_or(0, |b| b.sun_steps),
             ambient_lux: grid.map_or([0.0; 3], EnvironmentRadiance::ambient_lux),
-            storage_bytes: grid.map_or(0, EnvironmentRadiance::storage_bytes),
+            storage_bytes: grid.map_or(0, EnvironmentRadiance::storage_bytes)
+                + self
+                    .background
+                    .as_ref()
+                    .map_or(0, EnvironmentRadiance::storage_bytes),
             last_evaluation_ms: self.last_evaluation_ms,
             aurora_steps: budget.map_or(0, |b| b.aurora_steps),
         }
@@ -476,7 +537,14 @@ mod tests {
                 samples[3],
                 samples[6]
             );
-            assert!(max_error.is_finite());
+            let envelope = match quality {
+                thessa_graphics::AuroraQuality::Low => 2.1,
+                thessa_graphics::AuroraQuality::High => 0.003,
+            };
+            assert!(
+                max_error <= envelope,
+                "polar emission fixture exceeded its absolute lux/sr envelope: {max_error} > {envelope}"
+            );
         }
     }
 

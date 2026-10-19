@@ -74,26 +74,25 @@ fn frame_bind_group(
     instances: &wgpu::Buffer,
     environment: &crate::environment::EnvironmentBinding,
 ) -> wgpu::BindGroup {
-    let [environment_meta, environment_texels] = environment.entries();
+    let mut entries = vec![
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: view.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: lighting.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 2,
+            resource: instances.as_entire_binding(),
+        },
+    ];
+    entries.extend(environment.entries());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("mesh-frame"),
         layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: view.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: lighting.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: instances.as_entire_binding(),
-            },
-            environment_meta,
-            environment_texels,
-        ],
+        entries: &entries,
     })
 }
 fn words(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
@@ -392,7 +391,7 @@ impl MeshRenderer {
                     "{}\n{}\n{}\n{}\n{}",
                     rt_include,
                     thessa_rcbt_core::shaders::OCEAN_WGSL,
-                    include_str!("environment.wgsl"),
+                    crate::environment::shader(0),
                     shadows.map_or_else(
                         || crate::shadows::NO_SHADOWS.into(),
                         |_| crate::shadows::receiver_shader(2)

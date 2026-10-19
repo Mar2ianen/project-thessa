@@ -8,6 +8,7 @@ fn server_flight_window_adopts_snapshots_and_exits_cleanly() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
         .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .args([
+            "--mute",
             "--server-flight",
             "--chase",
             "--throttle",
@@ -60,7 +61,7 @@ fn hud_and_terrain_only_windows_exit_cleanly() {
     for hud in ["--hud", "--no-hud"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
             .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .args([hud, "--frames", "8"])
+            .args([hud, "--mute", "--frames", "8"])
             .output()
             .unwrap();
         assert!(
@@ -80,6 +81,7 @@ fn live_flight_throttle_preset_reaches_the_authority() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
         .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .args([
+            "--mute",
             "--flight",
             "--throttle",
             "1",
@@ -108,7 +110,7 @@ fn live_flight_throttle_preset_reaches_the_authority() {
 fn live_flight_chase_windows_advance_and_exit() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
         .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .args(["--flight", "--chase", "--hud", "--frames", "16"])
+        .args(["--flight", "--chase", "--hud", "--mute", "--frames", "16"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -129,7 +131,7 @@ fn live_flight_windows_advance_and_exit_with_or_without_hud() {
     for hud in ["--hud", "--no-hud"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
             .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .args(["--flight", hud, "--frames", "16"])
+            .args(["--flight", hud, "--mute", "--frames", "16"])
             .output()
             .unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);

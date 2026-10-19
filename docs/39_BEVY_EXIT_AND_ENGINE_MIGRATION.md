@@ -13,6 +13,10 @@
 
 ## 1. Decision
 
+The current source-to-consumer retirement ledger is
+[doc 66](66_BEVY_RETIREMENT.md). It tracks the full requested host replacement,
+including non-rendering functions; the native sky slice below is not that gate.
+
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only
 unit sphere is advanced by the canonical consumer and native selection below;
@@ -38,6 +42,15 @@ The mode suppresses legacy grid generation/compaction and classifies actual
 camera-relative emitted datum geometry through the existing transaction planner.
 Per-tile error/convergence, temporal/equal-error acceptance, primary terrain RT
 reflections and the wider platform/UI/effect migration remain open. See doc 63.
+
+The audited native sky follow-up in [doc 65](65_NATIVE_SKY_AUDIT.md) now consumes
+the shared aurora model, flux-normalized stars/source discs and depth-clipped
+clouds in both window and headless paths. Cloud primary, receiver-shadow and
+reflected-ray consumers share one weather/geometry/phase publication and WGSL
+transport implementation. Primary aurora is depth-clipped with correctly ordered
+cloud extinction, including orbital foreground terrain. Richer atmospheric
+transport and visual/platform acceptance remain open; this is not full client
+replacement.
 
 Native raster follow-up: [doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) records
 conservative non-ocean terrain caster rejection, independently compared with
@@ -3611,8 +3624,12 @@ there is no new moving-camera speedup claim or dirty-chunk/refit implementation.
 [Doc 65](65_NATIVE_SKY_AUDIT.md) is the pre-implementation audit for richer native
 sky, background stars, clouds and aurora. Shared optics/cloud transport/emission
 already exist, but the Bevy star spheres/material shells are adapters/proxies,
-not completed portable native effects. The current coarse radiance-grid slice
-does not close high-frequency sky, cloud occlusion or auroral-curtain acceptance.
+not portable native effects. The native follow-up now adds a flux-normalized
+catalogue/source-disc pass and shared depth-clipped cloud transport, receiver
+shadows and reflected rays outside that coarse grid. Primary aurora now clips
+to foreground depth with ordered cloud extinction. Richer magnetic/emission
+inputs, temporal/equal-error and independent visual/platform acceptance
+remain open; doc 65 records the implemented boundaries and numerical fixtures.
 
 ## 15. FastRT
 

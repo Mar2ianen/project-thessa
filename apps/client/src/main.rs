@@ -531,7 +531,9 @@ fn setup(
         .max_by(|a, b| a.temperature_k.total_cmp(&b.temperature_k))
         .map(|star| star.id.clone())
         .and_then(|id| star_materials.get(&id).cloned());
-    if let (Some(bright), Some(blue)) = (brightest, hottest) {
+    if !graphics.as_ref().is_none_or(|g| g.0.stars) {
+        eprintln!("[client] background stars disabled by resolved settings");
+    } else if let (Some(bright), Some(blue)) = (brightest, hottest) {
         spawn_starfield(&mut commands, sphere_mesh, bright, blue, &mut materials);
     } else {
         eprintln!("[client] no configured stars; starfield skipped");

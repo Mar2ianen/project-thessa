@@ -1,0 +1,106 @@
+# 66 — Bevy retirement: source inventory and acceptance ledger
+
+**Status: active, incomplete. Updated: 2026-10-19.**
+
+The requested outcome is removal of Bevy and reintegration or replacement of
+code tied to its host, not merely an optional native terrain benchmark. Keep
+the legacy client runnable until its retained functions have usable native
+consumers. Bevy appearance is not an acceptance oracle. Dated measurements and
+earlier partial-migration records in doc 39 retain their historical scope.
+
+## Dependency boundary
+
+Direct Cargo coupling is confined to `apps/client` and `crates/bevy-rcbt`, plus
+the root workspace dependency. Foundation simulation, streaming, acoustics,
+plume semantics, assets and native renderer crates do not require Bevy. This
+small dependency count does **not** imply a small amount of remaining work.
+
+## Source-to-consumer inventory
+
+The table is a source inspection ledger, not a completed visual acceptance
+matrix. Existing neutral implementations must be reused; no second simulation,
+streamer, allocator, propagation resolver or generic RT scene is needed.
+
+| Legacy source | Existing neutral/native owner | Remaining retirement obligation |
+|---|---|---|
+| `main.rs` lifecycle, scheduling, assets, window/input | `terrain-native/{main,window}.rs`, `render-assets`, winit/egui | promote a complete native client entry point; preserve packaged asset discovery and useful CLI scenarios |
+| `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
+| `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | reconcile remaining flight deck commands, reference/display-body choices, pause/warp and server/local control; do not fabricate authoritative state in UI |
+| `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared instrument settings | audit every retained readout/control; native flight deck exists but not all old widgets/commands have replacements |
+| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, `flight-authority` trajectory/navigation, native `celestial.rs` | native system map/body selection, orbit/trajectory drawing and maneuver interaction remain; reuse shared ephemeris/prediction instead of porting scaled Bevy transforms |
+| `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
+| `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
+| `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core` source/profile/medium/optics | native resolved Low/Medium/High field consumer and diagnostics; keep provisional nozzle inputs explicit and never make mesh shape authoritative |
+| `night_lights.rs`, gas-giant portions of `beauty.rs` | worldgen inhabited regions, material/assets layers | extract existing GPL optical bakes to game-owned code or independently implement a neutral model; native material consumers still missing |
+| `audio.rs` | `audio-core`, `audio-synth`, native `audio.rs` | native engine/device adapter, exterior/cabin routing and RCS/GPWS/boom fixtures now have consumers; docking event integration remains; captures/tests stay silent and missing audio hardware does not prevent rendering |
+| `contact_gizmos.rs`, `docking_demo.rs` | `collision`, shared docking state machine, native `contact_preview.rs` | preserve actual solved contact/docking inspection and deterministic replay; a static mesh preview is not a solved docking replacement |
+| Bevy bloom/exposure/AA, Solari | native `DisplayTransform`, `RayScene`, FastRT | manual HDR/display and scene-object rays exist; remaining settings must be implemented or explicitly resolved to documented fallbacks, not falsely marked applied |
+| `perf.rs`, Bevy BRP integration | `perf`, native capture schema, agent-QA tools | preserve measured CPU/GPU attribution and useful capture/control operations; never relabel CPU submit as GPU time |
+
+## Working order and deletion gate
+
+The 2026-10-19 combined-frame replay exposed regular triangular holes in the
+opt-in conforming terrain consumer. Disabling ocean does not remove them;
+regular patches do not show them. Numeric sky gates passed, but the complete
+frame is **not** visually accepted. Reproduce with the retained `sky-stage`
+configs/captures referenced in the sky/audio evidence artifact and resolve the
+conforming raster defect before expanding the native client surface.
+
+### Retained flight input audit
+
+The old `pilot_input` also owns functions not covered by a native WASDQE test:
+
+- relaunch after a stopped flight (`Reset` command remotely, shared launch-site
+  reset locally), preserving the simulation clock;
+- pause and warp requests, with acknowledged server pause/effective warp distinct
+  from client intent, and no second client clock in server mode;
+- map/pilot switching and camera-versus-flight input capture;
+- Mouse Aim, held temporary SAS inversion and safe neutral input on focus loss;
+- help/telemetry/HUD visibility and manual-takeover behavior;
+- opt-in coastal flyby guidance and server-side maneuver execution fixtures.
+
+These are remaining replacement obligations, not features certified by the
+existing native flight deck. Native arrow keys currently control the camera;
+new pause/warp bindings must be explicit and cannot silently double-handle them.
+Shared guidance, rails and command validation already exist; porting a UI must
+not introduce a parallel controller, trajectory bake or server authority.
+
+### Plume adapter audit before native reuse
+
+`plume-core::AxialProfile` already owns radius, emission, extinction and shock
+stations; `sample_medium` and `integrate_ray` are the numerical references.
+The legacy `assets/shaders/plume_volume.wesl` is **not** a drop-in semantic
+implementation: it contains Bevy imports/material bindings, fitted mean
+extinction rather than the complete station profile, a hard radial skirt cut,
+tail dissolve, turbulence deformation and camera-inside fade. It also discards
+near-axial rays when the cylinder quadratic is nearly parallel. These are
+representation changes requiring an error envelope, not facts to inherit just
+because they were visible in the old client. A native consumer should sample
+the existing published axial profile, handle parallel/inside/depth-clipped rays,
+and test its integration against the CPU oracle before adding residual detail.
+The provisional rocket deck and X-15 nozzle offset remain game-owned inputs,
+not calibrated compiled engine state. Field-derived lighting must enter the
+shared lighting/RT consumer; a second generic light or ray-scene subsystem is
+not a replacement strategy.
+
+1. Land the verified shared sky/cloud/aurora publication and its evidence.
+2. Reintegrate remaining small host adapters (audio and game-owned optical
+   producers), then native field/render consumers and finite transport.
+3. Replace map/navigation, remaining flight deck/event fixtures and runtime
+   controls using their existing authoritative owners.
+4. Promote the native application, move retained bridge-only tests to the owning
+   subsystem, update packaging/CI/tools/docs, and delete the obsolete host and
+   adapter. Do not claim completion by dropping behavior or disabling tests.
+
+For each implementation stage record actual commands, baseline, scenario,
+hardware/backend where relevant, numeric/reference bounds, counters and measured
+costs. Run workspace, feature-off and hardware gates before pushing. Keep quality
+fallbacks and disabled resource/work contracts explicit. Visual fixtures are
+deterministic evidence, not independent aesthetic approval.
+
+Final removal requires a Bevy-free **full native client dependency graph** and
+workspace manifests/lockfile, plus usable native entry points for retained game
+functions above. Search remaining source, shaders, CI, packaging and tools for
+active Bevy-only contracts. Historical documentation may mention Bevy; active
+instructions and status must identify the actual client. Platform/visual or
+transport gaps cannot be concealed by a clean Cargo graph.

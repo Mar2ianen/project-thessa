@@ -20,7 +20,7 @@ impl SkyBackground {
                 format!(
                     "{}\n{}\n{}",
                     thessa_rcbt_core::shaders::OCEAN_WGSL,
-                    include_str!("environment.wgsl"),
+                    crate::environment::shader(0),
                     include_str!("sky.wgsl")
                 )
                 .into(),
@@ -67,7 +67,7 @@ impl SkyBackground {
         view: &wgpu::Buffer,
         environment: &EnvironmentBinding,
     ) -> wgpu::BindGroup {
-        let [meta, texels] = environment.entries();
+        let [meta, texels] = environment.background_entries();
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shared-sky-background"),
             layout: &pipeline.get_bind_group_layout(0),

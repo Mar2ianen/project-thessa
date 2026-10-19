@@ -12,6 +12,9 @@ default = ["hud"]
 hud = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
 
 [dependencies]
+thessa-audio-core = { path = "../../crates/audio-core" }
+thessa-audio-synth = { path = "../../crates/audio-synth" }
+rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
 thessa-render-assets = { path = "../../crates/render-assets" }
 thessa-render-core = { path = "../../crates/render-core" }
 thessa-render-wgpu = { path = "../../crates/render-wgpu" }
@@ -33,3 +36,6 @@ winit = "0.30.13"
 egui = { version = "0.37", default-features = false, optional = true }
 egui-wgpu = { version = "0.37", default-features = false, optional = true }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "wayland", "x11"], optional = true }
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }

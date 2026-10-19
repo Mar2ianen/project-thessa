@@ -9,8 +9,10 @@ mod environment;
 mod hud;
 mod perf;
 mod scene;
+mod sky_layers;
 mod window;
 
+mod audio;
 use std::{error::Error, time::Instant};
 use thessa_render_wgpu::{Backend, terrain::OffscreenTarget};
 
@@ -37,8 +39,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut flight_step = None;
     let mut width = 1280u32;
     let mut height = 720u32;
+    let mut audio = audio::Options::default();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--mute" => audio.muted = true,
+            "--audio-cabin" => audio.cabin = true,
+            "--audio-demo" => audio.demo = true,
             "--width" => {
                 width = args.next().ok_or("--width requires pixels")?.parse()?;
             }
@@ -114,7 +120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping. Sun disks, aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -136,6 +142,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 println!(
                     "--throttle FRACTION (0..=1, requires --flight or --server-flight) presets throttle intent before the first frame. --engine-on arms engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, CapsLock precision; R/Y/G/P toggle RCS/wheels/gear/chutes. Server input acceptance means queued, not acknowledged; systems checkboxes show demands."
+                );
+                println!(
+                    "Audio: --mute skips output-device creation; --audio-cabin selects the PRIMARY-attached diagnostic cabin. --audio-demo enables the delayed Mach-cone fixture (flight SimTime when flying, isolated elapsed-time fixture otherwise). No audio device is opened by headless capture, regardless of flags."
                 );
                 return Ok(());
             }
@@ -291,6 +300,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             height,
         )?;
         let mut renderer = scene.renderer(&backend, display.scene_format())?;
+        let sky_layers = scene.sky_layers(&backend, display.scene_format(), &mut renderer);
+        println!(
+            "native_sky_layers enabled={} storage_bytes={}",
+            sky_layers.enabled(),
+            sky_layers.storage_bytes()
+        );
         let mut mesh_renderer =
             scene.mesh_renderer_with_shadows(&backend, display.scene_format(), &renderer)?;
         #[cfg(feature = "hud")]
@@ -389,6 +404,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 [width, height],
             )?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
+            scene.update_sky_layers(&backend, &sky_layers, width, height, exposure)?;
             renderer.update_shadows(
                 &backend,
                 scene.view(width, height, exposure).world_position_m,
@@ -421,7 +437,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 display.scene_color(&target.color),
                 &target.depth,
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
-                false,
+                sky_layers.enabled(),
+            );
+            sky_layers.encode(
+                &backend,
+                &mut encoder,
+                display.scene_color(&target.color),
+                &target.depth,
             );
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 3);
@@ -479,7 +501,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         timings.sort_by(f64::total_cmp);
         if let (Some(perf), Some(path)) = (&perf, &perf_capture) {
-            perf.write(path,&backend,&scene,&display,width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
+            perf.write(path,&backend,&scene,&display,&sky_layers,width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
         }
         streaming_timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];
@@ -560,7 +582,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             resolved.specular_reflections
         );
         println!(
-            "sky_background={} shared_environment_publication=true; single-scattering field, no sun disk/aerial perspective/HDR",
+            "sky_background={} shared_environment_publication=true; single-scattering field, native stars/source discs and depth-clipped clouds/aurora; no aerial perspective",
             renderer.sky_enabled()
         );
         let ocean = renderer.ocean_stats();
@@ -640,7 +662,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
-    window::run(scene, frame_limit, hud_enabled, width, height)
+    window::run(scene, frame_limit, hud_enabled, width, height, audio)
 }
 
 /// Same manual-camera convention as the current Bevy PBR host (EV100).

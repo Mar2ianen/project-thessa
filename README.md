@@ -200,7 +200,16 @@ The checked-in vertical slice currently contains:
      The [rejected optimization audit](docs/64_NATIVE_OPTIMIZATION_REVIEW.md)
      now has corrective GPU quiescence/origin/cache regressions (doc 63), not
      accepted speedup claims. [Sky migration audit](docs/65_NATIVE_SKY_AUDIT.md)
-     inventories existing sky, star, cloud and aurora producers before porting.
+      inventories existing sky, star, cloud and aurora producers before porting.
+      Its native follow-up now draws flux-normalized distant stars/source discs
+      and depth-clipped clouds. Shared cloud weather/transport also feeds direct
+      terrain/mesh/ocean visibility and reflected rays; auroral emission feeds the
+      common sky environment and a depth-clipped primary volume with ordered
+      cloud extinction, including orbital foreground terrain. Atmosphere/cloud
+      multiple scattering and wider visual/platform acceptance remain open.
+      Native windows also reuse the shared procedural engine/acoustic routing;
+      `--audio-cabin` selects the diagnostic cabin and `--mute` skips audio
+      device creation. Headless captures are always silent.
    Native `[renderer].hdr=true` now retains pre-exposed linear scene light in
    RGBA16Float, maps it with Reinhard to SDR, then draws the HUD unchanged.
    `hdr=false` or an unsupported target uses the direct LDR fallback without an

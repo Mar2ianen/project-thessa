@@ -17,7 +17,7 @@ fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,he
         if(cbt_specular_enabled()) {reflection+=ocean_sun_reflection(n,eye,lighting.directions[i].xyz,lighting.colors_lux[i].rgb,optical_roughness,f0)*visibility;}
     }
     if(!cbt_specular_enabled()){return vec4(albedo*illumination/OCEAN_PI,weight);}
-    reflection+=env_radiance(reflect(-eye,n),lighting.ambient_lux.rgb)*fresnel;
+    reflection+=env_radiance_from(position,reflect(-eye,n),lighting.ambient_lux.rgb)*fresnel;
     // The existing ocean material supplies the diffuse/subsurface colour;
     // no new absorption or bathymetry is invented by this render-only slice.
     return vec4(albedo*illumination/OCEAN_PI*(1.0-fresnel)+reflection,weight);

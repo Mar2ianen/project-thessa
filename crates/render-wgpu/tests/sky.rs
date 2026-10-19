@@ -124,6 +124,39 @@ fn sky_dome_off_keeps_shared_indirect_field_without_a_background_consumer() {
 }
 
 #[test]
+fn primary_clear_field_does_not_replace_total_indirect_radiance() {
+    let backend = Backend::bring_up().unwrap();
+    let (mut terrain, _) = renderer(&backend, true);
+    let target = OffscreenTarget::new(&backend, 65, 33).unwrap();
+    let camera = view(DQuat::IDENTITY, DVec3::ZERO, 1.0);
+    let baseline = draw(&backend, &mut terrain, &target, &camera);
+    let total = EnvironmentRadiance::new(8, 4, vec![[0.8, 0.5, 0.4]; 32]).unwrap();
+    let clear = EnvironmentRadiance::new(4, 2, vec![[0.02, 0.03, 0.04]; 8]).unwrap();
+    let mut binding = EnvironmentBinding::new(&backend.device);
+    binding.update(&backend, Some(&total));
+    binding.update_background(&backend, Some(&clear));
+    terrain.share_environment(&backend, Some(&binding));
+    let pixels = draw(&backend, &mut terrain, &target, &camera);
+    for (actual, value) in pixels[..3].iter().zip([0.02, 0.03, 0.04]) {
+        assert!((i16::from(*actual) - i16::from(srgb(value))).abs() <= 1);
+    }
+    assert_eq!(
+        binding.ambient_lux(),
+        total.ambient_lux(),
+        "primary emission must not be removed from indirect light"
+    );
+    assert_eq!(binding.storage_bytes(), 32 * 16 + 8 * 16 + 32);
+    binding.update_background(&backend, None);
+    terrain.share_environment(&backend, Some(&binding));
+    let pixels = draw(&backend, &mut terrain, &target, &camera);
+    assert!((i16::from(pixels[0]) - i16::from(srgb(0.8))).abs() <= 1);
+    binding.update(&backend, None);
+    terrain.share_environment(&backend, Some(&binding));
+    assert_eq!(binding.storage_bytes(), 0);
+    assert_eq!(draw(&backend, &mut terrain, &target, &camera), baseline);
+}
+
+#[test]
 fn sky_matches_cpu_directional_sampler_under_rotation_projection_and_large_translation() {
     let Some(backend) = backend() else {
         return;

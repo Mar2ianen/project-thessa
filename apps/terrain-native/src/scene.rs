@@ -127,6 +127,50 @@ pub struct FlightData {
 }
 
 impl Scene {
+    /// Audio observes the same primary flight state as instruments. The optional
+    /// debug cabin is attached to this primary cluster, not a simulated interior.
+    pub fn audio_frame(&self) -> Option<crate::audio::Frame> {
+        if self.flight_stopped()
+            || self
+                .remote
+                .as_ref()
+                .is_some_and(|remote| remote.snapshots == 0 || remote.fleet.stale)
+        {
+            return None;
+        }
+        let flight = self.flight.as_ref()?;
+        let data = self.flight_data()?;
+        let sample = flight.atmosphere.sample(data.altitude_datum_m).ok()?;
+        let medium = if sample.density_kg_m3 > 0.0 {
+            thessa_audio_core::AcousticMedium::gas(
+                sample.density_kg_m3,
+                sample.speed_of_sound_mps,
+                0.0,
+            )
+            .ok()?
+        } else {
+            thessa_audio_core::AcousticMedium::VACUUM
+        };
+        Some(crate::audio::Frame {
+            sim_time_s: flight.flight_time_s,
+            engine_active: flight.engine_active,
+            throttle: flight.throttle,
+            medium,
+            source: thessa_audio_core::AcousticPoint::stationary(self.center),
+            listener: thessa_audio_core::AcousticPoint::stationary(
+                self.view(1, 1, 1.0).world_position_m,
+            ),
+            // A temporary cabin listener rides PRIMARY, matching the legacy
+            // diagnostic. Per-node pressure volumes/structural acoustics remain
+            // separate from this explicit listener attachment.
+            source_cluster: Some(1),
+            listener_cluster: Some(1),
+            rcs_commanded: flight.rcs_enabled
+                && flight.regime() == thessa_flight_authority::FlightRegime::Coast
+                && flight.control_input.length_squared() > 0.02,
+            gpws_warning: data.altitude_datum_m < 100.0 && data.vertical_speed_mps < -1.0,
+        })
+    }
     /// Sample surface speed, vertical speed and datum/AGL altitude from the
     /// existing authority state through the shared kinematics (the same
     /// function the old client's HUD consumes). `None` without live flight
@@ -970,6 +1014,65 @@ impl Scene {
         self.environment.as_ref().map_or(0, |f| f.revision())
     }
 
+    pub fn sky_layers(
+        &mut self,
+        backend: &Backend,
+        format: wgpu::TextureFormat,
+        renderer: &mut TerrainRenderer,
+    ) -> crate::sky_layers::SkyLayers {
+        let mut settings = backend.resolve_graphics(&self.requested);
+        if self
+            .environment
+            .as_ref()
+            .and_then(|field| field.aurora_input())
+            .is_none()
+        {
+            settings.aurora_shell = false;
+        }
+        let layers =
+            crate::sky_layers::SkyLayers::new(backend, &settings, format, self.stream_radius());
+        if let Some(clouds) = layers.cloud_binding() {
+            let binding = self.gpu_environment.get_or_insert_with(|| {
+                thessa_render_wgpu::environment::EnvironmentBinding::new(&backend.device)
+            });
+            binding.set_clouds(clouds);
+            renderer.share_environment(backend, Some(binding));
+        }
+        layers
+    }
+
+    pub fn update_sky_layers(
+        &self,
+        backend: &Backend,
+        layers: &crate::sky_layers::SkyLayers,
+        width: u32,
+        height: u32,
+        exposure: f32,
+    ) -> Result<(), BackendError> {
+        if !layers.enabled() {
+            return Ok(());
+        }
+        let optics = self
+            .environment
+            .as_ref()
+            .and_then(|field| field.star_optics());
+        layers.update(
+            backend,
+            &self.view(width, height, exposure),
+            [width, height],
+            self.sample.time.0,
+            self.sample.frame.rotation().inverse(),
+            &self.lighting(),
+            optics.as_ref(),
+            &self.sample.environment_lights,
+        )?;
+        let emission = self
+            .environment
+            .as_ref()
+            .and_then(|field| field.aurora_input());
+        layers.update_aurora(backend, emission.as_ref(), self.sample.time.0)
+    }
+
     fn publish_presentation(
         &mut self,
         backend: &Backend,
@@ -982,6 +1085,12 @@ impl Scene {
                     thessa_render_wgpu::environment::EnvironmentBinding::new(&backend.device)
                 });
                 binding.update(backend, self.environment_grid());
+                binding.update_background(
+                    backend,
+                    self.environment
+                        .as_ref()
+                        .and_then(|field| field.background_grid()),
+                );
                 renderer.share_environment(backend, Some(&binding));
                 self.gpu_environment = Some(binding);
             }
@@ -1308,6 +1417,35 @@ fn elevated_view(
 mod tests {
     use super::*;
     use glam::DQuat;
+
+    #[test]
+    fn audio_observation_follows_primary_without_owning_a_flight_clock() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        assert!(scene.audio_frame().is_none());
+        scene.enable_live_flight().unwrap();
+        scene.input.engine_active = true;
+        scene.input.throttle = 0.5;
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(1.0 / 60.0, None).unwrap();
+        let frame = scene.audio_frame().unwrap();
+        let flight = scene.flight.as_ref().unwrap();
+        assert_eq!(frame.sim_time_s, flight.flight_time_s);
+        assert_eq!(frame.throttle, flight.throttle);
+        assert_eq!(frame.engine_active, flight.engine_active);
+        assert_eq!(frame.source.position_m, scene.center);
+        assert_eq!(
+            frame.listener.position_m,
+            scene.view(1, 1, 1.0).world_position_m
+        );
+        assert_eq!(
+            frame.gpws_warning,
+            scene
+                .flight_data()
+                .is_some_and(|d| d.altitude_datum_m < 100.0 && d.vertical_speed_mps < -1.0)
+        );
+        scene.flight.as_mut().unwrap().flight_error = Some("fixture stopped".into());
+        assert!(scene.audio_frame().is_none());
+    }
 
     #[test]
     fn live_canonical_flight_matches_direct_authority_and_publishes_one_complete_sample() {

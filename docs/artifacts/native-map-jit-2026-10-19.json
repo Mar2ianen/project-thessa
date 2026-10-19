@@ -10,11 +10,12 @@
     "readouts": "Shared dominant-body Ap/Pe/escape are instantaneous two-body diagnostics, not full-field trajectory predictions or solved contact. Local scheduler countdowns and transmitted wake_notice remain distinct; remote maps suppress the local countdown and retain observed notices. Solver reference and gravity do not change."
   },
   "verification": {
-    "status": "Immediate user-requested push after all mandatory CI-equivalent gates passed; extended native release ignored suite still running at push time. No all-fourteen-gates claim.",
+    "status": "All fourteen final local gates passed on unchanged compiled source inputs. Product commit 23d553a was pushed immediately at the user's request after mandatory CI-equivalent gates passed; this documentation-only follow-up records the completed extended checks.",
     "directory": "target/test-tmp/native-map-jit-final",
     "source_count": 597,
     "source_manifest_sha256": "47c7a3372996f072a2354aea3c37e23d785cacb89fa91de1b8a6562ed06853b9",
-    "checks_at_push": {
+    "sources_unchanged": true,
+    "checks_at_first_push": {
       "fmt_all_check": "passed",
       "workspace_all_targets_all_features_clippy_D_warnings": "passed",
       "native_no_default_all_targets_clippy_D_warnings": "passed",
@@ -26,6 +27,25 @@
       "render_wgpu_release_ignored_passed": 31,
       "native_release_ignored": "running; not yet certified",
       "remaining_architecture_qa_window_smoke": "pending in sequential final runner"
+    },
+    "completed_extended_checks": {
+      "native_release_ignored_passed": 31,
+      "architecture": "passed",
+      "agent_qa_passed": 5,
+      "diff_whitespace": "passed",
+      "muted_wayland_map_flight_smoke": "passed; 8 presentations, 0.7 simulation seconds, zero capacity rejections, no flight stop, no output device created"
+    },
+    "commands": "Exact argv, exit codes, durations and log hashes are in gates.json; source.json and summary.json record the unchanged compiled-input boundary.",
+    "release_cpu_diagnostic": {
+      "scenario": "Canonical 32-body catalogue, 3999 cached orbit vertices (95976 payload bytes); 1000 map samples and summaries; 100 shared JIT guard queries and projections of a 1000 km circular free coast; 100 toolkit/tessellation frames; 10000 closed-map samples. Single local measurement, not a paired speedup or game-FPS claim.",
+      "catalog_ms": 1.701,
+      "sample_us": 9.644,
+      "orbit_summary_us": 9.115,
+      "jit_guard_us": 42.893,
+      "jit_projection_us": 25.414,
+      "toolkit_us": 592.557,
+      "mesh_vertices": 34928,
+      "closed_ns": 5.663
     },
     "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
     "source_boundary": "Previous full source manifest plus the new shared thread_bake.rs; retains the server-wrapper source path. Final documentation/evidence edits are outside this compiled-input set; no assets or dependencies changed.",

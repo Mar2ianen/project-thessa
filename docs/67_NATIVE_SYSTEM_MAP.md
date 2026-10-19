@@ -162,7 +162,13 @@ The subsequent F1/F2/F3 HUD-visibility adapter is tracked separately in doc 66:
 F2 never hides the active map; visible help temporarily replaces its widgets
 until closed, retaining map navigation state and exclusive flight-input gating.
 Actual-JIT/readout follow-up commands and results are recorded separately in
-`artifacts/native-map-jit-2026-10-19.json` after verification.
+`artifacts/native-map-jit-2026-10-19.json`. All fourteen final local gates passed
+on 597 unchanged compiled inputs: 1,922 workspace lib/bin tests, 95 integration,
+54 feature-off, 24 Bevy GPU, 31 renderer ignored, 31 native ignored and 5 Python
+QA tests, plus Clippy/fmt/architecture, release builds and a muted eight-frame
+Wayland map/flight smoke. The release CPU diagnostic measured 9.115 us per
+orbital summary, 42.893 us per shared JIT guard query and 25.414 us per JIT
+projection. These are isolated producer costs, not a paired speedup or game FPS.
 
 ## Remaining obligations
 

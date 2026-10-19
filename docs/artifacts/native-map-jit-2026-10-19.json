@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-19",
+  "baseline": "3dc9122",
+  "scope": "Both maps consume the physics optimizer's existing JIT execution cache, never a separately requested hypothetical zero-thrust/zero-aero future. Shared orbital readouts and native thread-worker reuse.",
+  "contract": {
+    "source": "FlightAuthority::jit_coast_execution_end borrows the same coast eligibility, bounded interval and geometry/medium/constant-spin certificate helpers as execution. It also checks current cache validity and endpoint solver bounds. Maps do not request bakes, integrate trajectories, advance simulation time or mutate execution state.",
+    "interval": "Only the currently certified coast-batch interval is drawn, bounded by the scheduler, cache horizon and existing maximum batch duration. The map endpoint uses the same cache interpolant as physics, even between stored nodes; no synthetic impact marker is attached to the guard boundary.",
+    "unsupported": "Powered/live/state-dependent/controlled/contact/stale-cache states without this executable batch certificate produce no curve. This is intentionally not a claim that generalized powered JIT futures exist. PlanExecutionMode::Baked does not itself contain precomputed state samples.",
+    "worker": "The existing server ThreadBakeQueue moved into flight-authority with a compatibility server reexport. It uses the existing run_bake, one job at most, reset-discard without oversubscription and shutdown join. Native local physics installs it; remote replicas never install/request it.",
+    "readouts": "Shared dominant-body Ap/Pe/escape are instantaneous two-body diagnostics, not full-field trajectory predictions or solved contact. Local scheduler countdowns and transmitted wake_notice remain distinct; remote maps suppress the local countdown and retain observed notices. Solver reference and gravity do not change."
+  },
+  "verification": {
+    "status": "Immediate user-requested push after all mandatory CI-equivalent gates passed; extended native release ignored suite still running at push time. No all-fourteen-gates claim.",
+    "directory": "target/test-tmp/native-map-jit-final",
+    "source_count": 597,
+    "source_manifest_sha256": "47c7a3372996f072a2354aea3c37e23d785cacb89fa91de1b8a6562ed06853b9",
+    "checks_at_push": {
+      "fmt_all_check": "passed",
+      "workspace_all_targets_all_features_clippy_D_warnings": "passed",
+      "native_no_default_all_targets_clippy_D_warnings": "passed",
+      "workspace_lib_bins_passed": 1922,
+      "workspace_integration_passed": 95,
+      "native_no_default_unit_passed": 54,
+      "bevy_render_gpu_passed": 24,
+      "release_native_server_build": "passed",
+      "render_wgpu_release_ignored_passed": 31,
+      "native_release_ignored": "running; not yet certified",
+      "remaining_architecture_qa_window_smoke": "pending in sequential final runner"
+    },
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target",
+    "source_boundary": "Previous full source manifest plus the new shared thread_bake.rs; retains the server-wrapper source path. Final documentation/evidence edits are outside this compiled-input set; no assets or dependencies changed.",
+    "regressions": [
+      "50-second alarm-bounded interval query followed by real physics execution ends at exactly the cache position and velocity queried for the map; powered, stale and guidance-dependent states are refused",
+      "Counted queue proves opening/reading/pausing/resetting the map never requests a hypothetical bake or steps paused physics",
+      "Real native free-coast worker fixture compares projected samples and endpoint with the authority cache, checks unchanged paused state/time/step counters and withdraws the curve on powered demand",
+      "Projection budget <=1025 points, exact supplied guard endpoint without an interior stored node, per-node ephemeris epochs, no gap bridging or fabricated impact marker",
+      "Circular-orbit readout apsis error <0.02 m at 500 km altitude about Thessa and Nereid; display hint does not change solver reference; escape/suborbital/degenerate labels retain wake suffixes",
+      "Remote map own-epoch regression suppresses local future/countdown and keeps the transmitted observed wake notice",
+      "Moved worker test checks harvest, drops a second busy request and discards reset results without detaching a stale worker"
+    ],
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "limitations": [
+    "Generalized powered/live execution-future production and publication remain unimplemented (doc 07 section 7.10); no alternate coast is drawn in their place",
+    "Conservatively omits controlled tick-coasts that do not pass the shared batch certificate; does not draw the unchecked remainder of a long cache",
+    "Existing sampled geometry certificates and numerical coast tolerances are retained, not upgraded into a continuous-interval proof; changing inputs/plans may invalidate a displayed future",
+    "No remote executable-trajectory or future-scheduler payload, no maneuver editor and no new simulation law",
+    "No OS-level input injection, independent whole-frame visual/usability acceptance, Metal/WebGPU execution, remote CI or game-FPS improvement claim",
+    "Bevy retirement remains incomplete; retained instruments, flight/event fixtures, optical/render consumers and packaging/tooling still need replacement"
+  ]
+}

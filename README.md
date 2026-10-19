@@ -175,8 +175,15 @@ The checked-in vertical slice currently contains:
     ephemerides, f64 framing and cached Kepler geometry; select/frame/follow a
     body or frame PRIMARY, right-drag orbit, middle-drag pan and wheel zoom.
     Flight continues with neutral manual axes and retained throttle/SAS.
-    Available local rails reuse the authority's bake; remote snapshots carry no
-    forecast. Maneuver interaction and display-body switching remain unported.
+    The map reads the physics JIT's existing execution cache through the same
+    eligibility/interval/geometry guards as the solver, bounded to the current
+    executable coast interval. It never requests a hypothetical zero-thrust/
+    zero-aero forecast. Powered/live JIT trajectories are not implemented yet
+    and are shown as unavailable, not replaced by a coast curve. The map also
+    includes dominant-body osculating Ap/Pe/escape and local wake countdowns;
+    remote snapshots carry no JIT curve or
+    next-wake queue, only observed wake notices. Maneuver interaction and
+    instrument display-body switching remain unported.
     See [doc 67](docs/67_NATIVE_SYSTEM_MAP.md).
     `F1` opens controls help, `F2` hides/shows the flight HUD (not the map),
     and `F3` toggles telemetry/fleet panels. Help suppresses manual/camera input

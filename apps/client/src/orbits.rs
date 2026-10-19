@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(test)]
 use thessa_sim_core::OsculatingElements;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -68,7 +69,7 @@ const ORBIT_DIM_STRENGTH: f32 = 0.72;
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_orbits(
     survey: Res<terrain::SurfaceSurvey>,
-    mut flight: ResMut<PilotFlightRuntime>,
+    flight: Res<PilotFlightRuntime>,
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
@@ -131,11 +132,13 @@ pub(super) fn draw_orbits(
         );
     }
     let prediction_started = std::time::Instant::now();
-    flight.prepare_shared_trajectory(&runtime.ephemeris);
     draw_craft_orbit_prediction(
         &runtime.ephemeris,
         &map,
         &flight,
+        pilot
+            .as_ref()
+            .map_or(ControlMode::Navball, |state| state.control_mode),
         time,
         anchor,
         camera_pos,
@@ -347,29 +350,7 @@ pub(super) fn craft_display_body(
     flight: &PilotFlightRuntime,
     time: SimTime,
 ) -> BodyId {
-    let (r, _) = flight.inertial_state_m();
-    ephemeris
-        .dominant_body(r, time)
-        .unwrap_or(flight.reference_body)
-}
-
-/// Live osculating elements of the flown vehicle around its display body,
-/// or `None` for degenerate states (radial plunge, unresolvable bodies).
-pub(super) fn craft_elements(
-    ephemeris: &BakedEphemeris,
-    flight: &PilotFlightRuntime,
-    time: SimTime,
-) -> Option<OsculatingElements> {
-    let display = craft_display_body(ephemeris, flight, time);
-    let body = ephemeris.body(display).ok()?;
-    let state = ephemeris.body_state(display, time).ok()?;
-    let (r, v) = flight.inertial_state_m();
-    OsculatingElements::from_state(
-        r - state.position_inertial,
-        v - state.velocity_inertial,
-        body.mu,
-    )
-    .ok()
+    thessa_flight_authority::navigation::craft_display_body(ephemeris, flight, time)
 }
 
 /// One-line orbit readout for the map HUD: frame body, apsides, period, or
@@ -380,66 +361,7 @@ pub(super) fn craft_orbit_summary(
     flight: &PilotFlightRuntime,
     time: SimTime,
 ) -> String {
-    let display = craft_display_body(ephemeris, flight, time);
-    let (Some(elements), Ok(body)) = (
-        craft_elements(ephemeris, flight, time),
-        ephemeris.body(display),
-    ) else {
-        return "ORBIT n/a".to_string();
-    };
-    let frame = body.name.to_uppercase();
-    if elements.is_escape() {
-        let v_inf = (elements.central_mu / elements.semi_major_axis_m.abs()).sqrt() / 1000.0;
-        return format!("ORBIT {frame} ESC  v_inf {v_inf:.1} km/s");
-    }
-    let ap = (elements.apoapsis_m().unwrap_or(f64::NAN) - body.radius_m) / 1000.0;
-    let pe = (elements.periapsis_m() - body.radius_m) / 1000.0;
-    // A sub-surface periapsis is an impact trajectory, not an orbit: say so
-    // instead of printing a negative Pe next to a period.
-    if pe < 0.0 {
-        return format!("ORBIT {frame} Ap {ap:.1} km → IMPACT");
-    }
-    let base = match elements.period_s() {
-        Some(period) if period < 48.0 * 3600.0 => {
-            format!(
-                "ORBIT {frame} Ap {ap:.1} km  Pe {pe:.1} km  T {:.1} h",
-                period / 3600.0
-            )
-        }
-        _ => format!("ORBIT {frame} Ap {ap:.1} km  Pe {pe:.1} km"),
-    };
-    // Scheduler readout: next armed wake as a countdown, plus the last fired
-    // wake. The loop waits on events; the HUD shows what it waits on.
-    let mut wake = String::new();
-    if let Some(next) = flight.scheduler.next() {
-        let countdown = (next.time.seconds() - time.seconds()).max(0.0);
-        let label = match next.kind {
-            thessa_sim_core::ScheduledKind::RailsImpact { .. } => "IMPACT",
-            thessa_sim_core::ScheduledKind::RailsHorizon => "HORIZON",
-            thessa_sim_core::ScheduledKind::ManeuverNode { .. } => "NODE",
-            thessa_sim_core::ScheduledKind::Alarm => "ALARM",
-            thessa_sim_core::ScheduledKind::BurnSegment { .. } => "BURN",
-        };
-        wake = format!("  WKE {label} T-{}", format_countdown(countdown));
-    }
-    if let Some(notice) = flight.wake_notice.as_deref() {
-        wake.push_str("  [");
-        wake.push_str(notice);
-        wake.push(']');
-    }
-    format!("{base}{wake}")
-}
-
-/// Format a countdown duration as H:MM:SS (hours unbounded, for multi-day
-/// coast wakes).
-fn format_countdown(seconds: f64) -> String {
-    let total = seconds.max(0.0).round() as u64;
-    format!(
-        "{}:{:02}:{:02}",
-        total / 3600,
-        (total / 60) % 60,
-        total % 60
-    )
+    thessa_flight_authority::navigation::craft_orbit_summary(ephemeris, flight, time, true)
 }
 
 /// Bound-orbit path sampled forward from the current anomaly, clipped where
@@ -466,9 +388,8 @@ pub(super) fn bound_prediction_arc(
     (points, impacted)
 }
 
-/// Body-relative f64 prediction polyline (projected anew for every camera frame): the numeric propagation behind it costs
-/// milliseconds, so it refreshes every few frames while the gizmo redraws
-/// the cached points each frame.
+/// Body-relative f64 JIT polyline, reprojected from the execution cache each
+/// camera frame without propagation or renderer-owned bake requests.
 #[derive(Default)]
 pub(super) struct CraftPredictionCache {
     points: Vec<bevy::math::DVec3>,
@@ -476,15 +397,13 @@ pub(super) struct CraftPredictionCache {
     display: Option<BodyId>,
 }
 
-/// Predicted craft path integrated through the full summed gravity field
-/// (no SOI switch), not a two-body ellipse. Where third-body pull matters
-/// the line bends away from the osculating ellipse instead of lying: escape
-/// legs fly off, suborbital arcs stop at the surface with an impact marker.
+/// The optimizer's executable cached segment, not a hypothetical coast.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_craft_orbit_prediction(
     ephemeris: &BakedEphemeris,
     map: &MapState,
     flight: &PilotFlightRuntime,
+    mode: ControlMode,
     time: SimTime,
     anchor: bevy::math::DVec3,
     camera_pos: Vec3,
@@ -506,8 +425,7 @@ pub(super) fn draw_craft_orbit_prediction(
         |p: bevy::math::DVec3| center + (bevy::math::DVec3::new(p.x, p.z, -p.y) * scale).as_vec3();
     // Projection changes with simulation time, even when the bake is unchanged.
     // Refresh the bounded polyline each frame; no physics work happens here.
-    let view_cut_m = (center.distance(camera_pos) as f64 * DISTANCE_UNIT_M * 3.0).max(1.0);
-    refresh_prediction_cache(ephemeris, flight, time, display, view_cut_m, cache);
+    refresh_prediction_cache(ephemeris, flight, mode, time, display, cache);
     if cache.points.len() > 1 {
         gizmos.linestrip(
             cache.points.iter().copied().map(to_map_vec),
@@ -523,43 +441,32 @@ pub(super) fn draw_craft_orbit_prediction(
     }
 }
 
-/// Project the single runtime-owned bake. During powered/aero flight this
-/// is a gravity-only coast forecast, conditional on external forces ceasing;
-/// during vacuum coast it is exactly the trajectory consumed by the solver.
+/// Read the same optimizer guards as execution; rendering never bakes.
 fn refresh_prediction_cache(
     ephemeris: &BakedEphemeris,
     flight: &PilotFlightRuntime,
+    mode: ControlMode,
     time: SimTime,
     display: BodyId,
-    view_cut_m: f64,
     cache: &mut CraftPredictionCache,
 ) {
     cache.display = Some(display);
     cache.points.clear();
     cache.impact = None;
-    let Some(path) = flight.rails.path() else {
+    let Some(until) = flight.jit_coast_execution_end(ephemeris, mode) else {
         return;
     };
-    if time.0 < path.times[0].0 || time.0 > path.end_time.0 {
+    if time.0 != flight.flight_time_s {
         return;
     }
     let (position, _) = flight.inertial_state_m();
-    project_rails_path(ephemeris, path, display, time, position, view_cut_m, cache);
-}
-
-/// Project a baked inertial path into display-body-relative polyline points
-/// for the map gizmo, applying the view cut and the impact marker.
-fn project_rails_path(
-    ephemeris: &BakedEphemeris,
-    path: &thessa_sim_core::SampledPath,
-    display: BodyId,
-    time: SimTime,
-    r_craft: bevy::math::DVec3,
-    view_cut_m: f64,
-    cache: &mut CraftPredictionCache,
-) {
-    let projected = thessa_flight_authority::navigation::project_rails_path(
-        ephemeris, path, display, time, r_craft, view_cut_m,
+    let projected = thessa_flight_authority::navigation::project_jit_coast_path(
+        ephemeris,
+        &flight.rails,
+        display,
+        time,
+        position,
+        until,
     );
     cache.points = projected.points;
     cache.impact = projected.impact;

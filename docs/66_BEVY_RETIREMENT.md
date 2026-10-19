@@ -27,7 +27,7 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 | `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
 | `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | pause/warp/relaunch and focus release now have native consumers; reconcile remaining flight deck commands and reference/display-body choices; do not fabricate authoritative state in UI |
 | `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared instrument settings | audit every retained readout/control; native flight deck exists but not all old widgets/commands have replacements |
-| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, selection/follow, cached Kepler curves and available shared local rails; conditional powered-flight forecast requests, apsis/wake readouts, display-body choices and broader appearance/usability acceptance remain |
+| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards, dominant-body apsis/escape/wake readouts; powered/live JIT futures, instrument display-body choices and appearance/usability acceptance remain |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
 | `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
 | `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core` source/profile/medium/optics | native resolved Low/Medium/High field consumer and diagnostics; keep provisional nozzle inputs explicit and never make mesh shape authoritative |
@@ -70,14 +70,34 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
 - opt-in coastal flyby guidance and server-side maneuver execution fixtures.
 
 Source inspection distinguishes retained functionality from future UI: the
-legacy map has orbit/apsis/wake readouts and asks the existing BakeQueue for a
-conditional coast forecast even during powered flight. Its `bound_prediction_arc`
+legacy map had orbit/apsis/wake readouts and asked the existing BakeQueue for a
+conditional coast forecast even during powered flight. The latter is deliberately
+removed under the user's actual-JIT-path requirement, not preserved as the main
+map trajectory. Its `bound_prediction_arc`
 helper is test-only, not another production forecast to port. The pilot's
 `maneuver_kick_mps` sends a one-shot typed `ExecuteManeuver`; there is no shipped
 interactive maneuver-node editor to preserve. Do not inflate that fixture into
 an editor-completion claim or make the whole future editor a host-deletion gate.
 
-The remaining instrument audit is likewise concrete: `pilot::live_flight_ui_state`
+The map follow-up now extracts the server's existing `ThreadBakeQueue` into
+flight-authority (the server retains a compatibility import) and uses it for
+native local flight. At most one worker runs; reset discards its result without
+oversubscribing CPU work, and shutdown joins it. The existing `run_bake`/checked
+adoption/coast-reuse pipeline remains the only bake path. Maps only read the
+physics-produced execution cache: opening/reading/pausing a map never starts a
+bake or advances physics. Shared execution eligibility, bounded interval and
+geometry certification prevent drawing a hypothetical coast in powered/aero/
+controlled/contact/stale states, or drawing past the current guard boundary.
+Vacuum-coast physics owns its bake requests. Remote replicas do
+not install/request a worker or synthesize an executable future. Native projection and the extracted
+orbital summary follow the dominant-body display hint without changing the
+solver reference or summed gravity. Next-wake countdowns are local-only;
+transmitted wake notices remain visible remotely. The current actual-cache
+consumer covers certified coast batches only. Generalized powered/live JIT
+execution futures (doc 07 §7.10) and their remote publication are unfinished;
+unavailable is explicit, never a disguised gravity-only prediction. See doc 67.
+
+The remaining instrument audit is concrete: `pilot::live_flight_ui_state`
 derives dominant-body-relative orbital/surface readouts, apsides, air data,
 load/propulsion and parachute summaries; `craft_orbit_summary` adds scheduler
 wakes/notices. Native `FlightData` currently supplies reference-body speed,

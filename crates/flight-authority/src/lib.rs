@@ -5,12 +5,11 @@
 //! the flight runtime: input conditioning, regime selection, the fixed-step
 //! advance loop and rails-bake orchestration. Ring-fenced from Bevy by
 //! construction — background bakes go through [`BakeQueue`], whose
-//! implementations live beside their runtimes (Bevy pool in the client,
-//! threads on the server, inline in tests).
+//! implementations use the shared native thread worker, the legacy Bevy pool,
+//! or the deterministic inline test queue.
 //!
-//! Migration note: the runtime still lives in the client. Types move here
-//! one at a time with the client re-importing them, so every step stays
-//! green.
+//! The authoritative runtime lives here. Native and retained Bevy hosts share
+//! it and own only integration/presentation adapters.
 
 pub mod bake;
 pub mod camera;
@@ -24,6 +23,8 @@ pub mod navigation;
 pub mod presentation;
 pub mod runtime;
 pub mod survey;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod thread_bake;
 
 pub use thessa_flight_control::{
     ActuatorDynamics, ActuatorGroup, AircraftControlLaw, AircraftState, AllocationResult,
@@ -49,3 +50,5 @@ pub use runtime::{
 pub use thessa_collision::{ContactPartyKind, ContactSummary, JointId};
 pub use thessa_collision::{DynamicBodyConfig, ExternalWrench};
 pub use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleWithstandProof};
+#[cfg(not(target_arch = "wasm32"))]
+pub use thread_bake::ThreadBakeQueue;

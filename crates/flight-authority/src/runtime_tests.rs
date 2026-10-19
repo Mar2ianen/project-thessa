@@ -2612,6 +2612,45 @@ fn circular_orbit_fixture(altitude_m: f64) -> (BakedEphemeris, FlightAuthority) 
 }
 
 #[test]
+fn map_jit_boundary_and_physics_consume_the_identical_certified_cache_segment() {
+    let (ephemeris, mut flight) = circular_orbit_fixture(1_000_000.0);
+    let mode = ControlMode::Direct;
+    assert!(flight.jit_coast_execution_end(&ephemeris, mode).is_none());
+    assert!(flight.prepare_shared_trajectory(&ephemeris));
+    flight.scheduler.arm(ScheduledKind::Alarm, SimTime(50.0));
+    let before = flight.state;
+    let until = flight.jit_coast_execution_end(&ephemeris, mode).unwrap();
+    assert_eq!(until, SimTime(50.0));
+    let sampled = flight.rails.sample_at(until).unwrap();
+    assert_eq!(flight.state, before);
+    assert_eq!(flight.flight_time_s, 0.0);
+    flight.engine_active = true;
+    flight.throttle = 1.0;
+    assert!(
+        flight.jit_coast_execution_end(&ephemeris, mode).is_none(),
+        "a cached zero-force path is not powered execution"
+    );
+    flight.engine_active = false;
+    flight.throttle = 0.0;
+    flight.guidance_state_dependent = true;
+    assert!(flight.jit_coast_execution_end(&ephemeris, mode).is_none());
+    flight.guidance_state_dependent = false;
+    flight.state.position_inertial_m += DVec3::X * 1000.0;
+    assert!(
+        flight.jit_coast_execution_end(&ephemeris, mode).is_none(),
+        "stale cache must not reach the map"
+    );
+    flight.state = before;
+    let result = flight
+        .try_advance_cached_coast(&ephemeris, mode, until.0)
+        .unwrap();
+    assert!(matches!(result,CoastAdvance::Advanced(dt) if dt==until.0));
+    assert_eq!(flight.state.position_inertial_m, sampled.0);
+    assert_eq!(flight.state.velocity_inertial_mps, sampled.1);
+    assert_eq!(flight.flight_time_s, until.0);
+}
+
+#[test]
 fn circular_orbit_initializer_sets_body_relative_circular_state() {
     let (ephemeris, mut flight) = fixture();
     let altitude_m = 1_000_000.0;

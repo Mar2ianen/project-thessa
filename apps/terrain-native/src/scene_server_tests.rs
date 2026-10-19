@@ -54,9 +54,14 @@ fn replica() -> Scene {
 fn map_uses_own_time_authoritative_primary_without_creating_remote_predictions() {
     let mut scene = replica();
     scene.set_map_open(true);
+    scene.flight.as_mut().unwrap().scheduler.arm(
+        thessa_sim_core::ScheduledKind::Alarm,
+        thessa_sim_core::SimTime(1000.0),
+    );
     assert!(scene.map_snapshot().unwrap().craft.is_none());
     for time in [2.0, 3.0] {
-        let wire = snapshot(&scene, time);
+        let mut wire = snapshot(&scene, time);
+        wire.wake_notice = Some("observed server wake".into());
         scene.accept_server_snapshot(&wire).unwrap();
         let before = scene.flight.as_ref().unwrap().state;
         let map = scene.map_snapshot().unwrap();
@@ -88,6 +93,16 @@ fn map_uses_own_time_authoritative_primary_without_creating_remote_predictions()
         assert!(
             map.trajectory.is_none(),
             "lean snapshots contain no rails; never bake a client forecast"
+        );
+        assert!(
+            !map.trajectory_pending,
+            "remote mode must not install/request a forecast worker"
+        );
+        let summary = map.orbit_summary.as_deref().unwrap();
+        assert!(
+            summary.starts_with("ORBIT")
+                && !summary.contains("WKE")
+                && summary.contains("[observed server wake]")
         );
         assert_eq!(scene.flight.as_ref().unwrap().state, before);
         assert!(scene.flight.as_ref().unwrap().rails.is_empty());

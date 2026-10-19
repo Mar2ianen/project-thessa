@@ -90,7 +90,7 @@ do not update in place).
 | `63_CBT_CANONICAL_SURFACE.md` | 🟡 opt-in native production-frame consumer | exact canonical addresses through heap depth 58, borrowed height/material residency and f64 precision charts; seam/residency/metric-shadow/Fourier oracles; shared-epoch RayScene hits and whole-pool fallback; resolved disabled/Low/Medium/High native topology mode now selects shared primary raster, atlas, ocean and RT geometry with emitted-revision shadow caching; actual camera-relative datum classification and actionable parallel requests with independent f64/CPU replay oracles | per-tile relief/error and convergence, optimized dynamic-ocean RT/dirty-chunk reuse, primary terrain scene-object RT reflections and equal-error/temporal/platform acceptance; regular patches remain default/fallback; full-client Bevy removal remains open |
 | `64_NATIVE_OPTIMIZATION_REVIEW.md` | 🟡 historical rejected proposal; corrective implementation in doc 63 | supplied medians/tails recomputed; GPU failures retained as audit evidence; new regression verifies zero-request quiescence, LOD wake and mesh shadow/reference equality | original performance claims remain unaccepted; matched-work measurements and wider acceptance stay open |
 | `65_NATIVE_SKY_AUDIT.md` | 🟡 audited native sky consumers | shared aurora altitude/axis and incremental optical transport; native Low/High emission field with simulation-time refresh; flux-normalized background stars/source discs; depth-clipped clouds with shared weather/geometry/phase and terrain/mesh/ocean shadows plus reflected-ray transport; primary aurora with finite-depth clipping and ordered cloud extinction; separate clear primary/total indirect publications; independent disable and numerical GPU oracles | secondary-origin clear-sky/auroral parallax, partial stellar discs/eclipses, magnetic/weather data, richer curtains, cloud diffuse coupling/multiple scattering, RT-light proxies and temporal/performance/visual/platform acceptance |
-| `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 orthographic framing/orbit/pan/zoom, body selection/follow and PRIMARY framing, cached adaptive Kepler polylines, shared available local rails, explicit map/pilot input ownership, shared-device egui rendering and headless capture | maneuver interaction, dominant/display-body instrument choices, remote forecast transport, richer celestial appearance, small/mobile/platform and independent usability acceptance |
+| `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 framing/orbit/pan/zoom, body/PRIMARY selection/follow, cached Kepler curves, physics-JIT coast-cache consumer sharing execution guards and bounded interval, dominant-body Ap/Pe/escape/local-wake readouts, exclusive input ownership, shared-device egui and headless capture | powered/live executable JIT futures (never substituted with conditional coasts), instrument display-body choices, remote JIT/next-wake transport, richer celestial appearance and independent usability/platform acceptance |
 
 The full source-to-consumer Bevy retirement ledger is
 [doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must
@@ -137,6 +137,15 @@ The native continuation also restores F1 help, F2 flight-HUD visibility and F3
 telemetry/fleet visibility. Help captures manual/camera input without pausing or
 cutting thrust; hidden navball callbacks are released, and map UI remains usable.
 These are session-only UI adapters; remaining guidance/readout migration is open.
+The map now reads the physics optimizer's existing JIT cache, through shared
+execution eligibility/interval/geometry guards; it neither requests a bake nor
+substitutes a hypothetical zero-force coast during powered/live flight. Only
+the currently executable bounded coast interval is drawn; generalized powered
+JIT futures remain unimplemented (doc 07 §7.10). Native local physics reuses the
+server's extracted one-worker ThreadBakeQueue. Dominant-body Ap/Pe/escape and
+local-wake readouts have native consumers; remote mode shows transmitted notices,
+never a local future/scheduler as authoritative. Instrument display-frame and
+richer air/load fields remain.
 The transport retains its stdio handshake, receive timestamps/inbox, input
 mailbox and child cleanup;
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot

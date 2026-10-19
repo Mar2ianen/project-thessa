@@ -75,6 +75,9 @@ impl Source {
             time,
             craft: None,
             trajectory: None,
+            orbit_summary: None,
+            trajectory_pending: false,
+            execution_until: None,
         })
     }
 }
@@ -97,6 +100,9 @@ pub struct Snapshot {
     pub craft: Option<(DVec3, SimTime)>,
     /// Already projected through the canonical ephemeris at every sample's own time.
     pub trajectory: Option<(DVec3, thessa_flight_authority::navigation::ProjectedPath)>,
+    pub orbit_summary: Option<String>,
+    pub trajectory_pending: bool,
+    pub execution_until: Option<SimTime>,
 }
 impl Snapshot {
     fn body(&self, id: BodyId) -> Option<&Body> {
@@ -204,8 +210,14 @@ impl View {
                 ui.small(format!("t={:.3}s · {:.3} km half-height · right-drag orbit · middle-drag pan · wheel zoom · click selects · M closes", data.time.0, self.camera.half_height_m / 1000.0));
                 if let Some((_, time)) = data.craft {
                     ui.small(format!("PRIMARY newest authority t={:.3}s · {}", time.0,
-                        if data.trajectory.is_some() { "shared full-field rails (reference-body frame)" }
-                        else { "no current shared rails path; no synthetic forecast" }));
+                        if data.trajectory.is_some() { "JIT execution cache, dominant display-body frame; no separate forecast" }
+                        else if data.trajectory_pending { "physics JIT baking; no fabricated path" }
+                        else { "no executable JIT path for current flight mode; no conditional coast forecast" }));
+                }
+                if let Some(until)=data.execution_until {ui.small(format!("Current JIT guard/cadence boundary: t={:.3}s; beyond it is not drawn",until.0));}
+                if let Some(summary) = &data.orbit_summary {
+                    ui.small(summary);
+                    ui.small("Ap/Pe/ESC are instantaneous two-body diagnostics, not a full-field trajectory or solved contact.");
                 }
                 let size = egui::vec2(ui.available_width().max(1.0), ui.available_height().max(120.0));
                 let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
@@ -520,6 +532,46 @@ mod tests {
             black_box(source.sample(&e, SimTime(i as f64))).unwrap();
         }
         let sample_us = start.elapsed().as_secs_f64() * 1000.0;
+        let mut flight =
+            thessa_flight_authority::FlightAuthority::new(&e, e.body_id("thessa").unwrap())
+                .unwrap();
+        let start = Instant::now();
+        for _ in 0..1000 {
+            black_box(thessa_flight_authority::navigation::craft_orbit_summary(
+                &e,
+                &flight,
+                SimTime(0.0),
+                true,
+            ));
+        }
+        let summary_us = start.elapsed().as_secs_f64() * 1000.0;
+        flight
+            .initialize_circular_orbit(&e, 1_000_000.0, DVec3::Y)
+            .unwrap();
+        assert!(flight.prepare_shared_trajectory(&e));
+        let start = Instant::now();
+        for _ in 0..100 {
+            black_box(
+                flight.jit_coast_execution_end(&e, thessa_flight_authority::ControlMode::Direct),
+            )
+            .unwrap();
+        }
+        let jit_guard_us = start.elapsed().as_secs_f64() * 10000.0;
+        let until = flight
+            .jit_coast_execution_end(&e, thessa_flight_authority::ControlMode::Direct)
+            .unwrap();
+        let start = Instant::now();
+        for _ in 0..100 {
+            black_box(thessa_flight_authority::navigation::project_jit_coast_path(
+                &e,
+                &flight.rails,
+                flight.reference_body,
+                SimTime(0.0),
+                flight.state.position_inertial_m,
+                until,
+            ));
+        }
+        let jit_projection_us = start.elapsed().as_secs_f64() * 10000.0;
         let data = source.sample(&e, SimTime(0.0)).unwrap();
         let context = crate::hud::context();
         let mut view = View::default();
@@ -549,7 +601,7 @@ mod tests {
         }
         let closed_ns = start.elapsed().as_secs_f64() * 100000.0;
         println!(
-            "native_map bodies={} orbit_vertices={vertices} orbit_payload_bytes={} catalog_ms={catalog_ms:.3} sample_us={sample_us:.3} toolkit_us={toolkit_us:.3} mesh_vertices={mesh_vertices} closed_ns={closed_ns:.3}; CPU producer/toolkit diagnostic, no game-FPS claim",
+            "native_map bodies={} orbit_vertices={vertices} orbit_payload_bytes={} catalog_ms={catalog_ms:.3} sample_us={sample_us:.3} orbit_summary_us={summary_us:.3} jit_guard_us={jit_guard_us:.3} jit_projection_us={jit_projection_us:.3} toolkit_us={toolkit_us:.3} mesh_vertices={mesh_vertices} closed_ns={closed_ns:.3}; CPU producer/toolkit diagnostic, no game-FPS claim",
             e.bodies.len(),
             vertices * std::mem::size_of::<DVec3>()
         );

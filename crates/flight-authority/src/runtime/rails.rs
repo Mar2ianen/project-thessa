@@ -47,11 +47,7 @@ impl FlightAuthority {
         // interlunar coast at the first handoff.
         let relative = next.position_inertial_m - next_body.position_inertial;
         let guard_relative = next.position_inertial_m - guard_state.position_inertial;
-        if (guard_relative.length() - guard_radius).abs() > MAX_PILOT_ALTITUDE_M
-            || (next.velocity_inertial_mps - guard_state.velocity_inertial).length()
-                > MAX_PILOT_RELATIVE_SPEED_MPS
-            || next.angular_velocity_body_rps.length() > MAX_PILOT_ANGULAR_RATE_RPS
-        {
+        if !Self::endpoint_within_solver_bounds(next, guard_state, guard_radius) {
             return Err(FlightError::InvalidInput(
                 "flight state exceeded solver bounds".into(),
             ));
@@ -94,6 +90,54 @@ impl FlightAuthority {
             self.rails.invalidate();
         }
         Ok(())
+    }
+
+    fn endpoint_within_solver_bounds(
+        next: &RigidBodyState,
+        guard_state: BodyState,
+        guard_radius: f64,
+    ) -> bool {
+        ((next.position_inertial_m - guard_state.position_inertial).length() - guard_radius).abs()
+            <= MAX_PILOT_ALTITUDE_M
+            && (next.velocity_inertial_mps - guard_state.velocity_inertial).length()
+                <= MAX_PILOT_RELATIVE_SPEED_MPS
+            && next.angular_velocity_body_rps.length() <= MAX_PILOT_ANGULAR_RATE_RPS
+    }
+
+    /// End of the currently executable cached JIT coast segment. This borrows
+    /// the SAME eligibility, interval and geometric certificate as execution,
+    /// without making a forecast or advancing state. None is intentional for
+    /// live/powered/contact flight, unavailable/stale rails or failed guards.
+    /// The caller must not draw cached samples beyond this boundary.
+    pub fn jit_coast_execution_end(
+        &self,
+        ephemeris: &BakedEphemeris,
+        mode: ControlMode,
+    ) -> Option<SimTime> {
+        if self.flight_error.is_some()
+            || !self.coast_batch_eligible(ephemeris, mode).ok()?
+            || !self.rails_usable_now(ephemeris)
+        {
+            return None;
+        }
+        let (duration, _, end) = self.coast_batch_interval(MAX_COAST_BATCH_JUMP_S).ok()??;
+        let orientation = self
+            .certify_coast_geometry(ephemeris, duration, end)
+            .ok()??;
+        let (position, velocity) = self.rails.sample_at(end)?;
+        let next = RigidBodyState::new(
+            position,
+            velocity,
+            orientation,
+            self.state.angular_velocity_body_rps,
+        )
+        .ok()?;
+        let guard = ephemeris
+            .dominant_body(position, end)
+            .unwrap_or(self.reference_body);
+        let state = ephemeris.body_state(guard, end).ok()?;
+        let radius = ephemeris.body(guard).ok()?.radius_m;
+        Self::endpoint_within_solver_bounds(&next, state, radius).then_some(end)
     }
 
     /// Declared obstacle ceiling for rails batch certification, in metres
@@ -171,23 +215,22 @@ impl FlightAuthority {
         }
     }
 
-    pub(super) fn try_advance_cached_coast(
-        &mut self,
+    fn coast_batch_eligible(
+        &self,
         ephemeris: &BakedEphemeris,
         mode: ControlMode,
-        requested_s: f64,
-    ) -> Result<CoastAdvance, FlightError> {
+    ) -> Result<bool, FlightError> {
         // A contact-active craft never rides baked translation: Rapier owns
         // its pose every tick, so a rails batch would integrate a second,
         // divergent trajectory through the same interval.
         if self.contact_active() {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         if self.landing_gear_transitioning() {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         if self.guidance_state_dependent {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         // A declarative moment is an active actuator demand. The rails path
         // only integrates free translation and constant-spin attitude, so a
@@ -196,13 +239,13 @@ impl FlightAuthority {
             .explicit_moment_demand_nm
             .is_some_and(|moment| moment.length_squared() > 1.0e-24)
         {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         if self
             .explicit_force_demand_body_n
             .is_some_and(|force| force.length_squared() > 1.0e-24)
         {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         if self.thrust_n() != 0.0
             || (self.engine_active
@@ -223,7 +266,7 @@ impl FlightAuthority {
                 .any(|throttle| *throttle > 1.0e-8)
             || self.trace.is_some()
         {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         // A controlled coast must stay on the fixed-step path so RCS/SAS can
         // update attitude. Check this before touching the bake queue: a cold
@@ -238,7 +281,7 @@ impl FlightAuthority {
                     && self.sas_target_orientation != self.state.orientation_body_to_inertial
                     && self.sas_target_orientation != -self.state.orientation_body_to_inertial))
         {
-            return Ok(CoastAdvance::NotEligible);
+            return Ok(false);
         }
         // The exact declared-vacuum boundary is the contract that makes
         // translation batching physically valid. Do not prepare or wait for
@@ -254,6 +297,18 @@ impl FlightAuthority {
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?
             .density_kg_m3;
         if density_kg_m3 != 0.0 {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    pub(super) fn try_advance_cached_coast(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        mode: ControlMode,
+        requested_s: f64,
+    ) -> Result<CoastAdvance, FlightError> {
+        if !self.coast_batch_eligible(ephemeris, mode)? {
             return Ok(CoastAdvance::NotEligible);
         }
         // Collect a worker bake that finished while earlier batches flew;
@@ -277,134 +332,20 @@ impl FlightAuthority {
             }
         }
         self.arm_rails_wake();
-        let time = SimTime(self.flight_time_s);
-        let mut duration = ((requested_s + 1.0e-12) / FLIGHT_STEP_S).floor() * FLIGHT_STEP_S;
-        // Capped jumps: vacuum batches are drag-free by construction
-        // (the cutoff declares exact vacuum), so this bounds wake/event
-        // latency and forces periodic revalidation instead of certifying
-        // dynamics — one horizon rides as capped jumps, never one leap.
-        duration = duration.min(MAX_COAST_BATCH_JUMP_S);
-        if let Some(event) = self.scheduler.next() {
-            duration = duration
-                .min(((event.time.0 - time.0) / FLIGHT_STEP_S).floor().max(0.0) * FLIGHT_STEP_S);
-        }
-        if let Some(path) = self.rails.path() {
-            duration = duration.min(
-                ((path.end_time.0 - time.0) / FLIGHT_STEP_S)
-                    .floor()
-                    .max(0.0)
-                    * FLIGHT_STEP_S,
-            );
-        }
-        if duration < 2.0 * FLIGHT_STEP_S {
+        let Some((duration, ticks, end)) = self.coast_batch_interval(requested_s)? else {
             return Ok(CoastAdvance::NotEligible);
-        }
+        };
         // Proactive JIT preparation for sustained warp: when baked coverage
         // ahead drops under a day, start a fresh full-horizon worker bake
         // now so high warp never stalls on a synchronous rebake at the
         // horizon end. One job at most; the swap path validates on arrival.
         if !self.bake.has_pending()
             && let Some(covered) = self.rails.covered_until()
-            && covered.0 - time.0 < PROACTIVE_REBAKE_AHEAD_S
+            && covered.0 - self.flight_time_s < PROACTIVE_REBAKE_AHEAD_S
         {
             self.spawn_rails_bake(ephemeris);
         }
-        let ticks = (duration / FLIGHT_STEP_S).round() as u64;
-        let end = self.time_after_ticks(ticks)?;
-        // Coverage guard only; separation is certified per-sample below.
-        if self.rails.position_bounds(time, end).is_none() {
-            return Ok(CoastAdvance::NotEligible);
-        }
-        // A live field can replace the global recipe ceiling with a track
-        // report, but only when the five-point batch is close enough to
-        // terrain for that distinction to matter. Above the known ceiling the
-        // recipe bound is already a proof and avoids rebuilding obstacle grids
-        // on every high-warp batch.
-        let terrain_track = if self.terrain_field.is_some() {
-            let mut track = Vec::with_capacity(5);
-            let mut near_terrain = false;
-            for point in 0..5 {
-                let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
-                let Some((position, _)) = self.rails.sample_at(sample_time) else {
-                    return Ok(CoastAdvance::NotEligible);
-                };
-                let body_state = ephemeris
-                    .body_state(self.reference_body, sample_time)
-                    .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-                let altitude_m =
-                    (position - body_state.position_inertial).length() - self.planet_radius_m;
-                near_terrain |=
-                    altitude_m <= self.rails_terrain_bound_m() + PILOT_SURFACE_CLEARANCE_M;
-                track.push((sample_time, position));
-            }
-            near_terrain.then_some(track)
-        } else {
-            None
-        };
-        for body in ephemeris
-            .bodies
-            .iter()
-            .filter(|body| body.radius_m > 0.0 || body.id == self.reference_body)
-        {
-            // Exact segment certification: five smooth samples of the true
-            // craft-body separation, both endpoints evaluated on the live
-            // ephemeris. The old worst-case margin (body approaching at
-            // full chain speed for the whole batch) treated a co-moving
-            // planet as hostile and refused every near-planet batch; the
-            // between-sample curvature error is sub-meter, far inside the
-            // surface clearance. Geometry keeps a hard refuse; only the
-            // margin heuristic is gone.
-            let terrain_bound = if body.id == self.reference_body && terrain_track.is_none() {
-                self.rails_terrain_bound_m()
-            } else {
-                0.0
-            };
-            for point in 0..5 {
-                let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
-                let Some((position, _)) = self.rails.sample_at(sample_time) else {
-                    return Ok(CoastAdvance::NotEligible);
-                };
-                let body_state = ephemeris
-                    .body_state(body.id, sample_time)
-                    .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-                let clearance_m =
-                    (position - body_state.position_inertial).length() - body.radius_m;
-                if clearance_m <= terrain_bound + PILOT_SURFACE_CLEARANCE_M
-                    && !(body.id == self.reference_body && terrain_track.is_some())
-                {
-                    return Ok(CoastAdvance::NotEligible);
-                }
-                if body.id == self.reference_body {
-                    let altitude_m =
-                        (position - body_state.position_inertial).length() - self.planet_radius_m;
-                    let density_kg_m3 = self
-                        .atmosphere
-                        .sample(altitude_m.max(0.0))
-                        .map(|sample| sample.density_kg_m3)
-                        .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-                    if density_kg_m3 != 0.0 {
-                        return Ok(CoastAdvance::NotEligible);
-                    }
-                }
-            }
-        }
-        if let Some(track) = terrain_track {
-            let Ok(coverage) = self.certify_terrain_track(ephemeris, &track) else {
-                return Ok(CoastAdvance::NotEligible);
-            };
-            // Coverage is proven by the obstacle report; this sampled margin
-            // is the current gate. A sub-grid withstand bound is deliberately
-            // left for the next certification layer.
-            if coverage.min_obstacle_clearance_m <= PILOT_SURFACE_CLEARANCE_M {
-                return Ok(CoastAdvance::NotEligible);
-            }
-        }
-        let Some(orientation) = thessa_sim_core::constant_spin_orientation(
-            self.state.orientation_body_to_inertial,
-            self.state.angular_velocity_body_rps,
-            self.vehicle.mass_properties.inertia_body_kg_m2,
-            duration,
-        ) else {
+        let Some(orientation) = self.certify_coast_geometry(ephemeris, duration, end)? else {
             return Ok(CoastAdvance::NotEligible);
         };
         self.regime = FlightRegime::Coast;
@@ -444,6 +385,145 @@ impl FlightAuthority {
         Ok(CoastAdvance::Advanced(duration))
     }
 
+    fn coast_batch_interval(
+        &self,
+        requested_s: f64,
+    ) -> Result<Option<(f64, u64, SimTime)>, FlightError> {
+        let time = SimTime(self.flight_time_s);
+        let mut duration = ((requested_s + 1.0e-12) / FLIGHT_STEP_S).floor() * FLIGHT_STEP_S;
+        // Capped jumps: vacuum batches are drag-free by construction
+        // (the cutoff declares exact vacuum), so this bounds wake/event
+        // latency and forces periodic revalidation instead of certifying
+        // dynamics — one horizon rides as capped jumps, never one leap.
+        duration = duration.min(MAX_COAST_BATCH_JUMP_S);
+        if let Some(event) = self.scheduler.next() {
+            duration = duration
+                .min(((event.time.0 - time.0) / FLIGHT_STEP_S).floor().max(0.0) * FLIGHT_STEP_S);
+        }
+        if let Some(path) = self.rails.path() {
+            duration = duration.min(
+                ((path.end_time.0 - time.0) / FLIGHT_STEP_S)
+                    .floor()
+                    .max(0.0)
+                    * FLIGHT_STEP_S,
+            );
+        }
+        if duration < 2.0 * FLIGHT_STEP_S {
+            return Ok(None);
+        }
+        let ticks = (duration / FLIGHT_STEP_S).round() as u64;
+        let end = self.time_after_ticks(ticks)?;
+        Ok(Some((duration, ticks, end)))
+    }
+
+    /// One shared read-only certificate for the execution optimizer and map.
+    /// No bake, integration, input mutation or simulation-time advancement.
+    fn certify_coast_geometry(
+        &self,
+        ephemeris: &BakedEphemeris,
+        duration: f64,
+        end: SimTime,
+    ) -> Result<Option<DQuat>, FlightError> {
+        let time = SimTime(self.flight_time_s);
+        // Coverage guard only; separation is certified per-sample below.
+        if self.rails.position_bounds(time, end).is_none() {
+            return Ok(None);
+        }
+        // A live field can replace the global recipe ceiling with a track
+        // report, but only when the five-point batch is close enough to
+        // terrain for that distinction to matter. Above the known ceiling the
+        // recipe bound is already a proof and avoids rebuilding obstacle grids
+        // on every high-warp batch.
+        let terrain_track = if self.terrain_field.is_some() {
+            let mut track = Vec::with_capacity(5);
+            let mut near_terrain = false;
+            for point in 0..5 {
+                let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
+                let Some((position, _)) = self.rails.sample_at(sample_time) else {
+                    return Ok(None);
+                };
+                let body_state = ephemeris
+                    .body_state(self.reference_body, sample_time)
+                    .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+                let altitude_m =
+                    (position - body_state.position_inertial).length() - self.planet_radius_m;
+                near_terrain |=
+                    altitude_m <= self.rails_terrain_bound_m() + PILOT_SURFACE_CLEARANCE_M;
+                track.push((sample_time, position));
+            }
+            near_terrain.then_some(track)
+        } else {
+            None
+        };
+        for body in ephemeris
+            .bodies
+            .iter()
+            .filter(|body| body.radius_m > 0.0 || body.id == self.reference_body)
+        {
+            // Exact segment certification: five smooth samples of the true
+            // craft-body separation, both endpoints evaluated on the live
+            // ephemeris. The old worst-case margin (body approaching at
+            // full chain speed for the whole batch) treated a co-moving
+            // planet as hostile and refused every near-planet batch; the
+            // between-sample curvature error is sub-meter, far inside the
+            // surface clearance. Geometry keeps a hard refuse; only the
+            // margin heuristic is gone.
+            let terrain_bound = if body.id == self.reference_body && terrain_track.is_none() {
+                self.rails_terrain_bound_m()
+            } else {
+                0.0
+            };
+            for point in 0..5 {
+                let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
+                let Some((position, _)) = self.rails.sample_at(sample_time) else {
+                    return Ok(None);
+                };
+                let body_state = ephemeris
+                    .body_state(body.id, sample_time)
+                    .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+                let clearance_m =
+                    (position - body_state.position_inertial).length() - body.radius_m;
+                if clearance_m <= terrain_bound + PILOT_SURFACE_CLEARANCE_M
+                    && !(body.id == self.reference_body && terrain_track.is_some())
+                {
+                    return Ok(None);
+                }
+                if body.id == self.reference_body {
+                    let altitude_m =
+                        (position - body_state.position_inertial).length() - self.planet_radius_m;
+                    let density_kg_m3 = self
+                        .atmosphere
+                        .sample(altitude_m.max(0.0))
+                        .map(|sample| sample.density_kg_m3)
+                        .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+                    if density_kg_m3 != 0.0 {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        if let Some(track) = terrain_track {
+            let Ok(coverage) = self.certify_terrain_track(ephemeris, &track) else {
+                return Ok(None);
+            };
+            // Coverage is proven by the obstacle report; this sampled margin
+            // is the current gate. A sub-grid withstand bound is deliberately
+            // left for the next certification layer.
+            if coverage.min_obstacle_clearance_m <= PILOT_SURFACE_CLEARANCE_M {
+                return Ok(None);
+            }
+        }
+        let Some(orientation) = thessa_sim_core::constant_spin_orientation(
+            self.state.orientation_body_to_inertial,
+            self.state.angular_velocity_body_rps,
+            self.vehicle.mass_properties.inertia_body_kg_m2,
+            duration,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(orientation))
+    }
+
     pub(super) fn arm_rails_wake(&mut self) {
         let Some(wake) = self.rails.wake() else {
             return;
@@ -460,10 +540,6 @@ impl FlightAuthority {
         }
     }
 
-    /// Spawn a full-horizon worker bake from the live state unless one is
-    /// already running. No-op headless (no pool). The swap path validates
-    /// ephemeris/config on arrival, so a bake that goes stale mid-flight
-    /// is rejected harmlessly instead of corrupting the cache.
     /// Request a full-horizon worker bake from the live state unless one is
     /// already running. The [`BakeQueue`] decides how it runs (Bevy pool in
     /// the client, thread on the server, inline in tests). The swap path
@@ -505,8 +581,9 @@ impl FlightAuthority {
         }
     }
 
-    /// Poll/build the common gravity forecast. Reading the map never runs a
-    /// second integrator. Flight adopts it only after the state/key check.
+    /// Poll/build the common gravity execution cache. Physics owns requests;
+    /// map consumers only borrow it after execution guards pass. Adoption
+    /// requires the state/key check even for a worker-produced cache.
     pub fn prepare_shared_trajectory(&mut self, ephemeris: &BakedEphemeris) -> bool {
         let initial = TestParticleState {
             position: self.state.position_inertial_m,
@@ -541,11 +618,11 @@ impl FlightAuthority {
     }
 
     /// Unpowered vacuum coast on the shared baked trajectory. Translation is
-    /// sampled (cubic Hermite) from the rails path the map prediction draws;
+    /// sampled (cubic Hermite) from the shared rails execution cache;
     /// attitude keeps integrating under the RCS moment. Returns `None` when
     /// no rails path can serve this step (bake failure, horizon exhausted
     /// twice in a row) so the caller falls back to a normal integrated step.
-    /// Flight and map share the same tick-adaptive bake and interpolant.
+    /// Maps may draw only intervals that pass their shared batch certificate.
     pub(super) fn try_coast_step_on_rails(
         &mut self,
         ephemeris: &BakedEphemeris,

@@ -190,20 +190,31 @@ impl Scene {
             let time = thessa_sim_core::SimTime(flight.flight_time_s);
             let craft = flight.inertial_state_m().0;
             snapshot.craft = Some((craft, time));
-            if self.remote.is_none()
-                && let Some(path) = flight.rails.path()
-                && let Ok(reference) = ephemeris.body_state(flight.reference_body, time)
-            {
-                let projected = thessa_flight_authority::navigation::project_rails_path(
+            let display =
+                thessa_flight_authority::navigation::craft_display_body(ephemeris, flight, time);
+            snapshot.orbit_summary =
+                Some(thessa_flight_authority::navigation::craft_orbit_summary(
                     ephemeris,
-                    path,
-                    flight.reference_body,
+                    flight,
+                    time,
+                    self.remote.is_none(),
+                ));
+            snapshot.trajectory_pending = self.remote.is_none() && flight.bake.has_pending();
+            if self.remote.is_none()
+                && let Some(until) = flight.jit_coast_execution_end(ephemeris, self.control_mode)
+                && let Ok(reference) = ephemeris.body_state(display, time)
+            {
+                let projected = thessa_flight_authority::navigation::project_jit_coast_path(
+                    ephemeris,
+                    &flight.rails,
+                    display,
                     time,
                     craft,
-                    f64::INFINITY,
+                    until,
                 );
                 if !projected.points.is_empty() {
                     snapshot.trajectory = Some((reference.position_inertial, projected));
+                    snapshot.execution_until = Some(until);
                 }
             }
         }
@@ -589,6 +600,10 @@ impl Scene {
 
     pub fn enable_live_flight(&mut self) -> Result<(), String> {
         self.setup_flight()?;
+        // Reuse the server's bounded native worker, not synchronous UI bakes
+        // or a second forecast scheduler. Remote replicas never install one.
+        self.flight.as_mut().unwrap().bake =
+            Box::new(thessa_flight_authority::ThreadBakeQueue::new());
         eprintln!(
             "Live local flight: canonical COAST launch; existing FlightAuthority; no network/complete UI parity"
         );
@@ -1618,6 +1633,147 @@ fn elevated_view(
 mod tests {
     use super::*;
     use glam::DQuat;
+
+    #[test]
+    #[cfg(feature = "hud")]
+    fn map_never_requests_a_hypothetical_bake_or_steps_paused_physics() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct CountQueue {
+            requests: Arc<AtomicUsize>,
+            pending: bool,
+        }
+        impl thessa_flight_authority::BakeQueue for CountQueue {
+            fn request_bake(&mut self, _: thessa_flight_authority::RailsBakeRequest) {
+                assert!(!self.pending);
+                self.pending = true;
+                self.requests.fetch_add(1, Ordering::SeqCst);
+            }
+            fn poll_bake(&mut self) -> Option<Result<thessa_flight_authority::BakedRails, String>> {
+                None
+            }
+            fn has_pending(&self) -> bool {
+                self.pending
+            }
+            fn reset(&mut self) {
+                self.pending = false;
+            }
+        }
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        scene.flight.as_mut().unwrap().bake = Box::new(CountQueue {
+            requests: requests.clone(),
+            pending: false,
+        });
+        scene.request_pause(true);
+        scene.advance_flight(0.025, None).unwrap();
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "closed map must not request powered-flight forecast work"
+        );
+        let state = scene.flight.as_ref().unwrap().state;
+        let time = scene.sample.time;
+        scene.set_map_open(true);
+        assert!(scene.map_snapshot().unwrap().trajectory.is_none());
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "reading UI data must never request a bake"
+        );
+        for _ in 0..10 {
+            scene.advance_flight(0.0, None).unwrap();
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        let map = scene.map_snapshot().unwrap();
+        assert!(!map.trajectory_pending && map.trajectory.is_none());
+        assert_eq!(scene.flight.as_ref().unwrap().state, state);
+        assert_eq!(scene.sample.time, time);
+        assert_eq!(scene.flight.as_ref().unwrap().steps_this_frame, 0);
+        scene.set_map_open(false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        scene.reset_flight().unwrap();
+        scene.set_map_open(true);
+        scene.advance_flight(0.0, None).unwrap();
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "opening a reset map must not fabricate a forecast"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "hud")]
+    fn map_reads_the_actual_physics_jit_cache_without_advancing_or_extending_it() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        scene
+            .flight
+            .as_mut()
+            .unwrap()
+            .initialize_circular_orbit(scene.celestial.ephemeris(), 1_000_000.0, DVec3::Y)
+            .unwrap();
+        scene.control_mode = thessa_flight_authority::ControlMode::Direct;
+        scene.flight.as_mut().unwrap().sas_enabled = false;
+        scene.set_map_open(true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let map = loop {
+            scene.advance_flight(0.025, None).unwrap();
+            let map = scene.map_snapshot().unwrap();
+            if map.trajectory.is_some() {
+                break map;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "physics JIT did not produce an executable segment: {} contact={} pending={} rails={}",
+                scene.flight_telemetry().unwrap(),
+                scene.flight.as_ref().unwrap().contact_active(),
+                scene.flight.as_ref().unwrap().bake.has_pending(),
+                scene.flight.as_ref().unwrap().rails.path().is_some()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        scene.request_pause(true);
+        let state = scene.flight.as_ref().unwrap().state;
+        let time = scene.flight.as_ref().unwrap().flight_time_s;
+        scene.advance_flight(0.0, None).unwrap();
+        let flight = scene.flight.as_ref().unwrap();
+        let e = scene.celestial.ephemeris();
+        let display = thessa_flight_authority::navigation::craft_display_body(e, flight, map.time);
+        let until = map.execution_until.unwrap();
+        let direct = thessa_flight_authority::navigation::project_jit_coast_path(
+            e,
+            &flight.rails,
+            display,
+            map.time,
+            state.position_inertial_m,
+            until,
+        );
+        assert_eq!(map.trajectory.as_ref().unwrap().1.points, direct.points);
+        assert_eq!(map.trajectory.as_ref().unwrap().1.impact, direct.impact);
+        assert!(flight.rails_bake_seconds.is_some());
+        assert_eq!(flight.state, state);
+        assert_eq!(flight.flight_time_s, time);
+        assert_eq!(flight.steps_this_frame, 0);
+        assert_eq!(scene.clock.effective_warp, Some(0.0));
+        let last = map.trajectory.as_ref().unwrap().1.points.last().unwrap();
+        let end_position = flight.rails.sample_at(until).unwrap().0
+            - e.body_state(display, until).unwrap().position_inertial;
+        assert_eq!(
+            *last, end_position,
+            "map endpoint must be the exact execution interpolant"
+        );
+        scene.flight.as_mut().unwrap().engine_active = true;
+        scene.flight.as_mut().unwrap().throttle = 1.0;
+        assert!(
+            scene.map_snapshot().unwrap().trajectory.is_none(),
+            "powered flight must not retain a hypothetical coast"
+        );
+    }
 
     #[test]
     fn pause_and_warp_feed_existing_fixed_step_authority_only() {

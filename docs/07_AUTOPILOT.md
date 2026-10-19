@@ -282,6 +282,14 @@ The existing `BakeQueue`, coast rails, plan bakeability, guard/deoptimization
 model, and exact maneuver propagation provide the pieces; powered rails should
 reuse them rather than create a second autopilot runtime.
 
+The current native map consumer (doc 67) deliberately reads only the physics
+JIT's executable cached coast interval, sharing the optimizer's actual guards.
+It does not treat `PlanExecutionMode::Baked` as a powered trajectory curve or
+request a hypothetical zero-thrust/zero-aero coast. The requested powered/live
+execution-future publication still needs this generalized producer and its
+dependency/deoptimization contract; an unrelated renderer-side predictor is
+not an acceptable replacement.
+
 ## 7.11. User-facing levels
 
 One runtime should support:

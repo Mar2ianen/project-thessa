@@ -33,9 +33,14 @@ old-client-only map-camera snapshots below. Both hosts share neutral scope,
 selection, Kepler and rails-projection helpers; native egui adds six scopes,
 f64 framing/orbit/pan/zoom, body/PRIMARY tracking and exclusive map/flight input
 ownership. Its bodies and PRIMARY use one newest-authority epoch, separate from
-3D scene interpolation. Only available local rails are drawn; conditional
-powered-flight forecast requests, apsis/wake readouts, display-body choices and
-remaining flight-command/appearance adapters still prevent full host retirement.
+3D scene interpolation. The subsequent follow-up extracts/reuses the server's
+single native bake worker for local physics and shares dominant-body
+apsis/escape/wake readouts with the legacy host. Both maps now consume the
+optimizer's executable cached coast interval using shared solver guards;
+neither map requests a conditional zero-thrust/zero-aero forecast. Generalized
+powered/live JIT futures remain unimplemented, not replaced by coast curves.
+Instrument display-body choices and remaining flight-command/appearance
+adapters still prevent full host retirement.
 
 Native F1/F2/F3 now provide controls help, flight-HUD visibility and telemetry/
 fleet visibility. Help temporarily replaces other widgets and captures manual/

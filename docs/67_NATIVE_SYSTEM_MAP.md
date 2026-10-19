@@ -2,14 +2,16 @@
 
 **Status: implemented native map slice; full migration incomplete. 2026-10-19.**
 
-Baseline: `05ceb1b`. The old Bevy map remains available while its remaining
+Initial map baseline: `05ceb1b`; actual-JIT/readout follow-up baseline:
+`3dc9122`. The old Bevy map remains available while its remaining
 maneuver, display-body and appearance obligations are replaced. This slice is
 navigation presentation, not a second celestial or vehicle simulation.
 
 ## State and ownership
 
 `flight-authority::navigation` owns the shared six-scope policy, body cycling,
-adaptive Kepler sampling, bounded future-rails indexing/projection and an f64
+adaptive Kepler sampling, bounded future-rails indexing/projection, dominant-body
+orbit/apsis/escape/wake readouts and an f64
 orthographic map camera. Both hosts consume the extracted helpers. Canonical
 ephemerides stay in SI/inertial axes; only the legacy host converts its output
 to scaled Bevy coordinates. The old adaptive sampler could overrun its vertex
@@ -31,15 +33,53 @@ PRIMARY is the newest authoritative state with its labelled SimTime; all map
 celestial bodies use that **same** epoch. The underlying interpolated 3D scene
 may lag, but mixing its older planets with a newer inertial craft would invent
 apparent altitude from their common orbital motion. Before the first valid
-remote snapshot no craft marker exists. Local available rails use `FlightAuthority::rails.path()`
-and project every future sample relative to the reference body's ephemeris at
-that sample's own time. This is a reference-body-relative future curve anchored
-at the reference body's current position, not a barycentric future track or a
-two-body prediction. Impact circles are forecast display facts, not solved
-contacts. The polyline is bounded to 1,025 points including current craft.
-No renderer-triggered bake or second integrator is added. The lean wire carries
-no rails path: native remote mode explicitly reports no forecast rather than
-silently integrating a different one locally.
+remote snapshot no craft marker exists. Local executable JIT rails project each
+future sample relative to the dominant display body's ephemeris
+at that sample's own time. This is a display-body-relative future curve anchored
+at that body's current position, not a barycentric future track or a
+two-body prediction. The polyline is bounded to 1,025 points including current
+craft and the exact execution-interpolated endpoint.
+
+### Hard source contract: the map reads execution, not a hypothetical coast
+
+The user explicitly requires the real JIT trajectory. Both map hosts therefore
+read the optimizer's existing cache through `jit_coast_execution_end`, which
+shares the solver's actual eligibility, bounded-interval and geometry/medium/
+constant-spin certificate helpers. Rendering never calls
+`prepare_shared_trajectory`, starts a bake, advances physics or assumes thrust/
+aero suddenly cease. Changing thrust, explicit demands, guidance dependence,
+contact/gear state, cache validity or solver guards can withdraw the path.
+
+The currently supported consumer is the **certified vacuum-coast batch**. It
+draws only through the current wake/horizon/cadence boundary (at most the
+existing `MAX_COAST_BATCH_JUMP_S`), not the unchecked remainder of a long cache.
+The endpoint is sampled by the exact Hermite interpolant physics consumes,
+including between stored nodes. No synthetic surface-impact marker is attached
+to a bounded executable interval. Ordinary physics continues to revalidate
+before advancing; subsequent input/plan changes may invalidate the future.
+
+Generalized powered/live JIT futures are **not implemented yet** (doc 07 §7.10).
+`PlanExecutionMode::Baked` is an execution-mode label, not a precomputed state
+curve. In unsupported modes the map explicitly reports no executable JIT path;
+it must not substitute a zero-force coast or claim the requested full powered
+trajectory feature is complete. This also conservatively omits controlled
+tick-coasts that do not qualify for the shared batch certificate.
+
+The server's existing `ThreadBakeQueue` now lives in flight-authority and serves
+native local physics and server. At most one worker runs; reset retains/discards
+its result before another request; shutdown joins it. Adoption still checks
+state/ephemeris/config. Opening, closing or pausing a map cannot request or extend
+a bake. Thread completion is not simulation time. The lean wire contains no
+executable JIT curve or future scheduler queue: remote maps show observed orbital
+diagnostics and transmitted last-wake notices, not locally fabricated futures.
+
+Ap/Pe/period and escape speed use existing `OsculatingElements::from_state` in
+the dominant-body frame, not an alternate propagator. The solver's reference
+body and summed gravitational field do not change. A below-datum periapsis
+uses the retained `IMPACT` diagnostic text; this is an osculating geometric
+intersection, not an authoritative solved contact. The UI labels this boundary.
+Unlike the old early-return formatter, scheduler/notice suffixes are now kept
+even for escape, suborbital or degenerate osculating states.
 
 ## Controls and rendering
 
@@ -93,6 +133,23 @@ display dithering). The target-size ignored benchmark
 records catalogue cost/bytes, open snapshot and toolkit/tessellation costs and
 closed-map dispatch, not game FPS or an old-client performance win.
 
+The actual-JIT/readout follow-up additionally tests 500 km circular-orbit
+apsides within **0.02 m absolute** of the analytic radius at Thessa and Nereid,
+dominant-frame selection without solver-reference changes, escape/suborbital/
+degenerate labels, local countdown and remote-notice boundaries. A counted
+queue pins zero map-triggered requests even through repeated paused advances
+and reset. A real native worker/free-coast fixture compares map samples and
+endpoint against the physics cache, then verifies paused reads do not advance
+or extend it and a powered demand withdraws the curve. A core regression queries
+a 50-second alarm-bounded JIT interval and executes that same interval: final
+position/velocity exactly equal the queried cache interpolant; stale, powered
+and state-dependent-guidance states are refused. The moved server-worker test
+still checks harvest/reset-discard. The target-size benchmark separately reports
+shared guard, JIT projection and orbital-summary CPU costs, not an integrator-
+speed comparison. Existing numerical reduction/certification limits remain;
+this extraction does not upgrade five-point geometry checks to a continuous
+interval proof.
+
 The map stage's fourteen final local gates passed on 596 unchanged source inputs, including
 1,915 workspace lib/bin tests, 95 integration tests, 24 Bevy GPU tests, 31 native
 and 31 render-wgpu ignored hardware/diagnostic tests. Actual commands, hardware,
@@ -104,18 +161,17 @@ remote CI or complete Bevy retirement is implied.
 The subsequent F1/F2/F3 HUD-visibility adapter is tracked separately in doc 66:
 F2 never hides the active map; visible help temporarily replaces its widgets
 until closed, retaining map navigation state and exclusive flight-input gating.
+Actual-JIT/readout follow-up commands and results are recorded separately in
+`artifacts/native-map-jit-2026-10-19.json` after verification.
 
 ## Remaining obligations
 
-The old map's renderer-triggered conditional gravity-only forecast request
-during powered/aerodynamic flight is not ported: native draws only a currently
-available shared bake. Reintegrate that request through the existing BakeQueue
-host lifecycle, not another prediction system. Retained orbit/apsis/wake readouts,
-instrument reference/display-body choices and richer celestial/ring appearance
-also remain. The legacy pilot's one-shot server `ExecuteManeuver` fixture and
+Generalized powered/live JIT futures, instrument reference/display-body choices
+and richer celestial/ring appearance
+remain. The legacy pilot's one-shot server `ExecuteManeuver` fixture and
 coastal flyby intent adapter still need native entry points; an interactive
 maneuver editor is broader future work, not an implemented old-map feature.
-Remote forecast transport, guidance panels, secondary-fleet map markers and
+Remote executable-trajectory transport, guidance panels, secondary-fleet map markers and
 generalized trajectory error/pixel adaptation remain open. Tiny/mobile layouts and dense-system
 navigation require usability acceptance. Do not remove the old map or its
 remaining tests merely because the native host can now display its ephemerides.

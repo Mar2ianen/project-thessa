@@ -14,6 +14,10 @@ use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
 use thessa_sim_core::{ParachuteLoad, RigidBodyState, VehicleId, VehiclePartCommand};
 
+/// Shared wire/host ceiling. Warp scales admitted simulation-time demand,
+/// never the fixed solver step; effective warp can be lower under work limits.
+pub const MAX_TIME_WARP: f64 = 131_072.0;
+
 /// Client handshake: version check happens on [`Envelope`], this carries
 /// the human-readable identity for logs and the admin surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,7 +233,7 @@ impl ClientInput {
         for command in &self.commands {
             match command {
                 Command::SetWarp { factor }
-                    if !factor.is_finite() || *factor < 0.0 || *factor > 131_072.0 =>
+                    if !factor.is_finite() || *factor < 0.0 || *factor > MAX_TIME_WARP =>
                 {
                     return Err("warp vote must be finite and in [0, 131072]".into());
                 }

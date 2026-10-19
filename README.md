@@ -131,7 +131,8 @@ The checked-in vertical slice currently contains:
        Opt-in `[ocean]` now adds a shared multiband spectral field, filtered
        water optics and bounded near-grid displacement shared by raster/shadows/RT
        ([doc 56](docs/56_NATIVE_SPECTRAL_OCEAN.md)); overflow is optical-only.
-        Sun disks, aerial perspective, auto exposure/bloom and primary terrain/ocean mesh-query
+         Source discs/stars now have native consumers (doc 65); aerial perspective,
+        auto exposure/bloom and primary terrain/ocean mesh-query
        reflection consumers remain missing: **not** complete PBR/Bevy parity.
      The shared shadow atlas reuses depth only for unchanged light matrices,
      terrain and mesh casters; motion/source changes invalidate it, with no
@@ -158,7 +159,12 @@ The checked-in vertical slice currently contains:
   throttle, `X`/`Z` cut/fill, `Space` toggles the engine, `C` cycles the
   control law, `T` toggles SAS and `CapsLock` scales precision; the HUD mirrors
   the same panel plus installed-system toggles (`R` RCS, `Y` wheels, `G` gear,
-  `P` chutes) applied as the explicit part commands the old pilot sends.
+   `P` chutes) applied as the explicit part commands the old pilot sends.
+   Live flight also accepts `--paused` and `--warp 0..131072`; window F8 pauses,
+   `[`/`]` halve/double warp and Backspace relaunches at the canonical site
+   without rewinding simulation time. HUD requests and server acknowledgement
+   are separate; a disconnected server is never replaced by local physics.
+   Losing window focus releases held axes/gestures without cutting the engine.
   The live HUD also reads speed, datum/AGL altitude and vertical speed from
   the same shared kinematics the old client's instruments consume
   (reference-body readout; the old client's dominant-body display switching

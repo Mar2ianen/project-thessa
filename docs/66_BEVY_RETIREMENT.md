@@ -25,7 +25,7 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 |---|---|---|
 | `main.rs` lifecycle, scheduling, assets, window/input | `terrain-native/{main,window}.rs`, `render-assets`, winit/egui | promote a complete native client entry point; preserve packaged asset discovery and useful CLI scenarios |
 | `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
-| `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | reconcile remaining flight deck commands, reference/display-body choices, pause/warp and server/local control; do not fabricate authoritative state in UI |
+| `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | pause/warp/relaunch and focus release now have native consumers; reconcile remaining flight deck commands and reference/display-body choices; do not fabricate authoritative state in UI |
 | `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared instrument settings | audit every retained readout/control; native flight deck exists but not all old widgets/commands have replacements |
 | `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, `flight-authority` trajectory/navigation, native `celestial.rs` | native system map/body selection, orbit/trajectory drawing and maneuver interaction remain; reuse shared ephemeris/prediction instead of porting scaled Bevy transforms |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
@@ -51,18 +51,20 @@ visual acceptance of the whole client or a certification of the distant horizon.
 
 The old `pilot_input` also owns functions not covered by a native WASDQE test:
 
-- relaunch after a stopped flight (`Reset` command remotely, shared launch-site
-  reset locally), preserving the simulation clock;
-- pause and warp requests, with acknowledged server pause/effective warp distinct
-  from client intent, and no second client clock in server mode;
+- **Implemented follow-up:** relaunch after a stopped flight (`Reset` command
+  remotely, shared launch-site reset locally), preserving the simulation clock;
+- **Implemented follow-up:** pause and warp requests, with acknowledged server
+  pause/effective warp distinct from client intent, no second client clock in
+  server mode, explicit bindings F8 / brackets / Backspace and CLI/HUD controls;
 - map/pilot switching and camera-versus-flight input capture;
-- Mouse Aim, held temporary SAS inversion and safe neutral input on focus loss;
+- Mouse Aim and held temporary SAS inversion remain; focus loss and suspension
+  now release held axes/gestures and send neutral remote input;
 - help/telemetry/HUD visibility and manual-takeover behavior;
 - opt-in coastal flyby guidance and server-side maneuver execution fixtures.
 
-These are remaining replacement obligations, not features certified by the
-existing native flight deck. Native arrow keys currently control the camera;
-new pause/warp bindings must be explicit and cannot silently double-handle them.
+Unmarked items remain replacement obligations, not features certified by the
+existing native flight deck. Native arrow keys still control the camera;
+pause/warp use separate bindings and cannot silently double-handle them.
 Shared guidance, rails and command validation already exist; porting a UI must
 not introduce a parallel controller, trajectory bake or server authority.
 
@@ -77,13 +79,33 @@ Concrete reuse points for that follow-up:
   debt. Host pause/warp intent must scale admitted elapsed time, not solver dt,
   and must report actual time advanced separately from requested warp.
 - `flight-net::presentation::input_for_server` deliberately takes caller-owned
-  ordered commands and separate throttle/engine intent. Native currently sends
-  fixed unpaused x1 votes; replace those votes rather than add a second transport.
+  ordered commands and separate throttle/engine intent. Native now sends the
+  requested pause/warp votes through it instead of fixed unpaused x1 demands.
 - `Snapshot::{paused,effective_warp}` are checked authoritative observations.
   Preserve them in the native observer; UI vote state is not acknowledgement.
 - The old `SimulationClock` is a Bevy resource containing just presentation
   seconds/tick and multiplier/pause intent. It is not another physics clock
   worth reproducing alongside `FlightAuthority::flight_time_s`.
+
+The native clock adapter is intent and observation only. `--flight-step` remains
+a headless scripted admission interval; local window elapsed time is clamped to
+0.1s before warp scaling and existing solver work limits. Paused/x0 frames do not
+advance physics, sky, body spin or simulation-time audio events. Native capture
+records local fixed steps/rails/debt and actual frame-wall effective warp;
+server mode retains the reported server rate without inventing local work.
+Checked authoritative physics-stop snapshots keep the live link available for
+Reset; malformed packets, silence/deadlines and transport failure still close
+it. The bounded event queue reserves the two time votes and refuses excess
+Reset requests transactionally rather than expanding without a limit.
+The real stdio-server regression now acknowledges pause, relaunch while paused,
+resume and x4 demand; local tests cover invalid warp, stopped-flight recovery,
+work limiting, input capture and focus release. No new force/control solver,
+network payload, dependency, GPU pass or audio device is introduced. See
+`docs/artifacts/native-flight-clock-2026-10-19.json` for reproducible checks.
+All fourteen final local gates passed on 594 unchanged compiled source files,
+including the real-server exchange, GPU CLI pause/warp counters and a muted
+30-presentation native Wayland paused-flight/HUD smoke. This closes those
+specific host adapters, not the remaining map, guidance or visual obligations.
 
 ### Plume adapter audit before native reuse
 

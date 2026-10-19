@@ -369,6 +369,26 @@ struct App {
     audio: Option<crate::audio::NativeAudio>,
 }
 
+impl App {
+    fn release_held_input(&mut self) {
+        self.held.clear();
+        self.scene.input.keys = Default::default();
+        self.scene.push_live_input(0.0, false, false);
+        if self.scene.server_flight() {
+            // Deliver neutral axes before a suspended window stops polling.
+            if let Err(error) = self.scene.advance_flight(0.0, None) {
+                eprintln!("{error}");
+            }
+        }
+        self.right_held = false;
+        self.middle_held = false;
+        self.last_cursor = None;
+        if let Some(state) = &mut self.state {
+            state.last_flight_wall_s = None;
+        }
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -403,6 +423,7 @@ impl ApplicationHandler for App {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.release_held_input();
         self.audio = None;
         self.state = None;
     }
@@ -416,6 +437,16 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self
+            .state
+            .as_ref()
+            .is_none_or(|state| state.window.id() != id)
+        {
+            return;
+        }
+        if matches!(event, WindowEvent::Focused(false)) {
+            self.release_held_input();
+        }
         let Some(state) = &mut self.state else {
             return;
         };
@@ -445,7 +476,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if event.state == ElementState::Pressed {
+                    if event.state == ElementState::Pressed && !consumed {
                         self.held.insert(code);
                     } else {
                         self.held.remove(&code);
@@ -655,6 +686,28 @@ fn apply_discrete_flight_input(scene: &mut Scene, key: PhysicalKey, repeat: bool
         return;
     }
     match key {
+        PhysicalKey::Code(KeyCode::F8) => {
+            if let Some(clock) = scene.flight_clock() {
+                scene.request_pause(!clock.requested_paused);
+            }
+        }
+        PhysicalKey::Code(KeyCode::BracketLeft | KeyCode::BracketRight) => {
+            if let Some(clock) = scene.flight_clock() {
+                let factor = if key == PhysicalKey::Code(KeyCode::BracketRight) {
+                    (clock.requested_warp.max(0.125) * 2.0).min(thessa_flight_net::MAX_TIME_WARP)
+                } else {
+                    (clock.requested_warp * 0.5).max(0.125)
+                };
+                if let Err(error) = scene.request_warp(factor) {
+                    eprintln!("{error}");
+                }
+            }
+        }
+        PhysicalKey::Code(KeyCode::Backspace) => {
+            if let Err(error) = scene.reset_flight() {
+                eprintln!("{error}");
+            }
+        }
         PhysicalKey::Code(KeyCode::KeyX) => scene.input.cut(),
         PhysicalKey::Code(KeyCode::KeyZ) => scene.input.full(),
         PhysicalKey::Code(KeyCode::Space) => scene.input.toggle_engine(),
@@ -778,6 +831,74 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_shortcuts_are_edge_triggered_and_do_not_collide_with_the_camera() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        for key in [
+            KeyCode::F8,
+            KeyCode::BracketLeft,
+            KeyCode::BracketRight,
+            KeyCode::Backspace,
+        ] {
+            assert_eq!(camera_shortcut(PhysicalKey::Code(key), false), None);
+            let clock = scene.flight_clock();
+            apply_discrete_flight_input(&mut scene, PhysicalKey::Code(key), true, false);
+            apply_discrete_flight_input(&mut scene, PhysicalKey::Code(key), false, true);
+            assert_eq!(scene.flight_clock(), clock);
+        }
+        apply_discrete_flight_input(&mut scene, PhysicalKey::Code(KeyCode::F8), false, false);
+        assert!(scene.flight_clock().unwrap().requested_paused);
+        apply_discrete_flight_input(
+            &mut scene,
+            PhysicalKey::Code(KeyCode::BracketRight),
+            false,
+            false,
+        );
+        assert_eq!(scene.flight_clock().unwrap().requested_warp, 2.0);
+        apply_discrete_flight_input(
+            &mut scene,
+            PhysicalKey::Code(KeyCode::BracketLeft),
+            false,
+            false,
+        );
+        assert_eq!(scene.flight_clock().unwrap().requested_warp, 1.0);
+        let mut app = App {
+            scene,
+            state: None,
+            error: None,
+            frame_limit: None,
+            frames: 0,
+            started: None,
+            hud_enabled: false,
+            width: 1280,
+            height: 720,
+            right_held: true,
+            middle_held: true,
+            right_consumed: false,
+            middle_consumed: false,
+            last_cursor: Some((10.0, 20.0)),
+            held: [KeyCode::KeyW, KeyCode::ShiftLeft].into_iter().collect(),
+            audio_options: Default::default(),
+            audio: None,
+        };
+        app.scene.input.keys.nose_down = true;
+        app.scene.push_live_input(0.0, false, false);
+        assert_eq!(app.scene.input.stick_scaled(), glam::DVec3::NEG_X);
+        let time = app.scene.sample.time;
+        let throttle = app.scene.input.throttle;
+        app.release_held_input();
+        assert!(app.held.is_empty());
+        assert!(!app.right_held && !app.middle_held);
+        assert!(app.last_cursor.is_none());
+        assert_eq!(app.scene.input.stick_scaled(), glam::DVec3::ZERO);
+        assert_eq!(
+            app.scene.input.throttle, throttle,
+            "focus loss must not invent an engine cut"
+        );
+        assert_eq!(app.scene.sample.time, time);
+    }
 
     #[test]
     fn focused_widgets_block_camera_and_exit_shortcuts() {

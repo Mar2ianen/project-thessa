@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-18 (native flight deck, reviewed unified pass, manual HDR display, conservative shadow casters)
+**Updated:** 2026-10-19 (native sky/audio, shared shadow receiver, local/server flight-clock controls)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -16,6 +16,17 @@
 The current source-to-consumer retirement ledger is
 [doc 66](66_BEVY_RETIREMENT.md). It tracks the full requested host replacement,
 including non-rendering functions; the native sky slice below is not that gate.
+
+The native flight-clock follow-up now replaces fixed unpaused/x1 server votes
+with explicit pause/warp intent, retains authoritative acknowledgement, and
+reuses canonical launch-site reset locally or `Command::Reset` remotely.
+Window F8, brackets and Backspace do not conflict with the retained camera
+arrows; CLI/HUD expose the same demands. Focus loss/suspension neutralize held
+axes/gestures without an engine cut. Existing authority stepping/work limits,
+transport framing and time-based sky/audio remain their owners; no new physics
+clock or local server fallback is added. Native capture now reports fixed-step,
+rails and debt counters with explicit scripted-time versus frame-wall semantics.
+See doc 66 and `artifacts/native-flight-clock-2026-10-19.json` for checks and gaps.
 
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only

@@ -1,0 +1,31 @@
+{
+  "date":"2026-10-19",
+  "baseline":"2e854c2",
+  "scope":"Native local/server pause, warp, canonical relaunch, focus/suspend release and existing performance-budget publication. Bevy retirement remains incomplete.",
+  "contract":{
+    "authority":"Existing FlightAuthority or embedded server; no independently advanced client simulation clock, solver-dt changes or local server fallback.",
+    "controls":"--flight/--server-flight plus --paused / --warp 0..131072. F8 pause; brackets half/double (key minimum 0.125, CLI/HUD allow x0); Backspace relaunch without rewinding. HUD keeps requested state separate from authoritative pause/effective warp. Arrow keys retain camera behavior; Space retains engine toggle. A valid authoritative stop retains the live link for Reset; transport/protocol failures still close it. Reset events share the existing queue bound, reserving two clock votes and rejecting overflow without mutating queued events.",
+    "focus":"Clear held stick/throttle keys and pointer gestures on focus loss/suspend; apply/send neutral axes without altering retained throttle/engine demand. Reset elapsed window baseline, never catch up missing wall time.",
+    "capture":"Local SimBudget reports existing steps/rails/debt and actual frame-wall effective rate. Headless --flight-step is deterministic admission demand, not frame wall time. Server captures report server effective warp and zero local solver work. Simulation CPU attribution remains unmeasured."
+  },
+  "verification":{
+    "status":"all fourteen final local gates passed on unchanged compiled sources; earlier native-flight-clock-stable run is diagnostic because sources changed during it",
+    "directory":"target/test-tmp/native-flight-clock-final",
+    "compiled_source_count":594,
+    "source_manifest_sha256":"3af06288c31a2debaa2a53eb9e8a2850c671d05f37a79dee66c1057d79fecfae",
+    "checks":{"fmt":"passed","workspace_all_features_clippy":"passed","native_no_default_clippy":"passed","workspace_lib_bins_passed":1903,"workspace_integration_passed":94,"native_no_default_unit_passed":52,"bevy_gpu_passed":24,"render_wgpu_release_ignored_passed":31,"native_release_ignored_passed":29,"architecture":"passed","agent_qa_passed":5,"diff_whitespace":"passed","release_native_and_server_build":"passed","wayland_paused_flight_hud_smoke":"passed"},
+    "window_smoke":{"command":"thessa-terrain-native --flight --paused --warp 2 --frames 30 --width 1280 --height 720 --mute","exit_code":0,"presentation_requests":30,"seconds":7.219,"authority_time_s":0,"presentation_time_s":0,"solver_steps":0,"backlog_s":0,"capacity_rejections":0,"audio":"muted; no device opened","boundary":"Wayland/compositor and default graphics included, not game FPS, input-injection acceptance or independent visual review"},
+    "real_server_final":{"received_snapshots":9,"server_tick":64,"authority_time_s":0.5333333333333333,"requested_warp":4,"reported_effective_warp":1.3401902660582152,"local_backlog_s":0,"boundary":"pause/relaunch/resume acknowledgement, not sustained x4 throughput"}
+  },
+  "targeted_evidence":{
+    "native_cpu":"cargo test -p thessa-terrain-native --bin thessa-terrain-native: 51 passed at the targeted run; four added clock/focus/acknowledgement/relaunch regressions.",
+    "real_server":"cargo build -p thessa-server; cargo test -p thessa-terrain-native --bin thessa-terrain-native real_server_adoption -- --ignored --nocapture --test-threads=1: passed. Receives geometry/appearance, acknowledges pause, resets while paused without rewinding, resumes with x4 demand and retains zero local steps/debt.",
+    "headless":"cargo test --release -p thessa-terrain-native --test perf_capture headless_flight_time -- --ignored --nocapture --test-threads=1: passed on Radeon 880M/Vulkan. At --warp 2 --flight-step 0.025 each measured unpaused frame advances six 1/120s steps; 30 warmup + two measured frames reach 1.6s. Paused run reaches 0s with zero steps. Captured rate is actual advanced seconds / measured frame wall, within 1e-10 arithmetic tolerance.",
+    "scratch":"apps/terrain-native/target/test-tmp/native-clock-3137436 (final gates); native-clock-3095071 (earlier diagnostic)",
+    "fixed_step_limit":"At x131072 with an exhausted (zero-duration) local work budget, one mandatory fixed step advances and unserved whole-tick debt is shed; no requested-time teleport or solver-step inflation.",
+    "hardware":"AMD Radeon 880M / RADV STRIX1 / Vulkan; no Metal/WebGPU execution or independent visual acceptance. No output audio device used by fixtures."
+  },
+  "omitted":["Map/pilot switching and system navigation", "Mouse Aim and held temporary SAS inversion", "Display-body switching, full old-client help/telemetry parity", "Coastal guidance and maneuver/event fixtures", "Native plume/game optical/contact consumers", "Final Bevy host/bridge retirement"],
+  "performance":"No speedup, render-quality change or new GPU work claimed. Clock intent adds constant host arithmetic; full physics cost depends on admitted demand and existing work limits.",
+  "remote_ci":"not run or claimed"
+}

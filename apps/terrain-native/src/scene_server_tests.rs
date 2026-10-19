@@ -49,6 +49,46 @@ fn replica() -> Scene {
     scene
 }
 
+#[test]
+fn clock_acknowledgement_never_replaces_pending_intent_or_steps_locally() {
+    let mut scene = replica();
+    assert_eq!(scene.flight_clock().unwrap().authority_paused, None);
+    scene.request_pause(true);
+    scene.request_warp(64.0).unwrap();
+    let mut wire = snapshot(&scene, 2.0);
+    wire.paused = false;
+    wire.effective_warp = 0.75;
+    scene.accept_server_snapshot(&wire).unwrap();
+    let clock = scene.flight_clock().unwrap();
+    assert!(clock.requested_paused);
+    assert_eq!(clock.requested_warp, 64.0);
+    assert_eq!(clock.authority_paused, Some(false));
+    assert_eq!(clock.effective_warp, Some(0.75));
+    let state = scene.flight.as_ref().unwrap().state;
+    scene.advance_flight(0.1, None).unwrap();
+    assert_eq!(scene.flight.as_ref().unwrap().state, state);
+    assert_eq!(scene.flight.as_ref().unwrap().flight_time_s, 2.0);
+    let budget = scene.flight_budget(0.01).unwrap();
+    assert_eq!(budget.steps_this_frame, 0);
+    assert_eq!(budget.sim_time_advanced_s, 0.0);
+    assert_eq!(budget.effective_warp, 0.75);
+    assert!(
+        scene.reset_flight().is_err(),
+        "a lost link must not turn reset into local recovery"
+    );
+    assert_eq!(scene.flight.as_ref().unwrap().state, state);
+    wire.tick += 1;
+    wire.paused = true;
+    wire.effective_warp = 0.0;
+    scene.accept_server_snapshot(&wire).unwrap();
+    assert_eq!(scene.flight_clock().unwrap().authority_paused, Some(true));
+    let prior = scene.flight_clock();
+    wire.tick += 1;
+    wire.effective_warp = f64::NAN;
+    assert!(scene.accept_server_snapshot(&wire).is_err());
+    assert_eq!(scene.flight_clock(), prior);
+}
+
 fn fleet(scene: &Scene, ids_and_times: &[(u32, f64)]) -> thessa_flight_net::FleetSnapshot {
     thessa_flight_net::FleetSnapshot {
         geometry_revision: 1,
@@ -416,6 +456,80 @@ fn server_silence_and_pipe_loss_freeze_without_local_fallback() {
 
 #[cfg(unix)]
 #[test]
+fn authoritative_stop_keeps_the_link_for_bounded_remote_relaunch() {
+    let mut scene = Scene::load(Default::default()).unwrap();
+    scene.setup_flight().unwrap();
+    let mut stopped = snapshot(&scene, 2.0);
+    stopped.flight_error = Some("fixture: authoritative physics stopped".into());
+    let bytes = thessa_flight_net::encode_snapshot(&stopped)
+        .unwrap()
+        .iter()
+        .map(|byte| format!("\\{byte:03o}"))
+        .collect::<String>();
+    let path = peer(&format!("printf '{bytes}'; exec sleep 30"));
+    let link =
+        thessa_flight_net::embedded::EmbeddedLink::spawn_server(&path, Duration::from_secs(5))
+            .unwrap();
+    scene.remote = Some(RemoteFlight {
+        link: Some(link),
+        commands: Vec::new(),
+        started: Instant::now(),
+        timeout: Duration::from_secs(5),
+        snapshots: 0,
+        last_tick: None,
+        fleet: Default::default(),
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while scene.server_snapshot_count() == Some(0) {
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(scene.flight_stopped());
+    assert!(
+        scene
+            .remote
+            .as_ref()
+            .unwrap()
+            .link
+            .as_ref()
+            .is_some_and(|link| !link.is_closed())
+    );
+    let before = scene.flight.as_ref().unwrap().state;
+    for _ in 0..thessa_flight_net::MAX_COMMANDS_PER_INPUT - 2 {
+        scene.reset_flight().unwrap();
+    }
+    let commands = scene.remote.as_ref().unwrap().commands.clone();
+    assert!(scene.reset_flight().is_err());
+    assert_eq!(scene.remote.as_ref().unwrap().commands, commands);
+    assert!(
+        commands
+            .iter()
+            .all(|command| matches!(command, Command::Reset))
+    );
+    assert!(
+        scene.flight_stopped(),
+        "queued Reset is not acknowledgement"
+    );
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+    scene.advance_flight(0.0, None).unwrap();
+    assert!(scene.remote.as_ref().unwrap().commands.is_empty());
+    assert!(
+        scene.remote.as_ref().unwrap().link.is_some(),
+        "valid stopped snapshot is not a transport failure"
+    );
+    stopped.flight_error = None;
+    stopped.engine_active = true;
+    scene.accept_server_snapshot(&stopped).unwrap();
+    assert!(!scene.flight_stopped());
+    assert_eq!(scene.flight.as_ref().unwrap().flight_time_s, 2.0);
+    assert_eq!(scene.flight.as_ref().unwrap().accumulator_s, 0.0);
+    scene.stop_server_flight("fixture complete".into());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene() {
     let mut scene = Scene::load(Default::default()).unwrap();
     scene.setup_flight().unwrap();
@@ -618,6 +732,47 @@ fn real_server_adoption_advances_and_acknowledges_input_without_local_steps() {
     assert!(scene.sample.time.0 <= flight.flight_time_s);
     assert!(scene.flight_data().is_some());
     assert!(scene.view(1280, 720, 1.0).world_position_m.is_finite());
+    scene.request_pause(true);
+    while scene.flight_clock().unwrap().authority_paused != Some(true) {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(!scene.flight_stopped(), "{:?}", scene.flight_telemetry());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let paused_time = scene.flight.as_ref().unwrap().flight_time_s;
+    let before_reset = scene.flight.as_ref().unwrap().state;
+    scene.reset_flight().unwrap();
+    assert_eq!(
+        scene.flight.as_ref().unwrap().state,
+        before_reset,
+        "reset must wait for the server"
+    );
+    let count = scene.server_snapshot_count();
+    while scene.server_snapshot_count() == count || !scene.flight.as_ref().unwrap().engine_active {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        scene.flight.as_ref().unwrap().flight_time_s,
+        paused_time,
+        "relaunch must not rewind or advance a paused authority"
+    );
+    scene.request_warp(4.0).unwrap();
+    scene.request_pause(false);
+    while scene.flight.as_ref().unwrap().flight_time_s <= paused_time + 0.1
+        || scene.flight_clock().unwrap().authority_paused != Some(false)
+    {
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.0, None).unwrap();
+        assert!(!scene.flight_stopped(), "{:?}", scene.flight_telemetry());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(scene.flight_clock().unwrap().requested_warp, 4.0);
+    assert_eq!(scene.flight.as_ref().unwrap().accumulator_s, 0.0);
     eprintln!("{}", scene.flight_telemetry().unwrap());
 }
 

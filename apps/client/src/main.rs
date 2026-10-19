@@ -304,7 +304,7 @@ fn terrain_wgpu_settings(
 /// off-rails physics is per-tick, so the frame budget caps effective warp
 /// there automatically and the backlog never grows (unserved whole ticks
 /// are dropped, never queued).
-pub(crate) const MAX_TIME_WARP: f64 = 131072.0;
+pub(crate) const MAX_TIME_WARP: f64 = thessa_flight_net::MAX_TIME_WARP;
 
 #[derive(Resource)]
 struct SimulationClock {

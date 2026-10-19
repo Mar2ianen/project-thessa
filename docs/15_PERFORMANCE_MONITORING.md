@@ -17,7 +17,8 @@ and sibling CSV after rendering, and negotiates stable timestamp-query plus
 encoder-timestamp features only for this diagnostic. If either feature is
 unsupported, CPU capture still works and GPU timings are explicitly unavailable.
 Ordinary native devices create no timestamp query/readback buffers or collector.
-GPU intervals (`gpu_scope_layout=native-display-v3`) are `render.shadows`,
+GPU intervals (`gpu_scope_layout=native-topology-v5-sky`) are `render.surface_and_shadows`
+(persistent topology classification/transactions/emission and shadow depth),
 `render.rt_as_build` (dirty mesh/terrain AS builds),
 `render.scene_classify_and_raster` (classification plus the shared terrain,
 opaque-mesh and sky pass), `render.display_transform` (HDR to SDR, empty on the
@@ -41,8 +42,15 @@ frame wall includes GPU completion. Timestamp mapping and capture writing are
 outside samples, but the diagnostic can still perturb scheduling. This path
 already waits serially for offscreen completion; **it is not window profiling**
 and must not be inserted into the native window loop. Asynchronous window/Bevy
-timestamp collection, richer native counters and authoritative simulation
-telemetry remain future work. Unknown counters retain schema defaults with this
+timestamp collection and richer native counters remain future work. Native live
+flight now fills local fixed steps, rails seconds, debt and simulation time
+advanced from the existing authority. Its captured effective warp divides actual
+simulation work by measured frame wall time, **not** the scripted `--flight-step`
+admission interval. Paused/x0 frames record zero work; server mode reports the
+snapshot's effective warp separately and records no local solver work. Separate
+simulation CPU attribution remains unmeasured (schema default), not an isolated
+simulation-cost claim. CLI metadata records the host clock intent/observation.
+Unknown counters retain schema defaults with this
 limitation in capture metadata; GPU/UMA memory remains unknown. GPU scopes also
 appear as sorted `gpu_scope:NAME_ms` CSV columns: missing/unavailable values are
 blank, while a measured zero is `0.0000`. Existing CPU columns are unchanged.

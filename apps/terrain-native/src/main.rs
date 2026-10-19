@@ -40,11 +40,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut width = 1280u32;
     let mut height = 720u32;
     let mut audio = audio::Options::default();
+    let mut warp = None;
+    let mut paused = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--mute" => audio.muted = true,
             "--audio-cabin" => audio.cabin = true,
             "--audio-demo" => audio.demo = true,
+            "--paused" => paused = true,
+            "--warp" => {
+                warp = Some(
+                    args.next()
+                        .ok_or("--warp requires a factor")?
+                        .parse::<f64>()?,
+                )
+            }
             "--width" => {
                 width = args.next().ok_or("--width requires pixels")?.parse()?;
             }
@@ -146,6 +156,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "Audio: --mute skips output-device creation; --audio-cabin selects the PRIMARY-attached diagnostic cabin. --audio-demo enables the delayed Mach-cone fixture (flight SimTime when flying, isolated elapsed-time fixture otherwise). No audio device is opened by headless capture, regardless of flags."
                 );
+                println!(
+                    "Flight time: --paused and --warp 0..131072 require --flight or --server-flight. Pause/warp scale admitted simulation time, never solver dt. Window: F8 pause, [/] warp half/double, Backspace relaunch at the canonical site without rewinding time. Arrow keys remain camera controls; Space remains engine toggle. HUD separates intent from server acknowledgement. Lost server links require restarting the session, not a local reset."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
@@ -189,6 +202,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     let live_flight = live_flight || server_flight;
+    if (paused || warp.is_some()) && !live_flight {
+        return Err("--paused/--warp require --flight or --server-flight".into());
+    }
+    if warp.is_some_and(|factor| {
+        !factor.is_finite() || !(0.0..=thessa_flight_net::MAX_TIME_WARP).contains(&factor)
+    }) {
+        return Err("warp must be finite and within 0..=131072".into());
+    }
     if chase && !live_flight && !vehicle_preview {
         return Err("--chase requires --flight, --server-flight or --vehicle-preview".into());
     }
@@ -258,6 +279,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
     } else if live_flight {
         scene.enable_live_flight()?;
+    }
+    scene.request_pause(paused);
+    if let Some(warp) = warp {
+        scene.request_warp(warp)?;
     }
     if chase {
         scene.camera.set_chase(true);
@@ -501,7 +526,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         timings.sort_by(f64::total_cmp);
         if let (Some(perf), Some(path)) = (&perf, &perf_capture) {
-            perf.write(path,&backend,&scene,&display,&sky_layers,width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step}"))?;
+            perf.write(path,&backend,&scene,&display,&sky_layers,width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step} clock={:?}",scene.flight_clock()))?;
         }
         streaming_timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];

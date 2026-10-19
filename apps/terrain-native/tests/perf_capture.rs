@@ -1,6 +1,110 @@
 //! Native adapter contract: reuse the portable schema, never label CPU submit
 //! as GPU time; no temporary files outside the crate's ignored target tree.
 #[test]
+fn flight_time_cli_rejects_invalid_or_nonflight_requests_before_startup() {
+    for args in [
+        vec!["--paused"],
+        vec!["--warp", "2"],
+        vec!["--flight", "--warp", "NaN"],
+        vec!["--flight", "--warp", "-1"],
+        vec!["--flight", "--warp", "131073"],
+        vec!["--flight", "--warp", "inf"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("warp") || error.contains("--paused"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("canonical Thessa:"),
+            "invalid inputs must fail before loading the world"
+        );
+    }
+}
+
+#[test]
+#[ignore = "hardware: actual native CLI pause/warp and performance budget records, no audio"]
+fn headless_flight_time_requests_preserve_fixed_steps_and_truthful_capture_counters() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = root
+        .join("target/test-tmp")
+        .join(format!("native-clock-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let graphics = scratch.join("graphics.toml");
+    std::fs::write(&graphics,"version=1\npreset=\"custom\"\n[renderer]\nray_tracing=\"off\"\nhdr=false\n[atmosphere]\nenabled=false\nsky_dome=false\nstars=false\n[upper_atmosphere]\naurora=false\nairglow=false\n[clouds]\nenabled=false\n[ocean]\nenabled=false\n[shadows]\nenabled=false\n").unwrap();
+    for paused in [false, true] {
+        let json = scratch.join(format!("clock-{paused}.json"));
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"));
+        command
+            .current_dir(root.join("../.."))
+            .args([
+                "--flight",
+                "--warp",
+                "2",
+                "--flight-step",
+                "0.025",
+                "--frames",
+                "2",
+                "--width",
+                "320",
+                "--height",
+                "180",
+                "--no-hud",
+                "--mute",
+                "--prestream-seconds",
+                "0",
+                "--graphics",
+            ])
+            .arg(&graphics)
+            .arg("--headless")
+            .arg(json.with_extension("png"))
+            .arg("--perf-capture")
+            .arg(&json);
+        if paused {
+            command.arg("--paused");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("native_audio=active"));
+        let capture =
+            thessa_perf::PerfCapture::from_json(&std::fs::read_to_string(json).unwrap()).unwrap();
+        assert_eq!(capture.frames.len(), 2);
+        for frame in &capture.frames {
+            assert_eq!(frame.sim.fixed_dt_s, 1.0 / 120.0);
+            assert_eq!(frame.sim.steps_this_frame, if paused { 0 } else { 6 });
+            assert!(
+                (frame.sim.sim_time_advanced_s - if paused { 0.0 } else { 0.05 }).abs() < 1e-12
+            );
+            assert_eq!(frame.sim.requested_warp, if paused { 0.0 } else { 2.0 });
+            assert!(
+                (frame.sim.effective_warp - frame.sim.sim_time_advanced_s / frame.frame_wall_s)
+                    .abs()
+                    < 1e-10
+            );
+        }
+        assert!(
+            (capture.frames[1].sim_time_s - if paused { 0.0 } else { 1.6 }).abs() < 1e-10,
+            "30 warmup+2 measured deterministic frames"
+        );
+        println!(
+            "native_clock_capture paused={paused} fixed_steps={} time_s={} samples=2 scratch={}",
+            capture.frames[1].sim.steps_this_frame,
+            capture.frames[1].sim_time_s,
+            scratch.display()
+        );
+    }
+}
+
+#[test]
 fn capture_cli_rejects_window_mode_and_non_json_paths_before_startup() {
     for args in [
         vec!["--perf-capture", "trace.json"],

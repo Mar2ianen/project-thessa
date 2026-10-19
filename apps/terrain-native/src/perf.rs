@@ -66,6 +66,9 @@ impl HeadlessPerf {
             None => GpuFrame::unavailable(),
         };
         self.collector.set_gpu_frame(gpu);
+        if let Some(budget) = scene.flight_budget(wall_s) {
+            self.collector.set_sim_budget(budget);
+        }
         let jobs = scene.stream.pending_jobs();
         self.collector.set_world_counters(WorldCounters {
             terrain_patches_visible: scene.stream.visible().len() as u32,

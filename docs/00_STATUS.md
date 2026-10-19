@@ -122,7 +122,12 @@ Native survey framing is now 5 km by default rather than 30 km; prior terrain
 timings are not an equal-workload comparison. The celestial map camera remains
 in the unported remainder above.
 The owned native embedded-server transport now lives in GPL `flight-net`
-(stdio handshake, receive timestamps/inbox, input mailbox and child cleanup);
+and now carries native pause/warp votes and relaunch commands. CLI/HUD/key
+controls reuse the existing authority: no solver-dt change, second simulation
+clock or local fallback on server loss. Requested and acknowledged state stay
+separate; focus loss releases held inputs. See doc 66's retained-flight audit.
+The transport retains its stdio handshake, receive timestamps/inbox, input
+mailbox and child cleanup;
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot
 adoption and read-only fleet observations are implemented on the migration
 branch, including revision-matched authoritative contact geometry and an

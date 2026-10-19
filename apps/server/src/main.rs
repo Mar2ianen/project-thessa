@@ -83,7 +83,7 @@ const SNAPSHOT_MIN_INTERVAL_S: f64 = 0.05;
 /// This is an ingress fairness quantum, not a simulation/TPS limit.
 const MAX_UPSTREAM_MESSAGES_PER_ITERATION: usize = 256;
 /// Upper clamp for requested warp (2^17, same ceiling as the client).
-const MAX_WARP: f64 = 131072.0;
+const MAX_WARP: f64 = thessa_flight_net::MAX_TIME_WARP;
 
 struct Args {
     system_path: Option<String>,

@@ -22,6 +22,9 @@ pub struct Controls {
     pub wheels: bool,
     pub gear: bool,
     pub chutes: bool,
+    pub paused: bool,
+    pub warp: f64,
+    pub reset_flight: bool,
     pub exposure_ev100: f32,
     pub vsync: bool,
 }
@@ -45,6 +48,13 @@ impl Controls {
             wheels: scene.part_states().unwrap_or((true, true, true, false)).1,
             gear: scene.part_states().unwrap_or((true, true, true, false)).2,
             chutes: scene.part_states().unwrap_or((true, true, true, false)).3,
+            paused: scene
+                .flight_clock()
+                .is_some_and(|clock| clock.requested_paused),
+            warp: scene
+                .flight_clock()
+                .map_or(1.0, |clock| clock.requested_warp),
+            reset_flight: false,
             exposure_ev100: scene.requested.renderer.exposure_ev100,
             vsync: scene.requested.renderer.vsync,
         }
@@ -73,6 +83,16 @@ impl Controls {
             scene.survey.set_distance_m(self.survey_distance as f32);
         }
         if scene.live_flight() {
+            scene.request_pause(self.paused);
+            if let Err(error) = scene.request_warp(self.warp) {
+                eprintln!("{error}");
+            }
+            if self.reset_flight {
+                if let Err(error) = scene.reset_flight() {
+                    eprintln!("{error}");
+                }
+                return;
+            }
             scene.input.set_throttle(self.throttle);
             scene.input.engine_active = self.engine;
             scene.input.precision = self.precision;
@@ -107,6 +127,7 @@ impl Controls {
 
 #[derive(Default)]
 pub struct Stats {
+    pub clock: Option<crate::scene::FlightClock>,
     pub instruments: thessa_graphics::ResolvedInstruments,
     pub fleet: Option<crate::scene::FleetObserver>,
     pub live_flight: bool,
@@ -138,6 +159,7 @@ impl Stats {
     pub fn from_scene(scene: &crate::scene::Scene, frames: u64, cpu_ms: f64) -> Self {
         Self {
             instruments: thessa_graphics::resolve_instruments(scene.requested.instruments),
+            clock: scene.flight_clock(),
             submitted_frames: frames,
             live_flight: scene.live_flight(),
             server_snapshots: scene.server_snapshot_count(),
@@ -363,6 +385,19 @@ fn widgets(
                 ui.small("Host wall time, not GPU timing or game FPS.");
                 ui.separator();
                 if stats.live_flight {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut controls.paused, "Pause vote (F8)");
+                        if ui.button("Relaunch (Backspace)").clicked() { controls.reset_flight = true; }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Warp request");
+                        ui.add(egui::DragValue::new(&mut controls.warp).range(0.0..=thessa_flight_net::MAX_TIME_WARP).speed(0.125));
+                        if ui.button("½ [").clicked() { controls.warp = (controls.warp * 0.5).max(0.125); }
+                        if ui.button("2× ]").clicked() { controls.warp = (controls.warp.max(0.125) * 2.0).min(thessa_flight_net::MAX_TIME_WARP); }
+                    });
+                    if let Some(clock) = stats.clock {
+                        ui.small(format!("Authority paused: {:?} · observed warp: {:?}", clock.authority_paused, clock.effective_warp));
+                    }
                     if let Some(data) = stats.data {
                         ui.label(format!(
                             "Speed {:.1} m/s · Alt {:.0} m (AGL {:.0} m) · V/S {:+.1} m/s",
@@ -540,10 +575,23 @@ fn flight_deck(
                             "FDAI",
                         );
                         ui.small("SURFACE");
+                        ui.checkbox(&mut controls.paused, "PAUSE");
+                        if ui.small_button("RELAUNCH").clicked() {
+                            controls.reset_flight = true;
+                        }
                         if stats.flight_stopped {
                             ui.colored_label(egui::Color32::RED, "DATA FROZEN");
                         }
                     });
+                    if let Some(clock) = stats.clock {
+                        ui.small(format!(
+                            "T+{:.3}s · request x{:.3} · authority pause {:?}, rate {:?}",
+                            stats.sim_time_s,
+                            clock.requested_warp,
+                            clock.authority_paused,
+                            clock.effective_warp
+                        ));
+                    }
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(100.0);
@@ -740,6 +788,9 @@ mod tests {
             wheels: true,
             gear: true,
             chutes: false,
+            paused: false,
+            warp: 1.0,
+            reset_flight: false,
             exposure_ev100: 13.0,
             vsync: false,
         }

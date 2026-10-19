@@ -23,6 +23,7 @@ pub struct Scene {
     last_primary_frame_revision: u64,
     flight: Option<thessa_flight_authority::FlightAuthority>,
     remote: Option<RemoteFlight>,
+    clock: FlightClock,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -110,6 +111,26 @@ pub enum PartToggle {
     Parachutes,
 }
 
+/// Host intent plus acknowledged/observed clock state. No independently advanced
+/// simulation clock: FlightAuthority or its server snapshot owns actual time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlightClock {
+    pub requested_paused: bool,
+    pub requested_warp: f64,
+    pub authority_paused: Option<bool>,
+    pub effective_warp: Option<f64>,
+}
+impl Default for FlightClock {
+    fn default() -> Self {
+        Self {
+            requested_paused: false,
+            requested_warp: 1.0,
+            authority_paused: None,
+            effective_warp: None,
+        }
+    }
+}
+
 /// Read-only live flight data for the production-HUD path. Reference body
 /// only: unlike the old client's display-body switching near other worlds,
 /// the native viewer always reads relative to the flown reference body.
@@ -127,6 +148,94 @@ pub struct FlightData {
 }
 
 impl Scene {
+    pub fn flight_clock(&self) -> Option<FlightClock> {
+        self.live_flight().then(|| {
+            let mut clock = self.clock;
+            if self
+                .remote
+                .as_ref()
+                .is_some_and(|remote| remote.snapshots == 0)
+            {
+                clock.authority_paused = None;
+                clock.effective_warp = None;
+            }
+            clock
+        })
+    }
+
+    pub fn flight_budget(&self, frame_wall_s: f64) -> Option<thessa_perf::SimBudget> {
+        let flight = self.flight.as_ref()?;
+        let mut budget = thessa_perf::SimBudget {
+            requested_warp: if self.clock.requested_paused {
+                0.0
+            } else {
+                self.clock.requested_warp
+            },
+            effective_warp: self.clock.effective_warp.unwrap_or(0.0),
+            ..Default::default()
+        };
+        if self.server_flight() {
+            budget.server_effective_warp = budget.effective_warp;
+        } else {
+            budget.steps_this_frame = flight.steps_this_frame;
+            budget.rails_time_advanced_s = flight.rails_advanced_this_frame;
+            budget.sim_time_advanced_s = f64::from(flight.steps_this_frame) * budget.fixed_dt_s
+                + flight.rails_advanced_this_frame;
+            budget.backlog_s = flight.backlog_s();
+            // Captures use actual measured frame wall time, not the scripted
+            // --flight-step interval used to exercise deterministic headless input.
+            budget.effective_warp = if frame_wall_s > 0.0 {
+                budget.sim_time_advanced_s / frame_wall_s
+            } else {
+                0.0
+            };
+        }
+        Some(budget)
+    }
+
+    pub fn request_pause(&mut self, paused: bool) {
+        if self.live_flight() {
+            self.clock.requested_paused = paused;
+        }
+    }
+
+    pub fn request_warp(&mut self, factor: f64) -> Result<(), String> {
+        if !factor.is_finite() || !(0.0..=thessa_flight_net::MAX_TIME_WARP).contains(&factor) {
+            return Err("warp must be finite and within 0..=131072".into());
+        }
+        if !self.live_flight() {
+            return Err("warp requires live flight".into());
+        }
+        self.clock.requested_warp = factor;
+        Ok(())
+    }
+
+    /// Reset existing authoritative launch state, preserving time. A remote
+    /// request never clears a stopped replica or invents an acknowledged pose.
+    pub fn reset_flight(&mut self) -> Result<(), String> {
+        if let Some(remote) = &mut self.remote {
+            if remote.link.as_ref().is_none_or(|link| link.is_closed()) {
+                return Err("server link unavailable; restart the server flight session".into());
+            }
+            if remote.commands.len() + 2 >= thessa_flight_net::MAX_COMMANDS_PER_INPUT {
+                return Err("server command queue full; relaunch was not queued".into());
+            }
+            remote.commands.push(thessa_flight_net::Command::Reset);
+        } else {
+            let flight = self.flight.as_mut().ok_or("reset requires live flight")?;
+            flight.reset_to_launch_site(self.celestial.ephemeris())?;
+            flight.steps_this_frame = 0;
+            flight.rails_advanced_this_frame = 0.0;
+            let pose = thessa_flight_authority::presentation::FlightPose::from_authority(flight)
+                .ok_or("invalid reset flight pose")?;
+            self.publish_vehicle_pose(pose)?;
+            self.clock.effective_warp = Some(0.0);
+        }
+        self.input.keys = Default::default();
+        self.input.throttle = 0.0;
+        self.input.engine_active = true;
+        Ok(())
+    }
     /// Audio observes the same primary flight state as instruments. The optional
     /// debug cabin is attached to this primary cluster, not a simulated interior.
     pub fn audio_frame(&self) -> Option<crate::audio::Frame> {
@@ -299,6 +408,7 @@ impl Scene {
             gpu_environment_revision: None,
             sample,
             lighting_dirty: false,
+            clock: FlightClock::default(),
         };
         scene.select_site(1);
         eprintln!(
@@ -408,6 +518,8 @@ impl Scene {
                 .unwrap_or_default();
         self.control_mode = thessa_flight_authority::ControlMode::Navball;
         self.flight = Some(flight);
+        self.clock.authority_paused = Some(self.clock.requested_paused);
+        self.clock.effective_warp = Some(0.0);
         Ok(())
     }
 
@@ -445,6 +557,8 @@ impl Scene {
             last_tick: None,
             fleet: FleetObserver::default(),
         });
+        self.clock.authority_paused = None;
+        self.clock.effective_warp = None;
         eprintln!(
             "Server flight: canonical COAST; shared stdio link and receive-time interpolation; no local physics stepping or fallback"
         );
@@ -588,6 +702,8 @@ impl Scene {
         self.last_primary_revision = snapshot.geometry_revision;
         self.last_primary_frame_revision = snapshot.appearance_frame_revision;
         remote.snapshots += 1;
+        self.clock.authority_paused = Some(snapshot.paused);
+        self.clock.effective_warp = Some(snapshot.effective_warp);
         Ok(())
     }
 
@@ -609,8 +725,12 @@ impl Scene {
         };
         let flight = self.flight.as_ref().ok_or("missing flight replica")?;
         let mut commands = vec![
-            Command::SetWarp { factor: 1.0 },
-            Command::Pause { paused: false },
+            Command::SetWarp {
+                factor: self.clock.requested_warp,
+            },
+            Command::Pause {
+                paused: self.clock.requested_paused,
+            },
         ];
         commands.append(&mut remote.commands);
         let input = input_for_server(
@@ -660,13 +780,8 @@ impl Scene {
             self.publish_vehicle_pose(pose)?;
             self.primary_presentation = Some((snapshot.geometry_revision, pose));
         }
-        if self.flight_stopped() {
-            return Err(self
-                .flight
-                .as_ref()
-                .and_then(|flight| flight.flight_error.clone())
-                .unwrap_or_else(|| "server flight failed".into()));
-        }
+        // A checked authoritative physics stop is recoverable via Reset on
+        // this same live link. Only transport/protocol failures close it.
         Ok(())
     }
 
@@ -731,13 +846,22 @@ impl Scene {
         if !elapsed_s.is_finite() || !(0.0..=0.1).contains(&elapsed_s) {
             return Err("flight elapsed must be finite and within 0..=0.1s".into());
         }
-        if flight.flight_error.is_some() || elapsed_s == 0.0 {
+        self.clock.authority_paused = Some(self.clock.requested_paused);
+        self.clock.effective_warp = Some(0.0);
+        if flight.flight_error.is_some()
+            || elapsed_s == 0.0
+            || self.clock.requested_paused
+            || self.clock.requested_warp == 0.0
+        {
+            flight.steps_this_frame = 0;
+            flight.rails_advanced_this_frame = 0.0;
             return Ok(());
         }
+        let before = flight.flight_time_s;
         if let Err(error) = flight.advance_with_budget(
             self.celestial.ephemeris(),
             self.control_mode,
-            elapsed_s,
+            elapsed_s * self.clock.requested_warp,
             budget,
         ) {
             flight.engine_active = false;
@@ -749,6 +873,7 @@ impl Scene {
         }
         let pose = thessa_flight_authority::presentation::FlightPose::from_authority(flight)
             .ok_or("invalid advanced flight pose")?;
+        self.clock.effective_warp = Some((flight.flight_time_s - before) / elapsed_s);
         if pose.time() != self.sample.time {
             self.publish_vehicle_pose(pose)?;
         }
@@ -758,6 +883,7 @@ impl Scene {
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
+            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp);
             let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN, pole_body:DVec3::NAN,surface_velocity_body:DVec3::NAN });
             format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }
@@ -1417,6 +1543,97 @@ fn elevated_view(
 mod tests {
     use super::*;
     use glam::DQuat;
+
+    #[test]
+    fn pause_and_warp_feed_existing_fixed_step_authority_only() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        assert!(scene.flight_clock().is_none());
+        assert!(scene.request_warp(2.0).is_err());
+        scene.enable_live_flight().unwrap();
+        scene.input.engine_active = false;
+        scene.push_live_input(0.0, false, false);
+        scene.request_warp(4.0).unwrap();
+        scene.advance_flight(0.05, None).unwrap();
+        assert_eq!(scene.sample.time.0, 0.2);
+        assert_eq!(scene.flight.as_ref().unwrap().steps_this_frame, 24);
+        let before = scene.flight.as_ref().unwrap().state;
+        let pose = scene.sample.clone();
+        scene.request_pause(true);
+        scene.advance_flight(0.1, None).unwrap();
+        assert_eq!(scene.flight.as_ref().unwrap().state, before);
+        assert_eq!(scene.sample.time, pose.time);
+        assert_eq!(scene.sample.frame, pose.frame);
+        assert_eq!(scene.flight_clock().unwrap().effective_warp, Some(0.0));
+        let budget = scene.flight_budget(0.05).unwrap();
+        assert_eq!(
+            (
+                budget.steps_this_frame,
+                budget.sim_time_advanced_s,
+                budget.effective_warp,
+                budget.requested_warp
+            ),
+            (0, 0.0, 0.0, 0.0)
+        );
+        scene.request_pause(false);
+        scene.request_warp(0.0).unwrap();
+        scene.advance_flight(0.1, None).unwrap();
+        assert_eq!(scene.sample.time, pose.time);
+        scene.request_warp(0.5).unwrap();
+        scene.advance_flight(0.1, None).unwrap();
+        assert_eq!(scene.sample.time.0, 0.25);
+        assert_eq!(scene.flight_budget(0.1).unwrap().sim_time_advanced_s, 0.05);
+        assert_eq!(scene.flight_clock().unwrap().authority_paused, Some(false));
+        let clock = scene.flight_clock();
+        for factor in [
+            f64::NAN,
+            f64::INFINITY,
+            -1.0,
+            thessa_flight_net::MAX_TIME_WARP + 1.0,
+        ] {
+            assert!(scene.request_warp(factor).is_err());
+            assert_eq!(scene.flight_clock(), clock);
+        }
+        scene
+            .request_warp(thessa_flight_net::MAX_TIME_WARP)
+            .unwrap();
+        scene
+            .advance_flight(0.1, Some(std::time::Duration::ZERO))
+            .unwrap();
+        let flight = scene.flight.as_ref().unwrap();
+        assert_eq!(flight.steps_this_frame, 1);
+        assert!(flight.backlog_s() < 1.0 / 120.0);
+        assert!(
+            scene.sample.time.0 < 0.26,
+            "work limit cannot manufacture requested elapsed physics"
+        );
+    }
+
+    #[test]
+    fn stopped_local_flight_relaunch_reuses_canonical_reset_without_rewind() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        scene.advance_flight(0.1, None).unwrap();
+        let time = scene.sample.time;
+        scene.flight.as_mut().unwrap().flight_error = Some("fixture stop".into());
+        scene.input.throttle = 0.7;
+        scene.input.keys.nose_down = true;
+        scene.reset_flight().unwrap();
+        assert!(!scene.flight_stopped());
+        assert_eq!(scene.sample.time, time);
+        assert_eq!(scene.flight.as_ref().unwrap().flight_time_s, time.0);
+        assert_eq!(scene.input.throttle, 0.0);
+        assert!(scene.input.engine_active);
+        assert!(!scene.input.keys.any());
+        assert_eq!(scene.flight.as_ref().unwrap().control_input, DVec3::ZERO);
+        assert_eq!(scene.flight.as_ref().unwrap().backlog_s(), 0.0);
+        let center = scene.center;
+        scene.reset_flight().unwrap();
+        assert_eq!(scene.center, center);
+        scene.request_pause(false);
+        scene.push_live_input(0.0, false, false);
+        scene.advance_flight(0.1, None).unwrap();
+        assert!(scene.sample.time.0 > time.0);
+    }
 
     #[test]
     fn audio_observation_follows_primary_without_owning_a_flight_clock() {

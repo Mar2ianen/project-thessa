@@ -528,12 +528,19 @@ fn cbt_vertex(vertex_index: u32) -> VertexOutput {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(input.normal);
+    // Shadow filtering follows the raster triangle's plane, not interpolated
+    // shading normals (which may differ substantially on coarse bisectors).
+    let plane = cross(dpdx(input.render_position), dpdy(input.render_position));
+    var receiver_normal = normal;
+    if (dot(plane,plane) > 0.0) {
+        receiver_normal = normalize(plane) * select(-1.0,1.0,dot(plane,normal)>=0.0);
+    }
     let direction = normalize(input.body_direction);
     var direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
         if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
             direct += lighting.colors_lux[i].rgb * max(dot(normal, lighting.directions[i].xyz), 0.0)
-                * cbt_shadow_visibility(input.render_position, normal, i);
+                * cbt_shadow_visibility(input.render_position, receiver_normal, i);
         }
     }
     // Cloud-deck shadows dim the direct sun only; skylight and ambient stay.
@@ -644,7 +651,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             sky * vec3(0.015, 0.018, 0.015)) * fresnel;
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
-    let spectral_ocean = cbt_spectral_ocean(input.render_position,normal,direction,input.height_m,roughness,albedo,footprint_m);
+    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m);
     radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a);
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no

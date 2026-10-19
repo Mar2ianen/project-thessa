@@ -12,7 +12,8 @@ fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,he
     var illumination=env_ambient_lux(lighting.ambient_lux.rgb);
     var reflection=vec3(0.0);
     for(var i=0u;i<3u;i++){
-        let visibility=cbt_shadow_visibility(position,direction,i);
+        // Geometry controls shadow filtering; optical wave normals remain BRDF inputs.
+        let visibility=cbt_shadow_visibility(position,normal,i);
         illumination+=lighting.colors_lux[i].rgb*max(dot(n,lighting.directions[i].xyz),0.0)*visibility;
         if(cbt_specular_enabled()) {reflection+=ocean_sun_reflection(n,eye,lighting.directions[i].xyz,lighting.colors_lux[i].rgb,optical_roughness,f0)*visibility;}
     }

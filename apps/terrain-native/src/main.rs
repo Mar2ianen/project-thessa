@@ -241,7 +241,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     eprintln!(
-        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping; sun disks, aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
+        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
     );
     let mut scene = scene::Scene::load(requested)?;
     if let Some(site) = survey_site {

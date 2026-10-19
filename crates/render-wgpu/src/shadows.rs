@@ -201,8 +201,8 @@ impl ShadowAtlas {
             include_str!("shadow_conforming.wgsl").into(),
             &conforming_layout,
             false,
-            // This diagnostic measures geometric depth against canonical
-            // data. Production mesh/patch casters retain their existing bias.
+            // Keep geometric depth available to canonical metric oracles.
+            // Receiver-plane filtering accounts for the comparison footprint.
             wgpu::DepthBiasState::default(),
         );
         let layers = (0..layer_count)

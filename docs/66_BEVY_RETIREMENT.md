@@ -39,12 +39,13 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 
 ## Working order and deletion gate
 
-The 2026-10-19 combined-frame replay exposed regular triangular holes in the
-opt-in conforming terrain consumer. Disabling ocean does not remove them;
-regular patches do not show them. Numeric sky gates passed, but the complete
-frame is **not** visually accepted. Reproduce with the retained `sky-stage`
-configs/captures referenced in the sky/audio evidence artifact and resolve the
-conforming raster defect before expanding the native client surface.
+The 2026-10-19 combined-frame replay exposed regular triangular dark artifacts
+in the opt-in conforming terrain consumer. Further isolation identified shadow
+self-comparison, **not holes in geometry**: disabling shadows removes the grid.
+The receiver-plane follow-up in doc 63 fixes the near-field pattern and preserves
+real occlusion. Numeric sky gates did not catch this complete-frame defect.
+The original rejected captures remain evidence; the follow-up is not independent
+visual acceptance of the whole client or a certification of the distant horizon.
 
 ### Retained flight input audit
 
@@ -64,6 +65,25 @@ existing native flight deck. Native arrow keys currently control the camera;
 new pause/warp bindings must be explicit and cannot silently double-handle them.
 Shared guidance, rails and command validation already exist; porting a UI must
 not introduce a parallel controller, trajectory bake or server authority.
+
+Concrete reuse points for that follow-up:
+
+- `FlightAuthority::reset_to_launch_site` already clears the stopped state,
+  resets controls/scheduler/bake and rebuilds the canonical launch pose without
+  rewinding time. Native recovery should call it locally or send existing wire
+  `Command::Reset` remotely, not reconstruct an authority from an initial seed.
+- `FlightAuthority::advance_with_budget` already accepts simulation-time debt,
+  advances fixed physics/rails, bounds CPU work and sheds unserved whole-tick
+  debt. Host pause/warp intent must scale admitted elapsed time, not solver dt,
+  and must report actual time advanced separately from requested warp.
+- `flight-net::presentation::input_for_server` deliberately takes caller-owned
+  ordered commands and separate throttle/engine intent. Native currently sends
+  fixed unpaused x1 votes; replace those votes rather than add a second transport.
+- `Snapshot::{paused,effective_warp}` are checked authoritative observations.
+  Preserve them in the native observer; UI vote state is not acknowledgement.
+- The old `SimulationClock` is a Bevy resource containing just presentation
+  seconds/tick and multiplier/pause intent. It is not another physics clock
+  worth reproducing alongside `FlightAuthority::flight_time_s`.
 
 ### Plume adapter audit before native reuse
 

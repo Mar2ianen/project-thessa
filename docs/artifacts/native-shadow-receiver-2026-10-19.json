@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-19",
+  "baseline": "c0db7bc",
+  "scope": "Shared directional receiver-plane PCF correction; geometric terrain receiver normals; startup capability-label correction. No full-client migration or independent visual acceptance claim.",
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan, RADV Mesa 26.2.4-arch1.1",
+  "verification": {
+    "status":"all fourteen local gates passed on unchanged compiled sources",
+    "directory":"target/test-tmp/native-shadow-receiver-stable",
+    "source_count":594,
+    "source_manifest_sha256":"8365ad8e721ebba1ff7d05f564320b153857e09d97d91553554cc4eafef555a8",
+    "checks":{"fmt":"passed","workspace_all_feature_clippy":"passed","native_no_default_clippy":"passed","workspace_lib_bins_passed":1898,"workspace_integration_passed":93,"native_no_default_unit_passed":47,"bevy_gpu_ignored_passed":24,"render_wgpu_release_ignored_passed":31,"native_release_ignored_passed":28,"architecture":"passed","agent_qa_passed":5,"diff_whitespace":"passed","release_native_build":"passed","combined_30_frame_replay":"passed execution, not whole-frame visual acceptance"}
+  },
+  "regression": {
+    "command": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target cargo test --release -p thessa-render-wgpu --test terrain_topology conforming_planetary_receiver -- --ignored --nocapture --test-threads=1",
+    "fixture": "R=3200000m convex datum, 100m camera altitude, oblique perspective and sun, 257x257, conforming Low, 512px two-cascade atlas, 48 completed topology/render publications per image; reference disables shadows without changing geometry or lighting.",
+    "red": {"domain":"original foreground ROI", "tested_pixels":23870, "dark_pixels":23870, "max_srgb8_delta":19},
+    "rejected_caster_bias_trial": {"tested_pixels":23870,"dark_pixels":18268,"max_srgb8_delta":9,"retained":false},
+    "green": {"domain":"all lit reference pixels", "tested_pixels":50362,"dark_pixels":0,"max_srgb8_delta":0,"absolute_byte_envelope":3},
+    "real_occlusion": {"square_size_m":60,"height_m":20,"predicted_shadow_center_pixel":[99,168],"reference_green_srgb8":85,"occluded_green_srgb8":10,"minimum_attenuation_bytes":20},
+    "model": "Orthogonal directional-clip rows map the receiver plane into shadow-UV depth gradients. Compare each PCF tap at its plane depth with a conservative one-texel comparison-filter support bound. Terrain uses the oriented triangle-plane normal, while shading retains its own smooth/spectral normal. Caster depth remains unbiased for the existing canonical metric oracle.",
+    "resource_change": "None: same atlas, geometry stream, bind groups, passes, tier-selected tap count and explicit normal bias. Only receiver arithmetic changes; disabled effects retain their existing zero-work path."
+  },
+  "replay": {
+    "directory":"apps/terrain-native/target/test-tmp/sky-stage",
+    "command":"thessa-terrain-native --headless <image> --perf-capture <json> --graphics combined.toml --flight --throttle 0.3 --engine-on --no-hud --width 1280 --height 720 --prestream-seconds 1 --frames 3",
+    "requests":"Custom; topology Low; HDR/manual EV100=13; atmosphere/stars/clouds/aurora High, 24 atmosphere/cloud steps, two cloud decks, spectral ocean Low (32 grid), shadow Low, two cascades, 512 atlas, 4000m range, RT Off.",
+    "before":"combined.png and no-ocean.png, from baseline; dense triangular darkening. No-shadows replay establishes that the geometry is continuous. The dated sky/audio artifact retains the original incorrect holes description as historical evidence.",
+    "after":"combined-receiver-final.png and combined-receiver-final.json (final stable-source 30-frame replay); dense near-field pattern removed, foreground mesh shading and shared sky remain visible. Earlier combined-plane-normal.png is the three-frame diagnostic.",
+    "final_scopes_ms":{"render.surface_and_shadows":{"p50":3.325799,"p95":3.635267},"render.scene_classify_and_raster":{"p50":39.873059,"p95":41.159724},"render.display_transform":{"p50":0.129085,"p95":0.133894}},
+    "performance_boundary":"Thirty post-warmup live-streaming samples; p50 is median, p95 is sorted index floor(0.95*(N-1)). Includes shared sky/scene work. No matched baseline exists for this whole-frame run; no improvement or whole-client budget claim. Flight completed without a stop and with zero capacity rejections.",
+    "limitations":"Far-horizon dark silhouettes remain unaccepted. Live asynchronous residency and only three measured frames are unsuitable for a performance comparison. Ocean is enabled but this view admits no near deformed patches. Not game FPS, filtered-rough reflection acceptance or a calibrated terrain tessellation-error measurement. No sound device opened."
+  },
+  "remaining":["Wider grazing/nonplanar error coverage", "Distant horizon/streaming and independent visual acceptance", "Full native controls/map/navigation/plume and retained fixture migration", "Final Bevy host/bridge retirement"],
+  "remote_ci":"not run or claimed"
+}

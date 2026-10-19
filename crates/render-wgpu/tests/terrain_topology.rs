@@ -14,6 +14,169 @@ use thessa_render_wgpu::{
 };
 
 #[test]
+#[ignore = "hardware: lit convex planetary terrain must not acquire triangular self-shadow acne"]
+fn conforming_planetary_receiver_matches_unoccluded_reference() {
+    let mut request = RequestedGraphics::default();
+    request.renderer.ray_tracing = RayTracingRequest::Off;
+    request.terrain_topology.enabled = true;
+    request.terrain_topology.quality = Quality::Low;
+    request.shadows.enabled = true;
+    request.shadows.cascades = 2;
+    request.shadows.map_size = 512;
+    request.shadows.max_distance_m = 4000.0;
+    let backend = Backend::bring_up_for_graphics(&request).unwrap();
+    let settings = backend.resolve_graphics(&request);
+    let radius = 3_200_000.0;
+    let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let patches = (0..6)
+        .map(|face| TerrainPatch {
+            anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), radius).unwrap(),
+            page: &page,
+        })
+        .collect::<Vec<_>>();
+    let camera = DVec3::new(0.0, radius + 100.0, 0.0);
+    let view = ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(
+            camera,
+            DVec3::new(0.0, radius, -300.0),
+            DVec3::Y,
+        )
+        .inverse(),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.9, 1.0, 1.0, 1e8),
+        world_position_m: camera,
+        exposure: 1.0,
+    };
+    let sun = DVec3::new(0.6, 0.5, 0.4).normalize();
+    let lights = SurfaceLighting {
+        ambient_lux: [0.02, 0.02, 0.02, 0.0],
+        directions: [[sun.x as f32, sun.y as f32, sun.z as f32, 0.0]; 3],
+        colors_lux: [[1.0, 1.0, 1.0, 0.0], [0.0; 4], [0.0; 4]],
+    };
+    let target = OffscreenTarget::new(&backend, 257, 257).unwrap();
+    let render = |shadows: bool, occluder: bool| {
+        let mut settings = settings.clone();
+        settings.shadow_enabled = shadows;
+        let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &patches,
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: 6,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        terrain.update_lighting(&backend, &lights).unwrap();
+        let asset = thessa_render_core::mesh::MeshAsset {
+            primitives: vec![thessa_render_core::mesh::Primitive {
+                vertices: [
+                    [-30.0, 0.0, -30.0],
+                    [30.0, 0.0, -30.0],
+                    [30.0, 0.0, 30.0],
+                    [-30.0, 0.0, 30.0],
+                ]
+                .map(|position| thessa_render_core::mesh::Vertex {
+                    position,
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0; 2],
+                })
+                .to_vec(),
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material: 0,
+            }],
+            materials: vec![Default::default()],
+            textures: vec![],
+            images: vec![],
+        };
+        let mut mesh = thessa_render_wgpu::mesh::MeshRenderer::with_surface(
+            &backend,
+            &asset,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality: Quality::Low,
+                reflections: false,
+                shadows: terrain.shadows(),
+                ray_tracing: None,
+            },
+        )
+        .unwrap();
+        mesh.update(
+            &backend,
+            &view,
+            &lights,
+            &[thessa_render_core::mesh::MeshInstance {
+                position_m: DVec3::new(0.0, radius + 20.0, -180.0),
+                rotation: glam::DQuat::IDENTITY,
+                scale: 1.0,
+            }],
+        )
+        .unwrap();
+        for _ in 0..48 {
+            terrain
+                .update_view_for_extent(&backend, &view, [257, 257])
+                .unwrap();
+            terrain.update_shadows(&backend, camera, &lights).unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            terrain.encode_surface(&mut encoder);
+            terrain.encode_shadows(&mut encoder, occluder.then_some(&mesh));
+            terrain.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            backend
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+        }
+        target.read_rgba8(&backend).unwrap()
+    };
+    let reference = render(false, false);
+    let actual = render(true, false);
+    let mut tested = 0;
+    let mut dark = 0;
+    let mut max_delta = 0u8;
+    for y in 0..257 {
+        for x in 0..257 {
+            let i = (y * 257 + x) * 4;
+            if reference[i + 1] <= 50 {
+                continue;
+            }
+            let delta = reference[i + 1].saturating_sub(actual[i + 1]);
+            max_delta = max_delta.max(delta);
+            dark += usize::from(delta > 3);
+            tested += 1;
+        }
+    }
+    assert!(tested > 23870, "fixture must cover lit terrain");
+    println!(
+        "conforming_convex_shadow adapter={} tested={tested} dark={dark} max_srgb8_delta={max_delta}; 3-byte envelope, no occluders, no visual preference claim",
+        backend.adapter_name
+    );
+    assert_eq!(
+        dark, 0,
+        "a lit convex surface has no foreground self-occluder"
+    );
+    let occluded = render(true, true);
+    // Independent local-plane ray projection of the 20m-high opaque square's
+    // shadow centre. Planetary sag here is <1cm, well inside this 60m square.
+    let point = DVec3::new(0.0, radius, -180.0) - DVec3::new(sun.x, 0.0, sun.z) * (20.0 / sun.y);
+    let clip = (view.clip_from_view * view.world_from_view.inverse()).project_point3(point);
+    let x = ((clip.x * 0.5 + 0.5) * 257.0) as usize;
+    let y = ((0.5 - clip.y * 0.5) * 257.0) as usize;
+    assert!(x > 1 && x < 256 && y > 1 && y < 256);
+    let i = (y * 257 + x) * 4 + 1;
+    println!(
+        "conforming_real_shadow pixel=({x},{y}) unoccluded={} occluded={}",
+        reference[i], occluded[i]
+    );
+    assert!(
+        occluded[i] + 20 < reference[i],
+        "receiver-plane correction must retain a real mesh shadow"
+    );
+}
+
+#[test]
 #[ignore = "hardware: production persistent topology raster/shadow/ocean publication and disabled fallback"]
 fn native_topology_settings_select_shared_production_consumers() {
     let mut requested = RequestedGraphics::default();

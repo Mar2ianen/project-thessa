@@ -225,6 +225,54 @@ relief, and nothing yet feeds it into a production mode.
 
 ## Diagnostic shadow caster (added after phase three)
 
+### Current production receiver correction (2026-10-19)
+
+The sky/audio combined-flight replay at `c0db7bc` exposed regular triangular
+darkening in the opt-in conforming consumer. The initial description as holes
+was incorrect: with shadows disabled the same geometry is continuous. An
+unbiased canonical depth stream was being sampled at neighbouring PCF texels
+against the receiver centre's depth. A trial using the mesh/patch caster bias
+alone still failed the new regression and was not retained.
+
+The shared directional receiver now projects its tangent plane into the
+orthogonal light-view axes. Each integer PCF tap compares against that plane's
+depth at the tap, minus the plane-depth variation over the comparison filter's
+one-texel support. The bound derives from the actual atlas texel size and plane
+slope, not a new hand-tuned meter offset. The existing requested normal bias,
+filter tiers, atlas resolution, cascade bounds and disabled state are unchanged.
+Conforming and regular terrain supply the oriented geometric triangle normal
+from position derivatives, not a smoothed shading normal. Spectral BRDF normals
+remain optical normals; they do not redefine the geometric receiving plane.
+The canonical caster stays unbiased, preserving the independent metric-depth
+oracle below. No extra textures, passes, publications or geometry are introduced.
+
+`conforming_planetary_receiver_matches_unoccluded_reference` uses a 3,200 km
+radius convex datum, a near-ground oblique view and a 512px two-cascade shadow
+atlas. An unoccluded reference and the production shadowed stream are compared
+over all lit reference pixels, with a three-sRGB8-byte absolute envelope. The
+new regression initially failed (23,870/23,870 pixels in its original foreground
+ROI); after the correction its expanded full-image domain has 50,362 tested
+pixels, zero failures and zero maximum difference on Radeon 880M/Vulkan. An
+independent projection of a separate 60m opaque square's shadow centre retains
+real occlusion (green channel 85 unoccluded, 10 occluded). This is deterministic
+geometric/sampling evidence, not a blind image preference judgment.
+
+The 1280x720 combined native replay no longer has the dense near-field pattern.
+Its far-horizon dark silhouettes, live-streaming/LOD convergence, broader
+nonplanar/grazing-light error and independent visual acceptance remain outside
+this local regression. Finite-resolution filtering still bounds shadow detail;
+the tangent-plane correction is not a claim of exact curved-surface transport.
+See `docs/artifacts/native-shadow-receiver-2026-10-19.json` for commands,
+local gate status and capture/measurement locations.
+
+The final stable-source follow-up passed all fourteen local commands: fmt,
+workspace all-feature and native feature-off clippy, workspace unit/integration,
+native feature-off unit, Bevy/render/native ignored GPU suites, architecture,
+agent-QA, whitespace, release build and a 30-frame headless flight replay.
+The final replay's GPU p50 was 3.326 ms surface/shadows, 39.873 ms scene/sky,
+and 0.129 ms display. These live-streaming absolute intervals have no matched
+whole-frame baseline and are not game FPS or an accepted performance budget.
+
 The shared shadow atlas can now consume the canonical surface. `ShadowAtlas`
 owns a `conforming_pipeline`/`conforming_layout` beside the legacy terrain and
 mesh caster pipelines, and `encode_conforming_casters(backend, encoder, surface)`

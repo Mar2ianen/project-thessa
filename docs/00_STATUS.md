@@ -97,10 +97,12 @@ be replaced before removing `apps/client` and `crates/bevy-rcbt`; a clean native
 terrain dependency graph alone is not full-client replacement.
 
 The 2026-10-19 sky/audio stage passed its twelve local stable-source gates.
-Its combined-flight capture nevertheless exposed triangular holes in opt-in
+Its combined-flight capture nevertheless exposed triangular darkening in opt-in
 conforming terrain (also with ocean disabled, absent on regular patches).
-Doc 66 and the sky/audio artifact retain that rejected-frame evidence; no
-whole-frame visual acceptance follows from the passing numeric effect tests.
+Follow-up isolation identified self-shadow sampling, not missing geometry.
+Doc 63 records the shared receiver-plane correction and real-occlusion oracle;
+doc 66 and the dated sky/audio artifact retain the original rejected evidence.
+No whole-frame visual acceptance follows from the passing numeric effect tests.
 
 The doc 39 branch also shares the owned GPL surface-survey camera between
 clients (quaternion orbit/free look/zoom/reset and native bookmark selection).

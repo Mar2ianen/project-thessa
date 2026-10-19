@@ -126,6 +126,11 @@ and now carries native pause/warp votes and relaunch commands. CLI/HUD/key
 controls reuse the existing authority: no solver-dt change, second simulation
 clock or local fallback on server loss. Requested and acknowledged state stay
 separate; focus loss releases held inputs. See doc 66's retained-flight audit.
+Native Mouse Aim now consumes the shared cursor/deadband conditioner with manual
+stick takeover, unit-clamped diagonal demand and exclusive camera/UI ownership.
+Held F temporarily inverts retained SAS intent and releases safely on focus loss;
+the lean wire snapshot does not acknowledge SAS. This is input integration, not
+a new control law or completion of map/help/guidance migration.
 The transport retains its stdio handshake, receive timestamps/inbox, input
 mailbox and child cleanup;
 the old client keeps only a Bevy resource wrapper. Native viewer snapshot

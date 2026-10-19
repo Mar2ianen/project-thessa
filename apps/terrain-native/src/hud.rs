@@ -170,7 +170,7 @@ impl Stats {
             throttle: scene.input.throttle,
             engine: scene.input.engine_active,
             control_mode: scene.live_flight().then_some(scene.control_mode),
-            stick: scene.input.stick_scaled().to_array(),
+            stick: scene.control_axes().to_array(),
             parts: scene.part_states().unwrap_or((true, true, true, false)),
             data: scene.flight_data(),
             survey_label: scene
@@ -425,7 +425,7 @@ fn widgets(
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut controls.engine, "Engine");
                         ui.checkbox(&mut controls.precision, "Precision");
-                        ui.checkbox(&mut controls.sas, "SAS");
+                        ui.checkbox(&mut controls.sas, "SAS").on_hover_text("Base demand; hold F to temporarily invert. Releasing focus/key restores this demand. SAS is not acknowledged by the lean server snapshot.");
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Cycle control law").clicked() {
@@ -625,7 +625,7 @@ fn flight_deck(
                                 egui::ProgressBar::new(stats.throttle as f32).desired_width(90.0),
                             );
                             ui.checkbox(&mut controls.engine, "ENGINE");
-                            ui.checkbox(&mut controls.sas, "SAS");
+                            ui.checkbox(&mut controls.sas, "SAS").on_hover_text("Base demand; hold F to temporarily invert. Releasing focus/key restores this demand. SAS is not acknowledged by the lean server snapshot.");
                         });
                         ui.vertical(|ui| {
                             navball.show(ui, side);

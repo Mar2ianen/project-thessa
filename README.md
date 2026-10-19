@@ -165,6 +165,10 @@ The checked-in vertical slice currently contains:
    without rewinding simulation time. HUD requests and server acknowledgement
    are separate; a disconnected server is never replaced by local physics.
    Losing window focus releases held axes/gestures without cutting the engine.
+   Mouse Aim now consumes the cursor through the same 6% deadband as the old
+   pilot; keyboard stick takes precedence and diagonal demand is unit-limited
+   before precision scaling. Orbit/pan and UI gestures never also steer.
+   Hold `F` to invert the retained SAS demand temporarily; release restores it.
   The live HUD also reads speed, datum/AGL altitude and vertical speed from
   the same shared kinematics the old client's instruments consume
   (reference-body readout; the old client's dominant-body display switching

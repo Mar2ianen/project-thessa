@@ -57,8 +57,9 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
   pause/effective warp distinct from client intent, no second client clock in
   server mode, explicit bindings F8 / brackets / Backspace and CLI/HUD controls;
 - map/pilot switching and camera-versus-flight input capture;
-- Mouse Aim and held temporary SAS inversion remain; focus loss and suspension
-  now release held axes/gestures and send neutral remote input;
+- **Implemented follow-up:** Mouse Aim and held temporary SAS inversion share
+  the shipped neutral input helpers; focus loss and suspension release held
+  axes/gestures, cursor steering and the SAS override and send neutral input;
 - help/telemetry/HUD visibility and manual-takeover behavior;
 - opt-in coastal flyby guidance and server-side maneuver execution fixtures.
 
@@ -106,6 +107,21 @@ All fourteen final local gates passed on 594 unchanged compiled source files,
 including the real-server exchange, GPU CLI pause/warp counters and a muted
 30-presentation native Wayland paused-flight/HUD smoke. This closes those
 specific host adapters, not the remaining map, guidance or visual obligations.
+
+The Mouse Aim continuation uses the existing pilot's 6% NDC deadband, normalized
+forward direction and 0.85 pitch/yaw request, with keyboard takeover and a unit
+vector clamp before precision. The previous native diagonal keyboard path did
+not clamp the combined vector; it now matches the old pilot's demand policy.
+Camera gestures, pointer-owned widgets, keyboard capture, missing/unfocused
+cursor and pause/x0 cannot leak steering. Hold F inverts the retained SAS base
+demand until release; the lean Snapshot does **not** acknowledge SAS. Neither
+conditioner rotates authoritative state; local/server control laws still allocate
+actual actuators. The old pilot consumes the same extracted math, not a duplicate
+native law. See `artifacts/native-mouse-input-2026-10-19.json` for validation.
+Its fourteen final commands passed on unchanged compiled sources, including
+workspace/feature-off tests, hardware suites, real-server exchange, headless
+clock counters and a muted Wayland flight/HUD smoke. OS-level pointer injection
+and independent visual/usability acceptance were not performed.
 
 ### Plume adapter audit before native reuse
 

@@ -516,6 +516,7 @@ impl Scene {
         self.input =
             thessa_flight_authority::input::FlightInput::new(flight.throttle, flight.engine_active)
                 .unwrap_or_default();
+        self.input.sas_enabled = flight.sas_enabled;
         self.control_mode = thessa_flight_authority::ControlMode::Navball;
         self.flight = Some(flight);
         self.clock.authority_paused = Some(self.clock.requested_paused);
@@ -883,7 +884,7 @@ impl Scene {
     pub fn flight_telemetry(&self) -> Option<String> {
         self.flight.as_ref().map(|flight|{
             let source = self.remote.as_ref().map_or_else(|| "source=local".to_string(), |remote| format!("source=server received_snapshots={} server_tick={} link_closed={} local_steps=0 fleet_updates={} fleet_last_known={} fleet_stale={} geometry_updates={} geometry_revision={} geometry_matched={}", remote.snapshots, remote.last_tick.unwrap_or(0), remote.link.as_ref().is_none_or(|link| link.is_closed()), remote.fleet.updates, remote.fleet.rows.len(), remote.fleet.stale, remote.fleet.geometry_updates, remote.fleet.geometry_revision, remote.fleet.matched_geometry().is_some()));
-            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp);
+            let source = format!("{source} requested_paused={} requested_warp={} authority_paused={:?} effective_warp={:?} sas_requested={} sas_temporary_inversion={}",self.clock.requested_paused,self.clock.requested_warp,self.clock.authority_paused,self.clock.effective_warp,self.input.sas_enabled,self.input.sas_inverted);
             let data = self.flight_data().unwrap_or(FlightData { surface_speed_mps: f64::NAN, vertical_speed_mps: f64::NAN, altitude_datum_m: f64::NAN, altitude_agl_m: f64::NAN, local_up_body: DVec3::NAN, pole_body:DVec3::NAN,surface_velocity_body:DVec3::NAN });
             format!("{source} primary_appearance={} authority_time_s={} presentation_time_s={} relative_position_m={:?} steps_last_advance={} backlog_s={} stopped={} stop_reason={:?} chase={} throttle={:.3} engine={} control_mode={:?} sas={} rcs={} wheels={} gear={} chutes={} spd={:.1} vspeed={:+.1} alt={:.0} agl={:.0}",self.primary_appearance_status(),flight.flight_time_s,self.sample.time.0,flight.relative_position_m,flight.steps_this_frame,flight.backlog_s(),self.flight_stopped(),flight.flight_error,self.camera.chase(),flight.throttle,flight.engine_active,self.control_mode,flight.sas_enabled,flight.rcs_enabled,flight.reaction_wheels_enabled,flight.gear_down,flight.parachutes_armed,data.surface_speed_mps,data.vertical_speed_mps,data.altitude_datum_m,data.altitude_agl_m)})
     }
@@ -925,6 +926,7 @@ impl Scene {
     /// Inputs stay live even after a flight error, like the old client; the
     /// advance itself still stops on error.
     pub fn push_live_input(&mut self, dt_s: f64, throttle_up: bool, throttle_down: bool) {
+        let axes = self.control_axes();
         let Some(flight) = &mut self.flight else {
             return;
         };
@@ -933,7 +935,17 @@ impl Scene {
             flight.throttle = self.input.throttle;
             flight.engine_active = self.input.engine_active;
         }
-        flight.control_input = self.input.stick_scaled();
+        flight.control_input = axes;
+        flight.sas_enabled = self.input.effective_sas();
+    }
+
+    pub fn control_axes(&self) -> DVec3 {
+        if self.clock.requested_paused || self.clock.requested_warp == 0.0 {
+            DVec3::ZERO
+        } else {
+            self.input
+                .command_scaled(self.control_mode == thessa_flight_authority::ControlMode::MouseAim)
+        }
     }
 
     /// Cycle the assist control law (`Navball -> Rate -> Direct -> MouseAim`).
@@ -944,22 +956,22 @@ impl Scene {
     }
 
     pub fn toggle_sas(&mut self) {
+        self.input.sas_enabled = !self.input.sas_enabled;
         if let Some(flight) = &mut self.flight {
-            flight.sas_enabled = !flight.sas_enabled;
+            flight.sas_enabled = self.input.effective_sas();
         }
     }
 
     #[cfg(feature = "hud")]
     pub fn sas_enabled(&self) -> bool {
-        self.flight
-            .as_ref()
-            .is_some_and(|flight| flight.sas_enabled)
+        self.live_flight() && self.input.sas_enabled
     }
 
     #[cfg(feature = "hud")]
     pub fn set_sas(&mut self, enabled: bool) {
+        self.input.sas_enabled = enabled;
         if let Some(flight) = &mut self.flight {
-            flight.sas_enabled = enabled;
+            flight.sas_enabled = self.input.effective_sas();
         }
     }
 
@@ -2016,12 +2028,12 @@ mod tests {
         assert!((scene.input.throttle - (1.0 - 0.055)).abs() < 1e-12);
         let flight = scene.flight.as_ref().unwrap();
         assert_eq!(flight.throttle, scene.input.throttle);
-        assert_eq!(flight.control_input, DVec3::new(1.0, 1.0, 0.0));
+        assert_eq!(flight.control_input, DVec3::new(1.0, 1.0, 0.0).normalize());
         scene.input.toggle_precision();
         scene.push_live_input(0.0, false, false);
         assert_eq!(
             scene.flight.as_ref().unwrap().control_input,
-            DVec3::new(0.25, 0.25, 0.0)
+            DVec3::new(1.0, 1.0, 0.0).normalize() * 0.25
         );
 
         scene.input.cut();

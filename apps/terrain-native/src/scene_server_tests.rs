@@ -89,6 +89,45 @@ fn clock_acknowledgement_never_replaces_pending_intent_or_steps_locally() {
     assert_eq!(scene.flight_clock(), prior);
 }
 
+#[test]
+fn mouse_and_held_sas_demands_survive_snapshot_adoption_without_local_pose_changes() {
+    let mut scene = replica();
+    scene.control_mode = thessa_flight_authority::ControlMode::MouseAim;
+    scene.input.mouse_direction = thessa_flight_authority::input::mouse_aim_direction(
+        Some([1000.0, 500.0]),
+        [1000.0, 1000.0],
+    );
+    scene.input.sas_enabled = true;
+    scene.input.sas_inverted = true;
+    let wire = snapshot(&scene, 1.0);
+    scene.accept_server_snapshot(&wire).unwrap();
+    let before = scene.flight.as_ref().unwrap().state;
+    scene.push_live_input(0.0, false, false);
+    let flight = scene.flight.as_ref().unwrap();
+    let demand = input_for_server(
+        flight,
+        scene.control_mode,
+        scene.input.throttle,
+        scene.input.engine_active,
+        vec![],
+    );
+    demand.validate().unwrap();
+    assert!(!demand.sas_enabled);
+    assert!(demand.control_input[1] > 0.6);
+    assert_eq!(
+        flight.state, before,
+        "conditioning is not direct craft rotation"
+    );
+    scene.accept_server_snapshot(&wire).unwrap();
+    assert!(scene.input.sas_enabled && scene.input.sas_inverted);
+    scene.input.sas_inverted = false;
+    scene.input.mouse_direction = glam::Vec3::NEG_Z;
+    scene.push_live_input(0.0, false, false);
+    assert!(scene.flight.as_ref().unwrap().sas_enabled);
+    assert_eq!(scene.flight.as_ref().unwrap().control_input, DVec3::ZERO);
+    assert_eq!(scene.flight.as_ref().unwrap().state, before);
+}
+
 fn fleet(scene: &Scene, ids_and_times: &[(u32, f64)]) -> thessa_flight_net::FleetSnapshot {
     thessa_flight_net::FleetSnapshot {
         geometry_revision: 1,

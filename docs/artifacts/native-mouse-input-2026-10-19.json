@@ -1,0 +1,28 @@
+{
+  "date":"2026-10-19",
+  "baseline":"3d3a8b2",
+  "scope":"Replace native selectable-but-keyboard-only Mouse Aim with the shipped cursor conditioner; hold F for temporary SAS inversion; enforce exclusive camera/UI/focus ownership. No new physics/control law or wire payload.",
+  "contract":{
+    "conditioner":"flight-authority::input::mouse_aim_direction uses 6% NDC deadband, 0.94 remapping and normalized forward direction. Both clients consume it. manual_control_input maps (direction.y,direction.x,0)*0.85 when Mouse Aim has no keyboard demand, otherwise keyboard wins. Unit-limit the vector before 0.25 precision scaling.",
+    "behavior_correction":"The previous native diagonal keyboard demand was not unit-limited before precision, unlike the old pilot. It now uses the shared final conditioner. Raw stick_scaled remains a mapping diagnostic, not final authority demand.",
+    "ownership":"Camera right/middle gestures and pointer-owned widgets suppress cursor steering; keyboard-owned widgets suppress held stick, throttle slew and SAS override. Missing/unfocused cursor and cursor-leave are neutral. Paused/x0 demands have zero control axes. Focus loss/suspension clears cursor and held F along with the existing held keys/gestures.",
+    "sas":"Retain base enabled demand separately from held inversion; effective demand is XOR, repeated frames never toggle. HUD edits the base. The lean Snapshot does not acknowledge SAS; packet acceptance is not acknowledgement. Local/server control laws remain the only actuator/pose path.",
+    "resources":"Constant host input arithmetic only; no new crate/dependency, shader, GPU pass, device, thread, queue or authoritative state. Headless capture has no pointer and remains neutral and silent."
+  },
+  "targeted_checks":{
+    "shared":"cargo test -p thessa-flight-authority input::tests --lib: 5 passed, including 1323 grid points over landscape/portrait and scaled viewports bit-identical to an independent transcription of the old f32 conditioner. Cardinal pitch/yaw absolute tolerance 1e-7, invalid/missing pointer/viewport neutral, keyboard priority, precision, repeats and changed base while F held.",
+    "native":"cargo test -p thessa-terrain-native --bin thessa-terrain-native: 61 passed at targeted run, 22 deferred hardware/benchmark tests. New ownership test covers camera, widgets, keyboard capture, missing pointer, manual takeover and pause; extended focus-loss test clears pointer and SAS override. Snapshot/input test validates mouse/SAS wire demand without local authoritative pose mutation.",
+    "clippy":"workspace all-target/all-feature -D warnings passed at targeted run; third-party C unused-function warnings are outside Rust lint gates."
+  },
+  "verification":{
+    "status":"all fourteen final local gates passed on unchanged compiled sources",
+    "directory":"target/test-tmp/native-mouse-input-final",
+    "compiled_source_count":594,
+    "source_manifest_sha256":"7fa6f0a34623a49000f923b510f6805546eae583cc443f901c07429f776dfc3e",
+    "checks":{"fmt":"passed","workspace_all_feature_clippy":"passed","native_no_default_clippy":"passed","workspace_lib_bins_passed":1907,"workspace_integration_passed":94,"native_no_default_unit_passed":54,"bevy_gpu_passed":24,"render_wgpu_release_ignored_passed":31,"native_release_ignored_passed":29,"architecture":"passed","agent_qa_passed":5,"diff_whitespace":"passed","release_native_and_server_build":"passed","wayland_muted_flight_hud_smoke":"passed"},
+    "window_smoke":{"command":"thessa-terrain-native --flight --throttle 0 --frames 8 --width 512 --height 320 --mute","exit_code":0,"presentation_requests":8,"authority_time_s":0.7,"capacity_rejections":0,"flight_stopped":false,"audio":"muted; no device opened","boundary":"execution of the native event/render path; not OS-level input injection, visual acceptance, throughput or game FPS"},
+    "hardware":"AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1"
+  },
+  "limits":["No OS-level cursor/key injection or independent usability/visual acceptance", "No new sustained flight-control or performance claim", "Map/navigation, help/HUD visibility controls, guidance/maneuver, plume/optical/contact fixtures and final Bevy retirement still incomplete"],
+  "remote_ci":"not run or claimed"
+}

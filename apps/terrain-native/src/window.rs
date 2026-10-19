@@ -364,6 +364,7 @@ struct App {
     right_consumed: bool,
     middle_consumed: bool,
     last_cursor: Option<(f64, f64)>,
+    pointer_consumed: bool,
     held: HashSet<KeyCode>,
     audio_options: crate::audio::Options,
     audio: Option<crate::audio::NativeAudio>,
@@ -373,6 +374,8 @@ impl App {
     fn release_held_input(&mut self) {
         self.held.clear();
         self.scene.input.keys = Default::default();
+        self.scene.input.mouse_direction = glam::Vec3::NEG_Z;
+        self.scene.input.sas_inverted = false;
         self.scene.push_live_input(0.0, false, false);
         if self.scene.server_flight() {
             // Deliver neutral axes before a suspended window stops polling.
@@ -383,6 +386,7 @@ impl App {
         self.right_held = false;
         self.middle_held = false;
         self.last_cursor = None;
+        self.pointer_consumed = false;
         if let Some(state) = &mut self.state {
             state.last_flight_wall_s = None;
         }
@@ -547,6 +551,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.pointer_consumed = consumed;
                 let (x, y) = (position.x, position.y);
                 if let Some((last_x, last_y)) = self.last_cursor {
                     let (dx, dy) = ((x - last_x) as f32, (y - last_y) as f32);
@@ -573,6 +578,9 @@ impl ApplicationHandler for App {
                 }
                 self.last_cursor = Some((x, y));
             }
+            WindowEvent::CursorLeft { .. } => {
+                self.last_cursor = None;
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 if !consumed {
                     if self.scene.vehicle_preview() {
@@ -583,10 +591,24 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let (keys, throttle_up, throttle_down) = held_flight_keys(&self.held);
-                if self.scene.live_flight() {
-                    self.scene.input.keys = keys;
+                #[allow(unused_mut)]
+                let mut keyboard_blocked = !state.window.has_focus();
+                #[allow(unused_mut)]
+                let mut pointer_blocked = keyboard_blocked || self.pointer_consumed;
+                #[cfg(feature = "hud")]
+                if let Some(hud) = &state.hud {
+                    keyboard_blocked |= hud.gpu.context.egui_wants_keyboard_input();
+                    pointer_blocked |= hud.gpu.context.egui_wants_pointer_input();
                 }
+                let (throttle_up, throttle_down) = condition_flight_input(
+                    &mut self.scene,
+                    &self.held,
+                    self.last_cursor.map(|(x, y)| [x as f32, y as f32]),
+                    [state.config.width as f32, state.config.height as f32],
+                    keyboard_blocked,
+                    pointer_blocked,
+                    self.right_held || self.middle_held,
+                );
                 match state.draw(
                     &mut self.scene,
                     self.started.unwrap().elapsed().as_secs_f64(),
@@ -720,6 +742,31 @@ fn apply_discrete_flight_input(scene: &mut Scene, key: PhysicalKey, repeat: bool
 
 /// Held stick/throttle keys sampled every frame. Built fresh from the held
 /// set so a lost release cannot wedge an axis on.
+/// One ownership gate for held input, independent of event cadence. Camera/UI
+/// gestures can never also steer Mouse Aim; a missing pointer is neutral.
+fn condition_flight_input(
+    scene: &mut Scene,
+    held: &HashSet<KeyCode>,
+    cursor: Option<[f32; 2]>,
+    extent: [f32; 2],
+    keyboard_blocked: bool,
+    pointer_blocked: bool,
+    camera_gesture: bool,
+) -> (bool, bool) {
+    let (keys, up, down) = held_flight_keys(held);
+    scene.input.keys = if keyboard_blocked {
+        Default::default()
+    } else {
+        keys
+    };
+    scene.input.sas_inverted = !keyboard_blocked && held.contains(&KeyCode::KeyF);
+    scene.input.mouse_direction = thessa_flight_authority::input::mouse_aim_direction(
+        cursor.filter(|_| !keyboard_blocked && !pointer_blocked && !camera_gesture),
+        extent,
+    );
+    (up && !keyboard_blocked, down && !keyboard_blocked)
+}
+
 fn held_flight_keys(
     held: &HashSet<KeyCode>,
 ) -> (thessa_flight_authority::input::StickKeys, bool, bool) {
@@ -817,6 +864,7 @@ pub fn run(
         right_consumed: false,
         middle_consumed: false,
         last_cursor: None,
+        pointer_consumed: false,
         held: HashSet::new(),
         audio_options,
         audio: None,
@@ -831,6 +879,72 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_aim_and_sas_have_exclusive_camera_widget_and_focus_ownership() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_live_flight().unwrap();
+        scene.control_mode = thessa_flight_authority::ControlMode::MouseAim;
+        let held = [KeyCode::KeyF, KeyCode::ShiftLeft].into_iter().collect();
+        let mut condition = |keyboard, pointer, gesture| {
+            let slew = condition_flight_input(
+                &mut scene,
+                &held,
+                Some([1000.0, 500.0]),
+                [1000.0, 1000.0],
+                keyboard,
+                pointer,
+                gesture,
+            );
+            scene.push_live_input(0.0, false, false);
+            (scene.control_axes(), scene.input.effective_sas(), slew)
+        };
+        let (axes, sas, slew) = condition(false, false, false);
+        assert!(axes.y > 0.6);
+        assert!(!sas);
+        assert_eq!(slew, (true, false));
+        for (keyboard, pointer, gesture) in [
+            (false, true, false),
+            (false, false, true),
+            (true, false, false),
+        ] {
+            let (axes, sas, slew) = condition(keyboard, pointer, gesture);
+            assert_eq!(axes, glam::DVec3::ZERO);
+            assert_eq!(
+                sas, keyboard,
+                "keyboard capture releases the held SAS override"
+            );
+            assert_eq!(slew, (!keyboard, false));
+        }
+        let held = [KeyCode::KeyW].into_iter().collect();
+        condition_flight_input(
+            &mut scene,
+            &held,
+            Some([1000.0, 500.0]),
+            [1000.0, 1000.0],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            scene.control_axes(),
+            glam::DVec3::NEG_X,
+            "manual keys take over cursor steering"
+        );
+        scene.request_pause(true);
+        assert_eq!(scene.control_axes(), glam::DVec3::ZERO);
+        scene.request_pause(false);
+        condition_flight_input(
+            &mut scene,
+            &HashSet::new(),
+            None,
+            [1000.0, 1000.0],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(scene.control_axes(), glam::DVec3::ZERO);
+    }
 
     #[test]
     fn time_shortcuts_are_edge_triggered_and_do_not_collide_with_the_camera() {
@@ -879,11 +993,14 @@ mod tests {
             right_consumed: false,
             middle_consumed: false,
             last_cursor: Some((10.0, 20.0)),
+            pointer_consumed: false,
             held: [KeyCode::KeyW, KeyCode::ShiftLeft].into_iter().collect(),
             audio_options: Default::default(),
             audio: None,
         };
         app.scene.input.keys.nose_down = true;
+        app.scene.input.mouse_direction = glam::Vec3::X;
+        app.scene.input.sas_inverted = true;
         app.scene.push_live_input(0.0, false, false);
         assert_eq!(app.scene.input.stick_scaled(), glam::DVec3::NEG_X);
         let time = app.scene.sample.time;
@@ -893,6 +1010,8 @@ mod tests {
         assert!(!app.right_held && !app.middle_held);
         assert!(app.last_cursor.is_none());
         assert_eq!(app.scene.input.stick_scaled(), glam::DVec3::ZERO);
+        assert_eq!(app.scene.input.mouse_direction, glam::Vec3::NEG_Z);
+        assert!(!app.scene.input.sas_inverted);
         assert_eq!(
             app.scene.input.throttle, throttle,
             "focus loss must not invent an engine cut"

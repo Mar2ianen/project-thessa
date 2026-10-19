@@ -1386,20 +1386,17 @@ fn pilot_input(
         // deflects the aircraft and makes the controls feel broken.
         let camera_gesture =
             mouse_buttons.pressed(MouseButton::Right) || mouse_buttons.pressed(MouseButton::Middle);
-        let mouse_input = if camera_gesture || state.pointer_over_ui || state.show_modes {
-            DVec3::ZERO
+        let mouse_direction = if camera_gesture || state.pointer_over_ui || state.show_modes {
+            Vec3::NEG_Z
         } else {
-            DVec3::new(
-                f64::from(state.desired_direction.y),
-                f64::from(state.desired_direction.x),
-                0.0,
-            ) * 0.85
+            state.desired_direction
         };
-        let manual_input = match state.control_mode {
-            ControlMode::MouseAim if keyboard_input.length_squared() < 1.0e-8 => mouse_input,
-            _ => keyboard_input,
-        }
-        .clamp_length(0.0, 1.0);
+        let manual_input = thessa_flight_authority::input::manual_control_input(
+            keyboard_input,
+            mouse_direction,
+            state.control_mode == ControlMode::MouseAim,
+            false,
+        );
         // Flyby guidance from live craft state: datum-altitude P-law with
         // vertical-speed damping, a low-speed governor (no stall yanks off
         // the launch rail), and a gentle survey arc once settled. SAS holds
@@ -1539,15 +1536,13 @@ fn pilot_input(
             .cursor_position()
             .filter(|_| window.focused)
             .unwrap_or(size * 0.5);
-        let ndc = Vec2::new(
-            (cursor.x / size.x * 2.0 - 1.0).clamp(-1.0, 1.0),
-            (1.0 - cursor.y / size.y * 2.0).clamp(-1.0, 1.0),
-        );
         state.mouse_position = cursor;
         // Mouse steering requests an angular rate. Keep a neutral center
         // and let the controller allocate physical surface/jet commands.
-        let steer = (ndc.abs() - Vec2::splat(0.06)).max(Vec2::ZERO) / 0.94 * ndc.signum();
-        state.desired_direction = Vec3::new(steer.x, steer.y, -1.0).normalize();
+        state.desired_direction = thessa_flight_authority::input::mouse_aim_direction(
+            Some(cursor.to_array()),
+            size.to_array(),
+        );
     }
 }
 

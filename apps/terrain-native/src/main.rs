@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut server_timeout = 5.0_f64;
     let mut chase = false;
     let mut survey_site = None;
+    let mut survey_distance = None;
     let mut throttle_preset = None;
     let mut engine_on = false;
     let mut flight_step = None;
@@ -139,6 +140,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .parse::<usize>()?,
                 );
             }
+            "--survey-distance" => {
+                survey_distance = Some(
+                    args.next()
+                        .ok_or("--survey-distance requires metres")?
+                        .parse::<f32>()?,
+                );
+            }
             "--throttle" => {
                 throttle_preset = Some(
                     args.next()
@@ -187,7 +195,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight, --server-flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
                 );
                 println!(
-                    "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. Shared quaternion orbit/free look, distance 80..2000000m (default/reset 5000m). Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                    "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
                 );
                 println!(
                     "--throttle FRACTION (0..=1, requires --flight or --server-flight) presets throttle intent before the first frame. --engine-on arms engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, hold F to temporarily invert SAS, CapsLock precision; R/Y/G/P toggle RCS/wheels/gear/chutes. Mouse Aim uses the cursor with a 6% deadband; stick keys take over. Camera drag, UI capture, focus loss and pause cannot also steer. Server input acceptance means queued, not acknowledged; systems checkboxes show demands."
@@ -324,6 +332,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--site is survey-only; incompatible with flight modes or --vehicle-preview".into(),
         );
     }
+    if survey_distance.is_some()
+        && (live_flight || server_flight || vehicle_preview || docking || map_open)
+    {
+        return Err(
+            "--survey-distance is survey-only; incompatible with flight, docking, map or vehicle-preview"
+                .into(),
+        );
+    }
+    if let Some(distance) = survey_distance
+        && (!distance.is_finite()
+            || !(thessa_flight_authority::survey::MIN_DISTANCE_M
+                ..=thessa_flight_authority::survey::MAX_DISTANCE_M)
+                .contains(&distance))
+    {
+        return Err("--survey-distance must be finite and within 80..=2000000 m".into());
+    }
     if throttle_preset.is_some() && !live_flight {
         return Err("--throttle requires --flight or --server-flight".into());
     }
@@ -375,6 +399,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     scene.set_map_open(map_open);
     if let Some(site) = survey_site {
         scene.select_site(site);
+    }
+    if let Some(distance) = survey_distance {
+        // Applied after the site reset so deterministic close-up captures are
+        // not silently overwritten by bookmark framing.
+        scene.survey.set_distance_m(distance);
     }
     scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
     if docking {

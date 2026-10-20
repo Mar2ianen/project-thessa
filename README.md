@@ -301,6 +301,8 @@ The checked-in vertical slice currently contains:
    turns free look, wheel zooms (80 m–2,000 km), Backquote resets to 5 km.
    `--site 0|1|2`, HUD buttons or window `F6` select COAST/HIGHLANDS/VOLCANIC
    (default HIGHLANDS), resetting distance/free look while preserving orbit.
+   `--survey-distance 80..2000000` applies a deterministic framing distance in
+   metres after that reset for headless close-up captures; it is survey-only.
    This changes the old native 30 km framing; pre-slice terrain timings are
    not equal-workload comparisons. The celestial map camera is not ported.
   Window elapsed demand uses the

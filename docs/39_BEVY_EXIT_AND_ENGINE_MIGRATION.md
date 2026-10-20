@@ -2106,7 +2106,10 @@ policy, not an authoritative vehicle constraint or a physical force.
 Native HUD buttons, window `F6` and `--site 0|1|2` select the shared
 COAST/HIGHLANDS/VOLCANIC bookmarks (HIGHLANDS by default). Site selection
 resets distance/free look, preserves orbit, and cannot mutate flight or the
-constructor preview. Native right-drag orbits, Shift-right-drag turns free
+constructor preview. `--survey-distance 80..2000000` applies a deterministic
+metres-after-reset framing for headless close-up captures and is rejected in
+flight, docking, map and vehicle-preview modes. Native right-drag orbits,
+Shift-right-drag turns free
 look, wheel zooms and Backquote restores defaults. Existing HUD input capture
 blocks gestures/shortcuts; middle-drag pan remains vehicle-only. The obsolete
 single-angle survey slider and native scalar-orbit path are removed. No new

@@ -54,6 +54,37 @@ fn cloud_sun_visibility(position:vec3<f32>,sun:u32)->f32 {
     return exp(-cloud_optical_depth(cloud_frame.camera_radius.xyz+position,normalize(cloud_frame.directions[sun].xyz),max(8u,u32(cloud_frame.deck.w))));
 }
 fn cloud_hg(g:f32,c:f32)->f32 {return (1.0-g*g)/(4.0*CLOUD_PI*pow(max(0.0001,1.0+g*g-2.0*g*c),1.5));}
+fn cloud_source(point:vec3<f32>,direction:vec3<f32>,sun_steps:u32)->vec3<f32> {
+    var source=cloud_frame.ambient.rgb/CLOUD_PI;
+    for(var sun=0u;sun<3u;sun++) {
+        if(all(cloud_frame.colors[sun].rgb==vec3(0.0))){continue;}
+        let light=normalize(cloud_frame.directions[sun].xyz);
+        if(cloud_planet_stop(point,light,1e30)<1e30){continue;}
+        let taps=min(sun_steps,u32(cloud_frame.wind.z));var tau=0.0;if(taps>0u){tau=cloud_optical_depth(point,light,taps);}
+        let c=dot(direction,light);let phase=0.7*cloud_hg(0.76,c)+0.3*cloud_hg(-0.30,c);
+        source+=cloud_frame.colors[sun].rgb*exp(-tau)*phase;
+    }
+    return source;
+}
+// Low-cost reflected column: integrate density, hold the physical source at
+// the segment midpoint, then solve constant-source Beer-Lambert analytically.
+// This is a one-source quadrature, not a new scattering/opacity coefficient.
+fn cloud_transport_column(position:vec3<f32>,direction:vec3<f32>,view_steps:u32,sun_steps:u32)->vec4<f32> {
+    if(cloud_frame.wind.y==0.0){return vec4(0.0,0.0,0.0,1.0);}
+    let origin=cloud_frame.camera_radius.xyz+position;let stop=cloud_planet_stop(origin,direction,1e30);
+    let pieces=cloud_segments(origin,direction);var radiance=vec3(0.0);var transmission=1.0;
+    for(var segment=0u;segment<4u;segment++) {
+        let piece=pieces[segment];let a=piece.range.x;let b=min(stop,piece.range.y);if(b<=a){continue;}
+        let count=max(1u,min(view_steps,u32(cloud_frame.deck.w)));let dt=(b-a)/f32(count);
+        var density=0.0;
+        for(var i=0u;i<count;i++){density+=cloud_density(origin+direction*(a+(f32(i)+0.5)*dt),piece);}
+        let absorb=exp(-cloud_frame.deck.z/select(1.0,3.0,piece.layer!=0u)*density*dt);
+        let source=cloud_source(origin+direction*((a+b)*0.5),direction,sun_steps);
+        radiance+=transmission*(1.0-absorb)*source;transmission*=absorb;
+        if(transmission<0.0001){break;}
+    }
+    return vec4(radiance,transmission);
+}
 // RGB = unexposed in-scatter, alpha = transmittance. All origins are relative to
 // the current camera; the caller clips distance at its actual opaque hit.
 fn cloud_transport(position:vec3<f32>,direction:vec3<f32>,distance:f32)->vec4<f32> {
@@ -65,15 +96,7 @@ fn cloud_transport(position:vec3<f32>,direction:vec3<f32>,distance:f32)->vec4<f3
         let count=u32(cloud_frame.deck.w);let dt=(b-a)/f32(count);let extinction=cloud_frame.deck.z/select(1.0,3.0,piece.layer!=0u);
         for(var i=0u;i<count;i++) {
             let point=origin+direction*(a+(f32(i)+0.5)*dt);let d=cloud_density(point,piece);
-            if(d<=0.0){continue;}let absorb=exp(-extinction*d*dt);var source=cloud_frame.ambient.rgb/CLOUD_PI;
-            for(var sun=0u;sun<3u;sun++) {
-                if(all(cloud_frame.colors[sun].rgb==vec3(0.0))){continue;}
-                let light=normalize(cloud_frame.directions[sun].xyz);
-                if(cloud_planet_stop(point,light,1e30)<1e30){continue;}
-                let taps=u32(cloud_frame.wind.z);var tau=0.0;if(taps>0u){tau=cloud_optical_depth(point,light,taps);}
-                let c=dot(direction,light);let phase=0.7*cloud_hg(0.76,c)+0.3*cloud_hg(-0.30,c);
-                source+=cloud_frame.colors[sun].rgb*exp(-tau)*phase;
-            }
+            if(d<=0.0){continue;}let absorb=exp(-extinction*d*dt);let source=cloud_source(point,direction,u32(cloud_frame.wind.z));
             radiance+=transmission*(1.0-absorb)*source;transmission*=absorb;if(transmission<0.0001){break;}
         }
     }return vec4(radiance,transmission);

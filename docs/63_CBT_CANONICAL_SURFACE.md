@@ -36,6 +36,10 @@ temporal, cross-platform or blind visual acceptance.
 
 **Bevy renderer parity is not an acceptance gate** (see doc 62 §Acceptance).
 
+The shared native primary material now also integrates rough sky/cloud
+reflection on both regular and conforming terrain (doc 69); it does not change
+topology, canonical heights, convergence or their outstanding acceptance gates.
+
 ## What is implemented
 
 ### Exact surface addresses, independent of allocation slots

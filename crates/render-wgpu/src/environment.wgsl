@@ -79,3 +79,59 @@ fn env_radiance_from(position:vec3<f32>,direction:vec3<f32>,fallback_lux:vec3<f3
 fn env_radiance(direction:vec3<f32>,fallback_lux:vec3<f32>)->vec3<f32> {
     return env_radiance_from(vec3(0.0),direction,fallback_lux);
 }
+
+// Deterministic GGX visible-normal importance integration of the existing field
+// (Heitz 2018, Sampling the GGX Distribution of Visible Normals, JCGT 7(4)).
+// Same Schlick-Smith visibility, alpha and Fresnel as surface_sun_reflection.
+// Sample count changes quadrature only, never source flux or the material.
+// Keeping rejected below-surface samples in the denominator is essential:
+// renormalising only the surviving directions would create energy at grazing.
+fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,ambient:vec3<f32>,samples:u32,cloud_budget:vec3<u32>)->vec3<f32> {
+    let nv=max(dot(normal,eye),0.0);
+    if(!env_enabled() || nv<=OCEAN_EPSILON || samples==0u){return vec3(0.0);}
+    let helper=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(normal.y)>0.9);
+    let tangent=normalize(cross(helper,normal));let bitangent=cross(normal,tangent);
+    let r=clamp(roughness,0.02,1.0);let alpha=max(r*r,0.0025);let a2=alpha*alpha;
+    let k=(r+1.0)*(r+1.0)*0.125;
+    let gv=nv/max(nv*(1.0-k)+k,OCEAN_EPSILON);
+    // Stretch the local view, then sample the projected visible disk. Unlike
+    // ordinary NDF sampling this remains bounded and useful at grazing angles.
+    let vh_local=normalize(vec3(alpha*dot(eye,tangent),alpha*dot(eye,bitangent),nv));
+    let lensq=dot(vh_local.xy,vh_local.xy);
+    var t1=vec3(1.0,0.0,0.0);
+    if(lensq>0.0){t1=vec3(-vh_local.y,vh_local.x,0.0)*inverseSqrt(lensq);}
+    let t2=cross(vh_local,t1);
+    let gv_exact=2.0*nv/max(nv+sqrt(a2+(1.0-a2)*nv*nv),OCEAN_EPSILON);
+    // Bound nested volume work: rough sky quadrature is cheap, a nested full
+    // primary cloud march per sample is not. Keep every cloud phenomenon and
+    // change integration budgets only. Surface Low/Medium/High (4/8/16 clear
+    // samples) become 1/2/4 directions with 1/2/4 cloud steps and <=1 sun step.
+    let cloudy=cloud_frame.wind.y!=0.0 && cloud_budget.x>0u;
+    let count=select(samples,cloud_budget.x,cloudy);
+    var result=vec3(0.0);
+    for(var i=0u;i<count;i++) {
+        let xi=(f32(i)+0.5)/f32(count);
+        let phi=ENV_TAU*f32(reverseBits(i))*2.3283064365386963e-10;
+        let radius=sqrt(xi);let x=radius*cos(phi);
+        let s=0.5*(1.0+vh_local.z);
+        let y=(1.0-s)*sqrt(max(0.0,1.0-x*x))+s*radius*sin(phi);
+        let disk=t1*x+t2*y+vh_local*sqrt(max(0.0,1.0-x*x-y*y));
+        let local_h=normalize(vec3(alpha*disk.x,alpha*disk.y,max(0.0,disk.z)));
+        let h=tangent*local_h.x+bitangent*local_h.y+normal*local_h.z;
+        let vh=dot(eye,h);if(vh<=0.0){continue;}
+        let l=reflect(-eye,h);let nl=dot(normal,l);if(nl<=0.0){continue;}
+        let gl=nl/max(nl*(1.0-k)+k,OCEAN_EPSILON);
+        let fresnel=f0+(vec3(1.0)-f0)*pow(1.0-vh,5.0);
+        // The sampling PDF uses exact GGX G1. Correct to the Schlick-Smith
+        // constitutive BRDF shared with the direct-light kernel, not a second
+        // material law. Do not add an empirical roughness brightness factor.
+        let weight=gv*gl/max(gv_exact,OCEAN_EPSILON);
+        var incoming=env_base_radiance(l,ambient);
+        if(cloudy){
+            let column=cloud_transport_column(position,l,cloud_budget.y,cloud_budget.z);
+            incoming=incoming*column.a+column.rgb;
+        }
+        result+=incoming*fresnel*weight;
+    }
+    return result/f32(count);
+}

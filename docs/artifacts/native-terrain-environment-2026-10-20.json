@@ -1,0 +1,242 @@
+{
+  "date": "2026-10-20",
+  "baseline": "cee1a09",
+  "scope": "Primary regular/conforming terrain integrates the existing shared sky/cloud field through the existing rough dielectric GGX material. Reflection-only quadrature and reflected-cloud transport budgets; no terrain law, topology, height, material page, simulation, render target or pass change. A corrected shadow control is included to separate shadowing from the new reflection term. Not whole-frame visual acceptance.",
+  "contract": {
+    "source": "render-wgpu/src/environment.wgsl::env_specular_from; shared single-scattering sky plus existing reflected-cloud extinction/in-scatter at the surface origin.",
+    "brdf": "GGX distribution, Schlick-Smith masking and Schlick Fresnel with F0=0.04, matching the existing rcbt-core direct dielectric kernel. Visible-normal sampling: Heitz, JCGT 7(4), 2018, with exact G1 PDF and weight correction to Schlick-Smith. Below-surface samples contribute zero and stay in the denominator.",
+    "quadrature": "Deterministic Hammersley, no frame-random history. Clear sky 4/8/16 directions at low/medium/high surface_quality. With reflected clouds: 1/2/4 directions and 1/2/4 view steps, capped by the producer, at most one sun-depth step (zero if producer disables sun-depth integration).",
+    "cloud_transport": "Each hollow-shell segment stores the physical source at its midpoint; Beer-Lambert is solved analytically after density quadrature. Full nested primary march per direction is not used. Density, phase, extinction, scattering and self-shadow laws are unchanged.",
+    "disable": "renderer.specular_reflections=false compiles the terrain hook to zero and omits land-only sky bindings. Other sky/cloud/ocean consumers are independent. No published atmosphere/aurora sky yields zero added reflection, not invented ambient.",
+    "metadata": [
+      "native_terrain_environment_samples",
+      "native_terrain_environment_cloud_budget",
+      "native_terrain_environment_scope"
+    ],
+    "cost_scope": "render.scene_classify_and_raster; the isolated fixture is a regular black sphere/material/sky with no direct light, shadows or clouds, and is not whole-client cost."
+  },
+  "verification": {
+    "status": "all 13 local gates passed on 613 byte-identical compiled/configuration inputs, independently rechecked after the run; no remote CI claim",
+    "source_manifest_sha256": "9a799b16dacfd1fa84310ffd341b5df9f5ac7f0da18949edc0a9ff41a77c694c",
+    "validation_sha256": "803ec73ce6f537896d7e626e9f0730569e85df80546ebef457d20b1d979ffac0",
+    "checks": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+      "cargo test --workspace --lib --bins",
+      "cargo test --workspace --test *",
+      "cargo test -p thessa-terrain-native --no-default-features --bin thessa-terrain-native",
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+      "cargo build --release -p thessa-terrain-native -p thessa-server",
+      "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1",
+      "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1",
+      "python3 tools/agent-qa/check_architecture.py",
+      "python3 -m unittest discover -s tools/agent-qa/tests -v",
+      "git diff --check"
+    ],
+    "counts": {
+      "workspace_lib_bins": {
+        "passed": 1968,
+        "failed": 0,
+        "ignored": 41
+      },
+      "workspace_integration": {
+        "passed": 97,
+        "failed": 0,
+        "ignored": 77
+      },
+      "native_feature_off": {
+        "passed": 84,
+        "failed": 0,
+        "ignored": 24
+      },
+      "renderer_ignored": {
+        "passed": 70,
+        "failed": 0,
+        "ignored": 0
+      },
+      "native_ignored": {
+        "passed": 43,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "gpu_tests": [
+      "terrain_environment_ggx_matches_uniform_reference_and_releases_the_consumer: Low/Medium/High x regular/conforming, uniform radiance, tolerances 7/4/2 RGB8; reference 101/77/31 for roughness 64/153/255 at High; field lifecycle and specular-disable controls.",
+      "grazing_terrain_environment_remains_bounded: independent solid-angle D*G*F oracle at N.V=0.7/0.2, 8/255 envelope; maximum observed deviation 7/255.",
+      "rough_terrain_blurs_environment_and_tracks_publication_without_material_uploads: red/blue directional fields; rough material broadens reflection; same-size field writes reach terrain without material reupload.",
+      "terrain_reflected_cloud_budget_preserves_transport: independent smooth spherical deck, isotropic blue source and red incident sky; actual [60,0,15] versus reference [63,0,15] on both grids, tolerance 8.",
+      "terrain_environment_gpu_cost: counterbalanced disabled/Low/Medium/High and reverse order, 32 measured samples each, actual GPU timestamps."
+    ],
+    "isolated_gpu_cost_ms": {
+      "disabled": 0.346,
+      "low": 0.867,
+      "medium": 1.218,
+      "high": 1.639
+    },
+    "captures": [
+      {
+        "name": "final-site-0-high",
+        "frames": 32,
+        "gpu_median_ms": 81.102,
+        "gpu_p95_ms": 91.785,
+        "raster_median_ms": 80.968,
+        "png": "target/test-tmp/native-terrain-environment/final-site-0-high.png",
+        "png_sha256": "17b0ca8acf71a353233e5ea100213af5e15cee3be83c2cecc70d974f524a093c",
+        "capture_json_sha256": "f8ebafdd09a2da1da36216548904528d45ff83b4648fb379d31b0ac97ba4215f",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-1-high",
+        "frames": 32,
+        "gpu_median_ms": 89.23,
+        "gpu_p95_ms": 107.908,
+        "raster_median_ms": 89.005,
+        "png": "target/test-tmp/native-terrain-environment/final-site-1-high.png",
+        "png_sha256": "a793a8791897b82bf9bf3ee244893a9f17932551d0d2f7c3d1eb614f2e99b22f",
+        "capture_json_sha256": "691ecf3a8cc2f8b1de589d90df74df093ef6fb42d05f7578d1e61986562f6f09",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-2-high",
+        "frames": 32,
+        "gpu_median_ms": 82.715,
+        "gpu_p95_ms": 91.314,
+        "raster_median_ms": 82.472,
+        "png": "target/test-tmp/native-terrain-environment/final-site-2-high.png",
+        "png_sha256": "b257ed44c4b6e39fac7041a878395a609a61bf9f974397283703d9bacde18e57",
+        "capture_json_sha256": "4f1c269b12d403c110e3777955e5112aaab5a849b6271b444983e46aa21b39b4",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-0-low",
+        "frames": 32,
+        "gpu_median_ms": 72.118,
+        "gpu_p95_ms": 76.391,
+        "raster_median_ms": 71.962,
+        "png": "target/test-tmp/native-terrain-environment/final-site-0-low.png",
+        "png_sha256": "419dd9b7285cc69abdfcf8bb0e9bfbbeeb6de446144b0f154fabef9e8184eea0",
+        "capture_json_sha256": "e3349cc9fbb8f22d9f8c5e7aa9291df065dc4d12ab034c932b977e988f6ad295",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[1, 1, 1]",
+          "native_terrain_environment_samples": "4",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-0-medium",
+        "frames": 32,
+        "gpu_median_ms": 74.528,
+        "gpu_p95_ms": 80.347,
+        "raster_median_ms": 74.377,
+        "png": "target/test-tmp/native-terrain-environment/final-site-0-medium.png",
+        "png_sha256": "932f34b363a885bab8e2347fbd8bcea8be19adef3f76761f9baff53388b3cb2a",
+        "capture_json_sha256": "7a1d5e31646efd0e6edc22da212db1becb00b4223a03497b6853f0f2f458dffc",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[2, 2, 1]",
+          "native_terrain_environment_samples": "8",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-0-high-off",
+        "frames": 32,
+        "gpu_median_ms": 35.064,
+        "gpu_p95_ms": 36.533,
+        "raster_median_ms": 34.937,
+        "png": "target/test-tmp/native-terrain-environment/final-site-0-high-off.png",
+        "png_sha256": "e2fc94e9251b8e0f340f12ec1a2ff6cd25b8e272f0ca0a6fc09b972a865e862f",
+        "capture_json_sha256": "d67823b35f223329fc1396cc5d8035bb41fb989666ccc66975a007e2357c53e0",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[0, 0, 0]",
+          "native_terrain_environment_samples": "0",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-1-high-conforming",
+        "frames": 32,
+        "gpu_median_ms": 92.636,
+        "gpu_p95_ms": 99.513,
+        "raster_median_ms": 75.345,
+        "png": "target/test-tmp/native-terrain-environment/final-site-1-high-conforming.png",
+        "png_sha256": "7ec6d65200bc82a53abfae06350e8ee0d32de797bbd5247ea99fbbf52300e9e0",
+        "capture_json_sha256": "8e4782a093912d4c3ba16bb4fed339ca6a53b452fd141d7e8105f0ba30e8ea7c",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      },
+      {
+        "name": "final-site-1-high-no-shadows",
+        "frames": 32,
+        "gpu_median_ms": 89.397,
+        "gpu_p95_ms": 101.452,
+        "raster_median_ms": 89.229,
+        "png": "target/test-tmp/native-terrain-environment/final-site-1-high-no-shadows.png",
+        "png_sha256": "48044277e8f060597f6984dcf1cd084f33f0032c31be92820f812a3382180830",
+        "capture_json_sha256": "6406c2483ab7ab3fd41fa98f0d2a7afbe56c8bc214303de76015713ae63a647e",
+        "resolved": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        }
+      }
+    ],
+    "shadow_control": {
+      "purpose": "Correct the invalid earlier no-shadow attempt, which accidentally disabled the atmosphere as well.",
+      "config": "atmosphere.enabled=true, shadows.enabled=false, specular_reflections=true, surface_quality=high, site 1, 32 frames, 1280x720.",
+      "published_ambient_lux_both": "[1112.58, 2051.11, 4132.93]",
+      "shadow_median_ms": 89.23,
+      "no_shadow_median_ms": 89.397,
+      "mean_luminance_shadow": 382.53,
+      "mean_luminance_no_shadow": 382.605,
+      "pixels_differing_gt_4_of_255": 29559,
+      "pixels_total": 921600,
+      "percent_differing": "3.21",
+      "minimum_channel_sum_both": 95,
+      "conclusion": "The corrected control isolates shadowing: atmosphere publication is identical, while only 3.21% of pixels change by more than 4/255. The visible ridge speckles and conforming gaps are present with and without shadows and are not shadow darkening."
+    },
+    "dark_pixel_scan": {
+      "threshold_channel_sum": 45,
+      "matching_pixels_shadow": 0,
+      "matching_pixels_no_shadow": 0,
+      "matching_pixels_conforming": 0,
+      "constant_gap_color": "[31,31,33]",
+      "note": "No near-black pixels occur, but the full-frame crop shows small background gaps along ridge silhouettes (more/larger with conforming geometry) at constant [31,31,33], y about 350-378. The earlier below-y-260 scan did not cover them. They are independent of shadows and remain an open geometry/topology defect, not an accepted seam result."
+    }
+  },
+  "rejected_cost_evidence": {
+    "implementation": "First reflection attempt nested the full primary cloud march under every sky sample.",
+    "development_capture": "1280x720 COAST GPU median about 1877 ms versus 38 ms with specular disabled.",
+    "status": "Development measurement; the rejected code path is no longer in the tree and its raw log was not retained, so this figure is not independently re-runnable from this artifact. It motivated the cheaper reflected-cloud budget and is not an optimization win."
+  },
+  "limitations": [
+    "Material-normal detail, close-up relief/erosion convergence, vegetation/canopy, finite aerial perspective and primary scene-object terrain/ocean RT reflections remain incomplete.",
+    "Regular terrain still shows small ridge-silhouette background gaps; conforming geometry shows larger such gaps in the surveyed frame. They are independent of shadows and are not accepted.",
+    "Captured frame medians include the whole scene (sky, clouds, HDR display, streaming), not environment-only cost. The isolated cost fixture excludes shadows/direct light/clouds.",
+    "The no-shadow control covers site 1 only. Numerical oracles are fixture-specific, not general HDR/cloud transport or grazing material-normal error guarantees.",
+    "No blind subjective preference, cross-platform, motion-stability or whole-frame visual parity follows. The user goal of planet-wide Satisfactory-level detail is not met by this stage."
+  ],
+  "files": {
+    "crates/render-wgpu/src/environment.wgsl": "7295597989c2624ce27703a65feb5fbb8891f88a59585a60dcb0197f27280f87",
+    "crates/render-wgpu/src/clouds.wgsl": "f8b9da007c5a650a69a97d5a000d8e008bcf02b3173a02102c9d81e026b0fb14",
+    "crates/render-wgpu/src/terrain.rs": "1319cf0e2cf36cf6b892928403b3c14963479c56245a7ff10415b5d118fd0d50",
+    "crates/render-wgpu/tests/terrain_environment.rs": "fb39088a914dfa9c9cb1d0d0dac963b8434eab99dacf1aa1f2c7303dcdedb3e3",
+    "crates/graphics/src/resolve.rs": "8286e116bd2ce621c19f5b88e3f99aba998797813d50da76100412a0b0e870fa",
+    "docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md": "195e4f5e51e565131332d3e316cd66fad668674d0b046f459b5e8e6c561b9ad5"
+  }
+}

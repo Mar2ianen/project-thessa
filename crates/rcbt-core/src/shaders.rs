@@ -624,6 +624,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
                     * cbt_shadow_visibility(input.render_position, normal, i);
             }
         }
+        land_reflection += cbt_land_environment(input.render_position,normal,eye,roughness,lighting.ambient_lux.rgb);
         radiance = mix(diffuse, diffuse * (1.0 - land_fresnel) + land_reflection,
             1.0 - water_material);
     }

@@ -1,6 +1,6 @@
 # 53 — Rejected surface frames and substrate/material continuation
 
-Status: partial reconstruction, 2026-10-03; prepared for publication at the
+Status: partial reconstruction, 2026-10-03, with native lighting follow-up below; prepared for publication at the
 owner's request. Visual acceptance remains rejected/incomplete.
 
 The user explicitly rejected the three v8 survey frames: the highlands were
@@ -86,6 +86,21 @@ matched before/after improvement of the rejected canyon. Highland/coast frames
 can be compared at their original camera settings.
 
 ## Evidence and unresolved problems
+
+### Native lighting follow-up — 2026-10-20
+
+Native regular/conforming terrain now integrate the shared sky/cloud radiance
+through the existing rough dielectric GGX material, with resolved 4/8/16
+clear-sky directions, cheaper reflected-cloud columns and compile-out specular
+disable. See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)
+for the numerical bounds, lifecycle and scoped GPU cost diagnostic. Native
+terrain cast/receive shadows also now use the shared atlas (docs 60/63), rather
+than remaining absent as in the historical reconstruction below. Material
+normals, vegetation, close-up geometry/transport continuity and independent
+whole-frame visual acceptance remain incomplete. This does not accept the
+rejected frames or change canonical terrain.
+
+### Original reconstruction boundary
 
 Tests pin geological contrast at identical physical state, bounded material
 roughness, filtering of unresolved intermediate variation, climate suitability

@@ -8,7 +8,7 @@ use thessa_render_core::environment::EnvironmentRadiance;
 use thessa_render_wgpu::{
     Backend, BackendError,
     environment::EnvironmentBinding,
-    terrain::{OffscreenTarget, TerrainPatch, TerrainRenderer},
+    terrain::{OffscreenTarget, TerrainCapacity, TerrainPatch, TerrainRenderer},
     view::ViewParams,
 };
 
@@ -26,13 +26,26 @@ fn backend() -> Option<Backend> {
 fn renderer(backend: &Backend, empty: bool) -> (TerrainRenderer, TileAnchor) {
     let anchor = TileAnchor::new(TileKey::new(4, 10, 512, 512).unwrap(), 6_000_000.0).unwrap();
     let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
-    let mut terrain = TerrainRenderer::new(
+    // Isolate background depth/composition from the legitimate material
+    // response to a newly published sky. GGX terrain reflection is covered by
+    // terrain_environment; it must not be mistaken for a depth overwrite.
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        specular_reflections: false,
+        ..Default::default()
+    };
+    let mut terrain = TerrainRenderer::with_capacity_and_lighting(
         backend,
         &[TerrainPatch {
             anchor,
             page: &page,
         }],
         OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 1,
+            height_grid_size: 2,
+            material_layers: 1,
+        },
+        Some(&settings),
     )
     .unwrap();
     if empty {

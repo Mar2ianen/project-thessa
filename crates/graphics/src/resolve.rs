@@ -409,6 +409,33 @@ mod terrain_topology_tests {
 }
 
 impl ResolvedGraphicsSettings {
+    /// Native terrain GGX environment quadrature. Shares the requested surface
+    /// quality/specular switch; zero compiles out this consumer entirely.
+    pub fn terrain_environment_samples(&self) -> u32 {
+        if !self.specular_reflections {
+            return 0;
+        }
+        match self.surface_quality {
+            Quality::Low => 4,
+            Quality::Medium => 8,
+            Quality::High => 16,
+        }
+    }
+
+    /// Reflected-cloud (directions, view steps, sun steps) budget. Primary
+    /// clouds and existing mesh/ocean reflections retain their own budgets.
+    pub fn terrain_environment_cloud_budget(&self) -> [u32; 3] {
+        if !self.specular_reflections || !self.clouds_enabled {
+            return [0; 3];
+        }
+        let count = match self.surface_quality {
+            Quality::Low => 1,
+            Quality::Medium => 2,
+            Quality::High => 4,
+        };
+        [count, count.min(self.clouds_steps.max(1)), 1]
+    }
+
     /// Static inhabited-land optical mask budget; disabled/zero-gain paths
     /// have no producer or texture allocation beyond a shared black binding.
     pub fn night_light_mask_size(&self) -> Option<[u32; 2]> {
@@ -922,6 +949,37 @@ impl ResolvedGraphicsSettings {
 mod tests {
     use super::*;
     use crate::settings::RequestedGraphics;
+
+    #[test]
+    fn terrain_environment_quadrature_follows_resolved_material_policy() {
+        for (quality, samples) in [(Quality::Low, 4), (Quality::Medium, 8), (Quality::High, 16)] {
+            let mut request = RequestedGraphics::default();
+            request.renderer.surface_quality = quality;
+            request.renderer.specular_reflections = true;
+            request.clouds.enabled = true;
+            request.clouds.volumetric = true;
+            request.clouds.quality = Quality::High;
+            request.clouds.ray_steps = 24;
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+            assert_eq!(resolved.terrain_environment_samples(), samples);
+            assert_eq!(
+                resolved.terrain_environment_cloud_budget(),
+                [samples / 4, samples / 4, 1]
+            );
+            request.renderer.specular_reflections = false;
+            let off = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+            assert_eq!(off.terrain_environment_samples(), 0);
+            assert_eq!(off.terrain_environment_cloud_budget(), [0; 3]);
+            assert_eq!(off.surface_quality, resolved.surface_quality);
+            request.renderer.specular_reflections = true;
+            request.clouds.enabled = false;
+            let clear =
+                ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+            assert_eq!(clear.terrain_environment_cloud_budget(), [0; 3]);
+            assert_eq!(clear.terrain_environment_samples(), samples);
+        }
+    }
 
     #[test]
     fn fleet_quality_is_a_resolved_budget_and_disabled_stays_disabled() {

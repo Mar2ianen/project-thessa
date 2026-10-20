@@ -125,6 +125,11 @@ The checked-in vertical slice currently contains:
     ray-query BLAS/TLAS reflections; `[atmosphere]` enables a quality-tiered
     shared single-scattering sky field for mesh reflections/RT misses and
     derived diffuse ambient (see doc 39's environment-radiance checkpoint).
+    Regular/conforming terrain also integrate that sky through rough GGX, with
+    resolved 4/8/16 clear-sky directions, cheaper reflected-cloud columns and
+    compile-out specular disable
+    ([doc 69](docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)); material-normal detail
+    and final close-up terrain acceptance remain incomplete.
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
     textures; bounded stellar shadow rays supplement the shared atlas on meshes
      and reflected hits. The background now samples that same sky field at far

@@ -67,7 +67,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: true,
-            description: "F0 diffuse/ambient approximation, GGX factors, or GGX with normal/metallic-roughness/AO textures.",
+            description: "Mesh F0 approximation / GGX / textured GGX; terrain clear-sky GGX uses 4/8/16 directions, reflected-cloud columns 1/2/4 directions and density steps.",
         },
         SettingMeta {
             path: "renderer.specular_reflections",

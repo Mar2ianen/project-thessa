@@ -120,6 +120,7 @@ pub struct TerrainRenderer {
     ocean_geometry: Option<crate::ocean::OceanGeometry>,
     ocean_bind: Option<wgpu::BindGroup>,
     ocean_environment: Option<crate::environment::EnvironmentBinding>,
+    land_environment_samples: u32,
     ocean_settings: thessa_graphics::OceanSettings,
     ocean_dirty: bool,
     ocean_last_camera: Option<[f64; 3]>,
@@ -647,6 +648,9 @@ impl TerrainRenderer {
             )
         });
         let reflections = settings.is_none_or(|s| s.specular_reflections);
+        let land_environment_samples = settings.map_or(16, |s| s.terrain_environment_samples());
+        let [cloud_directions, cloud_steps, cloud_sun_steps] =
+            settings.map_or([4, 4, 1], |s| s.terrain_environment_cloud_budget());
         let topology_reason = (topology_requested && !topology_supported).then(|| {
             "conforming terrain exceeds negotiated device limits; using regular patches".into()
         });
@@ -680,11 +684,18 @@ impl TerrainRenderer {
         let mut hooks = format!(
             "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun)*cloud_sun_visibility(p,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
+        hooks.push_str(&if reflections {
+            format!("fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec3<f32>{{return env_specular_from(p,n,v,r,vec3(0.04),a,{land_environment_samples}u,vec3<u32>({cloud_directions}u,{cloud_steps}u,{cloud_sun_steps}u));}}\n")
+        } else {
+            "fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec3<f32>{return vec3(0.0);}\n".into()
+        });
         hooks.push_str(if ocean.is_some(){include_str!("ocean_raster.wgsl")}else{
             "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32)->vec4<f32>{return vec4(0.0);}"
         });
         if ocean.is_some() {
             hooks.push_str(&crate::ocean::shader(2));
+        }
+        if ocean.is_some() || reflections {
             hooks.push_str(&crate::environment::shader(2));
         } else {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
@@ -830,7 +841,7 @@ impl TerrainRenderer {
             let mut entries = ocean
                 .as_ref()
                 .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
-            if ocean.is_some() {
+            if ocean.is_some() || reflections {
                 entries.extend(environment.entries());
             } else {
                 entries.extend(environment.cloud_entries());
@@ -864,6 +875,7 @@ impl TerrainRenderer {
             ocean_geometry,
             ocean_bind,
             ocean_environment,
+            land_environment_samples,
             ocean_settings,
             ocean_dirty: true,
             ocean_last_camera: None,
@@ -1532,7 +1544,7 @@ impl TerrainRenderer {
                 .ocean
                 .as_ref()
                 .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
-            if self.ocean.is_some() {
+            if self.ocean.is_some() || self.land_environment_samples > 0 {
                 entries.extend(environment.entries());
             } else {
                 entries.extend(environment.cloud_entries());
@@ -1566,6 +1578,13 @@ impl TerrainRenderer {
 
     pub fn sky_enabled(&self) -> bool {
         self.sky.is_some()
+    }
+
+    /// Applied clear-sky quadrature budget (cloud columns use the smaller
+    /// resolved reflection budget); zero eliminates the
+    /// consumer at shader creation, without a texture, pass or per-frame work.
+    pub fn land_environment_samples(&self) -> u32 {
+        self.land_environment_samples
     }
 
     /// Lazy plume consumer. Disabled settings release all GPU resources;

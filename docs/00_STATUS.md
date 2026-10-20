@@ -56,7 +56,7 @@ do not update in place).
 | `50_THESSA_MOISTURE_EROSION_BRIDGE.md` | 🕰️ isolated erosion checkpoint | causal moisture attenuation, routed annual lake balance, offline runoff/infill, source-checked frozen delta | runtime continuation in doc 51 |
 | `51_THESSA_RUNTIME_GEOMORPHOLOGY.md` | 🕰️ isolated runtime/material checkpoint | bundled client/server erosion field, semantic source matching, matching globe maps, residency-edge filtering, coarse-first material loading, fixed-scale geometry/displacement appearance | continuation in doc 52 |
 | `52_THESSA_LOCAL_EROSION_REFINEMENT.md` | 🟡 partial refinement checkpoint | preserved global parent plus three 256 m runoff-erosion regions, open sediment export/budget, shared final height/prefix/sample/contact paths, finite-depth fine infill and precipitation-limited snow | resolved water channels/shores/deltas, global sediment coupling, landscape/apron convergence, GPU shadow parity, vegetation/infrastructure rendering, loading and surface-to-orbit acceptance |
-| `53_THESSA_SURFACE_MATERIAL_REVIEW.md` | 🟡 rejected frames; material continuation | geological rock/soil reflectance, distinct ground/canopy/reed optical proxies, physically filtered intermediate material patterns, native land roughness shading, corrected volcanic bookmark, bilinear salt-spill shorelines (no nearest-cell rectangles), coherent snow-drift thresholds, textured beaches/bare ground, rebaked v10 albedo/roughness, CPU survey-frame diagnostics | material-normal detail, cast shadows, canopy geometry, geological/transport continuity, final visual acceptance |
+| `53_THESSA_SURFACE_MATERIAL_REVIEW.md` | 🟡 rejected frames; material continuation | geological rock/soil reflectance, distinct ground/canopy/reed optical proxies, physically filtered intermediate material patterns, native land roughness/star/sky shading and shared shadow atlas (docs 60/63/69), corrected volcanic bookmark, bilinear salt-spill shorelines (no nearest-cell rectangles), coherent snow-drift thresholds, textured beaches/bare ground, rebaked v10 albedo/roughness, CPU survey-frame diagnostics | material-normal detail, shadow error/convergence acceptance, canopy geometry, geological/transport continuity, final visual acceptance |
 | `02_GAMEPLAY.md` | 🔵 baseline | §2.5 and §2.7–2.8 describe current flight/automation slices, including vehicle part controls | surface transport, editor, economy, contracts, logistics blocks, certification |
 
 ## Client, render, terrain
@@ -92,6 +92,7 @@ do not update in place).
 | `65_NATIVE_SKY_AUDIT.md` | 🟡 audited native sky consumers | shared aurora altitude/axis and incremental optical transport; native Low/High emission field with simulation-time refresh; flux-normalized background stars/source discs; depth-clipped clouds with shared weather/geometry/phase and terrain/mesh/ocean shadows plus reflected-ray transport; primary aurora with finite-depth clipping and ordered cloud extinction; separate clear primary/total indirect publications; independent disable and numerical GPU oracles; actual-ephemeris far-visible B and A-hidden/B-visible regular/conforming terrain regressions | secondary-origin clear-sky/auroral parallax, partial stellar discs/eclipses, magnetic/weather data, richer curtains, cloud diffuse coupling/multiple scattering, RT-light proxies and temporal/performance/visual/platform acceptance |
 | `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 framing/orbit/pan/zoom, body/PRIMARY selection/follow, cached Kepler curves, physics-JIT coast-cache consumer sharing execution guards and bounded interval, dominant-body Ap/Pe/escape/local-wake readouts, exclusive input ownership, shared-device egui and headless capture | powered/live executable JIT futures (never substituted with conditional coasts), remote JIT/next-wake transport, richer celestial appearance and independent usability/platform acceptance |
 | `68_NATIVE_NIGHT_LIGHTS.md` | 🟡 native primary-terrain optical slice | direct retained inhabited-land mask producer, resolved Low/Medium/High budgets, cached startup-only bake/upload, regular/conforming shared primary emission and zero-work disable; CPU parity and hardware numerical/source tests | calibrated radiance/activity, multi-source illumination/eclipses, secondary-ray emission and whole-frame visual/temporal acceptance |
+| `69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md` | 🟡 primary terrain sky-reflection slice | shared sky/cloud radiance integrated through the existing rough dielectric GGX material, resolved 4/8/16 clear directions or 1/2/4 reflected cloud columns and compile-out disable; regular/conforming numerical oracles and scoped GPU diagnostic | material-normal detail, general HDR/cloud quadrature error/convergence, primary scene-object reflections and close-up/visual/platform acceptance |
 
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606
@@ -119,6 +120,13 @@ formerly feature-gated mesh compute surrogate run as 25 Bevy-free tests in
 Seasonal far-visible B and A-hidden/B-visible terrain checks passed for regular
 and conforming geometry. Evidence:
 `artifacts/native-terrain-seasons-2026-10-20.json`.
+
+The native rough sky-reflection stage (doc 69) passed 13 local command gates on
+613 unchanged compiled/configuration inputs: 1968 workspace lib/bin tests,
+97 integration tests, 84 native feature-off tests, 70 renderer ignored hardware
+tests and 43 native ignored tests. This includes the five new terrain
+reflection/oracle/cost tests; it is not whole-frame visual acceptance or remote
+CI. Scoped evidence: `artifacts/native-terrain-environment-2026-10-20.json`.
 
 The remaining source-to-consumer retirement obligations are tracked in
 [doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must

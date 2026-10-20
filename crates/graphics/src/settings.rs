@@ -147,7 +147,7 @@ impl RayTracingRequest {
     }
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -156,6 +156,9 @@ pub struct RendererSettings {
     /// Native material quality: Low approximates diffuse/ambient Fresnel by F0.
     #[serde(default)]
     pub surface_quality: Quality,
+    /// Native primary terrain normal plane; restart required for residency.
+    #[serde(default = "default_true")]
+    pub terrain_normal_maps: bool,
     #[serde(default = "default_true")]
     pub specular_reflections: bool,
     /// Maximum native depth-atlas storage across three lights and all cascades.
@@ -217,6 +220,7 @@ impl Default for RendererSettings {
     fn default() -> Self {
         Self {
             surface_quality: Quality::High,
+            terrain_normal_maps: true,
             specular_reflections: true,
             shadow_memory_mib: default_shadow_memory(),
             fleet_meshes: true,

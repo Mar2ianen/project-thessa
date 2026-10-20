@@ -39,6 +39,7 @@ pub struct MaterialStream {
     refined: Vec<TileKey>,
     refinement: Option<(u64, u64)>,
     cache_budget: usize,
+    normal_maps: bool,
 }
 
 impl MaterialStream {
@@ -46,7 +47,15 @@ impl MaterialStream {
         Self::with_source(cache_budget, MaterialPageStore::default())
     }
 
-    pub fn with_source(cache_budget: usize, mut source: MaterialPageStore) -> Self {
+    pub fn with_source(cache_budget: usize, source: MaterialPageStore) -> Self {
+        Self::with_source_and_normals(cache_budget, source, false)
+    }
+
+    pub fn with_source_and_normals(
+        cache_budget: usize,
+        mut source: MaterialPageStore,
+        normal_maps: bool,
+    ) -> Self {
         source.trim_to_budget(cache_budget);
         Self {
             source,
@@ -54,6 +63,7 @@ impl MaterialStream {
             refined: Vec::new(),
             refinement: None,
             cache_budget,
+            normal_maps,
         }
     }
 
@@ -104,8 +114,9 @@ impl MaterialStream {
         demand: MaterialDemand<'_>,
         geometry_sources: impl IntoIterator<Item = TileKey>,
     ) {
+        let normal_maps = self.normal_maps;
         self.reconcile_with(demand, geometry_sources, |key| {
-            crate::spawn_material_job(field.clone(), key)
+            crate::spawn_material_job_with_normals(field.clone(), key, normal_maps)
         });
     }
 

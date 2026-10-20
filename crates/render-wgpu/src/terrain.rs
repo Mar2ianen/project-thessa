@@ -450,7 +450,9 @@ impl TerrainRenderer {
         let mut anchors: Vec<_> = patches.iter().map(|p| p.anchor).collect();
         anchors.resize(capacity, first.anchor);
         let frames_data = frame_bytes(&anchors, [0.0; 3])?;
-        let materials = crate::material::MaterialArray::new(backend, material_layers, capacity)?;
+        let normal_maps = settings.is_none_or(|s| s.terrain_normal_maps);
+        let materials =
+            crate::material::MaterialArray::new(backend, material_layers, capacity, normal_maps)?;
         let mut node_ids = Vec::with_capacity(capacity);
         let mut residuals = Vec::with_capacity(residual_bytes as usize);
         let mut page_slots = Vec::with_capacity(patches.len());
@@ -700,8 +702,19 @@ impl TerrainRenderer {
         } else {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
         }
-        let raster_source =
-            shaders::CBT_RASTER_WGSL.replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1);
+        let raster_source = shaders::CBT_RASTER_WGSL
+            .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
+            .replace(
+                "const MATERIAL_NORMALS_ENABLED: bool = true;",
+                &format!("const MATERIAL_NORMALS_ENABLED: bool = {normal_maps};"),
+            )
+            .replace(
+                "const MATERIAL_NORMAL_MIP_BIAS: f32 = 0.0;",
+                &format!(
+                    "const MATERIAL_NORMAL_MIP_BIAS: f32 = {}.0;",
+                    settings.map_or(0, |s| s.terrain_normal_mip_bias())
+                ),
+            );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cbt-raster"),
             source: wgpu::ShaderSource::Wgsl(
@@ -827,6 +840,11 @@ impl TerrainRenderer {
                 18,
                 wgpu::BindingResource::TextureView(night_view.as_ref().unwrap_or(&black)),
             ),
+            (
+                19,
+                wgpu::BindingResource::TextureView(&materials.normal_view),
+            ),
+            (20, materials.normal_directory.as_entire_binding()),
         ]
         .into_iter()
         .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource })

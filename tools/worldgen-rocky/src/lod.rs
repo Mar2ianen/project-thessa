@@ -1,7 +1,10 @@
 //! Deterministic cube-sphere surface addresses and bounded camera LOD.
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{
-    appearance::{surface_appearance, surface_appearance_filtered, surface_grain_height},
+    appearance::{
+        surface_appearance, surface_appearance_filtered, surface_grain_height,
+        surface_normal_grain_height,
+    },
     field::PlanetField,
 };
 use serde::{Deserialize, Serialize};
@@ -678,14 +681,19 @@ pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) ->
 ///
 /// The RGB channels are the canonical surface albedo in sRGB bytes. Alpha is
 /// the canonical perceptual roughness encoded from its linear 0..1 value.
-/// Pages are always 128x128: texels 1..=126 cover the 125-cell tile span and
-/// the outer texels form a one-texel sampling border. The raster shader maps a
-/// tile-local coordinate `local_uv` with
+/// `normal` is an optional linear RG8 tangent-space normal plane: `x` and `y`
+/// slopes encoded as `component * 0.5 + 0.5`, positive z reconstructed in the
+/// shader. It carries physical, filtered material-only grain, independent
+/// of mesh resolution and continuous across
+/// tile edges. Pages are always 128x128: texels 1..=126 cover the 125-cell
+/// tile span and the outer texels form a one-texel sampling border. The
+/// raster shader maps a tile-local coordinate `local_uv` with
 /// `(1.5 + local_uv * 125.0) / 128.0`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpuMaterialPage {
     pub size: u32,
     pub rgba: Vec<u8>,
+    pub normal: Vec<u8>,
 }
 
 pub const GPU_MATERIAL_PAGE_SIZE: u32 = 128;
@@ -699,20 +707,32 @@ const MATERIAL_SLOPE_WAVELENGTH_M: f64 = 256.0;
 ///
 /// This deliberately shares the surface prefix path with
 /// [`build_surface_texture_for_mesh`], but does not build mesh positions,
-/// normals, residuals, or a second fine-field sample. A single canonical
-/// prefix sample per texel is paired with a fixed-scale material slope, so
-/// classification is independent of tile LOD. Appearance-only noise is filtered
-/// at the page's physical texel spacing instead of aliasing unresolved grain.
+/// residuals, or a second fine-field sample. A single canonical prefix sample
+/// per texel is paired with a fixed-scale material slope, so classification is
+/// independent of tile LOD. Appearance-only noise is filtered at the page's
+/// physical texel spacing instead of aliasing unresolved grain. The normal
+/// plane uses band-limited gradient noise evaluated only on land.
 /// The border samples use the same field
 /// coordinates as adjacent pages, so filtering across tile edges is
 /// continuous.
 pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterialPage {
+    build_gpu_material_page_with_normals(field, key, true)
+}
+
+/// Same material producer with an explicit zero-work normal-plane fallback.
+/// Disabled returns an empty normal plane and does not evaluate grain.
+pub fn build_gpu_material_page_with_normals(
+    field: &PlanetField,
+    key: TileKey,
+    normal_maps: bool,
+) -> GpuMaterialPage {
     let size = GPU_MATERIAL_PAGE_SIZE as usize;
     let cells = GPU_MATERIAL_PAGE_CELLS;
     let texel_m = key.span_m(field.params.radius_m) / cells as f64;
     let mut dirs = Vec::with_capacity(size * size);
     let mut samples = Vec::with_capacity(size * size);
     let mut prefixes = Vec::with_capacity(size * size);
+    let mut grain = Vec::with_capacity(if normal_maps { size * size } else { 0 });
     for y in 0..size {
         for x in 0..size {
             // Texture centres are x+0.5; inverting the shader transform puts
@@ -727,14 +747,21 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
             // texel; the fixed-scale slope uses three lightweight base-height
             // evaluations and does not run five full semantic samples.
             let (prefix, macro_h) = field.height_prefix_m(dir);
+            let sample =
+                field.sample_surface_from_prefix(dir, prefix, macro_h, TEXTURE_DETAIL_MIN_WL_M);
+            // The normal plane is consumed only by the land BRDF; keeping
+            // ocean pages flat saves the grain band evaluations per texel and
+            // avoids inventing seabed relief that the water branch ignores.
+            if normal_maps {
+                grain.push(if sample.height_m > 0.0 {
+                    surface_normal_grain_height(field, dir, texel_m)
+                } else {
+                    0.0
+                });
+            }
             dirs.push(dir);
             prefixes.push((prefix, macro_h));
-            samples.push(field.sample_surface_from_prefix(
-                dir,
-                prefix,
-                macro_h,
-                TEXTURE_DETAIL_MIN_WL_M,
-            ));
+            samples.push(sample);
         }
     }
 
@@ -762,10 +789,83 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
             rgba.push((material.roughness.clamp(0.0, 1.0) * 255.0).round() as u8);
         }
     }
+
+    // Central differences in physical metres. The one-texel border makes the
+    // inner texel 1 and 126 derivatives use exactly the same two field
+    // samples as the neighbouring page, so normals meet without a seam.
+    if !normal_maps {
+        return GpuMaterialPage {
+            size: GPU_MATERIAL_PAGE_SIZE,
+            rgba,
+            normal: Vec::new(),
+        };
+    }
+    let mut normal = Vec::with_capacity(size * size * 2);
+    for y in 0..size {
+        for x in 0..size {
+            let x0 = x.saturating_sub(1);
+            let x1 = (x + 1).min(size - 1);
+            let y0 = y.saturating_sub(1);
+            let y1 = (y + 1).min(size - 1);
+            let [dx, dy] = if samples[y * size + x].height_m > 0.0 {
+                material_chart_gradient(
+                    key.face,
+                    dirs[y * size + x],
+                    sub(dirs[y * size + x1], dirs[y * size + x0])
+                        .map(|v| v * field.params.radius_m),
+                    sub(dirs[y1 * size + x], dirs[y0 * size + x])
+                        .map(|v| v * field.params.radius_m),
+                    grain[y * size + x1] - grain[y * size + x0],
+                    grain[y1 * size + x] - grain[y0 * size + x],
+                )
+            } else {
+                [0.0; 2]
+            };
+            let length = (dx * dx + dy * dy + 1.0).sqrt();
+            normal.push(
+                (((-dx / length) * 0.5 + 0.5) * 255.0)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+            );
+            normal.push(
+                (((-dy / length) * 0.5 + 0.5) * 255.0)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+            );
+        }
+    }
     GpuMaterialPage {
         size: GPU_MATERIAL_PAGE_SIZE,
         rgba,
+        normal,
     }
+}
+
+/// Solve the dual chart, not two independent metres-per-UV approximations.
+/// Cube-sphere U/V chords are both stretched and skewed away from face centre.
+/// The returned components use the orthonormal face basis of the raster shader.
+fn material_chart_gradient(
+    face: u8,
+    n: [f64; 3],
+    du: [f64; 3],
+    dv: [f64; 3],
+    dh_u: f64,
+    dh_v: f64,
+) -> [f64; 2] {
+    let axis = match face {
+        0 => [0.0, 0.0, -1.0],
+        1 => [0.0, 0.0, 1.0],
+        5 => [-1.0, 0.0, 0.0],
+        _ => [1.0, 0.0, 0.0],
+    };
+    let t = normalize(sub(axis, n.map(|v| v * dot(n, axis))));
+    let b = cross(n, t);
+    let [a, b_u, c, d] = [dot(du, t), dot(du, b), dot(dv, t), dot(dv, b)];
+    let determinant = a * d - b_u * c;
+    [
+        (dh_u * d - dh_v * b_u) / determinant,
+        (dh_v * a - dh_u * c) / determinant,
+    ]
 }
 
 /// Macro prefix evaluated on a coarse grid (`step` texels) covering the
@@ -1004,28 +1104,201 @@ mod surface_regressions {
     }
 
     #[test]
+    fn material_gradient_recovers_physical_plane_on_all_faces_and_skewed_charts() {
+        let radius = 6_371_000.0;
+        for face in 0..6 {
+            for xy in [0, 32768, 65535] {
+                let key = TileKey {
+                    face,
+                    level: 16,
+                    x: xy,
+                    y: 65535 - xy,
+                };
+                let n = key.direction(0.5, 0.5);
+                let axis = if face == 0 {
+                    [0.0, 0.0, -1.0]
+                } else if face == 1 {
+                    [0.0, 0.0, 1.0]
+                } else if face == 5 {
+                    [-1.0, 0.0, 0.0]
+                } else {
+                    [1.0, 0.0, 0.0]
+                };
+                let t = normalize(sub(axis, n.map(|v| v * dot(axis, n))));
+                let b = cross(n, t);
+                let g = std::array::from_fn(|i| t[i] * 0.3 - b[i] * 0.2);
+                let step = 1.0 / 125.0;
+                let du = sub(
+                    key.direction(0.5 + step, 0.5),
+                    key.direction(0.5 - step, 0.5),
+                )
+                .map(|v| v * radius);
+                let dv = sub(
+                    key.direction(0.5, 0.5 + step),
+                    key.direction(0.5, 0.5 - step),
+                )
+                .map(|v| v * radius);
+                let got = material_chart_gradient(face, n, du, dv, dot(g, du), dot(g, dv));
+                assert!((got[0] - 0.3).abs() < 1e-12, "face={face} xy={xy}: {got:?}");
+                assert!((got[1] + 0.2).abs() < 1e-12, "face={face} xy={xy}: {got:?}");
+            }
+        }
+    }
+
+    #[test]
     fn gpu_material_page_has_fixed_layout_and_continuous_inner_edges() {
         let field = field();
         let key = TileKey {
-            face: 0,
-            level: 10,
-            x: 510,
-            y: 511,
+            face: 3,
+            level: 16,
+            x: 14936,
+            y: 47207,
         };
         let a = build_gpu_material_page(&field, key);
-        let b = build_gpu_material_page(&field, TileKey { x: 511, ..key });
+        let disabled = build_gpu_material_page_with_normals(&field, key, false);
+        assert!(disabled.normal.is_empty());
+        assert_eq!(
+            a.rgba, disabled.rgba,
+            "normal policy cannot change albedo/roughness"
+        );
+        let b = build_gpu_material_page(
+            &field,
+            TileKey {
+                x: key.x + 1,
+                ..key
+            },
+        );
+        let c = build_gpu_material_page(
+            &field,
+            TileKey {
+                y: key.y + 1,
+                ..key
+            },
+        );
+        assert!(
+            a.normal.as_chunks::<2>().0.iter().any(|n| *n != [128, 128]),
+            "seam fixture must exercise resolved relief, not an all-flat distant page"
+        );
         assert_eq!(a.size, GPU_MATERIAL_PAGE_SIZE);
         assert_eq!(
             a.rgba.len(),
             (GPU_MATERIAL_PAGE_SIZE * GPU_MATERIAL_PAGE_SIZE * 4) as usize
         );
+        assert_eq!(
+            a.normal.len(),
+            (GPU_MATERIAL_PAGE_SIZE * GPU_MATERIAL_PAGE_SIZE * 2) as usize
+        );
         // The inner endpoint of a is x=126 (local_u=1), and the inner start
         // of b is x=1 (local_u=0); the outer texels remain their padding.
+        // Same-level neighbours share both central-difference samples, so
+        // normal bytes meet exactly as well as appearance bytes.
         for y in 1..127 {
             let ai = (y * a.size as usize + 126) * 4;
             let bi = (y * b.size as usize + 1) * 4;
             assert_eq!(&a.rgba[ai..ai + 4], &b.rgba[bi..bi + 4], "y={y}");
+            let an = (y * a.size as usize + 126) * 2;
+            let bn = (y * b.size as usize + 1) * 2;
+            assert_eq!(&a.normal[an..an + 2], &b.normal[bn..bn + 2], "y={y}");
+            let an = (126 * a.size as usize + y) * 2;
+            let cn = (a.size as usize + y) * 2;
+            assert_eq!(&a.normal[an..an + 2], &c.normal[cn..cn + 2], "x={y}");
         }
+    }
+
+    #[test]
+    fn gpu_material_page_normals_are_flat_on_ocean() {
+        let field = field();
+        let key = TileKey::root(0);
+        let page = build_gpu_material_page(&field, key);
+        let size = page.size as usize;
+        let cells = 125.0;
+        let mut ocean = None;
+        for y in (1..127).step_by(8) {
+            for x in (1..127).step_by(8) {
+                let dir = key.direction((x as f64 - 1.0) / cells, (y as f64 - 1.0) / cells);
+                let (prefix, macro_h) = field.height_prefix_m(dir);
+                if field
+                    .sample_surface_from_prefix(dir, prefix, macro_h, TEXTURE_DETAIL_MIN_WL_M)
+                    .height_m
+                    <= -50.0
+                {
+                    ocean = Some((x, y));
+                    break;
+                }
+            }
+            if ocean.is_some() {
+                break;
+            }
+        }
+        let (x, y) = ocean.expect("root page has deep ocean");
+        // Root texels are far wider than any grain band, so even land is
+        // flat here; the ocean assertion pins the land-only grain gate.
+        assert_eq!(
+            &page.normal[(y * size + x) * 2..][..2],
+            &[128, 128],
+            "ocean normals stay flat"
+        );
+    }
+
+    #[test]
+    fn gpu_material_page_normals_carry_grain_on_land() {
+        fn tile_containing(dir: [f64; 3], level: u8) -> TileKey {
+            let ax = dir[0].abs();
+            let ay = dir[1].abs();
+            let az = dir[2].abs();
+            let (face, u, v) = if ax >= ay && ax >= az {
+                if dir[0] > 0.0 {
+                    (0u8, -dir[2] / dir[0], dir[1] / dir[0])
+                } else {
+                    (1u8, dir[2] / -dir[0], dir[1] / -dir[0])
+                }
+            } else if ay >= ax && ay >= az {
+                if dir[1] > 0.0 {
+                    (2u8, dir[0] / dir[1], -dir[2] / dir[1])
+                } else {
+                    (3u8, dir[0] / -dir[1], dir[2] / -dir[1])
+                }
+            } else if dir[2] > 0.0 {
+                (4u8, dir[0] / dir[2], dir[1] / dir[2])
+            } else {
+                (5u8, dir[0] / dir[2], dir[1] / dir[2])
+            };
+            let n = 1u64 << level;
+            let q = |t: f64| (((t + 1.0) * 0.5 * n as f64) as u32).min(n as u32 - 1);
+            TileKey {
+                face,
+                level,
+                x: q(u),
+                y: q(v),
+            }
+        }
+        let field = field();
+        let key = tile_containing(
+            [
+                -0.44575261109709685,
+                -0.8191520442889918,
+                0.36096334722141254,
+            ],
+            16,
+        );
+        let page = build_gpu_material_page(&field, key);
+        let size = page.size as usize;
+        let varied = (1..127)
+            .flat_map(|y| {
+                let page = &page;
+                (1..127).map(move |x| {
+                    (
+                        page.normal[(y * size + x) * 2],
+                        page.normal[(y * size + x) * 2 + 1],
+                    )
+                })
+            })
+            .filter(|(x, y)| *x != 128 || *y != 128)
+            .count();
+        assert!(
+            varied > 128 * 128 / 4,
+            "close land page normal plane is too flat: {varied} sloped texels"
+        );
     }
 
     #[test]

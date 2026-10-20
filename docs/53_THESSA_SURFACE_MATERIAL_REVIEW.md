@@ -95,8 +95,11 @@ clear-sky directions, cheaper reflected-cloud columns and compile-out specular
 disable. See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)
 for the numerical bounds, lifecycle and scoped GPU cost diagnostic. Native
 terrain cast/receive shadows also now use the shared atlas (docs 60/63), rather
-than remaining absent as in the historical reconstruction below. Material
-normals, vegetation, close-up geometry/transport continuity and independent
+than remaining absent as in the historical reconstruction below. Optional RG8
+primary-raster material normals now follow the native page hierarchy with
+metric-correct gradients, filtered mip tiers and an explicit zero-work disable.
+They remain generic material grain, not accepted substrate-specific relief.
+Natural material detail, vegetation, close-up geometry/transport continuity and independent
 whole-frame visual acceptance remain incomplete. This does not accept the
 rejected frames or change canonical terrain.
 

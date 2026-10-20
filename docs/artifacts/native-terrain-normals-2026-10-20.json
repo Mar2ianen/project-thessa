@@ -1,0 +1,928 @@
+{
+  "date": "2026-10-20",
+  "baseline": "5088319531ddf80e15e2d33a07f5db23c4e9328b",
+  "scope": "Optional primary-raster RG8 material normal pages through retained native terrain residency; cube-sphere metric correction, surface-gradient mip/residency blending, resolved disable/filter tiers, explicit water isolation. Reference algorithm/license review in doc 69. No simulation, authoritative heights, topology, contacts or secondary-ray normal changes; not visual acceptance or Bevy retirement.",
+  "contract": {
+    "producer": "worldgen-rocky::lod::build_gpu_material_page_with_normals and appearance::surface_normal_grain_height; land-only filtered Perlin bands 8/4/2/1/0.5 m plus 32/128/512 m, independent of authoritative height.",
+    "metric": "Two physical cube-sphere direction chords and grain differences solved in the orthonormal face tangent frame; same-face level-16 horizontal/vertical apron derivatives agree at shared edges.",
+    "representation": "128x128 linear RG8 unit-normal XY, positive z reconstructed, eight mips. CPU mips and page hierarchy average decoded XY/z gradients; texture hardware interpolates unit XY within/across mips (approximation). z floor 0.01 for extreme/invalid input. No universal grazing/filtered-normal error bound.",
+    "residency": "Normal array and sparse normal-bearing directory reuse the albedo layer slots and generations. Missing coverage contributes flat without normalization. Globe transition and coarse/fine LOD follow albedo.",
+    "consumers": "Primary regular/conforming terrain direct diffuse and land direct/environment GGX. Water classifier suppresses this perturbation; water wave normals, shadow receiver plane, emissive geographic night gating and physical geometry stay independent. Bevy binds the existing array and one empty directory; secondary paths remain flat.",
+    "settings": "renderer.terrain_normal_maps=false skips native grain/normal mip generation, normal uploads, full array and shader sampling. Only 1x1 dummy texture/one 16-byte directory entry remain. Restart required. surface_quality low/medium/high uses +2/+1/+0 normal mip bias. Native capture now includes the existing common resolved metadata map.",
+    "payload_bytes": {
+      "albedo_roughness_mips": 87380,
+      "normal_mips": 43690,
+      "combined": 131070,
+      "normal_logical_1024_slots": 44738560
+    }
+  },
+  "hardware": {
+    "os": "linux",
+    "cpu": "x86_64",
+    "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+  },
+  "verification": {
+    "all_passed": true,
+    "unchanged_inputs": 614,
+    "source_manifest_sha256": "5db9d8b8349721fbbde22cd5f0f099232dd525b0ef7c55afd25e8289b8811c25",
+    "status": "All 13 local gates passed on 614 byte-identical compiled/configuration inputs, rechecked after captures; not remote CI. Two superseded development runs were stopped and are not counted.",
+    "counts": {
+      "workspace_lib_bins": {
+        "passed": 1979,
+        "failed": 0,
+        "ignored": 42
+      },
+      "workspace_integration": {
+        "passed": 98,
+        "failed": 0,
+        "ignored": 79
+      },
+      "native_feature_off": {
+        "passed": 84,
+        "failed": 0,
+        "ignored": 24
+      },
+      "bevy_ignored": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "renderer_ignored": {
+        "passed": 73,
+        "failed": 0,
+        "ignored": 0
+      },
+      "native_ignored": {
+        "passed": 43,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "bevy_ignored_note": "The required command compiled/passed with zero matching ignored tests (25 filtered); retained hardware optics were migrated to native tests earlier. This is not eight additional executed Bevy hardware tests.",
+    "gates": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.506146214029286,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-0.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 1.807856332976371,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-1.log",
+        "sha256": "05153a25746c79a2f427401f8e932e6a8f48fe3558215f386be10bd89f71f5b2"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "thessa-terrain-native",
+          "--no-default-features",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 2.1402368459966965,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-2.log",
+        "sha256": "f3c3edb4c5ba61633751e00b6bc68416493fa1c58ecc42759ed18410ff89b9e1"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--lib",
+          "--bins"
+        ],
+        "exit_code": 0,
+        "seconds": 38.78662477101898,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-3.log",
+        "sha256": "6f649e12ad12ff80e1dc073c8eff5b48cce43e27e1d39fa27c4cb565733095c6"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--test",
+          "*"
+        ],
+        "exit_code": 0,
+        "seconds": 7.758998967008665,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-4.log",
+        "sha256": "0c146b9f643d91d085dccf21d31262202a4196f94632a9d5df6389af4a41909c"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-terrain-native",
+          "--no-default-features",
+          "--bin",
+          "thessa-terrain-native"
+        ],
+        "exit_code": 0,
+        "seconds": 8.360290119017009,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-5.log",
+        "sha256": "100cc47446b9bc2a886b47abf637640c0995abeabefd143388b343bf57e468ce"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-bevy-rcbt",
+          "--features",
+          "render",
+          "--lib",
+          "--",
+          "--ignored"
+        ],
+        "exit_code": 0,
+        "seconds": 405.30681584303966,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-6.log",
+        "sha256": "ac2d352009ae69ee186ccfa2eaf5ddb4aac3bfc1b2768b868d28fc7b01a18c35"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "thessa-terrain-native",
+          "-p",
+          "thessa-server"
+        ],
+        "exit_code": 0,
+        "seconds": 107.80954435502645,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-7.log",
+        "sha256": "bf381c00fa27db0dfef895ceb7025bec710e5f1d562e291945a392b5c9219970"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "-p",
+          "thessa-render-wgpu",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 381.1971845480148,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-8.log",
+        "sha256": "ac01ffd2bdc31dee7af4de89f28478997c9d0a03a25f8f4b1ea9a5ac6f19358f"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "-p",
+          "thessa-terrain-native",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 327.01630062400363,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-9.log",
+        "sha256": "9cf1ec656bf581c9928145f48079d7a28d340ba6bc9440afd6a8d2b9ee9ea1d0"
+      },
+      {
+        "command": [
+          "python3",
+          "tools/agent-qa/check_architecture.py"
+        ],
+        "exit_code": 0,
+        "seconds": 0.13022702099988237,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-10.log",
+        "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"
+      },
+      {
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/agent-qa/tests",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 0.08166775899007916,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-11.log",
+        "sha256": "906e865079cd7b22d106c741637d38641c248e79d952fae057245f2d8da1d960"
+      },
+      {
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.07151904195779935,
+        "log": "target/test-tmp/native-terrain-normals-final/gates-verified/gate-12.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "oracles": [
+      "material_gradient_recovers_physical_plane_on_all_faces_and_skewed_charts: independent [0.3,-0.2] plane recovered within 1e-12 at six face centres/corners.",
+      "normal_mips_mix_bump_influence_not_unit_normal_xy and normal_mips_average_decoded_slopes_before_encoding: opposing gradients cancel; flat/tilted blend matches slope rather than unit-XY average.",
+      "gpu_material_page_has_fixed_layout_and_continuous_inner_edges: non-flat level-16 land, horizontal/vertical shared edge byte equality; disabled planes omit data without changing albedo/roughness.",
+      "material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal: unsaturated production raster Lambert reference within 2 RGB8 levels; removing normals restores exact frame; disable/open-water controls are byte-identical; lone fine-page corner remains within 5 RGB8 of flat.",
+      "disabled_normals_allocate_only_dummy_and_never_upload: 1x1x1 one-mip texture, 16-byte directory, zero normal writes and 87380-byte albedo upload.",
+      "normal_map_policy_and_filter_tiers_roundtrip and disabled_normal_policy_omits_bootstrap_planes: shared requested/resolved/metadata tiers and streaming bootstrap fallback."
+    ],
+    "logs": {
+      "target/test-tmp/native-terrain-normals-final/gates-verified/validation.json": "815560bd7001bcc7b3860f9a5fcf317f1b3454f67ddd24f9dfe7e89a73c98615",
+      "target/test-tmp/native-terrain-normals-final/gates-verified/source-manifest.json": "5db9d8b8349721fbbde22cd5f0f099232dd525b0ef7c55afd25e8289b8811c25",
+      "target/test-tmp/native-terrain-normals-final/material-pages-bench.log": "f1408242ee8d6006fa85d6bedb1a16c4766fa1717fff4179b7bde7f0c16ace73",
+      "target/test-tmp/native-terrain-normals-final/captures-summary.json": "61d76428a2d5070129be2f5046df58c6a6dcc0f612f31b9d5592789ceffa6db9",
+      "target/test-tmp/native-terrain-normals-final/capture-run.log": "63ba1d92f497e61d21178447baf0b0f0d83c4636f133c8ddba61eaf3d298a730"
+    }
+  },
+  "page_benchmarks": [
+    {
+      "albedo_payload_bytes": 33554432,
+      "count": 512,
+      "frozen_erosion": true,
+      "geometry_scale_m": 256.0,
+      "normal_payload_bytes": 16777216,
+      "not_frame_time_or_loading_benchmark": true,
+      "page_max_ms": 146.825817,
+      "page_p50_ms": 107.112103,
+      "page_p95_ms": 129.76549200000002,
+      "payload_bytes": 50331648,
+      "profile": "release/bench",
+      "total_s": 55.026729376,
+      "workload": "512 serial canonical material pages, 128x128, six faces, levels 10..14"
+    },
+    {
+      "count": 64,
+      "normal_maps": false,
+      "not_frame_time_or_loading_benchmark": true,
+      "page_max_ms": 166.364306,
+      "page_p50_ms": 120.828913,
+      "page_p95_ms": 124.70371800000001,
+      "total_s": 7.793887901000002,
+      "workload": "64 paired close-land pages, face 3, levels 14..17, counterbalanced order"
+    },
+    {
+      "count": 64,
+      "normal_maps": true,
+      "not_frame_time_or_loading_benchmark": true,
+      "page_max_ms": 143.393577,
+      "page_p50_ms": 124.22337399999999,
+      "page_p95_ms": 128.376476,
+      "total_s": 7.981454164000002,
+      "workload": "64 paired close-land pages, face 3, levels 14..17, counterbalanced order"
+    }
+  ],
+  "page_benchmark_boundary": "Release serial generation, includes canonical surface/albedo plus normal plane where enabled; no normal mip generation/upload/frame work. 512 broad pages not a paired gain claim; 64 close-land pairs counterbalanced on the same final implementation.",
+  "gpu_diagnostic_raw": [
+    "material_normal_raster adapter=AdapterInfo { name: \"AMD Radeon 880M Graphics (RADV STRIX1)\", vendor: 4098, device: 5390, device_type: IntegratedGpu, device_pci_bus_id: \"0000:64:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.5-arch1.1\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: Some(false), limit_bucket: None } enabled=false quality=High extent=1280x720 measurements=32 median_ms=1.046669 p95_ms=1.058772; regular close-land patch, diffuse only, no sky/clouds/shadows/specular, classify+raster not whole-client time",
+    "material_normal_raster adapter=AdapterInfo { name: \"AMD Radeon 880M Graphics (RADV STRIX1)\", vendor: 4098, device: 5390, device_type: IntegratedGpu, device_pci_bus_id: \"0000:64:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.5-arch1.1\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: Some(false), limit_bucket: None } enabled=true quality=Low extent=1280x720 measurements=32 median_ms=1.105460 p95_ms=1.138764; regular close-land patch, diffuse only, no sky/clouds/shadows/specular, classify+raster not whole-client time",
+    "material_normal_raster adapter=AdapterInfo { name: \"AMD Radeon 880M Graphics (RADV STRIX1)\", vendor: 4098, device: 5390, device_type: IntegratedGpu, device_pci_bus_id: \"0000:64:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.5-arch1.1\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: Some(false), limit_bucket: None } enabled=true quality=Medium extent=1280x720 measurements=32 median_ms=1.103817 p95_ms=1.117283; regular close-land patch, diffuse only, no sky/clouds/shadows/specular, classify+raster not whole-client time",
+    "material_normal_raster adapter=AdapterInfo { name: \"AMD Radeon 880M Graphics (RADV STRIX1)\", vendor: 4098, device: 5390, device_type: IntegratedGpu, device_pci_bus_id: \"0000:64:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.5-arch1.1\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: Some(false), limit_bucket: None } enabled=true quality=High extent=1280x720 measurements=32 median_ms=1.101974 p95_ms=1.113596; regular close-land patch, diffuse only, no sky/clouds/shadows/specular, classify+raster not whole-client time",
+    "material_normal_upload enabled=false pages=128 bytes=11184640 measurements=10 enqueue_median_ms=3.792181 enqueue_p95_ms=3.961716 drained_median_ms=6.905648 drained_p95_ms=7.387906; counterbalanced repeated dirty snapshots, enqueue is CPU validation/residency/write_texture, drained includes queue submit and GPU wait, not isolated DMA or streaming latency",
+    "material_normal_upload enabled=true pages=128 bytes=16776960 measurements=10 enqueue_median_ms=7.964279 enqueue_p95_ms=8.378060 drained_median_ms=13.186792 drained_p95_ms=14.157240; counterbalanced repeated dirty snapshots, enqueue is CPU validation/residency/write_texture, drained includes queue submit and GPU wait, not isolated DMA or streaming latency"
+  ],
+  "gpu_diagnostic_boundary": "32 timestamp samples per disabled/Low/Medium/High configuration, forward/reverse order, synthetic full-screen regular close-land diffuse patch at 1280x720; no specular/environment/clouds/shadows. Upload fixture: 128 dirty 8-mip pages, ten samples each after two warmups, counterbalanced disable/enable; CPU enqueue includes validation/residency/write_texture, drained wall includes submission/GPU wait, not pure DMA or streaming latency.",
+  "captures": [
+    {
+      "name": "final-site-0-5000m-high",
+      "site": 0,
+      "distance_m": 5000,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 76.61931765237236,
+      "gpu_p95_ms": 89.13255295440673,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 183,
+        "pixels_below_45": 0,
+        "gradient_energy": 0.6310713037464376
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-0-5000m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-0-5000m-high.json": "282357e469af4ac519b081ba91267809ebb519e6a725924ef5429776313b8d98",
+        "target/test-tmp/native-terrain-normals-final/final-site-0-5000m-high.log": "d22d924e9f3cf94212ccf452d795ebaef1cbda9dbc0d3ffaedf6f1acbc014608",
+        "target/test-tmp/native-terrain-normals-final/final-site-0-5000m-high.png": "b83792648b172fc374632f61521903e41b0d9a6b9a6259e25153c7d076d0acb6"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 366,
+        "terrain_patches_wanted": 366,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 488,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-0-500m-high",
+      "site": 0,
+      "distance_m": 500,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 78.01152285950661,
+      "gpu_p95_ms": 82.74886386608506,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 192,
+        "pixels_below_45": 0,
+        "gradient_energy": 0.7085469388933251
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-0-500m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-0-500m-high.json": "4795e8df0f3991323880458da480173224ed43feeae337ea0e1237ee1313e1ba",
+        "target/test-tmp/native-terrain-normals-final/final-site-0-500m-high.log": "52dbaea39ba8a074667ec06f1e55e11840811d4acc44272f877b7a7916938dc3",
+        "target/test-tmp/native-terrain-normals-final/final-site-0-500m-high.png": "99e72c62914350dc1f7b52c00530af8ee599f913aab06fda4cb43ad96d7e1bdf"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 371,
+        "terrain_patches_wanted": 371,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 494,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-1-5000m-high",
+      "site": 1,
+      "distance_m": 5000,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 92.10279645383837,
+      "gpu_p95_ms": 109.46843137524034,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 193,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.0418789365087262
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high.json": "2d7f3dc0d64e0db82b8a5b91192130df22f14a918377f065b1dacf05dcf640ba",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high.log": "fd93bbc26b7b28d1a80c2b89e744bbfa97809baa06375a07ac2c250a6bd54765",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high.png": "76ab8efc2065d51efc5b849cec4355927ae933bfcc4770bae59d3e5f8bc35d03"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 370,
+        "terrain_patches_wanted": 370,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 495,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-1-500m-high",
+      "site": 1,
+      "distance_m": 500,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 106.62102126076127,
+      "gpu_p95_ms": 132.11578162116624,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 188,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.99019790234257
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high.json": "bebe5b2cb023c4a8c94131148f5999bce2ec48d99a42e97af19a3ed2dfd17cc4",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high.log": "b7afe55238b6f09db891676f7ad7296be867180f8ec29b19a785ac22b118a0ad",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high.png": "f5e147f6ea30e35c97402f00d8d08f536a5bed07d6030b4cb329572cb27cf5a5"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 378,
+        "terrain_patches_wanted": 378,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 505,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-5000m-high",
+      "site": 2,
+      "distance_m": 5000,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 81.11287546786882,
+      "gpu_p95_ms": 98.66586636795044,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 185,
+        "pixels_below_45": 0,
+        "gradient_energy": 0.8853352785862002
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-5000m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-5000m-high.json": "c229e9fb4ac50ef27afc0e2cf1357b7b57ca1e04fe48ac9c2b62df708e0656ea",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-5000m-high.log": "02141b5839457809c878ea4113459c110947016efe1e2cf6ac727375459d63db",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-5000m-high.png": "58a048a4cda623b0ed19aad64aa0e349bf380f2c6a7eefd2b0148458bd46054a"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 371,
+        "terrain_patches_wanted": 371,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 496,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-500m-high",
+      "site": 2,
+      "distance_m": 500,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 89.97258903335953,
+      "gpu_p95_ms": 97.53391564756394,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 124,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.292534949902488
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high.json": "d193fa31e42a781b69dc6001a76fcc5b6549765afc0829e089a85022b41d0d81",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high.log": "0a024e246cede3a1a271ea067859388bf0faf934c751bd33b1ef4a0213f6abf2",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high.png": "66bbac4f2a129cb682d0c23c1e077f3f0221b18fd26c8f50feb7d5309ce5b980"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-500m-high-off",
+      "site": 2,
+      "distance_m": 500,
+      "normal_maps": false,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 88.71245476264002,
+      "gpu_p95_ms": 111.13680129875566,
+      "settings": {
+        "terrain_normal_maps": "false",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 183,
+        "pixels_below_45": 0,
+        "gradient_energy": 0.5352274692114861
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-off.toml": "06582f7e03b89c4a13ede23a4f000c381032912d21daa0e239ea9d010023612a",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-off.json": "32c17faf728450090e4e49458daef0356161b835675294d050007ffe01cd3dc5",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-off.log": "ea1ba622f8206f2f06402fcf66e8941fd3450f7e032bf1418ed262e828345a35",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-off.png": "baebee70fc76b5514fc4995d59733da0c1f02b3f3ea08e76413a1ea2debd5bb0"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-1-500m-high-off",
+      "site": 1,
+      "distance_m": 500,
+      "normal_maps": false,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 109.85109844741632,
+      "gpu_p95_ms": 126.03711207374954,
+      "settings": {
+        "terrain_normal_maps": "false",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 188,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.6506153540593513
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high-off.toml": "06582f7e03b89c4a13ede23a4f000c381032912d21daa0e239ea9d010023612a",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high-off.json": "7f66a9027e8dc83757dcf0edb554ed7d4e0bfa3e10f4b97c37dd8c95375c49b5",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high-off.log": "633144be57b9939d1f1b61fd87a6fc24ddb5a3394ee1924de8ada5c5a80a53e1",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-500m-high-off.png": "185ddadad6896fbb1d1e5b1cb03377cab1fa64e632e057ae9ecf28019e70baf1"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 378,
+        "terrain_patches_wanted": 378,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 505,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-200m-high",
+      "site": 2,
+      "distance_m": 200,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 99.20723497500802,
+      "gpu_p95_ms": 110.2416605201912,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 130,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.4540339117031311
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high.toml": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high.json": "bcffaf6fb63921b5031b95b893f21e2d4d6ec9950bada88da7280b01d8340037",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high.log": "ad40f5dae920667508895cb742dbd8a171c02b711a515215f63003b844b5563b",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high.png": "81c27443deb6096a2e94df71fda15b80fb22358108207da85b8217e036e68904"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-200m-high-off",
+      "site": 2,
+      "distance_m": 200,
+      "normal_maps": false,
+      "conforming": false,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 97.99106423554231,
+      "gpu_p95_ms": 120.84949553808976,
+      "settings": {
+        "terrain_normal_maps": "false",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 184,
+        "pixels_below_45": 0,
+        "gradient_energy": 0.4606451345940512
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high-off.toml": "06582f7e03b89c4a13ede23a4f000c381032912d21daa0e239ea9d010023612a",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high-off.json": "08d97b23c112d23026d8eb87a0f98c7a4b3dbbffb268e086b68f25faf2bb02fc",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high-off.log": "08b291a45353103ee0e76d1f7fa78e408f3db08f1d2bfdf13b28fc6b134a0d93",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-200m-high-off.png": "ec34fc6a28caf57414cfdd4f62f56cdf6bc131dcded258ad12cf5322fc25edf1"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-1-5000m-high-conforming",
+      "site": 1,
+      "distance_m": 5000,
+      "normal_maps": true,
+      "conforming": true,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 90.49101404730607,
+      "gpu_p95_ms": 102.93044912800599,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "131072",
+        "terrain_topology_merge_area_px": "8",
+        "terrain_topology_split_area_px": "64",
+        "terrain_topology_waves": "4"
+      },
+      "pixels": {
+        "min_channel_sum": 196,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.141593916969304
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high-conforming.toml": "0f9da4f34bf67a9786b04d0b7f3740abf41dad8fd966b78592529405d6e58d59",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high-conforming.json": "36f8e0dc6c6ce37d1dcbb89e17042943a3c093e1ed3665a594a1004408a63d90",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high-conforming.log": "cab070a16e4e6ebe4d82beef1527a4dfdf8d4ff362e491f0d6fbbb07c5556764",
+        "target/test-tmp/native-terrain-normals-final/final-site-1-5000m-high-conforming.png": "67a006b60f4f3c6c8164514ef4fa1c63c47539e9a0016fe201b686200411b3f4"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 370,
+        "terrain_patches_wanted": 370,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 495,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-500m-high-conforming",
+      "site": 2,
+      "distance_m": 500,
+      "normal_maps": true,
+      "conforming": true,
+      "surface_quality": "high",
+      "frames": 32,
+      "gpu_median_ms": 83.28834889431954,
+      "gpu_p95_ms": 89.32836499971772,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "0"
+      },
+      "topology": {
+        "terrain_topology_capacity": "131072",
+        "terrain_topology_merge_area_px": "8",
+        "terrain_topology_split_area_px": "64",
+        "terrain_topology_waves": "4"
+      },
+      "pixels": {
+        "min_channel_sum": 116,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.4188999309790233
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-conforming.toml": "0f9da4f34bf67a9786b04d0b7f3740abf41dad8fd966b78592529405d6e58d59",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-conforming.json": "b166efbdaa04ae99b766d396eec3163181903a29742fbcead0b674af4d89e5b6",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-conforming.log": "d444f8df39fdcc775a43091f1e8dd89914ec79da5c694a5ae163acac14adbbc8",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-high-conforming.png": "f39a9636c0aabaf6b9957ca8a7b232d918fccb6e7489ba095fcd87ed5a7fd9b9"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-500m-low",
+      "site": 2,
+      "distance_m": 500,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "low",
+      "frames": 32,
+      "gpu_median_ms": 75.56828066908835,
+      "gpu_p95_ms": 96.71271535684204,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "2"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 133,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.0821138900072784
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-low.toml": "93b80f18045ea5c92338555a3c47375b7665cfbb06ad592c424129836d655393",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-low.json": "83da54ae4e8ca7415088da7492e3936e870550d5b5e9f9128060554f00734109",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-low.log": "a08e0b9f59d2a452eae276e9a182e264215370076aaecd49558966ebc6baa3d7",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-low.png": "1169bb4c49d5e6cb73cd25a8c340010503cd3e3638a4fe8d0855a1b6ec409867"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    },
+    {
+      "name": "final-site-2-500m-medium",
+      "site": 2,
+      "distance_m": 500,
+      "normal_maps": true,
+      "conforming": false,
+      "surface_quality": "medium",
+      "frames": 32,
+      "gpu_median_ms": 84.86462383622933,
+      "gpu_p95_ms": 103.19960051898192,
+      "settings": {
+        "terrain_normal_maps": "true",
+        "terrain_normal_mip_bias": "1"
+      },
+      "topology": {
+        "terrain_topology_capacity": "0",
+        "terrain_topology_merge_area_px": "0",
+        "terrain_topology_split_area_px": "0",
+        "terrain_topology_waves": "0"
+      },
+      "pixels": {
+        "min_channel_sum": 121,
+        "pixels_below_45": 0,
+        "gradient_energy": 1.122005851051817
+      },
+      "files": {
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-medium.toml": "73c0603df6f479befd162cd29a0f9e2f6af685bead6fe73214defe5a0e0382dd",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-medium.json": "38080cb3829d4b72644418f6fa1ec69622b83555eb844a0c844317cf3363b633",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-medium.log": "d86475dc62fee0e6c8ce45f0d1455c16917bf45b8bccc205ca34c7a675e83435",
+        "target/test-tmp/native-terrain-normals-final/final-site-2-500m-medium.png": "9ea3e674a2095627f85a875457bab8ee1090e9ea9e70264c52ba681522ca25d4"
+      },
+      "resident_last": {
+        "terrain_patches_visible": 383,
+        "terrain_patches_wanted": 383,
+        "terrain_jobs_in_flight": 4,
+        "terrain_cache_entries": 510,
+        "terrain_material_missing": 0,
+        "terrain_material_jobs": 0
+      }
+    }
+  ],
+  "capture_boundary": "14 silent 1280x720 frozen-epoch native headless runs, 10 s live prestream, 30 warmup + 32 measured serial frames. Three sites x 500/5000 m; off controls at site 1/500 m and site 2/200/500 m; two conforming controls; Low/Medium site 2/500 m. Last-frame material missing/jobs counters are zero; on/off controls have matching visible/cache counts but not pinned whole streaming snapshot identity. Quality captures also change GGX reflection budget, not normal-only cost. Per-frame readback and audio are excluded/disabled. No convergence or blind preference claim.",
+  "visual_observation": "Implementer diagnostic inspection, not independent review: generic grain is visible, but smooth macro slopes, pale snow/green ground fields, directional stretch at grazing incidence, blue-grey ridge bands and faceted conforming silhouettes remain. No plant/rock scatter geometry. Zero channel-sum<45 pixels (minima 116..196) is a black-pixel statistic, not proof of no geometric holes or accepted natural appearance.",
+  "known_gaps": [
+    "No independent blind visual preference/acceptance, Satisfactory parity, temporal sweep or cross-platform visual certification.",
+    "No substrate-specific normal material families, stone/soil-consistent boundaries or resolved vegetation geometry.",
+    "No general nonlinear cross-face/LOD seam envelope, RG8/filter approximation bound, variance-to-roughness compensation or very-grazing convergence guarantee.",
+    "No new erosion/voxel/scatter registry, hex-tiling, imported OpenSimplex2, LabPBR compatibility or Complementary source/assets; references are ideas only.",
+    "Existing scatter kernel is tile-seeded and density-dependent; native geometry must extend/reuse canonical instance identity before promising stable density/LOD subsets.",
+    "Primary RT terrain normals and Bevy native-normal feature parity are deliberately omitted; Bevy retirement remains incomplete."
+  ],
+  "reproduction": {
+    "environment": {
+      "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp",
+      "CARGO_TARGET_DIR": "/home/chechulin/Projects/project-thessa-fastrt/target"
+    },
+    "benchmark_command": [
+      "cargo",
+      "bench",
+      "-p",
+      "thessa-worldgen-rocky",
+      "--bench",
+      "material_pages"
+    ],
+    "scripts": {
+      "target/test-tmp/native-terrain-normals-final/validate.py": "5d183540346b383ec597ab1ab3dd3f00b6c23b3d322beced3079cfe8642f640b",
+      "target/test-tmp/native-terrain-normals-final/capture.py": "9e6f688a667975b3be28861a050b107d5e7f5f851315521b84f70869d438b82e",
+      "target/test-tmp/native-terrain-normals-final/evidence.py": "300f69f3bc20d884be6b2085cbe0f14155d4b232750b41aecd9635874353d083"
+    },
+    "capture_command_template": [
+      "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+      "--headless",
+      "target/test-tmp/native-terrain-normals-final/{name}.png",
+      "--perf-capture",
+      "target/test-tmp/native-terrain-normals-final/{name}.json",
+      "--graphics",
+      "target/test-tmp/native-terrain-normals-final/{name}.toml",
+      "--frames",
+      "32",
+      "--prestream-seconds",
+      "10",
+      "--site",
+      "{site}",
+      "--survey-distance",
+      "{distance_m}",
+      "--no-hud",
+      "--mute"
+    ],
+    "native_binary_sha256": "1963edcb95febff87ca7fb8ddf5c257c756a415317b2148773a86c77357566d2"
+  }
+}

@@ -15,7 +15,26 @@ fn policy() -> StreamingPolicy {
         height_cache: 32,
         material_cache: 6,
         draw_capacity: 6,
+        normal_maps: true,
     }
+}
+
+#[test]
+fn disabled_normal_policy_omits_bootstrap_planes() {
+    let stream = TerrainStream::new(
+        field(),
+        StreamingPolicy {
+            normal_maps: false,
+            ..policy()
+        },
+    )
+    .unwrap();
+    assert!(
+        stream
+            .materials()
+            .values()
+            .all(|(_, page)| page.normal_mips().is_none())
+    );
 }
 
 #[test]

@@ -44,9 +44,23 @@ pub fn spawn_material_job(
     field: std::sync::Arc<thessa_worldgen_rocky::field::PlanetField>,
     key: thessa_worldgen_rocky::lod::TileKey,
 ) -> JobHandle<thessa_rcbt_core::material_page::CbtMaterialPage> {
+    spawn_material_job_with_normals(field, key, false)
+}
+
+pub fn spawn_material_job_with_normals(
+    field: std::sync::Arc<thessa_worldgen_rocky::field::PlanetField>,
+    key: thessa_worldgen_rocky::lod::TileKey,
+    normal_maps: bool,
+) -> JobHandle<thessa_rcbt_core::material_page::CbtMaterialPage> {
     JobHandle::spawn(move || {
-        thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8(
-            thessa_worldgen_rocky::lod::build_gpu_material_page(&field, key).rgba,
+        let page = thessa_worldgen_rocky::lod::build_gpu_material_page_with_normals(
+            &field,
+            key,
+            normal_maps,
+        );
+        thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8_with_normals(
+            page.rgba,
+            normal_maps.then_some(page.normal),
         )
         .expect("fixed material page layout")
     })

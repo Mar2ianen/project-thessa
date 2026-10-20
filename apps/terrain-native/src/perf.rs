@@ -144,6 +144,7 @@ pub(crate) fn base_capture_metadata(
     meta.graphics.preset = format!("{:?}", scene.requested.preset);
     let resolved = backend.resolve_graphics(&scene.requested);
     meta.graphics.ray_tracing = format!("{:?}", resolved.ray_tracing);
+    meta.graphics.resolved.extend(resolved.as_meta_map());
     meta.graphics
         .resolved
         .insert("settings".into(), format!("{resolved:?}"));

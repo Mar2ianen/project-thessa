@@ -356,6 +356,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/ocean.wgsl"),
     include_str!("shaders/page_directory.wgsl"),
     include_str!("shaders/material_sample.wgsl"),
+    include_str!("shaders/material_normal.wgsl"),
     r#"
 struct Params {
     leaf_count: u32,
@@ -536,30 +537,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         receiver_normal = normalize(plane) * select(-1.0,1.0,dot(plane,normal)>=0.0);
     }
     let direction = normalize(input.body_direction);
-    var direct = vec3(0.0);
-    for (var i = 0u; i < 3u; i = i + 1u) {
-        if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
-            direct += lighting.colors_lux[i].rgb * max(dot(normal, lighting.directions[i].xyz), 0.0)
-                * cbt_shadow_visibility(input.render_position, receiver_normal, i);
-        }
-    }
-    // Cloud-deck shadows dim the direct sun only; skylight and ambient stay.
-    // The deck bake is what the shell impostors show, sampled in shell-local
-    // coordinates with a sun-parallax offset for the physical deck height.
-    var shadow = 1.0;
-    if (lighting.shadow_params.z > 0.5) {
-        let sun_body = lighting.shadow_sun.xyz;
-        let deck_h = lighting.shadow_params.x;
-        let radius = bitcast<f32>(params.radius_bits);
-        // Walk from the ground toward the sun to the deck plane (mirrors the
-        // CPU sampler): overhead sun samples straight down.
-        let t = deck_h / max(dot(sun_body, direction), 0.15);
-        let deck_point = normalize(direction * radius + sun_body * t);
-        let local = quat_rotate(lighting.shadow_quat, deck_point);
-        let cloud_alpha = textureSample(cloud_texture, surface_sampler, shell_mesh_uv(local)).a;
-        shadow = 1.0 - lighting.shadow_params.y * smoothstep(0.05, 0.6, cloud_alpha);
-    }
-    var illuminance = lighting.ambient_lux.rgb + direct * shadow;
     // Project after interpolation so a triangle crossing longitude zero
     // cannot interpolate through the opposite side of the planet's map.
     let uv = surface_uv(input.body_direction);
@@ -586,8 +563,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // chosen in screen space rather than inheriting a coarse mesh page.
     let material_lod = clamp(log2(2.0 * bitcast<f32>(params.radius_bits)
         / (125.0 * max(footprint_m, 0.001))), 0.0, 17.0);
-    let coarse = material_at_level(address, address_dx, address_dy, u32(floor(material_lod)));
-    let fine = material_at_level(address, address_dx, address_dy, u32(ceil(material_lod)));
+    let coarse = material_at_level_raster(address, address_dx, address_dy, u32(floor(material_lod)));
+    let fine = material_at_level_raster(address, address_dx, address_dy, u32(ceil(material_lod)));
     let coverage = mix(coarse.coverage, fine.coverage, fract(material_lod));
     let detail = mix(coarse.value, fine.value, fract(material_lod)) / max(coverage, 0.00001);
     detail_weight *= coverage;
@@ -603,11 +580,41 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         roughness += textureSampleGrad(roughness_texture, surface_sampler, uv, dx, dy).g
             * (1.0 - detail_weight);
     }
-    let diffuse = albedo * illuminance / OCEAN_PI;
-    // Derivatives must be evaluated outside the non-uniform water branch.
-    // Canonical pages clamp ocean to datum; the material map excludes ice.
+    // Classify before material-normal perturbation: water owns its own wave
+    // normal, even where filtering includes a normal-bearing land neighbour.
     let water_material = (1.0 - smoothstep(0.22, 0.65, roughness))
         * (1.0 - smoothstep(0.25, 1.0, input.height_m));
+    // Premultiplied surface gradients: uncovered weight is flat. Preserve
+    // coverage and the same globe transition as albedo rather than magnifying
+    // a tiny resident normal contribution to full strength.
+    let tangent = mix(coarse.normal, fine.normal, fract(material_lod))
+        * (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m));
+    let shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
+    var direct = vec3(0.0);
+    for (var i = 0u; i < 3u; i = i + 1u) {
+        if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
+            direct += lighting.colors_lux[i].rgb * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
+                * cbt_shadow_visibility(input.render_position, receiver_normal, i);
+        }
+    }
+    // Cloud-deck shadows dim the direct sun only; skylight and ambient stay.
+    // The deck bake is what the shell impostors show, sampled in shell-local
+    // coordinates with a sun-parallax offset for the physical deck height.
+    var shadow = 1.0;
+    if (lighting.shadow_params.z > 0.5) {
+        let sun_body = lighting.shadow_sun.xyz;
+        let deck_h = lighting.shadow_params.x;
+        let radius = bitcast<f32>(params.radius_bits);
+        // Walk from the ground toward the sun to the deck plane (mirrors the
+        // CPU sampler): overhead sun samples straight down.
+        let t = deck_h / max(dot(sun_body, direction), 0.15);
+        let deck_point = normalize(direction * radius + sun_body * t);
+        let local = quat_rotate(lighting.shadow_quat, deck_point);
+        let cloud_alpha = textureSample(cloud_texture, surface_sampler, shell_mesh_uv(local)).a;
+        shadow = 1.0 - lighting.shadow_params.y * smoothstep(0.05, 0.6, cloud_alpha);
+    }
+    var illuminance = lighting.ambient_lux.rgb + direct * shadow;
+    let diffuse = albedo * illuminance / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
     // Land roughness is a material property, not only an ocean classifier.
     // Reuse the existing dielectric GGX kernel and linear-lux convention;
@@ -615,16 +622,16 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let eye = ocean_safe_normalize(view.world_position - input.render_position, normal);
     var radiance = diffuse;
     if (cbt_specular_enabled() && water_material < 1.0) {
-        let land_fresnel = ocean_schlick(0.04, max(dot(normal, eye), 0.0));
+        let land_fresnel = ocean_schlick(0.04, max(dot(shaded_normal, eye), 0.0));
         var land_reflection = vec3(0.0);
         for (var i = 0u; i < 3u; i = i + 1u) {
             if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
-                land_reflection += ocean_sun_reflection(normal, eye, lighting.directions[i].xyz,
+                land_reflection += ocean_sun_reflection(shaded_normal, eye, lighting.directions[i].xyz,
                     lighting.colors_lux[i].rgb, roughness, 0.04)
-                    * cbt_shadow_visibility(input.render_position, normal, i);
+                    * cbt_shadow_visibility(input.render_position, receiver_normal, i);
             }
         }
-        land_reflection += cbt_land_environment(input.render_position,normal,eye,roughness,lighting.ambient_lux.rgb);
+        land_reflection += cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
         radiance = mix(diffuse, diffuse * (1.0 - land_fresnel) + land_reflection,
             1.0 - water_material);
     }

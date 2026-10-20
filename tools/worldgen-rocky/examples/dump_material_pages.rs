@@ -89,6 +89,16 @@ fn write_png(path: &std::path::Path, rgba: &[u8]) {
     enc.write_header().unwrap().write_image_data(rgba).unwrap();
 }
 
+fn write_normal_png(path: &std::path::Path, rg: &[u8]) {
+    let rgba: Vec<u8> = rg
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0], p[1], 128, 255])
+        .collect();
+    write_png(path, &rgba);
+}
+
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).expect("output directory"));
     std::fs::create_dir_all(&out).unwrap();
@@ -199,6 +209,10 @@ fn main() {
                 write_png(
                     &out.join(format!("material_{name}_L{level}.png")),
                     &page.rgba,
+                );
+                write_normal_png(
+                    &out.join(format!("normal_{name}_L{level}.png")),
+                    &page.normal,
                 );
             }
         }

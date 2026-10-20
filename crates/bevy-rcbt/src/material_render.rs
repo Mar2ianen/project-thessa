@@ -80,6 +80,10 @@ pub(super) struct MaterialArray {
     pub sampler: Sampler,
     pub slots: RawBufferVec<[u32; 4]>,
     pub directory: RawBufferVec<[u32; 4]>,
+    /// Empty raster normal directory: the Bevy material pages remain albedo-
+    /// only, so binding 19/20 satisfies the shared raster shader and resolves
+    /// to the flat geometric normal without a second texture allocation.
+    pub normal_directory: RawBufferVec<[u32; 4]>,
     texture: Texture,
     cache: SlotCache,
     topology_generation: u64,
@@ -124,6 +128,7 @@ impl MaterialArray {
             sampler,
             slots: RawBufferVec::new(BufferUsages::STORAGE),
             directory: RawBufferVec::new(BufferUsages::STORAGE),
+            normal_directory: RawBufferVec::new(BufferUsages::STORAGE),
             cache: SlotCache::new(layers as usize).expect("wgpu supports texture array layers"),
             topology_generation: u64::MAX,
             pages_generation: u64::MAX,
@@ -218,6 +223,10 @@ impl MaterialArray {
                 }),
             ));
         self.directory.write_buffer(device, queue);
+        if self.normal_directory.is_empty() {
+            self.normal_directory.push([0; 4]);
+            self.normal_directory.write_buffer(device, queue);
+        }
         self.slots.clear();
         self.slots.extend(topology.records().iter().map(|r| {
             let id = u64::from(r[0]) | (u64::from(r[1]) << 32);

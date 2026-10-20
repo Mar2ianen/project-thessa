@@ -274,6 +274,7 @@ struct RasterBindKey {
     material_slots: BufferId,
     draw: BufferId,
     material_directory: BufferId,
+    material_normal_directory: BufferId,
     albedo_view: TextureViewId,
     albedo_sampler: SamplerId,
     roughness_view: TextureViewId,
@@ -885,6 +886,26 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
     });
     raster_entries.push(BindGroupLayoutEntry {
         binding: 16,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Buffer {
+            ty: BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    });
+    raster_entries.push(BindGroupLayoutEntry {
+        binding: 19,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Texture {
+            sample_type: TextureSampleType::Float { filterable: true },
+            view_dimension: TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    });
+    raster_entries.push(BindGroupLayoutEntry {
+        binding: 20,
         visibility: ShaderStages::FRAGMENT,
         ty: BindingType::Buffer {
             ty: BufferBindingType::Storage { read_only: true },
@@ -1749,6 +1770,9 @@ fn draw_cbt_geometry(
     let Some(material_directory) = material_array.directory.buffer() else {
         return;
     };
+    let Some(material_normal_directory) = material_array.normal_directory.buffer() else {
+        return;
+    };
     let Some(view_uniform_id) = view_uniform_buffer_id(&view_uniforms) else {
         return;
     };
@@ -1765,6 +1789,7 @@ fn draw_cbt_geometry(
         material_slots: material_slots.id(),
         draw: draw_buffer.id(),
         material_directory: material_directory.id(),
+        material_normal_directory: material_normal_directory.id(),
         albedo_view: albedo_image.texture_view.id(),
         albedo_sampler: albedo_image.sampler.id(),
         roughness_view: roughness_image.texture_view.id(),
@@ -1860,6 +1885,19 @@ fn draw_cbt_geometry(
                 BindGroupEntry {
                     binding: 18,
                     resource: BindingResource::TextureView(&city_image.texture_view),
+                },
+                // Bevy pages are albedo-only. The empty normal directory makes
+                // the raster shader resolve a flat normal, so binding the
+                // existing array view is inert and needs no second texture.
+                BindGroupEntry {
+                    binding: 19,
+                    resource: BindingResource::TextureView(&material_array.view),
+                },
+                BindGroupEntry {
+                    binding: 20,
+                    resource: BindingResource::Buffer(
+                        material_normal_directory.as_entire_buffer_binding(),
+                    ),
                 },
             ],
         ));

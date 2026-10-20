@@ -456,7 +456,17 @@ impl Scene {
             (sites[1], thessa_flight_authority::SURVEY_SITE_LABELS[1]),
             (sites[2], thessa_flight_authority::SURVEY_SITE_LABELS[2]),
         ];
-        let stream = TerrainStream::new(field, StreamingPolicy::default())?;
+        let stream_settings = thessa_graphics::ResolvedGraphicsSettings::from_requested(
+            &requested,
+            &thessa_graphics::Capabilities::unknown(),
+        );
+        let stream = TerrainStream::new(
+            field,
+            StreamingPolicy {
+                normal_maps: stream_settings.terrain_normal_maps,
+                ..StreamingPolicy::default()
+            },
+        )?;
         let mut scene = Self {
             ocean_gravity_m_s2,
             primary_presentation: None,

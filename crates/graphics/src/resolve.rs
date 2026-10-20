@@ -259,6 +259,8 @@ pub struct ResolvedGraphicsSettings {
     pub rt_reflection_samples: u32,
     pub rt_ray_bias_m: f32,
     pub surface_quality: Quality,
+    #[serde(default = "crate::settings::default_true")]
+    pub terrain_normal_maps: bool,
     pub specular_reflections: bool,
     pub native_shadow_map_size: u32,
     pub shadow_filter_radius: u32,
@@ -347,6 +349,28 @@ impl Default for ResolvedGraphicsSettings {
 mod terrain_topology_tests {
     use super::*;
     #[test]
+    fn normal_map_policy_and_filter_tiers_roundtrip() {
+        for (quality, bias) in [(Quality::Low, 2), (Quality::Medium, 1), (Quality::High, 0)] {
+            let mut request = RequestedGraphics::default();
+            request.renderer.surface_quality = quality;
+            for enabled in [true, false] {
+                request.renderer.terrain_normal_maps = enabled;
+                let resolved =
+                    ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+                assert_eq!(resolved.terrain_normal_maps, enabled);
+                assert_eq!(resolved.terrain_normal_mip_bias(), bias);
+                assert_eq!(
+                    resolved.as_meta_map()["terrain_normal_maps"],
+                    enabled.to_string()
+                );
+                assert_eq!(
+                    RequestedGraphics::from_toml(&toml::to_string(&request).unwrap()).unwrap(),
+                    request
+                );
+            }
+        }
+    }
+    #[test]
     fn topology_intent_budgets_fallback_and_metadata_roundtrip() {
         let request = RequestedGraphics::from_toml(
             "version=1\n[terrain_topology]\nenabled=true\nquality='low'\n",
@@ -409,6 +433,16 @@ mod terrain_topology_tests {
 }
 
 impl ResolvedGraphicsSettings {
+    /// Extra normal-map mip filtering; coarser tiers reduce texture bandwidth
+    /// and resolved detail without changing the canonical surface.
+    pub fn terrain_normal_mip_bias(&self) -> u32 {
+        match self.surface_quality {
+            Quality::Low => 2,
+            Quality::Medium => 1,
+            Quality::High => 0,
+        }
+    }
+
     /// Native terrain GGX environment quadrature. Shares the requested surface
     /// quality/specular switch; zero compiles out this consumer entirely.
     pub fn terrain_environment_samples(&self) -> u32 {
@@ -573,6 +607,7 @@ impl ResolvedGraphicsSettings {
                 Quality::High => 2,
             },
             surface_quality: requested.renderer.surface_quality,
+            terrain_normal_maps: requested.renderer.terrain_normal_maps,
             specular_reflections: requested.renderer.specular_reflections,
             backend: ResolvedBackend { name: backend_name },
             terrain,
@@ -783,6 +818,14 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "surface_quality".into(),
             format!("{:?}", self.surface_quality).to_lowercase(),
+        );
+        map.insert(
+            "terrain_normal_maps".into(),
+            self.terrain_normal_maps.to_string(),
+        );
+        map.insert(
+            "terrain_normal_mip_bias".into(),
+            self.terrain_normal_mip_bias().to_string(),
         );
         map.insert(
             "specular_reflections".into(),

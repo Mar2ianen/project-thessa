@@ -123,6 +123,61 @@ pub fn value_noise3(seed: u64, channel: u32, x: f64, y: f64, z: f64) -> f64 {
     y0 + (y1 - y0) * fz
 }
 
+/// Quintic fade for gradient noise; its first and second derivatives vanish
+/// at lattice boundaries, unlike the cubic fade used by value noise.
+fn fade(t: f64) -> f64 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+const GRADIENTS: [[f64; 3]; 16] = [
+    [1.0, 1.0, 0.0],
+    [-1.0, 1.0, 0.0],
+    [1.0, -1.0, 0.0],
+    [-1.0, -1.0, 0.0],
+    [1.0, 0.0, 1.0],
+    [-1.0, 0.0, 1.0],
+    [1.0, 0.0, -1.0],
+    [-1.0, 0.0, -1.0],
+    [0.0, 1.0, 1.0],
+    [0.0, -1.0, 1.0],
+    [0.0, 1.0, -1.0],
+    [0.0, -1.0, -1.0],
+    [1.0, 1.0, 0.0],
+    [0.0, -1.0, 1.0],
+    [-1.0, 1.0, 0.0],
+    [0.0, -1.0, -1.0],
+];
+
+/// 3D gradient (Perlin) noise in roughly [-1,1].
+///
+/// Value noise's cubic fade leaves a flat derivative at every lattice point,
+/// which reads as a cellular quilt when the field is used as a normal source.
+/// Gradient noise varies the slope across the cell and filters into a more
+/// isotropic surface at the same lattice frequency.
+pub fn perlin3(seed: u64, channel: u32, x: f64, y: f64, z: f64) -> f64 {
+    let ix = x.floor() as i64;
+    let iy = y.floor() as i64;
+    let iz = z.floor() as i64;
+    let fx = x - ix as f64;
+    let fy = y - iy as f64;
+    let fz = z - iz as f64;
+    let u = fade(fx);
+    let v = fade(fy);
+    let w = fade(fz);
+    let corner = |dx: i64, dy: i64, dz: i64| {
+        let g = (hash3_01(seed, channel, ix + dx, iy + dy, iz + dz) * 16.0) as usize;
+        let grad = GRADIENTS[g & 15];
+        grad[0] * (fx - dx as f64) + grad[1] * (fy - dy as f64) + grad[2] * (fz - dz as f64)
+    };
+    let x00 = corner(0, 0, 0) + (corner(1, 0, 0) - corner(0, 0, 0)) * u;
+    let x10 = corner(0, 1, 0) + (corner(1, 1, 0) - corner(0, 1, 0)) * u;
+    let x01 = corner(0, 0, 1) + (corner(1, 0, 1) - corner(0, 0, 1)) * u;
+    let x11 = corner(0, 1, 1) + (corner(1, 1, 1) - corner(0, 1, 1)) * u;
+    let y0 = x00 + (x10 - x00) * v;
+    let y1 = x01 + (x11 - x01) * v;
+    (y0 + (y1 - y0) * w) * 1.4
+}
+
 /// 3D fBm, normalized to roughly [-1,1].
 pub fn fbm3(seed: u64, channel: u32, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
     let mut amplitude = 1.0;
@@ -147,7 +202,7 @@ pub fn fbm3(seed: u64, channel: u32, x: f64, y: f64, z: f64, octaves: u32) -> f6
 
 #[cfg(test)]
 mod tests3d {
-    use super::{fbm3, hash3_01, value_noise3};
+    use super::{fbm3, hash3_01, perlin3, value_noise3};
 
     #[test]
     fn hash3_deterministic_bounded() {
@@ -155,6 +210,15 @@ mod tests3d {
         assert_eq!(a, hash3_01(7, 3, 1, -2, 5));
         assert!((0.0..1.0).contains(&a));
         assert!((hash3_01(8, 3, 1, -2, 5) - a).abs() > 1e-12);
+    }
+
+    #[test]
+    fn perlin3_is_deterministic_continuous_and_bounded() {
+        let a = perlin3(7, 3, 1.2, -0.4, 2.9);
+        assert_eq!(a, perlin3(7, 3, 1.2, -0.4, 2.9));
+        assert!(a.abs() <= 1.5);
+        let b = perlin3(7, 3, 1.2 + 1e-6, -0.4, 2.9);
+        assert!((a - b).abs() < 1e-4);
     }
 
     #[test]

@@ -105,6 +105,41 @@ pub(crate) fn surface_grain_height(
         .sum()
 }
 
+/// Normal-plane grain with a multi-scale slope spectrum.
+///
+/// The legacy four-band height above is tuned for albedo/residual filtering;
+/// used alone as a normal source, its 8 m octave reads as a single cellular
+/// lattice. This variant adds equal-slope octaves below 8 m when the page's
+/// texel footprint resolves them, so close ground gains isotropic roughness
+/// while sub-Nyquist detail is still discarded.
+pub(crate) fn surface_normal_grain_height(
+    field: &PlanetField,
+    dir: [f64; 3],
+    texel_wavelength_m: f64,
+) -> f64 {
+    [
+        (8.0, 0.42),
+        (4.0, 0.21),
+        (2.0, 0.105),
+        (1.0, 0.0525),
+        (0.5, 0.02625),
+        (32.0, 0.32),
+        (128.0, 0.20),
+        (512.0, 0.10),
+    ]
+    .into_iter()
+    .enumerate()
+    .filter(|(_, (scale, _))| band_weight(*scale, texel_wavelength_m) > 0.0)
+    .map(|(band, (scale, weight))| {
+        let q = dir.map(|v| v * field.params.radius_m / scale);
+        weight
+            * band_weight(scale, texel_wavelength_m)
+            * 2.0
+            * rng::perlin3(field.params.seed, 941 + band as u32 * 29, q[0], q[1], q[2])
+    })
+    .sum()
+}
+
 pub fn surface_appearance(
     field: &PlanetField,
     sample: &TerrainSample,
@@ -376,6 +411,19 @@ pub fn surface_appearance_filtered(
 mod palette_tests {
     use super::*;
     use crate::biomes::Geology;
+
+    #[test]
+    fn grain_band_filter_is_continuous_and_zero_beyond_nyquist() {
+        for scale in [0.5, 1.0, 2.0, 4.0, 8.0, 32.0, 128.0, 512.0] {
+            assert_eq!(band_weight(scale, scale * 0.5), 0.0);
+            assert_eq!(band_weight(scale, scale * 0.25), 1.0);
+            let a = band_weight(scale, scale * (0.5 - 1e-6));
+            assert!(
+                a < 1e-9,
+                "cutoff must fade instead of changing bands abruptly"
+            );
+        }
+    }
 
     fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
         ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()

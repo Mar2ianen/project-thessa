@@ -1,16 +1,23 @@
 //! Fixed, hinge, slider, suspension, and wheel-joint operations.
 
 use super::*;
+use rapier3d_f64::utils::RotationOps;
 
 impl CollisionWorld {
-    /// Read the current joint solver impulses as average force/moment loads
-    /// over `step_s`. This reports solver evidence only; structural ratings
-    /// and failure policy belong to the vehicle domain.
+    /// Read the latest solver-substep reaction force/moment, not a full-step
+    /// impulse sum or peak load. `step_s` is the last submitted physical step.
+    /// Rapier 0.35 writes the last small-step impulse; its duration is
+    /// `step_s / num_solver_iterations`. This wrapper does not set per-body
+    /// additional iterations or enable multiple CCD time subdivisions.
+    /// Angular locked-DOF impulses pass through the backend quaternion-error
+    /// Jacobian at the queried frames. Motor/limit impulses are not aggregated.
+    /// Structural ratings and failure policy belong to the vehicle domain.
     pub fn joint_loads(&self, step_s: f64) -> Result<Vec<JointLoadSummary>, CollisionBackendError> {
         if !step_s.is_finite() || step_s < MIN_STEP_S {
             return Err(CollisionBackendError::InvalidStep(step_s));
         }
         let mut loads = Vec::with_capacity(self.joints.len());
+        let substep_s = step_s / self.integration.num_solver_iterations as f64;
         for (joint_id, entry) in &self.joints {
             let Some(joint) = self.impulse_joints.get(entry.rapier) else {
                 continue;
@@ -20,12 +27,20 @@ impl CollisionWorld {
             let force_impulse = DVec3::new(joint.impulses[0], joint.impulses[1], joint.impulses[2]);
             let torque_impulse =
                 DVec3::new(joint.impulses[3], joint.impulses[4], joint.impulses[5]);
+            // Locked angular DOFs use the quaternion-error Jacobian, not
+            // unit angular axes (at alignment it is half a rotation matrix).
+            // Convert the generalized impulse through that same backend
+            // Jacobian before interpreting it as a physical moment.
+            let frame_a = self.bodies[joint.body1()].rotation() * joint.data.local_frame1.rotation;
+            let frame_b = self.bodies[joint.body2()].rotation() * joint.data.local_frame2.rotation;
+            let physical_torque_impulse =
+                frame_a.diff_conj1_2_tr(&frame_b) * to_rapier_vector(torque_impulse);
             loads.push(JointLoadSummary {
                 joint_id: *joint_id,
                 body_a: entry.a,
                 body_b: entry.b,
-                force_n: force_impulse.length() / step_s,
-                torque_nm: torque_impulse.length() / step_s,
+                force_n: force_impulse.length() / substep_s,
+                torque_nm: physical_torque_impulse.length() / substep_s,
             });
         }
         Ok(loads)

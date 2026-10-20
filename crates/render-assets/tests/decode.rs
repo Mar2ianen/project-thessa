@@ -54,6 +54,32 @@ fn nested_nonuniform_mirrored_transform_preserves_normals_and_winding() {
     assert_eq!(source.primitives[0].indices, [0, 2, 1]);
     assert_eq!(source.materials.len(), 1);
 }
+
+#[test]
+fn explicit_rest_pose_preserves_static_transforms_and_does_not_relax_other_limits() {
+    let (doc, blob) = fixture();
+    let bytes = encode(&doc, &blob);
+    let strict = decode_glb(&bytes, Limits::default()).unwrap();
+    let rest = thessa_render_assets::decode_glb_rest_pose(&bytes, Limits::default()).unwrap();
+    assert_eq!(strict.primitives[0].vertices, rest.primitives[0].vertices);
+    assert_eq!(strict.primitives[0].indices, rest.primitives[0].indices);
+    assert!(
+        thessa_render_assets::decode_glb_rest_pose(
+            &bytes,
+            Limits {
+                nodes: 1,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    let mut external = doc;
+    external["buffers"][0]["uri"] = json!("file:///not-an-asset");
+    assert!(
+        thessa_render_assets::decode_glb_rest_pose(&encode(&external, &blob), Limits::default())
+            .is_err()
+    );
+}
 #[test]
 fn embedded_image_color_bytes_and_sampler_are_preserved_and_budgeted() {
     let (mut doc, mut blob) = fixture();

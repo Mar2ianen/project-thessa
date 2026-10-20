@@ -177,9 +177,20 @@ The first executable D1 slice is implemented at the CAD/runtime boundary:
   installs the fixed joint after alignment, advances pressure equalization in
   simulation time, and removes the joint on separation while retaining both
   solved states;
-- `CollisionWorld::joint_loads(dt_s)` exposes the latest constraint impulse as
-  average force and moment magnitudes. This is solver telemetry for a future
-  strength policy, not an automatic failure threshold;
+- `CollisionWorld::joint_loads(dt_s)` exposes the latest solver-substep reaction
+  force and moment magnitudes, not a full-frame impulse sum or peak. Rapier
+  0.35 writes the final small-step impulse, so its duration is
+  `dt_s / num_solver_iterations`; the wrapper currently configures no per-body
+  extra iterations or multiple CCD time subdivisions. Dividing by the full
+  frame incorrectly under-reported these loads by four at default settings.
+  Angular locked-DOF impulses are additionally mapped through Rapier's public
+  quaternion-error Jacobian before being interpreted as a moment; at aligned
+  frames that Jacobian is half a rotation matrix, not unit angular axes.
+  Readback covers locked-DOF reactions, not motor/limit impulse aggregation or
+  a high-speed/large-misalignment peak-load estimate.
+  A two-equal-body regression pins F/2 and torque/2 across 1/2/4/8 small steps
+  at 60/120 Hz within 1e-6 N/Nm. This is solver telemetry for a future strength
+  policy, not an automatic failure threshold;
 - `CollisionWorld::attach_revolute_joint` is the mechanism seam for the six
   provisional soft-capture petals in the D1 asset;
 - the current `SoftCapture` transition is explicitly a logical MVP gate; the
@@ -220,3 +231,68 @@ the CAD -> normalized BRep -> adaptive RCBT -> transient mesh pipeline described
 in 'docs/45_CAD_RCBT_GEOMETRY.md'. Docking physics must consume explicit
 mechanical semantics from the design; it must not depend on the current
 view-dependent render tessellation.
+
+## 12. Native retained-fixture port (2026-10-20)
+
+The old `apps/client/src/docking_demo.rs` now has a direct GPL native consumer
+in `apps/terrain-native/src/docking.rs`. It calls the same `CollisionWorld` and
+`DockingSession`, not a new solver, controller, or animation-driven pose path.
+
+```sh
+cargo run --release -p thessa-terrain-native -- --docking-demo --mute
+cargo run --release -p thessa-terrain-native -- --docking-demo --headless target/docking.png --docking-time 5.5 --docking-step 0 --hud --mute
+```
+
+The retained fixture is an **isolated zero-gravity vacuum experiment**, not a
+spacecraft orbit or live fleet authority: two 300 kg bodies with diagonal
+400 kg m² inertia, starting at x=±1.5 m and vx=∓0.02 m/s; port stations are
+x=±1.4 m, with the same central body/eight ring-cuboid collision proxies.
+`SoftCapture` starts as a logical gate. The measured port-frame gap must be
+within 0.025 m and `DockingSession::align` must accept actual solved kinematics
+before the fixed joint is installed. Outer engagement and the 0.5 s pressure
+gate use the existing protocol. Once equalized, a real 350 N wrench on A acts
+for 240 ticks (2 s), then the joint is removed and the final solved poses freeze,
+matching the retained fixture's completion behavior. There is no undock kick.
+
+The native driver admits at most 0.05 s per presentation and accumulates exact
+1/120 s solver steps; arbitrary frame cadence never changes solver dt. Headless
+`--docking-time 0..30` seeks before warmup, while `--docking-step 0..0.05`
+(default 1/60) controls admission including the 30 warmup frames; zero freezes
+the requested checkpoint. Seek quantizes downward to a tick and clears old
+audio events. Flight/server/map/site/preview/time-control combinations fail
+before loading the world; the window map switch is inert in this fixture.
+
+The existing opaque mesh path renders the two actual solved rigid instances
+with per-primitive instance ranges, retained colored body/port proxies and D1
+CAD surfaces. `decode_glb_rest_pose` explicitly flattens the authored node
+transforms without sampling animation clips. Ordinary `decode_glb` still
+rejects clips, and both reject skins/extensions/external resources and enforce
+the same budgets. This preserves the old unanimated CAD inspection, not a
+working petal-actuator model. The source exporter maps STEP +Z into glTF +Y;
+native maps that actual mating normal to ±X, fixing the old adapter's +Z
+assumption. A geometry regression pins the thin axis to the mating corridor.
+
+The display anchor is one million metres above the current survey bookmark,
+solely to reuse native camera, celestial lighting, terrain and mesh consumers;
+it is never fed into the isolated solver as a physical trajectory. No local
+`FlightAuthority`, JIT forecast, flight engine plume, or remote replica is made.
+HUD/telemetry report state, gap, load time, actual velocities, joint count,
+latest-substep joint force and solved proxy inspection. Camera/UI reads cannot
+alter solved state. In cabin mode only, the once-consumed capture event emits
+the retained authored 110 Hz / 180 ms structural cue; exterior vacuum, mute,
+headless tests and seeking remain silent. This is not calibrated impact audio.
+
+Tests pin cadence-independent replay, single capture, full transition order,
+load transfer, ≤0.025 m port error, total momentum within 1e-5 kg m/s of the
+700 N s applied impulse, and the 175 N partner reaction within 0.001 N during
+steady loading. CLI captures cover approach, engagement, load and clean undock
+through the real native host; these are deterministic physical-state evidence,
+not independent aesthetic approval. The one-fixture CPU diagnostic runs nine
+1000-requested-tick trials, freezing completed fixtures; it is not a pure
+per-tick solver or whole-client benchmark. Executed gates and exact evidence:
+`../artifacts/native-docking-2026-10-20.json`.
+
+General live-flight contact patch/normal scene overlays, interactive docking
+commands, calibrated petal capture, server ownership UI and jointed-stack
+control remain separate obligations. The native solved-fixture inspector does
+not claim to replace every contact/debug view in the legacy host.

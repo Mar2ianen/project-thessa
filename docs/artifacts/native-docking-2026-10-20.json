@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-20",
+  "baseline": "49b4492",
+  "scope": "Direct GPL-to-GPL port of the retained isolated two-craft docking fixture into the native host, with solved rigid presentation, D1 CAD rest surfaces, fixed replay and structural capture cue. Shared locked-DOF joint telemetry correction discovered by a known-load regression. Not full Bevy retirement or live-fleet docking UI.",
+  "contract": {
+    "physics_owner": "Existing thessa_collision::CollisionWorld and thessa_sim_core::DockingSession; the game fixture supplies two 300 kg / diagonal 400 kg m2 bodies, the retained central/eight-cuboid proxies, initial +/-1.5 m and -/+0.02 m/s states, +/-1.4 m ports and a 350 N actuator load for two seconds. No second solver, trajectory prediction, or direct pose animation.",
+    "time": "Fixed 1/120 s solver dt with bounded 0..0.05 s presentation admission. Headless --docking-time 0..30 seeks before warmup and quantizes down to a fixed tick; --docking-step 0..0.05 (default 1/60) includes warmup, zero freezes. Completed fixture freezes the final solved state like the legacy demo. Invalid/mixed flight/server/map/site/preview/time controls fail before asset/world loading.",
+    "render": "Existing opaque mesh, materials, RT/shadow and per-primitive instance-range path; two solved instances, no new pass/backend. A body-space anchor one million metres above the survey bookmark is presentation only, never fed into the isolated zero-gravity vacuum solver as an orbit or live vehicle state.",
+    "cad": "D1 GLB's authored node transforms are flattened with explicit decode_glb_rest_pose; clips are not sampled, matching the old unanimated inspection. Default decode_glb still rejects clips; both retain skin/extension/external-resource rejection and identical budgets. Native maps the actual glTF +Y mating normal (STEP +Z after export) to +/-X, fixing the old +Z assumption; a geometry regression pins the thin axis.",
+    "inspection": "HUD reads solved state/gap/velocities/pressure progression/joint count/latest-substep reaction and transformed collision-shell preview. Readout/camera/mesh extraction do not step or mutate the fixture. There is no FlightAuthority, server replica, map forecast or starter engine plume in this mode.",
+    "audio": "One consumed capture event with solved relative speed; authored 110 Hz / 180 ms structural cue only for the explicit diagnostic cabin listener attached to craft A. Exterior vacuum, mute, headless tests and seek remain silent; no acoustic-power or impact-spectrum calibration claim.",
+    "telemetry_fix": "Rapier 0.35 stores the final small-step impulse, not a full-frame sum. Locked-DOF force readback now divides by dt/num_solver_iterations rather than dt. Angular generalized impulses additionally pass through Rapier's public quaternion-error Jacobian at queried frames before normalization; its aligned-frame basis is half a rotation matrix. No hard-coded factor tied to default iterations. Motor/limit impulses, full-frame averages/peaks and high-speed/large-misalignment certification are not implied.",
+    "capture_metadata": "native_docking_fixture identifies the isolated mode and native_docking_clock explains its fixed replay versus authority/ephemeris state. Existing GPU interval layout remains unchanged."
+  },
+  "verification": {
+    "status": "All 29 local command gates passed with 609 compiled/configuration inputs byte-identical throughout the run and independently rechecked afterward. No remote CI claim.",
+    "source_manifest_sha256": "2ecbb9a06f90320d838cc262993d7fabb3d8c010854415eb329f3e14fbd39a23",
+    "checks": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+      "cargo test --workspace --lib --bins: 1957 passed, zero failed",
+      "cargo test --workspace --test '*': 97 passed, zero failed",
+      "cargo test -p thessa-terrain-native --no-default-features --bin thessa-terrain-native: 78 passed",
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored: 24 GPU tests passed",
+      "cargo build --release -p thessa-terrain-native -p thessa-server",
+      "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1: 36 passed",
+      "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1: 39 passed, including real silent CLI docking/plume captures",
+      "python3 tools/agent-qa/check_architecture.py; python3 -m unittest discover -s tools/agent-qa/tests -v; git diff --check (separate command gates)",
+      "Inherited focused map/flight/mouse/visibility/flyby/maneuver/performance/plume regressions and muted window smokes; exact argv in gates.json",
+      "cargo test --release -p thessa-terrain-native --bin thessa-terrain-native docking -- --nocapture --test-threads=1: 5 passed, one separately executed diagnostic",
+      "thessa-terrain-native --hud --docking-demo --frames 12 --mute: 12 presentations on native Wayland, no audio device opened"
+    ],
+    "directory": "target/test-tmp/native-docking-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan",
+    "focused_logs": ["target/test-tmp/docking-unit.log", "target/test-tmp/docking-load.log", "target/test-tmp/docking-cli.log", "target/test-tmp/docking-feature-off.log"],
+    "bounds": {
+      "load_readback_known_cases": "Two equal 5 kg bodies, 350 N plus 2 Nm axial input on A: 175 N and 1 Nm transferred to B, absolute error below 1e-6 N/Nm over 1/2/4/8 solver small steps at 60/120 Hz",
+      "fixture_momentum_error_kg_m_s": 0.00001,
+      "fixture_steady_partner_force_error_n": 0.001,
+      "maximum_capture_port_gap_m": 0.025,
+      "replay": "Same solved snapshot for 300*0.01 s, 60*0.05 s and seek(3 s); invalid admission is rejected before mutation; one capture cue; no second joint/capture after completion; camera/extraction remain read-only"
+    },
+    "focused_state_evidence": "Aligned/hard dock/outer engagement at 4.375 s, pressure gate completed at 4.866666666666666 s, load and undock finished at 6.866666666666666 s; one capture, zero remaining joints, each vx=1.1666666666666667 m/s. Exact final snapshot rather than requested seek time is reported.",
+    "cost_boundary": "Nine isolated one-fixture trials, 1000 requested fixed ticks per trial; completed fixtures freeze. Does not include GPU/asset loading/audio, and is not a pure active-tick solver or whole-client timing.",
+    "replay_cpu_median_ms": 3.002410,
+    "replay_cpu_max_ms": 6.053901,
+    "cli_captures": "apps/terrain-native/target/test-tmp/native-docking-845796: 640x360 no-HUD captures at requested 0/4.5/5.5/8 seconds plus 960x540 inspector at 5.5 seconds. All headless and silent; two submitted rigid instances, no plume allocation/draw.",
+    "cli_approach_to_final_changed_pixels": 9612,
+    "records": "source.json, gates.json, summary.json and validation.json under the verification directory; verify.py independently rechecked input and gate-log hashes. Images establish contribution/readout rendering, not independent whole-frame visual acceptance."
+  },
+  "limitations": [
+    "General live-flight contact patch/normal scene overlays remain unported; solved docking-shell inspection does not replace all legacy contact gizmos",
+    "No live petal actuation, calibrated capture damping/stiffness, class ratings, interactive docking controls, server ownership UI or jointed-stack control",
+    "No independent blind visual/usability review, OS-level key injection, Metal/WebGPU runtime execution or remote CI claim",
+    "Legacy host retained until the other render/game/test/packaging obligations are replaced; no full native parity or whole-client performance win claimed"
+  ]
+}

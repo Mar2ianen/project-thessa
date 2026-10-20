@@ -141,6 +141,7 @@ impl Controls {
 
 #[derive(Default)]
 pub struct Stats {
+    pub docking: Option<crate::docking::Snapshot>,
     pub map: Option<crate::map::Snapshot>,
     pub clock: Option<crate::scene::FlightClock>,
     pub instruments: thessa_graphics::ResolvedInstruments,
@@ -177,6 +178,7 @@ impl Stats {
     pub fn from_scene(scene: &crate::scene::Scene, frames: u64, cpu_ms: f64) -> Self {
         let data = scene.flight_data();
         Self {
+            docking: scene.docking.as_ref().and_then(|d| d.snapshot().ok()),
             map: scene.map_snapshot(),
             instruments: thessa_graphics::resolve_instruments(scene.requested.instruments),
             clock: scene.flight_clock(),
@@ -472,6 +474,21 @@ fn widgets(
             return;
         }
         perf_overlay(context, stats);
+        if let Some(demo) = &stats.docking {
+            egui::Window::new("Thessa | solved docking fixture")
+                .default_pos([340.0, 16.0]).default_width(360.0).show(context, |ui| {
+                    ui.heading(format!("{:?} · {:.3} s", demo.state, demo.time.0));
+                    ui.label(format!("Port gap {:.4} m · joint count {} · touching pairs {}", demo.port_gap_m, demo.joints, demo.contacts));
+                    ui.label(format!("350 N load on A: {:.3} s · captures {}", demo.load_time_s, demo.captures));
+                    ui.label(demo.joint_force_n.map_or_else(|| "Joint load: unavailable (no joint)".into(), |force| format!("Solved joint load: {force:.3} N")));
+                    ui.label(format!("Solved vx A / B: {:.4} / {:.4} m/s", demo.bodies[0].velocity_inertial_mps.x, demo.bodies[1].velocity_inertial_mps.x));
+                    ui.strong(if demo.finished { "DONE — joint removed; final solved state frozen" } else { "LIVE RAPIER · 120 Hz" });
+                    ui.small("Isolated vacuum fixture; display anchor is not an orbit. CAD at authored rest pose; port actuation is not animated.");
+                    if let Ok(shell) = crate::docking::solved_shell(demo) {
+                        crate::contact_preview::show(ui, &shell);
+                    }
+                });
+        }
         if view.telemetry {
         egui::Window::new("Thessa | terrain migration")
             .default_open(!stats.live_flight)

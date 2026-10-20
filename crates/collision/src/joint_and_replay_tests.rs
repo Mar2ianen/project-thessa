@@ -43,6 +43,56 @@ fn two_spheres() -> (CollisionWorld, CollisionBodyId, CollisionBodyId) {
 }
 
 #[test]
+fn fixed_joint_load_uses_the_actual_small_step_duration_not_the_whole_frame() {
+    for iterations in [1, 2, 4, 8] {
+        for step_s in [1.0 / 60.0, 1.0 / 120.0] {
+            let (mut world, a, b) = two_spheres();
+            world.integration.num_solver_iterations = iterations;
+            world
+                .attach_fixed_joint(
+                    a,
+                    b,
+                    DVec3::X * 2.0,
+                    DQuat::IDENTITY,
+                    DVec3::NEG_X * 2.0,
+                    DQuat::IDENTITY,
+                )
+                .unwrap();
+            for _ in 0..120 {
+                world
+                    .step(
+                        step_s,
+                        [
+                            (
+                                a,
+                                ExternalWrench {
+                                    force_inertial_n: DVec3::X * 350.0,
+                                    torque_inertial_nm: DVec3::X * 2.0,
+                                },
+                            ),
+                            (b, ExternalWrench::ZERO),
+                        ],
+                    )
+                    .unwrap();
+            }
+            let load = world.joint_loads(step_s).unwrap()[0];
+            // Two equal 5 kg bodies: F/2 must reach B, irrespective of solver
+            // convergence count. Old readback under-reported by that count.
+            assert!(
+                (load.force_n - 175.0).abs() < 1e-6,
+                "iterations={iterations} dt={step_s} force={}",
+                load.force_n
+            );
+            assert!(
+                (load.torque_nm - 1.0).abs() < 1e-6,
+                "iterations={iterations} dt={step_s} torque={}",
+                load.torque_nm
+            );
+        }
+    }
+}
+
+#[test]
 fn prismatic_joint_keeps_its_anchor_and_enforces_strut_stroke_limits() {
     let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
     let mut world = CollisionWorld::new(frame).unwrap();

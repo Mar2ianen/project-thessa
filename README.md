@@ -139,6 +139,11 @@ The checked-in vertical slice currently contains:
       14-step actual-profile volume rendering with opaque-depth clipping and
       resource-free disable. The starter nozzle deck remains provisional;
       native nozzle lighting is explicitly unavailable ([doc 38](docs/38_ENGINE_PLUME_RENDERING.md)).
+      `--docking-demo` now runs the retained two-body Rapier/DockingSession
+      experiment with solved poses, D1 CAD rest surfaces, native inspection and
+      cabin-only capture cue. `--docking-time` / `--docking-step` provide silent
+      headless replay; this isolated fixture is not orbital/fleet authority
+      ([docking contract](docs/details/01_DOCKING_PORTS.md#12-native-retained-fixture-port-2026-10-20)).
      The shared shadow atlas reuses depth only for unchanged light matrices,
      terrain and mesh casters; motion/source changes invalidate it, with no
      quality or update-rate reduction.

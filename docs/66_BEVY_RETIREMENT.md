@@ -26,14 +26,14 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 | `main.rs` lifecycle, scheduling, assets, window/input | `terrain-native/{main,window}.rs`, `render-assets`, winit/egui | promote a complete native client entry point; preserve packaged asset discovery and useful CLI scenarios |
 | `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
 | `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | pause/warp/relaunch and focus release now have native consumers; reconcile remaining flight deck commands and reference/display-body choices; do not fabricate authoritative state in UI |
-| `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared `flight-authority::instruments` and instrument settings | dominant-body kinematics, air/load/orbit and wheel/canopy details plus speed/altitude selectors now have native consumers; guidance/target semantic inputs and remaining command fixtures still need replacement |
+| `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared `flight-authority::instruments` and instrument settings | dominant-body kinematics, air/load/orbit, wheel/canopy details and speed/altitude selectors now have native consumers; remaining presentation/command usability evidence is open; a new target picker or nonlocal attitude deck is future work, not shipped legacy functionality |
 | `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards and dominant-body apsis/escape/wake readouts; powered/live JIT futures, remaining guidance/event inputs and appearance/usability acceptance remain |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
 | `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
 | `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core`, native game-owned `plume.rs`, `render-wgpu` station/depth consumer | resolved Low/Medium/High consumers and diagnostics now exist (doc 38); field-derived native nozzle lighting, compiled nozzle extraction and wider animation/visual acceptance remain; provisional inputs never drive physics |
 | `night_lights.rs`, gas-giant portions of `beauty.rs` | worldgen inhabited regions, material/assets layers | extract existing GPL optical bakes to game-owned code or independently implement a neutral model; native material consumers still missing |
-| `audio.rs` | `audio-core`, `audio-synth`, native `audio.rs` | native engine/device adapter, exterior/cabin routing and RCS/GPWS/boom fixtures now have consumers; docking event integration remains; captures/tests stay silent and missing audio hardware does not prevent rendering |
-| `contact_gizmos.rs`, `docking_demo.rs` | `collision`, shared docking state machine, native `contact_preview.rs` | preserve actual solved contact/docking inspection and deterministic replay; a static mesh preview is not a solved docking replacement |
+| `audio.rs` | `audio-core`, `audio-synth`, native `audio.rs` | native engine/device adapter, exterior/cabin routing, RCS/GPWS/boom and once-consumed structural docking cue now have consumers; captures/tests stay silent and missing audio hardware does not prevent rendering |
+| `contact_gizmos.rs`, `docking_demo.rs` | `collision`, shared docking state machine, native `docking.rs` / `contact_preview.rs` | solved two-body docking fixture, D1 CAD rest surfaces, load/undock replay and inspector now ported (docking doc §12); general live-flight contact patch/normal overlays remain; a static preview alone is not solved docking |
 | Bevy bloom/exposure/AA, Solari | native `DisplayTransform`, `RayScene`, FastRT | manual HDR/display and scene-object rays exist; remaining settings must be implemented or explicitly resolved to documented fallbacks, not falsely marked applied |
 | `perf.rs`, Bevy BRP integration | `perf`, native capture schema, agent-QA tools | the retainer's F4/`Shift+F4`/F5 overlay, short capture and profiling level now run in the native window over the same shared collector (windowed overlays never fabricate GPU time; GPU timestamps stay the headless `--perf-capture` path), and `THESSA_AUTOBENCH` remains an old-client measurement harness superseded there by the deterministic headless capture |
 
@@ -129,6 +129,13 @@ doc 57); guidance/target inputs and broader platform/visual acceptance remain.
 The one-shot typed `ExecuteManeuver` fixture is now the native
 `--maneuver-kick` (see the retirement list above); an interactive maneuver
 editor is future work, not a retained feature.
+Likewise, the legacy live `FlightUiState` supplies no target name/distance/
+closing-speed or target speed; its attitude frame is always `Local`. The nonlocal
+target/guidance data in `demo_preview` is test-only. The shipped HUD actions
+contain no target picker or prograde/normal/radial guidance selector. Those
+future features must not become invented requirements merely to delete the
+old host. Native flyby and the typed maneuver fixture are the real retained
+guidance adapters; their verified ports are listed above.
 F1/F2/F3 visibility and display preferences are session-owned UI policy, never
 authoritative state or acknowledgement.
 

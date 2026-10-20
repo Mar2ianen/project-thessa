@@ -23,8 +23,13 @@ world or pretend an event happened in the authoritative simulation. No sound
 is emitted by offline PCM tests.
 The original adapter's constant authored listening levels are retained, not
 claimed as calibrated power, distance attenuation, Doppler, delay-line engine
-transport or structural material transfer. Per-source/pressure-volume mixing,
-docking event integration remain retirement work; see
+transport or structural material transfer. The 2026-10-20 native docking port
+now delivers its once-consumed capture event to the existing optional mixer:
+110 Hz / 180 ms, authored gain from solved relative speed, only for a diagnostic
+cabin listener attached to craft A. Exterior vacuum, mute, replay seek and all
+headless tests remain silent. This is not a calibrated impact spectrum or a
+generic networked contact-event stream. Per-source/pressure-volume mixing remains
+future work; see
 [doc 66](66_BEVY_RETIREMENT.md).
 
 This document defines the semantic boundary for sound before the current Bevy

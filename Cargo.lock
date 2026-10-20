@@ -6547,6 +6547,7 @@ dependencies = [
  "thessa-atmosphere",
  "thessa-audio-core",
  "thessa-audio-synth",
+ "thessa-collision",
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-graphics",

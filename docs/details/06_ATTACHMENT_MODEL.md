@@ -190,7 +190,8 @@ assembly_air`; local hardware dependent).
 `ContactRuntime` can sync a partner into the shared Rapier scene, validate
 live local-port kinematics against `DockingSession`, begin soft capture, align
 and hard-dock with a fixed joint, advance pressure equalization in physics
-time, report the latest joint solver impulse as average force/moment, and
+time, report the latest solver-substep joint reaction as force/moment (not a
+full-frame impulse sum; see `01_DOCKING_PORTS.md` §10), and
 remove the joint while preserving both solved body states. The D1 contact test
 exercises that sequence under an applied load. `CollisionWorld` reports
 constraint loads only; it does not assign structural damage or infer ratings.

@@ -4,6 +4,7 @@
 mod celestial;
 #[cfg(feature = "hud")]
 mod contact_preview;
+mod docking;
 mod environment;
 mod flyby;
 #[cfg(feature = "hud")]
@@ -49,8 +50,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut paused = false;
     let mut flyby = false;
     let mut maneuver_kick = None;
+    let mut docking = false;
+    let mut docking_time = None;
+    let mut docking_step = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--docking-demo" => docking = true,
+            "--docking-time" => {
+                docking_time = Some(
+                    args.next()
+                        .ok_or("--docking-time requires seconds")?
+                        .parse::<f64>()?,
+                )
+            }
+            "--docking-step" => {
+                docking_step = Some(
+                    args.next()
+                        .ok_or("--docking-step requires seconds")?
+                        .parse::<f64>()?,
+                )
+            }
             "--mute" => audio.muted = true,
             "--audio-cabin" => audio.cabin = true,
             "--audio-demo" => audio.demo = true,
@@ -146,6 +165,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--no-hud" => hud_override = Some(false),
             "--help" => {
                 println!(
+                    "--docking-demo runs the retained isolated vacuum two-craft Rapier/DockingSession fixture with actual solved poses and D1 CAD rest surfaces. Not flight/fleet authority. Headless --docking-time 0..30 seeks a deterministic fixed-step replay before warmup; --docking-step 0..0.05 advances per frame (default 1/60, zero freezes). Window uses elapsed admission capped at 0.05s. Incompatible with flight/map/site/preview/time controls. Cabin impact is a diagnostic structural cue; vacuum exterior stays silent."
+                );
+                println!(
                     "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
@@ -198,6 +220,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     if frame_limit == Some(0) {
         return Err("--frames must be non-zero".into());
     }
+    if (docking_time.is_some() || docking_step.is_some()) && (!docking || headless.is_none()) {
+        return Err("--docking-time/--docking-step require --docking-demo and --headless".into());
+    }
+    if docking_time.is_some_and(|s| !s.is_finite() || !(0.0..=30.0).contains(&s))
+        || docking_step.is_some_and(|s| !s.is_finite() || !(0.0..=0.05).contains(&s))
+    {
+        return Err("docking replay requires finite time 0..30 and step 0..0.05 seconds".into());
+    }
+    if docking
+        && (live_flight
+            || server_flight
+            || vehicle_preview
+            || map_open
+            || survey_site.is_some()
+            || sim_time != 0.0
+            || sim_step != 0.0
+            || paused
+            || warp.is_some()
+            || chase
+            || flyby
+            || throttle_preset.is_some()
+            || engine_on
+            || maneuver_kick.is_some()
+            || flight_step.is_some())
+    {
+        return Err(
+            "--docking-demo is isolated: incompatible with flight/map/site/preview/time controls"
+                .into(),
+        );
+    }
+    let docking_step = docking_step.unwrap_or(1.0 / 60.0);
     if perf_capture.is_some() && headless.is_none() {
         return Err("--perf-capture requires --headless".into());
     }
@@ -323,6 +376,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         scene.select_site(site);
     }
     scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
+    if docking {
+        scene.enable_docking(docking_time.unwrap_or(0.0))?;
+    }
     if vehicle_preview {
         scene.enable_vehicle_preview()?;
     }
@@ -463,7 +519,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut last_flight_frame = Instant::now();
         for frame in 0..u64::from(count) + 30 {
             let start = Instant::now();
-            if live_flight {
+            if docking {
+                scene.advance_docking(docking_step)?;
+            } else if live_flight {
                 let elapsed = if server_flight {
                     start
                         .duration_since(last_flight_frame)
@@ -781,6 +839,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "environment=disabled; isotropic ambient_lux/PI reflection term, no sky integration"
             ),
             None => println!("environment=unavailable; body has no atmosphere provider"),
+        }
+        if let Some(demo) = &scene.docking {
+            println!("{}", demo.snapshot()?.telemetry());
         }
         if let Some(status) = scene.flight_telemetry() {
             if server_flight {

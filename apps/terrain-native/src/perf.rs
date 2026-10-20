@@ -156,6 +156,8 @@ pub(crate) fn base_capture_metadata(
         .insert("gpu_scope_layout".into(), "native-topology-v6-plume".into());
     meta.graphics.resolved.extend(sky_layers.metadata());
     for (key, value) in [
+        ("native_docking_fixture", scene.docking.is_some().to_string()),
+        ("native_docking_clock", "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory".into()),
         ("native_map_open", scene.map_active().to_string()),
         ("native_hdr", display.enabled().to_string()),
         (

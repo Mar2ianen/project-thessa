@@ -50,6 +50,13 @@ contract, drives them through capture/alignment/hard-dock/pressure
 equalization, applies a force to one craft, and then undocks them without an
 artificial velocity kick.
 
+The native `--docking-demo` consumer (`docs/details/01_DOCKING_PORTS.md` §12)
+renders these surfaces at their authored static rest pose, as the retained
+client did; the clips are not a live actuator model. Native explicitly selects
+`decode_glb_rest_pose` rather than silently discarding animations during ordinary
+GLB loading. The Blender glTF export maps the STEP +Z mating normal to +Y;
+the native two-port placement maps +Y to ±X to match its physical corridor.
+
 Do not promote the provisional proxy or coefficients to final gameplay values
 without a structural/contact calibration pass.
 

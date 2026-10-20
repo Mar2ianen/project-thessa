@@ -28,6 +28,17 @@ impl Default for Limits {
 }
 
 pub fn decode_glb(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
+    decode(bytes, limits, false)
+}
+
+/// Explicit static inspection of a scene's authored node transforms even if
+/// the file also contains animation clips. No clip is sampled, nor are skins
+/// or other unsupported semantics accepted. Ordinary loading remains strict.
+pub fn decode_glb_rest_pose(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
+    decode(bytes, limits, true)
+}
+
+fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, String> {
     if bytes.len() > limits.file_bytes {
         return Err("GLB file budget exceeded".into());
     }
@@ -70,7 +81,7 @@ pub fn decode_glb(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
             return Err("GLB accessor outside buffer view".into());
         }
     }
-    if glb.animations().len() != 0
+    if (!rest_pose && glb.animations().len() != 0)
         || glb.skins().len() != 0
         || glb.nodes().len() > limits.nodes
         || glb.extensions_used().next().is_some()

@@ -58,6 +58,11 @@ MIT `render-wgpu` consumes immutable axial samples and a caller-provided texture
 its medium integration follows MIT `plume-core` and its modal shell deformation
 is independently implemented, not a relicensed legacy game shader.
 
+The retained docking fixture is ported GPL-to-GPL into `apps/terrain-native`;
+its D1 source/proxy calibration remains game-owned. The explicit static-rest-pose
+option in MIT `render-assets` contains only generic GLB decoding policy and no
+copied game fixture or asset. Animation sampling/skin support is not implied.
+
 ### Assets
 
 Art, music, fonts, third-party datasets and trademarks have their own licenses. GPL code licensing does not automatically choose an asset license. Asset policy remains TBD.

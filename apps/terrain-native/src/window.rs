@@ -210,7 +210,13 @@ impl State {
             self.config.width,
             self.config.height,
         );
-        if scene.live_flight() {
+        if scene.docking.is_some() {
+            let elapsed = self
+                .last_flight_wall_s
+                .replace(now_s)
+                .map_or(0.0, |last| (now_s - last).clamp(0.0, 0.05));
+            scene.advance_docking(elapsed)?;
+        } else if scene.live_flight() {
             let elapsed = self
                 .last_flight_wall_s
                 .replace(now_s)
@@ -785,6 +791,8 @@ impl ApplicationHandler for App {
                             self.middle_held = false;
                             self.scene.release_manual_input();
                         }
+                        let docking_impact =
+                            self.scene.docking.as_mut().and_then(|d| d.take_impact());
                         if let Some(audio) = &mut self.audio {
                             let frame = self.scene.audio_frame().or_else(|| {
                                 (self.audio_options.demo && !self.scene.live_flight()).then(|| {
@@ -794,6 +802,9 @@ impl ApplicationHandler for App {
                                 })
                             });
                             audio.update(frame);
+                            if let Some(speed) = docking_impact {
+                                audio.docking_impact(speed);
+                            }
                         }
                         self.frames += 1;
                         if self.frame_limit.is_some_and(|n| self.frames >= n) {

@@ -77,6 +77,11 @@ through capture/alignment/hard-dock/pressure equalization, apply a structural
 load, and undock. It is a validation fixture, not a gameplay command exposed
 in the normal HUD.
 
+The same retained fixture now has a native `thessa-terrain-native --docking-demo`
+consumer with actual solved poses and explicit static CAD rest surfaces. See
+`details/01_DOCKING_PORTS.md` §12 for replay, cabin cue and limitations; general
+live-flight patch/normal overlays are not yet replaced by this fixture port.
+
 ## Known limits
 
 - the visible system uses design-target analytic ephemerides;

@@ -266,7 +266,7 @@ impl SceneMeshes {
                     source,
                     thessa_render_wgpu::mesh::SurfaceSettings {
                         format,
-                        capacity: 1,
+                        capacity: if scene.docking.is_some() { 2 } else { 1 },
                         quality,
                         reflections: resolved.specular_reflections,
                         shadows,
@@ -363,6 +363,22 @@ impl SceneMeshes {
                 Ok(())
             };
         };
+        if let Some(demo) = &scene.docking {
+            let instances = demo
+                .instances(*primary_instance)
+                .map_err(|e| BackendError::Device(e.to_string()))?;
+            return self
+                .inner
+                .as_mut()
+                .expect("local docking source")
+                .update_selected(
+                    backend,
+                    &view,
+                    &scene.lighting(),
+                    &instances,
+                    Some(&demo.ranges),
+                );
+        }
         if !scene.server_flight() {
             return self.inner.as_mut().expect("local source").update(
                 backend,

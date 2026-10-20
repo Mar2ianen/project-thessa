@@ -377,6 +377,18 @@ and rebuilds the affected backend bodies — the same rebuild path staging
 already uses. No exploding/despawning on damage: AGENTS.md §6 stays in
 force.
 
+Joint-load readback correction (2026-10-20): Rapier 0.35's stored locked-DOF
+impulse belongs to the last solver small step, not the whole contact frame.
+`joint_loads(step_s)` now normalizes by `step_s / num_solver_iterations` and
+maps angular generalized impulses through the backend quaternion-error
+Jacobian. A constant known-load test pins equal-body force/torque transfer
+across 1/2/4/8 iterations and 60/120 Hz. This is latest-substep telemetry,
+not a full-frame average/peak or aggregated motor/limit impulse. Wrapper
+per-body extra iterations and multiple CCD time subdivisions remain disabled.
+The native retained docking replay and its acceptance boundary are documented
+in `details/01_DOCKING_PORTS.md` §12; the historical gizmo claims below refer
+to the Bevy adapter until the live-flight overlay is replaced.
+
 Wired since the third slice: `FlightAuthority::enable_contact_mode`
 arms the switch with an explicit hysteresis boundary. Each 120 Hz `step`
 polls terrain evidence (field surface clearance, else datum clearance),

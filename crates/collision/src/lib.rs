@@ -310,8 +310,9 @@ pub struct ContactSummary {
 }
 
 /// Constraint load transmitted by one impulse joint during the most recent
-/// contact step. Rapier's generalized impulse is divided by the caller's step
-/// duration; translational and rotational channels remain separate.
+/// contact step's final solver substep. Rapier's generalized impulse is divided
+/// by that small-step duration, not the whole frame; this is not a full-frame
+/// impulse sum or peak. Translational/rotational channels remain separate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct JointLoadSummary {
     pub joint_id: JointId,

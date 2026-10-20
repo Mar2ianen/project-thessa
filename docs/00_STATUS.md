@@ -79,7 +79,7 @@ do not update in place).
 | `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 experimental | codec A–E, allocator/residency, GPU LOD/mip/aniso path, game + render-world A/B measured; compact path pre-decodes to RGBA and raw remains default | packed material-shader sampling, crack-free geometry, baked-format adoption, production height pages |
 | `43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md` | 🟡 experimental | scalar adaptive residual codec with force/moment error bounds, safe table/query validation, non-negative decoded drag, and direct panel sampling; 257×257 storage is 1.77× smaller; scalar sampling was 1.58× slower in the dated baseline and 1.77–2.10× slower across three later one-pass reruns; canonical tables remain the default | fused SIMD decode, channel-specific budgets, real VLM/CFD fields, production acceptance |
 | `45_CAD_RCBT_GEOMETRY.md` | 🔵 design baseline | D1 STEP/BRep fixture audited; existing RCBT + mesh-shader terrain path reused architecturally | CAD importer, normalized BRep runtime, crack-free adaptive face meshing, editor integration |
-| `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🟡 first slice | `audio-core` path semantics, exact-vacuum gating, structural/direct paths, Mach-cone arrival; `audio-synth` live procedural engine DSP; temporary Bevy RCS/GPWS/docking/demo adapter | calibrated physical engine telemetry/spectra, procedural one-shot mechanisms, structural attenuation graph, real IVA listener, occlusion/reverb/HRTF, post-Bevy backend |
+| `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🟡 first slice | `audio-core` path semantics, exact-vacuum gating, structural/direct paths, Mach-cone arrival; `audio-synth` live procedural engine DSP; native RCS/GPWS/boom/docking cues and optional device adapter | calibrated engine telemetry/spectra and impact audio, procedural one-shot mechanisms, structural attenuation graph, real IVA listener, occlusion/reverb/HRTF |
 | `56_NATIVE_SPECTRAL_OCEAN.md` | 🟡 native render-only slice | independent multiband GPU FFT, simulation-time finite-depth/local-gravity waves, slope-moment filtering, bounded shared raster/atlas/mesh-RT near geometry, explicit quality/optical-only fallback, GPU oracles and scoped costs | nonlinear waves, foam/wakes, bathymetry/weather, authoritative fluid coupling, far displaced intersections, primary ocean mesh-query reflections, ray cones/environment convolution, blind visual/platform acceptance |
 | `57_NATIVE_FLIGHT_DECK.md` | 🟡 native instrument/readout slice | native-pixel FastNavball, local heading/pitch/roll, dominant-body shared SI/f64 readouts, session-only speed/cue and Datum/AGL selectors, air/load/apsis/wheel/canopy details with explicit replica provenance, aircraft/FDAI layouts and disabled/quality policy; transactional ray-update recovery | nonlocal attitude frames, target/maneuver inputs, full FDAI rate/error needles, assists, small/mobile/accessibility and blind aesthetic/platform acceptance |
 | `58_NATIVE_PIPELINE_REVIEW.md` | 🟡 reviewed native pipeline slice | shared terrain/opaque-mesh/sky pass, explicit AS-before-raster API, corrected timestamp scopes, reusable terrain staging/unchanged-origin skip and fixed shadow serialization; fixed-resident split/unified oracle and A/B diagnostic | supplied whole-application speedup/parity/allocation claims not accepted; no blind/platform acceptance or complete renderer replacement |
@@ -98,7 +98,12 @@ remained byte-identical; the only edit during the run was configuration comments
 with parsed TOML values independently verified unchanged. Exact evidence and
 scoped timing/oracle bounds: `artifacts/native-plume-2026-10-20.json`.
 
-The full source-to-consumer Bevy retirement ledger is
+The 2026-10-20 retained native docking replay and shared
+joint-load correction passed 29 local command gates on 609 unchanged inputs
+(1957 workspace lib/bin and 97 integration tests, plus actual GPU suites).
+Exact scoped evidence: `artifacts/native-docking-2026-10-20.json`.
+
+The remaining source-to-consumer retirement obligations are tracked in
 [doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must
 be replaced before removing `apps/client` and `crates/bevy-rcbt`; a clean native
 terrain dependency graph alone is not full-client replacement.
@@ -306,6 +311,6 @@ fleet observations (but is rebuilt for v10).
 | `35_BLAZE_AUDIT_2026_09_12.md` | 🕰️ record | scoped to base `45e0b79`; see 36 for current status |
 | `36_DOCUMENTATION_AUDIT_2026_09_14.md` | 🕰️ record | snapshot `e1454ac`; superseded by this file for post-merge state |
 | `44_KSA_TECHNICAL_COMPARISON_2026_09_20.md` | 🕰️ external audit | KSA comparison: warp, rings, glints, plume, instruments, body orientation |
-| `details/01_DOCKING_PORTS.md` | 🟡 D1 contact-scene slice | persisted D1 docking protocol, fixed-joint install/removal, pressure-equalization gate, solver joint-load readback, authored port inventory, and server fleet ownership with dock sessions, vacuum-gated joints, and fleet snapshots | calibrated capture dynamics and class-dependent ratings, jointed-stack control, client fleet render, and complete part-level structural integration |
+| `details/01_DOCKING_PORTS.md` | 🟡 D1 contact-scene slice | persisted protocol, fixed-joint install/removal, pressure gate, corrected latest-substep joint-load readback, authored ports, server fleet ownership and snapshots; native solved two-craft replay, D1 rest surfaces, inspector and structural cue | calibrated capture/class ratings, petal actuation, jointed-stack control, interactive ownership/commands, live-flight patch/normal overlays and complete structural integration |
 | `REFERENCES.md` | 📚 reference | UX-only refs; Nyx/ANISE isolation; no copied code |
 | `adr/0007–0011` | ✅ accepted | licensing, render boundary, autopilot graphs, aero boundary, RCBT boundary |

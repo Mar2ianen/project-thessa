@@ -56,6 +56,17 @@ struct Tone {
     gain: f32,
 }
 
+/// Retained isolated-vacuum capture cue. The caller is attached to craft A;
+/// this is an authored structural listening level, not acoustic power.
+fn docking_tone(options: Options, relative_speed_mps: f64) -> Option<Tone> {
+    (options.cabin && !options.muted && relative_speed_mps.is_finite() && relative_speed_mps >= 0.0)
+        .then(|| Tone {
+            frequency_hz: 110.0,
+            duration_ms: 180,
+            gain: (relative_speed_mps / 0.05).clamp(0.05, 1.0) as f32 * 0.24,
+        })
+}
+
 #[derive(Default)]
 struct Mix {
     throttle: f32,
@@ -242,19 +253,54 @@ impl NativeAudio {
         self.control
             .set_active(mix.airborne > 0.0 || mix.structure > 0.0);
         for tone in mix.tones {
-            use rodio::Source;
-            self.device.mixer().add(
-                rodio::source::SineWave::new(tone.frequency_hz)
-                    .take_duration(std::time::Duration::from_millis(tone.duration_ms))
-                    .amplify(tone.gain),
-            );
+            self.play_tone(tone);
         }
+    }
+
+    pub fn docking_impact(&self, relative_speed_mps: f64) {
+        if let Some(tone) = docking_tone(self.policy.options, relative_speed_mps) {
+            self.play_tone(tone);
+        }
+    }
+
+    fn play_tone(&self, tone: Tone) {
+        use rodio::Source;
+        self.device.mixer().add(
+            rodio::source::SineWave::new(tone.frequency_hz)
+                .take_duration(std::time::Duration::from_millis(tone.duration_ms))
+                .amplify(tone.gain),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docking_capture_is_structural_cabin_only_and_silent_when_invalid_or_muted() {
+        assert!(docking_tone(Options::default(), 0.04).is_none());
+        let cabin = Options {
+            cabin: true,
+            ..Default::default()
+        };
+        let tone = docking_tone(cabin, 0.04).unwrap();
+        assert_eq!((tone.frequency_hz, tone.duration_ms), (110.0, 180));
+        assert!((tone.gain - 0.192).abs() < 1e-6);
+        assert!(
+            docking_tone(
+                Options {
+                    muted: true,
+                    ..cabin
+                },
+                0.04
+            )
+            .is_none()
+        );
+        for speed in [f64::NAN, f64::INFINITY, -0.01] {
+            assert!(docking_tone(cabin, speed).is_none());
+        }
+    }
 
     #[test]
     #[ignore = "benchmark: silent offline target-size 48 kHz audio blocks"]

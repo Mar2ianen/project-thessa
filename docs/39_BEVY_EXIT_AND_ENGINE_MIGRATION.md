@@ -63,6 +63,17 @@ release the GPU consumer. Native nozzle lighting is explicitly unavailable,
 and compiled nozzle extraction plus wider animated/visual acceptance remain
 open. See `artifacts/native-plume-2026-10-20.json`; this does not retire the host.
 
+The native docking follow-up directly ports the retained isolated two-craft
+fixture into `terrain-native::docking`, using existing Rapier/DockingSession
+state and heterogeneous opaque mesh draws. It retains D1 CAD rest surfaces,
+fixed-step replay, the actual joint/load/undock inspection and cabin-only
+capture cue. A new known-load regression also fixes a fourfold under-reporting
+in the shared latest-substep force telemetry, and maps angular generalized
+impulses through the backend Jacobian (see docking contract §10/12).
+This is not orbital/fleet authority or generalized live-flight contact gizmos;
+those remain independent obligations. Evidence:
+`artifacts/native-docking-2026-10-20.json`.
+
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only
 unit sphere is advanced by the canonical consumer and native selection below;

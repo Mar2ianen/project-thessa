@@ -31,6 +31,7 @@ pub struct Scene {
     /// `ExecuteManeuver` fixture semantics: never re-sent in a session).
     maneuver_kick_sent: bool,
     plume: crate::plume::Cache,
+    pub docking: Option<crate::docking::Demo>,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -154,6 +155,9 @@ impl Scene {
     }
     #[cfg(feature = "hud")]
     pub fn set_map_open(&mut self, open: bool) {
+        if self.docking.is_some() {
+            return;
+        }
         self.map.set_open(open, self.celestial.ephemeris());
         // Transition cannot leave stale key/cursor/SAS demands in the authority.
         self.release_manual_input();
@@ -465,6 +469,7 @@ impl Scene {
             vehicle: None,
             maneuver_kick_sent: false,
             plume: Default::default(),
+            docking: None,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
             input: thessa_flight_authority::input::FlightInput::default(),
             control_mode: thessa_flight_authority::ControlMode::Navball,
@@ -565,6 +570,52 @@ impl Scene {
             .unwrap_or_else(|| self.up.any_orthonormal_vector());
         self.camera = thessa_flight_authority::camera::FlightCamera::pilot_default();
         self.vehicle = Some((source, instance));
+        Ok(())
+    }
+
+    /// Opt-in isolated vacuum experiment. Its display anchor is not a
+    /// gravitational trajectory, fleet vehicle, or FlightAuthority replica.
+    pub fn enable_docking(&mut self, replay_time_s: f64) -> Result<(), String> {
+        if self.vehicle.is_some() || self.sample.time != thessa_sim_core::SimTime::EPOCH {
+            return Err("docking demo requires an empty epoch scene".into());
+        }
+        let mut demo = crate::docking::Demo::new().map_err(|e| e.to_string())?;
+        demo.seek(replay_time_s).map_err(|e| e.to_string())?;
+        let source = demo.source().map_err(|e| e.to_string())?;
+        self.center = self.up * (self.stream.radius_m() + 1_000_000.0);
+        let rotation = DQuat::from_mat3(&glam::DMat3::from_cols(
+            self.east,
+            self.up,
+            self.east.cross(self.up),
+        ))
+        .normalize();
+        self.vehicle = Some((
+            source,
+            thessa_render_core::mesh::MeshInstance {
+                position_m: self.center,
+                rotation,
+                scale: 1.0,
+            },
+        ));
+        self.camera = thessa_flight_authority::camera::FlightCamera::pilot_default();
+        self.camera.set_distance_m(9.0);
+        self.camera
+            .set_orbit(glam::Quat::from_rotation_y(0.22) * glam::Quat::from_rotation_x(-0.28));
+        self.docking = Some(demo);
+        self.advance_docking(0.0)
+    }
+
+    pub fn advance_docking(&mut self, elapsed_s: f64) -> Result<(), String> {
+        let Some(demo) = &mut self.docking else {
+            return Ok(());
+        };
+        demo.advance(elapsed_s).map_err(|e| e.to_string())?;
+        let time = demo.snapshot().map_err(|e| e.to_string())?.time;
+        if time != self.sample.time {
+            let sample = self.celestial.sample(time)?;
+            self.lighting_dirty |= self.sample.lighting != sample.lighting;
+            self.sample = sample;
+        }
         Ok(())
     }
 
@@ -1358,6 +1409,11 @@ impl Scene {
     /// debounce. An unchanged SimTime performs no ephemeris or lighting work.
     /// Stage the full sample before mutation so failure preserves the old frame.
     pub fn set_presentation_time(&mut self, time: thessa_sim_core::SimTime) -> Result<(), String> {
+        if self.docking.is_some() {
+            return Err(
+                "docking presentation time is owned by the fixture's fixed-step solver".into(),
+            );
+        }
         if self.live_flight() {
             return Err("live presentation time is owned by FlightAuthority".into());
         }
@@ -1729,7 +1785,11 @@ impl Scene {
         use thessa_flight_authority::presentation::x15_asset_to_craft_rotation;
         let (_, instance) = self.vehicle.as_ref()?;
         let asset = x15_asset_to_craft_rotation().as_dquat().conjugate();
-        let craft = (instance.rotation * asset).normalize();
+        let craft = if self.docking.is_some() {
+            instance.rotation
+        } else {
+            (instance.rotation * asset).normalize()
+        };
         let up_body = self.center.try_normalize()?;
         let orientation = glam::Quat::from_xyzw(
             craft.x as f32,
@@ -1772,6 +1832,43 @@ impl Scene {
 #[cfg(test)]
 #[path = "scene_flyby_tests.rs"]
 mod flyby_tests;
+
+#[cfg(test)]
+mod docking_tests {
+    use super::*;
+    #[test]
+    fn isolated_docking_has_no_flight_authority_forecast_or_engine_and_owns_its_clock() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.enable_docking(5.5).unwrap();
+        assert!(!scene.live_flight() && !scene.server_flight());
+        assert!(scene.flight_telemetry().is_none() && scene.audio_frame().is_none());
+        assert_eq!(scene.sample.time, thessa_sim_core::SimTime(5.5));
+        assert!(
+            scene
+                .set_presentation_time(thessa_sim_core::SimTime(7.0))
+                .is_err()
+        );
+        assert!(scene.enable_live_flight().is_err());
+        let before = scene.docking.as_ref().unwrap().snapshot().unwrap();
+        let anchor = scene.vehicle.as_ref().unwrap().1;
+        let site = scene.site;
+        scene.select_site((site + 1) % 3);
+        scene.camera.zoom(1.0);
+        scene.camera.orbit_yaw(0.2);
+        scene.view(640, 360, 1.0);
+        #[cfg(feature = "hud")]
+        {
+            scene.set_map_open(true);
+            assert!(!scene.map_active());
+            let stats = crate::hud::Stats::from_scene(&scene, 0, 0.0);
+            assert_eq!(stats.docking.as_ref(), Some(&before));
+        }
+        assert_eq!(scene.docking.as_ref().unwrap().snapshot().unwrap(), before);
+        assert_eq!(scene.vehicle.as_ref().unwrap().1, anchor);
+        scene.advance_docking(0.05).unwrap();
+        assert_eq!(scene.sample.time, thessa_sim_core::SimTime(5.55));
+    }
+}
 
 #[cfg(test)]
 #[path = "scene_server_tests.rs"]

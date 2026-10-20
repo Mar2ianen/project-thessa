@@ -23,6 +23,7 @@ thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 thessa-flight-authority = { path = "../../crates/flight-authority" }
 thessa-flight-net = { path = "../../crates/flight-net" }
+thessa-collision = { path = "../../crates/collision" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }
 thessa-graphics = { path = "../../crates/graphics" }

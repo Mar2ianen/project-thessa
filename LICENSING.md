@@ -63,6 +63,11 @@ its D1 source/proxy calibration remains game-owned. The explicit static-rest-pos
 option in MIT `render-assets` contains only generic GLB decoding policy and no
 copied game fixture or asset. Animation sampling/skin support is not implied.
 
+The city-mask optical bake is directly ported GPL-to-GPL into native game code.
+MIT `render-wgpu` only uploads caller-supplied R8 bytes to the existing shared
+terrain-shader consumer; no GPL settlement envelope or speckle bake is moved
+into reusable engine crates.
+
 ### Assets
 
 Art, music, fonts, third-party datasets and trademarks have their own licenses. GPL code licensing does not automatically choose an asset license. Asset policy remains TBD.

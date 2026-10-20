@@ -144,6 +144,11 @@ The checked-in vertical slice currently contains:
       cabin-only capture cue. `--docking-time` / `--docking-step` provide silent
       headless replay; this isolated fixture is not orbital/fleet authority
       ([docking contract](docs/details/01_DOCKING_PORTS.md#12-native-retained-fixture-port-2026-10-20)).
+      `[night_lights]` now binds the retained inhabited-land optical mask to
+      native regular/conforming terrain, with cached Low/Medium/High startup
+      bakes and no mask work when disabled or gain=0. Primary-only authored
+      emission, not simulated electrical activity or secondary-ray lighting
+      ([doc 68](docs/68_NATIVE_NIGHT_LIGHTS.md)).
      The shared shadow atlas reuses depth only for unchanged light matrices,
      terrain and mesh casters; motion/source changes invalidate it, with no
      quality or update-rate reduction.

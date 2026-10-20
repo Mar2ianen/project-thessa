@@ -159,6 +159,8 @@ pub(crate) fn base_capture_metadata(
         ("native_docking_fixture", scene.docking.is_some().to_string()),
         ("native_docking_clock", "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory".into()),
         ("native_map_open", scene.map_active().to_string()),
+        ("native_night_lights_extent", format!("{:?}", resolved.night_light_mask_size())),
+        ("native_night_lights_source", "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission".into()),
         ("native_hdr", display.enabled().to_string()),
         (
             "native_hdr_target_bytes",

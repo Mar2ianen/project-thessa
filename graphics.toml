@@ -103,6 +103,8 @@ animate = true # differential deck drift; off = static
 # Warm emissive city clusters over inhabited land, gated by the terminator
 # in-shader. The mask bakes once at startup from the world's inhabited
 # regions (bake resolution only, never simulated activity); off = free.
+# Native: cached R8 primary-terrain emission, same regular/conforming consumer;
+# intensity=0 also skips mask bake/allocation. No secondary-ray city emission.
 enabled = true
 quality = "medium" # low = 128x64, medium = 256x128, high = 512x256 mask
 intensity = 1.0 # 0..2 emissive gain over the mask

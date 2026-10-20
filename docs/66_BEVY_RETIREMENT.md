@@ -25,13 +25,16 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 |---|---|---|
 | `main.rs` lifecycle, scheduling, assets, window/input | `terrain-native/{main,window}.rs`, `render-assets`, winit/egui | promote a complete native client entry point; preserve packaged asset discovery and useful CLI scenarios |
 | `terrain.rs`, `bevy-rcbt` jobs, caches, render extraction | `terrain-stream`, `rcbt-core`, `rcbt-wgpu`, `render-wgpu`, native `scene.rs` | retain conforming topology/shared surface epochs and independent height/material residency; remove the bridge only after its retained tests have neutral/native coverage |
+| `bevy-rcbt::material_microstore` / compact material decode and diagnostics | `microstore-core` codec, shared `rcbt-core::material_page`, native raw material residency | port retained neutral encoding/decode tests out of the host and either integrate compact storage or explicitly resolve the native raw fallback; a requested compact mode must not be silently reported as applied |
 | `pilot.rs`, `embedded.rs` flight/server input and cameras | `flight-authority`, `flight-net`, native `scene.rs`, `window.rs` | pause/warp/relaunch and focus release now have native consumers; reconcile remaining flight deck commands and reference/display-body choices; do not fabricate authoritative state in UI |
 | `pilot/{hud,navball,fastnavball,...}.rs` | native `hud.rs`, `fastnavball.rs`, shared `flight-authority::instruments` and instrument settings | dominant-body kinematics, air/load/orbit, wheel/canopy details and speed/altitude selectors now have native consumers; remaining presentation/command usability evidence is open; a new target picker or nonlocal attitude deck is future work, not shipped legacy functionality |
-| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards and dominant-body apsis/escape/wake readouts; powered/live JIT futures, remaining guidance/event inputs and appearance/usability acceptance remain |
+| `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards and dominant-body apsis/escape/wake readouts; celestial appearance/usability acceptance remain; generalized powered/live JIT futures are separately unfinished, never replaced with a conditional forecast |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
 | `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
 | `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core`, native game-owned `plume.rs`, `render-wgpu` station/depth consumer | resolved Low/Medium/High consumers and diagnostics now exist (doc 38); field-derived native nozzle lighting, compiled nozzle extraction and wider animation/visual acceptance remain; provisional inputs never drive physics |
-| `night_lights.rs`, gas-giant portions of `beauty.rs` | worldgen inhabited regions, material/assets layers | extract existing GPL optical bakes to game-owned code or independently implement a neutral model; native material consumers still missing |
+| `night_lights.rs` | worldgen inhabited regions, native game-owned `night_lights.rs`, existing terrain emission shader | direct retained producer and resolved cached native primary regular/conforming consumer now exist (doc 68); secondary-ray emission/calibration are not claimed |
+| gas-giant portions of `beauty.rs` | game-owned optical bake, material/assets layers | port retained GPL band producers and native celestial material consumers; do not relicense the game bake into engine crates |
+| `main.rs` celestial `MaterialParams` / `data/materials.toml` | game-owned material data, `render-assets`, existing native material draw | retain authored celestial surface textures, linear/sRGB roles, roughness/metallic/emissive overrides and physical spin in a usable native body presentation; native map outlines alone are not that consumer |
 | `audio.rs` | `audio-core`, `audio-synth`, native `audio.rs` | native engine/device adapter, exterior/cabin routing, RCS/GPWS/boom and once-consumed structural docking cue now have consumers; captures/tests stay silent and missing audio hardware does not prevent rendering |
 | `contact_gizmos.rs`, `docking_demo.rs` | `collision`, shared docking state machine, native `docking.rs` / `contact_preview.rs` | solved two-body docking fixture, D1 CAD rest surfaces, load/undock replay and inspector now ported (docking doc §12); general live-flight contact patch/normal overlays remain; a static preview alone is not solved docking |
 | Bevy bloom/exposure/AA, Solari | native `DisplayTransform`, `RayScene`, FastRT | manual HDR/display and scene-object rays exist; remaining settings must be implemented or explicitly resolved to documented fallbacks, not falsely marked applied |
@@ -65,8 +68,8 @@ The old `pilot_input` also owns functions not covered by a native WASDQE test:
 - **Implemented follow-up:** F1 controls help, F2 flight HUD visibility and F3
   telemetry/fleet panels. Help exclusively owns scene/manual input without
   pausing or cutting thrust; hidden instruments release their GPU callback.
-  Map remains usable independently of flight-HUD visibility. Guidance-specific
-  manual-takeover behavior still belongs to the remaining adapter below;
+  Map remains usable independently of flight-HUD visibility. The implemented
+  flyby adapter below owns its guidance-specific manual takeover;
 - **Implemented follow-up:** opt-in coastal flyby guidance (`F7`, `--flyby`, HUD
   toggle) is a direct native port in `apps/terrain-native/src/flyby.rs`: it
   mutates only stick/throttle/SAS/engine/chase demands, requires fresh unpaused
@@ -125,7 +128,8 @@ reuse prior replica loads. Foreign bodies never borrow home rotation/air/terrain
 and acoustics stays in the source's reference atmosphere. See doc 57 and
 `artifacts/native-flight-readouts-2026-10-19.json` for checks/cost. The opt-in
 coastal flyby fixture is now ported natively (see the retirement list above and
-doc 57); guidance/target inputs and broader platform/visual acceptance remain.
+doc 57); broader platform/visual acceptance remains. Target-selection and
+nonlocal attitude data in test-only previews are not shipped legacy controls.
 The one-shot typed `ExecuteManeuver` fixture is now the native
 `--maneuver-kick` (see the retirement list above); an interactive maneuver
 editor is future work, not a retained feature.

@@ -11,6 +11,7 @@ mod flyby;
 mod hud;
 #[cfg(feature = "hud")]
 mod map;
+mod night_lights;
 mod perf;
 mod plume;
 mod scene;
@@ -767,6 +768,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             renderer.sky_enabled()
         );
         let ocean = renderer.ocean_stats();
+        let night = renderer.night_lights_stats();
+        println!(
+            "native_night_lights extent={:?} storage_bytes={} uploaded_bytes={}; primary terrain emission only, no extra pass",
+            night.extent, night.storage_bytes, night.uploaded_bytes
+        );
         let plume = renderer.plume_stats();
         eprintln!(
             "native_plume allocated={} draws={} march_steps={} frame_upload_bytes={} profile_upload_bytes={} texture_upload_bytes={} nozzle_light=unavailable",

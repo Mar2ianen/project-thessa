@@ -95,6 +95,15 @@ pub struct TerrainPublication {
     pub dispatch_slots: usize,
 }
 
+/// Static R8 optical-mask residency, not authoritative settlement state or
+/// emitted watts. A missing source stays dark even when allocation is enabled.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NightLightsStats {
+    pub extent: Option<[u32; 2]>,
+    pub uploaded_bytes: u64,
+    pub storage_bytes: u64,
+}
+
 #[derive(PartialEq)]
 struct ShadowCacheKey {
     lights: u64,
@@ -163,6 +172,9 @@ pub struct TerrainRenderer {
     classify_bind: wgpu::BindGroup,
     raster: wgpu::RenderPipeline,
     raster_bind: wgpu::BindGroup,
+    night_mask: Option<wgpu::Texture>,
+    night_intensity: f32,
+    night_uploaded_bytes: u64,
 }
 
 fn bytes(words: impl IntoIterator<Item = u32>) -> Vec<u8> {
@@ -738,7 +750,29 @@ impl TerrainRenderer {
         let globe = solid_texture(backend, FALLBACK_ALBEDO, false);
         let roughness = solid_texture(backend, [255; 4], false);
         let black = solid_texture(backend, [0; 4], false);
+        let night_mask = settings
+            .and_then(|s| s.night_light_mask_size())
+            .map(|[width, height]| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("terrain-night-mask"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                })
+            });
+        let night_view = night_mask
+            .as_ref()
+            .map(|t| t.create_view(&Default::default()));
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -778,7 +812,10 @@ impl TerrainRenderer {
             (14, materials.slots.as_entire_binding()),
             (16, materials.directory.as_entire_binding()),
             (17, wgpu::BindingResource::TextureView(&black)),
-            (18, wgpu::BindingResource::TextureView(&black)),
+            (
+                18,
+                wgpu::BindingResource::TextureView(night_view.as_ref().unwrap_or(&black)),
+            ),
         ]
         .into_iter()
         .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource })
@@ -917,6 +954,9 @@ impl TerrainRenderer {
             classify_bind,
             raster,
             raster_bind,
+            night_mask,
+            night_intensity: settings.map_or(0.0, |s| s.night_lights_intensity),
+            night_uploaded_bytes: 0,
         })
     }
 
@@ -956,6 +996,53 @@ impl TerrainRenderer {
             &bytes(records.into_iter().flatten().map(f32::to_bits)),
         );
         Ok(())
+    }
+
+    /// Adopt a complete caller-owned optical mask. Dimensions follow resolved
+    /// quality; validate before touching texture/uniform bytes. The same shader
+    /// consumes it on regular and conforming primary terrain, without a pass.
+    pub fn update_night_mask(
+        &mut self,
+        backend: &Backend,
+        pixels: &[u8],
+    ) -> Result<(), BackendError> {
+        let texture = self
+            .night_mask
+            .as_ref()
+            .ok_or_else(|| BackendError::Device("night mask is disabled".into()))?;
+        if pixels.len() as u64 != u64::from(texture.width()) * u64::from(texture.height()) {
+            return Err(BackendError::Device(
+                "night mask byte length does not match resolved extent".into(),
+            ));
+        }
+        backend.queue.write_texture(
+            texture.as_image_copy(),
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(texture.width()),
+                rows_per_image: Some(texture.height()),
+            },
+            texture.size(),
+        );
+        backend.queue.write_buffer(
+            &self.lighting,
+            52 * 4,
+            &bytes([self.night_intensity, 1.0, 0.0, 0.0].map(f32::to_bits)),
+        );
+        self.night_uploaded_bytes += pixels.len() as u64;
+        Ok(())
+    }
+
+    pub fn night_lights_stats(&self) -> NightLightsStats {
+        NightLightsStats {
+            extent: self.night_mask.as_ref().map(|t| [t.width(), t.height()]),
+            uploaded_bytes: self.night_uploaded_bytes,
+            storage_bytes: self
+                .night_mask
+                .as_ref()
+                .map_or(0, |t| u64::from(t.width()) * u64::from(t.height())),
+        }
     }
 
     pub fn shadows(&self) -> Option<&crate::shadows::ShadowAtlas> {

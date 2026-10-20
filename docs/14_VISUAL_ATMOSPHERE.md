@@ -24,6 +24,12 @@ environment and depth-clipped primary volume. See doc 65 for numerical evidence
 and remaining secondary-origin/transport gaps, doc 39 for migration checkpoints,
 and doc 56 for ocean scope.
 
+Native inhabited-land night lights now directly consume the retained game-owned
+R8 optical bake in the shared regular/conforming primary terrain shader, with
+resolved quality budgets and startup cache. See doc 68 for first-source-slot
+terminator, authored-gain and primary-only limitations; this is not calibrated
+city radiance or simulated electrical activity.
+
 Scope: rocky planets and rocky moons first, with gas-giant bands already
 shipped as CPU-baked shells (`beauty.rs`). Full gas-giant volumetric
 treatment is not a requirement for the first implementation.

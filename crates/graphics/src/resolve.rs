@@ -404,6 +404,22 @@ mod terrain_topology_tests {
 }
 
 impl ResolvedGraphicsSettings {
+    /// Static inhabited-land optical mask budget; disabled/zero-gain paths
+    /// have no producer or texture allocation beyond a shared black binding.
+    pub fn night_light_mask_size(&self) -> Option<[u32; 2]> {
+        if !self.night_lights_enabled
+            || !self.night_lights_intensity.is_finite()
+            || self.night_lights_intensity <= 0.0
+        {
+            return None;
+        }
+        Some(match self.night_lights_quality {
+            Quality::Low => [128, 64],
+            Quality::Medium => [256, 128],
+            Quality::High => [512, 256],
+        })
+    }
+
     /// Resolve requested settings through capabilities. Never panics; explicit
     /// RT requests on incapable hardware are preserved (fail-fast downstream)
     /// with an explanatory note, everything else degrades cleanly.

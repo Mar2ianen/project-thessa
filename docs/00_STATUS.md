@@ -91,6 +91,7 @@ do not update in place).
 | `64_NATIVE_OPTIMIZATION_REVIEW.md` | 🟡 historical rejected proposal; corrective implementation in doc 63 | supplied medians/tails recomputed; GPU failures retained as audit evidence; new regression verifies zero-request quiescence, LOD wake and mesh shadow/reference equality | original performance claims remain unaccepted; matched-work measurements and wider acceptance stay open |
 | `65_NATIVE_SKY_AUDIT.md` | 🟡 audited native sky consumers | shared aurora altitude/axis and incremental optical transport; native Low/High emission field with simulation-time refresh; flux-normalized background stars/source discs; depth-clipped clouds with shared weather/geometry/phase and terrain/mesh/ocean shadows plus reflected-ray transport; primary aurora with finite-depth clipping and ordered cloud extinction; separate clear primary/total indirect publications; independent disable and numerical GPU oracles | secondary-origin clear-sky/auroral parallax, partial stellar discs/eclipses, magnetic/weather data, richer curtains, cloud diffuse coupling/multiple scattering, RT-light proxies and temporal/performance/visual/platform acceptance |
 | `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 framing/orbit/pan/zoom, body/PRIMARY selection/follow, cached Kepler curves, physics-JIT coast-cache consumer sharing execution guards and bounded interval, dominant-body Ap/Pe/escape/local-wake readouts, exclusive input ownership, shared-device egui and headless capture | powered/live executable JIT futures (never substituted with conditional coasts), remote JIT/next-wake transport, richer celestial appearance and independent usability/platform acceptance |
+| `68_NATIVE_NIGHT_LIGHTS.md` | 🟡 native primary-terrain optical slice | direct retained inhabited-land mask producer, resolved Low/Medium/High budgets, cached startup-only bake/upload, regular/conforming shared primary emission and zero-work disable; CPU parity and hardware numerical/source tests | calibrated radiance/activity, multi-source illumination/eclipses, secondary-ray emission and whole-frame visual/temporal acceptance |
 
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606
@@ -102,6 +103,12 @@ The 2026-10-20 retained native docking replay and shared
 joint-load correction passed 29 local command gates on 609 unchanged inputs
 (1957 workspace lib/bin and 97 integration tests, plus actual GPU suites).
 Exact scoped evidence: `artifacts/native-docking-2026-10-20.json`.
+
+The native night-light follow-up passed 31 local command gates on 612 unchanged
+inputs: 1962 workspace lib/bin and 97 integration tests, feature-off checks and
+actual GPU suites. The retained bake matches all bytes in its recorded fixture;
+GPU timing and primary-only numerical bounds are scoped in
+`artifacts/native-night-lights-2026-10-20.json`.
 
 The remaining source-to-consumer retirement obligations are tracked in
 [doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must

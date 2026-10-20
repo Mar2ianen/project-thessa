@@ -74,6 +74,15 @@ This is not orbital/fleet authority or generalized live-flight contact gizmos;
 those remain independent obligations. Evidence:
 `artifacts/native-docking-2026-10-20.json`.
 
+The night-light follow-up directly ports the retained GPL city-mask producer
+to `terrain-native`, then binds its caller-owned R8 data into the existing MIT
+terrain shader for regular/conforming primary emission. Shared resolved mask
+budgets gate startup cache/allocation/upload; disabled and zero gain do no
+mask work. It introduces no pass, simulation state or generic light system.
+The old authored first-source terminator/gain is retained, not silently claimed
+as calibrated activity or multi-source/secondary-ray transport. See doc 68 and
+`artifacts/native-night-lights-2026-10-20.json`.
+
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only
 unit sphere is advanced by the canonical consumer and native selection below;

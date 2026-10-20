@@ -32,6 +32,7 @@ pub struct Scene {
     maneuver_kick_sent: bool,
     plume: crate::plume::Cache,
     pub docking: Option<crate::docking::Demo>,
+    night_mask: Option<([u32; 2], Vec<u8>)>,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -470,6 +471,7 @@ impl Scene {
             maneuver_kick_sent: false,
             plume: Default::default(),
             docking: None,
+            night_mask: None,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
             input: thessa_flight_authority::input::FlightInput::default(),
             control_mode: thessa_flight_authority::ControlMode::Navball,
@@ -1606,6 +1608,32 @@ impl Scene {
             Some(&resolved),
             Some(sea),
         )?;
+        if let Some([width, height]) = resolved.night_light_mask_size() {
+            if !self
+                .night_mask
+                .as_ref()
+                .is_some_and(|(size, _)| *size == [width, height])
+            {
+                let started = std::time::Instant::now();
+                let field = self.stream.field();
+                let mask = crate::night_lights::bake_city_mask(
+                    &field.inhabited_regions,
+                    |dir| field.sample_surface(dir, 64_000.0).height_m > 5.0,
+                    width,
+                    height,
+                );
+                eprintln!(
+                    "native_night_bake extent={width}x{height} regions={} lit={} elapsed_ms={:.6}; static optical proxy, not activity or electric power",
+                    field.inhabited_regions.len(),
+                    mask.iter().filter(|v| **v > 0).count(),
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+                self.night_mask = Some(([width, height], mask));
+            }
+            renderer.update_night_mask(backend, &self.night_mask.as_ref().unwrap().1)?;
+        } else {
+            self.night_mask = None;
+        }
         let stats = renderer.update_materials(
             backend,
             self.stream.material_demand(),
@@ -1867,6 +1895,56 @@ mod docking_tests {
         assert_eq!(scene.vehicle.as_ref().unwrap().1, anchor);
         scene.advance_docking(0.05).unwrap();
         assert_eq!(scene.sample.time, thessa_sim_core::SimTime(5.55));
+    }
+}
+
+#[cfg(test)]
+mod night_tests {
+    use super::*;
+    #[test]
+    #[ignore = "hardware: actual native source cache survives renderer recreation, quality change and disabled release"]
+    fn native_source_cache_is_reused_without_advancing_presentation_or_physics() {
+        let backend = thessa_render_wgpu::Backend::bring_up().unwrap();
+        let mut requested = thessa_graphics::RequestedGraphics::default();
+        requested.night_lights.enabled = false;
+        requested.ocean.enabled = false;
+        requested.shadows.enabled = false;
+        let mut scene = Scene::load(requested).unwrap();
+        let time = scene.sample.time;
+        let renderer = scene
+            .renderer(&backend, wgpu::TextureFormat::Rgba8Unorm)
+            .unwrap();
+        assert!(scene.night_mask.is_none());
+        assert_eq!(renderer.night_lights_stats(), Default::default());
+        scene.requested.night_lights.enabled = true;
+        scene.requested.night_lights.quality = thessa_graphics::Quality::Low;
+        let mut renderer = scene
+            .renderer(&backend, wgpu::TextureFormat::Rgba8Unorm)
+            .unwrap();
+        let source = scene.night_mask.as_ref().unwrap().1.as_ptr();
+        assert_eq!(renderer.night_lights_stats().uploaded_bytes, 8192);
+        scene
+            .tick(&backend, &mut renderer, 65, 65, 1.0, 0.0)
+            .unwrap();
+        assert_eq!(renderer.night_lights_stats().uploaded_bytes, 8192);
+        let _replacement = scene
+            .renderer(&backend, wgpu::TextureFormat::Rgba8Unorm)
+            .unwrap();
+        assert_eq!(scene.night_mask.as_ref().unwrap().1.as_ptr(), source);
+        scene.requested.night_lights.quality = thessa_graphics::Quality::High;
+        let renderer = scene
+            .renderer(&backend, wgpu::TextureFormat::Rgba8Unorm)
+            .unwrap();
+        assert_eq!(renderer.night_lights_stats().uploaded_bytes, 131072);
+        assert_eq!(scene.night_mask.as_ref().unwrap().0, [512, 256]);
+        scene.requested.night_lights.intensity = 0.0;
+        let renderer = scene
+            .renderer(&backend, wgpu::TextureFormat::Rgba8Unorm)
+            .unwrap();
+        assert_eq!(renderer.night_lights_stats(), Default::default());
+        assert!(scene.night_mask.is_none());
+        assert_eq!(scene.sample.time, time);
+        assert!(!scene.live_flight());
     }
 }
 

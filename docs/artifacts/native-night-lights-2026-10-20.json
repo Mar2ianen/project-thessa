@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-20",
+  "baseline": "110187c",
+  "scope": "Direct GPL port of the retained inhabited-land city-mask bake into native game code, with resolved cached startup-only R8 publication to the existing regular/conforming primary terrain shader. No new render pass, settlement/activity model, simulation clock or secondary-ray emission.",
+  "contract": {
+    "ownership": "GPL terrain-native owns the retained population/suitability envelope, hash-speckle bake and actual immutable world land gate. MIT graphics owns the shared resolved extent budget. MIT render-wgpu uploads caller R8 data to the already-shared MIT primary terrain shader; no GPL producer is relicensed into the engine.",
+    "resolution": "Low 128x64 / Medium 256x128 / High 512x256 R8. Disabled, zero or invalid resolved gain returns no extent: no source bake/cache, effect texture or upload, only an existing shared one-texel black binding. Renderer/source recreation reuses the CPU mask if extent and immutable Scene world are unchanged.",
+    "storage_bytes": {"low": 8192, "medium": 32768, "high": 131072},
+    "lifecycle": "One startup bake per extent; one upload per renderer, no per-frame bake/upload or prepass. CPU cache releases on disabled renderer creation. Allocated-unpublished stays dark. Invalid full-mask length is rejected before any texture/uniform mutation.",
+    "coordinates": "Body-fixed globe UV: east-positive atan2(-z,x), v=0 north; repeat-U/clamp-V filtering includes seam continuity. Regular and conforming primary geometry consume the identical fragment path.",
+    "emission": "Retained authored warm linear RGB (1,0.72,0.42) * mask * first-slot terminator gate * optical gain * 500, pre-exposure. Not calibrated watts, electrical activity, eclipse-aware or total multi-source illumination. No secondary RT-hit/reflection/indirect emission.",
+    "counters": "NightLightsStats extent/storage_bytes/uploaded_bytes, actual CLI native_night_lights output and startup region/lit-texel/bake-time log. Existing scene-classify/raster GPU scope includes the texture sample; scope layout unchanged."
+  },
+  "verification": {
+    "status": "All 31 local command gates passed on 612 byte-identical compiled/configuration inputs, independently rechecked afterward. Actual GPU timestamp diagnostics executed on this device. No remote CI claim.",
+    "source_manifest_sha256": "4f35538242883f1ff74429b2168e6485ae4cf648b5b272e704693fa0a728a479",
+    "checks": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+      "cargo test --workspace --lib --bins: 1962 passed, zero failed",
+      "cargo test --workspace --test '*': 97 passed, zero failed",
+      "cargo test -p thessa-terrain-native --no-default-features --bin thessa-terrain-native: 83 passed",
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored: 24 GPU tests passed",
+      "cargo build --release -p thessa-terrain-native -p thessa-server",
+      "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1: 40 passed, including real night-mask GPU timestamp diagnostic",
+      "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1: 42 passed, including silent real CLI/source-cache tests",
+      "python3 tools/agent-qa/check_architecture.py; python3 -m unittest discover -s tools/agent-qa/tests -v; git diff --check (separate command gates)",
+      "Inherited focused map/flight/mouse/visibility/flyby/maneuver/performance/plume/docking checks and muted Wayland smokes; exact argv in gates.json",
+      "cargo test --release -p thessa-terrain-native --bin thessa-terrain-native night -- --include-ignored --nocapture --test-threads=1: 8 passed",
+      "python3 target/test-tmp/native-night-reference.py: independently compiled retained/native producers matched all bytes at all three tiers"
+    ],
+    "directory": "target/test-tmp/native-night-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan",
+    "retained_producer_reference": "Independently compiled pure functions extracted from retained and native source; all bytes identical for 18 all-land metros at each tier. FNV64 byte results pinned in native regression; this proves retained fixture parity, not independent physical calibration.",
+    "reference_fnv64": {"low": "ea1722e8d5f85f50", "medium": "9b6f39222b2dbb42", "high": "b5633a1038d1de0f"},
+    "numerical_bounds": "Full-night constant R8=255, exposure=0.001, gain=1 gives central linear RGBA8 RGB (128,92,54), each channel within 2/255 on regular/conforming terrain at Low/Medium/High. Daylight central samples equal a dark mask. Longitude quadrants and repeat-U seam match within 2 stored-byte values. Conforming silhouette LOD continues independently; no false whole-frame identity claim.",
+    "source_boundary": "Real immutable world has 48 inhabited regions. Renderer-recreation/quality/disabled-release GPU regression does not advance sample time; camera/direct-light changes cannot reupload the mask. Invalid publication leaves previous central output/counters unchanged.",
+    "cli_boundary": "Real native host, local FlightAuthority, 320x180 manual HDR, 30 warmup plus two measured frames, flight admission 0.025 s, off/zero/Low/Medium/High, mute/no HUD. Exactly one source bake/upload on enabled tiers and zero when off/zero; all final authoritative flight telemetry strings equal. Daytime captures are integration evidence, not proof of visible night emission or independent aesthetic acceptance.",
+    "cost_boundary": "CPU: one startup bake of 18 all-land metros per tier, terrain sampling excluded; production-world source-cache diagnostic separately records 48-region sampling. GPU: actual timestamped isolated regular-sphere classify/raster at 1280x720, four warmups plus 32 samples, disabled versus High constant mask. Includes fixed raster cost; not mask-only cost, whole-client timing or a performance-win claim.",
+    "timings": {
+      "isolated_gpu_disabled_median_ms": 0.177417,
+      "isolated_gpu_disabled_p95_ms": 0.209238,
+      "isolated_gpu_high_median_ms": 0.184751,
+      "isolated_gpu_high_p95_ms": 0.204989,
+      "all_land_cpu_ms_low_medium_high": [3.582009, 10.718407, 42.199622],
+      "world_cpu_low_ms": 16.879669,
+      "world_cpu_high_ms": 241.525489,
+      "world_medium_cpu_ms_across_four_captures": [61.980823, 62.005279, 62.231229, 61.883512]
+    },
+    "cli_captures": "apps/terrain-native/target/test-tmp/native-night-973972: off/zero/Low/Medium/High actual manual-HDR native-flight captures, all silent and with identical final authoritative telemetry",
+    "records": "source.json, gates.json, summary.json and validation.json under the verification directory; verify.py rechecked source and gate-log hashes. The earlier passing chain is archived under target/test-tmp/native-night-before-timestamps: its cost test had not requested timestamp features and truthfully reported unavailable; the final chain corrects only that diagnostic device request and executes the measurement."
+  },
+  "limitations": [
+    "Retained authored proxy parameters and first-source terminator are not physical city radiance/activity or total multi-source/eclipsed illuminance",
+    "No secondary-ray city emission, reflected/indirect night illumination, animated settlement evolution or electric resource consumption",
+    "No blind whole-frame visual/usability review, Metal/WebGPU runtime execution or remote CI claim",
+    "Gas-giant producer/consumer, live-flight contact overlay, remaining native lighting/transport/settings and final Bevy host deletion remain separate obligations"
+  ]
+}

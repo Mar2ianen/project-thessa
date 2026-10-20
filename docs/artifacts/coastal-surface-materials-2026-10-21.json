@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-21",
+  "baseline": "3d8698f918d151fb2e94290d0b0af4611231471b",
+  "branch": "feat/world-surface-foundation",
+  "task": "WORLD coastal optical eligibility correction",
+  "scope": "Presentation-only source reuse: regional maritime support and local substrate eligibility replace height-only universal sand/wet paint. No height, frozen erosion, authoritative physics, water classification, roughness algorithm or optional normal-strength change.",
+  "root_causes": [
+    "The old 0..45 m yellow layer ignored ocean context, slope, exposed geology, vegetation, wetland and salt.",
+    "The old 0..3 m wet-rim multiplier darkened every near-datum land surface.",
+    "Independent review rejected an intermediate correction that mixed sand after partial cover, attenuating the vegetation twice and disagreeing with its roughness/normal weight. Coastal optical treatment now precedes the existing cover stack."
+  ],
+  "regressions": {
+    "initial_failure_log": "target/test-tmp/world-coastal-material-before.log",
+    "initial_failures": ["inland_datum_crossing_does_not_paint_a_beach_or_wet_rim", "low_coastal_cliff_retains_exposed_geology_instead_of_sand_paint"],
+    "fractional_cover_failure_log": "target/test-tmp/world-coastal-fractional-before.log",
+    "fractional_cover_test_boundary": "Final regression filters the existing vegetation-dependent cover-texture gain at 5000 m to isolate layer opacity. An intermediate unfiltered assertion after the layer move failed because it omitted that pre-existing gain; this was a test-oracle correction, not a second material fix."
+  },
+  "independent_review": {
+    "session": "ses_ea4664946ffe7OeexdxrRFr6Jt",
+    "final_result": "No remaining source blockers; partial-cover issue resolved. Coarse maritime support may still admit isolated near-datum inland ground. Source/numerical inspection only, not independent GPU or visual acceptance."
+  },
+  "actual_checks": {
+    "log_directory": "target/test-tmp/coastal-material-2026-10-21",
+    "command_results_and_log_hashes": "gates.json",
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp",
+    "fmt": "passed",
+    "workspace_all_targets_all_features_clippy": "passed, -D warnings",
+    "architecture": "passed",
+    "workspace_lib_bins": {"passed": 1988, "failed": 0, "ignored": 43},
+    "workspace_integration": {"passed": 98, "failed": 0, "ignored": 81},
+    "machine_required_bevy_ignored_command": "passed but matched zero ignored tests; not hardware coverage",
+    "renderer_terrain_environment_ignored": {"passed": 8, "failed": 0},
+    "renderer_terrain_regular": {"passed": 8, "failed": 0, "log": "renderer-terrain-regular.log"},
+    "remote_ci_claimed": false
+  },
+  "fallback_asset_sync": {
+    "command": "target/release/thessa-worldgen-rocky export-client-maps --recipe data/worldgen/worldgen_recipe.toml --body-file data/worldgen/thessa_v02.toml --frozen data/worldgen/thessa-erosion-v3.surface.json.gz --out assets/worlds/thessa-v10 --width 2048 --height 1024 --min-wavelength-m 2000",
+    "baseline_build": "Exact 3d8698f generator source in a separate target/coastal-reference directory; not the pre-existing release executable.",
+    "comparison": "fallback-generation-comparison.json",
+    "baseline_generated_roughness_identical_to_after": true,
+    "retained_baseline_roughness_stale_pixels": 289512,
+    "retained_baseline_albedo_stale_pixels": 52319,
+    "fresh_baseline_vs_after_albedo_changed_pixels": 45848,
+    "fresh_baseline_vs_after_albedo_mean_absolute_channel_difference_u8": 0.7733386357625326,
+    "fresh_baseline_vs_after_albedo_max_channel_difference_u8": 120,
+    "normal_and_world_layers_byte_identical": true,
+    "new_albedo_sha256": "5a453e45f4c1c60123c6bc45710a0640d9fea02f4c56e050627644d16e9fe330",
+    "roughness_sha256": "e3493ed4e1053de54eccdfd4c86fbece667e6801c9279382c7b479745c5e1321",
+    "initial_export_failure": "Wrong body filename thessa_body.toml was rejected before export. Retried successfully with the existing thessa_v02.toml; not a source fix."
+  },
+  "page_construction_observations": {
+    "workload": "Existing release material_pages: 512 serial 128x128 pages across six faces and L10..14; 64 close-land normal-off/on paired pages at L14..17.",
+    "baseline_log": "/home/chechulin/Projects/project-thessa-world-baseline/tools/worldgen-rocky/target/test-tmp/world00/material-pages-baseline.jsonl",
+    "after_log": "target/test-tmp/coastal-material-2026-10-21/material-pages-after.log",
+    "baseline_broad_total_s": 91.910892647,
+    "baseline_broad_p50_ms": 166.340511,
+    "baseline_broad_p95_ms": 325.37506,
+    "after_broad_total_s": 65.267068625,
+    "after_broad_p50_ms": 117.241193,
+    "after_broad_p95_ms": 203.358837,
+    "after_close_normal_off_p50_ms": 122.327553,
+    "after_close_normal_on_p50_ms": 125.072314,
+    "after_close_normal_off_p95_ms": 178.907961,
+    "after_close_normal_on_p95_ms": 184.195456,
+    "payload_bytes_each_broad_run": 50331648,
+    "boundary": "Non-counterbalanced whole processes under varying concurrent compilation/CPU load. Cost observations only: no speedup or stable before/after ranking. This is not a shoreline scene or frame/loading benchmark."
+  },
+  "limits": [
+    "Regional ocean context has 2-degree meridional spacing: maritime support fades at approximately 111.7..223.4 km, not a precise shoreline or connectivity query.",
+    "Altitude, slope and wet-rim parameters are authored optical priors, not measured sediment availability or capillary physics.",
+    "Texture differences and passing numeric tests do not establish visual preference, close-surface acceptance, natural geometry or vegetation rendering.",
+    "No FPS, whole-client CPU/GPU tail, allocation or RSS/VRAM improvement claim."
+  ],
+  "documentation": ["docs/73_COASTAL_SURFACE_MATERIALS.md", "docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md", "docs/00_STATUS.md"],
+  "readme_check": "Existing deterministic worldgen/shared material and incomplete visual acceptance claims remain accurate; no new public CLI in this slice."
+}

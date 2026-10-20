@@ -265,6 +265,10 @@ pub struct ClimateDrivers {
     pub geothermal: f64,
 }
 
+/// Distance corresponding to saturated continentality. Consumers may recover
+/// the unsaturated regional ocean-distance proxy, not a local shoreline.
+pub const CONTINENTALITY_DISTANCE_M: f64 = 2_500_000.0;
+
 #[allow(clippy::too_many_arguments)]
 pub fn drivers_at(
     lat_deg: f64,
@@ -275,7 +279,7 @@ pub fn drivers_at(
     geothermal: f64,
 ) -> ClimateDrivers {
     let polar = (lat_deg.abs() / 90.0).clamp(0.0, 1.0);
-    let continentality = (ocean_dist_m / 2_500_000.0).clamp(0.0, 1.0);
+    let continentality = (ocean_dist_m / CONTINENTALITY_DISTANCE_M).clamp(0.0, 1.0);
     let elevation = (height_m.max(0.0) / 12_000.0).clamp(0.0, 1.0);
     let facing = nereid_influence(lon_deg);
     // Wetter on the facing side + near coasts, drier deep inland.

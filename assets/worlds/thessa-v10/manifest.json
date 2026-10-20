@@ -1,5 +1,6 @@
 {
   "appearance_filter": "physical_texel_spectral_cutoff",
+  "coastal_material": "regional_maritime_lithology_substrate_v1",
   "curvature_sign": "positive_concave",
   "ecology": "climate_hydrology_cover_v1",
   "fine_deposition": "finite_depth_relief_infill",

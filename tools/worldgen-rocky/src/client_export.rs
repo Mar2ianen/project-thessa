@@ -316,6 +316,7 @@ pub fn write_client_maps(
         std::fs::write(directory.join(format!("{name}.png")), bytes).map_err(|e| e.to_string())?;
     }
     let metadata = serde_json::json!({"generator":"Thessa canonical field v10", "seed":field.params.seed,
+        "coastal_material":"regional_maritime_lithology_substrate_v1",
         "frozen_erosion_attached":field.has_frozen_erosion(),
         "regional_erosion":field.regional_erosion().iter().map(|patch| &patch.recipe).collect::<Vec<_>>(),
         "snow_cover":"annual_precipitation_depth_over_32m_source_roughness_proxy",

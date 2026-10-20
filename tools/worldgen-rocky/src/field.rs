@@ -320,6 +320,15 @@ impl PlanetField {
         self.context.hydrology_step_deg
     }
 
+    /// Meridional spacing of the regional ocean-distance context, in metres.
+    /// This is not the finer frozen drainage grid or a shoreline error bound.
+    pub fn ocean_context_spacing_m(&self) -> f64 {
+        (self.context.lats[1] - self.context.lats[0])
+            .to_radians()
+            .abs()
+            * self.params.radius_m
+    }
+
     pub fn regional_erosion(&self) -> &[crate::offline::RegionalErosion] {
         self.frozen_erosion
             .as_ref()

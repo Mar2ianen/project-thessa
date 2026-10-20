@@ -173,6 +173,28 @@ fn land_roughness(vegetation: f64, exposed: f64, damp: f64, texture: f64, frost:
     .clamp(0.45, 0.98) as f32
 }
 
+/// Regional maritime eligibility, not metre-scale shoreline distance. The
+/// existing ocean-distance field is only resolved at its context-grid spacing;
+/// never turn that coarse source into a fictitious precise coast query.
+fn maritime_material_support(field: &PlanetField, sample: &TerrainSample) -> f64 {
+    let distance_m = sample.continentality01 * crate::climate::CONTINENTALITY_DISTANCE_M;
+    let spacing_m = field.ocean_context_spacing_m();
+    1.0 - smooth(spacing_m, 2.0 * spacing_m, distance_m)
+}
+
+fn beach_material_coverage(maritime: f64, sample: &TerrainSample, exposed: f64) -> f64 {
+    let unsalted = if sample.geology == Geology::Evaporite {
+        0.0
+    } else {
+        1.0 - smooth(0.0, 0.25, sample.salt01)
+    };
+    maritime
+        * (1.0 - smooth(3.0, 45.0, sample.height_m))
+        * (1.0 - smooth(0.08, 0.35, sample.slope_hint))
+        * (1.0 - exposed)
+        * unsalted
+}
+
 fn mix(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t.clamp(0.0, 1.0))
 }
@@ -424,7 +446,16 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
     let (stone, weathered_soil) = substrate_albedo(sample.geology);
     let soil = weathered_soil.map(|c| c * (1.0 + weathering * 0.18));
     let damp = smooth(0.35, 0.95, moisture);
-    let dry = soil.map(|c| c * (1.0 - damp * 0.25));
+    let mut dry = soil.map(|c| c * (1.0 - damp * 0.25));
+    // Only the bare substrate receives coastal fines and the provisional
+    // capillary rim. Apply before the existing cover layers so fractional
+    // vegetation/mud keeps the same opacity as roughness and normal response.
+    let maritime = maritime_material_support(field, sample);
+    let beach_cover = beach_material_coverage(maritime, sample, exposed);
+    let beach_albedo = weathered_soil.map(|c| c * (1.0 + cover_texture * 0.12 - damp * 0.18));
+    dry = mix(dry, beach_albedo, beach_cover);
+    let wet_rim = (1.0 - smooth(0.0, 3.0, h)) * beach_cover;
+    dry = dry.map(|c| c * (1.0 - wet_rim * 0.18));
     // The existing ecology state distinguishes canopy, ground plants and reeds.
     // Do not collapse all three into one full-coverage green paint bucket.
     // These are filtered optical cover proxies, not rendered tree geometry.
@@ -478,15 +509,6 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
             (damp_patch * 0.5).clamp(0.0, 1.0),
         );
     }
-    // Beach is a height band, not a circular feature footprint. The band
-    // itself carries sand texture and moisture darkening so tidal flats do
-    // not render as one flat paint fill.
-    let beach_albedo = [0.66, 0.64, 0.48].map(|c| c * (1.0 + cover_texture * 0.12 - damp * 0.18));
-    color = mix(beach_albedo, color, smooth(3.0, 45.0, h));
-    // Wet-sand rim: capillary water darkens the waterline band, fading by
-    // ~3 m above datum. Visual only; heights and classification are untouched.
-    let wet_rim = 1.0 - smooth(0.0, 3.0, h);
-    color = color.map(|c| c * (1.0 - wet_rim * 0.18));
     color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
     // Bare ground (little vegetation to carry the cover texture) gets its
     // own large-scale tonal structure so deserts and dry plains are not a
@@ -979,7 +1001,7 @@ mod shoreline_tests {
             moisture01: 0.5,
             wetland_potential01: 0.0,
             temperature_k: 285.0,
-            continentality01: 0.5,
+            continentality01: 0.0,
             eclipse_exposure01: 1.0,
         }
     }
@@ -1061,7 +1083,7 @@ mod shoreline_tests {
         let mut dry = 0.0;
         for dir in dirs(16) {
             let w = surface_appearance(&field, &land_sample(1.0), dir);
-            let d = surface_appearance(&field, &land_sample(10.0), dir);
+            let d = surface_appearance(&field, &land_sample(3.0), dir);
             wet += (w.albedo_srgb[0] + w.albedo_srgb[1] + w.albedo_srgb[2]) as f64 / 3.0;
             dry += (d.albedo_srgb[0] + d.albedo_srgb[1] + d.albedo_srgb[2]) as f64 / 3.0;
         }
@@ -1071,6 +1093,144 @@ mod shoreline_tests {
             wet < dry,
             "waterline sand darker, wet={wet:.3} dry={dry:.3}"
         );
+    }
+
+    #[test]
+    fn inland_datum_crossing_does_not_paint_a_beach_or_wet_rim() {
+        let field = field();
+        for geology in [
+            Geology::ContinentalCrust,
+            Geology::Basaltic,
+            Geology::Evaporite,
+        ] {
+            for dir in dirs(8) {
+                let mut low = land_sample(1.0);
+                low.continentality01 = 1.0;
+                low.geology = geology;
+                let mut higher = low.clone();
+                higher.height_m = 3.0;
+                higher.macro_height_m = 3.0;
+                let a = surface_appearance(&field, &low, dir);
+                let b = surface_appearance(&field, &higher, dir);
+                assert_eq!(
+                    a.albedo_srgb, b.albedo_srgb,
+                    "inland soil acquired datum-based beach/wet paint: {geology:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn low_coastal_cliff_retains_exposed_geology_instead_of_sand_paint() {
+        let field = field();
+        let dir = dirs(1)[0];
+        let mut coast = land_sample(1.0);
+        coast.continentality01 = 0.0;
+        coast.moisture01 = 0.0;
+        coast.slope_hint = 0.8;
+        coast.geology = Geology::Basaltic;
+        let basalt = surface_appearance(&field, &coast, dir);
+        coast.geology = Geology::FelsicHighland;
+        let felsic = surface_appearance(&field, &coast, dir);
+        let separation = basalt
+            .albedo_srgb
+            .iter()
+            .zip(felsic.albedo_srgb)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>();
+        assert!(
+            separation > 0.2,
+            "low cliff geology was hidden by sand: {basalt:?} {felsic:?}"
+        );
+    }
+
+    #[test]
+    fn coastal_substrate_eligibility_rejects_inland_exposure_salt_and_steep_ground() {
+        let mut sample = land_sample(1.0);
+        let eligible = beach_material_coverage(1.0, &sample, 0.0);
+        assert!(
+            eligible > 0.99,
+            "bare gentle maritime surface can carry fines"
+        );
+        for (maritime, exposed) in [(0.0, 0.0), (1.0, 1.0)] {
+            assert_eq!(beach_material_coverage(maritime, &sample, exposed), 0.0);
+        }
+        sample.geology = Geology::Evaporite;
+        assert_eq!(beach_material_coverage(1.0, &sample, 0.0), 0.0);
+        sample.geology = Geology::Sedimentary;
+        sample.salt01 = 0.25;
+        assert_eq!(beach_material_coverage(1.0, &sample, 0.0), 0.0);
+        sample.salt01 = 0.0;
+        sample.slope_hint = 0.35;
+        assert_eq!(beach_material_coverage(1.0, &sample, 0.0), 0.0);
+    }
+
+    #[test]
+    fn maritime_and_height_eligibility_fade_endpoints_are_continuous() {
+        let field = field();
+        let spacing = field.ocean_context_spacing_m();
+        assert!((spacing - field.params.radius_m * 2.0_f64.to_radians()).abs() < 1e-8);
+        let mut sample = land_sample(1.0);
+        for ratio in [1.0, 2.0] {
+            sample.continentality01 =
+                spacing * (ratio - 1e-6) / crate::climate::CONTINENTALITY_DISTANCE_M;
+            let a = maritime_material_support(&field, &sample);
+            sample.continentality01 =
+                spacing * (ratio + 1e-6) / crate::climate::CONTINENTALITY_DISTANCE_M;
+            let b = maritime_material_support(&field, &sample);
+            assert!(
+                (a - b).abs() < 1e-8,
+                "macro coast context must not become a cell edge"
+            );
+        }
+        for h in [3.0, 45.0] {
+            sample.height_m = h - 1e-6;
+            let a = beach_material_coverage(1.0, &sample, 0.0);
+            sample.height_m = h + 1e-6;
+            let b = beach_material_coverage(1.0, &sample, 0.0);
+            assert!((a - b).abs() < 1e-8);
+        }
+        // Eligibility has no texel/page/camera input. Appearance filtering
+        // still uses the existing common physical-footprint path.
+        sample.continentality01 = 1.0;
+        assert_eq!(maritime_material_support(&field, &sample), 0.0);
+    }
+
+    #[test]
+    fn fractional_cover_attenuates_only_the_coastal_substrate_difference() {
+        let field = field();
+        let dir = dirs(1)[0];
+        let difference = |sample: &TerrainSample| {
+            let mut coast = sample.clone();
+            coast.continentality01 = 0.0;
+            let mut inland = sample.clone();
+            inland.continentality01 = 1.0;
+            // Filter out the final vegetation-dependent cover-texture gain
+            // to isolate cover opacity rather than a second optical effect.
+            let a = surface_appearance_filtered(&field, &coast, dir, 5000.0);
+            let b = surface_appearance_filtered(&field, &inland, dir, 5000.0);
+            std::array::from_fn::<_, 3, _>(|i| f64::from(a.albedo_srgb[i] - b.albedo_srgb[i]))
+        };
+        let mut sample = land_sample(1.0);
+        sample.slope_hint = 0.0;
+        sample.moisture01 = 0.4;
+        sample.temperature_k = 335.0;
+        let bare = difference(&sample);
+        assert!(bare.iter().any(|v| v.abs() > 0.01));
+        for (temperature, wetland) in [(325.0, 0.0), (315.0, 0.0), (325.0, 0.3), (315.0, 1.0)] {
+            sample.temperature_k = temperature;
+            sample.wetland_potential01 = wetland;
+            let vegetation = crate::ecology::vegetation_cover(&sample, 0.0).total();
+            let actual = difference(&sample);
+            for i in 0..3 {
+                let expected = bare[i] * (1.0 - vegetation) * (1.0 - wetland);
+                assert!(
+                    (actual[i] - expected).abs() < 1e-6,
+                    "coast must not repaint partial cover: vegetation={vegetation} wetland={wetland} actual={} expected={expected}",
+                    actual[i]
+                );
+            }
+        }
     }
 }
 

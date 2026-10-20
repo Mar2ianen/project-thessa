@@ -468,6 +468,11 @@ identities across density/LOD tiers, participate in shared shadows, and avoid
 duplicating the existing deterministic scatter descriptors. These are follow-up
 tasks, not implemented vegetation, new collision relief, hex-tiling, or POM.
 
+The subsequent [coastal eligibility correction](73_COASTAL_SURFACE_MATERIALS.md)
+reuses those sources to stop height-only sand/wet paint from masking inland
+lowlands and exposed cliffs. It changes optical coverage, not substrate relief
+or vegetation geometry; the maritime source is explicitly regional/coarse.
+
 In particular, the current `scatter::scatter_distribution` is tile-seeded and
 changes its grid with requested density. Identical inputs are deterministic,
 but a different tile level/density is **not** a stable subset of the same

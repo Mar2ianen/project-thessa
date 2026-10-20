@@ -52,6 +52,16 @@ Generation and residency:
   read as a cellular quilt when promoted to a normal source; the gradient-noise
   variant fills the resolved spectrum instead. This is a representation change,
   not a new terrain law.
+- The existing filtered material response now supplies a bounded normal-strength
+  and roughness adjustment from exposed geology, loose-cover/deposition,
+  fixed-scale slope/curvature, moisture, ecological cover, snow and frost. The
+  per-geology values are small authored rendering priors (profile coefficients
+  0.92–1.08 before moisture/cover attenuation; roughness offsets at most 0.012),
+  not measured lithology parameters. The strength scales the solved tangent
+  gradient, not a second height signal, so a categorical geology boundary does
+  not become a synthetic relief step. No noise bands, phase, authoritative
+  height, collision, water classification or vegetation geometry are added.
+  Water remains flat and snow/vegetation attenuate exposed-substrate detail.
 - Slopes use the inverse local cube-sphere chart metric: the two physical
   direction chords and height differences define a 2×2 solve in the face's
   orthonormal tangent frame. Dividing both differences by one nominal texel
@@ -103,9 +113,10 @@ Shading and consumer boundary:
   before direct diffuse as well as reflections, so a filtered land neighbour
   cannot perturb open-water lighting.
 - The Bevy consumer binds its existing material array view at binding 19 and a
-  one-entry zero normal directory at binding 20. Bevy pages remain albedo-only;
-  the empty directory resolves to the flat normal without a second texture
-  allocation.
+  one-entry zero normal directory at binding 20 to satisfy the shared layout.
+  Its compile-time normal switch is false, so it performs no per-fragment
+  normal-directory lookup or texture sample and allocates no second texture.
+  Bevy pages remain albedo-only.
 
 The actual primary-raster oracle (`material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal`)
 renders a flat page and a constant +X-tilted page under a +X sun on the real
@@ -119,6 +130,9 @@ of a lone fine normal page within 5 RGB8 levels of flat (no coverage
 amplification). It is not a general normal-map error bound. Same-face horizontal
 and vertical shared-edge tests use level-16 land with nonzero resolved relief;
 general nonlinear cross-face/LOD seam envelopes and temporal sweeps remain open.
+Disabled native residency accepts incomplete optional normal mip chains from
+decoded pages because it neither uploads nor samples them; the enabled raw
+texture-array path still rejects incomplete chains before residency changes.
 
 Early development captures at sites 0/1/2, 500 m and 5 km, showed added grain
 but also regular wind-ripple-like patterns on some slopes. Those captures used
@@ -172,17 +186,58 @@ snapshot is not identity-pinned. All fourteen have zero channel-sum-below-45
 pixels, with minima 116–196; that statistic does not prove absence of geometry
 holes or visual acceptance.
 
-Implementer inspection still finds generic grain rather than convincing
-substrate-specific ground, smooth macro slopes, pale snow/green fields,
-grazing directional stretching and blue-grey ridge bands. The conforming
-controls still show faceted silhouettes. No plant/rock scatter geometry or
-independent blind preference review is claimed. These are outstanding defects,
-not a completed natural-terrain or Satisfactory-quality milestone.
+Implementer inspection still finds a shared generic grain carrier with only a
+bounded material-state response, rather than convincing stratum, fracture,
+scree or weathering relief; smooth macro slopes, pale snow/green fields,
+grazing directional stretching and blue-grey ridge bands also remain. The
+conforming controls still show faceted silhouettes. No plant/rock scatter
+geometry or independent blind preference review is claimed. These are
+outstanding defects, not a completed natural-terrain or Satisfactory-quality
+milestone.
+
+## Material-response follow-up — 2026-10-20
+
+The existing normal carrier now receives a conservative, per-page-texel
+strength response from the already-computed exposed-rock/loose-cover masks,
+geology, fixed-scale slope/curvature and erosion/deposition evidence, moisture,
+ecological cover, snow and frost. Exposed-rock and loose-soil coefficients are
+bounded to 0.92–1.08; geology roughness offsets are bounded to ±0.012. These are
+authored rendering priors, not calibrated rock mechanics or mineral data. The
+response scales the solved chart-space gradient rather than introducing a new
+height signal; it adds no frequencies or phase changes and cannot affect
+authoritative terrain, contacts, hydrology, water classification or vegetation
+geometry. Water has zero normal-detail strength; vegetation/snow attenuate the
+substrate response.
+
+The separate fallback fixes are also pinned: Bevy's shared raster compiles out
+normal-directory lookup/sampling, and native residency does not reject an
+incomplete optional normal mip chain when that feature is disabled. Enabled
+normal residency still requires a complete chain and validates the full update
+before mutation.
+
+Release/bench measurements on Radeon 880M / Vulkan / RADV Mesa 26.2.5:
+
+| Workload | Current measurement | Boundary |
+| --- | ---: | --- |
+| 512 serial 128×128 pages, six faces, levels 10–14 | p50 105.488 ms; p95 126.792 ms; total 54.133 s | Material generation only, not loading/frame time |
+| 64 paired close-land pages, levels 14–17, normals disabled | p50 118.946 ms; p95 121.271 ms | Page-build CPU time |
+| 64 paired close-land pages, levels 14–17, normals enabled | p50 122.114 ms; p95 133.684 ms | Page-build CPU time; no performance win claimed |
+
+Eight silent 1280×720 real native captures cover normals on/off at sites 0/1/2
+at 500 m and site 2 at 200 m. Final visible/cache counts match within each pair
+and material-missing is zero, but whole streaming snapshots are not identity-
+pinned. Measured 32-frame GPU medians vary from 80.921–106.251 ms across the
+captures; these are whole-client observations, not an isolated effect cost or
+stable on/off ranking. Four matched pairs are prepared for blind review in
+`target/test-tmp/native-material-response-final-2026-10-20/blind-review`; no visual
+acceptance is claimed. Gate, capture-hash and benchmark details are recorded in
+[`native-terrain-material-response-2026-10-20.json`](artifacts/native-terrain-material-response-2026-10-20.json).
 
 ## Settings, fallback and accounting
 
-- `[renderer].terrain_normal_maps = false`: native streaming omits grain
-  evaluation and normal mip generation; upload skips normal bytes; the renderer
+- `[renderer].terrain_normal_maps = false`: native streaming omits normal-height
+  grain evaluation, normal-detail response evaluation and normal mip generation;
+  upload skips normal bytes; the renderer
   uses only a 1×1 dummy normal texture and the shader's normal branch is a false
   compile-time constant. No full normal array or normal sampling remains.
   The setting is restart-required. Albedo/roughness and physical heights stay

@@ -172,7 +172,9 @@ impl MaterialArray {
         // Decoded microstore pages may omit coarse mips; this raw backend rejects
         // them rather than sampling zero/uninitialised coarse levels.
         if pages.iter().any(|(&id, (_, page))| {
-            !valid_node(id) || page.mips().len() != 8 || !complete_normal_chain(page)
+            !valid_node(id)
+                || page.mips().len() != 8
+                || (self.normal_maps && !complete_normal_chain(page))
         }) {
             return Err(BackendError::Device(
                 "materials require cube-tile IDs and complete mip chains".into(),
@@ -371,9 +373,12 @@ mod tests {
         );
         assert_eq!(array.normal_texture.mip_level_count(), 1);
         assert_eq!(array.normal_directory.size(), 16);
-        let page = CbtMaterialPage::from_rgba8_with_normals(
-            vec![128; 128 * 128 * 4],
-            Some([200, 128].repeat(128 * 128)),
+        let color = CbtMaterialPage::from_rgba8(vec![128; 128 * 128 * 4]).unwrap();
+        // Decoded pages may omit coarse normal levels. Disabled consumers must
+        // not reject data they neither upload nor sample.
+        let page = CbtMaterialPage::from_decoded_mips_with_normals(
+            color.mips().to_vec(),
+            Some(vec![[200, 128].repeat(128 * 128)]),
         )
         .unwrap();
         let pages = MaterialPages::from([(12, (1, page))]);
@@ -386,6 +391,8 @@ mod tests {
                 .iter()
                 .all(|entry| *entry == [0; 4])
         );
+        let mut enabled = MaterialArray::new(&backend, 16, 1, true).unwrap();
+        assert!(enabled.prepare(&backend, &[12], &[12], &pages).is_err());
     }
 
     #[test]

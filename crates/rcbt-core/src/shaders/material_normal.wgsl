@@ -8,7 +8,9 @@
 // reconstructed positive in the page's face tangent frame.
 @group(0) @binding(19) var material_normal_texture: texture_2d_array<f32>;
 @group(0) @binding(20) var<storage, read> material_normal_directory: array<vec4<u32>>;
-const MATERIAL_NORMALS_ENABLED: bool = true;
+// Consumers opt in at shader assembly time. Bevy's albedo-only path and
+// native settings with normals disabled compile the directory/sample branch out.
+const MATERIAL_NORMALS_ENABLED: bool = false;
 const MATERIAL_NORMAL_MIP_BIAS: f32 = 0.0;
 
 struct RasterMaterialSample {

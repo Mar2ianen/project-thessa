@@ -2275,6 +2275,10 @@ mod tests {
 
     #[test]
     fn raster_shader_is_portable_wgsl() {
+        assert!(
+            CBT_RASTER_WGSL.contains("const MATERIAL_NORMALS_ENABLED: bool = false;"),
+            "Bevy's albedo-only consumer must compile out native normal-directory lookups"
+        );
         let module =
             naga::front::wgsl::parse_str(CBT_RASTER_WGSL).expect("CBT raster shader must parse");
         naga::valid::Validator::new(Default::default(), Default::default())

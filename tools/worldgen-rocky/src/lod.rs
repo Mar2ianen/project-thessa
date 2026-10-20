@@ -2,7 +2,8 @@
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{
     appearance::{
-        surface_appearance, surface_appearance_filtered, surface_grain_height,
+        surface_appearance, surface_appearance_filtered,
+        surface_appearance_filtered_with_normal_detail, surface_grain_height,
         surface_normal_grain_height,
     },
     field::PlanetField,
@@ -733,6 +734,7 @@ pub fn build_gpu_material_page_with_normals(
     let mut samples = Vec::with_capacity(size * size);
     let mut prefixes = Vec::with_capacity(size * size);
     let mut grain = Vec::with_capacity(if normal_maps { size * size } else { 0 });
+    let mut normal_detail_scales = Vec::with_capacity(if normal_maps { size * size } else { 0 });
     for y in 0..size {
         for x in 0..size {
             // Texture centres are x+0.5; inverting the shader transform puts
@@ -779,7 +781,13 @@ pub fn build_gpu_material_page_with_normals(
                 let sample = &mut samples[index];
                 sample.slope_hint = slope;
                 sample.curvature_per_m = curvature;
-                surface_appearance_filtered(field, sample, dirs[index], texel_m)
+                surface_appearance_filtered_with_normal_detail(
+                    field,
+                    sample,
+                    dirs[index],
+                    texel_m,
+                    normal_maps,
+                )
             };
             rgba.extend(
                 material
@@ -787,6 +795,9 @@ pub fn build_gpu_material_page_with_normals(
                     .map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8),
             );
             rgba.push((material.roughness.clamp(0.0, 1.0) * 255.0).round() as u8);
+            if normal_maps {
+                normal_detail_scales.push(material.normal_detail_scale as f64);
+            }
         }
     }
 
@@ -807,7 +818,7 @@ pub fn build_gpu_material_page_with_normals(
             let x1 = (x + 1).min(size - 1);
             let y0 = y.saturating_sub(1);
             let y1 = (y + 1).min(size - 1);
-            let [dx, dy] = if samples[y * size + x].height_m > 0.0 {
+            let mut gradient = if samples[y * size + x].height_m > 0.0 {
                 material_chart_gradient(
                     key.face,
                     dirs[y * size + x],
@@ -821,6 +832,13 @@ pub fn build_gpu_material_page_with_normals(
             } else {
                 [0.0; 2]
             };
+            // Material response controls shading strength, not a second height
+            // field. Apply after the shared world-space gradient solve so a
+            // categorical geology edge cannot become a synthetic height step.
+            let detail_scale = normal_detail_scales[y * size + x];
+            gradient[0] *= detail_scale;
+            gradient[1] *= detail_scale;
+            let [dx, dy] = gradient;
             let length = (dx * dx + dy * dy + 1.0).sqrt();
             normal.push(
                 (((-dx / length) * 0.5 + 0.5) * 255.0)

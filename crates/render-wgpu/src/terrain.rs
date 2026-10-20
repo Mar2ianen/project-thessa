@@ -705,7 +705,7 @@ impl TerrainRenderer {
         let raster_source = shaders::CBT_RASTER_WGSL
             .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
             .replace(
-                "const MATERIAL_NORMALS_ENABLED: bool = true;",
+                "const MATERIAL_NORMALS_ENABLED: bool = false;",
                 &format!("const MATERIAL_NORMALS_ENABLED: bool = {normal_maps};"),
             )
             .replace(

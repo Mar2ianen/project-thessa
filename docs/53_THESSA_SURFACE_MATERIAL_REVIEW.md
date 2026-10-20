@@ -98,7 +98,10 @@ terrain cast/receive shadows also now use the shared atlas (docs 60/63), rather
 than remaining absent as in the historical reconstruction below. Optional RG8
 primary-raster material normals now follow the native page hierarchy with
 metric-correct gradients, filtered mip tiers and an explicit zero-work disable.
-They remain generic material grain, not accepted substrate-specific relief.
+Their shared world-addressed grain carrier now has bounded substrate/exposure,
+cover, moisture and snow/frost response plus small geology-linked roughness
+priors. These are authored appearance priors, not calibrated lithology or
+resolved strata/weathering relief.
 Natural material detail, vegetation, close-up geometry/transport continuity and independent
 whole-frame visual acceptance remain incomplete. This does not accept the
 rejected frames or change canonical terrain.
@@ -113,11 +116,13 @@ Successful tests alone cannot establish plausible materials or visual quality.
 Runtime captures and final validation are saved under
 `target/planet-biomes-audit/`; their reviewed outcomes are added below.
 
-Still missing: native material-normal detail (native currently lights geometry
-normals), terrain cast-shadow casting/receiving, resolved vegetation/canopy,
-spatially continuous geological transitions and transported material inventories,
-proper fine channels/shore surfaces and demonstrated close-up/surface-to-orbit
-acceptance. GGX alone does not repair uniform shapes or flat forest coverage.
+Still missing: calibrated lithology-specific relief such as strata, fractures,
+scree and weathering, resolved vegetation/canopy geometry, spatially continuous
+geological transitions and transported material inventories, proper fine
+channels/shore surfaces and demonstrated close-up/surface-to-orbit acceptance.
+Native primary terrain already has shared-atlas cast/receive shadows and a
+material-normal shading path; neither alone repairs uniform shapes or flat
+forest coverage.
 The accepted standard is the actual final frame, not a noisy texture swatch,
 an albedo histogram or a CPU-only material test.
 

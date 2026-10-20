@@ -31,12 +31,140 @@ fn substrate_albedo(geology: Geology) -> ([f64; 3], [f64; 3]) {
 pub struct SurfaceAppearance {
     pub albedo_srgb: [f32; 3],
     pub roughness: f32,
+    /// Bounded material-state response for the existing native normal grain.
+    /// This changes shading detail only, never the canonical height field.
+    pub normal_detail_scale: f32,
     pub vegetation: f32,
     pub snow: f32,
     /// Supply/geometry-limited visual cover, separate from cold suitability.
     pub snow_cover: f32,
     /// Optical frost mixing weight; zero outside the frost temperature band.
     pub frost_cover: f32,
+}
+
+#[derive(Clone, Copy)]
+struct SubstrateSurfaceProfile {
+    exposed_rock_detail: f64,
+    loose_soil_detail: f64,
+    exposed_roughness_delta: f64,
+    loose_roughness_delta: f64,
+}
+
+/// Small authored rendering priors, not measured lithology parameters.
+/// They modulate one shared world-addressed signal; geology never changes its
+/// phase, adds noise octaves, or feeds physical terrain/contacts.
+fn substrate_surface_profile(geology: Geology) -> SubstrateSurfaceProfile {
+    match geology {
+        Geology::Basaltic | Geology::OceanicCrust => SubstrateSurfaceProfile {
+            exposed_rock_detail: 1.04,
+            loose_soil_detail: 0.98,
+            exposed_roughness_delta: 0.010,
+            loose_roughness_delta: 0.0,
+        },
+        Geology::FelsicHighland => SubstrateSurfaceProfile {
+            exposed_rock_detail: 0.98,
+            loose_soil_detail: 1.00,
+            exposed_roughness_delta: -0.006,
+            loose_roughness_delta: 0.002,
+        },
+        Geology::ContinentalCrust => SubstrateSurfaceProfile {
+            exposed_rock_detail: 1.00,
+            loose_soil_detail: 1.00,
+            exposed_roughness_delta: 0.0,
+            loose_roughness_delta: 0.0,
+        },
+        Geology::Sedimentary => SubstrateSurfaceProfile {
+            exposed_rock_detail: 1.02,
+            loose_soil_detail: 1.04,
+            exposed_roughness_delta: -0.006,
+            loose_roughness_delta: -0.005,
+        },
+        Geology::ImpactBreccia => SubstrateSurfaceProfile {
+            exposed_rock_detail: 1.08,
+            loose_soil_detail: 1.02,
+            exposed_roughness_delta: 0.012,
+            loose_roughness_delta: 0.004,
+        },
+        Geology::Evaporite => SubstrateSurfaceProfile {
+            exposed_rock_detail: 0.92,
+            loose_soil_detail: 0.92,
+            exposed_roughness_delta: -0.012,
+            loose_roughness_delta: -0.010,
+        },
+        Geology::GlacialTill => SubstrateSurfaceProfile {
+            exposed_rock_detail: 0.95,
+            loose_soil_detail: 0.98,
+            exposed_roughness_delta: -0.008,
+            loose_roughness_delta: -0.003,
+        },
+        Geology::Regolith => SubstrateSurfaceProfile {
+            exposed_rock_detail: 0.96,
+            loose_soil_detail: 1.03,
+            exposed_roughness_delta: 0.004,
+            loose_roughness_delta: 0.006,
+        },
+        Geology::Hydrothermal => SubstrateSurfaceProfile {
+            exposed_rock_detail: 1.04,
+            loose_soil_detail: 0.98,
+            exposed_roughness_delta: 0.012,
+            loose_roughness_delta: 0.004,
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GeomorphologyResponse {
+    hollow: f64,
+    loose_cover: f64,
+    exposed: f64,
+}
+
+fn normal_detail_response(
+    profile: SubstrateSurfaceProfile,
+    exposed_rock: f64,
+    loose_cover: f64,
+    vegetation: f64,
+    damp: f64,
+    snow_cover: f64,
+    frost: f64,
+) -> f64 {
+    let rock = exposed_rock.clamp(0.0, 1.0);
+    let soil_detail = profile.loose_soil_detail * (1.0 - damp.clamp(0.0, 1.0) * 0.08);
+    let substrate_detail = soil_detail * (1.0 - rock) + profile.exposed_rock_detail * rock;
+    (substrate_detail
+        * (1.0 - loose_cover.clamp(0.0, 1.0) * 0.35)
+        * (1.0 - vegetation.clamp(0.0, 1.0) * 0.35)
+        * (1.0 - snow_cover.clamp(0.0, 1.0) * 0.95)
+        * (1.0 - frost.clamp(0.0, 1.0) * 0.25))
+        .clamp(0.0, 1.12)
+}
+
+fn substrate_roughness_delta(profile: SubstrateSurfaceProfile, exposed_rock: f64) -> f64 {
+    let rock = exposed_rock.clamp(0.0, 1.0);
+    profile.loose_roughness_delta * (1.0 - rock) + profile.exposed_roughness_delta * rock
+}
+
+/// Existing fixed-wavelength field signals shared by optical appearance and
+/// its normal response. Regional displacement is evidence for exposure/cover,
+/// not a fine sediment inventory or added relief.
+fn geomorphology_response(sample: &TerrainSample) -> GeomorphologyResponse {
+    let crest = smooth(0.02, 0.25, -sample.curvature_per_m * 256.0);
+    let hollow = smooth(0.02, 0.25, sample.curvature_per_m * 256.0);
+    let eroded = smooth(0.0, 40.0, -sample.erosion_displacement_m);
+    let deposited = smooth(
+        0.0,
+        40.0,
+        sample.erosion_displacement_m.max(sample.local_deposition_m),
+    );
+    let gentle = 1.0 - smooth(0.25, 0.7, sample.slope_hint);
+    let loose_cover = gentle * hollow.max(deposited);
+    let exposed =
+        smooth(0.35, 0.85, sample.slope_hint).max(crest * eroded * (1.0 - loose_cover) * 0.15);
+    GeomorphologyResponse {
+        hollow,
+        loose_cover,
+        exposed,
+    }
 }
 fn land_roughness(vegetation: f64, exposed: f64, damp: f64, texture: f64, frost: f64) -> f32 {
     (0.88 + vegetation * 0.06 - exposed * 0.18 - damp * (1.0 - vegetation) * 0.12
@@ -155,6 +283,16 @@ pub fn surface_appearance_filtered(
     dir: [f64; 3],
     texel_m: f64,
 ) -> SurfaceAppearance {
+    surface_appearance_filtered_with_normal_detail(field, sample, dir, texel_m, true)
+}
+
+pub(crate) fn surface_appearance_filtered_with_normal_detail(
+    field: &PlanetField,
+    sample: &TerrainSample,
+    dir: [f64; 3],
+    texel_m: f64,
+    normal_detail_enabled: bool,
+) -> SurfaceAppearance {
     let noise = |channel, scale, octaves| {
         if texel_m > 0.0 {
             let mut sum = 0.0;
@@ -194,25 +332,15 @@ pub fn surface_appearance_filtered(
     // Independent micro-relief noise (24 m + 12 m octaves): deliberately NOT
     // the cover grain — sharing one signal for threshold patches and final
     // brightness partially cancels (opposite signs), muting both.
-    // Geometry and the actual frozen displacement, not another random mask.
-    // Curvature is measured at 256 m by material consumers; scaling it by
-    // that span yields a dimensionless change in slope. Displacement remains
-    // regional evidence, not a resolved local sediment thickness/inventory.
-    let crest = smooth(0.02, 0.25, -sample.curvature_per_m * 256.0);
-    let hollow = smooth(0.02, 0.25, sample.curvature_per_m * 256.0);
-    let eroded = smooth(0.0, 40.0, -sample.erosion_displacement_m);
-    let deposited = smooth(
-        0.0,
-        40.0,
-        sample.erosion_displacement_m.max(sample.local_deposition_m),
-    );
-    let gentle = 1.0 - smooth(0.25, 0.7, sample.slope_hint);
-    let loose_cover = gentle * hollow.max(deposited);
+    // Reuse the geometry/displacement masks used for other surface choices;
+    // no new random cover mask or inferred local sediment inventory.
+    let geomorphology = geomorphology_response(sample);
+    let hollow = geomorphology.hollow;
+    let loose_cover = geomorphology.loose_cover;
     // Regional displacement is not a local snow inventory. Curvature may
     // bias exposure weakly, but must not strip every convex crest into an
     // artificial contour line; actual steepness remains the main exposure.
-    let exposed =
-        smooth(0.35, 0.85, sample.slope_hint).max(crest * eroded * (1.0 - loose_cover) * 0.15);
+    let exposed = geomorphology.exposed;
     // Accumulation smooths the small material bands; exposed rock retains
     // them. This changes appearance only, never collision/height or biomes.
     let texture_gain = 1.0 - loose_cover * 0.65;
@@ -283,6 +411,7 @@ pub fn surface_appearance_filtered(
             // Foam is matte (kills the glint in the surf, like real white water);
             // ice stays rough; open water keeps the sun-glint roughness.
             roughness: (0.16 + 0.58 * ice + 0.49 * foam * (1.0 - ice)) as f32,
+            normal_detail_scale: 0.0,
             vegetation: 0.0,
             snow: ice as f32,
             snow_cover: ice as f32,
@@ -396,10 +525,32 @@ pub fn surface_appearance_filtered(
     // independent micro signal, so it adds instead of fighting the patches.
     // ±8% stays clear of the sRGB ceiling on bright snow.
     color = color.map(|c| (c * (1.0 + micro * 0.08)).clamp(0.0, 1.0));
+    // Existing world-addressed detail follows the selected material state.
+    // These are bounded rendering priors, not measured lithology properties;
+    // vegetation and snow reduce the exposed substrate response rather than
+    // receiving invented leaf/snow geometry.
+    let substrate = substrate_surface_profile(sample.geology);
+    let normal_detail_scale = if normal_detail_enabled {
+        normal_detail_response(
+            substrate,
+            rock,
+            loose_cover,
+            vegetation,
+            damp,
+            snow_cover,
+            frost,
+        )
+    } else {
+        0.0
+    };
+    let roughness = (land_roughness(vegetation, exposed, damp, outcrop_texture, frost) as f64
+        + substrate_roughness_delta(substrate, rock))
+    .clamp(0.45, 0.98) as f32;
     SurfaceAppearance {
         albedo_srgb: color.map(|c| c.clamp(0.0, 1.0) as f32),
         // Frost crystals glitter: pull roughness down where they settle.
-        roughness: land_roughness(vegetation, exposed, damp, outcrop_texture, frost),
+        roughness,
+        normal_detail_scale: normal_detail_scale as f32,
         vegetation: vegetation as f32,
         snow: snow as f32,
         snow_cover: snow_cover as f32,
@@ -458,6 +609,46 @@ mod palette_tests {
             }
         }
     }
+
+    #[test]
+    fn normal_detail_response_is_bounded_and_follows_material_cover() {
+        for geology in [
+            Geology::Basaltic,
+            Geology::FelsicHighland,
+            Geology::ContinentalCrust,
+            Geology::Sedimentary,
+            Geology::ImpactBreccia,
+            Geology::Evaporite,
+            Geology::GlacialTill,
+            Geology::Regolith,
+            Geology::Hydrothermal,
+        ] {
+            let profile = substrate_surface_profile(geology);
+            assert!((0.92..=1.08).contains(&profile.exposed_rock_detail));
+            assert!((0.92..=1.08).contains(&profile.loose_soil_detail));
+            assert!(profile.exposed_roughness_delta.abs() <= 0.012);
+            assert!(profile.loose_roughness_delta.abs() <= 0.012);
+        }
+        let basalt = substrate_surface_profile(Geology::Basaltic);
+        let evaporite = substrate_surface_profile(Geology::Evaporite);
+        let exposed_basalt = normal_detail_response(basalt, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let exposed_evaporite = normal_detail_response(evaporite, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let covered_basalt = normal_detail_response(basalt, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0);
+        let snow_basalt = normal_detail_response(basalt, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+        let all = [
+            exposed_basalt,
+            exposed_evaporite,
+            covered_basalt,
+            snow_basalt,
+            normal_detail_response(basalt, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0),
+        ];
+        assert!(all.into_iter().all(|scale| (0.0..=1.12).contains(&scale)));
+        assert!(exposed_basalt > exposed_evaporite);
+        assert!(covered_basalt < exposed_basalt);
+        assert!(snow_basalt < exposed_basalt * 0.1);
+        assert!(substrate_roughness_delta(basalt, 1.0).abs() <= 0.012);
+        assert!(substrate_roughness_delta(evaporite, 1.0).abs() <= 0.012);
+    }
 }
 
 #[cfg(test)]
@@ -500,7 +691,27 @@ mod frost_tests {
             assert_eq!(basalt.height_m, felsic.height_m);
             assert_eq!(a.vegetation, b.vegetation);
             assert!((0.45..=0.98).contains(&a.roughness));
+            assert!(a.roughness > b.roughness);
+            assert!((a.roughness - b.roughness).abs() <= 0.02);
+            assert!(a.normal_detail_scale > b.normal_detail_scale);
+            assert!((0.0..=1.12).contains(&a.normal_detail_scale));
         }
+    }
+
+    #[test]
+    fn disabled_normal_detail_keeps_optical_material_and_returns_zero_scale() {
+        let field = field();
+        let dir = crate::sphere::dir_from_latlon(38.0, -171.0);
+        let mut sample = sample(285.0, 0.0);
+        sample.slope_hint = 1.0;
+        sample.geology = Geology::Basaltic;
+        let enabled = surface_appearance_filtered(&field, &sample, dir, 2.0);
+        let disabled =
+            surface_appearance_filtered_with_normal_detail(&field, &sample, dir, 2.0, false);
+        assert!(enabled.normal_detail_scale > 0.0);
+        assert_eq!(disabled.normal_detail_scale, 0.0);
+        assert_eq!(enabled.albedo_srgb, disabled.albedo_srgb);
+        assert_eq!(enabled.roughness, disabled.roughness);
     }
 
     #[test]
@@ -765,6 +976,10 @@ mod shoreline_tests {
         let mut foamed = 0;
         for dir in dirs(32) {
             let out = surface_appearance(&field, &ocean_sample(-1.5), dir);
+            assert_eq!(
+                out.normal_detail_scale, 0.0,
+                "water has no material normal grain"
+            );
             let lum = (out.albedo_srgb[0] + out.albedo_srgb[1] + out.albedo_srgb[2]) / 3.0;
             if lum > 0.55 && out.roughness > 0.35 {
                 foamed += 1;

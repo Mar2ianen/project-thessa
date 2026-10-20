@@ -1,0 +1,173 @@
+{
+  "date": "2026-10-20",
+  "baseline": "e567274 (optional native terrain material normals)",
+  "scope": "Bounded geology/exposure/cover response for the existing primary-raster normal carrier and roughness; Bevy albedo-only shader lookup removal; disabled native acceptance of incomplete optional normal mip chains. No physical height, contact, hydrology, water classification, scatter or vegetation geometry changes.",
+  "implementation": {
+    "normal_profile_coefficients": "0.92..1.08 before moisture/cover attenuation",
+    "maximum_geology_roughness_offset": 0.012,
+    "normal_response_inputs": [
+      "existing exposed-rock and loose-cover/deposition masks",
+      "geology",
+      "fixed-scale slope and curvature",
+      "erosion/deposition evidence",
+      "moisture and ecological cover",
+      "snow and frost cover"
+    ],
+    "gradient_application": "Scales the solved chart-space shading gradient; does not introduce a relief-height signal or a synthetic discontinuity at categorical geology boundaries.",
+    "calibration_status": "Authored bounded appearance priors, not measured or calibrated lithology parameters."
+  },
+  "verification": {
+    "format": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo fmt --all -- --check",
+      "result": "passed"
+    },
+    "clippy": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "result": "passed"
+    },
+    "workspace_lib_bins": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test --workspace --lib --bins",
+      "passed": 1981,
+      "failed": 0,
+      "ignored": 42
+    },
+    "workspace_integration": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test --workspace --test '*'",
+      "result": "passed"
+    },
+    "architecture": {
+      "command": "python3 tools/agent-qa/check_architecture.py",
+      "result": "passed; 12 guarded foundational crates"
+    },
+    "appearance_tests": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test -p thessa-worldgen-rocky --lib appearance::",
+      "passed": 15,
+      "failed": 0
+    },
+    "disabled_normal_residency": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test -p thessa-render-wgpu disabled_normals_allocate_only_dummy_and_never_upload -- --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "hardware": "AMD Radeon 880M / Vulkan / RADV Mesa 26.2.5",
+      "assertions": "Disabled mode accepts an incomplete optional normal mip chain without upload; enabled mode rejects it."
+    },
+    "bevy_shader": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test -p thessa-bevy-rcbt --features render raster_shader_is_portable_wgsl",
+      "passed": 1,
+      "failed": 0
+    },
+    "bevy_ignored_hardware": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+      "matched": 0,
+      "note": "No ignored hardware tests remain in this crate; raster shader coverage ran separately."
+    },
+    "material_gpu_diagnostic": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo test -p thessa-render-wgpu --test material -- --ignored --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "hardware": "AMD Radeon 880M / Vulkan / RADV Mesa 26.2.5"
+    },
+    "release_viewer": {
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo build --release -p thessa-terrain-native --bin thessa-terrain-native",
+      "result": "passed"
+    }
+  },
+  "page_generation_benchmark": {
+    "command": "TMPDIR=/home/chechulin/Projects/project-thessa-gpui/target/tmp cargo bench -p thessa-worldgen-rocky --bench material_pages",
+    "profile": "release/bench",
+    "hardware": "AMD Radeon 880M / Vulkan / RADV Mesa 26.2.5",
+    "broad_512_pages": {
+      "workload": "512 serial 128x128 canonical pages, six faces, levels 10..14, frozen erosion",
+      "p50_ms": 105.488,
+      "p95_ms": 126.792,
+      "total_s": 54.133,
+      "not_frame_time_or_loading_latency": true
+    },
+    "paired_close_land_64_pages": {
+      "workload": "Counterbalanced face-3 levels 14..17 pages, 64 each mode",
+      "normals_disabled_p50_ms": 118.946,
+      "normals_disabled_p95_ms": 121.271,
+      "normals_enabled_p50_ms": 122.114,
+      "normals_enabled_p95_ms": 133.684,
+      "performance_claim": "No performance win claimed; this measures page generation, not streaming latency."
+    }
+  },
+  "gpu_diagnostic": {
+    "workload": "1280x720 regular close-land classify+raster, diffuse-only, no sky/clouds/shadows/specular",
+    "normal_disabled_median_ms": 1.048552,
+    "normal_disabled_p95_ms": 1.061417,
+    "normal_low_median_ms": 1.107825,
+    "normal_low_p95_ms": 1.115760,
+    "normal_medium_median_ms": 1.098327,
+    "normal_medium_p95_ms": 1.112033,
+    "normal_high_median_ms": 1.099409,
+    "normal_high_p95_ms": 1.110630,
+    "upload_128_pages_disabled": {
+      "bytes": 11184640,
+      "enqueue_median_ms": 3.299,
+      "enqueue_p95_ms": 3.686,
+      "drained_median_ms": 6.714,
+      "drained_p95_ms": 7.018
+    },
+    "upload_128_pages_enabled": {
+      "bytes": 16776960,
+      "enqueue_median_ms": 6.455,
+      "enqueue_p95_ms": 6.987,
+      "drained_median_ms": 11.650,
+      "drained_p95_ms": 12.311
+    },
+    "boundary": "Isolated diagnostics, not whole-client frame time, isolated DMA time, or streaming latency."
+  },
+  "captures": {
+    "summary_path": "target/test-tmp/native-material-response-final-2026-10-20/captures-summary.json",
+    "summary_sha256": "59338eb493755ee8cfa1cc4a0c8a4dc81123c2985ad2afb9fcb2977b3281fc65",
+    "binary": "target/release/thessa-terrain-native built from the changed worktree",
+    "protocol": "Eight silent native headless captures; 10 s live prestream, 32 measured frames, fixed epoch, no HUD/audio; each normals-on/off pair uses identical site, distance and graphics quality.",
+    "platform": "AMD Radeon 880M / Vulkan / RADV Mesa 26.2.5",
+    "matched_pairs": [
+      {
+        "id": "site-0-500m",
+        "gpu_median_on_ms": 84.152,
+        "gpu_median_off_ms": 80.921,
+        "gpu_p95_on_off_ms": [97.243, 93.154],
+        "visible_patches_on_off": [371, 371],
+        "cache_entries_on_off": [494, 494],
+        "material_missing_on_off": [0, 0]
+      },
+      {
+        "id": "site-1-500m",
+        "gpu_median_on_ms": 105.262,
+        "gpu_median_off_ms": 104.240,
+        "gpu_p95_on_off_ms": [124.157, 123.096],
+        "visible_patches_on_off": [378, 378],
+        "cache_entries_on_off": [505, 505],
+        "material_missing_on_off": [0, 0]
+      },
+      {
+        "id": "site-2-500m",
+        "gpu_median_on_ms": 98.577,
+        "gpu_median_off_ms": 89.425,
+        "gpu_p95_on_off_ms": [111.033, 112.178],
+        "visible_patches_on_off": [383, 383],
+        "cache_entries_on_off": [510, 510],
+        "material_missing_on_off": [0, 0]
+      },
+      {
+        "id": "site-2-200m",
+        "gpu_median_on_ms": 106.251,
+        "gpu_median_off_ms": 100.128,
+        "gpu_p95_on_off_ms": [128.710, 124.340],
+        "visible_patches_on_off": [383, 383],
+        "cache_entries_on_off": [510, 510],
+        "material_missing_on_off": [0, 0]
+      }
+    ],
+    "limitations": "Whole-client GPU timings are noisy and not an isolated normal/material-response comparison. Visible/cache counters match but the full streaming snapshot is not identity-pinned. These captures do not establish visual acceptance or a stable performance ranking.",
+    "blind_review": {
+      "status": "prepared, not reviewed",
+      "directory": "target/test-tmp/native-material-response-final-2026-10-20/blind-review",
+      "private_key_directory": "target/test-tmp/native-material-response-final-2026-10-20/private-answer-key",
+      "cases": 4
+    }
+  }
+}

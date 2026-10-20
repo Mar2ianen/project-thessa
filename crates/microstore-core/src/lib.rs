@@ -56,7 +56,7 @@ pub mod wgsl;
 
 pub use alloc::{AllocError, SlabAllocator, SlabMove, SlabStats};
 pub use codec::{CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec, ScalarField};
-pub use color::{ColorBudget, ColorField, ColorPage};
+pub use color::{ColorBudget, ColorField, ColorPage, EncodedMaterialLevel, encode_material_level};
 pub use height::{
     HeightBlock, HeightCodec, HeightGrid, HeightMode, HeightPage, HeightVerify, shared_edge_error,
     verify,

@@ -2329,7 +2329,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(test)]
-#[path = "gpu_tests.rs"]
-mod gpu_tests;

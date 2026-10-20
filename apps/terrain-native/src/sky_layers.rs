@@ -595,6 +595,295 @@ impl SkyLayers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Actual design ephemerides: one Nereid year carries Thessa with its host
+    // around A. The moon's 80 h orbit is not the seasonal half-year.
+    fn seasonal_lights() -> [(f64, f64, Vec<thessa_atmosphere::CelestialLight>); 2] {
+        use thessa_sim_core::{SimTime, SystemConfig};
+        let system: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = system.bake().unwrap();
+        let thessa = ephemeris.body_id("thessa").unwrap();
+        let bc = ephemeris.body_id("bc_barycenter").unwrap();
+        let nereid = ephemeris.body_id("nereid").unwrap();
+        let year = ephemeris.body(nereid).unwrap().orbit.unwrap().period_s();
+        let distance = |time: f64| {
+            let a = ephemeris
+                .body_state(thessa, SimTime(time))
+                .unwrap()
+                .position_inertial;
+            let b = ephemeris
+                .body_state(bc, SimTime(time))
+                .unwrap()
+                .position_inertial;
+            a.distance(b)
+        };
+        // Bound the search to the seasons surrounding epoch 0. Pin extrema
+        // numerically instead of assuming Earth's calendar or authored phase.
+        let extrema = [true, false].map(|maximum| {
+            let sample = (0..=1024)
+                .map(|i| year * (i as f64 / 1024.0 - 0.25))
+                .max_by(|a, b| {
+                    let order = distance(*a).total_cmp(&distance(*b));
+                    if maximum { order } else { order.reverse() }
+                })
+                .unwrap();
+            let (mut lo, mut hi) = (sample - year / 1024.0, sample + year / 1024.0);
+            for _ in 0..48 {
+                let a = lo + (hi - lo) / 3.0;
+                let b = hi - (hi - lo) / 3.0;
+                if (distance(a) > distance(b)) == maximum {
+                    hi = b;
+                } else {
+                    lo = a;
+                }
+            }
+            (lo + hi) * 0.5
+        });
+        assert!(((extrema[1] - extrema[0]) / year - 0.5).abs() < 0.05);
+        let extrema = extrema.map(|time| (time, distance(time)));
+        let presentation =
+            crate::celestial::CelestialPresentation::new(&system, ephemeris, thessa).unwrap();
+        extrema.map(|(time, distance)| {
+            (
+                time,
+                distance,
+                presentation
+                    .sample(SimTime(time))
+                    .unwrap()
+                    .environment_lights,
+            )
+        })
+    }
+
+    #[test]
+    fn thessa_half_year_keeps_each_star_occlusion_independent_at_both_distance_extrema() {
+        let seasons = seasonal_lights();
+        assert!(seasons[0].1 - seasons[1].1 > 1.0e11);
+        assert!(seasons[0].2[1].irradiance_w_m2 < seasons[1].2[1].irradiance_w_m2);
+        for (index, (time, distance, lights)) in seasons.into_iter().enumerate() {
+            let a = lights[0].direction_to_star;
+            let b = lights[1].direction_to_star;
+            let separation = a.angle_between(b);
+            // A-night midpoint, not a global eclipse scalar on all sources.
+            let camera = -a * 3_201_000.0;
+            let ta = stellar_transmission(3_200_000.0, camera, a, None, 8);
+            let tb = stellar_transmission(3_200_000.0, camera, b, None, 8);
+            assert_eq!(ta, [0.0; 3]);
+            if index == 0 {
+                assert!(separation < 5.0f64.to_radians());
+                assert_eq!(
+                    tb, [0.0; 3],
+                    "farthest BC is near A in the sky, not opposite it"
+                );
+                // Separate requested case: farthest season, but choose the
+                // star-facing hemisphere. Both A and the distant B stay visible.
+                let far_day = a * 3_201_000.0;
+                assert_eq!(
+                    stellar_transmission(3_200_000.0, far_day, a, None, 8),
+                    [1.0; 3]
+                );
+                assert_eq!(
+                    stellar_transmission(3_200_000.0, far_day, b, None, 8),
+                    [1.0; 3]
+                );
+                assert!(lights[1].irradiance_w_m2 > 0.0);
+            } else {
+                assert!(separation > 170.0f64.to_radians());
+                assert_eq!(tb, [1.0; 3], "B survives the Thessa occultation of A");
+            }
+            let mut optics =
+                thessa_atmosphere::nitrogen_oxygen_optics(3_200_000.0, 101325.0, 8000.0).unwrap();
+            optics.emission.airglow_rgb = [0.0; 3];
+            let visible_camera = if index == 0 { a } else { -a } * 3_201_000.0;
+            let up = visible_camera.normalize();
+            for steps in [8, 16, 32] {
+                let b_trans =
+                    stellar_transmission(3_200_000.0, visible_camera, b, Some(&optics), steps);
+                assert!(b_trans.into_iter().all(|t| t > 0.0 && t <= 1.0));
+                if index == 1 {
+                    assert_eq!(
+                        stellar_transmission(3_200_000.0, visible_camera, a, Some(&optics), steps),
+                        [0.0; 3]
+                    );
+                    let full = thessa_atmosphere::sky_radiance(
+                        &optics,
+                        visible_camera,
+                        up,
+                        &lights,
+                        steps,
+                        steps,
+                    );
+                    let bc_only = thessa_atmosphere::sky_radiance(
+                        &optics,
+                        visible_camera,
+                        up,
+                        &lights[1..],
+                        steps,
+                        steps,
+                    );
+                    assert_eq!(
+                        full.radiance_rgb, bc_only.radiance_rgb,
+                        "hidden A cannot erase BC scattering or shine through the body"
+                    );
+                    assert!(full.radiance_rgb.into_iter().any(|v| v > 0.0));
+                }
+            }
+            eprintln!(
+                "native_thessa_season maximum_distance={} time_s={time:.6} distance_bc_m={distance:.3} separation_a_b_deg={:.6} a_transmission={ta:?} b_transmission={tb:?}",
+                index == 0,
+                separation.to_degrees()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "hardware: real seasonal ephemerides, far-visible BC and A-hidden/B-visible terrain, regular/conforming"]
+    fn thessa_seasonal_b_light_reaches_native_terrain_when_a_is_behind_the_body() {
+        use thessa_graphics::ResolvedTerrainTopology;
+        use thessa_rcbt_core::{
+            HeightPage,
+            tile_anchor::{TileAnchor, TileKey},
+        };
+        use thessa_render_wgpu::terrain::{
+            OffscreenTarget, TerrainCapacity, TerrainPatch, TerrainRenderer,
+        };
+        let backend = Backend::bring_up().unwrap();
+        let seasons = seasonal_lights();
+        // Identical manual exposure for both seasons as well as source-subset
+        // controls, so inverse-square dimming cannot be normalised away.
+        let exposure = 1.0
+            / (seasons[1].2[1]
+                .weighted_rgb()
+                .into_iter()
+                .fold(0.0, f64::max)
+                * crate::environment::LUX_PER_W_M2);
+        for (season, (time, _, lights)) in seasons.into_iter().enumerate() {
+            let up = if season == 0 {
+                lights[0].direction_to_star
+            } else {
+                -lights[0].direction_to_star
+            };
+            let eye = up * 8_000_000.0;
+            let b_lux = lights[1]
+                .weighted_rgb()
+                .map(|v| v * crate::environment::LUX_PER_W_M2);
+            let view = ViewParams {
+                world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, DVec3::ZERO, DVec3::Y)
+                    .inverse(),
+                world_position_m: eye,
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                    1.0, 1.0, 10_000.0, 1e8,
+                ),
+                exposure: exposure as f32,
+            };
+            let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+            let patches = (0..6)
+                .map(|face| TerrainPatch {
+                    anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), 3_200_000.0)
+                        .unwrap(),
+                    page: &page,
+                })
+                .collect::<Vec<_>>();
+            for conforming in [false, true] {
+                let mut settings = ResolvedGraphicsSettings {
+                    shadow_enabled: false,
+                    specular_reflections: false,
+                    night_lights_enabled: false,
+                    ..Default::default()
+                };
+                settings.ocean.enabled = false;
+                if conforming {
+                    settings.terrain_topology = ResolvedTerrainTopology {
+                        capacity: 4096,
+                        waves: 2,
+                        split_area_px: 64.0,
+                        merge_area_px: 8.0,
+                    };
+                }
+                let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+                    &backend,
+                    &patches,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    TerrainCapacity {
+                        patches: 6,
+                        height_grid_size: 2,
+                        material_layers: 1,
+                    },
+                    Some(&settings),
+                )
+                .unwrap();
+                terrain
+                    .update_view_for_extent(&backend, &view, [65, 65])
+                    .unwrap();
+                let target =
+                    OffscreenTarget::with_format(&backend, 65, 65, wgpu::TextureFormat::Rgba8Unorm)
+                        .unwrap();
+                let draw = |sources: &[usize], reverse: bool| {
+                    let mut lighting = SurfaceLighting::default();
+                    for (slot, &source) in sources.iter().enumerate() {
+                        let slot = if reverse { 2 - slot } else { slot };
+                        lighting.directions[slot] = lights[source]
+                            .direction_to_star
+                            .as_vec3()
+                            .extend(0.0)
+                            .to_array();
+                        let rgb = lights[source]
+                            .weighted_rgb()
+                            .map(|v| (v * crate::environment::LUX_PER_W_M2) as f32);
+                        lighting.colors_lux[slot] = [rgb[0], rgb[1], rgb[2], 0.0];
+                    }
+                    terrain.update_lighting(&backend, &lighting).unwrap();
+                    for _ in 0..6 {
+                        let mut encoder =
+                            backend.device.create_command_encoder(&Default::default());
+                        terrain.encode_surface(&mut encoder);
+                        terrain.encode(&mut encoder, &target.color, &target.depth);
+                        backend.queue.submit([encoder.finish()]);
+                    }
+                    let pixels = target.read_rgba8(&backend).unwrap();
+                    <[u8; 3]>::try_from(&pixels[(32 * 65 + 32) * 4..][..3]).unwrap()
+                };
+                let b_only = draw(&[1], false);
+                let cosine = up.dot(lights[1].direction_to_star).max(0.0);
+                for ((actual, albedo), lux) in
+                    b_only.into_iter().zip([100.0, 130.0, 70.0]).zip(b_lux)
+                {
+                    let expected =
+                        (albedo * lux * cosine * exposure / std::f64::consts::PI).round() as u8;
+                    assert!(
+                        actual.abs_diff(expected) <= 2,
+                        "season={season} conforming={conforming} B={b_only:?} actual={actual} expected={expected}"
+                    );
+                }
+                assert!(
+                    b_only.iter().any(|&v| v > 15),
+                    "distant B must not disappear"
+                );
+                if season == 1 {
+                    assert_eq!(
+                        draw(&[0], false),
+                        [0; 3],
+                        "A is below the opaque body's horizon"
+                    );
+                    let bc = draw(&[1, 2], false);
+                    let all = draw(&[0, 1, 2], false);
+                    assert_eq!(
+                        all, bc,
+                        "A occultation must not remove B/C terrain lighting"
+                    );
+                    assert_eq!(
+                        draw(&[0, 1, 2], true),
+                        all,
+                        "stellar slot order must not change diffuse lighting"
+                    );
+                }
+                eprintln!(
+                    "native_thessa_season_terrain season={season} time_s={time:.6} conforming={conforming} b_only_linear_rgb8={b_only:?} tolerance_u8=2; real distance and inverse-square flux, not arbitrary opposed lamps"
+                );
+            }
+        }
+    }
     #[test]
     fn shader_is_portable() {
         let source = format!(

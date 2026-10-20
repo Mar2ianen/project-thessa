@@ -176,6 +176,10 @@ impl ActiveCloudRepresentation {
 /// requests are kept and fail fast at device creation with a clear note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Capabilities {
+    /// Host implements compact material residency (not merely the GPU codec).
+    /// Unknown preserves the legacy pre-init path; native must report false
+    /// until its production material cache actually consumes compact pages.
+    pub material_compact_supported: Option<bool>,
     /// Persistent topology's eight compute storage bindings are available.
     pub terrain_conforming_supported: Option<bool>,
     /// Enabled mesh feature and sufficient terrain shader limits on the device.
@@ -191,6 +195,7 @@ pub struct Capabilities {
 impl Capabilities {
     pub fn unknown() -> Self {
         Self {
+            material_compact_supported: None,
             terrain_conforming_supported: None,
             ray_query_supported: None,
             is_discrete_gpu: None,
@@ -555,7 +560,12 @@ impl ResolvedGraphicsSettings {
                     ResolvedMaterialStorage::RgbaArray
                 }
                 crate::settings::MaterialStorageRequest::MicrostoreCompact => {
-                    ResolvedMaterialStorage::MicrostoreCompact
+                    if caps.material_compact_supported == Some(false) {
+                        notes.push("Compact material residency is unavailable in this host; using rgba_array (no compact encode/decode work)".into());
+                        ResolvedMaterialStorage::RgbaArray
+                    } else {
+                        ResolvedMaterialStorage::MicrostoreCompact
+                    }
                 }
             },
             ray_tracing,
@@ -1212,6 +1222,44 @@ mod tests {
 mod storage_tests {
     use super::*;
     use crate::settings::{MaterialStorageRequest, RequestedGraphics};
+
+    #[test]
+    fn unsupported_host_resolves_compact_to_the_explicit_raw_fallback() {
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.material_storage = MaterialStorageRequest::MicrostoreCompact;
+        for supported in [Some(false), Some(true), None] {
+            let caps = Capabilities {
+                material_compact_supported: supported,
+                ..Default::default()
+            };
+            let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+            assert_eq!(
+                resolved.material_storage.is_microstore(),
+                supported != Some(false)
+            );
+            assert_eq!(
+                resolved
+                    .notes
+                    .iter()
+                    .any(|n| n.contains("Compact material residency")),
+                supported == Some(false)
+            );
+        }
+        requested.renderer.material_storage = MaterialStorageRequest::RgbaArray;
+        let resolved = ResolvedGraphicsSettings::from_requested(
+            &requested,
+            &Capabilities {
+                material_compact_supported: Some(false),
+                ..Default::default()
+            },
+        );
+        assert!(
+            !resolved
+                .notes
+                .iter()
+                .any(|n| n.contains("Compact material residency"))
+        );
+    }
 
     #[test]
     fn storage_defaults_to_rgba_array() {

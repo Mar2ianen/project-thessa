@@ -1,7 +1,51 @@
 //! Execute the production WGSL and read back its results. These tests require
 //! a wgpu adapter (a software Vulkan adapter is sufficient).
-use super::*;
+use thessa_microstore_core::encode_material_level;
+use thessa_rcbt_core::shaders::{
+    CBT_CLASSIFY_WGSL, CBT_GEOMETRY_WGSL, CBT_RASTER_WGSL, GRID_SIZE as GPU_GRID_SIZE,
+    TRIANGLES_PER_PATCH as GPU_TRIANGLE_COUNT_PER_PATCH,
+    VERTICES_PER_PATCH as GPU_VERTEX_COUNT_PER_PATCH,
+};
+use thessa_rcbt_core::{
+    HeightPage, material_cache, material_page as material_pages, tile_anchor as precision,
+};
 use wgpu::util::DeviceExt;
+
+// Retained test fixture, not a second production height uploader.
+fn pack_page_residuals(page: &HeightPage, output: &mut Vec<u32>) -> u32 {
+    let offset = output.len() as u32;
+    for pair in page.residuals().chunks(2) {
+        let low = pair[0] as u16 as u32;
+        let high = pair.get(1).copied().unwrap_or_default() as u16 as u32;
+        output.push(low | (high << 16));
+    }
+    offset
+}
+
+// Same deterministic rock fixture as the former bridge tests.
+fn rock_rgba(size: u32, seed: u64) -> Vec<u8> {
+    let mut s = seed | 1;
+    let mut next = || {
+        s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = s;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) as f64 / u64::MAX as f64
+    };
+    let mut out = Vec::with_capacity(size as usize * size as usize * 4);
+    for y in 0..size {
+        for x in 0..size {
+            let band = ((y / 16) % 2) as f64;
+            let grain = next();
+            let r = (90.0 + band * 60.0 + grain * 40.0).clamp(0.0, 255.0) as u8;
+            let g = (70.0 + band * 40.0 + grain * 30.0).clamp(0.0, 255.0) as u8;
+            let b = (50.0 + grain * 60.0 + (x % 7) as f64 * 3.0).clamp(0.0, 255.0) as u8;
+            let a = (110.0 + band * 80.0).clamp(0.0, 255.0) as u8;
+            out.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+    out
+}
 
 struct Gpu {
     device: wgpu::Device,
@@ -750,7 +794,7 @@ fn check() {
 #[test]
 #[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
 fn gpu_tile_transform_keeps_near_camera_precision_after_body_rotation() {
-    use bevy::math::{DMat4, DQuat, DVec3};
+    use glam::{DMat4, DQuat, DVec3};
     let gpu = Gpu::new();
     let anchor = crate::precision::TileAnchor::new(
         crate::precision::TileKey::new(2, 17, 57_213, 89_319).unwrap(),
@@ -955,7 +999,6 @@ fn check() {
 /// (textures, lighting, directory) keep their production numbers with dummy
 /// contents; the mesh path never samples them. This tests all lanes/outputs
 /// even on adapters without native mesh shaders.
-#[cfg(feature = "mesh-shaders")]
 #[test]
 #[ignore = "requires a wgpu adapter; run with --include-ignored"]
 fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
@@ -996,7 +1039,11 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
             "var<workgroup> mesh_output: MeshOutput;",
             "@group(0) @binding(17) var<storage, read_write> mesh_outputs: array<MeshOutput>;",
         )
-        .replace("@vertex\nfn vertex(\n    @builtin(vertex_index) vertex_index: u32,\n) -> VertexOutput {\n    return cbt_vertex(vertex_index);\n}", "")
+        // Keep the complete current raster wrapper as an unused helper. Its
+        // body now also admits conforming vertices, so deleting an old exact
+        // string silently left an invalid vertex entry in the compute shim.
+        .replace("@vertex", "")
+        .replace("@builtin(vertex_index)", "")
         // Fan-out kept verbatim; per-workgroup outputs are indexed by the
         // same meshlet id (`first / 32u`) instead of workgroup memory.
         .replace("mesh_output.", "mesh_outputs[first / 32u].");
@@ -1042,9 +1089,9 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     let mut generated = Vec::new();
     for y in 0..33 {
         for x in 0..33 {
-            let p = bevy::math::DVec3::from_array(
+            let p = glam::DVec3::from_array(
                 anchor.project_body_m([x as f64 / 32., y as f64 / 32.], 120.),
-            ) - bevy::math::DVec3::from_array(anchor.anchor_body_m);
+            ) - glam::DVec3::from_array(anchor.anchor_body_m);
             generated.extend(
                 [p.x as f32, p.y as f32, p.z as f32, 1., 0., 1., 0., 120.].map(f32::to_bits),
             );
@@ -1536,7 +1583,6 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
 #[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
 #[test]
 fn game_material_mips_decode_on_hardware() {
-    use crate::material_microstore::rock_rgba;
     use thessa_microstore_core::{EncodeMode, EncodedPage, ScalarField};
     use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
 
@@ -1590,7 +1636,6 @@ fn game_material_mips_decode_on_hardware() {
 #[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
 #[test]
 fn microstore_compact_levels_match_gpu_decode() {
-    use crate::material_microstore::{encode_material_level, rock_rgba};
     use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -1632,7 +1677,7 @@ fn microstore_compact_levels_match_gpu_decode() {
             assert_eq!(gpu, &cpu.data, "level {level} ch {ch} bit-exact");
         }
         // The pre-decode upload path interleaves those exact planes.
-        let decoded = material_render::MaterialArray::decode_material_levels(&[encoded]);
+        let decoded = [encoded.decode_rgba().expect("matching material planes")];
         assert_eq!(decoded.len(), 1);
         let back = &decoded[0];
         assert_eq!(back.len(), mip.len(), "level {level} rgba len");
@@ -1658,7 +1703,7 @@ fn raster_surface_shader_validates_on_hardware() {
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cbt-raster-surface-validation"),
-            source: wgpu::ShaderSource::Wgsl(super::CBT_RASTER_WGSL.into()),
+            source: wgpu::ShaderSource::Wgsl(CBT_RASTER_WGSL.into()),
         });
     let err = pollster::block_on(scope.pop());
     assert!(err.is_none(), "raster WGSL validation failed: {err:?}");

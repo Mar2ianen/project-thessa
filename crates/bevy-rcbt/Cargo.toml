@@ -27,9 +27,6 @@ wgpu = { version = "30", optional = true }
 [dev-dependencies]
 naga = { version = "30", features = ["wgsl-in"] }
 wgpu.workspace = true
-pollster = "0.4"
-thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
-thessa-atmosphere = { path = "../atmosphere" }
 thessa-render-wgpu = { path = "../render-wgpu" }
 glam.workspace = true
 

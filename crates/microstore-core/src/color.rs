@@ -32,6 +32,84 @@ pub enum ColorBudget {
 const COLOR_MAGIC: [u8; 4] = *b"MICC";
 const COLOR_VERSION: u8 = 1;
 
+/// Interleaved material transport as independent RGB plus linear roughness.
+/// This is the retained codec contract, not a renderer resource or mip policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodedMaterialLevel {
+    pub color: ColorPage,
+    pub roughness: EncodedPage,
+}
+
+impl EncodedMaterialLevel {
+    /// Combined RGB wire plus scalar roughness wire length.
+    pub fn encoded_bytes(&self) -> usize {
+        self.color.encoded_bytes() + self.roughness.encoded_bytes()
+    }
+
+    /// Reinterleave the same four decoded planes consumed by GPU decoders.
+    /// Reject inconsistent public plane extents rather than silently indexing
+    /// mismatched data. Code values are preserved; no color-space transform.
+    pub fn decode_rgba(&self) -> Option<Vec<u8>> {
+        let size = (self.color.width, self.color.height);
+        if size.0 == 0
+            || size.1 == 0
+            || self
+                .color
+                .channels
+                .iter()
+                .chain([&self.roughness])
+                .any(|p| (p.width, p.height) != size)
+        {
+            return None;
+        }
+        let [r, g, b] = self.color.decode();
+        let a = self.roughness.decode();
+        let mut rgba = Vec::with_capacity(r.data.len().checked_mul(4)?);
+        for i in 0..r.data.len() {
+            rgba.extend_from_slice(&[r.data[i], g.data[i], b.data[i], a.data[i]]);
+        }
+        Some(rgba)
+    }
+}
+
+/// Encode the retained four-plane RGBA material layout with a code-level
+/// absolute-error budget. No page size, game design or host scheduler is owned
+/// here. RGB linear-light budgeting remains available through ColorPage.
+pub fn encode_material_level(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    max_abs_error: f64,
+) -> Option<EncodedMaterialLevel> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let expected_bytes = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    if rgba.len() != expected_bytes || !max_abs_error.is_finite() || max_abs_error < 0.0 {
+        return None;
+    }
+    let mut planes = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for px in rgba.as_chunks::<4>().0 {
+        for (plane, v) in planes.iter_mut().zip(px.iter()) {
+            plane.push(*v);
+        }
+    }
+    let mut planes = planes.into_iter();
+    let rgb = [
+        ScalarField::new(width, height, planes.next().expect("r")).ok()?,
+        ScalarField::new(width, height, planes.next().expect("g")).ok()?,
+        ScalarField::new(width, height, planes.next().expect("b")).ok()?,
+    ];
+    let a = ScalarField::new(width, height, planes.next().expect("a")).ok()?;
+    let mode = EncodeMode::Adaptive { max_abs_error };
+    Some(EncodedMaterialLevel {
+        color: ColorPage::encode(&ColorField::new(rgb).ok()?, mode),
+        roughness: EncodedPage::encode(&a, mode),
+    })
+}
+
 /// One RGB color field as three independent scalar planes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColorField {
@@ -254,6 +332,64 @@ fn encode_plane_linear(plane: &ScalarField, budget: f64) -> EncodedPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_interleave_preserves_the_retained_four_plane_codec_and_budget() {
+        for (w, h) in [(1, 1), (3, 5), (16, 16), (128, 128)] {
+            let rgba: Vec<u8> = (0..w * h * 4)
+                .map(|i| ((i * 13 + i / 7) % 256) as u8)
+                .collect();
+            for budget in [0.0, 2.0] {
+                let encoded = encode_material_level(&rgba, w, h, budget).unwrap();
+                let back = encoded.decode_rgba().unwrap();
+                assert_eq!(back.len(), rgba.len());
+                for (a, b) in back.iter().zip(&rgba) {
+                    assert!(f64::from(a.abs_diff(*b)) <= budget);
+                }
+                // Independent scalar encoding pins the pre-migration wire layout.
+                for (channel, page) in encoded
+                    .color
+                    .channels
+                    .iter()
+                    .chain([&encoded.roughness])
+                    .enumerate()
+                {
+                    let field = ScalarField::new(
+                        w,
+                        h,
+                        rgba.as_chunks::<4>().0.iter().map(|p| p[channel]).collect(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        *page,
+                        EncodedPage::encode(
+                            &field,
+                            EncodeMode::Adaptive {
+                                max_abs_error: budget
+                            }
+                        )
+                    );
+                }
+                assert_eq!(
+                    encoded.encoded_bytes(),
+                    encoded.color.to_bytes().len() + encoded.roughness.to_bytes().len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn material_codec_rejects_bad_extents_and_invalid_error_budgets() {
+        for (bytes, w, h) in [(10, 4, 4), (0, 0, 0), (0, u32::MAX, u32::MAX)] {
+            assert!(encode_material_level(&vec![0; bytes], w, h, 2.0).is_none());
+        }
+        for budget in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(encode_material_level(&[0; 64], 4, 4, budget).is_none());
+        }
+        let mut encoded = encode_material_level(&[0; 64], 4, 4, 2.0).unwrap();
+        encoded.roughness.width = 3;
+        assert!(encoded.decode_rgba().is_none());
+    }
     use crate::{fixtures, measure_linear};
 
     fn rgb_fixture(width: u32, height: u32) -> ColorField {

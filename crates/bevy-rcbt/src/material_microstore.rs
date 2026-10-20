@@ -6,62 +6,9 @@
 //! renderer-neutral (no `wgpu`/`bevy_render` types cross this boundary).
 
 use bevy::prelude::*;
-use thessa_microstore_core::{ColorField, ColorPage, EncodeMode, EncodedPage, ScalarField};
+pub use thessa_microstore_core::{EncodedMaterialLevel, encode_material_level};
 
 use crate::material_pages::{CbtMaterialPage, MATERIAL_PAGE_SIZE};
-
-/// One encoded material mip level: RGB color plus roughness.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncodedMaterialLevel {
-    /// RGB planes.
-    pub color: ColorPage,
-    /// Roughness (alpha) plane.
-    pub roughness: EncodedPage,
-}
-
-impl EncodedMaterialLevel {
-    /// Exact wire size of both parts.
-    pub fn encoded_bytes(&self) -> usize {
-        self.color.encoded_bytes() + self.roughness.encoded_bytes()
-    }
-}
-
-/// Encode one RGBA mip level (`width` x `height` texels) with an adaptive
-/// per-channel budget in code levels. Returns `None` on extent mismatch.
-pub fn encode_material_level(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    max_abs_error: f64,
-) -> Option<EncodedMaterialLevel> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let expected_bytes = (width as usize)
-        .checked_mul(height as usize)?
-        .checked_mul(4)?;
-    if rgba.len() != expected_bytes {
-        return None;
-    }
-    let mut planes = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-    for px in rgba.as_chunks::<4>().0 {
-        for (plane, v) in planes.iter_mut().zip(px.iter()) {
-            plane.push(*v);
-        }
-    }
-    let mut planes = planes.into_iter();
-    let rgb = [
-        ScalarField::new(width, height, planes.next().expect("r")).expect("extent"),
-        ScalarField::new(width, height, planes.next().expect("g")).expect("extent"),
-        ScalarField::new(width, height, planes.next().expect("b")).expect("extent"),
-    ];
-    let a = ScalarField::new(width, height, planes.next().expect("a")).expect("extent");
-    let mode = EncodeMode::Adaptive { max_abs_error };
-    Some(EncodedMaterialLevel {
-        color: ColorPage::encode(&ColorField::new(rgb).expect("rgb"), mode),
-        roughness: EncodedPage::encode(&a, mode),
-    })
-}
 
 /// Inbox of freshly streamed material pages (node id + page).
 #[derive(Resource, Default)]

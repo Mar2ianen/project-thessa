@@ -136,6 +136,44 @@ The source-disc limb currently uses centre-ray atmospheric/body visibility,
 not partial-disc eclipse integration. Discs and the distant catalogue share
 the `stars` switch; authoritative stellar lighting does not depend on it.
 
+### Seasonal terrain/source regressions (2026-10-20)
+
+`sky_layers::tests::thessa_half_year_keeps_each_star_occlusion_independent_at_both_distance_extrema`
+and the ignored hardware
+`thessa_seasonal_b_light_reaches_native_terrain_when_a_is_behind_the_body`
+use the unmodified `data/system.toml` baked ephemerides. They search the
+seasonal Thessa–BC-barycentre distance extrema around epoch zero, including
+Thessa's motion around Nereid. A half-year here is half Nereid's year around A,
+not half Thessa's 80-hour moon orbit or six Earth calendar months.
+
+Two distinct requested cases are retained: at the farther seasonal extremum,
+the star-facing hemisphere sees distant B; roughly half a host year later,
+an A-night receiver has A completely behind Thessa but B/C above the horizon.
+A control at far-season midnight hides both A and B: maximum distance does not
+put the stars on opposite sides of the sky. In this design ephemeris the two
+extrema are about 138.34 Earth days apart, distances about 44.456/42.888 AU,
+with A–B angular separations about 0.117/178.348 degrees. These are scoped
+seasonal extrema over the tested host-year window, not a global extremum of
+the 169-year outer binary orbit.
+
+Body transmission is tested without atmosphere and with 8/16/32 transmission
+samples through a fixed N2/O2 optical fixture. In the A-hidden case, the
+single-scattering sky with all stars equals the B/C-only sky and remains
+nonzero; no global A-visibility multiplier may extinguish the other stars.
+Actual regular/conforming native terrain is drawn at both epochs. B-only
+central linear RGB agrees with independent Lambert evaluation to **2/255**
+per channel using the existing fallback albedo and actual inverse-square
+stellar irradiance. Manual exposure is identical across both seasons and all
+source-subset controls. At A-night, A-only terrain is exactly dark, all-star
+terrain equals B/C-only terrain, and reversing source slots preserves it.
+
+These tests intentionally isolate direct diffuse terrain lighting: no clouds,
+ambient, specular, city-mask emission or auto exposure. They do not certify
+multi-star city gating, Nereid/other-body eclipses, partial stellar discs,
+production atmosphere calibration, full-frame visual preference or a rendered
+stellar-disc pixel oracle. See
+`artifacts/native-terrain-seasons-2026-10-20.json` for executed gates.
+
 Clouds reuse the canonical `bake_clouds` coverage/opacity source and vertical
 sine profile, Beer-Lambert law and dual-HG phase contract. Native decks are
 3–6 km and, when requested, 9–10 km above the datum; they are explicit

@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-20",
+  "baseline": "c2358f6",
+  "scope": "Requested seasonal source/terrain regressions using actual design ephemerides, retained GPU regression migration out of Bevy, neutral material codec ownership and explicit native raw material-storage fallback. No simulation/ephemeris/terrain law, new rendering effect or plume-form change.",
+  "seasonal_scenarios": {
+    "source": "Unmodified data/system.toml -> SystemConfig::bake -> CelestialPresentation::sample. Search 1025 host-year samples from -P/4 to 3P/4, then refine each seasonal distance extremum for 48 ternary steps. Thessa's moon motion and the moving BC barycentre are included; this is not an extremum of the full outer binary orbit.",
+    "far_visible": "Farther seasonal Thessa-BC extremum, receiver on the star-facing hemisphere. B remains visible and its positive inverse-square irradiance reaches the actual regular/conforming terrain renderer; A remains visible too. No arbitrary opposed lamps or replacement ephemeris is installed.",
+    "a_hidden_b_visible": "Nearer seasonal extremum roughly half Nereid's host year later, receiver on A's night hemisphere. A is completely occulted by Thessa, while B/C illuminate the surface and sky. Hiding A must not multiply all stellar illumination by zero.",
+    "negative_control": "At far-season A-midnight both A and B are hidden: maximum observer-BC distance does not imply A and B are on opposite sides of the sky.",
+    "far_time_s": -7793.822982,
+    "near_time_s": 11945105.066726,
+    "separation_between_scenarios_earth_days": 138.34373714939815,
+    "far_distance_bc_m": 6650562234957.202,
+    "near_distance_bc_m": 6415991267386.381,
+    "far_a_b_separation_deg": 0.116935,
+    "near_a_b_separation_deg": 178.347694,
+    "cpu_oracles": "Shared solid-body clipping independently per source with no atmosphere, then nonzero B transmission at 8/16/32 samples through a fixed N2/O2 optical fixture. Hidden A transmission is exactly zero. With airglow disabled, A-night all-star single scattering equals B/C-only and remains nonzero. Actual B irradiance is lower at the farther extremum.",
+    "gpu_oracles": "Actual regular and conforming sphere terrain at both ephemeris samples, fallback albedo (100,130,70)/255 linear, no ambient/specular/cloud/night-mask/auto-exposure. One fixed manual exposure across both seasons and all source-subset controls. B-only central linear RGBA8 agrees with independent Lambert evaluation within 2/255 per channel. A-night A-only is exactly dark; all-star equals B/C-only; reversing stellar slots preserves the central result.",
+    "camera": "Body-frame 8,000,000 m eye radius, 3,200,000 m flat datum sphere, 65x65 linear Rgba8Unorm target, perspective near=10,000 m / far=100,000,000 m. Six submit/refinement iterations per control; only invariant central rays are compared, not independently refining conforming silhouettes."
+  },
+  "material_boundary": {
+    "codec": "Existing EncodedMaterialLevel, four-plane RGBA encoder and reinterleave moved from MIT bevy-rcbt to existing MIT microstore-core::color. Bevy reexports/consumes the same implementation. No game-specific GPL content, page constructor, mip policy or residency is moved into the codec.",
+    "regression": "Independent scalar per-channel encoding pins retained wire planes and code-level absolute-error bounds at 1x1, 3x5, 16x16 and 128x128, lossless and 2-code-level budgets. Invalid sizes/error budgets and mismatched plane extents are rejected. This is not a new linear-light error guarantee.",
+    "native_fallback": "Capabilities::material_compact_supported expresses host residency support, separate from hardware codec support. Native Backend::resolve_graphics sets false: compact requests resolve to rgba_array with a diagnostic and correct applied metadata, without mutating requested settings or adding compact encode/decode/cache work. Legacy reports true and retains its path; unknown pre-init support keeps previous provisional resolution.",
+    "no_win_claim": "Native residency remains the existing bounded raw MaterialArray. No native compression gain, reduced GPU memory, faster frame or improved landscape appearance is claimed."
+  },
+  "retained_gpu_migration": {
+    "from": "crates/bevy-rcbt/src/gpu_tests.rs",
+    "to": "crates/render-wgpu/tests/retained_surface.rs",
+    "coverage": "25 retained shader/material/cloud-optics tests, including real page mips, CPU/GPU compact decode, cube-face material addressing, dirty geometry, f64 chart precision, classifier history, cloud transport/quadrature/continuity and a compute surrogate for mesh emission. Shader text and fixture inputs remain their existing shared owners, including the retained cloud_volume.wesl asset; this does not newly certify native cloud parity.",
+    "newly_admitted_test": "Mesh-emission compute surrogate no longer depends on the old mesh-shaders feature. First run exposed stale exact-string deletion of the raster vertex wrapper after conforming support had extended its body. The shim now strips only stage attributes, preserving the current helper body, production bindings, fan-out and checked output. This is not native mesh-stage execution.",
+    "remaining": "Bevy scheduling/extraction/residency adapter tests and the legacy runnable host are retained. Final Bevy deletion and complete renderer replacement remain unfinished."
+  },
+  "verification": {
+    "status": "All 33 local command gates passed on 612 byte-identical compiled/configuration inputs; verify.py independently rechecked source and gate-log hashes afterward. No remote CI claim.",
+    "source_manifest_sha256": "3aaf856cee6e35cbb2ef4282398a27810d3652d9f358f7320675d436b8998fc0",
+    "counts": {
+      "workspace_lib_bins": 1967,
+      "workspace_integration": 97,
+      "native_feature_off": 84,
+      "renderer_hardware_ignored": 65,
+      "native_ignored": 43,
+      "seasonal_focused": 2,
+      "retained_gpu_focused": 25,
+      "failures": 0
+    },
+    "bevy_gpu_gate": "The inherited cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored command now has zero matching tests, explicitly not counted as hardware coverage. The same retained suite moved to render-wgpu: 24 formerly admitted GPU tests plus the formerly feature-gated mesh compute surrogate all passed there (25 total).",
+    "checks": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+      "cargo test --workspace --lib --bins",
+      "cargo test --workspace --test '*'",
+      "cargo test -p thessa-terrain-native --no-default-features --bin thessa-terrain-native",
+      "cargo build --release -p thessa-terrain-native -p thessa-server",
+      "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1",
+      "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1",
+      "python3 tools/agent-qa/check_architecture.py; python3 -m unittest discover -s tools/agent-qa/tests -v; git diff --check (separate command gates)",
+      "Inherited focused map/flight/mouse/visibility/flyby/maneuver/performance/plume/docking/night-light checks and muted Wayland smokes; exact argv/log hashes in gates.json",
+      "cargo test --release -p thessa-terrain-native --bin thessa-terrain-native thessa_ -- --include-ignored --nocapture --test-threads=1",
+      "cargo test --release -p thessa-render-wgpu --test retained_surface -- --ignored --nocapture --test-threads=1"
+    ],
+    "seasonal_gpu_central_linear_rgb8": {"far_regular_and_conforming": [25, 34, 21], "near_regular_and_conforming": [27, 36, 22]},
+    "dependency_check": "cargo tree -p thessa-render-wgpu -e normal,build,dev --prefix none, checked after the 33-gate chain: no Bevy packages in normal/build/dev dependencies. dependencies.txt SHA-256 446e56abddd9905b51ef4b179a5da10f1bd119b31a4db90e14e7fa87b95875cc",
+    "records": "source.json, gates.json, summary.json, validation.json, dependencies.txt and verifier under the verification directory. Logs contain actual seasonal geometry, source-subset and regular/conforming numerical diagnostics. No PNG aesthetic review is implied.",
+    "directory": "target/test-tmp/native-terrain-seasons",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Mesa 26.2.4-arch1.1, Vulkan",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "focused_commands": [
+      "cargo clippy -p thessa-microstore-core -p thessa-graphics -p thessa-render-wgpu -p thessa-terrain-native -p thessa-bevy-rcbt --all-targets --all-features -- -D warnings",
+      "cargo test --release -p thessa-terrain-native --bin thessa-terrain-native thessa_ -- --include-ignored --nocapture --test-threads=1",
+      "cargo test --release -p thessa-render-wgpu --test retained_surface -- --ignored --nocapture --test-threads=1"
+    ]
+  },
+  "limitations": [
+    "Seasonal tests isolate body centre-ray visibility, direct diffuse terrain and clear-sky single scattering, not a full-frame rendered source-disc oracle or independent aesthetic acceptance",
+    "No partial-disc stellar limb/eclipses, Nereid or other-body occluders, multi-star city-mask gating or calibrated production atmosphere certification",
+    "Native compact material residency and packed material-shader sampling remain unavailable; explicit raw fallback is not a compressed implementation",
+    "No geometry/LOD/convergence/performance improvement, plume-form change, Metal/WebGPU runtime execution or remote CI claim"
+  ]
+}

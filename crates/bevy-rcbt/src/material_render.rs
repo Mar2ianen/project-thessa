@@ -278,17 +278,9 @@ impl MaterialArray {
         levels
             .iter()
             .map(|level| {
-                let [r, g, b] = level.color.decode();
-                let a = level.roughness.decode();
-                let n = r.data.len();
-                debug_assert_eq!(g.data.len(), n);
-                debug_assert_eq!(b.data.len(), n);
-                debug_assert_eq!(a.data.len(), n);
-                let mut rgba = Vec::with_capacity(n * 4);
-                for i in 0..n {
-                    rgba.extend_from_slice(&[r.data[i], g.data[i], b.data[i], a.data[i]]);
-                }
-                rgba
+                level
+                    .decode_rgba()
+                    .expect("material planes share validated extents")
             })
             .collect()
     }

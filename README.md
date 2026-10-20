@@ -105,6 +105,9 @@ The checked-in vertical slice currently contains:
   through thin Bevy resources. Height admission counts pending results against
   cache capacity and returns retired payloads to the host's asset bridge.
   Height eviction does not remove material pages.
+  Native compact-material requests explicitly resolve to raw RGBA residency
+  with a diagnostic; the codec and retained shader/GPU regressions now run
+  without Bevy, but native compact residency is not claimed (doc 41).
   Backend-neutral f64 body/camera frames now live in MIT `thessa-render-core`
   and are consumed by both clients. The native viewer defaults to the frozen
   epoch; `--sim-time 72000` samples a different celestial pose, and headless
@@ -135,6 +138,8 @@ The checked-in vertical slice currently contains:
          Source discs/stars now have native consumers (doc 65); aerial perspective,
         auto exposure/bloom and primary terrain/ocean mesh-query
         reflection consumers remain missing: **not** complete PBR/Bevy parity.
+       Seasonal regressions use actual Thessa/Nereid/BC ephemerides: distant
+       visible B, and A hidden by Thessa while B/C still light native terrain.
       `[engine_plume]` now selects native Low impostor / Medium 8-step / High
       14-step actual-profile volume rendering with opaque-depth clipping and
       resource-free disable. The starter nozzle deck remains provisional;

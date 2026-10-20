@@ -179,6 +179,7 @@ impl Backend {
         requested: &thessa_graphics::RequestedGraphics,
     ) -> thessa_graphics::ResolvedGraphicsSettings {
         let mut caps = self.caps;
+        caps.material_compact_supported = Some(false);
         caps.ray_query_supported = Some(
             self.device
                 .features()
@@ -447,6 +448,7 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        material_compact_supported: None, // Host support is not an adapter property.
         terrain_conforming_supported: Some(
             limits.max_storage_buffers_per_shader_stage >= 8
                 && limits.max_storage_buffer_binding_size >= 131072 * 144,
@@ -468,6 +470,32 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_material_storage_reports_raw_instead_of_claiming_unused_compact_work() {
+        let Some(backend) = backend() else {
+            return;
+        };
+        let mut requested = thessa_graphics::RequestedGraphics::default();
+        requested.renderer.material_storage =
+            thessa_graphics::MaterialStorageRequest::MicrostoreCompact;
+        let resolved = backend.resolve_graphics(&requested);
+        assert_eq!(
+            resolved.material_storage,
+            thessa_graphics::ResolvedMaterialStorage::RgbaArray
+        );
+        assert_eq!(resolved.as_meta_map()["material_storage"], "rgba_array");
+        assert!(
+            resolved
+                .notes
+                .iter()
+                .any(|n| n.contains("Compact material residency"))
+        );
+        assert_eq!(
+            requested.renderer.material_storage,
+            thessa_graphics::MaterialStorageRequest::MicrostoreCompact
+        );
+    }
 
     fn backend() -> Option<Backend> {
         match Backend::bring_up() {

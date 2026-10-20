@@ -145,6 +145,40 @@ Implementation status (landed on `main` from `feat/microstorage-phase-a`):
   (12–18 ms/page encode, unoptimized) are not representative; release
   numbers above are the honest baseline.
 
+### Native retirement follow-up (2026-10-20)
+
+The retained RGBA plane split/interleave (`EncodedMaterialLevel`,
+`encode_material_level`, `decode_rgba`) now belongs to `microstore-core::color`.
+The Bevy scheduler reexports that codec instead of owning another copy. This
+does not move the page constructor, mip policy, residency or game semantics
+into the codec. RGB code values and linear roughness keep the same independent
+wire planes; the retained 2-code-level budget is not newly described as a
+linear-light error guarantee. Invalid/negative/nonfinite error budgets and
+inconsistent plane extents are rejected by the new entry points.
+
+The 25 hardware shader/optics/material regressions formerly under
+`bevy-rcbt::render::gpu_tests` now live in
+`crates/render-wgpu/tests/retained_surface.rs`. They import their existing
+neutral owners directly and no longer build Bevy to run. This includes both
+real-material mip/GPU-decode tests. The portable compute surrogate for mesh
+emission is always admitted, not hidden behind the bridge's `mesh-shaders`
+feature; its stale exact-string removal of the old vertex wrapper was corrected
+to remove only stage attributes. This tests emitted data, not native mesh-stage
+execution on hardware that lacks that feature. The legacy bridge's schedule,
+residency and extraction tests remain until their host can be removed.
+
+Native material residency is still the existing bounded raw `MaterialArray`.
+The shared capability resolver now accepts host compact-residency support:
+native reports false, so `microstore_compact` explicitly resolves to
+`rgba_array` with a diagnostic and accurate applied capture metadata. The
+request is not mutated; no encode/decode or auxiliary compact cache runs in
+native frames. The legacy host reports true and keeps its retained path;
+unknown pre-init support keeps the previous provisional resolution. GPU codec
+availability alone is not production compact-residency support. There is no
+native compression/performance-win claim in this follow-up. Local checks and
+the separate seasonal terrain regressions are recorded in
+`artifacts/native-terrain-seasons-2026-10-20.json`.
+
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height
 pages are a secondary target after the codec and error metrics are proven on

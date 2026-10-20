@@ -102,6 +102,22 @@ Their shared world-addressed grain carrier now has bounded substrate/exposure,
 cover, moisture and snow/frost response plus small geology-linked roughness
 priors. These are authored appearance priors, not calibrated lithology or
 resolved strata/weathering relief.
+The follow-up audit in doc 69 removes the artificial grazing sky floor,
+evaluates the finite GGX visibility limit, and derives both incoming and
+outgoing substrate throughput from that rough-material integral. It also excludes buried-rock roughness
+priors under opaque cover and preserves unmasked coastal normal stencils.
+Fresh survey captures no longer show the broad blue-grey grazing bands or
+black ridge dashes seen in the preceding slice. One fresh model reviewer,
+shown only unlabeled pairs, preferred an intermediate outgoing-only version in
+all four cases after votes were frozen and scored. That version was still
+rejected for directional energy creation and replaced by a two-sided,
+first-substrate-bounce closure. The reviewer noted speckles, blurred/abrupt
+material transitions and stretched detail; the earlier preference does not
+establish final-patch visual acceptance or physical validation.
+A fresh blind reviewer separately preferred the final two-sided version in all
+four matched cases, while still identifying blurred/stretched materials,
+angular contours, speckling and an artificial foreground boundary. This remains
+one final-version model review, not broad acceptance or physical validation.
 Natural material detail, vegetation, close-up geometry/transport continuity and independent
 whole-frame visual acceptance remain incomplete. This does not accept the
 rejected frames or change canonical terrain.

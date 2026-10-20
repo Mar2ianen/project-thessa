@@ -86,14 +86,22 @@ fn env_radiance(direction:vec3<f32>,fallback_lux:vec3<f32>)->vec3<f32> {
 // Sample count changes quadrature only, never source flux or the material.
 // Keeping rejected below-surface samples in the denominator is essential:
 // renormalising only the surviving directions would create energy at grazing.
-fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,ambient:vec3<f32>,samples:u32,cloud_budget:vec3<u32>)->vec3<f32> {
+struct EnvironmentSpecular {
+    radiance: vec3<f32>,
+    reflectance: vec3<f32>,
+};
+
+struct EnvironmentDirection {
+    direction: vec3<f32>,
+    weight: vec3<f32>,
+};
+
+fn env_specular_direction(normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,i:u32,count:u32)->EnvironmentDirection {
     let nv=max(dot(normal,eye),0.0);
-    if(!env_enabled() || samples==0u){return vec3(0.0);}
     let helper=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(normal.y)>0.9);
     let tangent=normalize(cross(helper,normal));let bitangent=cross(normal,tangent);
     let r=clamp(roughness,0.02,1.0);let alpha=max(r*r,0.0025);let a2=alpha*alpha;
     let k=(r+1.0)*(r+1.0)*0.125;
-    let gv=nv/max(nv*(1.0-k)+k,OCEAN_EPSILON);
     // Stretch the local view, then sample the projected visible disk. Unlike
     // ordinary NDF sampling this remains bounded and useful at grazing angles.
     let vh_local=normalize(vec3(alpha*dot(eye,tangent),alpha*dot(eye,bitangent),nv));
@@ -101,48 +109,76 @@ fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness
     var t1=vec3(1.0,0.0,0.0);
     if(lensq>0.0){t1=vec3(-vh_local.y,vh_local.x,0.0)*inverseSqrt(lensq);}
     let t2=cross(vh_local,t1);
-    let gv_exact=2.0*nv/max(nv+sqrt(a2+(1.0-a2)*nv*nv),OCEAN_EPSILON);
-    // Bound nested volume work: rough sky quadrature is cheap, a nested full
-    // primary cloud march per sample is not. Keep every cloud phenomenon and
-    // change integration budgets only. Surface Low/Medium/High (4/8/16 clear
-    // samples) become 1/2/4 directions with 1/2/4 cloud steps and <=1 sun step.
-    let cloudy=cloud_frame.wind.y!=0.0 && cloud_budget.x>0u;
-    let count=select(samples,cloud_budget.x,cloudy);
-    var result=vec3(0.0);
-    for(var i=0u;i<count;i++) {
-        let xi=(f32(i)+0.5)/f32(count);
-        let phi=ENV_TAU*f32(reverseBits(i))*2.3283064365386963e-10;
-        let radius=sqrt(xi);let x=radius*cos(phi);
-        let s=0.5*(1.0+vh_local.z);
-        let y=(1.0-s)*sqrt(max(0.0,1.0-x*x))+s*radius*sin(phi);
-        let disk=t1*x+t2*y+vh_local*sqrt(max(0.0,1.0-x*x-y*y));
-        let local_h=normalize(vec3(alpha*disk.x,alpha*disk.y,max(0.0,disk.z)));
-        let h=tangent*local_h.x+bitangent*local_h.y+normal*local_h.z;
-        let vh=dot(eye,h);if(vh<=0.0){continue;}
-        let l=reflect(-eye,h);let nl=dot(normal,l);if(nl<=0.0){continue;}
-        let gl=nl/max(nl*(1.0-k)+k,OCEAN_EPSILON);
-        let fresnel=f0+(vec3(1.0)-f0)*pow(1.0-vh,5.0);
-        // The sampling PDF uses exact GGX G1. Correct to the Schlick-Smith
-        // constitutive BRDF shared with the direct-light kernel, not a second
-        // material law. Do not add an empirical roughness brightness factor.
-        let weight=gv*gl/max(gv_exact,OCEAN_EPSILON);
-        var incoming=env_base_radiance(l,ambient);
-        if(cloudy){
-            let column=cloud_transport_column(position,l,cloud_budget.y,cloud_budget.z);
-            incoming=incoming*column.a+column.rgb;
-        }
-        result+=incoming*fresnel*weight;
+    // Gv_Schlick / Gv_GGX contains N.V in both numerator and denominator.
+    // Cancel it before evaluation: clamping either vanishing factor to epsilon
+    // destroys the finite grazing limit and used to require an unphysical floor.
+    let visibility_ratio=(nv+sqrt(a2+(1.0-a2)*nv*nv))
+        /(2.0*(nv*(1.0-k)+k));
+    let xi=(f32(i)+0.5)/f32(count);
+    let phi=ENV_TAU*f32(reverseBits(i))*2.3283064365386963e-10;
+    let radius=sqrt(xi);let x=radius*cos(phi);
+    let s=0.5*(1.0+vh_local.z);
+    let y=(1.0-s)*sqrt(max(0.0,1.0-x*x))+s*radius*sin(phi);
+    let disk=t1*x+t2*y+vh_local*sqrt(max(0.0,1.0-x*x-y*y));
+    let local_h=normalize(vec3(alpha*disk.x,alpha*disk.y,max(0.0,disk.z)));
+    let h=tangent*local_h.x+bitangent*local_h.y+normal*local_h.z;
+    let vh=dot(eye,h);let l=reflect(-eye,h);let nl=dot(normal,l);
+    if(vh<=0.0 || nl<=0.0){return EnvironmentDirection(l,vec3(0.0));}
+    let gl=nl/max(nl*(1.0-k)+k,OCEAN_EPSILON);
+    let fresnel=f0+(vec3(1.0)-f0)*pow(1.0-vh,5.0);
+    // Correct the exact GGX G1 sampling PDF to the shared Schlick-Smith BRDF.
+    return EnvironmentDirection(l,fresnel*visibility_ratio*gl);
+}
+
+fn env_directional_reflectance(normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,samples:u32)->vec3<f32> {
+    if(samples==0u){return f0;}
+    var reflectance=vec3(0.0);
+    for(var i=0u;i<samples;i++){
+        reflectance+=env_specular_direction(normal,eye,roughness,f0,i,samples).weight;
     }
-    let integrated=result/f32(count);
-    // At a silhouette the visible-normal quadrature can reject every sample
-    // because its reflected ray points below the local horizon. Fresnel then
-    // removes the diffuse term too, so the fragment would tonemap to black
-    // along every ridge. Keep a continuous, bounded sky floor in the grazing
-    // band; it is a numerical horizon guard, not a second BRDF or an empirical
-    // brightness factor. Rejected samples still stay in the denominator above
-    // the band, and the nv >= 0.2 oracle remains unchanged.
-    let horizon=1.0-smoothstep(0.0,0.2,nv);
-    let grazing=f0+(vec3(1.0)-f0)*pow(1.0-nv,5.0);
-    let floor=env_base_radiance(normal,ambient)*grazing*horizon;
-    return max(integrated,floor);
+    return clamp(reflectance/f32(samples),vec3(0.0),vec3(1.0));
+}
+
+// Cosine-weighted average of the same material law. With t=mu^2 the
+// hemispherical integral is uniform on [0,1]; four midpoint directions are
+// sufficient for the terrain roughness range, subject to the tested envelope.
+// Aggregate ambient retains no angular radiance, so this assumes isotropy.
+fn env_average_reflectance(roughness:f32,f0:vec3<f32>,samples:u32)->vec3<f32> {
+    var result=vec3(0.0);
+    for(var j=0u;j<4u;j++){
+        let mu=sqrt((f32(j)+0.5)*0.25);
+        result+=env_directional_reflectance(vec3(0.0,0.0,1.0),vec3(sqrt(1.0-mu*mu),0.0,mu),roughness,f0,samples);
+    }
+    return result*0.25;
+}
+
+fn env_specular_response(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,ambient:vec3<f32>,samples:u32,cloud_budget:vec3<u32>)->EnvironmentSpecular {
+    if(samples==0u){return EnvironmentSpecular(vec3(0.0),f0);}
+    // Material quadrature is independent of cloud publication/transport budgets.
+    let cloudy=cloud_frame.wind.y!=0.0 && cloud_budget.x>0u;
+    var result=vec3(0.0);
+    var reflectance=vec3(0.0);
+    for(var i=0u;i<samples;i++) {
+        let sample=env_specular_direction(normal,eye,roughness,f0,i,samples);
+        reflectance+=sample.weight;
+        if(env_enabled() && !cloudy){
+            result+=env_base_radiance(sample.direction,ambient)*sample.weight/f32(samples);
+        }
+    }
+    // Bound only radiative transport, not the material's unit-source response.
+    if(env_enabled() && cloudy){
+        for(var i=0u;i<cloud_budget.x;i++){
+            let sample=env_specular_direction(normal,eye,roughness,f0,i,cloud_budget.x);
+            if(all(sample.weight==vec3(0.0))){continue;}
+            let column=cloud_transport_column(position,sample.direction,cloud_budget.y,cloud_budget.z);
+            let incoming=env_base_radiance(sample.direction,ambient)*column.a+column.rgb;
+            result+=incoming*sample.weight/f32(cloud_budget.x);
+        }
+    }
+    return EnvironmentSpecular(result,clamp(reflectance/f32(samples),vec3(0.0),vec3(1.0)));
+}
+
+fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,ambient:vec3<f32>,samples:u32,cloud_budget:vec3<u32>)->vec3<f32> {
+    if(!env_enabled() || samples==0u){return vec3(0.0);}
+    return env_specular_response(position,normal,eye,roughness,f0,ambient,samples,cloud_budget).radiance;
 }

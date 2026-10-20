@@ -543,9 +543,15 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
     } else {
         0.0
     };
+    // A buried substrate cannot change the optical roughness of the cover.
+    // Use the same ordered coverage weights as the appearance mix, rather than
+    // applying a geology offset to opaque vegetation, snow or frost.
+    let visible_substrate = (1.0 - vegetation.clamp(0.0, 1.0))
+        * (1.0 - snow_cover)
+        * (1.0 - (frost * 0.75).clamp(0.0, 1.0));
     let roughness = (land_roughness(vegetation, exposed, damp, outcrop_texture, frost) as f64
-        + substrate_roughness_delta(substrate, rock))
-    .clamp(0.45, 0.98) as f32;
+        + substrate_roughness_delta(substrate, rock) * visible_substrate)
+        .clamp(0.45, 0.98) as f32;
     SurfaceAppearance {
         albedo_srgb: color.map(|c| c.clamp(0.0, 1.0) as f32),
         // Frost crystals glitter: pull roughness down where they settle.
@@ -712,6 +718,28 @@ mod frost_tests {
         assert_eq!(disabled.normal_detail_scale, 0.0);
         assert_eq!(enabled.albedo_srgb, disabled.albedo_srgb);
         assert_eq!(enabled.roughness, disabled.roughness);
+    }
+
+    #[test]
+    fn opaque_cover_hides_substrate_roughness_priors() {
+        let mut field = field();
+        field.params.surface_climate.precipitation_m_yr = 1000.0;
+        let dir = crate::sphere::dir_from_latlon(38.0, -171.0);
+        for temperature in [250.0, 285.0] {
+            let mut ground = sample(temperature, 1.0);
+            ground.slope_hint = 0.0;
+            ground.geology = Geology::Basaltic;
+            let basalt = surface_appearance(&field, &ground, dir);
+            ground.geology = Geology::FelsicHighland;
+            let felsic = surface_appearance(&field, &ground, dir);
+            assert!(basalt.snow_cover.max(basalt.vegetation) > 0.999);
+            assert!(
+                (basalt.roughness - felsic.roughness).abs() < 1e-6,
+                "buried geology leaked through opaque cover at {temperature} K: {} vs {}",
+                basalt.roughness,
+                felsic.roughness
+            );
+        }
     }
 
     #[test]

@@ -712,7 +712,7 @@ const MATERIAL_SLOPE_WAVELENGTH_M: f64 = 256.0;
 /// per texel is paired with a fixed-scale material slope, so classification is
 /// independent of tile LOD. Appearance-only noise is filtered at the page's
 /// physical texel spacing instead of aliasing unresolved grain. The normal
-/// plane uses band-limited gradient noise evaluated only on land.
+/// plane uses band-limited gradient noise on land and its one-texel derivative halo.
 /// The border samples use the same field
 /// coordinates as adjacent pages, so filtering across tile edges is
 /// continuous.
@@ -733,7 +733,6 @@ pub fn build_gpu_material_page_with_normals(
     let mut dirs = Vec::with_capacity(size * size);
     let mut samples = Vec::with_capacity(size * size);
     let mut prefixes = Vec::with_capacity(size * size);
-    let mut grain = Vec::with_capacity(if normal_maps { size * size } else { 0 });
     let mut normal_detail_scales = Vec::with_capacity(if normal_maps { size * size } else { 0 });
     for y in 0..size {
         for x in 0..size {
@@ -751,16 +750,6 @@ pub fn build_gpu_material_page_with_normals(
             let (prefix, macro_h) = field.height_prefix_m(dir);
             let sample =
                 field.sample_surface_from_prefix(dir, prefix, macro_h, TEXTURE_DETAIL_MIN_WL_M);
-            // The normal plane is consumed only by the land BRDF; keeping
-            // ocean pages flat saves the grain band evaluations per texel and
-            // avoids inventing seabed relief that the water branch ignores.
-            if normal_maps {
-                grain.push(if sample.height_m > 0.0 {
-                    surface_normal_grain_height(field, dir, texel_m)
-                } else {
-                    0.0
-                });
-            }
             dirs.push(dir);
             prefixes.push((prefix, macro_h));
             samples.push(sample);
@@ -811,6 +800,7 @@ pub fn build_gpu_material_page_with_normals(
             normal: Vec::new(),
         };
     }
+    let grain = material_normal_grain_samples(field, &dirs, &samples, size, texel_m);
     let mut normal = Vec::with_capacity(size * size * 2);
     for y in 0..size {
         for x in 0..size {
@@ -857,6 +847,35 @@ pub fn build_gpu_material_page_with_normals(
         rgba,
         normal,
     }
+}
+
+fn material_normal_grain_samples(
+    field: &PlanetField,
+    dirs: &[[f64; 3]],
+    samples: &[crate::field::TerrainSample],
+    size: usize,
+    texel_m: f64,
+) -> Vec<f64> {
+    (0..size * size)
+        .map(|i| {
+            let x = i % size;
+            let y = i / size;
+            // Mask the resulting normal, not the height signal inside its
+            // derivative. A coastal land texel still needs the true grain at
+            // its water-side stencil points; substituting zero creates a
+            // fictitious shore cliff. Deep ocean evaluates no grain at all.
+            let needed = samples[i].height_m > 0.0
+                || (x > 0 && samples[i - 1].height_m > 0.0)
+                || (x + 1 < size && samples[i + 1].height_m > 0.0)
+                || (y > 0 && samples[i - size].height_m > 0.0)
+                || (y + 1 < size && samples[i + size].height_m > 0.0);
+            if needed {
+                surface_normal_grain_height(field, dirs[i], texel_m)
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 /// Solve the dual chart, not two independent metres-per-UV approximations.
@@ -1161,6 +1180,45 @@ mod surface_regressions {
                 assert!((got[1] + 0.2).abs() < 1e-12, "face={face} xy={xy}: {got:?}");
             }
         }
+    }
+
+    #[test]
+    fn coastal_grain_stencil_does_not_differentiate_the_water_mask() {
+        let field = field();
+        let key = TileKey {
+            face: 3,
+            level: 16,
+            x: 14936,
+            y: 47207,
+        };
+        let size = 5;
+        let texel_m = key.span_m(field.params.radius_m) / 125.0;
+        let dirs: Vec<_> = (0..size * size)
+            .map(|i| key.direction((i % size) as f64 / 125.0, (i / size) as f64 / 125.0))
+            .collect();
+        let mut sample = field.sample_surface(dirs[0], 32.0);
+        sample.height_m = -1.0;
+        let mut samples = vec![sample; size * size];
+        let centre = 2 * size + 2;
+        samples[centre].height_m = 1.0;
+        let grain = material_normal_grain_samples(&field, &dirs, &samples, size, texel_m);
+        let reference: Vec<_> = dirs
+            .iter()
+            .map(|&dir| surface_normal_grain_height(&field, dir, texel_m))
+            .collect();
+        for i in [centre, centre - 1, centre + 1, centre - size, centre + size] {
+            assert_eq!(
+                grain[i], reference[i],
+                "coastal derivative sample {i} was masked"
+            );
+        }
+        assert_eq!(grain[0], 0.0, "deep ocean must skip grain work");
+        samples[centre].height_m = -1.0;
+        assert!(
+            material_normal_grain_samples(&field, &dirs, &samples, size, texel_m)
+                .iter()
+                .all(|&height| height == 0.0)
+        );
     }
 
     #[test]

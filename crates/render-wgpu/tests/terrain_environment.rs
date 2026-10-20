@@ -240,7 +240,9 @@ fn grazing_reference(roughness: f64, nv: f64) -> f64 {
     let r = roughness.clamp(0.02, 1.0);
     let a2 = (r * r).max(0.0025).powi(2);
     let k = (r + 1.0).powi(2) / 8.0;
-    let gv = nv / (nv * (1.0 - k) + k);
+    // Integrate the BRDF after cancelling N.V analytically. This independent
+    // solid-angle reference remains defined at the exact grazing limit.
+    let gv_over_nv = 1.0 / (nv * (1.0 - k) + k);
     let mut sum = 0.0;
     let n = 1024;
     for y in 0..n {
@@ -252,7 +254,7 @@ fn grazing_reference(roughness: f64, nv: f64) -> f64 {
             let h = (eye + DVec3::new(sine * phi.cos(), sine * phi.sin(), mu)).normalize();
             let d = a2 / (std::f64::consts::PI * (h.z * h.z * (a2 - 1.0) + 1.0).powi(2));
             let fresnel = 0.04 + 0.96 * (1.0 - eye.dot(h)).powi(5);
-            sum += d * gv * gl * fresnel / (4.0 * nv);
+            sum += d * gv_over_nv * gl * fresnel * 0.25;
         }
     }
     sum * std::f64::consts::TAU / (n * n) as f64
@@ -270,7 +272,7 @@ fn grazing_terrain_environment_remains_bounded() {
         terrain.share_environment(&backend, Some(&binding));
         for (generation, roughness) in [153, 255u8].into_iter().enumerate() {
             material(&backend, &mut terrain, roughness, generation as u64 + 1);
-            for nv in [0.7, 0.2] {
+            for nv in [0.7, 0.2, 0.05, 0.01] {
                 let look_at = DVec3::Z * 1010.0;
                 let eye = look_at + DVec3::new((1.0_f64 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
                 let pixel = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
@@ -293,7 +295,76 @@ fn grazing_terrain_environment_remains_bounded() {
 }
 
 #[test]
-#[ignore = "hardware: extreme grazing keeps a bounded sky floor instead of a black ridge silhouette"]
+#[ignore = "hardware: first-substrate-bounce white/grey furnace deficit, regular/conforming, all material tiers"]
+fn rough_dielectric_diffuse_and_specular_share_the_same_directional_energy() {
+    let backend = Backend::bring_up().unwrap();
+    let field = EnvironmentRadiance::new(8, 4, vec![[8.0; 3]; 32]).unwrap();
+    let mut binding = EnvironmentBinding::new(&backend.device);
+    binding.update(&backend, Some(&field));
+    // Isotropic incoming throughput for aggregate ambient. This independently
+    // integrates sixteen cosine-weighted directions rather than the shader's
+    // four midpoint directions and VNDF quadrature.
+    let average = (0..16)
+        .map(|i| grazing_reference(1.0, ((f64::from(i) + 0.5) / 16.0).sqrt()))
+        .sum::<f64>()
+        / 16.0;
+    for conforming in [false, true] {
+        for quality in [Quality::Low, Quality::Medium, Quality::High] {
+            let mut terrain = scene(&backend, quality, true, conforming);
+            terrain.share_environment(&backend, Some(&binding));
+            terrain
+                .update_lighting(
+                    &backend,
+                    &SurfaceLighting {
+                        ambient_lux: [
+                            8.0 * std::f32::consts::PI,
+                            8.0 * std::f32::consts::PI,
+                            8.0 * std::f32::consts::PI,
+                            0.0,
+                        ],
+                        ..SurfaceLighting::default()
+                    },
+                )
+                .unwrap();
+            for (generation, color) in [255, 128u8].into_iter().enumerate() {
+                let page =
+                    CbtMaterialPage::from_rgba8([color, color, color, 255].repeat(128 * 128))
+                        .unwrap();
+                let pages = MaterialPages::from_iter(
+                    (8..14).map(|id| (id, (generation as u64 + 1, page.clone()))),
+                );
+                terrain
+                    .update_materials(&backend, &(8..14).collect::<Vec<_>>(), &pages)
+                    .unwrap();
+                for nv in [0.7, 0.2, 0.05, 0.01] {
+                    let look_at = DVec3::Z * 1010.0;
+                    let eye = look_at + DVec3::new((1.0_f64 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
+                    let pixel = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
+                    let albedo = ((f64::from(color) / 255.0 + 0.055) / 1.055).powf(2.4);
+                    let reflected = grazing_reference(1.0, nv);
+                    let expected = ((albedo * (1.0 - reflected) * (1.0 - average) + reflected)
+                        * 204.0)
+                        .round() as u8;
+                    // The omitted internal return bounces give a real deficit,
+                    // not exact white-furnace equality. Neither substrate may
+                    // exceed incoming energy; grey checks the BRDF reference too.
+                    let tolerance = if quality == Quality::High { 1 } else { 2 };
+                    assert!(
+                        pixel.iter().all(|v| v.abs_diff(expected) <= tolerance),
+                        "conforming={conforming} quality={quality:?} color={color} nv={nv} actual={pixel:?} reference={expected}"
+                    );
+                    assert!(
+                        pixel.iter().all(|&v| v <= 204),
+                        "furnace energy creation: {pixel:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "hardware: regular/conforming extreme-grazing raster remains finite without artificial sky floor"]
 fn extreme_grazing_terrain_environment_is_not_black() {
     let backend = Backend::bring_up().unwrap();
     let field = EnvironmentRadiance::new(8, 4, vec![[100.0; 3]; 32]).unwrap();
@@ -306,24 +377,17 @@ fn extreme_grazing_terrain_environment_is_not_black() {
         for nv in [0.01_f64, 0.001, 0.0001] {
             // Hit the +Z face at its centre for every view angle. The eye sits
             // just above the face plane, so the view direction is nearly
-            // tangent and the visible-normal quadrature can reject every
-            // sample; this reproduces the ridge-silhouette case rather than a
-            // flat normal-incidence patch.
+            // tangent; this reproduces the ridge-silhouette case rather than a
+            // flat normal-incidence patch. Exact-angle accuracy is covered by
+            // the shared-environment compute probe and solid-angle oracle.
             let look_at = DVec3::Z * 1000.0;
             let eye = look_at + DVec3::new((1.0 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
             let pixel = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
-            // The original estimator returns zero when every reflected sample
-            // falls below the local horizon; Fresnel then removes the diffuse
-            // term as well, so a ridge line tonemaps to black. This is a lower
-            // bound only: the exact reference is not the rejected-sample
-            // integral once the bounded horizon floor takes over.
             assert!(
-                pixel.iter().all(|&v| v >= 10),
-                "conforming={conforming} nv={nv} black silhouette: {pixel:?}"
+                pixel.iter().all(|&v| v > 0 && v < 128),
+                "conforming={conforming} nv={nv} black or overbright silhouette: {pixel:?}"
             );
-            eprintln!(
-                "terrain_grazing_floor conforming={conforming} nv={nv} actual={pixel:?} floor=10"
-            );
+            eprintln!("terrain_grazing_limit conforming={conforming} nv={nv} actual={pixel:?}");
         }
     }
 }
@@ -342,15 +406,35 @@ fn terrain_environment_gpu_cost() {
     let target =
         OffscreenTarget::with_format(&backend, 1280, 720, wgpu::TextureFormat::Rgba8Unorm).unwrap();
     let configurations = [
-        (false, Quality::High),
-        (true, Quality::Low),
-        (true, Quality::Medium),
-        (true, Quality::High),
+        (false, Quality::High, true),
+        (true, Quality::Low, true),
+        (true, Quality::Medium, true),
+        (true, Quality::High, true),
+        (false, Quality::High, false),
+        (true, Quality::High, false),
     ];
-    let mut terrains = configurations.map(|(enabled, quality)| {
+    let mut terrains = configurations.map(|(enabled, quality, sky)| {
         let mut terrain = scene(&backend, quality, enabled, false);
         material(&backend, &mut terrain, 153, 1);
-        terrain.share_environment(&backend, Some(&binding));
+        if sky {
+            terrain.share_environment(&backend, Some(&binding));
+        } else {
+            let page = CbtMaterialPage::from_rgba8([255, 255, 255, 255].repeat(128 * 128)).unwrap();
+            let pages = MaterialPages::from_iter((8..14).map(|id| (id, (2, page.clone()))));
+            terrain
+                .update_materials(&backend, &(8..14).collect::<Vec<_>>(), &pages)
+                .unwrap();
+            terrain
+                .update_lighting(
+                    &backend,
+                    &SurfaceLighting {
+                        ambient_lux: [std::f32::consts::PI; 4],
+                        directions: [[0.0, 0.0, 1.0, 0.0]; 3],
+                        colors_lux: [[std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+                    },
+                )
+                .unwrap();
+        }
         let eye = DVec3::Z * 2500.0;
         terrain
             .update_view_for_extent(
@@ -376,8 +460,8 @@ fn terrain_environment_gpu_cost() {
             .unwrap();
         terrain
     });
-    let mut samples: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::new());
-    for index in [0, 1, 2, 3, 3, 2, 1, 0] {
+    let mut samples: [Vec<f64>; 6] = std::array::from_fn(|_| Vec::new());
+    for index in [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0] {
         let terrain = &mut terrains[index];
         for frame in 0..20 {
             let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -395,10 +479,11 @@ fn terrain_environment_gpu_cost() {
     for (index, values) in samples.iter_mut().enumerate() {
         values.sort_by(f64::total_cmp);
         eprintln!(
-            "terrain_environment_cost adapter={:?} quality={:?} samples_per_pixel={} extent=1280x720 measurements=32 median_ms={:.6} p95_ms={:.6}; same regular black sphere/material/sky, no direct light/shadows/clouds; whole classify/raster and uncovered sky cost, not whole-client cost",
+            "terrain_environment_cost adapter={:?} quality={:?} samples_per_pixel={} sky={} extent=1280x720 measurements=32 median_ms={:.6} p95_ms={:.6}; sky modes: regular black sphere/material/sky, no direct light/shadows/clouds; no-sky modes: white material plus direct/ambient, no field; classify/raster cost, not whole-client cost",
             backend.adapter.get_info(),
             configurations[index].1,
             terrains[index].land_environment_samples(),
+            configurations[index].2,
             values[16],
             values[30]
         );
@@ -406,9 +491,16 @@ fn terrain_environment_gpu_cost() {
 }
 
 fn uniform_cloud(backend: &Backend) -> thessa_render_wgpu::clouds::CloudBinding {
+    cloud_with_extinction(backend, 0.0002)
+}
+
+fn cloud_with_extinction(
+    backend: &Backend,
+    extinction: f32,
+) -> thessa_render_wgpu::clouds::CloudBinding {
     let mut records = [[0.0_f32; 4]; 11];
     records[0] = [0.0, 0.0, 2500.0, 1000.0];
-    records[1] = [3000.0, 3000.0, 0.0002, 24.0];
+    records[1] = [3000.0, 3000.0, extinction, 24.0];
     records[2] = [0.0, 1.0, 4.0, 1.0];
     records[10] = [0.0, 0.0, 100.0 * std::f32::consts::PI, 0.0];
     let bytes = records
@@ -446,6 +538,60 @@ fn uniform_cloud(backend: &Backend) -> thessa_render_wgpu::clouds::CloudBinding 
         frame,
         weather: texture.create_view(&Default::default()),
         sampler: backend.device.create_sampler(&Default::default()),
+    }
+}
+
+#[test]
+#[ignore = "hardware: nonblack direct-lit material without sky is independent of optically empty cloud publication"]
+fn empty_clouds_do_not_change_direct_material_without_a_sky_field() {
+    let backend = Backend::bring_up().unwrap();
+    let clear = EnvironmentBinding::new(&backend.device);
+    let mut cloudy = EnvironmentBinding::new(&backend.device);
+    cloudy.set_clouds(cloud_with_extinction(&backend, 0.0));
+    for conforming in [false, true] {
+        for quality in [Quality::Low, Quality::Medium, Quality::High] {
+            let mut terrain = scene(&backend, quality, true, conforming);
+            terrain
+                .update_lighting(
+                    &backend,
+                    &SurfaceLighting {
+                        directions: [[0.0, 0.0, 1.0, 0.0]; 3],
+                        colors_lux: [[9.0 * std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+                        ..SurfaceLighting::default()
+                    },
+                )
+                .unwrap();
+            let page = CbtMaterialPage::from_rgba8([255, 255, 255, 255].repeat(128 * 128)).unwrap();
+            let pages = MaterialPages::from_iter((8..14).map(|id| (id, (1, page.clone()))));
+            terrain
+                .update_materials(&backend, &(8..14).collect::<Vec<_>>(), &pages)
+                .unwrap();
+            for nv in [1.0_f64, 0.05] {
+                let look_at = DVec3::Z * 1010.0;
+                let eye = look_at + DVec3::new((1.0 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
+                terrain.share_environment(&backend, Some(&clear));
+                let a = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
+                terrain.share_environment(&backend, Some(&cloudy));
+                let b = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
+                assert!(a.iter().all(|&v| v > 20), "unlit fixture: {a:?}");
+                assert_eq!(
+                    a, b,
+                    "cloud publication changed material: {quality:?} conforming={conforming} nv={nv}"
+                );
+                let rv = grazing_reference(1.0, nv);
+                let rl = grazing_reference(1.0, 1.0);
+                // Normal incidence source, roughness=1: D=1/pi and k=0.5.
+                let h_cos = ((1.0 + nv) * 0.5).sqrt();
+                let fresnel = 0.04 + 0.96 * (1.0 - h_cos).powi(5);
+                let spec = fresnel * 2.25 / (nv * 0.5 + 0.5);
+                let expected = ((9.0 * (1.0 - rv) * (1.0 - rl) + spec) * 25.5).round() as u8;
+                let tolerance = if quality == Quality::High { 1 } else { 2 };
+                assert!(
+                    a.iter().all(|v| v.abs_diff(expected) <= tolerance),
+                    "direct substrate oracle: {quality:?} conforming={conforming} nv={nv} actual={a:?} expected={expected}"
+                );
+            }
+        }
     }
 }
 

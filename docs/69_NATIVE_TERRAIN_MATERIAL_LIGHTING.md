@@ -1,6 +1,6 @@
 # 69 — Native terrain material lighting
 
-**Status: implemented primary-raster material normals, primary sky-reflection slice and grazing horizon guard; terrain visual acceptance incomplete.**
+**Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
 ## Source and consumer
 
@@ -13,7 +13,7 @@ contacts and simulation are unchanged. No new lighting-field producer, render ta
 render pass or ray-tracing requirement is introduced; the material page gains a
 second texture plane and the primary raster declares its two bindings.
 
-`render-wgpu::environment.wgsl::env_specular_from` integrates incoming radiance
+`render-wgpu::environment.wgsl::env_specular_response` integrates incoming radiance
 against the same GGX distribution, Schlick-Smith masking and Schlick Fresnel used
 by `rcbt-core`'s direct dielectric kernel (F0 = 0.04). It importance-samples
 visible GGX normals using Heitz, *Sampling the GGX Distribution of Visible
@@ -27,8 +27,14 @@ Every accepted direction uses shared sky radiance plus the existing
 reflected-cloud extinction/in-scatter law at the surface origin, with a bounded
 reflection-specific quadrature budget (below).
 It does not add the directly evaluated stellar disc a second time. The legacy
-shader hook returns zero, preserving the runnable Bevy path without requiring
-native bindings.
+shader hook returns zero reflected radiance, preserving the runnable Bevy path
+without native bindings. Native material transmission uses the same
+directional-hemispherical reflectance on both incoming and outgoing paths,
+independent of sky colour or cloud publication/transport budgets. It models
+one Lambert-substrate encounter, omitting internal return bounces; this is not
+a complete refracting rough-interface or multiple-scattering solver. Legacy
+Bevy retains its existing macro-normal Schlick outgoing split and unattenuated
+incoming diffuse, without native environment bindings.
 
 ## Tangent-space material normals
 
@@ -40,10 +46,11 @@ older decoded pages and the Bevy albedo-only path remain valid.
 
 Generation and residency:
 
-- `build_gpu_material_page` evaluates `surface_normal_grain_height` only where
-  the canonical surface sample is land. Ocean pages stay flat: the water branch
-  owns its wave normal, and inventing seabed relief would add cost without
-  affecting the water BRDF.
+- `build_gpu_material_page` evaluates `surface_normal_grain_height` on land
+  and the one-texel cardinal halo required by its derivative stencil. Zeroing
+  the source at a water-side stencil point would create a false shore cliff.
+  Ocean output normals stay flat and all-ocean pages evaluate no grain; the
+  water branch owns its wave normal. The halo is shading data, not seabed relief.
 - The normal height spectrum uses Perlin gradient noise at 8 / 4 / 2 / 1 / 0.5 m
   with equal slope contributions where the page texel resolves them, plus the
   broader 32 / 128 / 512 m bands. The existing `band_weight` filter smoothly
@@ -62,6 +69,8 @@ Generation and residency:
   not become a synthetic relief step. No noise bands, phase, authoritative
   height, collision, water classification or vegetation geometry are added.
   Water remains flat and snow/vegetation attenuate exposed-substrate detail.
+  Geology-linked roughness offsets are weighted by uncovered substrate, so
+  opaque vegetation/snow/frost do not inherit buried-rock roughness priors.
 - Slopes use the inverse local cube-sphere chart metric: the two physical
   direction chords and height differences define a 2×2 solve in the face's
   orthonormal tangent frame. Dividing both differences by one nominal texel
@@ -186,14 +195,15 @@ snapshot is not identity-pinned. All fourteen have zero channel-sum-below-45
 pixels, with minima 116–196; that statistic does not prove absence of geometry
 holes or visual acceptance.
 
-Implementer inspection still finds a shared generic grain carrier with only a
+The earlier captures show a shared generic grain carrier with only a
 bounded material-state response, rather than convincing stratum, fracture,
 scree or weathering relief; smooth macro slopes, pale snow/green fields,
-grazing directional stretching and blue-grey ridge bands also remain. The
+grazing directional stretching and blue-grey ridge bands. The
 conforming controls still show faceted silhouettes. No plant/rock scatter
 geometry or independent blind preference review is claimed. These are
 outstanding defects, not a completed natural-terrain or Satisfactory-quality
-milestone.
+milestone. The audit below removes the erroneous grazing energy/floor behavior;
+it does not supply missing geological or vegetation geometry.
 
 ## Material-response follow-up — 2026-10-20
 
@@ -250,8 +260,13 @@ acceptance is claimed. Gate, capture-hash and benchmark details are recorded in
   zero, with no quadrature or land-only sky bindings. Other sky/cloud/ocean
   consumers retain their independent settings.
 - `[renderer].surface_quality = "low" | "medium" | "high"`: 4 / 8 / 16
-  clear-sky samples per land fragment, resolved by
-  `ResolvedGraphicsSettings::terrain_environment_samples()`.
+   clear-sky samples per land fragment, resolved by
+   `ResolvedGraphicsSettings::terrain_environment_samples()`.
+  The same budgets evaluate material reflectance for the view and each active,
+  above-horizon star. Nonzero aggregate ambient adds four cosine-weighted
+  midpoint directions, each using that material budget. This incoming ambient
+  approximation assumes isotropic illumination because the existing irradiance
+  does not retain angular information. It does not introduce another sky field.
 - When clouds are published, use 1 / 2 / 4 directions and 1 / 2 / 4 cloud
   view steps, capped by the cloud producer's steps, and at most one sun-depth
   step (zero if the producer disables sun-depth integration). These budgets
@@ -260,9 +275,14 @@ acceptance is claimed. Gate, capture-hash and benchmark details are recorded in
   sample counts change. Each hollow-shell segment holds the physical source at
   its midpoint and solves Beer-Lambert analytically after density quadrature;
   it does not run the full nested primary march per GGX direction. Primary
-  clouds and existing mesh/ocean reflection budgets remain unchanged.
+  clouds and existing mesh/ocean reflection budgets remain unchanged. Material
+  transmission retains its clear-quality budget even with clouds, so publishing
+  an optically empty cloud deck cannot change the material's direct response.
 - No published atmosphere/aurora sky field: zero added land reflection, rather
-  than an invented ambient sky. Existing direct/diffuse terrain behavior remains.
+  than an invented ambient sky. Native direct/diffuse still use the two-sided
+  material transmission model (and its quadrature cost), unlike the former
+  macro-normal Schlick approximation. The no-field, nonblack direct-lit case is
+  tested against an independent reference and included in the GPU cost fixture.
 - No new device capability or native backend is required beyond the current
   terrain path. Ocean classification and specular disable behavior are unchanged.
 
@@ -279,44 +299,84 @@ sample counts are still **not** a frame-time guarantee. The optional diagnostic
 uses actual GPU timestamps and reports unavailability when timestamp features
 cannot be negotiated.
 
-## Grazing horizon guard
+## Grazing audit: finite visibility ratio and coupled material energy
 
-The visible-normal estimator deliberately keeps rejected below-surface samples
-in its denominator. At a silhouette every sample can be rejected; Fresnel then
-approaches one and removes the diffuse term as well, so the fragment's final
-radiance is exactly zero. On the real terrain this produced near-black dashes
-along ridge crests (and larger pure-black patches on the surveyed volcanic
-site), not geometry holes.
+The horizon floor introduced by `5088319` is removed. Its historical evidence
+remains in `artifacts/native-terrain-horizon-guard-2026-10-20.json`, but the
+interpretation that an empty quadrature justified adding a sky floor was wrong.
+Being bounded by incident sky radiance is not a BRDF error bound: the expanded
+solid-angle oracle reproduced RGB8 255 instead of 140 at roughness 0.6 and
+`N.V = 0.05` before this correction.
 
-`env_specular_from` now returns a continuous sky floor in the extreme grazing
-band:
+Two errors compounded at grazing:
 
-- `horizon = 1 - smoothstep(0, 0.2, N.V)`;
-- `floor = env_base_radiance(normal, ambient) * F * horizon`;
-- the result is `max(integrated, floor)`.
+1. The PDF correction computed `Gv_Schlick / Gv_exact` by separately evaluating
+   two terms proportional to `N.V`, then clamped their denominators. This loses
+   the finite ratio at `N.V = 0`. With `alpha = max(roughness², 0.0025)` and
+   `k = (roughness + 1)² / 8`, algebraically cancel `N.V` first:
 
-The floor uses only the already-published environment field and the existing
-Schlick Fresnel. It adds no field, texture, pass or material coefficient, it
-does not renormalize surviving directions, and it is zero at `N.V >= 0.2`.
-Above that band the rejected-sample denominator is unchanged. The guard is a
-bounded numerical horizon term, not a second BRDF; its physical reading is the
-unresolved grazing sky reflection that the finite quadrature loses, and it is
-bounded by the sky radiance times Fresnel.
+   `ratio = (nv + sqrt(alpha² + (1 - alpha²) * nv²)) / (2 * (nv * (1 - k) + k))`.
 
-The targeted diagnostic used a constant-red fragment output to prove the black
-pixels were shaded fragments, then found zero final radiance with non-zero
-albedo and illuminance. A GPU compute probe calls the actual shared WGSL
-function with a uniform 100-radiance field at `N.V = 0`, `1e-7` and `0.05`.
-The pre-guard shader returns exactly zero at `N.V = 0`, so the probe is a real
-regression rather than a source-shape check. With the guard the three values
-are `100`, `99.99994` and `66.051` radiance, finite and bounded by the uniform
-field. A full-terrain probe at `N.V = 0.01`, `0.001` and `0.0001` also stays
-non-black on regular and conforming geometry. The existing independent
-`N.V = 0.2` and `0.7` grazing oracle still passes, so the guard does not alter
-the calibrated band. On the surveyed real frames, all sampled near-black
-pixels disappeared; a specular-off control shows that the remaining thin dark
-ridge rims are reflected sky at grazing incidence rather than holes. Those
-rims are still an aliasing/visual-quality issue, not an accepted result.
+   The exact grazing limit is `alpha / (2k)`, not zero. Rejected directions
+   still contribute zero and remain in the denominator. There is no sky floor,
+    angular brightness gain, new source or extra reflection sample/pass.
+2. The diffuse term used macro-normal Schlick Fresnel, approaching one at
+   grazing regardless of roughness, while the reflected term used the rough
+   GGX integral. This removed far more diffuse energy than the specular lobe
+    could reflect and produced dark ridge dashes. With `R` denoting that same
+    law's directional reflectance, native diffuse now uses the reciprocal
+    first-substrate-bounce BRDF
+    `albedo * (1-R(view)) * (1-R(light)) / pi`. Aggregate ambient uses the
+    cosine-weighted average incoming `R`, with the isotropy limitation above.
+    Unreflected energy is treated as substrate throughput; a complete rough
+    refraction/transmission solver and internal return bounces are omitted.
+    For exact `R`, hemispherically integrated outgoing energy for white
+    substrate is `R(light) + (1-R(light))*(1-average_R) <= 1`.
+
+An intermediate outgoing-only complement passed an exact-white-furnace test
+but failed independent review: its nonreciprocal direct response generated
+approximately 2.5% excess energy at roughness 1 and incident cosine 0.01. It
+was rejected before committing. The revised omitted-bounce model intentionally
+has a white-furnace deficit, not exact equality. Its material quadrature is
+also independent of the cheaper reflected-cloud transport budget.
+
+The actual shared-WGSL compute probe at roughness 0.5 and uniform radiance 100
+returns 6.03526 at `N.V=0` and `1e-7`, versus an independent solid-angle result
+5.95017; at 0.05 it returns 6.05356 versus 5.92255. The absolute tolerance is
+0.25 radiance in this fixture, with 512/1024-grid reference convergence below
+0.01 radiance. Exact and near-grazing outputs differ by less than 0.0001.
+The raster oracle now covers `N.V = 0.7/0.2/0.05/0.01`, regular/conforming,
+with the existing 8/255 fixture envelope. White/grey furnace-deficit and
+no-sky direct-lit tests cover all quality tiers and both topologies, within
+1 RGB8 level at High and 2 at cheaper tiers. Test exposure is chosen to make
+missing incoming transmission observable, rather than hidden below tolerance.
+An additional actual-WGSL probe integrates collimated-source outgoing energy
+on an independent 128x256 solid-angle grid at roughness 0.45/0.6/1, incident
+cosine 0.01/0.2/1 and all three budgets. The absolute incident-energy envelope
+is 1.005; observed values are below 0.986. Specular reciprocity error stays
+below 0.0001; the two diffuse factors are symmetric by construction. The
+cosine-averaged material response is compared with independent BRDF integration
+within 0.01 absolute reflectance. These are scoped tests, not a mathematical
+certificate of finite-quadrature passivity for every direction, an integration
+convergence proof, or guarantees for narrow HDR peaks/arbitrary bump maps.
+
+The audit also fixes roughness priors leaking through opaque cover and masked
+water-side normal derivatives. Both new CPU regressions were observed failing
+before their fixes. Review captures and verification are recorded in
+[`native-terrain-material-audit-2026-10-20.json`](artifacts/native-terrain-material-audit-2026-10-20.json).
+One fresh model reviewer saw unlabeled pairs of an intermediate outgoing-only
+version and preferred it in all four cases after votes were frozen and scored.
+That preference did not prevent rejection on physical grounds. It is not a
+review of the final two-sided closure or general visual acceptance; the
+reviewer still noted speckles, coarse silhouettes, stretched detail and blurred
+foreground patches. Final capture evidence is distinguished in the artifact.
+A second fresh model reviewer assessed the final two-sided captures without
+origins or previous reviews and also preferred the correction in all four
+cases after votes were frozen and scored (no ties/invalid cases). It still
+reported flat/blurry materials, weak atmospheric depth, angular contours and
+an artificial foreground boundary. These are two small checks of different
+versions, not eight independent votes on the final implementation or a
+general visual-quality milestone.
 
 ## Numerical and visual acceptance boundary
 
@@ -325,7 +385,7 @@ rims are still an aliasing/visual-quality issue, not an accepted result.
 - all three quality levels, with regular and conforming geometry, black
   albedo and independently integrated uniform radiance;
 - normal-incidence tolerances of 7 / 4 / 2 RGB8 levels at the pinned
-  radiance/exposure, and an 8/255 High grazing envelope at N.V = 0.7 and 0.2;
+  radiance/exposure, and an 8/255 High grazing envelope at N.V = 0.7/0.2/0.05/0.01;
 - directional red/blue fields: rough material broadens the reflection rather
   than substituting an unfiltered mirror;
 - same-size field writes reach the terrain without material reupload;
@@ -368,10 +428,10 @@ perspective and primary scene-object reflections remain separate work. The
 captures still show smooth macro forms and regular normal-grain ripples; sky
 reflection and a normal plane alone cannot make the planet look like
 Satisfactory, and no visual acceptance follows from these frames.
-An earlier note in this document described the dark silhouette pixels as
-constant-colour background gaps. That interpretation was wrong: the pixels
-were fully shaded terrain fragments whose final radiance was zero because the
-grazing environment integral was empty. The horizon guard above removes them.
+Earlier notes described dark silhouette pixels first as background gaps, then
+as an empty grazing environment integral that required a sky floor. Both
+diagnoses were incomplete: the audit above identifies the unstable visibility
+ratio and mismatched diffuse/specular energy partition. The floor is removed.
 A corrected site-1 shadow control (`[atmosphere].enabled = true`,
 `[shadows].enabled = false`, identical published ambient
 `[1112.58, 2051.11, 4132.93]`) changed only 3.21 % of pixels by more than

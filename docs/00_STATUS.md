@@ -128,7 +128,8 @@ tests and 43 native ignored tests. This includes the five new terrain
 reflection/oracle/cost tests; it is not whole-frame visual acceptance or remote
 CI. Scoped evidence: `artifacts/native-terrain-environment-2026-10-20.json`.
 
-The native terrain grazing-horizon guard (doc 69) followed on 613 unchanged
+The native terrain grazing-horizon guard (doc 69, **superseded by the audit
+below**) followed on 613 unchanged
 compiled/configuration inputs with 13 local command gates: 1968 workspace
 lib/bin tests, 97 integration tests, 84 native feature-off tests, 72 renderer
 ignored hardware tests and 43 native ignored tests. A new GPU compute probe
@@ -171,6 +172,29 @@ not yet reviewed. Exact checks, current page-build measurements, capture hashes
 and limitations are in
 `artifacts/native-terrain-material-response-2026-10-20.json`; visual acceptance
 remains open.
+
+The subsequent audit of `cc037f1` reproduced two material bugs (buried geology
+roughness leaking through opaque cover and zero-masked water-side normal
+stencils) and two grazing-lighting errors. It replaces the sky-floor workaround
+with the finite Schlick/GGX visibility ratio and uses that same rough-material
+directional reflectance for reciprocal incoming/outgoing diffuse throughput.
+An intermediate outgoing-only complement was rejected for directional energy
+creation despite passing a white furnace. Cloud transport budgets no longer
+alter material quadrature. Expanded independent grazing, collimated-energy,
+no-field direct lighting and furnace-deficit fixtures cover the revised model.
+Current evidence and explicit visual gaps are
+in `artifacts/native-terrain-material-audit-2026-10-20.json`; see doc 69 for
+the corrected derivation. The historical horizon-guard artifact is a record of
+the rejected workaround, not current behavior or a BRDF-accuracy guarantee.
+Local verification covers 1983 workspace lib/bin tests, 98 integration tests,
+76 distinct renderer hardware tests (one long target rerun after command
+timeout), all-feature Clippy, Bevy shader parsing and the feature-off native
+path. The final native ignored suite also passed all 43 tests after building its
+debug-server prerequisite.
+Six final silent captures have no missing material pages; one fresh
+blind reviewer preferred the final correction in all four matched cases while
+still flagging blur/stretch, angular contours and weak atmospheric depth.
+No performance win, global visual acceptance or full client parity is claimed.
 
 The remaining source-to-consumer retirement obligations are tracked in
 [doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must

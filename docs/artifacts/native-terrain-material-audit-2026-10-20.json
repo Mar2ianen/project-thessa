@@ -1,0 +1,273 @@
+{
+  "date": "2026-10-20",
+  "completed_date": "2026-10-21",
+  "topic_branch": "fix/native-material-grazing-audit",
+  "baseline": "cc037f177e0e95b759145bd51e36919f89d4af42",
+  "scope": "Audit and correction of buried-substrate roughness, coastal shading derivatives and native grazing material energy. Presentation only: no authoritative heights, topology, simulation, contacts, water classification or vegetation geometry change.",
+  "hardware": {
+    "cpu": "AMD Ryzen AI 9 H 365",
+    "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan",
+    "driver": "RADV Mesa 26.2.5-arch1.1",
+    "platform": "Linux"
+  },
+  "reproduced_failures": [
+    {
+      "test": "appearance::frost_tests::opaque_cover_hides_substrate_roughness_priors",
+      "before": "At 250 K under opaque snow, basalt/felsic roughness differed: 0.76019907 vs 0.76219904.",
+      "fix": "Weight the bounded geology roughness prior by uncovered substrate, using the existing vegetation, snow and frost opacity weights."
+    },
+    {
+      "test": "lod::surface_regressions::coastal_grain_stencil_does_not_differentiate_the_water_mask",
+      "before": "The water-side derivative sample was 0 instead of the continuous grain value 0.7648140995514645.",
+      "fix": "Evaluate the land grain's cardinal derivative halo even across the water mask; keep ocean output normals flat and all-ocean pages grain-free."
+    },
+    {
+      "test": "grazing_terrain_environment_remains_bounded, expanded to N.V=0.05/0.01",
+      "before": "Regular roughness_u8=153, N.V=0.05: [255,255,255] vs independent solid-angle reference [140,140,140]. The old sky floor passed the previous lower-bound test despite this BRDF error.",
+      "fix": "Cancel N.V analytically in Gv_Schlick/Gv_GGX before evaluating its finite limit, and remove the artificial sky floor. Rejected below-surface samples remain in the denominator."
+    },
+    {
+      "test": "rough_dielectric_diffuse_and_specular_share_the_same_directional_energy",
+      "before": "After removing the floor, regular Low white substrate at N.V=0.2 returned [34,34,34] instead of the white-furnace [51,51,51]. Macro-normal Schlick removed too much diffuse for the rough reflected lobe.",
+      "fix": "Use reciprocal first-substrate-bounce diffuse albedo*(1-R(view))*(1-R(light))/pi, with R from the same GGX law. Aggregate ambient uses a four-direction cosine-weighted average incoming R (isotropic approximation). Extra material quadrature is measured; no new field/pass or full rough-interface refraction/multiple-scattering solver."
+    }
+  ],
+  "independent_code_review": {
+    "reviewer_session": "ses_ea502d9dfffeZccC7KWVvepaaX",
+    "rejected_intermediate": "An outgoing-only complement passed its white furnace but was nonreciprocal and produced approximately 2.5% excess energy for a grazing collimated source at roughness 1. A second issue let cloud transport sample count change material/direct response. Both were corrected before commit.",
+    "final_result": "No blocking implementation issues found in the revised two-sided closure; legacy Bevy macro-Schlick behavior preserved. Review was source and CPU arithmetic, not independent GPU execution.",
+    "test_feedback": "Raised furnace radiance and direct-source illuminance after review showed incoming-factor omissions could hide below RGB8 tolerance. Final raster tolerance is 1 level at High, 2 at cheaper tiers. Energy compute probe reconstructs the product from actual shader material functions; raster direct/furnace fixtures separately check production wiring."
+  },
+  "numerical_envelopes": {
+    "shared_wgsl_compute_probe": {
+      "fixture": "Uniform radiance 100, roughness 0.5, 16-direction production visible-normal quadrature; independent solid-angle BRDF midpoint integration.",
+      "nv": [0.0, 0.0000001, 0.05, 0.2],
+      "actual_radiance": [6.0352564, 6.035258, 6.053562, 5.536124],
+      "independent_radiance": [5.950167560247436, 5.9501675913001915, 5.922551572159843, 5.385266046671909],
+      "absolute_tolerance_radiance": 0.25,
+      "reference_512_1024_grid_difference_below": 0.01,
+      "exact_and_near_grazing_difference_below": 0.0001
+    },
+    "grazing_raster": "Independent solid-angle reference at N.V=0.7/0.2/0.05/0.01, roughness_u8=153/255, regular/conforming, High, tolerance 8 RGB8 levels.",
+    "white_grey_furnace": "Uniform radiance 8 and diffuse illuminance 8*pi, substrate sRGB 255/128, roughness 1, N.V=0.7/0.2/0.05/0.01, all quality tiers and both topologies; expected omitted-bounce deficit, tolerance 1 RGB8 level at High and 2 at cheaper tiers, no output above incoming furnace radiance.",
+    "no_field_direct": "White substrate, roughness 1, normal source illuminance 9*pi, N.V=1/0.05, all tiers and both topologies. Independent direct/specular reference and exact unchanged output when publishing zero-extinction clouds without a sky field.",
+    "directional_energy": "Actual WGSL material functions plus direct specular, independent 128x256 outgoing solid-angle integration, roughness 0.45/0.6/1, incident cosine 0.01/0.2/1, 4/8/16 samples: outgoing fractions 0.957818..0.985663, envelope <=1.005. Specular reciprocity max 0.000069759 (bound 0.0001); diffuse product symmetric by construction. Average material reflectance vs independent BRDF integration has absolute tolerance 0.01.",
+    "boundary": "Fixture-specific absolute bounds, not certified finite-quadrature passivity for all directions/materials, a convergence proof for the energy grid, or arbitrary HDR sky/bump-map/layered-material guarantees. Aggregate ambient loses angular information; missing internal substrate return bounces cause a deliberate energy deficit."
+  },
+  "verification": {
+    "cargo_environment": "Every cargo command below used TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp.",
+    "log_directory": "target/test-tmp/material-audit-2026-10-20",
+    "remote_ci_claimed": false,
+    "readme_check": "README.md native rough-GGX/material-normal description and incomplete visual acceptance remain accurate; no README edit required.",
+    "failures_and_recovery": [
+      "Initial native ignored suite: 3 real-server tests failed because target/debug/thessa-server had not been built, not an asserted state mismatch. Built it with cargo build -p thessa-server, then reran the suite. This prerequisite is not a source fix.",
+      "The complete renderer ignored command exceeded its 240 s wrapper timeout during unified_scene diagnostic workloads. The 18 completed targets passed (71 tests); rerunning unified_scene separately passed all 5. No full-command exit-zero claim is made.",
+      "Independent review rejected the intermediate outgoing-only diffuse complement and cloud-budget-dependent material response. Final oracles were strengthened rather than treating the initial green tests or preferred images as sufficient."
+    ],
+    "checks": [
+      {
+        "command": "cargo fmt --all -- --check",
+        "result": "passed",
+        "log": "fmt-final.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+        "result": "passed",
+        "log": "clippy-final.log",
+        "sha256": "e5408e42eca775f3018fa95b733213bbea1e1ac851e9afcee4c3e3ec1ccff809"
+      },
+      {
+        "command": "cargo test --workspace --lib --bins",
+        "passed": 1983,
+        "failed": 0,
+        "ignored": 43,
+        "log": "workspace-lib-bins-final.log",
+        "sha256": "8dbe662cddaf89e805a380458eca1556797c41e2f9a085d4bf33800a4902cc7c"
+      },
+      {
+        "command": "cargo test --workspace --test '*'",
+        "passed": 98,
+        "failed": 0,
+        "ignored": 81,
+        "log": "workspace-integration-final.log",
+        "sha256": "9e4270aec1bd05583ca9c40e48ee872c68c733daf3c2d560c23edca04a81966d"
+      },
+      {
+        "command": "cargo test -p thessa-render-wgpu --lib --tests -- --ignored --nocapture --test-threads=1",
+        "result": "Timed out after 240 s in the long unified_scene diagnostic target; first 18 targets completed with 71 passes, zero failures. The remaining target was rerun separately below.",
+        "passed": 71,
+        "failed": 0,
+        "ignored": 0,
+        "log": "renderer-ignored-v2.log",
+        "sha256": "a69860c6adc4e5027407e737ce37c74fd510a0ddade971e9e000e90efaaa5a59"
+      },
+      {
+        "command": "cargo test -p thessa-render-wgpu --test unified_scene -- --ignored --test-threads=1",
+        "passed": 5, "failed": 0, "ignored": 0,
+        "log": "unified-scene-v2.log",
+        "sha256": "51637ce857290be338566e77fc8878e4332841457ad737578bff52ee759c03e6"
+      },
+      {
+        "command": "cargo test -p thessa-render-wgpu --test terrain_environment -- --ignored --nocapture --test-threads=1",
+        "passed": 8, "failed": 0, "ignored": 0,
+        "note": "Final rerun after strengthening raster exposure/tolerances, included in the 76 distinct renderer hardware tests, not 8 additional tests.",
+        "log": "terrain-environment-final.log",
+        "sha256": "74c64db64862adbb9111bd1569f983f1e11911f6edaa4a415cff5a429570bdfd"
+      },
+      {
+        "command": "cargo test -p thessa-bevy-rcbt --features render --lib",
+        "passed": 25,
+        "failed": 0,
+        "log": "bevy-render-final.log",
+        "sha256": "5b681df9bd3af7116417b8ed8601ac260e37160389a9b51ca704125d647e793f"
+      },
+      {
+        "command": "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored",
+        "matched": 0,
+        "note": "No remaining ignored hardware tests in this crate; shader parsing ran above and actual renderer GPU suites ran separately.",
+        "log": "bevy-ignored-final.log",
+        "sha256": "90f5367191e6e7c405dbdf8d57c8af880ab5bd988b1c988be9989f4a0bf960a8"
+      },
+      {
+        "command": "cargo test -p thessa-terrain-native --no-default-features --bin thessa-terrain-native",
+        "passed": 84,
+        "failed": 0,
+        "ignored": 24,
+        "log": "native-feature-off-final.log",
+        "sha256": "d545c764ef1a2f8bc4a8b3d0905627f1296fd48642706b06210c79569399f929"
+      },
+      {
+        "command": "cargo test -p thessa-terrain-native -- --ignored --test-threads=1",
+        "passed": 43,
+        "failed": 0,
+        "ignored": 0,
+        "note": "Final revised shader/material path, with the debug server prerequisite built. All eight test targets completed.",
+        "log": "native-ignored-final.log",
+        "sha256": "c900127eab935dbf52c580df8202527e1e6fb9f014f0de1df8e7d958628b7765"
+      },
+      {
+        "command": "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+        "result": "passed",
+        "log": "native-feature-off-clippy-final.log",
+        "sha256": "1c720094a8c5fd64b64c4041c3d97ab68dd25b068fe2e5fbc74ba21facb246ae"
+      },
+      {
+        "command": "python3 -m unittest discover -s tools/agent-qa/tests -v",
+        "result": "5 passed",
+        "log": "agent-qa-tests.log",
+        "sha256": "906e865079cd7b22d106c741637d38641c248e79d952fae057245f2d8da1d960"
+      },
+      {
+        "command": "python3 tools/agent-qa/check_architecture.py",
+        "result": "passed",
+        "log": "architecture-final.log",
+        "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"
+      },
+      {
+        "command": "cargo build --release -p thessa-terrain-native --bin thessa-terrain-native",
+        "result": "passed; rebuilt after the complete shader correction before verified captures",
+        "log": "release-build-v2.log",
+        "sha256": "974b86056cdd6a66ea0101452d413756358bff13a003a62a127b48e4d1bafa9b"
+      }
+    ]
+  },
+  "performance": {
+    "page_generation": {
+      "command": "cargo bench -p thessa-worldgen-rocky --bench material_pages",
+      "log": "target/test-tmp/material-audit-2026-10-20/material-pages-bench.log",
+      "sha256": "c1aa94b0a395f84b0874277c99a30521f9dba64e0fcd865de2f6cae446851b24",
+      "broad_512_pages": {"p50_ms": 107.082388, "p95_ms": 131.270885, "total_s": 55.221032501},
+      "paired_close_land_64_each": {
+        "disabled_p50_ms": 119.600927,
+        "disabled_p95_ms": 129.906314,
+        "enabled_p50_ms": 122.912823,
+        "enabled_p95_ms": 133.324669,
+        "workload": "Face 3 levels 14..17, counterbalanced order, release/bench; same canonical 128x128 pages, frozen erosion."
+      },
+      "boundary": "CPU page generation, not loading latency or frame time. No performance win claimed."
+    },
+    "isolated_environment_gpu": {
+      "command": "cargo test -p thessa-render-wgpu --test terrain_environment terrain_environment_gpu_cost -- --ignored --nocapture --test-threads=1",
+      "log": "target/test-tmp/material-audit-2026-10-20/terrain-environment-final.log",
+      "sha256": "74c64db64862adbb9111bd1569f983f1e11911f6edaa4a415cff5a429570bdfd",
+      "extent": [1280, 720],
+      "samples_per_mode": 32,
+      "modes": ["disabled", "Low", "Medium", "High"],
+      "median_ms": [0.381325, 1.052560, 1.643523, 2.216852],
+      "p95_ms": [0.443923, 1.343753, 1.906502, 2.836309],
+      "no_field_white_direct_ambient": {"disabled_median_ms": 0.315119, "disabled_p95_ms": 0.371786, "high_median_ms": 2.192806, "high_p95_ms": 2.989039},
+      "boundary": "Actual timestamps, counterbalanced regular black sphere/material/sky without direct/shadows/clouds; separate paired white/direct/ambient no-field fallback includes material-only quadrature. Classify+raster, not whole-client cost, release-build benchmark or controlled before/after speed comparison. No speedup claimed."
+    }
+  },
+  "captures": {
+    "directory": "target/test-tmp/material-audit-2026-10-20",
+    "summary": "verified-summary.json",
+    "summary_sha256": "41e5fe5ca5fef686cdd2f8831ffb6f8bed5e2f41eeb196a2f991862f588d9c6b",
+    "protocol": "Release native headless 1280x720, graphics.toml High, fixed default epoch, stationary survey view, 10 s live prestream, 30 warmup frames excluded, 32 measured frames, --no-hud --mute. Command/config/perf/log hashes are in the summary. Site 2 adds a normal-disabled control and a conforming-topology control. This is not the new WORLD-00 2x2 km vertical-slice acceptance scenario.",
+    "frames": [
+      {"name": "verified-site-0-500m", "gpu_median_ms": 84.981, "gpu_p95_ms": 110.289, "visible": 371, "cache": 494, "material_missing": 0, "png_sha256": "d75eb5ad089770674740de3a30aef11c42395ed6b5aebbc45416343f6cc49096"},
+      {"name": "verified-site-1-500m", "gpu_median_ms": 117.224, "gpu_p95_ms": 133.090, "visible": 378, "cache": 505, "material_missing": 0, "png_sha256": "8e39e1fd3c1f3164eaff1f6154fef483e079e4da41e1bca7cbfb08d49cd61473"},
+      {"name": "verified-site-2-500m", "gpu_median_ms": 97.767, "gpu_p95_ms": 112.484, "visible": 383, "cache": 510, "material_missing": 0, "png_sha256": "c3f81f67506633a16a16ec8f14c418cba789c1eefdb554c8411327f112231168"},
+      {"name": "verified-site-2-200m", "gpu_median_ms": 107.700, "gpu_p95_ms": 119.635, "visible": 383, "cache": 510, "material_missing": 0, "png_sha256": "39359dab74c2abaa1a9a7dbfb401903eedc739c54a636cc22022c3dd26e24f47"},
+      {"name": "verified-site-2-200m-normals-off", "gpu_median_ms": 114.981, "gpu_p95_ms": 148.491, "visible": 383, "cache": 510, "material_missing": 0, "png_sha256": "d399c39627ab9f35cb9b939221f92151e740f75a7c693e10bb745e392f124365"},
+      {"name": "verified-site-2-500m-conforming", "gpu_median_ms": 89.414, "gpu_p95_ms": 93.294, "visible": 383, "cache": 510, "material_missing": 0, "png_sha256": "6b6ff45b5cf6ee8ec1949d572a82aece1780c253ad1b9610cfb7c1e90b6a6b4d"}
+    ],
+    "implementer_inspection": "The broad blue-grey grazing bands and black ridge dashes are no longer visible in these survey frames. Generic grain, grazing texture stretch, smooth macro slopes and faceted silhouettes remain; no vegetation geometry was added.",
+    "limitations": "Visible/cache counts match the previous regular captures, but full streaming snapshots are not identity-pinned. Whole-client times are noisy and do not isolate this correction or establish a performance ranking. Still frames do not establish temporal or cross-platform stability.",
+    "intermediate_blind_review": {
+      "directory": "target/test-tmp/material-audit-2026-10-20/blind-review",
+      "cases": 4,
+      "status": "independent votes frozen, then scored against the separate origin key",
+      "reviewer_session": "ses_ea502be0cffelDmRxaQn4XA7Ig",
+      "reviewer_context": "Fresh general subagent instructed to read only unlabeled blind-review images, cases and rubric; no source, origins or key access. One model reviewer, not a human review or population preference study.",
+      "frozen_votes": [
+        {"case": "site-0-500m", "choice": "A", "confidence": "medium", "notes": "Same muted sky and flat horizon. A has calmer, more consistently matte ground shading; B has blue horizontal bands. Both show horizon speckles; material identity remains unclear."},
+        {"case": "site-1-500m", "choice": "B", "confidence": "high", "notes": "Matching ridgelines and similar atmosphere. B has cleaner slope shading; A has blue/dark edge streaks. Both remain coarse; B retains angular texture transitions and blur. Neither resolves convincing material detail."},
+        {"case": "site-2-500m", "choice": "B", "confidence": "high", "notes": "Matching main peaks/sky. B is easier to read and more plausibly matte. A has extensive blue diagonal striping; B retains an abrupt blurry dark foreground patch; distant detail remains soft."},
+        {"case": "site-2-200m", "choice": "B", "confidence": "high", "notes": "Matching landmarks and similar atmosphere. B gives a cleaner shaded hillside. A has blue striping and dotted ridge edges; B retains stretched surface detail and a smooth, low-detail foreground."}
+      ],
+      "reviewer_limitations": "No clear camera/content mismatch found, but only still images were inspected. Confidence describes preference, not physical fidelity, temporal/LOD stability or performance. Material properties cannot be established from these images.",
+      "score": {"audit_preferred": 4, "baseline_preferred": 0, "ties": 0, "invalid": 0, "reviewers": 1},
+      "score_command": "python3 tools/agent-qa/arena.py score --blind target/test-tmp/material-audit-2026-10-20/blind-review --key target/test-tmp/material-audit-2026-10-20/private-answer-key/answer-key.json",
+      "score_output": "target/test-tmp/material-audit-2026-10-20/blind-score.json",
+      "physical_correctness": "This outgoing-only intermediate was rejected on physical grounds despite preference; not final-patch acceptance."
+    },
+    "blind_review": {
+      "directory": "target/test-tmp/material-audit-2026-10-20/blind-review-verified",
+      "cases": 4,
+      "status": "final two-sided version; independent votes frozen, then scored against the separate key",
+      "reviewer_session": "ses_ea486b150ffeUIcwj61c3k9xW2",
+      "reviewer_context": "Fresh general subagent, only unlabeled frames/cases/rubric; no source, origins, keys or previous reviews. One model reviewer, not human/population acceptance.",
+      "frozen_votes": [
+        {"case": "site-0-500m", "choice": "A", "confidence": "medium", "notes": "A has coherent shading but remains flat/featureless, with distant speckles. B has blue-grey bands. Equivalent muted sky, weak depth cues and flat horizon."},
+        {"case": "site-1-500m", "choice": "B", "confidence": "high", "notes": "B has cleaner continuous slopes; A has blue/dark contour seams. Both retain blurred mottled materials, angular ridgelines and weak atmospheric depth."},
+        {"case": "site-2-500m", "choice": "B", "confidence": "medium", "notes": "B improves continuity and foreground roughness, but its abrupt material boundary looks artificial. A has diagonal blue-grey striping/dark seams. Both have angular peaks and weak distance separation."},
+        {"case": "site-2-200m", "choice": "A", "confidence": "high", "notes": "A has more coherent near-slope shading, still overly smooth. B has diagonal stripes/dark outlines. Matching silhouettes, limited geometric detail and atmospheric depth."}
+      ],
+      "reviewer_limitations": "All eight images read; framing/landmarks matched and no pair invalidated. Appearance judgments only, not physics or performance; blurry/stretched details, sparse scale cues, angular contours and speckling remain. Still images cannot establish flicker/pop-in/temporal stability.",
+      "score": {"audit_preferred": 4, "baseline_preferred": 0, "ties": 0, "invalid": 0, "reviewers": 1},
+      "score_output": "target/test-tmp/material-audit-2026-10-20/blind-score-verified.json",
+      "physical_correctness": "Assessed separately with the numerical fixtures, not inferred from preference."
+    }
+  },
+  "changed_compiled_inputs_sha256": {
+    "crates/rcbt-core/src/shaders.rs": "9eed7dbd0ac43b9c9d98e305cb7f576832384716c520f49c72f166f162e65c3b",
+    "crates/rcbt-core/src/shaders/raster_surface_hooks.wgsl": "92f6be43ea4c372520a56d70418a337f35de73ad95a5f4391bd65b611f18358b",
+    "crates/render-wgpu/src/environment.rs": "bfba0da1b968204eff88947d0e07053febf17a68e66fc8a07abd71118f140fa0",
+    "crates/render-wgpu/src/environment.wgsl": "5aec204a8203aef08658212bfef92e7d6047117c08e24a8e2846b6138a7c9f9e",
+    "crates/render-wgpu/src/terrain.rs": "a5da7935ab62d18197129ba9a65fd76a6f3fd23bf65abbf80c425a849c7fdeae",
+    "crates/render-wgpu/tests/terrain_environment.rs": "8b740c9ecc5092ff4bd058d982d3cd1d110b4ae83ab984623dd9a61815bdd080",
+    "tools/worldgen-rocky/src/appearance.rs": "145cbdfccf17ac95c69c7c73143fcfa594ab2ee89bdb483501a4abe4da1d69d9",
+    "tools/worldgen-rocky/src/lod.rs": "578bab1e9270f7ac20bdd60bae507c46fd3fdc39e2b9c1f57e0b79b063895df1"
+  },
+  "deliberately_omitted": [
+    "No new noise carrier, resolved strata/fractures/scree geometry or vegetation production consumer.",
+    "No authoritative terrain/physics adjustment to hide shading defects.",
+    "No full rough-interface transmission or multiple-scattering solver, arbitrary-HDR reference envelope or new renderer abstraction.",
+    "No claim of full Bevy retirement, Satisfactory parity, visual acceptance, remote green CI or measured speedup.",
+    "CPU frame p50/p95/p99, whole-client GPU p99, allocations, host RSS/VRAM and memory high-water marks were not collected in this correctness stage and are unavailable; do not infer them from page-generation or synthetic GPU measurements.",
+    "The 2026-10-21 GH handoff BUG/PERF/WORLD items remain a separate, unverified backlog; none is claimed fixed by this patch. Next isolated investigation: BUG-01 modifier-release handling."
+  ]
+}

@@ -591,10 +591,15 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         * (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m));
     let shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
     var direct = vec3(0.0);
+    var land_direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
         if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
-            direct += lighting.colors_lux[i].rgb * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
+            let incoming = lighting.colors_lux[i].rgb * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
                 * cbt_shadow_visibility(input.render_position, receiver_normal, i);
+            direct += incoming;
+            if (cbt_specular_enabled() && water_material < 1.0 && any(incoming > vec3(0.0))) {
+                land_direct += incoming * cbt_land_transmission(shaded_normal,lighting.directions[i].xyz,roughness);
+            }
         }
     }
     // Cloud-deck shadows dim the direct sun only; skylight and ambient stay.
@@ -622,7 +627,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let eye = ocean_safe_normalize(view.world_position - input.render_position, normal);
     var radiance = diffuse;
     if (cbt_specular_enabled() && water_material < 1.0) {
-        let land_fresnel = ocean_schlick(0.04, max(dot(shaded_normal, eye), 0.0));
         var land_reflection = vec3(0.0);
         for (var i = 0u; i < 3u; i = i + 1u) {
             if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
@@ -631,8 +635,14 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
                     * cbt_shadow_visibility(input.render_position, receiver_normal, i);
             }
         }
-        land_reflection += cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
-        radiance = mix(diffuse, diffuse * (1.0 - land_fresnel) + land_reflection,
+        let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
+        land_reflection += environment.rgb;
+        var land_ambient = lighting.ambient_lux.rgb;
+        if (any(land_ambient > vec3(0.0))) {
+            land_ambient *= cbt_land_ambient_transmission(roughness);
+        }
+        let land_diffuse = albedo * (land_ambient + land_direct * shadow) / OCEAN_PI;
+        radiance = mix(diffuse, land_diffuse * (1.0 - environment.a) + land_reflection,
             1.0 - water_material);
     }
     if (cbt_specular_enabled() && water > 0.0) {

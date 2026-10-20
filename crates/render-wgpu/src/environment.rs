@@ -297,16 +297,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "hardware: environment probe keeps a bounded sky floor at N.V=0 and 1e-7"]
-    fn grazing_floor_is_not_the_old_zero_early_return() {
+    #[ignore = "hardware: exact grazing GGX limit vs independent solid-angle quadrature, no sky floor"]
+    fn grazing_limit_matches_the_brdf_without_a_radiance_floor() {
         let backend = crate::Backend::bring_up().unwrap();
         let field = EnvironmentRadiance::new(8, 4, vec![[100.0; 3]; 32]).unwrap();
         let mut binding = EnvironmentBinding::new(&backend.device);
         binding.update(&backend, Some(&field));
         // The probe calls the actual shared WGSL function, not a Rust mirror.
-        // N.V=0 and 1e-7 returned exactly zero before the horizon guard (the
-        // old early-out covered the first, and the grazing quadrature the
-        // second); the floor must keep both finite and non-zero.
+        // These angles expose the cancelled 0/0 in the visibility ratio.
+        // Merely requiring a nonzero result would also accept the old, much
+        // too bright horizon floor; compare with the literal BRDF instead.
         let source = format!(
             "{}\n{}\n{}",
             include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
@@ -330,6 +330,34 @@ fn probe() {
 }
 "#
         );
+        let values = probe(&backend, &binding, source, 4, [1, 1, 1]);
+        for (index, nv) in [0.0, 1e-7, 0.05, 0.2].into_iter().enumerate() {
+            let radiance = values[index][0];
+            let reference = grazing_brdf_reference(0.5, nv, 1024) * 100.0;
+            let coarser = grazing_brdf_reference(0.5, nv, 512) * 100.0;
+            assert!(
+                (reference - coarser).abs() < 0.01,
+                "oracle did not converge"
+            );
+            assert!(
+                radiance.is_finite() && (f64::from(radiance) - reference).abs() < 0.25,
+                "N.V={nv} actual={radiance} independent={reference}"
+            );
+            eprintln!("terrain_specular_limit nv={nv} radiance={radiance} reference={reference}");
+        }
+        assert!(
+            (values[0][0] - values[1][0]).abs() < 0.0001,
+            "exact and near-grazing limits must be continuous"
+        );
+    }
+
+    fn probe(
+        backend: &crate::Backend,
+        binding: &EnvironmentBinding,
+        source: String,
+        count: u64,
+        workgroups: [u32; 3],
+    ) -> Vec<[f32; 4]> {
         let module = backend
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -355,7 +383,7 @@ fn probe() {
             });
         let output = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("environment-grazing-probe-output"),
-            size: 4 * 16,
+            size: count * 16,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -377,15 +405,15 @@ fn probe() {
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &group0, &[]);
             pass.set_bind_group(1, &group1, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
+            pass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
         }
         let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("environment-grazing-probe-staging"),
-            size: 4 * 16,
+            size: count * 16,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        encoder.copy_buffer_to_buffer(&output, 0, &staging, 0, 4 * 16);
+        encoder.copy_buffer_to_buffer(&output, 0, &staging, 0, count * 16);
         backend.queue.submit([encoder.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
         staging
@@ -411,18 +439,103 @@ fn probe() {
             .collect();
         drop(mapped);
         staging.unmap();
-        for (index, label) in ["N.V=0", "N.V=1e-7", "N.V=0.05"].into_iter().enumerate() {
-            let radiance = values[index][0];
-            assert!(
-                radiance.is_finite() && radiance > 0.0,
-                "{label} is not a bounded non-zero horizon value: {radiance}"
-            );
-            assert!(
-                radiance <= 100.01,
-                "{label} exceeds the uniform sky radiance: {radiance}"
-            );
-            eprintln!("terrain_specular_floor {label} radiance={radiance}");
+        values
+    }
+
+    #[test]
+    #[ignore = "hardware: actual WGSL two-sided substrate reciprocity and collimated-source energy"]
+    fn substrate_response_is_reciprocal_and_does_not_create_directional_energy() {
+        let backend = crate::Backend::bring_up().unwrap();
+        let field = EnvironmentRadiance::new(8, 4, vec![[1.0; 3]; 32]).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        // The 128x256 outgoing solid-angle grid is unrelated to the production
+        // VNDF sampling. Integrate actual direct WGSL plus the substrate term.
+        for roughness in [0.45, 0.6, 1.0] {
+            let average_reference = (0..16)
+                .map(|i| {
+                    grazing_brdf_reference(roughness, ((f64::from(i) + 0.5) / 16.0).sqrt(), 256)
+                })
+                .sum::<f64>()
+                / 16.0;
+            for nl in [0.01, 0.2, 1.0] {
+                for samples in [4, 8, 16] {
+                    let body = format!(
+                        r#"
+@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;
+@compute @workgroup_size(8,8)
+fn probe(@builtin(global_invocation_id) id:vec3<u32>){{
+    let nv=(f32(id.x)+0.5)/128.0;
+    let phi=(f32(id.y)+0.5)*ENV_TAU/256.0;
+    let n=vec3(0.0,0.0,1.0);
+    let v=vec3(sqrt(1.0-nv*nv)*cos(phi),sqrt(1.0-nv*nv)*sin(phi),nv);
+    let nl:f32={nl};let l=vec3(sqrt(1.0-nl*nl),0.0,nl);let r:f32={roughness};
+    let response=env_specular_response(vec3(0.0),n,v,r,vec3(0.04),vec3(1.0),{samples}u,vec3<u32>(0u));
+    let rv=response.reflectance.r;
+    let rl=env_directional_reflectance(n,l,r,vec3(0.04),{samples}u).r;
+    let diffuse=(1.0-rv)*(1.0-rl)/OCEAN_PI;
+    let spec=ocean_sun_reflection(n,v,l,vec3(1.0),r,0.04).r/nl;
+    let reverse=ocean_sun_reflection(n,l,v,vec3(1.0),r,0.04).r/nv;
+    probe_out[id.y*128u+id.x]=vec4((spec+diffuse)*nv,abs(spec-reverse),rv,response.radiance.r);
+    if(id.x==0u && id.y==0u){{probe_out[32768]=vec4(env_average_reflectance(r,vec3(0.04),{samples}u),1.0);}}
+}}
+"#
+                    );
+                    let source = format!(
+                        "{}\n{}\n{body}",
+                        include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+                        shader(0)
+                    );
+                    let values = probe(&backend, &binding, source, 128 * 256 + 1, [16, 32, 1]);
+                    let average = f64::from(values[32768][0]);
+                    assert!(
+                        (average - average_reference).abs() < 0.01,
+                        "ambient r={roughness} samples={samples} actual={average} reference={average_reference}"
+                    );
+                    let values = &values[..32768];
+                    let energy: f64 = values.iter().map(|v| f64::from(v[0])).sum::<f64>()
+                        * std::f64::consts::TAU
+                        / (128.0 * 256.0);
+                    let reciprocal_error = values.iter().map(|v| v[1]).fold(0.0_f32, f32::max);
+                    // Absolute incident-energy envelope, not strict certification
+                    // of finite quadrature over every possible material/direction.
+                    assert!(
+                        energy.is_finite() && energy <= 1.005,
+                        "r={roughness} nl={nl} samples={samples} energy={energy}"
+                    );
+                    assert!(
+                        reciprocal_error < 0.0001,
+                        "reciprocity error={reciprocal_error}"
+                    );
+                    eprintln!(
+                        "substrate_energy r={roughness} nl={nl} samples={samples} outgoing={energy} reciprocity_error={reciprocal_error} average={average} independent_average={average_reference}"
+                    );
+                }
+            }
         }
-        assert!(values[3][0].is_finite(), "{:?}", values[3]);
+    }
+
+    // Integrate D*G*F/(4*N.V) over incident solid angle, independent of the
+    // shader's visible-normal importance sampler and sampling PDF. Gv/N.V has
+    // a finite limit 1/k; no epsilon or artificial light source is needed.
+    fn grazing_brdf_reference(r: f64, nv: f64, n: usize) -> f64 {
+        let ex = (1.0 - nv * nv).sqrt();
+        let a2 = (r * r).max(0.0025).powi(2);
+        let k = (r + 1.0).powi(2) / 8.0;
+        let mut sum = 0.0;
+        for y in 0..n {
+            let mu = (y as f64 + 0.5) / n as f64;
+            let sine = (1.0 - mu * mu).sqrt();
+            let gl = mu / (mu * (1.0 - k) + k);
+            for x in 0..n {
+                let phi = std::f64::consts::TAU * (x as f64 + 0.5) / n as f64;
+                let h =
+                    glam::DVec3::new(ex + sine * phi.cos(), sine * phi.sin(), nv + mu).normalize();
+                let d = a2 / (std::f64::consts::PI * (h.z * h.z * (a2 - 1.0) + 1.0).powi(2));
+                let f = 0.04 + 0.96 * (1.0 - ex * h.x - nv * h.z).powi(5);
+                sum += d * gl * f / (4.0 * (nv * (1.0 - k) + k));
+            }
+        }
+        sum * std::f64::consts::TAU / (n * n) as f64
     }
 }

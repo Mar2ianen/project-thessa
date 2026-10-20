@@ -1,6 +1,6 @@
 # 66 — Bevy retirement: source inventory and acceptance ledger
 
-**Status: active, incomplete. Updated: 2026-10-19.**
+**Status: active, incomplete. Updated: 2026-10-20.**
 
 The requested outcome is removal of Bevy and reintegration or replacement of
 code tied to its host, not merely an optional native terrain benchmark. Keep
@@ -30,7 +30,7 @@ streamer, allocator, propagation resolver or generic RT scene is needed.
 | `navigation.rs`, `map_ui.rs`, `orbits.rs`, celestial visuals in `main.rs` | `sim-core` baked ephemerides, shared `flight-authority::navigation`/`ThreadBakeQueue`, native `map.rs`/`celestial.rs` | doc 67 adds six-scope map, body/PRIMARY framing, cached Kepler curves, a physics-JIT cache consumer with shared execution guards and dominant-body apsis/escape/wake readouts; powered/live JIT futures, remaining guidance/event inputs and appearance/usability acceptance remain |
 | `atmosphere.rs`, sky/cloud/aurora portions of `beauty.rs` | `atmosphere`, native `environment.rs`/`sky_layers.rs`, shared `render-wgpu` environment/clouds | doc 65 records implemented stars, cloud transport and depth-aware aurora; finite aerial perspective and richer transport/acceptance remain |
 | `water.rs` and GPU terrain water shading | `atmosphere::ocean`, shared native spectral ocean/material/RT consumers | preserve one spectral surface across consumers; dynamic ocean RT reuse and wider transport/temporal acceptance remain |
-| `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core` source/profile/medium/optics | native resolved Low/Medium/High field consumer and diagnostics; keep provisional nozzle inputs explicit and never make mesh shape authoritative |
+| `plume.rs`, `assets/shaders/plume_volume.wesl` | `plume-core`, native game-owned `plume.rs`, `render-wgpu` station/depth consumer | resolved Low/Medium/High consumers and diagnostics now exist (doc 38); field-derived native nozzle lighting, compiled nozzle extraction and wider animation/visual acceptance remain; provisional inputs never drive physics |
 | `night_lights.rs`, gas-giant portions of `beauty.rs` | worldgen inhabited regions, material/assets layers | extract existing GPL optical bakes to game-owned code or independently implement a neutral model; native material consumers still missing |
 | `audio.rs` | `audio-core`, `audio-synth`, native `audio.rs` | native engine/device adapter, exterior/cabin routing and RCS/GPWS/boom fixtures now have consumers; docking event integration remains; captures/tests stay silent and missing audio hardware does not prevent rendering |
 | `contact_gizmos.rs`, `docking_demo.rs` | `collision`, shared docking state machine, native `contact_preview.rs` | preserve actual solved contact/docking inspection and deterministic replay; a static mesh preview is not a solved docking replacement |
@@ -221,6 +221,16 @@ The provisional rocket deck and X-15 nozzle offset remain game-owned inputs,
 not calibrated compiled engine state. Field-derived lighting must enter the
 shared lighting/RT consumer; a second generic light or ray-scene subsystem is
 not a replacement strategy.
+
+The native follow-up now consumes the actual 48-station publication rather than
+copying that fitted legacy shader. A projected-box coverage pass handles axial
+and inside rays, samples the existing stored scene depth and clips the integral
+at opaque hits. GPU regressions compare its unperturbed station interpolation
+against the CPU oracle; Low keeps the game-owned GPL optical bake. The reusable
+MIT backend contains no copied GPL game bake or vehicle deck. Native
+`engine_plume.light` remains explicitly unavailable, not a fake point-light
+replacement. See doc 38 and `artifacts/native-plume-2026-10-20.json` for bounds,
+work counters, executed gates and the remaining full-view/lighting obligations.
 
 1. Land the verified shared sky/cloud/aurora publication and its evidence.
 2. Reintegrate remaining small host adapters (audio and game-owned optical

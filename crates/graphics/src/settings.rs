@@ -497,7 +497,8 @@ pub struct EnginePlumeSettings {
     /// Enable plume animation; off freezes the field-time input.
     #[serde(default = "default_true")]
     pub flicker: bool,
-    /// One point light at the nozzle; off saves a forward light.
+    /// Legacy field-derived nozzle point light; the native renderer currently
+    /// reports this consumer as unavailable instead of fabricating lighting.
     #[serde(default = "default_true")]
     pub light: bool,
 }

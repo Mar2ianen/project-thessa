@@ -291,6 +291,13 @@ impl State {
         )?;
         self.renderer
             .update_ocean(&self.backend, scene.sample.time.0)?;
+        scene.update_plume(
+            &self.backend,
+            &mut self.renderer,
+            self.config.width,
+            self.config.height,
+            self.exposure,
+        )?;
         scene.update_sky_layers(
             &self.backend,
             &self.sky_layers,

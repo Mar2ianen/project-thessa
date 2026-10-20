@@ -43,6 +43,7 @@ pub mod environment;
 pub mod material;
 pub mod mesh;
 pub mod ocean;
+pub mod plume;
 pub mod ray_scene;
 pub mod shadows;
 mod sky;

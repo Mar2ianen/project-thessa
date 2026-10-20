@@ -18,6 +18,7 @@ wgpu.workspace = true
 pollster = "0.4"
 
 [dev-dependencies]
+thessa-plume-core = { path = "../plume-core" }
 naga = { version = "30", features = ["wgsl-in"] }
 thessa-render-assets = { path = "../render-assets" }
 png = "0.18"

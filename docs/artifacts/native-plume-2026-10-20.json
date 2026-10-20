@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-20",
+  "baseline": "fc24d5a",
+  "scope": "Native starter-plume extraction plus resolved Low impostor and Medium/High actual-axial-publication consumers; this is not complete Bevy retirement or native nozzle-light parity.",
+  "contract": {
+    "ownership": "GPL terrain-native owns the provisional starter deck, nozzle station, reference-atmosphere extraction and retained Low optical bake. MIT render-wgpu owns sample/texture transport, unit coverage, independent medium integration and modal shell representation. No GPL game shader or optical bake is relicensed into the MIT backend.",
+    "source": "One explicit starter X-15 only, from local FlightAuthority or a fresh explicit-starter replica. No arbitrary retained-mesh nozzle inference, pre-snapshot plume, stale-link continuation or renderer-owned simulation clock. Map ownership suppresses extraction without changing engine/throttle.",
+    "provisional_deck": "Methalox fixture: exit radius 0.55 m, full-flow 480 kg/s, exhaust velocity 3550 m/s, exit pressure 120000 Pa, exit temperature 1850 K, Mach 3.5. Nozzle is craft-space (0,-7.5,0) physical metres independent of mesh scale. Not calibrated X-15 propulsion or compiled nozzle extraction.",
+    "profile": "48 CPU stations cached in 2% throttle and logarithmic approximately 2% pressure bands with a 50 Pa floor. This fixes the saturating legacy pressure key. Immutable 32-byte-per-station GPU payloads upload on publication changes only.",
+    "quality": "Low uses a caller-provided 32x256 sRGB optical bake on a 32-sector unit cone. Medium/High integrate the same station radius/extinction/emission/shock with 8/14 samples. Tangent-warped bins concentrate the fixed budget near thin local slices of the vacuum bound and retain each bin's physical path length.",
+    "transport": "Conservative projected finite-cylinder-box coverage, with near-plane/inside fallback; exact axial and camera-inside rays are supported. One active color-load pass samples existing stored scene depth and truncates the integral even at an opaque hit inside the field. No depth copy/writes, fitted mean extinction/hues, hard skirt clip, parallel-ray rejection or near-camera opacity fudge.",
+    "animation": "Low retains game-owned cone flicker. Native volume shell modes are independently implemented, zero-mean and advected with simulation time; flicker=false removes shell deformation. The last 30% axial dissolve is representation detail. Neither alters simulation state; the numerical central-chord oracle excludes these residual details.",
+    "disabled": "Disabled clears the producer and drops GPU resources. No-source frames never allocate a consumer. An inactive retained consumer records no pass or uploads. No timestamp queries exist outside opt-in measurement.",
+    "resource_bound": "Per allocated consumer: two pipelines, 160-byte camera + 80-byte draw buffers, a 2048-byte station buffer, a 32768-byte impostor and 192 unit-cone vertices. Active volume writes 240 frame bytes; profile changes upload 48*32 bytes. Draw/march/upload counters are workload counters, not visibility counts or GPU time.",
+    "capture": "native-topology-v6-plume keeps the existing interval names and explicitly includes the plume pass in render.scene_classify_and_raster. Requested/resolved settings remain recorded; native_plume_light_applied=false and native_plume_light_status=unavailable prevent a false lighting claim.",
+    "lighting": "Native engine_plume.light is explicitly unavailable. The old field-derived point light remains a retirement obligation to integrate through existing shared lighting/RT, not a second generic light subsystem. No light parity is claimed."
+  },
+  "verification": {
+    "status": "All 27 command gates passed. 606 non-configuration inputs stayed byte-identical; graphics.toml changed comments only, with parsed TOML equality verified against the tested baseline. No remote CI claim.",
+    "directory": "target/test-tmp/native-plume-final",
+    "environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-fastrt/target PYTHONDONTWRITEBYTECODE=1",
+    "hardware": "AMD Radeon 880M Graphics / RADV STRIX1 / Vulkan / Mesa 26.2.4-arch1.1",
+    "focused": "Portable naga validation; GPU slab/profile/axial/inside/depth/camera/upload/lifecycle tests; release CLI Low/Medium/High/disabled captures with identical final authoritative flight telemetry and silent audio.",
+    "inputs": {
+      "count": 607,
+      "tested_manifest_sha256": "9083b5621e91dc4b5b9f848aec26b377db8be3014eca3a9321245abbf5e5f5bd",
+      "validated_manifest_sha256": "78155adaffae2f5ed41738e64447214997cea012e9d586128fdd5f2131267d0b",
+      "byte_unchanged_except": ["graphics.toml"],
+      "graphics_toml_values_identical": true,
+      "graphics_toml_canonical_values_sha256": "5853a425859fad992063968bdc74fc4e2d4e22161946785dbbeb78949b1cd948",
+      "records": "source.json, validated-source.json, gates.json, validation.json and gate-0..26.log under the verification directory; log hashes independently rechecked"
+    },
+    "checks": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo clippy -p thessa-terrain-native --no-default-features --all-targets -- -D warnings",
+      "cargo test --workspace --lib --bins (1951 passed)",
+      "cargo test --workspace --test '*' (95 passed)",
+      "cargo test -p thessa-terrain-native --no-default-features --bin thessa-terrain-native (73 passed)",
+      "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored (24 passed on GPU)",
+      "cargo build --release -p thessa-terrain-native -p thessa-server",
+      "cargo test --release -p thessa-render-wgpu -- --ignored --nocapture --test-threads=1 (36 passed)",
+      "cargo test --release -p thessa-terrain-native -- --ignored --nocapture --test-threads=1 (37 passed)",
+      "python3 tools/agent-qa/check_architecture.py; python3 -m unittest discover -s tools/agent-qa/tests -v; git diff --check (separate command gates)",
+      "Inherited focused map/flight/mouse/visibility/flyby/maneuver/performance regressions and muted window smokes, plus cargo test --release -p thessa-terrain-native --bin thessa-terrain-native plume:: -- --nocapture --test-threads=1 and thessa-terrain-native --hud --flight --throttle 0.5 --frames 8 --mute; exact argv in gates.json"
+    ],
+    "diagnostics": {
+      "gpu_fixture": "One source, 1280x720, 4 warmups and 32 samples; actual command timestamps, isolated consumer fixture, not total scene cost",
+      "medium_gpu_median_ms": 0.036028,
+      "medium_gpu_p95_ms": 0.052339,
+      "high_gpu_median_ms": 0.054343,
+      "high_gpu_p95_ms": 0.055465,
+      "cpu_fixture": "One source, 48 stations, 20000 release iterations; cached extraction versus forced profile rebuild",
+      "cached_cpu_us": 0.200423,
+      "forced_rebuild_cpu_us": 1.804350,
+      "cli_changed_pixels_vs_disabled": {"low": 111, "medium": 1220, "high": 847},
+      "cli_boundary": "320x180, two measured frames after warmup, actual local flight at throttle 0.5 and 0.025 s admission, silent audio; all four final authoritative telemetry strings identical. Async terrain residency varies, so pixel counts establish contribution, not stable image identity or preference."
+    },
+    "numeric_bounds": {
+      "actual_profile_cases": 18,
+      "actual_profile_absolute_linear_rgb_envelope": 0.02,
+      "focused_observed_max_error": 0.003799,
+      "constant_slice_absolute_rgb_alpha_envelope": 0.003,
+      "boundary": "Undeformed untapered central chords compared with 256-step CPU integration over the same bounded chord; radiometric normalization avoids SDR clipping masking vacuum errors. Not a universal animated/oblique/tail-view error bound."
+    },
+    "preliminary_diagnostics": "The first final-chain invocation passed gates 0-6 but hit the shell timeout during release build. Its outputs are retained in target/test-tmp/native-plume-before-metadata; graphics/capture metadata and offscreen-coverage regression were completed before the fresh unbounded stable-source run. Earlier debug GPU and focused CLI logs remain in target/test-tmp/plume-*.log."
+  },
+  "limitations": [
+    "No native field-derived nozzle light, compiled/nozzle-count extraction, crosswind, condensation, secondary combustion, surface impingement, wake or adaptive residual field",
+    "Finite radial integration bound is 1.6 times the largest station radius; full-view animated/tapered transport error is not certified by the central-chord fixtures",
+    "No independent blind visual/usability acceptance, OS-level key injection, Metal/WebGPU execution or remote CI claim",
+    "No whole-client performance win or complete Bevy retirement: remaining guidance/target inputs, docking/contact inspection, optics/material producers and packaging/tooling still need replacement"
+  ]
+}

@@ -320,7 +320,7 @@ fn check_capture(hdr: bool, topology: bool) {
             .resolved
             .get("gpu_scope_layout")
             .map(String::as_str),
-        Some("native-topology-v5-sky")
+        Some("native-topology-v6-plume")
     );
     if topology
         && thessa_render_wgpu::probe_capabilities(&backend.adapter).terrain_conforming_supported
@@ -352,6 +352,9 @@ fn check_capture(hdr: bool, topology: bool) {
     );
     assert_eq!(meta["native_auto_exposure_applied"], "false");
     assert_eq!(meta["native_bloom_applied"], "false");
+    assert_eq!(meta["native_plume_light_applied"], "false");
+    assert_eq!(meta["native_plume_light_status"], "unavailable");
+    assert!(meta["native_plume_scope"].contains("depth-clipped plume"));
     assert_eq!(
         meta["native_scene_format"],
         if enabled {

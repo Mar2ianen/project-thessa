@@ -30,6 +30,7 @@ pub struct Scene {
     /// One-shot prograde kick already queued on the wire (retained
     /// `ExecuteManeuver` fixture semantics: never re-sent in a session).
     maneuver_kick_sent: bool,
+    plume: crate::plume::Cache,
     launch_site: [f64; 3],
     vehicle: Option<(
         thessa_render_core::mesh::MeshAsset,
@@ -463,6 +464,7 @@ impl Scene {
             launch_site: sites[0].0,
             vehicle: None,
             maneuver_kick_sent: false,
+            plume: Default::default(),
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
             input: thessa_flight_authority::input::FlightInput::default(),
             control_mode: thessa_flight_authority::ControlMode::Navball,
@@ -1277,6 +1279,70 @@ impl Scene {
             })
             .transpose()
     }
+    /// Read-only extraction from local authority or the server-fed replica.
+    /// The provisional deck belongs only to the explicit starter X-15, never
+    /// to arbitrary retained geometry or a fabricated server engine state.
+    pub fn update_plume(
+        &mut self,
+        backend: &Backend,
+        renderer: &mut TerrainRenderer,
+        width: u32,
+        height: u32,
+        exposure: f32,
+    ) -> Result<(), BackendError> {
+        let settings = backend.resolve_graphics(&self.requested);
+        let view = self.view(width, height, exposure);
+        let input = (settings.plume_enabled
+            && !self.map_active()
+            && !self.flight_stopped()
+            && matches!(
+                self.primary_appearance_status(),
+                "local" | "explicit_starter_x15"
+            )
+            && self
+                .remote
+                .as_ref()
+                .is_none_or(|r| r.snapshots > 0 && !r.fleet.stale))
+        .then(|| {
+            let flight = self.flight.as_ref()?;
+            let body = self
+                .celestial
+                .ephemeris()
+                .body_state(
+                    flight.reference_body,
+                    thessa_sim_core::SimTime(flight.flight_time_s),
+                )
+                .ok()?;
+            let altitude = (flight.state.position_inertial_m - body.position_inertial).length()
+                - flight.planet_radius_m;
+            let env = crate::plume::environment(
+                flight
+                    .atmosphere
+                    .sample(altitude.max(0.0))
+                    .ok()
+                    .map(|s| [s.pressure_pa, s.density_kg_m3, s.temperature_k]),
+            );
+            Some((
+                crate::plume::Input {
+                    throttle: flight.throttle,
+                    engine_active: flight.engine_active,
+                    sim_time_s: flight.flight_time_s,
+                },
+                env,
+                self.vehicle.as_ref()?.1,
+            ))
+        })
+        .flatten();
+        let frame = input.and_then(|(input, env, instance)| {
+            self.plume
+                .frame(input, env, &instance, view.world_position_m, &settings)
+        });
+        if input.is_none() {
+            self.plume.clear();
+        }
+        renderer.update_plume(backend, &view, &settings, frame)
+    }
+
     pub fn update_mesh(
         &self,
         backend: &Backend,

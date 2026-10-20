@@ -153,7 +153,7 @@ pub(crate) fn base_capture_metadata(
     );
     meta.graphics
         .resolved
-        .insert("gpu_scope_layout".into(), "native-topology-v5-sky".into());
+        .insert("gpu_scope_layout".into(), "native-topology-v6-plume".into());
     meta.graphics.resolved.extend(sky_layers.metadata());
     for (key, value) in [
         ("native_map_open", scene.map_active().to_string()),
@@ -177,6 +177,11 @@ pub(crate) fn base_capture_metadata(
         ),
         ("native_auto_exposure_applied", "false".into()),
         ("native_bloom_applied", "false".into()),
+        ("native_plume_light_applied", "false".into()),
+        ("native_plume_light_status", "unavailable".into()),
+        ("native_plume_enabled", resolved.plume_enabled.to_string()),
+        ("native_plume_quality", format!("{:?}", resolved.plume_quality)),
+        ("native_plume_scope", "render.scene_classify_and_raster (includes depth-clipped plume color-load pass when active)".into()),
     ] {
         meta.graphics.resolved.insert(key.into(), value);
     }

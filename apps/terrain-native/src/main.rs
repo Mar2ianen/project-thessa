@@ -11,6 +11,7 @@ mod hud;
 #[cfg(feature = "hud")]
 mod map;
 mod perf;
+mod plume;
 mod scene;
 mod sky_layers;
 mod window;
@@ -525,6 +526,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 [width, height],
             )?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
+            scene.update_plume(&backend, &mut renderer, width, height, exposure)?;
             scene.update_sky_layers(&backend, &sky_layers, width, height, exposure)?;
             renderer.update_shadows(
                 &backend,
@@ -707,6 +709,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             renderer.sky_enabled()
         );
         let ocean = renderer.ocean_stats();
+        let plume = renderer.plume_stats();
+        eprintln!(
+            "native_plume allocated={} draws={} march_steps={} frame_upload_bytes={} profile_upload_bytes={} texture_upload_bytes={} nozzle_light=unavailable",
+            renderer.plume_allocated(),
+            plume.draw_calls,
+            plume.march_steps,
+            plume.frame_upload_bytes,
+            plume.profile_upload_bytes,
+            plume.texture_upload_bytes
+        );
         println!(
             "spectral_ocean=size={} evaluations={} last_fft_dispatches={} field_bytes={} near_bytes={} near_patches={} absolute_height_bound_m={:.6} fallback={}",
             ocean.size,

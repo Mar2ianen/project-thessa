@@ -27,6 +27,7 @@ thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }
 thessa-graphics = { path = "../../crates/graphics" }
 thessa-perf = { path = "../../crates/perf" }
+thessa-plume-core = { path = "../../crates/plume-core" }
 glam.workspace = true
 rayon.workspace = true
 toml.workspace = true

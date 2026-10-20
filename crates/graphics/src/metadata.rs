@@ -573,7 +573,18 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: false,
-            description: "Cone + emissive texture + flicker plume on the active craft.",
+            description: "Quality-tiered engine plume; disabled releases the native consumer and submits no plume pass.",
+        },
+        SettingMeta {
+            path: "engine_plume.quality",
+            label: "Plume quality",
+            kind: SettingKind::Enum,
+            range: "low | medium | high",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: false,
+            description: "Low textured impostor; Medium/High integrate the same axial field with 8/14 samples and native opaque-depth clipping.",
         },
         SettingMeta {
             path: "engine_plume.mach_diamonds",
@@ -584,7 +595,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: false,
-            description: "Bright shock bands baked into the plume texture.",
+            description: "Field-derived shock modulation in Medium/High; fixed texture bands in the Low fallback.",
         },
         SettingMeta {
             path: "engine_plume.flicker",
@@ -595,7 +606,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: false,
-            description: "Throttle-driven flicker; off keeps a steady plume.",
+            description: "Low cone flicker or Medium/High advected shell deformation; off keeps the native field representation steady.",
         },
         SettingMeta {
             path: "engine_plume.light",
@@ -606,7 +617,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: true,
             restart_required: false,
-            description: "One point light at the nozzle; off saves a forward light.",
+            description: "Legacy field-derived nozzle point light; currently unavailable in the native renderer.",
         },
         SettingMeta {
             path: "raytracing.terrain",
@@ -919,6 +930,7 @@ mod tests {
         assert!(paths.contains(&"clouds.cast_shadows"));
         assert!(paths.contains(&"raytracing.terrain"));
         assert!(paths.contains(&"atmosphere.ray_steps"));
+        assert!(paths.contains(&"engine_plume.quality"));
         let rt = metas
             .iter()
             .find(|m| m.path == "renderer.ray_tracing")

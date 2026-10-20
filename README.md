@@ -45,7 +45,7 @@ The checked-in vertical slice currently contains:
   vehicle asset compilation including electrical power, thermal, shield-aero,
   and wing tile-layer hardware;
 - `thessa-plume-core`: backend-neutral engine-exhaust profiles, optics, and
-  participating-medium evaluation, consumed by the client plume renderer;
+  participating-medium evaluation, consumed by both plume renderers;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
   aircraft/spacecraft/direct control laws, policy limits, physical allocation,
   actuator dynamics, the authoritative flight stepper, and contact-scene D1
@@ -134,7 +134,11 @@ The checked-in vertical slice currently contains:
        ([doc 56](docs/56_NATIVE_SPECTRAL_OCEAN.md)); overflow is optical-only.
          Source discs/stars now have native consumers (doc 65); aerial perspective,
         auto exposure/bloom and primary terrain/ocean mesh-query
-       reflection consumers remain missing: **not** complete PBR/Bevy parity.
+        reflection consumers remain missing: **not** complete PBR/Bevy parity.
+      `[engine_plume]` now selects native Low impostor / Medium 8-step / High
+      14-step actual-profile volume rendering with opaque-depth clipping and
+      resource-free disable. The starter nozzle deck remains provisional;
+      native nozzle lighting is explicitly unavailable ([doc 38](docs/38_ENGINE_PLUME_RENDERING.md)).
      The shared shadow atlas reuses depth only for unchanged light matrices,
      terrain and mesh casters; motion/source changes invalidate it, with no
      quality or update-rate reduction.

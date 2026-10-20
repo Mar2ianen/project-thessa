@@ -125,7 +125,8 @@ limb_darkening = true # belt/zone contrast baked into the texture
 [engine_plume]
 # Field-first plume (docs/38): analytic mean field + RCBT residual (later).
 # Low = baked cone impostor (fallback artifact); Medium/High = analytic
-# volume ribbon (camera-facing bound, per-pixel Beer-Lambert march).
+# per-pixel Beer-Lambert march. Native samples the actual axial stations
+# inside a projected bound and clips against scene depth; legacy uses a ribbon.
 # Propulsion models and vehicle assets exist, but the client renderer is not
 # wired to their live nozzle state yet; it still supplies provisional X-15
 # nozzle/source values. RCBT residual rendering is also future work.
@@ -133,7 +134,7 @@ enabled = true
 quality = "medium" # low = cone impostor; medium = volume/8 steps; high = volume/14 steps
 mach_diamonds = true # visual shock-cell toggle; never changes simulation physics
 flicker = true
-light = true
+light = true # field-derived legacy nozzle light; native reports this consumer unavailable
 
 [instruments]
 # Native HUD only; legacy Bevy retains its CPU instrument until adapted.

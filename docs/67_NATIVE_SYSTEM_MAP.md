@@ -102,7 +102,9 @@ even for escape, suborbital or degenerate osculating states.
   after the display transform. No second device, renderer, global render mode,
   audio device or simulation clock is introduced. The terrain/flight scene
   keeps updating behind the map; this is not a map-only performance mode.
-  The flight navball callback resource is released while map UI owns the HUD.
+   The flight navball callback resource is released while map UI owns the HUD.
+   Native starter-plume extraction is suppressed in map mode without changing
+   engine/throttle state; normal scene extraction resumes after closing the map.
 - Performance capture records `native_map_open`; map UI costs stay in the
   existing host/UI scopes and must not be compared as a hidden no-HUD workload.
   Headless egui animation time is scripted at 60 presentation frames/s, including

@@ -1,8 +1,9 @@
 # Engine Plume Rendering Architecture
 
 Status: partially implemented. `thessa-plume-core` provides the backend-neutral
-analytic profile/optics/medium model; the client uses a Low-quality impostor
-and a Medium/High field-integrated volume ribbon with field-derived lighting.
+analytic profile/optics/medium model. Both clients have a Low-quality impostor
+and Medium/High volume consumer. The native consumer reads the actual axial
+stations and scene depth; only the legacy client has a field-derived nozzle light.
 Wiring live compiled engine/nozzle state into the client, adaptive residual
 rendering, and ray-traced lighting remain future work. The rest of this document
 records the architecture and acceptance targets for those follow-ups.
@@ -59,10 +60,11 @@ The plume renderer is not authoritative propulsion physics. Thrust, mass flow, t
 
 The backend-neutral plume core is implemented in `crates/plume-core`. It
 provides `PlumeSource`, `PlumeEnvironment`, analytic axial profiles, optical
-materials, and CPU medium/ray integration. The current client integration is
-in `apps/client/src/plume.rs`, with the volume shader in
-`assets/shaders/plume_volume.wgsl` and the Low-quality fallback in the same
-client module. This remains a thinner arrangement than the fuller optional
+materials, and CPU medium/ray integration. Native source extraction and the
+GPL Low optical bake live in `apps/terrain-native/src/plume.rs`; the MIT
+GPU transport/integrator lives in `crates/render-wgpu/src/plume.rs` and its
+WGSL files. The retained Bevy adapter is `apps/client/src/plume.rs`, with
+`assets/shaders/plume_volume.wesl`. This remains a thinner arrangement than the fuller optional
 backend split proposed below:
 
 ```text
@@ -92,7 +94,7 @@ crates/
 
 `thessa-plume-core` exposes no Bevy, wgpu, or Vulkan types. The proposed
 separate `plume-wgpu` / `bevy-plume` crates and optional Vulkan backend have
-not been split out; the client currently owns those rendering adapters.
+not been split out; the native GPU consumer belongs to `render-wgpu`.
 
 `apps/client/src/beauty.rs` currently owns gas-giant bands, cloud decks, and
 aurora; the plume renderer is already split into `apps/client/src/plume.rs`.
@@ -271,11 +273,13 @@ A short Beer-Lambert integration is sufficient for the first implementation. The
 The shipped tiers use representation budgets, not different physical models:
 
 - Low: baked cone impostor;
-- Medium: analytic field volume ribbon, 8 view-ray samples per covered pixel;
-- High: the same analytic field volume ribbon, 14 samples per covered pixel;
+- Medium: field-volume integration, 8 view-ray samples per covered pixel;
+- High: the same field-volume integration, 14 samples per covered pixel;
 - future tiers: adaptive residual budget and ray-traced lighting/transmittance.
 
-The current Medium/High path does not yet traverse RCBT residuals or use
+Native coverage is a conservative projected finite-cylinder box, with full-screen
+coverage only for near-plane/inside crossings. The legacy consumer uses a
+cylindrical billboard. The current Medium/High path does not yet traverse RCBT residuals or use
 temporal reuse/jitter. Those remain architecture targets.
 
 Projected size should additionally select cheaper LODs. A sub-pixel plume should collapse to an emissive sprite rather than running a volume pass.
@@ -295,8 +299,8 @@ settings change representation cost/fidelity, not physical source state.
 ## 10. Turbulence and advection
 
 Do not model plume instability as whole-plume brightness flicker. The current
-two-sine animation is confined to the Low impostor; Medium/High use advected
-noise to deform the visible mixing-layer boundary, but do not yet have an
+two-sine whole-cone animation is confined to Low. Native Medium/High use
+zero-mean advected azimuthal shell modes; the legacy path uses noise. Neither has an
 adaptive residual field.
 
 The analytic supersonic core should be comparatively stable. Higher-frequency motion belongs primarily to the mixing layer and residual field. A small deterministic 3D noise field may be advected approximately with exhaust/mixing flow:
@@ -349,10 +353,13 @@ This keeps the bright supersonic jet, atmospheric cloud, and lifted ground mater
 
 ## 13. Lighting before full ray tracing
 
-The current renderer has one point light at the nozzle for all quality tiers;
+The legacy renderer has one point light at the nozzle for all quality tiers;
 its intensity is scaled from the plume profile's integrated radiant power. The
 photometric mapping remains provisional. Additional downstream proxies and
 ray-traced volume lighting are future work.
+The native renderer does **not** apply `engine_plume.light` yet and reports
+`nozzle_light=unavailable`. Its existing stellar/RT lighting needs a proper
+field-radiance consumer; no second light subsystem is introduced to fake parity.
 
 The long-term lighting architecture may integrate or approximate radiative
 power along the plume and emit a small set of `RadianceProxy` records:
@@ -411,7 +418,8 @@ Original staged plan (completed items and remaining work):
 1. **Done:** retain the cone impostor as the Low fallback.
 2. **Partial:** `thessa-plume-core` owns semantic nozzle/environment/profile
    types, while the client adapter still constructs provisional source data.
-3. **Remaining:** remove the X-15 entity lookup and provisional nozzle offset;
+3. **Partial:** native extraction uses explicit starter identity, not an entity
+   name lookup. Remove the legacy lookup and both provisional nozzle offsets;
    extract live plume sources from compiled vehicle/engine state.
 4. **Done:** implement the analytic pressure-aware mean plume and axial profile.
 5. **Done:** add the Medium/High view-ray volume pass and keep the cone fallback.
@@ -448,6 +456,72 @@ screenshots alone:
   residual brick count, and wake count.
 
 Visual captures remain useful for regression, but numeric field/transmittance comparisons should be the primary correctness oracle.
+
+### Native consumer verification (2026-10-20)
+
+The GPU tests in `crates/render-wgpu/tests/plume.rs` cover the actual publication:
+
+- 48-station atmospheric/upper-atmosphere/vacuum profiles at 5%, 30% and full
+  throttle, 8/14 steps, compared with `integrate_ray(..., 256)`. Shared radiometric
+  normalization avoids SDR clipping hiding vacuum errors. The absolute linear-RGB
+  envelope is **0.02** for these undeformed, untapered central-chord fixtures,
+  not a universal bound on animated/oblique/tail views.
+- A constant-radius slice pins RGB and alpha within **0.003**, including RGBA8
+  quantization. Exact axial, camera-inside, foreground-occluded and partially
+  depth-clipped rays all produce the appropriate finite integral.
+- Camera rotation with an unchanged field, 1e12 m translation, immutable profile
+  upload reuse, Low texture upload, HDR pipeline creation, integrated scene depth
+  storage and disabled resource release have hardware regressions.
+- Native producer tests pin pressure-cache response, engine/disable clearing,
+  source-identical quality switches, physical nozzle metres independent of mesh
+  scale, camera rebasing and the retained Low bake. Actual silent CLI captures
+  exercise all tiers and verify identical final authoritative flight telemetry.
+
+### Native work/budget boundary
+
+One explicit starter source is supported, using the provisional 0.55 m /
+480 kg/s / 3550 m/s / 120 kPa / 1850 K / Mach 3.5 methalox deck. This is not
+calibrated X-15 propulsion or generalized compiled-nozzle extraction. Local
+authority and a fresh explicit-starter server replica provide throttle, engine,
+time and reference-atmosphere samples. Missing/stale/failed state, arbitrary
+retained geometry and map ownership cannot manufacture a plume.
+
+The producer keeps 48 stations and immutable GPU payloads, rebuilding in 2%
+throttle / logarithmic approximately 2% pressure bands. The logarithmic pressure
+key replaces the retained adapter's saturating `p / (.02*p+50)` key. Rendering
+never feeds back into flight or creates a simulation clock.
+
+Low uses the retained 32x256 sRGB bake on a single-wound, 32-sector unit cone;
+the game supplies its physical fallback scale. Medium/High interpolate station
+radius, extinction, emission and shock directly. A tangent-warped fixed sample
+budget resolves thin slices of the long vacuum bound; integration always uses
+each bin's physical path length. There is no hard radial skirt clip, averaged
+extinction, near-camera opacity fudge or parallel-ray rejection. The integration
+bound is 1.6 times the largest published radius. Artistic shell deformation and
+last-30%-of-length dissolve remain representation details, not semantic state;
+a general full-view error envelope is still future work.
+
+Active frames add one color-load pass, sampling existing stored scene depth
+with no copy and no depth writes. Premultiplied emission composites over opaque
+terrain/mesh and sky before display mapping. Opaque depth truncates rays even
+at hits inside a plume. Disabled settings clear the producer and release the
+GPU consumer; absent sources never allocate it. An inactive retained consumer
+submits no pass or uploads. There are no timestamp queries outside opt-in
+measurement. Resource bounds per allocated consumer are two pipelines,
+160-byte camera + 80-byte draw buffers, a 2048-byte station buffer, a 32 KiB
+impostor and unit-cone vertices. Counters report submitted draws, march budget
+and frame/profile/texture upload bytes, not visible-pixel counts or GPU times.
+The headless diagnostic prints them as `native_plume`.
+Capture metadata uses `native-topology-v6-plume`: the existing
+`render.scene_classify_and_raster` interval now includes this active plume pass.
+Both capture adapters explicitly record native nozzle lighting as unapplied /
+unavailable, independently of the shared requested/resolved light toggle.
+
+The CPU extraction diagnostic compares one-source cached frames with forced
+48-station rebuilds. A separate 1280x720 one-source GPU fixture uses real command
+timestamps (4 warmups, 32 samples, 8/14 steps). Exact commands/results belong in
+`artifacts/native-plume-2026-10-20.json`; no whole-client speedup, blind visual
+approval, Metal/WebGPU execution or complete Bevy retirement is implied.
 
 ## 18. Performance targets
 

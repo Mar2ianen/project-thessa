@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-10-19 (native sky/audio, shadow receiver, flight-clock/input controls, system map)
+**Updated:** 2026-10-20 (native plume station/depth consumer; prior sky/audio, flight and map slices)
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
@@ -52,6 +52,16 @@ edits retain held pilot keys. Hidden instruments release their navball callback,
 and F2 leaves an active map usable. These are session-only presentation flags,
 not new graphics requests or authoritative acknowledgements. See doc 66 for the
 remaining readout/guidance adapters and visibility evidence.
+
+The native plume follow-up ([doc 38](38_ENGINE_PLUME_RENDERING.md)) adds resolved
+Low impostors and Medium/High 8/14-step integration of the actual shared axial
+stations, including finite axial/inside rays and direct opaque-depth clipping.
+The GPL game keeps its provisional starter deck and optical bake; the MIT
+backend transports samples/textures and independently integrates the medium.
+No draw, uploads or extra pass remain for an inactive source; disabled settings
+release the GPU consumer. Native nozzle lighting is explicitly unavailable,
+and compiled nozzle extraction plus wider animated/visual acceptance remain
+open. See `artifacts/native-plume-2026-10-20.json`; this does not retire the host.
 
 The [CBT sphere experiment](61_CBT_SPHERE_EXPERIMENT.md) now isolates persistent
 conforming bisector topology from render-patch grid LOD. The original test-only

@@ -125,6 +125,9 @@ pub struct TerrainRenderer {
     last_shadow_draws: crate::shadows::ShadowDrawStats,
     sky: Option<crate::sky::SkyBackground>,
     sky_visible: bool,
+    /// Enabled plume paths; disabled settings drop everything, frames without
+    /// an active engine only skip the draws.
+    plume: Option<crate::plume::PlumeRenderer>,
     format: wgpu::TextureFormat,
     shadows: Option<crate::shadows::ShadowAtlas>,
     shadow_receiver: Option<wgpu::BindGroup>,
@@ -840,6 +843,7 @@ impl TerrainRenderer {
             last_shadow_passes: 0,
             last_shadow_draws: Default::default(),
             sky: None,
+            plume: None,
             sky_visible: settings.is_none_or(|s| s.sky_dome),
             format,
             shadow_receiver: shadows
@@ -1477,6 +1481,47 @@ impl TerrainRenderer {
         self.sky.is_some()
     }
 
+    /// Lazy plume consumer. Disabled settings release all GPU resources;
+    /// absent engine draws do not allocate a consumer in the first place.
+    pub fn update_plume(
+        &mut self,
+        backend: &Backend,
+        view: &ViewParams,
+        settings: &thessa_graphics::ResolvedGraphicsSettings,
+        frame: Option<crate::plume::PlumeFrame>,
+    ) -> Result<(), BackendError> {
+        if !settings.plume_enabled {
+            self.plume = None;
+            return Ok(());
+        }
+        if frame.is_some()
+            && self
+                .plume
+                .as_ref()
+                .is_none_or(|p| !p.is_live_for(self.format, settings.plume_diamonds))
+        {
+            self.plume = Some(crate::plume::PlumeRenderer::new(
+                backend,
+                self.format,
+                settings.plume_diamonds,
+            )?);
+        }
+        if let Some(plume) = &mut self.plume {
+            plume.update(backend, view, frame)?;
+        }
+        Ok(())
+    }
+
+    pub fn plume_allocated(&self) -> bool {
+        self.plume.is_some()
+    }
+
+    pub fn plume_stats(&self) -> crate::plume::PlumeStats {
+        self.plume
+            .as_ref()
+            .map_or_else(Default::default, |p| p.stats())
+    }
+
     pub fn ocean_stats(&self) -> crate::ocean::OceanStats {
         let mut stats = self
             .ocean
@@ -1808,7 +1853,7 @@ impl TerrainRenderer {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: if store_depth {
+                    store: if store_depth || self.plume.as_ref().is_some_and(|p| p.active()) {
                         wgpu::StoreOp::Store
                     } else {
                         wgpu::StoreOp::Discard
@@ -1842,6 +1887,10 @@ impl TerrainRenderer {
         // pixels before sky sampling. UI remains a separate overlay pass.
         if let Some(sky) = &self.sky {
             sky.draw(&mut pass);
+        }
+        drop(pass);
+        if let Some(plume) = &self.plume {
+            plume.encode(encoder, color, depth);
         }
     }
 

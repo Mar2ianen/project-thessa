@@ -72,7 +72,9 @@ The checked-in vertical slice currently contains:
 - `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
   landmarks, LOD, obstacle reports, and client texture export. Recipe conformance
   is partial; authored ocean bounds now reach canonical datum calibration.
-  The remaining planet refactor is tracked in doc 13;
+  The remaining planet refactor is tracked in doc 13; a reproducible canonical
+  coastal 2×2 km CPU audit site and its limitations are recorded in
+  [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;
 - `thessa-rcbt-core`, `thessa-rcbt-ffi`, `thessa-rcbt-large-ffi`,
   `thessa-bevy-rcbt`, and `thessa-rcbt-wgpu`:
   backend-neutral adaptive terrain topology, a fast pure Rust implementation,

@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    adapter_info: wgpu::AdapterInfo,
 }
 
 impl Gpu {
@@ -13,7 +14,8 @@ impl Gpu {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("GPU regression tests require a wgpu adapter");
-        eprintln!("CBT regression adapter: {:?}", adapter.get_info());
+        let adapter_info = adapter.get_info();
+        eprintln!("CBT regression adapter: {:?}", adapter_info);
         let features = adapter.features()
             & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -22,7 +24,11 @@ impl Gpu {
             ..Default::default()
         }))
         .unwrap();
-        Self { device, queue }
+        Self {
+            device,
+            queue,
+            adapter_info,
+        }
     }
 
     fn buffer(&self, words: &[u32], uniform: bool) -> wgpu::Buffer {
@@ -2264,6 +2270,18 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}
 
 @compute @workgroup_size(64)
+fn test_cloud_dither(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    if (idx >= arrayLength(&in_samples)) {{
+        return;
+    }}
+    let pos = in_samples[idx].xy;
+    let val_dither = dither2d(pos);
+    let val_ign = ign(pos);
+    out_results[idx] = vec4<f32>(val_dither, val_ign, 0.0, 0.0);
+}}
+
+@compute @workgroup_size(64)
 fn test_raymarch(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let idx = gid.x;
     let total_rays = arrayLength(&in_samples) / 2u;
@@ -2497,6 +2515,155 @@ fn test_solar_shadow(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     out_results[idx * 2u] = vec4<f32>(atten_3tap, t_march, sun_depth, tau_march);
     out_results[idx * 2u + 1u] = vec4<f32>(t_top * radius_km, step_km, t_3tap_beer, abs(t_3tap_beer - t_march));
+}}
+
+@compute @workgroup_size(64)
+fn test_coastal_view_raw_telemetry(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    let total_samples = arrayLength(&in_samples) / 2u;
+    if (idx >= total_samples) {{
+        return;
+    }}
+
+    let ro = in_samples[idx * 2u].xyz;
+    let rd = normalize(in_samples[idx * 2u + 1u].xyz);
+
+    let radius = max(cloud.center_radius.w, 1e-6);
+    let radius_km = radius * 0.001;
+    let inv_radius = 1.0 / radius;
+    let bot = cloud.slab.x;
+    let top = cloud.slab.y;
+    let thick = max(top - bot, 1e-6);
+    let ext = max(cloud.slab.z, 0.0);
+    let sun_dir = normalize(cloud.sun.xyz);
+    let sun_vis = clamp(cloud.sun.w, 0.0, 1.0);
+    let steps = u32(clamp(cloud.params.x * 24.0, 4.0, 256.0));
+    let shadow_span = max(cloud.params.z / 0.8, 0.05);
+    let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.32);
+
+    let r_cam = length(ro);
+    let b = dot(ro, rd);
+    let disc_bot = b * b - (r_cam * r_cam - bot * bot);
+    let disc_top = b * b - (r_cam * r_cam - top * top);
+
+    var t0 = 0.0;
+    var t1 = 0.0;
+    if (disc_top > 0.0) {{
+        let s_top = sqrt(disc_top);
+        let t_top_entry = max(-b - s_top, 0.0);
+        let t_top_exit = max(-b + s_top, 0.0);
+        if (r_cam <= bot) {{
+            if (disc_bot > 0.0) {{
+                t0 = max(-b + sqrt(disc_bot), 0.0);
+                t1 = t_top_exit;
+            }}
+        }} else if (r_cam >= top) {{
+            t0 = t_top_entry;
+            if (disc_bot > 0.0) {{
+                t1 = max(-b - sqrt(disc_bot), 0.0);
+            }} else {{
+                t1 = t_top_exit;
+            }}
+        }} else {{
+            t0 = 0.0;
+            if (disc_bot > 0.0) {{
+                t1 = max(-b - sqrt(disc_bot), 0.0);
+            }} else {{
+                t1 = t_top_exit;
+            }}
+        }}
+    }}
+
+    let chord = max(t1 - t0, 0.0);
+    let chord_km = chord * radius_km;
+    if (chord <= 1e-4) {{
+        out_results[idx * 2u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        out_results[idx * 2u + 1u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return;
+    }}
+
+    let w_entry = weather_at(ro + rd * t0, drift);
+    let w_exit = weather_at(ro + rd * t1, drift);
+    var transmittance = 1.0;
+    var scat = vec3<f32>(0.0);
+    var unsaturated_tau: f32 = 0.0;
+    var steps_taken: f32 = 0.0;
+
+    let dt = chord / f32(steps);
+    let step_km = dt * radius_km;
+    let dither_raw = dither2d(vec2<f32>(f32(idx % 1270u), f32(idx / 1270u)));
+    let dither = (dither_raw - 0.5) * 0.70 + 0.5;
+
+    for (var i = 0u; i < steps; i += 1u) {{
+        let t_current = t0 + (f32(i) + dither) * dt;
+        if (t_current >= t1) {{
+            break;
+        }}
+
+        let p = ro + rd * t_current;
+        let f = clamp((t_current - t0) / chord, 0.0, 1.0);
+        let w2 = mix(w_entry, w_exit, f);
+        let weather = vec3<f32>(w2.x, 0.0, w2.y);
+
+        let density = slab_density(p, drift, weather, step_km, true);
+        steps_taken += 1.0;
+        if (density <= 0.001) {{
+            continue;
+        }}
+
+        let step_ext = density * ext * dt;
+        unsaturated_tau += step_ext;
+
+        let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
+
+        let shadow_d0 = 180.0 * inv_radius * shadow_span;
+        let shadow_d1 = 650.0 * inv_radius * shadow_span;
+        let shadow_d2 = 1800.0 * inv_radius * shadow_span;
+
+        let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, 0.80, false);
+        let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, 2.20, false);
+        let s2 = slab_density(p + sun_dir * shadow_d2, drift, weather, 5.00, false);
+
+        let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
+
+        let direct_attenuation = beer_powder(sun_depth);
+        let ms1 = exp(-sun_depth * 0.20) * 0.50;
+        let ms2 = exp(-sun_depth * 0.05) * 0.28;
+
+        let up = p / max(length(p), 1e-6);
+        let elev = dot(up, sun_dir);
+        let day = smoothstep(-0.06, 0.16, elev) * sun_vis;
+        let tint = mix(vec3<f32>(1.0, 0.45, 0.18), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.35, elev));
+
+        let cos_theta = dot(rd, sun_dir);
+        let phase_direct = dual_lobe_phase(cos_theta);
+        let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
+
+        let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.28;
+        let sun_radiance = tint * (day * sun_scatter * 2.8);
+
+        let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
+        let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
+        let height_occ = smoothstep(0.04, 0.40, h01);
+        let core_occ = transmittance * transmittance;
+        let dens_occ = clamp(1.0 - (density / max(6.2 * cloud.params.x, 1e-3)) * 0.35, 0.40, 1.0);
+        let amb_occ = (0.30 + 0.70 * height_occ) * (0.20 + 0.80 * core_occ) * dens_occ;
+        let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.55;
+
+        let step_trans = exp(-step_ext);
+        let point_light = sun_radiance + ambient_radiance;
+        scat += transmittance * point_light * (1.0 - step_trans);
+        transmittance *= step_trans;
+
+        if (transmittance < 0.01) {{
+            transmittance = 0.0;
+            break;
+        }}
+    }}
+
+    let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
+    out_results[idx * 2u] = vec4<f32>(scat, alpha);
+    out_results[idx * 2u + 1u] = vec4<f32>(unsaturated_tau, steps_taken, chord_km, step_km);
 }}
 "#
     )
@@ -4641,4 +4808,416 @@ fn cloud_raymarch_dispatch_hardware_benchmark() {
         "p95 GPU duration must be within sane bounds: got {p95:.3} ms"
     );
     eprintln!("[BENCHMARKED] cloud_raymarch_dispatch_hardware_benchmark: PASSED\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+#[allow(clippy::needless_range_loop)]
+fn cloud_dither2d_dispersion_and_isotropy_on_hardware() {
+    let gpu = Gpu::new();
+    let (tex_size, tex_bytes) = make_synthetic_island_tex();
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_size, tex_size, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.008,
+        1.014,
+        1000.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.5).normalize(),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0171,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    let width = 64usize;
+    let height = 64usize;
+    let num_samples = width * height;
+
+    let mut samples: Vec<[f32; 4]> = Vec::with_capacity(num_samples);
+    for y in 0..height {
+        for x in 0..width {
+            samples.push([x as f32, y as f32, 0.0, 0.0]);
+        }
+    }
+
+    let in_words: Vec<u32> = samples
+        .iter()
+        .flat_map(|s| {
+            [
+                s[0].to_bits(),
+                s[1].to_bits(),
+                s[2].to_bits(),
+                s[3].to_bits(),
+            ]
+        })
+        .collect();
+    let out_words = vec![0u32; num_samples * 4];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    let workgroups = (num_samples as u32).div_ceil(64);
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_cloud_dither",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        workgroups,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    let mut dither_grid = vec![vec![0.0f32; width]; height];
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = y * width + x;
+            let val = readback_floats[idx * 4];
+            assert!(
+                val.is_finite() && (0.0..1.0).contains(&val),
+                "dither value must be strictly in [0, 1): got {val}"
+            );
+            dither_grid[y][x] = val;
+            sum += val as f64;
+            sum_sq += (val as f64) * (val as f64);
+        }
+    }
+
+    let n = num_samples as f64;
+    let mean = sum / n;
+    let variance = (sum_sq / n) - (mean * mean);
+    let std_dev = variance.sqrt();
+
+    eprintln!("\n=== [GPU TEST] Cloud 2D Isotropic Dither Characterization ===");
+    eprintln!(
+        "Hardware: {} ({:?}, driver: {})",
+        gpu.adapter_info.name, gpu.adapter_info.backend, gpu.adapter_info.driver_info
+    );
+    eprintln!("Grid: {width}x{height} pixels ({num_samples} samples)");
+    eprintln!("Mean: {mean:.5} (target ~0.500)");
+    eprintln!("StdDev: {std_dev:.5} (target ~0.28867)");
+
+    assert!(
+        (mean - 0.50).abs() < 0.03,
+        "dither mean must be balanced near 0.50: got {mean}"
+    );
+    assert!(
+        (std_dev - 0.28867).abs() < 0.03,
+        "dither standard deviation must match uniform distribution: got {std_dev}"
+    );
+
+    let offsets = [(1isize, 0isize), (0, 1), (1, 1), (-1, 11), (1, 11)];
+    for &(dx, dy) in &offsets {
+        let mut cov_sum = 0.0f64;
+        let mut count = 0usize;
+        for y in 0..height {
+            let ny = y as isize + dy;
+            if ny < 0 || ny >= height as isize {
+                continue;
+            }
+            for x in 0..width {
+                let nx = x as isize + dx;
+                if nx < 0 || nx >= width as isize {
+                    continue;
+                }
+                let v0 = dither_grid[y][x] as f64 - mean;
+                let v1 = dither_grid[ny as usize][nx as usize] as f64 - mean;
+                cov_sum += v0 * v1;
+                count += 1;
+            }
+        }
+        let autocorr = (cov_sum / count as f64) / variance;
+        eprintln!("Autocorrelation at offset ({dx:+2}, {dy:+2}): {autocorr:+.5}");
+        assert!(
+            (-0.35..0.25).contains(&autocorr),
+            "Autocorrelation at offset ({dx}, {dy}) must remain within [-0.35, 0.25] to prevent both directional striation and extreme periodic anti-correlation: got {autocorr}"
+        );
+    }
+
+    // Angle-Resolved Autocorrelation & Radial Dispersion Analysis:
+    // Characterizes isotropy across 4 cardinal/diagonal orientations (0°, 45°, 90°, 135°)
+    // and radial falloff across radii r in {1, 2, 3, 4} pixels:
+    eprintln!("\n--- Angle-Resolved Autocorrelation Profile ---");
+    let angles = [
+        (" 0 deg (+x)   ", 1isize, 0isize),
+        ("45 deg (+x,+y)", 1, 1),
+        ("90 deg (+y)   ", 0, 1),
+        ("135 deg (-x,+y)", -1, 1),
+    ];
+    let mut dir_corrs_r1 = Vec::new();
+    for (label, dx, dy) in angles {
+        let mut cov_sum = 0.0f64;
+        let mut count = 0usize;
+        for y in 0..height {
+            let ny = y as isize + dy;
+            if ny < 0 || ny >= height as isize {
+                continue;
+            }
+            for x in 0..width {
+                let nx = x as isize + dx;
+                if nx < 0 || nx >= width as isize {
+                    continue;
+                }
+                let v0 = dither_grid[y][x] as f64 - mean;
+                let v1 = dither_grid[ny as usize][nx as usize] as f64 - mean;
+                cov_sum += v0 * v1;
+                count += 1;
+            }
+        }
+        let corr = (cov_sum / count as f64) / variance;
+        dir_corrs_r1.push(corr);
+        eprintln!("  Orientation {label} (r=1): {corr:+.5}");
+        assert!(
+            (-0.35..0.25).contains(&corr),
+            "Directional correlation at {label} out of bounds: {corr}"
+        );
+    }
+
+    // Directional anisotropy bound across orientations:
+    let mean_dir_corr = dir_corrs_r1.iter().sum::<f64>() / dir_corrs_r1.len() as f64;
+    let dir_anisotropy = dir_corrs_r1
+        .iter()
+        .map(|&c| (c - mean_dir_corr).powi(2))
+        .sum::<f64>()
+        / dir_corrs_r1.len() as f64;
+    eprintln!(
+        "Directional Anisotropy Variance (r=1 across 4 angles): {:.6} (target < 0.02)",
+        dir_anisotropy
+    );
+    assert!(
+        dir_anisotropy < 0.02,
+        "Directional anisotropy variance {dir_anisotropy} exceeds 0.02 limit (indicates directional banding)"
+    );
+
+    // Radial Autocorrelation Falloff:
+    eprintln!("\n--- Radial Autocorrelation Falloff ---");
+    for r in 1..=4 {
+        let mut ring_cov = 0.0f64;
+        let mut ring_count = 0usize;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < (r * r - r) || dist_sq > (r * r + r) {
+                    continue;
+                }
+                for y in 0..height {
+                    let ny = y as isize + dy;
+                    if ny < 0 || ny >= height as isize {
+                        continue;
+                    }
+                    for x in 0..width {
+                        let nx = x as isize + dx;
+                        if nx < 0 || nx >= width as isize {
+                            continue;
+                        }
+                        let v0 = dither_grid[y][x] as f64 - mean;
+                        let v1 = dither_grid[ny as usize][nx as usize] as f64 - mean;
+                        ring_cov += v0 * v1;
+                        ring_count += 1;
+                    }
+                }
+            }
+        }
+        let ring_corr = if ring_count > 0 {
+            (ring_cov / ring_count as f64) / variance
+        } else {
+            0.0
+        };
+        eprintln!("  Radial Ring r={r} px: Mean Autocorr = {ring_corr:+.5}");
+        assert!(
+            ring_corr.abs() < 0.20,
+            "Radial ring r={r} autocorrelation {ring_corr} exceeds 0.20 limit"
+        );
+    }
+
+    eprintln!("[PASSED] cloud_dither2d_dispersion_and_isotropy_on_hardware\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn coastal_view_raw_gpu_telemetry_on_hardware() {
+    let gpu = Gpu::new();
+
+    let tex_w = 256u32;
+    let tex_h = 128u32;
+    let tex_bytes = thessa_atmosphere::clouds::bake_clouds(
+        0xC10D_0000_0000_0001,
+        tex_w,
+        tex_h,
+        0.55,
+        1.0,
+        (1.0, 1.0),
+    );
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_w, tex_h, &tex_bytes);
+
+    let r_planet = 3_200_000.0f32;
+    let bot = 1.008f32;
+    let top = 1.014f32;
+    let march_top = 1.0171f32;
+    let ext = 1000.0f32;
+    let steps = 24.0f32;
+
+    let dir_peak = glam::Vec3::new(0.1488, 0.9262, -0.346).normalize();
+    let up = dir_peak;
+    let right = glam::Vec3::new(0.0, 0.0, 1.0).cross(up).normalize();
+    let forward = right.cross(up).normalize();
+
+    let sun_15 =
+        (up * 15.0_f32.to_radians().sin() + right * 15.0_f32.to_radians().cos()).normalize();
+
+    let uniform_words = pack_cloud_uniform_words(
+        r_planet, bot, top, ext, steps, sun_15, 1.0, 1.0, 0.0, 0.55, 1.6, march_top, false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    // Observer at COAST altitude (1.5 km above surface at dir_peak):
+    let r_cam = 1.0 + 1.5 / 3200.0;
+    let ro = up * r_cam;
+
+    // Generate 1024 camera rays scanning across the coastal survey FOV:
+    let num_rays = 1024usize;
+    let mut ray_data: Vec<[f32; 4]> = Vec::with_capacity(num_rays * 2);
+
+    for i in 0..num_rays {
+        let u = (i as f32 + 0.5) / (num_rays as f32);
+        let az = (u - 0.5) * 80.0f32.to_radians();
+        let el = ((i % 32) as f32 / 31.0) * 45.0f32.to_radians() + 2.0f32.to_radians();
+
+        let rd = (forward * (az.cos() * el.cos()) + right * (az.sin() * el.cos()) + up * el.sin())
+            .normalize();
+
+        ray_data.push([ro.x, ro.y, ro.z, 0.0]);
+        ray_data.push([rd.x, rd.y, rd.z, 0.0]);
+    }
+
+    let in_words: Vec<u32> = ray_data
+        .iter()
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
+        .collect();
+    let out_words = vec![0u32; num_rays * 8];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_coastal_view_raw_telemetry",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        (num_rays as u32).div_ceil(64),
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    eprintln!("\n=== [GPU RAW TELEMETRY] Coastal View Frustum Readback (AMD Radeon 880M) ===");
+    eprintln!(
+        "Hardware: {} ({:?}, driver: {})",
+        gpu.adapter_info.name, gpu.adapter_info.backend, gpu.adapter_info.driver_info
+    );
+    eprintln!("Total Camera Rays Dispatched: {}", num_rays);
+
+    let mut cloud_taus: Vec<f32> = Vec::new();
+    let mut cloud_steps: Vec<f32> = Vec::new();
+    let mut early_exit_count = 0usize;
+
+    for i in 0..num_rays {
+        let base = i * 8;
+        let alpha = readback_floats[base + 3];
+        let tau = readback_floats[base + 4];
+        let steps = readback_floats[base + 5];
+
+        if alpha > 0.005 {
+            cloud_taus.push(tau);
+            cloud_steps.push(steps);
+            if steps <= 2.0 {
+                early_exit_count += 1;
+            }
+        }
+    }
+
+    let cloud_ray_count = cloud_taus.len();
+    assert!(
+        cloud_ray_count > 0,
+        "Must intersect cloud volume in coastal view"
+    );
+
+    cloud_taus.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    cloud_steps.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let mean_tau: f32 = cloud_taus.iter().sum::<f32>() / cloud_ray_count as f32;
+    let p50_tau = cloud_taus[cloud_ray_count / 2];
+    let p95_tau = cloud_taus[(cloud_ray_count * 95) / 100];
+    let min_tau = cloud_taus[0];
+    let max_tau = cloud_taus[cloud_ray_count - 1];
+    let sat_count = cloud_taus.iter().filter(|&&t| t > 16.0).count();
+    let sat_pct = (sat_count as f64 / cloud_ray_count as f64) * 100.0;
+
+    let mean_steps: f32 = cloud_steps.iter().sum::<f32>() / cloud_ray_count as f32;
+    let p50_steps = cloud_steps[cloud_ray_count / 2];
+    let p95_steps = cloud_steps[(cloud_ray_count * 95) / 100];
+    let min_steps = cloud_steps[0];
+    let max_steps = cloud_steps[cloud_ray_count - 1];
+    let early_exit_pct = (early_exit_count as f64 / cloud_ray_count as f64) * 100.0;
+
+    eprintln!(
+        "Cloud-Intersecting Rays (alpha > 0.005): {} / {} ({:.1}%)",
+        cloud_ray_count,
+        num_rays,
+        (cloud_ray_count as f64 / num_rays as f64) * 100.0
+    );
+    eprintln!("\n--- Raw Unsaturated Optical Depth (tau) Telemetry ---");
+    eprintln!("  Mean tau:   {:.3}", mean_tau);
+    eprintln!("  p50 tau:    {:.3}", p50_tau);
+    eprintln!("  p95 tau:    {:.3}", p95_tau);
+    eprintln!("  Range:      [{:.3}, {:.3}]", min_tau, max_tau);
+    eprintln!(
+        "  Saturated (tau > 16.0): {} / {} ({:.2}%)",
+        sat_count, cloud_ray_count, sat_pct
+    );
+
+    eprintln!("\n--- Raw March Step Count Telemetry ---");
+    eprintln!("  Mean steps: {:.2} / 24", mean_steps);
+    eprintln!("  p50 steps:  {:.1}", p50_steps);
+    eprintln!("  p95 steps:  {:.1}", p95_steps);
+    eprintln!("  Range:      [{:.0}, {:.0}]", min_steps, max_steps);
+    eprintln!(
+        "  Early-Out (steps <= 2): {} / {} ({:.2}%)",
+        early_exit_count, cloud_ray_count, early_exit_pct
+    );
+
+    assert!(mean_tau.is_finite() && mean_tau > 0.0);
+    assert!(mean_steps >= 2.0);
+    assert!(p50_steps > 0.0);
+
+    eprintln!("\n[PASSED] coastal_view_raw_gpu_telemetry_on_hardware\n");
 }

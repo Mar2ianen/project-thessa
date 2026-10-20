@@ -216,7 +216,7 @@
       "matching_pixels_no_shadow": 0,
       "matching_pixels_conforming": 0,
       "constant_gap_color": "[31,31,33]",
-      "note": "No near-black pixels occur, but the full-frame crop shows small background gaps along ridge silhouettes (more/larger with conforming geometry) at constant [31,31,33], y about 350-378. The earlier below-y-260 scan did not cover them. They are independent of shadows and remain an open geometry/topology defect, not an accepted seam result."
+      "note": "Superseded interpretation: these are not background gaps. A constant-red fragment output removed them and the black pixels had zero final radiance with non-zero albedo and illuminance, so they were shaded fragments whose grazing environment integral was empty. The horizon guard in docs/artifacts/native-terrain-horizon-guard-2026-10-20.json removes them; the constant [31,31,33] colour is not a clear-colour leak."
     }
   },
   "rejected_cost_evidence": {
@@ -226,7 +226,7 @@
   },
   "limitations": [
     "Material-normal detail, close-up relief/erosion convergence, vegetation/canopy, finite aerial perspective and primary scene-object terrain/ocean RT reflections remain incomplete.",
-    "Regular terrain still shows small ridge-silhouette background gaps; conforming geometry shows larger such gaps in the surveyed frame. They are independent of shadows and are not accepted.",
+    "Regular terrain still shows thin dark ridge rims with specular enabled; these are reflected sky at grazing incidence (a specular-off control has minimum channel sum 278), not holes. They remain a visual-quality/aliasing issue and are not accepted.",
     "Captured frame medians include the whole scene (sky, clouds, HDR display, streaming), not environment-only cost. The isolated cost fixture excludes shadows/direct light/clouds.",
     "The no-shadow control covers site 1 only. Numerical oracles are fixture-specific, not general HDR/cloud transport or grazing material-normal error guarantees.",
     "No blind subjective preference, cross-platform, motion-stability or whole-frame visual parity follows. The user goal of planet-wide Satisfactory-level detail is not met by this stage."
@@ -238,5 +238,10 @@
     "crates/render-wgpu/tests/terrain_environment.rs": "fb39088a914dfa9c9cb1d0d0dac963b8434eab99dacf1aa1f2c7303dcdedb3e3",
     "crates/graphics/src/resolve.rs": "8286e116bd2ce621c19f5b88e3f99aba998797813d50da76100412a0b0e870fa",
     "docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md": "195e4f5e51e565131332d3e316cd66fad668674d0b046f459b5e8e6c561b9ad5"
+  },
+  "correction": {
+    "date": "2026-10-20",
+    "superseded_by": "docs/artifacts/native-terrain-horizon-guard-2026-10-20.json",
+    "what": "The dark silhouette pixels recorded here were initially called background geometry gaps. They were actually terrain fragments with zero grazing environment reflection; the horizon guard removes them."
   }
 }

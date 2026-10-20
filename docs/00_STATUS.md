@@ -128,6 +128,22 @@ tests and 43 native ignored tests. This includes the five new terrain
 reflection/oracle/cost tests; it is not whole-frame visual acceptance or remote
 CI. Scoped evidence: `artifacts/native-terrain-environment-2026-10-20.json`.
 
+The native terrain grazing-horizon guard (doc 69) followed on 613 unchanged
+compiled/configuration inputs with 13 local command gates: 1968 workspace
+lib/bin tests, 97 integration tests, 84 native feature-off tests, 72 renderer
+ignored hardware tests and 43 native ignored tests. A new GPU compute probe
+calls the actual shared grazing function at N.V=0, 1e-7 and 0.05; it fails
+against the pre-guard shader at N.V=0 and returns bounded non-zero radiance
+with the guard. A full-terrain probe covers regular and conforming geometry at
+N.V=0.01/0.001/0.0001. All nine
+real captures (three sites at 500 m and 5 km, two conforming controls and one
+specular-off control) have no pixel with channel sum below 45, with a minimum
+of 183 and a specular-off minimum of 278. This corrects the earlier
+background-gap reading: the black fragments were zero-radiance grazing
+reflections, not geometry holes. Thin dark ridge rims remain reflected sky with
+specular enabled; visual acceptance is still incomplete. Evidence:
+`artifacts/native-terrain-horizon-guard-2026-10-20.json`.
+
 The remaining source-to-consumer retirement obligations are tracked in
 [doc 66](66_BEVY_RETIREMENT.md). Remaining host adapters and game functions must
 be replaced before removing `apps/client` and `crates/bevy-rcbt`; a clean native

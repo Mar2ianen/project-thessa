@@ -1,6 +1,6 @@
 # 69 — Native terrain material lighting
 
-**Status: implemented primary sky-reflection slice; terrain visual acceptance incomplete.**
+**Status: implemented primary sky-reflection slice and grazing horizon guard; terrain visual acceptance incomplete.**
 
 ## Source and consumer
 
@@ -63,6 +63,45 @@ sample counts are still **not** a frame-time guarantee. The optional diagnostic
 uses actual GPU timestamps and reports unavailability when timestamp features
 cannot be negotiated.
 
+## Grazing horizon guard
+
+The visible-normal estimator deliberately keeps rejected below-surface samples
+in its denominator. At a silhouette every sample can be rejected; Fresnel then
+approaches one and removes the diffuse term as well, so the fragment's final
+radiance is exactly zero. On the real terrain this produced near-black dashes
+along ridge crests (and larger pure-black patches on the surveyed volcanic
+site), not geometry holes.
+
+`env_specular_from` now returns a continuous sky floor in the extreme grazing
+band:
+
+- `horizon = 1 - smoothstep(0, 0.2, N.V)`;
+- `floor = env_base_radiance(normal, ambient) * F * horizon`;
+- the result is `max(integrated, floor)`.
+
+The floor uses only the already-published environment field and the existing
+Schlick Fresnel. It adds no field, texture, pass or material coefficient, it
+does not renormalize surviving directions, and it is zero at `N.V >= 0.2`.
+Above that band the rejected-sample denominator is unchanged. The guard is a
+bounded numerical horizon term, not a second BRDF; its physical reading is the
+unresolved grazing sky reflection that the finite quadrature loses, and it is
+bounded by the sky radiance times Fresnel.
+
+The targeted diagnostic used a constant-red fragment output to prove the black
+pixels were shaded fragments, then found zero final radiance with non-zero
+albedo and illuminance. A GPU compute probe calls the actual shared WGSL
+function with a uniform 100-radiance field at `N.V = 0`, `1e-7` and `0.05`.
+The pre-guard shader returns exactly zero at `N.V = 0`, so the probe is a real
+regression rather than a source-shape check. With the guard the three values
+are `100`, `99.99994` and `66.051` radiance, finite and bounded by the uniform
+field. A full-terrain probe at `N.V = 0.01`, `0.001` and `0.0001` also stays
+non-black on regular and conforming geometry. The existing independent
+`N.V = 0.2` and `0.7` grazing oracle still passes, so the guard does not alter
+the calibrated band. On the surveyed real frames, all sampled near-black
+pixels disappeared; a specular-off control shows that the remaining thin dark
+ridge rims are reflected sky at grazing incidence rather than holes. Those
+rims are still an aliasing/visual-quality issue, not an accepted result.
+
 ## Numerical and visual acceptance boundary
 
 `render-wgpu/tests/terrain_environment.rs` checks actual primary raster output:
@@ -110,15 +149,15 @@ The reflected-cloud fixture produced `[60, 0, 15]` versus the independent
 Missing material normals, close-up geometry/erosion convergence, vegetation,
 finite aerial perspective and primary scene-object reflections remain separate
 work. Sky reflection alone cannot make the planet look like Satisfactory.
-The captured survey frames also still show small background-coloured gaps along
-ridge silhouettes, larger with conforming geometry; they are present with
-shadows both on and off, occur at the constant `[31, 31, 33]` clear colour and
-are an open geometry/topology defect, not shadow darkening or an accepted seam
-result. Their exact extent/coverage is not measured here. A corrected site-1
-control (`[atmosphere].enabled = true`, `[shadows].enabled = false`, identical
-published ambient `[1112.58, 2051.11, 4132.93]`) changed only 3.21 % of pixels
-by more than 4/255, with whole-frame medians 89.230 ms (shadows) versus
-89.397 ms (no shadows); this isolates shadowing from the reflection term but is
-one site, not a shadow-quality acceptance.
+An earlier note in this document described the dark silhouette pixels as
+constant-colour background gaps. That interpretation was wrong: the pixels
+were fully shaded terrain fragments whose final radiance was zero because the
+grazing environment integral was empty. The horizon guard above removes them.
+A corrected site-1 shadow control (`[atmosphere].enabled = true`,
+`[shadows].enabled = false`, identical published ambient
+`[1112.58, 2051.11, 4132.93]`) changed only 3.21 % of pixels by more than
+4/255, with whole-frame medians 89.230 ms (shadows) versus 89.397 ms (no
+shadows); this isolates shadowing from the reflection term but is one site,
+not a shadow-quality acceptance.
 No blind subjective preference, cross-platform acceptance or whole-scene visual
 parity follows from these numerical tests or the captured survey frames.

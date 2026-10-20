@@ -1,0 +1,594 @@
+{
+  "date": "2026-10-20",
+  "baseline": "934f9ee",
+  "scope": "Grazing horizon guard for the native terrain land environment reflection, correcting the earlier black/background-gap diagnosis. Adds a deterministic survey-distance capture aid. Does not add material normals, new sky data, geometry or a second BRDF, and does not claim whole-frame visual acceptance.",
+  "contract": {
+    "problem": "The visible-normal GGX integral keeps rejected below-surface samples in the denominator. At a silhouette every sample can be rejected; Fresnel approaches one and removes the diffuse term, so final radiance is exactly zero and ridge crests tonemap black.",
+    "guard": "env_specular_from computes horizon=1-smoothstep(0,0.2,N.V), floor=env_base_radiance(normal,ambient)*F*horizon, and returns max(integrated,floor).",
+    "bounded": "The floor uses only the published environment field and the existing Schlick Fresnel. It adds no field, texture, pass, material coefficient or renormalization of surviving samples. It is zero at N.V>=0.2; the calibrated grazing oracle there is unchanged.",
+    "diagnosis": "A constant-red fragment output removed the black pixels, proving they were shaded fragments rather than clear-colour/background holes. A fragment diagnostic found zero final radiance while albedo and illuminance were non-zero; the specular-off control removes the remaining dark rims, identifying them as reflected sky at grazing incidence.",
+    "capture_aid": "--survey-distance 80..2000000 applies deterministic metres-after-reset framing for headless close-ups; rejected in flight, docking, map and vehicle-preview modes. It changes presentation only.",
+    "unchanged": "Authoritative heights, geometry, material pages, simulation, contacts and render targets/passes are unchanged. No new persistent large allocation. Disabled specular still compiles the hook to zero."
+  },
+  "verification": {
+    "status": "13 local command gates passed on 613 byte-identical compiled/configuration inputs; no remote CI claim",
+    "source_manifest_sha256": "d6c20801968aea85c00a4237c056f465c7f64c50af5f5e7def017d7d9f3bb83b",
+    "validation_sha256": "25adb99152eee2ddaadbdd4057088a9409613dddea5aecb647f2b0f1851efd36",
+    "source_count": 613,
+    "counts": {
+      "workspace_lib_bins": {
+        "passed": 1968,
+        "failed": 0,
+        "ignored": 42
+      },
+      "workspace_integration": {
+        "passed": 97,
+        "failed": 0,
+        "ignored": 78
+      },
+      "native_feature_off": {
+        "passed": 84,
+        "failed": 0,
+        "ignored": 24
+      },
+      "renderer_ignored": {
+        "passed": 72,
+        "failed": 0,
+        "ignored": 0
+      },
+      "native_ignored": {
+        "passed": 43,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "gpu_tests": [
+      "grazing_floor_is_not_the_old_zero_early_return: a compute probe calls the actual shared environment.wgsl function with a uniform 100-radiance field at N.V=0, 1e-7 and 0.05. The pre-guard shader returns exactly zero at N.V=0, so this is a real regression. With the guard the three raw radiance values are 100, 99.99994 and 66.051, finite and bounded by the uniform field; N.V=0.2 remains the unfloored integrated value.",
+      "extreme_grazing_terrain_environment_is_not_black: full primary raster on regular and conforming terrain at N.V=0.01, 0.001 and 0.0001, asserting every channel >=10. This exercises the integrated terrain path; it is not the exact pre-guard regression because the flat patch did not reproduce the black ridge, so the compute probe above carries that requirement.",
+      "grazing_terrain_environment_remains_bounded: independent D*G*F solid-angle oracle at N.V=0.7 and 0.2, 8/255 envelope; values unchanged from the prior stage after the floor (0.2: actual 123/72 vs references 116/75; 0.7: 71/41 vs 71/39 for roughness 153/255).",
+      "terrain_environment_ggx_matches_uniform_reference_and_releases_the_consumer: Low/Medium/High regular/conforming, tolerances 7/4/2; High values 101/77/31 for roughness 64/153/255.",
+      "rough_terrain_blurs_environment_and_tracks_publication_without_material_uploads.",
+      "terrain_reflected_cloud_budget_preserves_transport: actual [60,0,15] vs independent [63,0,15] on both grids, tolerance 8.",
+      "terrain_environment_gpu_cost: counterbalanced disabled/Low/Medium/High, 32 samples each; latest medians 0.330/0.975/1.298/1.951 ms. Diagnostic only, not a budget or whole-client cost."
+    ],
+    "captures": [
+      {
+        "name": "horizon-site-0-5000m",
+        "site": 0,
+        "survey_distance_m": 5000,
+        "specular_reflections": true,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "0",
+          "--survey-distance",
+          "5000",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 18.04098468797747,
+        "frames": 32,
+        "gpu_median_ms": 79.06033561673357,
+        "gpu_p95_ms": 91.36671789546203,
+        "raster_median_ms": 78.92295459108354,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 203,
+          "p0_01_channel_sum": 213.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 480738,
+          "mean_channel_sum": 286.07490125868054
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.toml": "5a09ff9ca54c74e4ebbf753d40e5355df2a738a62db3c57a21d77412cf18a5c4",
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.json": "a52926479d130c59154cef04c8e3cf180de7b57ab69e44f0a40008e1e70b9de6",
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.png": "a41c056234f8fdf92142af374a4061f7148a76b08dba8eacc7587e0f7e96c5e2",
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-5000m.log": "41391453e6b37dda54f8ad3ddbb03356153b123af83791effe1f0d04a39d7b6e"
+        }
+      },
+      {
+        "name": "horizon-site-0-500m",
+        "site": 0,
+        "survey_distance_m": 500,
+        "specular_reflections": true,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-0-500m.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-0-500m.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-0-500m.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "0",
+          "--survey-distance",
+          "500",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 17.74200375098735,
+        "frames": 32,
+        "gpu_median_ms": 80.77910129280282,
+        "gpu_p95_ms": 89.26961337089539,
+        "raster_median_ms": 80.66241959613419,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 207,
+          "p0_01_channel_sum": 216.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 529726,
+          "mean_channel_sum": 282.85241536458335
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-500m.toml": "5a09ff9ca54c74e4ebbf753d40e5355df2a738a62db3c57a21d77412cf18a5c4",
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-500m.json": "83255906b296e47c5e8825a585cb0128e5c1ef0298d287b1ab1cd69807550cb2",
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-500m.png": "b397b08f9411127a82e8832daa968fb77ec58b0318d919f765fef0756bc896a7",
+          "target/test-tmp/native-terrain-horizon/horizon-site-0-500m.log": "8ccc0933a230ebe16af8fe040742fca3095e9992696eabf3107c610f661cf506"
+        }
+      },
+      {
+        "name": "horizon-site-1-5000m",
+        "site": 1,
+        "survey_distance_m": 5000,
+        "specular_reflections": true,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "1",
+          "--survey-distance",
+          "5000",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 19.40039403102128,
+        "frames": 32,
+        "gpu_median_ms": 93.49251693997194,
+        "gpu_p95_ms": 111.32644161771012,
+        "raster_median_ms": 93.12580017357445,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 193,
+          "p0_01_channel_sum": 229.1599,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 157,
+          "mean_channel_sum": 382.9004720052083
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.toml": "5a09ff9ca54c74e4ebbf753d40e5355df2a738a62db3c57a21d77412cf18a5c4",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.json": "166915acb6fac87d0d1612ff6b754f525aade107c6d22814fab125cf9537a887",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.png": "87e73f854c298484cad31fed5f489895f9fda0270aa1c28fb0373c4c191fbb77",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m.log": "4c7053a4fd0b18611505353b3e17f1ed8892cc510dadfa24385a625a75b4bae6"
+        }
+      },
+      {
+        "name": "horizon-site-1-500m",
+        "site": 1,
+        "survey_distance_m": 500,
+        "specular_reflections": true,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-500m.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-500m.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-500m.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "1",
+          "--survey-distance",
+          "500",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 20.092910235980526,
+        "frames": 32,
+        "gpu_median_ms": 106.19324848719407,
+        "gpu_p95_ms": 118.06740954024127,
+        "raster_median_ms": 105.92020971013642,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 188,
+          "p0_01_channel_sum": 206.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 343,
+          "mean_channel_sum": 392.439228515625
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-500m.toml": "5a09ff9ca54c74e4ebbf753d40e5355df2a738a62db3c57a21d77412cf18a5c4",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-500m.json": "28d8880b8213c981c1edee554d03b282a0d0fc6051d30a70eef9caceca892658",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-500m.png": "0d103c58a50814b000fd65bd375642863818fad05e9b47a15474b546c7610831",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-500m.log": "30c8a166120b382c34875479ac0cfcc0ba845912d0e9049586cf30f009c9f839"
+        }
+      },
+      {
+        "name": "horizon-site-2-5000m",
+        "site": 2,
+        "survey_distance_m": 5000,
+        "specular_reflections": true,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "2",
+          "--survey-distance",
+          "5000",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 17.99080333398888,
+        "frames": 32,
+        "gpu_median_ms": 83.05434428265954,
+        "gpu_p95_ms": 98.13016853543473,
+        "raster_median_ms": 82.80458974594688,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 184,
+          "p0_01_channel_sum": 194.1599,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 11023,
+          "mean_channel_sum": 326.2228526475694
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.toml": "5a09ff9ca54c74e4ebbf753d40e5355df2a738a62db3c57a21d77412cf18a5c4",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.json": "e0db7087ee86bc95b48c4232c95c4a8eac5f95017edf4233be607ca2f4bbf66b",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.png": "3b4958e11ed5f6a6bdf082eebd58a93a56b06f854ba9e147b6bf7aa5d5021929",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-5000m.log": "d92f0c5c50f6349fe03b0bac10a5acee152143bd233b8c616428c4b334e110dc"
+        }
+      },
+      {
+        "name": "horizon-site-2-500m",
+        "site": 2,
+        "survey_distance_m": 500,
+        "specular_reflections": true,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-500m.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-500m.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-500m.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "2",
+          "--survey-distance",
+          "500",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 19.337296118028462,
+        "frames": 32,
+        "gpu_median_ms": 98.69205612882043,
+        "gpu_p95_ms": 117.58470239067937,
+        "raster_median_ms": 98.56289071293068,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 183,
+          "p0_01_channel_sum": 197.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 400059,
+          "mean_channel_sum": 282.8045236545139
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m.toml": "5a09ff9ca54c74e4ebbf753d40e5355df2a738a62db3c57a21d77412cf18a5c4",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m.json": "5bd9667bd87e2be7f1b7aec412c025190f8451308ed6c2d5f52f0afc0160b364",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m.png": "be1fdac8e16592f743a1d97ff1b9e95100e4fe02326a32ebdea6a212159f9dd5",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m.log": "ab6304201fbe82b0f6d33c73550dae02bc0d179beb59eedda1fbb6f8ce73776c"
+        }
+      },
+      {
+        "name": "horizon-site-1-5000m-off",
+        "site": 1,
+        "survey_distance_m": 5000,
+        "specular_reflections": false,
+        "conforming": false,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "1",
+          "--survey-distance",
+          "5000",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 15.876624805969186,
+        "frames": 32,
+        "gpu_median_ms": 56.09053270675278,
+        "gpu_p95_ms": 58.25055677923966,
+        "raster_median_ms": 55.934155588291176,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[0, 0, 0]",
+          "native_terrain_environment_samples": "0",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 278,
+          "p0_01_channel_sum": 279.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 0,
+          "mean_channel_sum": 386.44446614583336
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.toml": "e0f7eda49c9928d0c4fe37ae7141c95e6e245eed33988aad3345ae0b076d963a",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.json": "f35f5a698d89d320818179b043cae40bcc83b528b26a4bde79d4783bf722c512",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.png": "4808f7dd4a1dc61efc953c5c11dca8266ea8a2f1e910ec797b60dd5b8961ef7b",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-off.log": "835be6ded6368d2156f5f0597452c0e758d7d0648f2ac7edc6091e8949277e66"
+        }
+      },
+      {
+        "name": "horizon-site-1-5000m-conforming",
+        "site": 1,
+        "survey_distance_m": 5000,
+        "specular_reflections": true,
+        "conforming": true,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "1",
+          "--survey-distance",
+          "5000",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 18.6338451729971,
+        "frames": 32,
+        "gpu_median_ms": 95.07203804964067,
+        "gpu_p95_ms": 99.11916764599229,
+        "raster_median_ms": 76.73690106230737,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 196,
+          "p0_01_channel_sum": 201.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 3876,
+          "mean_channel_sum": 380.35683485243055
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.toml": "22bf580fb2aed4d46a216bb91787320e09ef4d65f76f0161b28545b4ad1a45d9",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.json": "b15c8ee404b792b2124a48eb1f8b23781b29396b9657d4320632d973b687d5ca",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.png": "76fe98f34de565427f89121f1f959179648b936a3f7f46018f579ba6a26252d9",
+          "target/test-tmp/native-terrain-horizon/horizon-site-1-5000m-conforming.log": "12ee6f97bdb12f0c9ebd40792f7bb7dfb8ec893c0632bf76911dff29782d952e"
+        }
+      },
+      {
+        "name": "horizon-site-2-500m-conforming",
+        "site": 2,
+        "survey_distance_m": 500,
+        "specular_reflections": true,
+        "conforming": true,
+        "command": [
+          "/home/chechulin/Projects/project-thessa-fastrt/target/release/thessa-terrain-native",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.json",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.toml",
+          "--frames",
+          "32",
+          "--prestream-seconds",
+          "10",
+          "--site",
+          "2",
+          "--survey-distance",
+          "500",
+          "--no-hud",
+          "--mute"
+        ],
+        "seconds": 16.809747279970907,
+        "frames": 32,
+        "gpu_median_ms": 82.5528915161934,
+        "gpu_p95_ms": 88.57076555138397,
+        "raster_median_ms": 64.34824245754052,
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.4-arch1.1"
+        },
+        "settings": {
+          "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+          "native_terrain_environment_samples": "16",
+          "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections"
+        },
+        "pixels": {
+          "min_channel_sum": 190,
+          "p0_01_channel_sum": 191.0,
+          "pixels_below_45": 0,
+          "pixels_below_90": 0,
+          "pixels_below_245": 401293,
+          "mean_channel_sum": 282.9829915364583
+        },
+        "files": {
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.toml": "22bf580fb2aed4d46a216bb91787320e09ef4d65f76f0161b28545b4ad1a45d9",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.json": "f1884b2c52e43b20e2038936bebf30cfe4ce3fd67d5f0cc8e0a671d0784bcd0f",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.png": "c8b0e3445410779e8613aac724536ef60e647312a9d0964515050158741f576e",
+          "target/test-tmp/native-terrain-horizon/horizon-site-2-500m-conforming.log": "466f2f14dd462ab108d170b8b03bf1568a3ea5e73b25a9cdcbd2adae69eb37e2"
+        }
+      }
+    ],
+    "capture_scope": "1280x720 real frames, 32 measured frames, 10 s prestream, High surface quality, HUD off/muted. Medians include the whole scene (sky, clouds, HDR display, streaming), not isolated reflection cost.",
+    "pixel_audit": {
+      "criterion": "channel sum RGB <45 over every pixel",
+      "all_nine_captures_matching_pixels": 0,
+      "minimum_channel_sum_across_all": 183,
+      "worst_capture": "horizon-site-2-500m",
+      "conforming_minimums": {
+        "site_1_5000m": 196,
+        "site_2_500m": 190
+      },
+      "specular_off_control_minimum": 278,
+      "sample_before_fix": {
+        "site_2_500m_pure_black_pixels": 381,
+        "site_0_500m_pure_black_pixels": 275,
+        "source": "pre-fix diagnostics recorded in the preceding terrain-reflection stage; the full pre-fix frame set is not retained as an artifact."
+      }
+    }
+  },
+  "correction_of": "docs/artifacts/native-terrain-environment-2026-10-20.json",
+  "limitations": [
+    "The thin dark ridge rims visible with specular enabled are reflected sky at grazing incidence, not holes (specular-off minimum channel sum 278 vs 183-207 with specular). They remain an aliasing/visual-quality issue and are not accepted.",
+    "No material-normal detail, close-up relief/erosion convergence, vegetation/canopy, finite aerial perspective or primary scene-object terrain/ocean RT reflections are added.",
+    "The full-terrain uniform-field probe saturates; the compute probe carries the bounded raw-radiance check. The floor is a bounded numerical guard, not a validated general grazing BRDF.",
+    "Captures cover three bookmarks at 500 m and 5 km plus two conforming and one specular-off control; they are not a planet-wide or blind visual survey.",
+    "No cross-platform, motion-stability, temporal-antialiasing or whole-frame Satisfactory-level parity is claimed."
+  ],
+  "files": {
+    "crates/render-wgpu/src/environment.wgsl": "e48b33e688f6766cd6f886eccc844dc34e4fdbfb33737843439ce7580947184b",
+    "crates/render-wgpu/tests/terrain_environment.rs": "d87d53bf19c8c01b06cdc69ea21a80a7f9aa634d90ef350c06a266b7cac046e4",
+    "apps/terrain-native/src/main.rs": "9452d72e2502e8fc023e6116f6c7f4a38f4ea4410878362554398d857c6ded72",
+    "docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md": "acc7c173d48a6a78bd38a4b16c0c3a6375b722d7e9ce06d918fe5834b86a091e",
+    "docs/00_STATUS.md": "276ea662eb9d1440619942270d58d3e0279ea72e397cc60cb16f13dc0482a51c",
+    "crates/render-wgpu/src/environment.rs": "c34fb4a8b691765445da35472c1f735483c2e61b0c21dffc492b6d255f729cf2"
+  }
+}

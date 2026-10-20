@@ -293,6 +293,42 @@ fn grazing_terrain_environment_remains_bounded() {
 }
 
 #[test]
+#[ignore = "hardware: extreme grazing keeps a bounded sky floor instead of a black ridge silhouette"]
+fn extreme_grazing_terrain_environment_is_not_black() {
+    let backend = Backend::bring_up().unwrap();
+    let field = EnvironmentRadiance::new(8, 4, vec![[100.0; 3]; 32]).unwrap();
+    let mut binding = EnvironmentBinding::new(&backend.device);
+    binding.update(&backend, Some(&field));
+    for conforming in [false, true] {
+        let mut terrain = scene(&backend, Quality::High, true, conforming);
+        terrain.share_environment(&backend, Some(&binding));
+        material(&backend, &mut terrain, 255, 1);
+        for nv in [0.01_f64, 0.001, 0.0001] {
+            // Hit the +Z face at its centre for every view angle. The eye sits
+            // just above the face plane, so the view direction is nearly
+            // tangent and the visible-normal quadrature can reject every
+            // sample; this reproduces the ridge-silhouette case rather than a
+            // flat normal-incidence patch.
+            let look_at = DVec3::Z * 1000.0;
+            let eye = look_at + DVec3::new((1.0 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
+            let pixel = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
+            // The original estimator returns zero when every reflected sample
+            // falls below the local horizon; Fresnel then removes the diffuse
+            // term as well, so a ridge line tonemaps to black. This is a lower
+            // bound only: the exact reference is not the rejected-sample
+            // integral once the bounded horizon floor takes over.
+            assert!(
+                pixel.iter().all(|&v| v >= 10),
+                "conforming={conforming} nv={nv} black silhouette: {pixel:?}"
+            );
+            eprintln!(
+                "terrain_grazing_floor conforming={conforming} nv={nv} actual={pixel:?} floor=10"
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "diagnostic hardware: counterbalanced terrain sky-reflection quality cost using real GPU timestamps, not a performance assertion"]
 fn terrain_environment_gpu_cost() {
     let backend = Backend::bring_up_for_graphics_profiled(&Default::default()).unwrap();

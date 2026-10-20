@@ -295,4 +295,134 @@ mod tests {
         let bytes = meta_bytes(false, 0, 0, [0.0; 3]);
         assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 0);
     }
+
+    #[test]
+    #[ignore = "hardware: environment probe keeps a bounded sky floor at N.V=0 and 1e-7"]
+    fn grazing_floor_is_not_the_old_zero_early_return() {
+        let backend = crate::Backend::bring_up().unwrap();
+        let field = EnvironmentRadiance::new(8, 4, vec![[100.0; 3]; 32]).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        // The probe calls the actual shared WGSL function, not a Rust mirror.
+        // N.V=0 and 1e-7 returned exactly zero before the horizon guard (the
+        // old early-out covered the first, and the grazing quadrature the
+        // second); the floor must keep both finite and non-zero.
+        let source = format!(
+            "{}\n{}\n{}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0),
+            r#"
+@group(1) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>>;
+
+@compute @workgroup_size(1)
+fn probe() {
+    let n = vec3<f32>(0.0, 0.0, 1.0);
+    let f0 = vec3<f32>(0.04, 0.04, 0.04);
+    let ambient = vec3<f32>(100.0, 100.0, 100.0);
+    let e0 = vec3<f32>(1.0, 0.0, 0.0);
+    let e1 = normalize(vec3<f32>(1.0, 0.0, 1.0e-7));
+    let e2 = normalize(vec3<f32>(0.9987492, 0.0, 0.05));
+    let e3 = normalize(vec3<f32>(0.9797959, 0.0, 0.2));
+    probe_out[0] = vec4<f32>(env_specular_from(vec3<f32>(0.0), n, e0, 0.5, f0, ambient, 16u, vec3<u32>(0u, 0u, 0u)), 1.0);
+    probe_out[1] = vec4<f32>(env_specular_from(vec3<f32>(0.0), n, e1, 0.5, f0, ambient, 16u, vec3<u32>(0u, 0u, 0u)), 1.0);
+    probe_out[2] = vec4<f32>(env_specular_from(vec3<f32>(0.0), n, e2, 0.5, f0, ambient, 16u, vec3<u32>(0u, 0u, 0u)), 1.0);
+    probe_out[3] = vec4<f32>(env_specular_from(vec3<f32>(0.0), n, e3, 0.5, f0, ambient, 16u, vec3<u32>(0u, 0u, 0u)), 1.0);
+}
+"#
+        );
+        let module = backend
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("environment-grazing-probe"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        let pipeline = backend
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("environment-grazing-probe"),
+                layout: None,
+                module: &module,
+                entry_point: Some("probe"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let group0 = backend
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("environment-grazing-probe-field"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &binding.entries(),
+            });
+        let output = backend.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("environment-grazing-probe-output"),
+            size: 4 * 16,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group1 = backend
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("environment-grazing-probe-output-binding"),
+                layout: &pipeline.get_bind_group_layout(1),
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: output.as_entire_binding(),
+                }],
+            });
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group0, &[]);
+            pass.set_bind_group(1, &group1, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("environment-grazing-probe-staging"),
+            size: 4 * 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&output, 0, &staging, 0, 4 * 16);
+        backend.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        backend
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        rx.recv().unwrap().unwrap();
+        let mapped = staging.slice(..).get_mapped_range().unwrap();
+        let values: Vec<[f32; 4]> = mapped
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|chunk| {
+                std::array::from_fn(|i| {
+                    f32::from_le_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap())
+                })
+            })
+            .collect();
+        drop(mapped);
+        staging.unmap();
+        for (index, label) in ["N.V=0", "N.V=1e-7", "N.V=0.05"].into_iter().enumerate() {
+            let radiance = values[index][0];
+            assert!(
+                radiance.is_finite() && radiance > 0.0,
+                "{label} is not a bounded non-zero horizon value: {radiance}"
+            );
+            assert!(
+                radiance <= 100.01,
+                "{label} exceeds the uniform sky radiance: {radiance}"
+            );
+            eprintln!("terrain_specular_floor {label} radiance={radiance}");
+        }
+        assert!(values[3][0].is_finite(), "{:?}", values[3]);
+    }
 }

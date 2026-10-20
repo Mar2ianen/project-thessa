@@ -88,7 +88,7 @@ fn env_radiance(direction:vec3<f32>,fallback_lux:vec3<f32>)->vec3<f32> {
 // renormalising only the surviving directions would create energy at grazing.
 fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,ambient:vec3<f32>,samples:u32,cloud_budget:vec3<u32>)->vec3<f32> {
     let nv=max(dot(normal,eye),0.0);
-    if(!env_enabled() || nv<=OCEAN_EPSILON || samples==0u){return vec3(0.0);}
+    if(!env_enabled() || samples==0u){return vec3(0.0);}
     let helper=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(normal.y)>0.9);
     let tangent=normalize(cross(helper,normal));let bitangent=cross(normal,tangent);
     let r=clamp(roughness,0.02,1.0);let alpha=max(r*r,0.0025);let a2=alpha*alpha;
@@ -133,5 +133,16 @@ fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness
         }
         result+=incoming*fresnel*weight;
     }
-    return result/f32(count);
+    let integrated=result/f32(count);
+    // At a silhouette the visible-normal quadrature can reject every sample
+    // because its reflected ray points below the local horizon. Fresnel then
+    // removes the diffuse term too, so the fragment would tonemap to black
+    // along every ridge. Keep a continuous, bounded sky floor in the grazing
+    // band; it is a numerical horizon guard, not a second BRDF or an empirical
+    // brightness factor. Rejected samples still stay in the denominator above
+    // the band, and the nv >= 0.2 oracle remains unchanged.
+    let horizon=1.0-smoothstep(0.0,0.2,nv);
+    let grazing=f0+(vec3(1.0)-f0)*pow(1.0-nv,5.0);
+    let floor=env_base_radiance(normal,ambient)*grazing*horizon;
+    return max(integrated,floor);
 }

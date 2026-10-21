@@ -1,0 +1,121 @@
+{
+  "task": "WORLD-03",
+  "date": "2026-10-21",
+  "component_base": "20c3098",
+  "component_commit": "f09aa1f",
+  "integration_base": "7337376",
+  "integration_source_commit": "67ff8b4",
+  "branch": "feat/world-surface-runtime-foundation",
+  "scope": "Canonical CPU plant-surface callback and shared coarse water query, not a native plant renderer, new terrain model, stream scheduler or collision population.",
+  "owned_files": [
+    "tools/worldgen-rocky/src/field.rs",
+    "tools/worldgen-rocky/src/lod.rs",
+    "tools/worldgen-rocky/src/offline.rs",
+    "tools/worldgen-rocky/src/scatter.rs",
+    "tools/worldgen-rocky/src/scatter_runtime_tests.rs",
+    "README.md",
+    "docs/00_STATUS.md",
+    "docs/70_WORLD_SCATTER_IDENTITY.md",
+    "docs/artifacts/canonical-plant-sampling-2026-10-21.json"
+  ],
+  "contract": {
+    "entry": "scatter::canonical_plant_surface(&PlanetField, direction) -> ScatterSurface",
+    "ownership": "Borrows the caller's existing field. TerrainStream::field and launch_site::canonical_world_field already own the source-checked canonical Arc; no new loader/provider/cache is introduced.",
+    "input_precondition": "Finite body-fixed unit direction, guaranteed by scatter_region; direct field queries do not add a fallible validation/normalization layer.",
+    "ground": "Exact final sample_surface/height_m at fixed 32m cutoff, including attached global/regional erosion and retained analytic bands; no storage quantization or vertical offset.",
+    "placement_slope": "Existing metric surface_geometry at 32m, centred +/-16m; not sample_surface's zero hint or historical sample's approximate slope.",
+    "ecology": "Same final 32m semantic sample with existing shared material 256m geometry slope (+/-128m); not a query/camera/density-dependent habitat model.",
+    "water": "PlanetField::water_height_m: maximum of ocean datum zero and non-saline basin levels at the existing nearest hydrology cell. Uses actual hydrology dimensions, not climate-context dimensions.",
+    "identity": "Fixed-address kernel, seed/hash channels, world-local IDs, existing density/eligibility policy and historical IDs/wire format unchanged. No fabricated rock-density noise.",
+    "offline": "Historical frozen-DEM plant callback retains its height/cover/+/-32m slope behavior. Water lookup is extracted unchanged and shared; arbitrary accepted unsorted offline artifacts retain historical behavior. Only the runtime field-owned lake copies are normalized."
+  },
+  "source_sha256": {
+    "tools/worldgen-rocky/src/field.rs": "f5fb2aee642f76ee2e40953765adfecabf6efc8c064ae6cc0799e97e2f07cef4",
+    "tools/worldgen-rocky/src/lod.rs": "b1b708251c53c8d2f15c6c0aebe33bc9ab2a7ac936bd54cc6995dea86d310e67",
+    "tools/worldgen-rocky/src/offline.rs": "a7904e1ebc1ae1bc6a7e39d58585609ebab43d5b6cef8a53cb0884dee7a63ff3",
+    "tools/worldgen-rocky/src/scatter.rs": "9d37f9d9fec62881a71017bbe24911222bc452d06b75b0a5d5f888ceb5d72db9",
+    "tools/worldgen-rocky/src/scatter_runtime_tests.rs": "641c37abf6b01ff70ab7ff48c50bfc51d0c4c1c12a6c890e11350c1c563e58c4",
+    "data/worldgen/worldgen_recipe.toml": "e4687f25559fbddb81b58536ec26397f1e0f1ec45a27a9d46b2d1e4f396f4048",
+    "data/worldgen/thessa-erosion-v3.surface.json.gz": "04ce20649b1d8810ea917bf705d763631beebdedca01b3fcd3fc337665463332"
+  },
+  "review_regression": {
+    "finding": "FrozenSurface::validate accepts unsorted lake cells while binary membership lookup assumes sorting. The bundled producer sorts cells, but source-compatible accepted input can silently lose standing water.",
+    "before_scope": "Intermediate new adapter before field-copy normalization, not a claim that the baseline had this new public sampler.",
+    "fixture": "Reverse an existing freshwater lake's cell list in the complete bundled source-compatible artifact; assert frozen validation and attachment accept it.",
+    "before": "Cell [17,342] returned 0 instead of 413.0495928638749m.",
+    "fix": "sort_unstable only on field-owned cloned lake cells during attachment; do not mutate input, tighten frozen validation or change historical offline lookup.",
+    "after": "Every affected cell exactly matches the sorted-control field; field cell order normalized, original artifact remains reversed.",
+    "owner_evidence_directory": "/home/chechulin/Projects/project-thessa-plant-sampling/target/world03-evidence",
+    "before_log_sha256": "4c06049d1c7a36d9e60ab5a4c00272e494801b30975decb0dcbfe4ba0c743770",
+    "after_log_sha256": "a48acb572a026a6f631fa347392a38d5dd64fe598f04d6481b67c434cbbd82fa"
+  },
+  "coverage": [
+    "Existing WORLD00 land height 4.557292563542587m and actual metric slope, plus known submerged endpoint.",
+    "81-point material/ecology semantic comparison with a non-vacuous distinction from placement-scale reeds.",
+    "Attached 0.5-degree freshwater membership versus 2-degree climate context, saline exclusion and otherwise-eligible plants rejected by real lake levels.",
+    "Shared helper ocean fallback, maximum level, nearest-cell rounding, seam/pole endpoints.",
+    "Nonempty L14 window (1,14,6018,11888), 4096 visits: exact reversed-child union, repeat/density-survivor descriptors, direct per-instance canonical heights and placement slope/water eligibility.",
+    "Known-special-case geometry truncation coverage reuses existing stencil tests; no new derivative implementation."
+  ],
+  "numerical_limits": "Fixed 32m cutoff is not 32m resolved erosion or metre-scale root/contact accuracy. Smooth central derivative component truncation <= max_abs_third_derivative*d^2/6 at d=16m placement /128m ecology, before floating-point error. No universal derivative/error envelope across DEM triangles, clamps, noise or blend boundaries. Bundled regional erosion remains nominally256m. Water cells are0.5degrees (~27.93km meridional, nearest-cell support +/-13.96km), not shoreline-position error bounds or resolved channels/ponds. Geometry uses the existing datum-sphere metric.",
+  "isolated_checks": {
+    "owner": "ses_ea2a9f0feffeR7EpDkD49azMxn",
+    "library_passed": 229,
+    "cli_passed": 5,
+    "other": "Scoped all-target/all-feature Clippy, formatting, architecture, diff checks and unchanged WORLD00 numeric example regression passed; explicit release timing test passed separately.",
+    "independent_source_review": "ses_ea16a4a35ffeDOaTbr1XKSAt2t found the unsorted-cell issue and confirmed its correction; no remaining concrete blocker for the CPU stage. Reviewer read source/logs but did not independently execute tests. Parent combined gates are separate."
+  },
+  "isolated_cost_diagnostic": {
+    "hardware": "AMD Ryzen AI 9 H 365, Linux x86-64, rustc1.99.1",
+    "command": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=$PWD/target cargo test --release -p thessa-worldgen-rocky --lib scatter::runtime_tests::canonical_plant_batch_cost -- --exact --ignored --nocapture",
+    "window": [1, 12, 1504, 2972],
+    "iterations": 15,
+    "timing_scope": "Each query includes enumeration, actual canonical surface/ecology/water sampling, allocation, sorting and drop. Source load/check and exact partition/height assertions are outside timing.",
+    "rows": [
+      {"density": 0, "visits": 0, "samples": 0, "items": 0, "median_ms": 0.000040, "sample_p95_ms": 0.000100},
+      {"density": 0.25, "visits": 65536, "samples": 1303, "items": 910, "median_ms": 32.435672, "sample_p95_ms": 32.782649},
+      {"density": 1, "visits": 65536, "samples": 5166, "items": 3752, "median_ms": 81.865647, "sample_p95_ms": 122.619487}
+    ],
+    "log_sha256": "356accecb71b0c3c03fc110ef52d125caace516c2838bb3e7796049953509eff",
+    "qualification": "No concurrent GPU gates during this diagnostic; affinity/thermals/unrelated machine activity uncontrolled. Zero row is timer-scale overhead. Earlier cheap-callback microbenchmarks used different surfaces/scenarios and are not a matched speedup baseline. No frame budget, production placement throughput or renderer performance acceptance."
+  },
+  "integration_verification": {
+    "status": "All 13 local command gates passed on 753 unchanged source/configuration/asset inputs. No remote CI or new visual acceptance claim.",
+    "directory": "target/test-tmp/canonical-plant-sampling-2026-10-21/gates",
+    "commands_results_durations_log_hashes": "results.json",
+    "source_input_manifests": "inputs-before.json / inputs-after.json / input-changes.json",
+    "unchanged_input_count": 753,
+    "results_json_sha256": "d81e942ff1b2e6dad99d0d7b316ab3aae8edd52ca771bd8e291622118a63831d",
+    "identical_before_after_manifest_sha256": "0e9be435ddedde5c50a20f5fa8cbe4f540534591d8fc997533acf78c48511ba4",
+    "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan, Mesa26.2.5-arch1.1; Linux x86-64",
+    "checks": {
+      "workspace_fmt": "passed",
+      "workspace_all_targets_all_features_clippy": "passed, -D warnings",
+      "architecture": "passed",
+      "canonical_runtime_regressions": {"passed": 7, "failed": 0, "ignored_timing_diagnostic": 1},
+      "explicit_release_timing_diagnostic": "passed separately",
+      "workspace_lib_bins": {"passed": 2011, "failed": 0, "ignored": 44},
+      "workspace_integration": {"passed": 98, "failed": 0, "ignored": 84},
+      "renderer_ignored_hardware": {"passed": 79, "failed": 0},
+      "native_ignored_hardware_and_cli": {"passed": 43, "failed": 0},
+      "required_legacy_bevy_ignored_command": "passed with zero matching tests; not hardware coverage",
+      "debug_server_build": "passed prerequisite for actual server CLI tests",
+      "WORLD00_release_numeric_regression": {"passed": 1, "failed": 0},
+      "native_release_build": "passed; executable SHA256193c3a4e3709b79456e8342927f7bcc44f1b22c2c692d808e3f0e75205f8824a"
+    },
+    "parent_repeated_cpu_diagnostic": {
+      "log": "canonical-cpu-cost.log",
+      "log_sha256": "eefdec4f8ed393a7fd935bb1d39982a28dc8a96cc7143fd7e0e29840b951e764",
+      "rows": [
+        {"density": 0, "visits": 0, "samples": 0, "items": 0, "median_ms": 0.000021, "sample_p95_ms": 0.000060},
+        {"density": 0.25, "visits": 65536, "samples": 1303, "items": 910, "median_ms": 21.467861, "sample_p95_ms": 21.681038},
+        {"density": 1, "visits": 65536, "samples": 5166, "items": 3752, "median_ms": 80.976240, "sample_p95_ms": 81.628916}
+      ],
+      "qualification": "Repeated integrated source before serial GPU gates; uncontrolled machine state, no stable speedup or tail-bound claim."
+    },
+    "remote_ci_claimed": false
+  },
+  "deliberately_omitted": "No new native foliage/rock rendering, streaming/cache, graphics quality consumer, collision/obstacle ownership, fine water geometry, metre-scale root agreement, habitat physiology or independent visual acceptance. No terrain rebake or global noise gain.",
+  "next_isolated_work": "Bounded opt-in native survey prototype publication through the existing opaque mesh/shadow path and shared graphics settings; prepared in separate worktrees, not part of this CPU stage's acceptance.",
+  "main_merged": false
+}

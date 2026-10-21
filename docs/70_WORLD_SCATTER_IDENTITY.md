@@ -363,6 +363,25 @@ timings used different surfaces/scenarios and are not a same-workload baseline.
 README/status integration was synchronized by the parent; final combined
 workspace/hardware checks are recorded separately from these isolated CPU gates.
 
+The parent repeated the same command on integrated `67ff8b4` source before its
+serial GPU gates: median/sample-p95 milliseconds were 0.000021/0.000060
+(disabled), 21.467861/21.681038 (quarter density) and 80.976240/81.628916 (full
+density), with identical candidate/sample/item counts. This repeat establishes
+neither a stable speedup nor a tail bound; machine state was uncontrolled.
+Both runs are recorded separately in the
+[integration artifact](artifacts/canonical-plant-sampling-2026-10-21.json).
+
+On the combined cloud-fix/CPU-sampler branch all **13 local command gates**
+passed with **753 unchanged source/configuration/asset inputs**: workspace fmt,
+all-target/all-feature Clippy, architecture, seven focused canonical runtime
+regressions, explicit release timing, 2,011 lib/bin tests, 98 integration tests,
+79 ignored renderer hardware tests, 43 ignored native hardware/CLI tests,
+WORLD00 numeric regression, server build and native release build. The required
+legacy Bevy ignored command matched zero tests; hardware coverage came from the
+renderer/native targets. This is local evidence, not remote CI or visual
+acceptance. Exact commands, durations, log/source hashes and omissions are in
+the same artifact.
+
 ## Evidence and reproduction
 
 Baseline: `3d8698f`, branch `feat/world-scatter-identity`, exclusive disk worktree

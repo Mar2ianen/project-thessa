@@ -374,6 +374,7 @@ mod tests {
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
             let mut end = 0;
+            let mut prototype_payload = 0;
             for (range, primitive) in prepared.ranges.iter().zip(&prepared.asset.primitives) {
                 assert_eq!(range.start, end);
                 assert!(range.end > range.start);
@@ -395,15 +396,27 @@ mod tests {
                 assert_eq!(primitive.indices, prototype.indices);
                 let material = &prepared.asset.materials[primitive.material];
                 assert_eq!(material.metallic, 0.0);
+                let linear = |v: f32| {
+                    if v <= 0.04045 {
+                        v / 12.92
+                    } else {
+                        ((v + 0.055) / 1.055).powf(2.4)
+                    }
+                };
                 for (actual, expected) in material.base_color[..3]
                     .iter()
-                    .zip([0.02198095, 0.07323896, 0.01341175])
+                    .zip(prototype.albedo_srgb.map(linear))
                 {
                     assert!((actual - expected).abs() < 1e-7);
                 }
                 end = range.end;
+                prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
+                    + primitive.indices.len() * std::mem::size_of::<u32>();
             }
             assert_eq!(end as usize, prepared.instances.len());
+            // Exact producer payload actually published, not a stale pin.
+            assert_eq!(stats.prototype_bytes, prototype_payload);
+            assert!(prototype_payload > 0);
             prepared.asset.validate().unwrap();
             eprintln!("WORLD04 {quality:?}: {stats:?}");
             previous = prepared.descriptors;
@@ -456,22 +469,17 @@ mod tests {
                 prototype.positions.len()
             );
             assert!(prototype.positions.iter().all(|p| p[1] >= 0.0));
-            // Existing fern fronds begin at 0.1 m in the producer, deliberately
-            // preserved, not "fixed" by a renderer ground offset.
+            // The producer's fern fronds now meet the local ground plane
+            // (they previously began at 0.1 m); the adapter still adds no offset.
             let min_y = prototype
                 .positions
                 .iter()
                 .map(|p| p[1])
                 .fold(f32::INFINITY, f32::min);
             assert!(
-                (min_y
-                    - if prototype.kind == ScatterKind::FernClump {
-                        0.1
-                    } else {
-                        0.0
-                    })
-                .abs()
-                    < 1e-6
+                (0.0..=0.02).contains(&min_y),
+                "{:?} prototype must sit on its local ground plane, got {min_y}",
+                prototype.kind
             );
             let root = prepared.instances[0];
             let radial_gap = prepared.asset.primitives[0]

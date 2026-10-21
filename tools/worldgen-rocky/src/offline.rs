@@ -1122,32 +1122,285 @@ pub fn plant_prototypes() -> Vec<PlantMesh> {
         };
         match kind {
             ScatterKind::FernClump => {
-                for i in 0..8 {
-                    fern_frond(&mut mesh, i as f64 * std::f64::consts::TAU / 8.0);
-                }
+                mesh.albedo_srgb = [0.18, 0.38, 0.10];
+                fern_clump(&mut mesh);
             }
             ScatterKind::ReedClump => {
-                for i in 0..5 {
-                    let a = i as f64 * 2.399963;
-                    stem(
-                        &mut mesh,
-                        [a.cos() * 0.2, 0.0, a.sin() * 0.2],
-                        0.025,
-                        1.5 + i as f64 * 0.1,
-                    );
-                }
+                mesh.albedo_srgb = [0.33, 0.35, 0.11];
+                reed_clump(&mut mesh);
             }
             ScatterKind::LycopsidTree => {
-                stem(&mut mesh, [0.0; 3], 0.3, 9.0);
-                for i in 0..12 {
-                    tree_crown(&mut mesh, i as f64 * std::f64::consts::TAU / 12.0);
-                }
+                mesh.albedo_srgb = [0.17, 0.28, 0.10];
+                lycopsid_tree(&mut mesh);
             }
             _ => unreachable!(),
         }
         mesh
     })
     .collect()
+}
+
+const GOLDEN_ANGLE: f64 = 2.399_963_229_728_653;
+
+/// Grounded fern rosette. Eleven arching, serrated fronds replace the previous
+/// eight flat spokes; every frond base sits on or just above local Y = 0.
+fn fern_clump(mesh: &mut PlantMesh) {
+    const FRONDS: usize = 13;
+    // Explicit non-random per-frond variation (length, arch height, base height).
+    const LENGTH_M: [f64; FRONDS] = [
+        0.86, 1.04, 0.92, 1.10, 0.80, 0.98, 0.75, 1.06, 0.88, 1.00, 0.72, 0.94, 0.82,
+    ];
+    const HEIGHT_M: [f64; FRONDS] = [
+        0.56, 0.64, 0.52, 0.60, 0.58, 0.66, 0.54, 0.62, 0.50, 0.58, 0.60, 0.55, 0.57,
+    ];
+    const BASE_Y_M: [f64; FRONDS] = [
+        0.0, 0.02, 0.01, 0.03, 0.015, 0.005, 0.025, 0.0, 0.018, 0.008, 0.022, 0.012, 0.006,
+    ];
+    for i in 0..FRONDS {
+        fern_frond(
+            mesh,
+            0.37 + i as f64 * GOLDEN_ANGLE,
+            LENGTH_M[i],
+            HEIGHT_M[i],
+            BASE_Y_M[i],
+        );
+    }
+}
+
+/// Tapered reed bed: eight curved blades around a low tussock instead of
+/// six-sided needles. Blade bases stay on local Y = 0.
+fn reed_clump(mesh: &mut PlantMesh) {
+    const STEMS: usize = 10;
+    const HEIGHT_M: [f64; STEMS] = [1.72, 1.95, 1.50, 1.85, 2.00, 1.62, 1.90, 1.40, 1.78, 1.66];
+    const LEAN_M: [f64; STEMS] = [0.24, 0.36, 0.18, 0.30, 0.42, 0.22, 0.34, 0.20, 0.28, 0.26];
+    const BASE_R_M: [f64; STEMS] = [0.10, 0.03, 0.15, 0.06, 0.11, 0.02, 0.14, 0.08, 0.05, 0.12];
+    const WIDTH_M: [f64; STEMS] = [
+        0.075, 0.085, 0.070, 0.080, 0.090, 0.072, 0.082, 0.068, 0.078, 0.065,
+    ];
+    for i in 0..STEMS {
+        reed_blade(
+            mesh,
+            0.9 + i as f64 * GOLDEN_ANGLE,
+            BASE_R_M[i],
+            LEAN_M[i],
+            HEIGHT_M[i],
+            WIDTH_M[i],
+        );
+    }
+    // Six short outward blades close the base silhouette without bulk.
+    for i in 0..6 {
+        let (radial, lateral) = azimuth_frame(0.4 + i as f64 * std::f64::consts::TAU / 6.0);
+        let nodes: [[f64; 3]; 3] = std::array::from_fn(|k| {
+            let (radius, y) = [(0.02, 0.0), (0.14, 0.10), (0.26, 0.21)][k];
+            offset(scaled(radial, radius), [0.0, y, 0.0])
+        });
+        ribbon(
+            mesh,
+            &nodes,
+            &[0.030, 0.075, 0.009],
+            lateral,
+            [0.0, 1.0, 0.0],
+        );
+    }
+}
+
+/// Lycopsid: segmented trunk with a flared base and upward fork stubs, plus
+/// three whorls of narrow drooping leaves instead of twelve umbrella triangles.
+fn lycopsid_tree(mesh: &mut PlantMesh) {
+    const TRUNK_RINGS: [(f64, f64); 6] = [
+        (0.0, 0.44),
+        (0.22, 0.34),
+        (0.60, 0.30),
+        (3.0, 0.28),
+        (6.5, 0.225),
+        (9.0, 0.18),
+    ];
+    // (height, length, base radius, tip radius, outward tilt from vertical, azimuth)
+    const BRANCH_STUBS: [(f64, f64, f64, f64, f64, f64); 4] = [
+        (3.15, 0.72, 0.075, 0.028, 9.0, 0.55),
+        (4.05, 0.86, 0.070, 0.026, 8.0, 2.35),
+        (4.95, 0.64, 0.062, 0.022, 10.0, 3.95),
+        (5.80, 0.78, 0.056, 0.020, 7.0, 5.30),
+    ];
+    // (attachment height, frond reach, frond count, azimuth phase)
+    const CROWN_WHORLS: [(f64, f64, usize, f64); 3] = [
+        (7.35, 2.05, 9, 0.0),
+        (8.15, 1.62, 8, 0.42),
+        (8.90, 1.18, 7, 0.86),
+    ];
+    tapered_limb(mesh, [0.0; 3], [0.0, 1.0, 0.0], 10, &TRUNK_RINGS);
+    for &(y, length, base_radius, tip_radius, tilt_deg, azimuth) in &BRANCH_STUBS {
+        let (radial, _) = azimuth_frame(azimuth);
+        let tilt = tilt_deg.to_radians();
+        let axis = offset(scaled(radial, tilt.sin()), [0.0, tilt.cos(), 0.0]);
+        let base = offset(scaled(radial, 0.24), [0.0, y, 0.0]);
+        tapered_limb(
+            mesh,
+            base,
+            axis,
+            5,
+            &[(0.0, base_radius), (length, tip_radius)],
+        );
+    }
+    for &(y, reach, leaves, phase) in &CROWN_WHORLS {
+        for i in 0..leaves {
+            crown_frond(
+                mesh,
+                phase + i as f64 * std::f64::consts::TAU / leaves as f64,
+                y,
+                reach,
+            );
+        }
+    }
+}
+
+/// One arching fern frond: seven nodes along the rachis, serrated half-widths
+/// that read as pinnae, tips drooping below the arch peak.
+fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, base_y_m: f64) {
+    const T: [f64; 7] = [0.0, 0.16, 0.33, 0.50, 0.67, 0.84, 1.0];
+    const ARC: [f64; 7] = [0.0, 0.40, 0.72, 0.94, 1.0, 0.86, 0.56];
+    const WIDTH: [f64; 7] = [0.028, 0.150, 0.075, 0.160, 0.072, 0.100, 0.006];
+    let (radial, lateral) = azimuth_frame(angle);
+    let nodes: [[f64; 3]; 7] = std::array::from_fn(|i| {
+        offset(
+            scaled(radial, 0.04 + T[i] * length_m),
+            [0.0, base_y_m + ARC[i] * height_m, 0.0],
+        )
+    });
+    let widths = WIDTH.map(|w| w * length_m);
+    // Upper surfaces are the visible side: choose the up-facing winding.
+    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+}
+
+/// One tapered reed blade: wide at the base, narrow at the drooping tip.
+fn reed_blade(
+    mesh: &mut PlantMesh,
+    angle: f64,
+    base_radius: f64,
+    lean_m: f64,
+    height_m: f64,
+    width_m: f64,
+) {
+    const T: [f64; 7] = [0.0, 0.17, 0.34, 0.51, 0.68, 0.84, 1.0];
+    const HEIGHT_T: [f64; 7] = [0.0, 0.20, 0.40, 0.60, 0.79, 0.92, 0.86];
+    const LEAN_T: [f64; 7] = [0.0, 0.05, 0.11, 0.18, 0.27, 0.38, 1.0];
+    let (radial, lateral) = azimuth_frame(angle);
+    let nodes: [[f64; 3]; 7] = std::array::from_fn(|i| {
+        offset(
+            scaled(radial, base_radius + LEAN_T[i] * lean_m),
+            [0.0, HEIGHT_T[i] * height_m, 0.0],
+        )
+    });
+    let widths = T.map(|t| width_m * (1.0 - 0.85 * t));
+    // Blades around a tussock present their outer face, wound consistently.
+    ribbon(mesh, &nodes, &widths, lateral, radial);
+}
+
+/// One arching crown frond: rises from the trunk, then droops outward. Broad
+/// enough to present a real silhouette from both above and eye level.
+fn crown_frond(mesh: &mut PlantMesh, angle: f64, base_y: f64, reach_m: f64) {
+    const RADIAL: [f64; 5] = [0.0, 0.20, 0.45, 0.74, 1.0];
+    const ARC: [f64; 5] = [0.0, 0.26, 0.30, 0.10, -0.38];
+    const WIDTH: [f64; 5] = [0.012, 0.075, 0.095, 0.070, 0.008];
+    let (radial, lateral) = azimuth_frame(angle);
+    let nodes: [[f64; 3]; 5] = std::array::from_fn(|i| {
+        offset(
+            scaled(radial, 0.16 + RADIAL[i] * reach_m),
+            [0.0, base_y + ARC[i] * reach_m, 0.0],
+        )
+    });
+    let widths = WIDTH.map(|w| w * reach_m);
+    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+}
+
+fn offset(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|i| a[i] + b[i])
+}
+
+fn scaled(v: [f64; 3], s: f64) -> [f64; 3] {
+    v.map(|c| c * s)
+}
+
+/// Horizontal unit radial and lateral directions for one azimuth about +Y.
+fn azimuth_frame(angle: f64) -> ([f64; 3], [f64; 3]) {
+    let (sin, cos) = angle.sin_cos();
+    ([cos, 0.0, sin], [-sin, 0.0, cos])
+}
+
+/// Flat tapered strip through `nodes`. `lateral` is a unit horizontal axis and
+/// `hint` selects which side of the sheet receives the derived face normals.
+fn ribbon(
+    mesh: &mut PlantMesh,
+    nodes: &[[f64; 3]],
+    half_widths: &[f64],
+    lateral: [f64; 3],
+    hint: [f64; 3],
+) {
+    debug_assert_eq!(nodes.len(), half_widths.len());
+    for i in 0..nodes.len() - 1 {
+        let left = offset(nodes[i], scaled(lateral, half_widths[i]));
+        let right = offset(nodes[i], scaled(lateral, -half_widths[i]));
+        let next_right = offset(nodes[i + 1], scaled(lateral, -half_widths[i + 1]));
+        let next_left = offset(nodes[i + 1], scaled(lateral, half_widths[i + 1]));
+        oriented_triangle(mesh, [left, right, next_right], hint);
+        oriented_triangle(mesh, [left, next_right, next_left], hint);
+    }
+}
+
+/// Open tapered polygonal limb along `axis` with (distance, radius) rings.
+/// No caps: no downward-facing lid is emitted and the interior is never visible.
+fn tapered_limb(
+    mesh: &mut PlantMesh,
+    base: [f64; 3],
+    axis: [f64; 3],
+    sides: usize,
+    rings: &[(f64, f64)],
+) {
+    let axis = crate::lod::normalize(axis);
+    let reference = if axis[1].abs() < 0.9 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let u = crate::lod::normalize(crate::lod::cross(reference, axis));
+    let v = crate::lod::cross(axis, u);
+    let at = |distance: f64, radius: f64, angle: f64| {
+        offset(
+            offset(base, scaled(axis, distance)),
+            offset(
+                scaled(u, radius * angle.cos()),
+                scaled(v, radius * angle.sin()),
+            ),
+        )
+    };
+    for band in rings.windows(2) {
+        let (start_d, start_r) = band[0];
+        let (end_d, end_r) = band[1];
+        for i in 0..sides {
+            let a = i as f64 * std::f64::consts::TAU / sides as f64;
+            let b = (i + 1) as f64 * std::f64::consts::TAU / sides as f64;
+            let mid = (a + b) * 0.5;
+            let hint = offset(scaled(u, mid.cos()), scaled(v, mid.sin()));
+            oriented_triangle(
+                mesh,
+                [
+                    at(start_d, start_r, a),
+                    at(start_d, start_r, b),
+                    at(end_d, end_r, b),
+                ],
+                hint,
+            );
+            oriented_triangle(
+                mesh,
+                [
+                    at(start_d, start_r, a),
+                    at(end_d, end_r, b),
+                    at(end_d, end_r, a),
+                ],
+                hint,
+            );
+        }
+    }
 }
 
 fn triangle(mesh: &mut PlantMesh, points: [[f64; 3]; 3]) {
@@ -1181,61 +1434,26 @@ fn validate_mesh(mesh: &PlantMesh) -> Result<(), String> {
     Ok(())
 }
 
-fn stem(mesh: &mut PlantMesh, origin: [f64; 3], radius: f64, height: f64) {
-    for i in 0..6 {
-        let a = i as f64 * std::f64::consts::TAU / 6.0;
-        let b = (i + 1) as f64 * std::f64::consts::TAU / 6.0;
-        let p = |angle: f64, y: f64| {
-            [
-                origin[0] + radius * angle.cos(),
-                origin[1] + y,
-                origin[2] + radius * angle.sin(),
-            ]
-        };
-        triangle(mesh, [p(a, 0.0), p(a, height), p(b, height)]);
-        triangle(mesh, [p(a, 0.0), p(b, height), p(b, 0.0)]);
-    }
+fn face_normal(points: [[f64; 3]; 3]) -> [f64; 3] {
+    crate::lod::cross(
+        crate::lod::sub(points[1], points[0]),
+        crate::lod::sub(points[2], points[0]),
+    )
 }
 
-fn fern_frond(mesh: &mut PlantMesh, angle: f64) {
-    for i in 0..5 {
-        let a = i as f64 / 5.0;
-        let b = (i + 1) as f64 / 5.0;
-        let p = |t: f64, side: f64| {
-            let length = t * 1.2;
-            let width = (t * std::f64::consts::PI).sin() * 0.15 * side;
-            [
-                length * angle.cos() - width * angle.sin(),
-                0.1 + (t * std::f64::consts::PI).sin() * 0.6,
-                length * angle.sin() + width * angle.cos(),
-            ]
-        };
-        if i == 4 {
-            triangle(mesh, [p(a, -1.0), p(b, 0.0), p(a, 1.0)]);
-        } else {
-            triangle(mesh, [p(a, -1.0), p(b, -1.0), p(b, 1.0)]);
-            if i > 0 {
-                triangle(mesh, [p(a, -1.0), p(b, 1.0), p(a, 1.0)]);
-            }
-        }
+/// Emit a triangle whose winding makes the cross-product normal agree with
+/// `hint`. Normals are still derived from the emitted winding, never assigned.
+fn oriented_triangle(mesh: &mut PlantMesh, mut points: [[f64; 3]; 3], hint: [f64; 3]) {
+    if crate::lod::dot(face_normal(points), hint) < 0.0 {
+        points.swap(1, 2);
     }
-}
-
-fn tree_crown(mesh: &mut PlantMesh, angle: f64) {
-    let p = |radius: f64, yaw: f64, y: f64| [radius * yaw.cos(), y, radius * yaw.sin()];
-    triangle(
-        mesh,
-        [
-            p(0.0, angle, 10.0),
-            p(2.5, angle, 7.0),
-            p(2.5, angle + std::f64::consts::TAU / 12.0, 7.0),
-        ],
-    );
+    triangle(mesh, points);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scatter::ScatterKind;
 
     #[test]
     fn regional_refinement_reuses_parent_and_enters_every_height_path() {
@@ -1531,5 +1749,174 @@ mod tests {
         let mut w = world();
         w.lats[1] = 0.0;
         assert!(w.validate().is_err());
+    }
+
+    /// Proto-type triangles as f64 world-local points plus the normal derived
+    /// from their winding; independent of the stored f32 normals.
+    fn prototype_triangles(mesh: &PlantMesh) -> Vec<(u32, [[f64; 3]; 3], [f64; 3])> {
+        mesh.indices
+            .chunks(3)
+            .map(|index| {
+                let points = [0, 1, 2].map(|k| mesh.positions[index[k] as usize].map(f64::from));
+                let cross = face_normal(points);
+                let length = crate::lod::dot(cross, cross).sqrt();
+                (index[0], points, cross.map(|v| v / length))
+            })
+            .collect()
+    }
+
+    fn centroid(points: [[f64; 3]; 3]) -> [f64; 3] {
+        scaled(
+            points.iter().fold([0.0; 3], |sum, p| offset(sum, *p)),
+            1.0 / 3.0,
+        )
+    }
+
+    fn radial_of(point: [f64; 3]) -> [f64; 3] {
+        let radial = [point[0], 0.0, point[2]];
+        crate::lod::normalize(radial)
+    }
+
+    #[test]
+    fn plant_prototypes_are_bounded_non_degenerate_and_deterministic() {
+        let prototypes = plant_prototypes();
+        assert_eq!(prototypes.len(), 3);
+        // No RNG or external state: repeated production is bit-identical.
+        assert_eq!(plant_prototypes(), prototypes);
+        for mesh in &prototypes {
+            validate_mesh(mesh).unwrap();
+            assert_eq!(mesh.normals.len(), mesh.positions.len());
+            assert!(mesh.positions.len() <= 4096);
+            let triangles = mesh.indices.len() / 3;
+            let (minimum, ceiling) = match mesh.kind {
+                ScatterKind::FernClump => (130, 180),
+                ScatterKind::ReedClump => (120, 170),
+                ScatterKind::LycopsidTree => (300, 380),
+                kind => panic!("unexpected prototype kind {kind:?}"),
+            };
+            assert!(
+                (minimum..=ceiling).contains(&triangles),
+                "{:?} has {triangles} triangles outside the pinned {minimum}..={ceiling}",
+                mesh.kind
+            );
+            for (first, points, normal) in prototype_triangles(mesh) {
+                assert!(
+                    points.iter().flatten().all(|v| v.is_finite()),
+                    "{:?} has a non-finite vertex",
+                    mesh.kind
+                );
+                assert!(
+                    (crate::lod::dot(normal, normal) - 1.0).abs() < 1e-9,
+                    "{:?} triangle normal is not unit length",
+                    mesh.kind
+                );
+                // Twice the triangle area; catches collapsed/duplicate vertices.
+                let double_area = crate::lod::dot(face_normal(points), normal);
+                assert!(
+                    double_area > 2e-4,
+                    "{:?} has a degenerate triangle (area {:.3e})",
+                    mesh.kind,
+                    double_area * 0.5
+                );
+                // The stored normal is the winding normal, shared by all corners.
+                let stored = mesh.normals[first as usize].map(f64::from);
+                assert!(crate::lod::dot(stored, normal) > 1.0 - 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn plant_prototype_extents_and_fern_roots_stay_on_local_ground() {
+        // Pinned representation limits, in metres: the fern rosette must sit on
+        // local Y = 0, reeds stay in 1.2-2.0 m, trees keep the 9 m trunk.
+        for mesh in plant_prototypes() {
+            let min_y = mesh
+                .positions
+                .iter()
+                .map(|p| f64::from(p[1]))
+                .fold(f64::INFINITY, f64::min);
+            let max_y = mesh
+                .positions
+                .iter()
+                .map(|p| f64::from(p[1]))
+                .fold(f64::NEG_INFINITY, f64::max);
+            let max_reach = mesh
+                .positions
+                .iter()
+                .map(|p| f64::from(p[0]).hypot(f64::from(p[2])))
+                .fold(0.0, f64::max);
+            let (min_height, max_height, max_extent) = match mesh.kind {
+                ScatterKind::FernClump => (0.45, 0.75, 1.35),
+                ScatterKind::ReedClump => (1.20, 2.00, 0.70),
+                ScatterKind::LycopsidTree => (8.70, 10.20, 2.60),
+                kind => panic!("unexpected prototype kind {kind:?}"),
+            };
+            // No ground offset is invented: every prototype base meets local Y=0.
+            assert!(
+                min_y > -0.01,
+                "{:?} dips below its root plane by {min_y}",
+                mesh.kind
+            );
+            assert!(
+                min_y <= 0.02,
+                "{:?} floats {min_y} m above its root plane",
+                mesh.kind
+            );
+            assert!(
+                (min_height..=max_height).contains(&max_y),
+                "{:?} height {max_y} outside {min_height}..={max_height}",
+                mesh.kind
+            );
+            assert!(
+                max_reach <= max_extent,
+                "{:?} reach {max_reach} exceeds {max_extent}",
+                mesh.kind
+            );
+        }
+    }
+
+    #[test]
+    fn plant_foliage_normals_face_up_and_crowns_face_outward() {
+        // Any triangle whose centroid is in the upper 60% of the plant is crown
+        // foliage for the fern/reed kinds, and above every branch for the tree.
+        // Above the last branch, crown leaves are the only geometry outside the
+        // trunk radius; nearer triangle centroids belong to the trunk itself.
+        const CROWN_FLOOR_M: f64 = 6.6;
+        const CROWN_LEAF_REACH_M: f64 = 0.26;
+        for mesh in plant_prototypes() {
+            let max_y = mesh
+                .positions
+                .iter()
+                .map(|p| f64::from(p[1]))
+                .fold(f64::NEG_INFINITY, f64::max);
+            for (_, points, normal) in prototype_triangles(&mesh) {
+                let middle = centroid(points);
+                if middle[1] > 0.4 * max_y {
+                    assert!(
+                        normal[1] > -0.25,
+                        "{:?} upper surface faces down at {middle:?}: {normal:?}",
+                        mesh.kind
+                    );
+                }
+                if mesh.kind != ScatterKind::LycopsidTree {
+                    continue;
+                }
+                if middle[1] > CROWN_FLOOR_M && middle[0].hypot(middle[2]) > CROWN_LEAF_REACH_M {
+                    // Arching fronds rise before they droop, so their upper
+                    // surface may tilt inward near the trunk. What must never
+                    // happen is an upper-side triangle facing the ground.
+                    assert!(
+                        normal[1] > 0.35,
+                        "crown frond faces down at {middle:?}: {normal:?}"
+                    );
+                } else if middle[1] < 3.0 {
+                    let radial = radial_of(middle);
+                    assert!(
+                        crate::lod::dot(normal, radial) > 0.5,
+                        "trunk side faces inward at {middle:?}: {normal:?}"
+                    );
+                }
+            }
+        }
     }
 }

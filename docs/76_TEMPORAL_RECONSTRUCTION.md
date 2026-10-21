@@ -226,8 +226,8 @@ invalidation. A native TAA reference is required before comparing adapters.
 
 - `crates/render-core/src/temporal.rs` defines `JitterOffset` (Halton 2,3,
   bounded to ±0.5 px), clip-space jitter application, `project_uv_depth`,
-  `world_from_depth` and `motion_uv` with the `previous_uv - current_uv`
-  convention.
+  `world_from_depth`, `motion_uv` with the `previous_uv - current_uv`
+  convention, and the composed `reproject_static_surface` path.
 - `crates/render-wgpu/src/view.rs` adds `ViewUniformBlock::new_jittered`, which
   builds both projections from the caller's matrices. `clip_from_world`,
   `clip_from_view`, `world_from_clip` and `view_from_clip` are jittered;

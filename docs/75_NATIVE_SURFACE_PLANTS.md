@@ -1,10 +1,11 @@
 # 75 — Native surface prototype plants (WORLD04 bounded consumer)
 
-**Status:** bounded native survey consumer and graphics policy implemented;
-CPU verification is recorded below. Hardware/capture/independent visual review
-are recorded separately as integration-owner evidence. This is neither planet-wide
-vegetation streaming nor botanical realism, authoritative collision, or final
-close-up visual acceptance.
+**Status:** bounded native survey consumer, graphics policy, hardware oracles,
+matched captures and one independent blind review are implemented and recorded
+on `feat/native-surface-plants`. This is neither planet-wide vegetation streaming
+nor botanical realism, authoritative collision, or final close-up visual
+acceptance. The current prototype geometry is deliberately schematic; its
+visible limits are recorded at the end of this document.
 
 ## Requested and resolved contract
 

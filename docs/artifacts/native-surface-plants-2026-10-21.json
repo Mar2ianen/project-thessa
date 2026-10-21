@@ -105,7 +105,8 @@
     "procedure": "arena.py stripped identifyingPNGmetadata and shuffledA/B; reviewer saw only blind-review files, not key/origins/source/logs. Votes frozen beforekeyread. Firstattempt couldnotfindarenaonPATH; exactCLIpathprovided and unchangedvotesrecorded oncepercase, thenparentdecoded."
   },
   "final_verification": {
-    "status": "passed 14 combined local command gates on committed HEAD 71f43ed; no remote CI claimed",
+    "status": "passed 14 combined local command gates while the code tree was at 71f43ed; no remote CI claimed",
+    "post_gate_changes": "Commits after the gate run changed only documentation and graphics.toml comments; the edited graphics.toml parses to exactly the same TOML values as the gated file, so no runtime setting, source or binary changed.",
     "directory": "/home/chechulin/Projects/project-thessa-native-plants/target/world04-evidence/gates-final",
     "commands_results_seconds_log_hashes": "results.json (14 records, all exit 0)",
     "source_manifests": "inputs-before.json / inputs-after.json / input-changes.json",

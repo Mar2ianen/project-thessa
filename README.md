@@ -79,8 +79,11 @@ The checked-in vertical slice currently contains:
   and placement slope, material-consistent ecological cover and coarse lake/ocean
   rejection. Disabled-by-default `[surface_plants]` enables a bounded native
   survey-only prototype consumer through the existing opaque mesh/shadow path
-  ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)). Production vegetation streaming,
-  grounded botanical assets and physical obstacle ownership remain unimplemented.
+  ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); the prototypes now use grounded
+  arching fronds, tapered trunks and per-kind albedo, with matched old/new
+  captures and a blind preference review. Production vegetation streaming,
+  fully modeled botanical assets and physical obstacle ownership remain
+  unimplemented.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

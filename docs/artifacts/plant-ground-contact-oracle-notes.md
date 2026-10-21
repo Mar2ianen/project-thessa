@@ -199,5 +199,6 @@ error 0.00005327431 m and range 0–5.3496675 m. Thus the allowed 0.5 m page bud
 was not the observed grid quantization error; it must not be quoted as measured
 root error or as a between-vertex guarantee.
 
-This still does **not** measure the actual viewer's streamed resident cover,
-conforming topology or fern geometry gap. Those remain separate limitations.
+This still does **not** measure the actual viewer's streamed resident cover or
+conforming topology. The WORLD04 0.1 m fern prototype gap was removed by the
+WORLD05 geometry pass; the viewer-side residual remains a separate limitation.

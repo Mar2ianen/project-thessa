@@ -1,11 +1,12 @@
-# 75 — Native surface prototype plants (WORLD04 bounded consumer)
+# 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-**Status:** bounded native survey consumer, graphics policy, hardware oracles,
-matched captures and one independent blind review are implemented and recorded
-on `feat/native-surface-plants`. This is neither planet-wide vegetation streaming
-nor botanical realism, authoritative collision, or final close-up visual
-acceptance. The current prototype geometry is deliberately schematic; its
-visible limits are recorded at the end of this document.
+**Status:** bounded native survey consumer and graphics policy are recorded on
+`feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid
+prototypes, per-kind albedo and a second matched capture/blind-review stage are
+recorded on `feat/native-plant-prototypes` (WORLD05). This is neither planet-wide
+vegetation streaming nor botanical realism, authoritative collision, or final
+close-up visual acceptance. The current prototypes remain deliberately schematic
+flat-shaded meshes; visible limits are recorded at the end of this document.
 
 ## Requested and resolved contract
 
@@ -107,16 +108,24 @@ memory and terrain admission checks; preflight alone is not a claim of active RT
 
 ### Representation limits
 
-These are the existing simple fern/reed/lycopsid prototypes, not realistic plant
-assets. In particular the producer's fern geometry begins at local Y = 0.1 m;
-the adapter preserves this and does **not** lower the root to hide it. Stems have
-no terrain-conforming footprint and the population has no physics/collision
-ownership. Canonical 32 m root height need not equal the current interpolated
-resident triangle (which may use a different wavelength/representation).
+The survey prototypes are hand-built schematic meshes, not botanical assets or
+photogrammetry. The WORLD05 geometry pass replaces the original eight-spoke fern,
+five-stem reed and umbrella-crown tree with grounded, arching foliage. Fern
+fronds now begin at local Y = 0; the adapter still applies no vertical offset and
+does **not** lower roots to hide geometry. Reeds use ten vertical tapered blades
+plus a six-blade basal tussock. The lycopsid uses a ten-sided tapered trunk with
+four stub forks and 24 arching fronds in three whorls. All three remain unindexed
+flat-shaded triangle soups using the existing double-sided material; there is no
+foliage transmission, LOD, wind, growth, per-kind shader or collision ownership.
+The trunk is visibly faceted at 2 m, crown undersides stay dark, thin fronds can
+alias into dark speckle at 50 m, and the fork stubs are near-vertical rather than
+spreading branches. Stems have no terrain-conforming footprint. Canonical 32 m
+root height need not equal the current interpolated resident triangle (which may
+use a different wavelength/representation).
+
 **Actual root-to-resident-triangle residual is unmeasured in this change.**
 Page-height comparisons would not establish that residual; neither a clearance
-bound nor a resident-mesh contact guarantee is claimed. Parent captures/review
-must consider this limitation without introducing a vertical offset.
+bound nor a resident-mesh contact guarantee is claimed.
 
 A separate independently reviewed hardware oracle now measures the existing
 canonical descriptors against one **fixed generated regular L14 patch**, using
@@ -125,8 +134,9 @@ roots hit; signed residuals span -0.068938668 to +0.096391605 m, with nearest-ra
 p50 -0.000603619 m and p95 +0.047214586 m. The observed grid-height quantization
 error is only 0.000053186 m, not the allowed 0.5 m page budget. This is neither
 the actual viewer's streamed resident cover nor a universal contact envelope;
-the fern geometry gap remains separate. Exact ABI/topology, arithmetic checks,
-per-kind results and source/log hashes:
+the WORLD04 0.1 m fern prototype gap has been removed by WORLD05, but the
+viewer's streamed cover and conforming topology remain unmeasured. Exact
+ABI/topology, arithmetic checks, per-kind results and source/log hashes:
 [fixed-patch oracle notes](artifacts/plant-ground-contact-oracle-notes.md).
 
 ### Diagnostics and cost boundary
@@ -216,6 +226,10 @@ At WORLD00 `(1,L14,6018,11888)` with the unchanged canonical attachment:
 | Medium | 4096 | 134 | 98 | 15984 | 6272 |
 | High | 4096 | 298 | 222 | 15984 | 14208 |
 
+Those WORLD04 rows predate the WORLD05 geometry pass. Current prototype payload
+is 68,256 B at every quality; the retained counts, rigid-instance bytes and
+per-frame upload bytes are unchanged (see WORLD05 below).
+
 An initial unoptimized diagnostic observed preparation at approximately
 1.77/3.05/6.41 ms respectively. These single CPU test observations are not a
 stable startup/frame budget, isolated benchmark, speedup comparison or GPU
@@ -289,7 +303,113 @@ Exact binary/image/configuration/source hashes, commands, votes and limitations
 are recorded in
 [`artifacts/native-surface-plants-2026-10-21.json`](artifacts/native-surface-plants-2026-10-21.json).
 
-### Combined local verification
+## WORLD05 prototype geometry
+
+The geometry pass edits only the `offline::plant_prototypes` producers and the
+consumer's `cfg(test)` expectations. Placement, world-local IDs, canonical root
+height, scale, yaw, fixed L14 window, quality tiers, material/shadow/RT path,
+grouped ranges and the no-collision boundary are unchanged. No vertical offset or
+root lowering was introduced; fern fronds simply begin at local Y = 0.
+
+| Kind | Triangles (old → new) | Vertices | Max local Y m | Reach m |
+| --- | --- | --- | --- | --- |
+| Fern clump | 64 → 156 | 468 | 0.665 | 1.14 |
+| Reed clump | 60 → 144 | 432 | 2.00 | 0.53 |
+| Lycopsid | 24 → 332 | 996 | 9.25 | 2.21 |
+| **All three** | **148 → 632** | **1,896** | | |
+
+Prototype payload grows from 15,984 to 68,256 bytes (+52,272 B, 4.27×); the
+selected-instance buffer stays 14,208 B and reported per-frame upload stays
+14,784 B because only instances, not prototype meshes, are uploaded per frame.
+The prototypes use distinct sRGB albedos now — fern `[0.18, 0.38, 0.10]`, reed
+`[0.33, 0.35, 0.11]`, lycopsid `[0.17, 0.28, 0.10]` — still decoded by the existing
+linear material path. Ferns use 13 arching fronds with a serrated width profile;
+reeds use ten tapered near-vertical blades plus a six-blade tussock; the lycopsid
+uses a ten-sided tapered trunk with a stepped base, four stub forks and three
+whorls of broad arching fronds. Flat per-triangle normals are kept; winding hints
+force foliage normals upward/outward. Tests pin extents, root height, minimum
+triangle area, winding/normal bounds, triangle ceilings, payload bytes and
+determinism. They also assert that arching crown triangles may tilt inward near
+the trunk but never have an upper face pointing downward.
+
+### WORLD05 matched captures
+
+Three matched old/new pairs use the same frozen scene and settings as WORLD04:
+overview at 1800/800 m, close at 80/50 m and standing at 80/2 m, 1280x720,
+epoch/step 0, 60 s prestream, 30 warmup frames and 32 measured frames. Old
+executable `b5f33c40…` has the WORLD04 prototypes; new executable `6fe61390…`
+has WORLD05 geometry; both run the same committed settings. Camera arguments,
+world target and time are identical. Final height/material jobs and material
+misses are zero. Cover counts are 496/579/372 (overview), 490/580/368 (close) and
+494/581/371 (standing). Total shared RT instances remain 594/590/593; enabling
+plants admits the already-requested mesh/terrain RT scene, and the close-up RT
+scene is 33,538,848 B. Per-frame instance upload for High remains 14,784 B.
+
+The old executable was re-captured twice at the same close/standing cameras: the
+two runs differ at only 5 pixels (maximum channel difference 35/255), while
+old-vs-new differs at 177,362 pixels (close, max 134/255), 114,027 pixels
+(standing, max 143/255) and 3,797 pixels (overview, max 101/255). The pairs are
+therefore materially different, not renderer noise. Scene lighting/cloud state
+still carries small nondeterministic variation, so this is a visual comparison,
+not a pixel-identity or contact test.
+
+The independent reviewer saw only shuffled A/B images and froze three votes
+before the key was read. Decoded result: **arching prototypes preferred over the
+previous umbrellas at 50 m (medium confidence) and 2 m (high confidence);
+overview tie**. Preference points were 2.5 vs 0.5. The reviewer described the new
+50 m form as recognizable frond crowns with tapered trunks and readable ferns,
+and the old form as faceted cone-on-pole placeholders. At 2 m the new root flare
+and drooping crown read as a coherent plant silhouette. At overview distance
+both collapse to tiny silhouettes. Remaining new-geometry defects: thin-frond
+aliasing/dark speckle, dark crown undersides, a visibly faceted ten-sided trunk
+at 2 m and near-vertical fork stubs. The old geometry's hard facets, laminar cone
+overlaps and blob shadows are not retained. This is one reviewer and one shuffle,
+not statistical or ecological acceptance.
+
+### WORLD05 observed cost
+
+| View | Old High GPU median ms | New High GPU median ms |
+| --- | --- | --- |
+| Overview | 77.456 | 80.435 |
+| 50 m | 104.016 | 94.837 |
+| 2 m | 94.563 | 97.564 |
+
+New Low at 50 m measured 83.927 ms and off 82.152 ms. These are whole-client GPU
+timestamp intervals, not isolated foliage cost or game FPS. Runs are serial,
+single-order and not counterbalanced; view, capture order and thermal state are
+not separated (the old executable's own 50 m and 2 m medians differ by 9.5 ms).
+The lower new 50 m median therefore is **not** claimed as a speedup, and the
+higher overview and 2 m medians are not a stable regression magnitude. Geometry cost is visible
+in prototype payload/triangle counts; CPU preparation measured 5.55/8.49 ms
+(new) versus 5.36/8.11 ms (old) at close/standing in these single captures.
+No allocation/RSS/VRAM high-water, frame-budget or platform acceptance is claimed.
+
+Exact hashes, commands, camera arguments, votes and limitations are recorded in
+[`artifacts/native-plant-prototypes-2026-10-21.json`](artifacts/native-plant-prototypes-2026-10-21.json).
+
+### WORLD05 combined local verification
+
+Fourteen local command gates passed on committed `HEAD 132b709`: formatting,
+whole-workspace all-target/all-feature clippy with `-D warnings`, architecture
+check, 2,027 workspace lib/bin tests (45 ignored), 102 integration tests (85
+ignored and executed by the hardware suites), feature-off native check, the two
+focused plant GPU lifecycle/root oracles, the WORLD00 release regression, 79
+renderer hardware tests, server build, 45 native hardware/CLI tests, the legacy
+Bevy command and a release build. The 755 tracked test-input manifests were
+byte-identical before and after the run (`input-changes.json` is empty). The
+release rebuild reproduced the captured executable byte-for-byte
+(`6fe61390192971187f82d98c29ecfb77842f363eadce2f5d036f9a764d8ddf9c`), so the
+captures correspond to the committed producer rather than only to a working tree.
+
+The legacy `cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored`
+gate exits successfully but currently matches **zero** tests: that crate has no
+`#[ignore]` tests after the Bevy retirement. It must not be cited as GPU
+coverage; the actual hardware coverage above comes from `thessa-render-wgpu` and
+`thessa-terrain-native`. These are local results, not remote CI. The blind review
+and cost rows above remain subjective/single-order evidence and are not replaced
+by the gate count.
+
+### WORLD04 combined local verification
 
 Fourteen local command gates passed on committed `HEAD 71f43ed`: formatting,
 whole-workspace all-target/all-feature clippy with `-D warnings`, architecture

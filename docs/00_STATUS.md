@@ -98,7 +98,7 @@ do not update in place).
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
-| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in requested/resolved density tiers, one retained L14 canonical plant window, grouped sources in the existing opaque/shadow path, RT-budget preflight/raster fallback and zero-work disable | actual resident-mesh root agreement, botanical geometry, independent visual/performance acceptance, instance streaming and collision ownership |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in requested/resolved density tiers, one retained L14 canonical plant window, grouped sources in the existing opaque/shadow path, RT-budget preflight/raster fallback, zero-work disable and grounded arching prototype geometry | actual resident-mesh root agreement, botanical realism, stable performance acceptance, instance streaming and collision ownership |
 
 The [WORLD00 coastal baseline](72_WORLD_SURFACE_BASELINE.md) now identifies an
 actual canonical zero crossing and a 2×2 km sampled land/water neighborhood,
@@ -157,10 +157,18 @@ no erosion artifact, world height or historical plant ID is rewritten. See
 WORLD04 connects those canonical descriptors to the existing native opaque mesh,
 shadow atlas and environment path for one selected L14 survey window. The shared
 `[surface_plants]` settings default off; quality thins nested render subsets,
-not authoritative obstacles. Existing simple prototypes retain their geometry
-limitations, including the fern's intrinsic root gap. This is not planet-wide
-streaming, grounded botanical assets, collision ownership or final surface
-acceptance. See [doc 75](75_NATIVE_SURFACE_PLANTS.md).
+not authoritative obstacles. This is not planet-wide streaming, realistic
+botanical assets, collision ownership or final surface acceptance. See
+[doc 75](75_NATIVE_SURFACE_PLANTS.md).
+
+WORLD05 replaces the schematic prototypes with grounded arching fern/reeds and
+tapered lycopsid trunks with drooping frond whorls, plus distinct per-kind
+albedo. Placement IDs, heights, scales, window, density tiers and the no-collision
+boundary are unchanged. A matched old/new capture and independent blind review
+preferred the new geometry at 50 m and 2 m and tied at overview distance; thin
+fronds still alias, crown undersides remain dark, and the trunk is faceted. No
+stable performance or botanical-realism acceptance is claimed. Evidence:
+[`artifacts/native-plant-prototypes-2026-10-21.json`](artifacts/native-plant-prototypes-2026-10-21.json).
 
 The 2026-10-21 WORLD04 capture stage passed 14 local command gates on 755
 unchanged test inputs, with the captured executable reproduced byte-for-byte by
@@ -168,6 +176,17 @@ the committed source, plus one independent blind review. The legacy Bevy
 `--ignored` command matched zero tests and is not counted as hardware coverage;
 actual GPU suites are the renderer and native runs. Evidence:
 [`artifacts/native-surface-plants-2026-10-21.json`](artifacts/native-surface-plants-2026-10-21.json).
+No remote CI or stable performance acceptance is claimed.
+
+The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
+gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
+lib/bin and 102 integration tests, the focused plant hardware oracles, 79
+renderer and 45 native hardware/CLI tests, and a release rebuild matching the
+captured binary byte-for-byte (`6fe61390…`). The independent blind review and
+single-order cost observations remain scoped as stated in doc 75. The legacy
+Bevy `--ignored` command again matched zero tests and is not hardware coverage.
+Evidence:
+[`artifacts/native-plant-prototypes-2026-10-21.json`](artifacts/native-plant-prototypes-2026-10-21.json).
 No remote CI or stable performance acceptance is claimed.
 
 The 2026-10-20 native plume stage passed all 27 local command gates, including

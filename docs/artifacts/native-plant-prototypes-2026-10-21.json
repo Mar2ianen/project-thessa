@@ -1,0 +1,225 @@
+{
+  "task": "WORLD05",
+  "date": "2026-10-21",
+  "branch": "feat/native-plant-prototypes",
+  "base_commit": "4e56476",
+  "geometry_commit": "132b709",
+  "scope": "Replacement of the WORLD04 schematic fern/reed/lycopsid prototypes with grounded arching fronds, tapered trunks, a stepped lycopsid base and distinct per-kind albedo. Placement identity, canonical heights, scales, yaw, fixed L14 window, density tiers, material/shadow/RT path and the no-collision boundary are unchanged. Not planet-wide vegetation, botanical realism, contact or stable performance acceptance.",
+  "owned_files": [
+    "tools/worldgen-rocky/src/offline.rs",
+    "apps/terrain-native/src/surface_plants.rs",
+    "docs/75_NATIVE_SURFACE_PLANTS.md",
+    "docs/00_STATUS.md",
+    "docs/artifacts/plant-ground-contact-oracle-notes.md",
+    "docs/artifacts/native-plant-prototypes-2026-10-21.json",
+    "README.md"
+  ],
+  "invariants": {
+    "identity_and_placement": "World-local ScatterId, kind, direction, signed canonical ground height, scale and yaw are unchanged. No vertical offset or root lowering was added; fern fronds begin at local Y=0.",
+    "consumer_contract": "One retained (1,L14,6018,11888) WORLD00 window, 4096 candidate visits, 298 surface samples, 222 accepted/retained/submitted plants, 62 ferns / 12 reeds / 148 lycopsids, three draws, zero collision/physics ownership.",
+    "payload": "Prototype vertex/index payload grows 15,984 -> 68,256 bytes; the 64-byte-ABI instance buffer remains 14,208 bytes and reported per-frame upload remains 14,784 bytes.",
+    "materials": "One existing linearized material per prototype kind; metallic 0, roughness 0.92, double-sided triangle sheets. Albedo sRGB: fern [0.18,0.38,0.10], reed [0.33,0.35,0.11], lycopsid [0.17,0.28,0.10].",
+    "graphics_policy": "No settings, resolution, shadow-atlas, environment, topology or RT policy changed by this stage."
+  },
+  "geometry": {
+    "fern": {
+      "construction": "13 arching fronds x 6 ribbon segments, serrated width profile, base Y in 0..0.03 m; grounded clump, no stem",
+      "triangles_old_new": [
+        64,
+        156
+      ],
+      "vertices": 468,
+      "max_local_y_m": 0.665,
+      "max_reach_m": 1.14
+    },
+    "reed": {
+      "construction": "10 tapered near-vertical blades + 6-blade basal tussock; blades kept within ~10 degrees of vertical for the shared back-face normal flip",
+      "triangles_old_new": [
+        60,
+        144
+      ],
+      "vertices": 432,
+      "max_local_y_m": 2.0,
+      "max_reach_m": 0.53
+    },
+    "lycopsid": {
+      "construction": "10-sided tapered trunk with stepped root flare and six rings, four near-vertical stub forks below the crown floor, 24 broad arching fronds in three whorls (9/8/7)",
+      "triangles_old_new": [
+        24,
+        332
+      ],
+      "vertices": 996,
+      "max_local_y_m": 9.25,
+      "max_reach_m": 2.21
+    },
+    "totals": {
+      "triangles_old_new": [
+        148,
+        632
+      ],
+      "vertices": 1896,
+      "prototype_payload_bytes_old_new": [
+        15984,
+        68256
+      ],
+      "payload_multiplier": 4.27,
+      "instances_high": 222,
+      "draw_calls": 3,
+      "instance_buffer_bytes": 14208,
+      "reported_frame_upload_bytes": 14784
+    },
+    "normals": "Flat per-triangle normals retained. Winding hints force foliage normals up/outward and trunk normals radially out. A crown frond may tilt inward while rising, but tests require its upper face not to point downward.",
+    "tests": "Worldgen tests pin deterministic prototypes, non-degenerate triangles, triangle ceilings 130..180 (fern), 120..170 (reed), 300..380 (tree), local extents, fern min Y in 0..0.02 m, upper-60% normal bounds and crown/trunk winding. The native WORLD00 test re-derives material colors from the producer albedo and asserts the exact 68,256-byte payload."
+  },
+  "source_sha256": {
+    "tools/worldgen-rocky/src/offline.rs": "efbde5bcd9aec65bc2198332a42cc64c7d7d91743002fa898c3bbd7adef66eed",
+    "apps/terrain-native/src/surface_plants.rs": "cb1afcc6e6168260b5fed8491ef0ebea1fc0ccec02b390bb53e9c5ba15d67ab9"
+  },
+  "prototype_checks": {
+    "implementation_owner": "Subagent produced the first arching/grounded geometry and CPU tests. Parent then broadened crown fronds and fern/reeds, added per-kind albedo, fixed the material-color test to derive from the producer, and reran the focused tests before capture.",
+    "worldgen_lib": "3 focused geometry tests passed (1 unrelated ignored CPU cost diagnostic); full worldgen lib previously 232 passed / 1 ignored at the intermediate geometry.",
+    "native_bin": "All seven surface_plants CPU tests passed, including exact WORLD00 Low/Medium/High descriptors, disabled/withheld zero work and the exact prototype payload.",
+    "hardware": "Lifecycle hardware test passed on Radeon 880M / RADV / Vulkan (2.42 s). Fixed-L14 root oracle passed unchanged: 222 roots hit, signed residual -0.068938668..+0.096391605 m, p50 -0.000603619 m, p95 +0.047214586 m, grid error 0.000053186 m. Geometry does not change canonical roots.",
+    "scoped_gates": "rustfmt --check, git diff --check, scoped all-target/all-feature clippy with -D warnings and the architecture check passed before capture."
+  },
+  "captures": {
+    "directory": "/home/chechulin/Projects/project-thessa-gpui/target/test-tmp/native-plant-geometry-2026-10-21",
+    "scenario": "WORLD00 target 23.565679258039204N 165.13881581863882E, epoch/step 0, 1280x720, mute/no-HUD, 60 s pre-stream, 30 warmup, 32 measured frames. Overview distance/AGL 1800/800 m; close50 80/50 m; standing2 80/2 m.",
+    "new_executable_sha256": "6fe61390192971187f82d98c29ecfb77842f363eadce2f5d036f9a764d8ddf9c",
+    "old_executable_sha256": "b5f33c40f647f12e33c7aecb18115d72f6f05f583311b13a625814690660aed2",
+    "config_sha256_base_high_low": [
+      "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+      "f1f990712198fa54c47c8d26b6d1e6f1952c2f68e9a04cd2a0fda1645002fdd2",
+      "b0a619b1f6db582ecbaef7ccfb66255b325bbc6b595a3d19de9d7042b508cfc7"
+    ],
+    "images_sha256": {
+      "old-high-overview": "07041cf0f913cd5771ea6cf2a991a85f426ab687bb415e1910f1e867ab54b917",
+      "new-high-overview": "7fbf95a6a9075baffa51495d3e6ad2e22dd55e778d41194061f24ae3763149d5",
+      "old-high-close50": "4ca52fc3c90782b9951fdaee2335daedc37adf72264d1f5ca89c8537bc9bf40d",
+      "new-high-close50": "b70b930b735aa30997d5c60a72cc5b0cfcb721572edd032ad437478350c59bbb",
+      "old-high-standing2": "7e45bdb85ae47ae924575c6dd435ab4d553a8553a49ddf342178bbc6bff04aa0",
+      "new-high-standing2": "d07dff21e2260176c3da268ab0432eae98dc6173c6b39d8dd3f968b9a33dcc56",
+      "new-low-close50": "816126eedf89ac338e3ecd70216be39376709ccd264af1cd5a6a557f0b86c3f6",
+      "new-off-close50": "5922c1714d411f6fe19eea3cfbe9bfcf3f9da2f0cc711c3ab1db79c912e1096c"
+    },
+    "commands_sha256": "56fa7a14e00b8abc2bcd295a9c8d293c093627546d733673f145293fd45e39c2",
+    "inputs_sha256": "30fa8874980cf8f33eb48097086a9f4b952d337846557f0379942a52610f032b",
+    "camera_pairs_exactly_equal": true,
+    "final_height_material_jobs_and_material_misses_all_zero": true,
+    "visible_wanted_heightcache_counts": [
+      [
+        372,
+        372,
+        496
+      ],
+      [
+        368,
+        368,
+        490
+      ],
+      [
+        371,
+        371,
+        494
+      ]
+    ],
+    "high_total_rt_instances": [
+      594,
+      590,
+      593
+    ],
+    "high_close_shared_rt_bytes": 33538848,
+    "high_close_rt_bytes_old": 33533808,
+    "low_close_instances_draws_frameupload": [
+      52,
+      3,
+      3904
+    ],
+    "disabled_boundary": "Off/disabled reports zero plant samples, candidates, prototypes, instances, preparation time and upload, and no plant survey mesh/RT scene.",
+    "nondeterminism": "Old executable re-captured twice at identical close/standing cameras differs at 5 pixels, maximum channel difference 35/255. Old-vs-new differs at 177,362 pixels (close, max 134/255), 114,027 (standing, max 143/255) and 3,797 (overview, max 101/255), so the blind pairs are materially different.",
+    "exact_evidence": "capture-commands.json holds all eight commands (including the separately captured old overview) with executable/image/perf/log hashes; capture-inputs.json holds the settings/producer qualification."
+  },
+  "blind_review": {
+    "judge": "ses_ea0c63620ffeNHUt9L8zzusThk / independent-geometry-judge-2026-10-21",
+    "frozen_votes": {
+      "geometry-close50": "A",
+      "geometry-standing2": "B",
+      "geometry-overview": "tie"
+    },
+    "decoded": "A/B assignment was independently shuffled per case. Decoded: arching prototypes preferred at 50 m (A, medium confidence) and 2 m (B, high confidence); overview tie. Preference points 2.5 arching vs 0.5 previous umbrella.",
+    "reviewer_notes": "New form: recognizable frond crowns, tapered trunks, readable ferns, coherent root flare and drooping crown silhouette; thin-frond aliasing/dark speckle remains. Old form: cone-on-pole placeholders, hard faceted shading, laminar cone overlaps and blob shadows.",
+    "votes_sha256": "75032140260321530afed55df8c7bc4e045698c4fb4446b84618401950c3ee66",
+    "answer_key_sha256": "e7375fed1d609dce270102ae2c9e7305c6203d4c7bf3c0bfc68df2addab494e8",
+    "score_sha256": "0ae5c9b8b0416f3f86e790efa4a7b592743e977b5f5f2baba4eeba126f4f607c",
+    "procedure": "arena.py stripped identifying PNG metadata and shuffled A/B per case. Reviewer saw only blind-review files, not key/origins/source/logs, and recorded exactly one vote per case before the key was read. One reviewer/one shuffle: not a statistical, ecological or physical acceptance."
+  },
+  "cost": {
+    "gpu_medians_ms_old_high": [
+      77.456,
+      104.016,
+      94.563
+    ],
+    "gpu_medians_ms_new_high": [
+      80.435,
+      94.837,
+      97.564
+    ],
+    "gpu_median_ms_new_low_close50": 83.927,
+    "gpu_median_ms_new_off_close50": 82.152,
+    "views_order": [
+      "overview",
+      "close50",
+      "standing2"
+    ],
+    "preparation_ms_old_new_close": [
+      5.358227,
+      5.5476
+    ],
+    "preparation_ms_old_new_standing": [
+      8.108487,
+      8.49108
+    ],
+    "performance_boundary": "Whole-client GPU timestamp intervals, not isolated foliage cost or game FPS. Runs are serial, single-order and not counterbalanced; view, capture order and thermal state are not separated (the old executable's own 50 m and 2 m medians differ by 9.5 ms). Neither the lower new 50 m median nor the higher overview/2 m medians establish speedup or regression. No memory high-water, frame budget or platform acceptance claimed."
+  },
+  "remaining_limitations": [
+    "Thin fronds alias and can read as dark speckle at 50 m; crown undersides remain dark because the shared material has no foliage transmission.",
+    "The ten-sided flat-shaded trunk is visibly faceted at 2 m; fork stubs are near-vertical rather than spreading branches.",
+    "No LOD, wind, growth, per-kind shader, collision/physics or per-instance contact correction.",
+    "Only one L14 survey window and 222 prototype plants; no planet-wide streaming or production botanical assets.",
+    "Actual viewer root-to-resident-triangle residual remains unmeasured; the fixed-patch oracle is not the streamed resident cover.",
+    "One blind reviewer and one shuffle; preference is subjective and not physical/ecological/temporal acceptance.",
+    "No stable performance acceptance; captures are single-order and uncounterbalanced."
+  ],
+  "final_verification": {
+    "status": "passed 14 combined local command gates while the code tree was at 132b70933fd1f11d8e2d74d7b083faad59aaeebe; no remote CI claimed",
+    "post_gate_changes": "Commits after the gate run change only documentation and this evidence manifest; no Rust, WGSL, TOML, asset, test-input or runtime setting is edited.",
+    "directory": "/home/chechulin/Projects/project-thessa-plant-prototypes/target/world05-evidence/gates-final",
+    "commands_results_seconds_log_hashes": "results.json (14 records, all exit 0; sha256 8ff752ee500d0c92093f01116fb3249e73e2b61ec6d0de19781b344c754141af)",
+    "source_manifests": "inputs-before.json / inputs-after.json / input-changes.json",
+    "tracked_input_count": 755,
+    "input_changes": [],
+    "test_counts": {
+      "workspace_lib_bins_passed_ignored": [
+        2027,
+        45
+      ],
+      "workspace_integration_passed_ignored": [
+        102,
+        85
+      ],
+      "renderer_ignored_passed": 79,
+      "native_ignored_passed": 45,
+      "world00_regression_passed": 1
+    },
+    "hardware_gate_logs": [
+      "plant-lifecycle-hardware.log",
+      "plant-ground-hardware.log",
+      "renderer-ignored.log",
+      "native-ignored.log"
+    ],
+    "release_binary_rebuild_sha256": "6fe61390192971187f82d98c29ecfb77842f363eadce2f5d036f9a764d8ddf9c",
+    "release_binary_matches_captured": true,
+    "required_legacy_gpu_zero_match": "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored exits 0 but runs zero tests: the crate currently contains no #[ignore] tests (25 non-ignored filtered out). Do not count this command as hardware coverage. Actual GPU coverage in this run is renderer-ignored (79) and native-ignored (45).",
+    "remote_ci_claimed": false
+  }
+}

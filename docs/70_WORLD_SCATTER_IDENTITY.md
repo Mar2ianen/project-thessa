@@ -26,6 +26,9 @@ yaw is radians about radial up, relative to `sphere::enu_basis(direction)`.
 Slope is dimensionless **rise/run**, not an angle or a normalized [0,1] value.
 Water is an optional local datum elevation; ground at or below it is rejected.
 Density is instances per **datum-sphere km²**, not per relief-surface km².
+There is no authoritative collision/obstacle consumer in this slice. A future
+renderer may thin visible instances without changing the world's collision
+population; graphics quality must not create/remove physical obstacles.
 
 Plant density describes clumps/crowns, not blades. The existing ecological
 coverage proxy and prototype meshes are preserved, not promoted to plant

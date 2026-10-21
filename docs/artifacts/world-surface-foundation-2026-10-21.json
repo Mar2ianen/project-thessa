@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-21",
+  "baseline": "3d8698f918d151fb2e94290d0b0af4611231471b",
+  "branch": "feat/world-surface-vertical-slice",
+  "compiled_source_commit": "f8d3ce1",
+  "component_commits": {
+    "coastal_material_correction": "895bf46",
+    "WORLD00_numeric_site": "1f68b41",
+    "WORLD00_fixed_camera": "f171aee",
+    "WORLD01_scatter_identity": "f8d3ce1"
+  },
+  "scope": "Scoped world-surface foundations, not full vegetation or visual acceptance. Canonical terrain heights, physics, erosion artifacts and launch authority remain unchanged.",
+  "implemented": [
+    "Coastal substrate/cover correction and synchronized retained maps; separate artifact coastal-surface-materials-2026-10-21.json records the failing regressions and scoped gates.",
+    "Fixed canonical coastal zero crossing and 2x2 km numeric patch, plus a source-checked regression and nearby land target.",
+    "Presentation-only numeric site and exact radial eye AGL controls, source/camera capture metadata, near-plane handling and correct fixed-site HUD label.",
+    "Fixed world-local scatter addresses, exact query/LOD unions, density subsets, per-candidate eligibility callback, explicit budgets/capacity/allocation errors and the existing offline plant consumer."
+  ],
+  "WORLD00": {
+    "crossing_lat_lon_deg": [23.567917375616958, 165.13942625682847],
+    "land_target_lat_lon_deg": [23.565679258039204, 165.13881581863882],
+    "land_target_height_m": 4.557292563542587,
+    "patch_enu_extent_m": [2000, 2000],
+    "grid_vertices": [65, 65],
+    "sample_spacing_m": 31.25,
+    "height_range_m": [-10.742522750814077, 17.731800419943614],
+    "submerged_vertices": 566,
+    "height_grid_search_and_crossing_exactly_equal_before_after": true,
+    "land_albedo_before_srgb": [0.5551603436470032, 0.538783848285675, 0.40395405888557434],
+    "land_albedo_after_srgb": [0.12242220342159271, 0.22971278429031372, 0.13902363181114197],
+    "unchanged_land_roughness": 0.9399999976158142,
+    "limits": "Nearest detected grid-edge crossing, not a continuous nearest-coast certificate. Root tolerance is not physical terrain accuracy. Full canopy/ground coverage remains an optical proxy, not rendered trees or blades."
+  },
+  "WORLD01": {
+    "standalone_source_commit": "fa7f737",
+    "source_review": "ses_ea45e82d9ffeUWunZyLU0RqHsa found no address/ownership/density defect but rejected exact cover validation and infallible instance-buffer growth. Both findings were fixed and regression-tested by the parent after subagent usage exhaustion; no fresh independent re-review of those final fixes is claimed.",
+    "review_regression_before": "/home/chechulin/Projects/project-thessa-world-scatter/target/world-scatter-evidence/review-cover-regression-before.log",
+    "final_isolated_tests": "216 library + 5 CLI passed, scoped all-target/all-feature Clippy passed; complete historical v3 artifact load covered.",
+    "kernel_benchmark": "1,048,576 visits -> 117,401 plants, 15 cheap-callback iterations: median 33.335779 ms, nearest-rank p95 34.108067 ms. Different concurrent load from prior observations; not a speedup, actual canonical-field cost or renderer result.",
+    "limits": "Existing offline consumer samples its final frozen global DEM/ecology, not full attached runtime terrain. No runtime instance streaming, foliage/rock renderer, collision ownership, blue-noise placement or unbounded density claim."
+  },
+  "real_captures": {
+    "directory": "target/test-tmp/world00-captures-2026-10-21",
+    "scenario": "Fixed land target above, frozen epoch/step 0, 1280x720, 20 seconds prestream, 32 measured frames after warmup, HUD off and explicit mute. Overview: distance 1800 m / AGL 800 m; close50: distance 80 m / AGL 50 m; standing2: distance 80 m / AGL 2 m.",
+    "before_build": "Camera/audit integration f171aee with only the coastal color block temporarily restored to 3d8698f behavior; not an unmodified 3d8698f executable. Exact temporary diff/source/binary hash in before-build-provenance.json. Temporary source edits were fully restored before the corrected release build and final gates.",
+    "before_executable_sha256": "1463ab7b564f32c2adad95164175c71e1fdc3e5b8a6e3225d71e568b88911c2a",
+    "after_executable_sha256": "bde878d3b0ebf4f167e91a534e059a2200b5c6cc8025aa01f95e7f8ff57d8b9a",
+    "graphics_sha256": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+    "hardware": "AMD Radeon 880M Graphics / Vulkan / RADV Mesa 26.2.5-arch1.1, Linux x86-64",
+    "all_three_final_camera_metadata_exactly_equal_before_after": true,
+    "all_six_final_missing_material_pages": 0,
+    "all_six_final_height_jobs_in_flight": 0,
+    "matched_visible_wanted_cache_counts": "overview 372/372/496; close50 368/368/490; standing2 371/371/494. These are matching counts, not resident-ID snapshots.",
+    "actual_corrected_agl_m": [799.999999999344, 50.00000000028052, 1.9999999998080256],
+    "resolved_near_m": [1.0, 1.0, 0.1],
+    "whole_client_gpu_medians_before_ms": [75.16875155883122, 74.56717856268884, 71.83592915499115],
+    "whole_client_gpu_medians_after_ms": [75.01436822859193, 74.48511263641262, 69.77816437642909],
+    "timing_boundary": "One serial process per case under varying CPU activity, no counterbalanced repeat or stable speedup claim. CPU tail, allocations and RSS/VRAM high-water acceptance were not collected.",
+    "hashes_commands_and_counters": "before-commands.json, after-commands.json, capture-summary.json and after-build-provenance.json",
+    "blind_review": "Three pairs prepared in blind-review with a separate private-key directory. No new votes: subagent usage limit exhausted. Implementer inspection is not independent preference or visual acceptance.",
+    "known_visible_defects": "Water stippling/moire already present in the old-color control persists. Flat ground-cover appearance, absent vegetation geometry, weak depth and blurred/angular material boundaries remain; no natural-surface parity claimed.",
+    "water_diagnostic_controls": {
+      "commands_and_summary": "water-diagnostics-commands.json / water-diagnostics-summary.json",
+      "scope": "Three additional silent actual overview frames, 16 measured frames each, independently disabling shared shadows, specular reflections or terrain normals through requested/resolved settings. Intended disable values verified in metadata; exact camera metadata, 372 visible patches, zero height jobs and zero missing materials in each.",
+      "water_roi_xywh": [900, 80, 350, 120],
+      "water_roi_pixels": 42000,
+      "roi_changed_pixels_no_shadows": 20,
+      "roi_changed_pixels_no_specular": 175,
+      "roi_changed_pixels_no_normals": 23,
+      "conclusion": "The dominant stippling remains: at least 99.58% of this water ROI is byte-identical under each independent toggle. This narrows a follow-up investigation but does not establish its root cause or justify hiding it by disabling an effect."
+    }
+  },
+  "integration_verification": {
+    "status": "all 14 local command gates passed; no source input changed during the run",
+    "directory": "target/test-tmp/world-surface-final-2026-10-21",
+    "commands_results_durations_log_hashes": "gates.json",
+    "input_fingerprints": "inputs-before.json / inputs-after.json / input-changes.json; Rust, WGSL, TOML, C/C++ headers/source and all tracked assets/data",
+    "unchanged_fingerprinted_inputs": 750,
+    "gates_json_sha256": "b8c4292becfa5d9560741d5e5fed80389f22d3d3c8ad90598b9358cc734f25ba",
+    "identical_before_after_input_manifest_sha256": "aeb672c13694bbfb2bf5efbb2aee5651c07210527b24a7ca8cd364358d769f1c",
+    "checks": {
+      "release_build_and_three_corrected_captures": "passed",
+      "workspace_fmt": "passed",
+      "workspace_all_targets_all_features_clippy": "passed, -D warnings",
+      "architecture": "passed",
+      "workspace_lib_bins": {"passed": 2003, "failed": 0, "ignored": 43},
+      "workspace_integration": {"passed": 98, "failed": 0, "ignored": 81},
+      "WORLD00_release_example_regression": {"passed": 1, "failed": 0},
+      "native_feature_off": {"passed": 88, "failed": 0, "ignored": 24},
+      "current_debug_server_build": "passed prerequisite for real-server CLI regressions",
+      "native_ignored_hardware_and_cli": {"passed": 43, "failed": 0},
+      "required_legacy_bevy_ignored_command": "passed, matches zero ignored tests; not hardware coverage",
+      "renderer_terrain_hardware": {"passed": 8, "failed": 0},
+      "renderer_terrain_environment_ignored_hardware": {"passed": 8, "failed": 0}
+    },
+    "cargo_environment": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp",
+    "remote_ci_claimed": false,
+    "corrected_command_error": "An earlier extra native GPU invocation incorrectly passed --lib to a binary-only package; Cargo rejected it before tests. Retried without --lib successfully in the prior coastal stage; the final integration command uses the correct target."
+  },
+  "next_isolated_work": "Reproduce and isolate the actual-coast water stippling in shared renderer/material/height consumers before claiming coastal acceptance; then integrate stable descriptors with the canonical runtime sampler and existing mesh/shadow renderer. Finer runoff relief requires an explicit nested-refinement contract or a disjoint region, not new global noise gain.",
+  "main_merged": false
+}

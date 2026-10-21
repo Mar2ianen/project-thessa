@@ -1,8 +1,10 @@
 # 71 — Native surface capture and WORLD00 acceptance
 
 **Status:** presentation-only numeric survey-site and exact eye-AGL controls
-implemented; WORLD00 coastal-site selection, GPU captures and visual acceptance
-remain open. No new terrain, collision or flight authority is introduced here.
+implemented; WORLD00's numeric coastal site is recorded in doc 72, with actual
+silent captures and checks below. Resident geometry convergence and independent
+visual acceptance remain open. No new terrain, collision or flight authority
+is introduced here.
 
 ## A bookmark is not an acceptance site
 
@@ -11,10 +13,11 @@ baseline (`3d8698f`) it is approximately 23° N, 165° E and 102 m above datum;
 its label is not evidence that a shoreline crosses a 2 × 2 km neighborhood.
 Do not promote it to WORLD00 or claim coastal acceptance from that bookmark.
 
-WORLD00 still needs a numeric canonical-field survey identifying an actual
-coastal 2 × 2 km region. Record its fixed latitude/longitude, sampled land/sea
-boundary and neighborhood bounds, canonical source/build revision and dataset
-hashes. A matching pair of 50 m / 2 m AGL frames is then necessary evidence,
+The [numeric canonical-field survey](72_WORLD_SURFACE_BASELINE.md) identifies an
+actual coastal 2 × 2 km region, its sampled land/sea boundary and neighborhood
+bounds, source revision and dataset hashes. Its fixed land camera target is
+23.565679258039204° N, 165.13881581863882° E. A matching pair of 50 m / 2 m AGL
+frames is then necessary evidence,
 not by itself acceptance of coast continuity, terrain detail, vegetation or
 surface-to-orbit quality. No shoreline coordinate is invented by this document.
 
@@ -48,8 +51,8 @@ surface-to-orbit quality. No shoreline coordinate is invented by this document.
   unchanged. Vertical FOV remains 0.9 radians. Explicit AGL uses near distance
   `min(1 m, 0.05 × AGL)`: 1 m at 50 m AGL, 0.1 m at 2 m AGL.
 
-After the numeric survey supplies `WORLD00_LAT` and `WORLD00_LON`, capture
-serially (do not compete with another GPU job):
+Set `WORLD00_LAT=23.565679258039204` and `WORLD00_LON=165.13881581863882`, then
+capture serially (do not compete with another GPU job):
 
 ```sh
 mkdir -p target/surface-captures
@@ -87,6 +90,26 @@ These entries are absent for vehicle/map views. They do not reconstruct every
 frame of `--sweep` or a moving-time capture; use frozen time/no sweep for the
 matched acceptance pair. This metadata is outside measured frame samples and
 does not enable a new renderer effect or change graphics-resolution policy.
+
+The integration captured six actual silent 1280×720 frames: old-color control
+and corrected material at 800 m, 50 m and 2 m eye AGL. All paired final camera
+metadata is exactly equal; computed radial clearances differ from the requested
+values by less than 1 nm (arithmetic residual, not terrain accuracy). All final
+height jobs are drained and material misses are
+zero, with matching visible/wanted/cache counts. Resident-ID snapshots were
+not captured, and the 800 m overview is not a certified footprint-coverage test.
+Three pairs are prepared for blind review, but no new independent votes were
+obtained after subagent usage exhaustion. Water stippling and missing vegetation
+geometry remain visible; this does not close visual acceptance. Exact commands,
+hashes, counters and verification:
+[`artifacts/world-surface-foundation-2026-10-21.json`](artifacts/world-surface-foundation-2026-10-21.json).
+
+Three extra actual overview controls independently disable shadows, specular
+reflection and terrain normals through shared settings. The stippling persists;
+at least 99.58% of a fixed 350×120 water ROI remains byte-identical in each.
+All have identical final camera metadata and drained/miss-free terrain counters.
+This is a reproducible rendering defect for the next isolated investigation,
+not proof of a specific source or a reason to change physical relief/noise.
 
 ## Verification boundary
 

@@ -89,7 +89,17 @@ baseline observations were collected under different concurrent load and do
 not support a speedup claim. Exact logs, fallback comparison and limitations:
 [`artifacts/coastal-surface-materials-2026-10-21.json`](artifacts/coastal-surface-materials-2026-10-21.json).
 
-Remaining work: a numerically surveyed real coastal 2×2 km acceptance site,
-fixed 50 m/2 m AGL captures, finer runoff-derived relief, stable scatter,
+The [numeric WORLD00 survey](72_WORLD_SURFACE_BASELINE.md) subsequently located
+an actual 2×2 km coastal site. Its entire 4,225-height grid, crossing and search
+results remain exactly unchanged by this optical correction. At the fully
+vegetated land target, albedo changes from the old sand
+`[0.55516034, 0.53878385, 0.40395406]` to
+`[0.12242220, 0.22971278, 0.13902363]`, while roughness remains 0.94 and all
+reported physical/ecological inputs remain unchanged.
+
+The [scatter identity foundation](70_WORLD_SCATTER_IDENTITY.md) is now integrated
+for renderer-neutral descriptors and the existing offline consumer.
+Remaining work: fixed 50 m/2 m AGL capture acceptance, finer runoff-derived relief,
+native runtime scatter placement,
 and production vegetation/rock consumers. Neither this correction nor a
 preferred survey image establishes natural surface geometry or visual parity.

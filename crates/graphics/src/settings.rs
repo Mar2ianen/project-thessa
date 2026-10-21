@@ -728,9 +728,29 @@ impl Default for TerrainTopologySettings {
     }
 }
 
+/// Prepared policy for bounded survey-only prototype plants, not a streamer or
+/// authoritative vegetation/collision model. Quality thins the same population.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SurfacePlantsSettings {
+    pub enabled: bool,
+    pub quality: Quality,
+}
+
+impl Default for SurfacePlantsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quality: Quality::High,
+        }
+    }
+}
+
 /// Requested graphics configuration as parsed from `graphics.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestedGraphics {
+    #[serde(default)]
+    pub surface_plants: SurfacePlantsSettings,
     #[serde(default)]
     pub terrain_topology: TerrainTopologySettings,
     #[serde(default)]
@@ -770,6 +790,7 @@ fn default_config_version() -> u32 {
 impl Default for RequestedGraphics {
     fn default() -> Self {
         Self {
+            surface_plants: SurfacePlantsSettings::default(),
             terrain_topology: TerrainTopologySettings::default(),
             instruments: InstrumentSettings::default(),
             ocean: OceanSettings::default(),
@@ -993,6 +1014,7 @@ impl RequestedGraphics {
             };
             self.instruments.quality = self.ocean.quality;
             self.terrain_topology.quality = self.ocean.quality;
+            self.surface_plants.quality = self.ocean.quality;
         }
         match preset {
             Preset::Low => {
@@ -1160,6 +1182,88 @@ mod tests {
         let config = RequestedGraphics::from_toml(text).unwrap();
         assert_eq!(config.version, 1);
         assert_eq!(config.renderer.terrain, TerrainRenderRequest::GpuAuto);
+        assert_eq!(config.surface_plants, SurfacePlantsSettings::default());
+    }
+
+    #[test]
+    fn surface_plants_defaults_partial_sections_choices_and_validation() {
+        for text in ["", "[surface_plants]", "[surface_plants]\nenabled=false"] {
+            let config = RequestedGraphics::from_toml(text).unwrap();
+            assert_eq!(config.surface_plants, SurfacePlantsSettings::default());
+        }
+        let enabled = RequestedGraphics::from_toml("[surface_plants]\nenabled=true").unwrap();
+        assert!(enabled.surface_plants.enabled);
+        assert_eq!(enabled.surface_plants.quality, Quality::High);
+        for (name, quality) in [
+            ("low", Quality::Low),
+            ("medium", Quality::Medium),
+            ("high", Quality::High),
+        ] {
+            for enabled in [false, true] {
+                let text =
+                    format!("[surface_plants]\nenabled={enabled}\nquality='{name}'\nfuture_key=42");
+                let config = RequestedGraphics::from_toml(&text).unwrap();
+                assert_eq!(
+                    config.surface_plants,
+                    SurfacePlantsSettings { enabled, quality }
+                );
+                assert_eq!(
+                    RequestedGraphics::from_toml(&toml::to_string(&config).unwrap()).unwrap(),
+                    config
+                );
+            }
+        }
+        let quality_only = RequestedGraphics::from_toml("[surface_plants]\nquality='low'").unwrap();
+        assert!(!quality_only.surface_plants.enabled);
+        assert_eq!(quality_only.surface_plants.quality, Quality::Low);
+        for assignment in [
+            "quality='ultra'",
+            "quality='off'",
+            "quality=3",
+            "enabled='true'",
+        ] {
+            assert!(
+                RequestedGraphics::from_toml(&format!("[surface_plants]\n{assignment}")).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn surface_plants_presets_preserve_opt_in_and_explicit_overrides() {
+        for enabled in [false, true] {
+            for (preset, quality) in [
+                (Preset::Low, Quality::Low),
+                (Preset::Medium, Quality::Medium),
+                (Preset::High, Quality::High),
+                (Preset::Ultra, Quality::High),
+            ] {
+                let mut config = RequestedGraphics::default();
+                config.surface_plants.enabled = enabled;
+                config.apply_preset(preset);
+                assert_eq!(
+                    config.surface_plants,
+                    SurfacePlantsSettings { enabled, quality }
+                );
+                assert!(!config.is_custom());
+                config.surface_plants.quality = if quality == Quality::Low {
+                    Quality::High
+                } else {
+                    Quality::Low
+                };
+                assert!(config.is_custom());
+                assert_eq!(config.effective_preset_label(), "custom");
+                let before_custom = config.surface_plants;
+                config.apply_preset(Preset::Custom);
+                assert_eq!(config.surface_plants, before_custom);
+            }
+        }
+        let override_config = RequestedGraphics::from_toml(
+            "preset='high'\n[surface_plants]\nenabled=true\nquality='low'",
+        )
+        .unwrap();
+        assert!(override_config.surface_plants.enabled);
+        assert_eq!(override_config.surface_plants.quality, Quality::Low);
+        assert!(override_config.is_custom());
     }
 
     #[test]

@@ -78,6 +78,9 @@ The checked-in vertical slice currently contains:
   A plant-only callback now borrows the canonical attached field for 32 m ground
   and placement slope, material-consistent ecological cover and coarse lake/ocean
   rejection; this CPU foundation is not runtime instance streaming or rendering.
+  A disabled-by-default `[surface_plants]` settings policy is prepared for a
+  bounded native consumer ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); settings
+  alone do not render plants or establish physical obstacle ownership.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

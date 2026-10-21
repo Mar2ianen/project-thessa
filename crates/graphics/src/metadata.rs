@@ -37,6 +37,28 @@ pub struct SettingMeta {
 pub fn describe() -> Vec<SettingMeta> {
     let mut metadata = vec![
         SettingMeta {
+            path: "surface_plants.enabled",
+            label: "Prototype surface plants",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Prepared bounded survey-only policy, awaiting native consumer integration. Disabled resolves density and budgets to zero; skip sampler, jobs and mesh work. Not production vegetation or collision.",
+        },
+        SettingMeta {
+            path: "surface_plants.quality",
+            label: "Prototype plant density",
+            kind: SettingKind::Enum,
+            range: "low | medium | high",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Nested density subsets 0.25/0.5/1.0; fixed 4096-candidate/4096-item ceiling at every tier. Identity, habitat and ground height are independent of quality.",
+        },
+        SettingMeta {
             path: "terrain_topology.enabled",
             label: "Native conforming terrain",
             kind: SettingKind::Bool,
@@ -961,6 +983,31 @@ pub fn describe() -> Vec<SettingMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surface_plants_descriptors_match_the_requested_schema() {
+        let metadata = describe();
+        let plants: Vec<_> = metadata
+            .iter()
+            .filter(|meta| meta.path.starts_with("surface_plants."))
+            .collect();
+        assert_eq!(plants.len(), 2);
+        for (path, kind, range) in [
+            ("surface_plants.enabled", SettingKind::Bool, "true | false"),
+            (
+                "surface_plants.quality",
+                SettingKind::Enum,
+                "low | medium | high",
+            ),
+        ] {
+            let meta = plants.iter().find(|meta| meta.path == path).unwrap();
+            assert_eq!(meta.kind, kind);
+            assert_eq!(meta.range, range);
+            assert!(meta.restart_required);
+            assert!(meta.advanced);
+            assert!(!meta.description.is_empty());
+        }
+    }
 
     #[test]
     fn descriptors_cover_mode_switch_and_budgets() {

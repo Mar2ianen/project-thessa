@@ -98,6 +98,7 @@ do not update in place).
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🔵 prepared settings policy | opt-in requested/resolved plant density tiers, bounded budgets, zero-budget disabled state and metadata tests | native sampler/mesh consumer, actual hardware/visual checks, instance streaming and collision ownership |
 
 The [WORLD00 coastal baseline](72_WORLD_SURFACE_BASELINE.md) now identifies an
 actual canonical zero crossing and a 2×2 km sampled land/water neighborhood,

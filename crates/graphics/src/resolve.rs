@@ -248,6 +248,19 @@ impl ResolvedTerrainTopology {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    /// Prepared survey-only plant policy. False must skip sampler, jobs and
+    /// mesh work; resolving these values does not allocate instance resources.
+    #[serde(default)]
+    pub surface_plants_enabled: bool,
+    /// Nested visual density subset, never a change to habitat, height or IDs.
+    #[serde(default)]
+    pub surface_plants_density_scale: f64,
+    /// One fixed L14 window contains 4096 canonical candidate cells.
+    #[serde(default)]
+    pub surface_plants_max_candidates: u64,
+    /// Output ceiling, not a reservation or a target population count.
+    #[serde(default)]
+    pub surface_plants_max_items: u32,
     #[serde(default)]
     pub terrain_topology: ResolvedTerrainTopology,
     pub instruments: ResolvedInstruments,
@@ -577,6 +590,26 @@ impl ResolvedGraphicsSettings {
             ));
         }
         Self {
+            surface_plants_enabled: requested.surface_plants.enabled,
+            surface_plants_density_scale: if !requested.surface_plants.enabled {
+                0.0
+            } else {
+                match requested.surface_plants.quality {
+                    Quality::Low => 0.25,
+                    Quality::Medium => 0.5,
+                    Quality::High => 1.0,
+                }
+            },
+            surface_plants_max_candidates: if requested.surface_plants.enabled {
+                4096
+            } else {
+                0
+            },
+            surface_plants_max_items: if requested.surface_plants.enabled {
+                4096
+            } else {
+                0
+            },
             instruments: resolve_instruments(requested.instruments),
             ocean: requested.ocean.clone(),
             ocean_size: match requested.ocean.quality {
@@ -816,6 +849,22 @@ impl ResolvedGraphicsSettings {
     pub fn as_meta_map(&self) -> BTreeMap<String, String> {
         let mut map = BTreeMap::new();
         map.insert(
+            "surface_plants_enabled".into(),
+            self.surface_plants_enabled.to_string(),
+        );
+        map.insert(
+            "surface_plants_density_scale".into(),
+            self.surface_plants_density_scale.to_string(),
+        );
+        map.insert(
+            "surface_plants_max_candidates".into(),
+            self.surface_plants_max_candidates.to_string(),
+        );
+        map.insert(
+            "surface_plants_max_items".into(),
+            self.surface_plants_max_items.to_string(),
+        );
+        map.insert(
             "surface_quality".into(),
             format!("{:?}", self.surface_quality).to_lowercase(),
         );
@@ -992,6 +1041,91 @@ impl ResolvedGraphicsSettings {
 mod tests {
     use super::*;
     use crate::settings::RequestedGraphics;
+
+    #[test]
+    fn surface_plants_tiers_disable_metadata_and_isolation() {
+        for supported in [None, Some(false), Some(true)] {
+            let caps = Capabilities {
+                material_compact_supported: supported,
+                terrain_conforming_supported: supported,
+                terrain_mesh_supported: supported,
+                ray_query_supported: supported,
+                is_discrete_gpu: supported,
+                hdr_render_target_supported: supported,
+            };
+            // Exclude preset-label changes so complete resolved equality pins
+            // isolation, including RT, shadow, topology and fallback notes.
+            let mut request = RequestedGraphics {
+                preset: crate::Preset::Custom,
+                ..Default::default()
+            };
+            let baseline = ResolvedGraphicsSettings::from_requested(&request, &caps);
+            assert!(!baseline.surface_plants_enabled);
+            assert_eq!(baseline.surface_plants_density_scale, 0.0);
+            assert_eq!(baseline.surface_plants_max_candidates, 0);
+            assert_eq!(baseline.surface_plants_max_items, 0);
+            for (quality, density) in [
+                (Quality::Low, 0.25),
+                (Quality::Medium, 0.5),
+                (Quality::High, 1.0),
+            ] {
+                request.surface_plants.quality = quality;
+                for enabled in [false, true] {
+                    request.surface_plants.enabled = enabled;
+                    let resolved = ResolvedGraphicsSettings::from_requested(&request, &caps);
+                    let expected_density = if enabled { density } else { 0.0 };
+                    let expected_budget = if enabled { 4096 } else { 0 };
+                    assert_eq!(resolved.surface_plants_enabled, enabled);
+                    assert_eq!(resolved.surface_plants_density_scale, expected_density);
+                    assert_eq!(resolved.surface_plants_max_candidates, expected_budget);
+                    assert_eq!(resolved.surface_plants_max_items, expected_budget as u32);
+                    let meta = resolved.as_meta_map();
+                    assert_eq!(meta["surface_plants_enabled"], enabled.to_string());
+                    assert_eq!(
+                        meta["surface_plants_density_scale"],
+                        expected_density.to_string()
+                    );
+                    assert_eq!(
+                        meta["surface_plants_max_candidates"],
+                        expected_budget.to_string()
+                    );
+                    assert_eq!(
+                        meta["surface_plants_max_items"],
+                        expected_budget.to_string()
+                    );
+                    assert_eq!(
+                        toml::from_str::<ResolvedGraphicsSettings>(
+                            &toml::to_string(&resolved).unwrap()
+                        )
+                        .unwrap(),
+                        resolved
+                    );
+                    let mut unrelated = resolved;
+                    unrelated.surface_plants_enabled = false;
+                    unrelated.surface_plants_density_scale = 0.0;
+                    unrelated.surface_plants_max_candidates = 0;
+                    unrelated.surface_plants_max_items = 0;
+                    assert_eq!(unrelated, baseline);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn surface_plants_legacy_resolved_capture_defaults_to_zero_work() {
+        let baseline = ResolvedGraphicsSettings::default();
+        let mut legacy = toml::Value::try_from(&baseline).unwrap();
+        for key in [
+            "surface_plants_enabled",
+            "surface_plants_density_scale",
+            "surface_plants_max_candidates",
+            "surface_plants_max_items",
+        ] {
+            legacy.as_table_mut().unwrap().remove(key).unwrap();
+        }
+        let restored: ResolvedGraphicsSettings = legacy.try_into().unwrap();
+        assert_eq!(restored, baseline);
+    }
 
     #[test]
     fn terrain_environment_quadrature_follows_resolved_material_policy() {

@@ -213,6 +213,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Native: pre-exposed RGBA16Float scene plus Reinhard to SDR before HUD; unsupported adapters fall back to direct LDR. Restart required.",
         },
         SettingMeta {
+            path: "temporal.motion_vectors",
+            label: "Native motion-vector diagnostics",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Produces native-resolution camera-motion vectors from stored scene depth before plume/cloud overlays. Ocean and all rigid meshes are explicitly invalid until previous object motion exists. No jitter, TAA or visible change yet; disabled allocates no motion target or pipeline. Requires HDR, otherwise falls back to off.",
+        },
+        SettingMeta {
             path: "renderer.bloom",
             label: "Bloom",
             kind: SettingKind::Bool,

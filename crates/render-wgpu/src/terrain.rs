@@ -114,6 +114,7 @@ struct ShadowCacheKey {
 /// Persistent GPU terrain working set. Regular-patch geometry is generated at
 /// page publication; opt-in conforming geometry is emitted at encode_surface.
 pub struct TerrainRenderer {
+    motion_vectors: bool,
     topology: Option<crate::terrain_topology::TerrainTopology>,
     topology_reason: Option<String>,
     ocean: Option<crate::ocean::OceanField>,
@@ -702,7 +703,28 @@ impl TerrainRenderer {
         } else {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
         }
+        // Displacement samples material at vertices, independently of this
+        // fragment's filtered material. Conservatively mask the whole height
+        // admission band, including rough/dry fallback fragments at its edges.
+        let temporal_alpha = if settings.is_some_and(|s| s.temporal_motion_vectors) {
+            format!(
+                "return vec4(radiance * view.exposure, select(1.0, 0.0, max(water_material, spectral_ocean.a) > 0.0{}));",
+                if ocean.is_some() && ocean_settings.geometry_patches > 0 {
+                    " || input.height_m < 1.0"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            "return vec4(radiance * view.exposure, 1.0);".into()
+        };
         let raster_source = shaders::CBT_RASTER_WGSL
+            // Only the opt-in native diagnostic repurposes scene alpha. The
+            // shared/legacy shader and disabled native output remain intact.
+            .replace(
+                "return vec4(radiance * view.exposure, 1.0);",
+                &temporal_alpha,
+            )
             .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
             .replace(
                 "const MATERIAL_NORMALS_ENABLED: bool = false;",
@@ -911,6 +933,7 @@ impl TerrainRenderer {
             last_shadow_draws: Default::default(),
             sky: None,
             plume: None,
+            motion_vectors: settings.is_some_and(|s| s.temporal_motion_vectors),
             sky_visible: settings.is_none_or(|s| s.sky_dome),
             format,
             shadow_receiver: shadows
@@ -1933,9 +1956,24 @@ impl TerrainRenderer {
     }
 
     /// Unified scene pass with explicit control over depth buffer store.
-    /// Passing `store_depth: false` configures `StoreOp::Discard` to save memory
-    /// bus bandwidth when the depth buffer is not consumed by downstream passes.
+    /// Passing `store_depth: false` permits `StoreOp::Discard` when neither
+    /// resolved motion diagnostics nor an active plume consumes scene depth.
     pub fn encode_scene_ops(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        mesh: Option<&crate::mesh::MeshRenderer>,
+        store_depth: bool,
+    ) {
+        self.encode_opaque_scene_ops(encoder, color, depth, mesh, store_depth);
+        self.encode_plume(encoder, color, depth);
+    }
+
+    /// Opaque scene plus far-depth sky background, without translucent plume.
+    /// Motion diagnostics must run after this pass with `store_depth = true`,
+    /// before plume or cloud overlays can contaminate the static-surface mask.
+    pub fn encode_opaque_scene_ops(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
@@ -1977,7 +2015,10 @@ impl TerrainRenderer {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: if store_depth || self.plume.as_ref().is_some_and(|p| p.active()) {
+                    store: if store_depth
+                        || self.motion_vectors
+                        || self.plume.as_ref().is_some_and(|p| p.active())
+                    {
                         wgpu::StoreOp::Store
                     } else {
                         wgpu::StoreOp::Discard
@@ -2013,6 +2054,15 @@ impl TerrainRenderer {
             sky.draw(&mut pass);
         }
         drop(pass);
+    }
+
+    /// Translucent, depth-clipped plume, after opaque motion diagnostics.
+    pub fn encode_plume(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) {
         if let Some(plume) = &self.plume {
             plume.encode(encoder, color, depth);
         }

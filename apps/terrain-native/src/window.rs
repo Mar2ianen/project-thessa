@@ -19,6 +19,7 @@ struct State {
     renderer: TerrainRenderer,
     sky_layers: crate::sky_layers::SkyLayers,
     display: thessa_render_wgpu::display::DisplayTransform,
+    motion: Option<thessa_render_wgpu::motion::SceneMotion>,
     mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
     drawable: bool,
@@ -101,6 +102,16 @@ impl State {
             display.target_bytes()
         );
         let depth = depth(&backend, config.width, config.height);
+        let motion = thessa_render_wgpu::motion::SceneMotion::new(
+            &backend,
+            &resolved,
+            [config.width, config.height],
+        )?;
+        eprintln!(
+            "native motion diagnostics: enabled={} target_bytes={}; opaque-only, no TAA/jitter",
+            motion.is_some(),
+            motion.as_ref().map_or(0, |m| m.target_bytes()),
+        );
         #[cfg(feature = "hud")]
         let hud = hud_enabled.then(|| {
             let gpu = crate::hud::Hud::new(&backend, config.format);
@@ -123,6 +134,7 @@ impl State {
             renderer,
             sky_layers,
             display,
+            motion,
             mesh_renderer,
             depth,
             drawable: size.width > 0 && size.height > 0,
@@ -144,6 +156,7 @@ impl State {
             scene,
             &self.display,
             &self.sky_layers,
+            self.motion.as_ref(),
         );
         metadata.display.vsync = scene.requested.renderer.vsync;
         // Empty base preserves the legacy relative "stem.json" cwd contract.
@@ -164,6 +177,12 @@ impl State {
         self.config.height = height;
         self.surface.configure(&self.backend.device, &self.config);
         self.depth = depth(&self.backend, width, height);
+        if let Some(motion) = &mut self.motion
+            && let Err(error) = motion.resize(&self.backend, [width, height])
+        {
+            self.drawable = false;
+            eprintln!("motion resize rejected: {error}");
+        }
     }
 
     fn draw(
@@ -283,9 +302,10 @@ impl State {
             self.exposure,
             now_s,
         )?;
+        let view = scene.view(self.config.width, self.config.height, self.exposure);
         self.renderer.update_view_for_extent(
             &self.backend,
-            &scene.view(self.config.width, self.config.height, self.exposure),
+            &view,
             [self.config.width, self.config.height],
         )?;
         self.renderer.update_shadows(
@@ -336,15 +356,26 @@ impl State {
         if let Some(mesh) = &mut self.mesh_renderer {
             mesh.encode_rt(&mut encoder);
         }
-        self.renderer.encode_scene_ops(
+        self.renderer.encode_opaque_scene_ops(
             &mut encoder,
             self.display.scene_color(&color),
             &self.depth,
             self.mesh_renderer
                 .as_ref()
                 .and_then(crate::scene::SceneMeshes::opaque),
-            self.sky_layers.enabled(),
+            self.sky_layers.enabled() || self.motion.is_some(),
         );
+        if let Some(motion) = &self.motion {
+            motion.encode(
+                &self.backend,
+                &mut encoder,
+                &self.depth,
+                self.display.scene_color(&color),
+                &view,
+            )?;
+        }
+        self.renderer
+            .encode_plume(&mut encoder, self.display.scene_color(&color), &self.depth);
         self.sky_layers.encode(
             &self.backend,
             &mut encoder,
@@ -382,6 +413,9 @@ impl State {
                 .into_iter()
                 .chain(std::iter::once(encoder.finish())),
         );
+        if let Some(motion) = &mut self.motion {
+            motion.commit(view);
+        }
         self.backend.queue.present(frame);
         self.submitted_frames += 1;
         // Overlay wall includes present/vsync wait (same definition as the

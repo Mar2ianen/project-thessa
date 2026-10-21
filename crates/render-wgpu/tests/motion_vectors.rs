@@ -9,6 +9,7 @@ use thessa_render_wgpu::{
     motion::{BYTES_PER_PIXEL, FORMAT, MotionParams, MotionVectorPass},
     view::{ViewParams, ViewUniformBlock},
 };
+use wgpu::util::DeviceExt;
 
 const SIZE: u32 = 64;
 
@@ -108,6 +109,29 @@ fn static_motion_matches_cpu_reprojection_and_marks_sky_invalid() {
         view_formats: &[],
     });
     let output_view = output.create_view(&Default::default());
+    let pixels = (0..SIZE * SIZE)
+        .flat_map(|i| [0, 0, 0, if i % SIZE >= 56 { 0 } else { 255 }])
+        .collect::<Vec<_>>();
+    let mask = backend.device.create_texture_with_data(
+        &backend.queue,
+        &wgpu::TextureDescriptor {
+            label: Some("static-dynamic-mask-fixture"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &pixels,
+    );
+    let mask_view = mask.create_view(&Default::default());
     let pipeline = depth_pipeline(&backend);
     let pass = MotionVectorPass::new(&backend);
 
@@ -125,6 +149,7 @@ fn static_motion_matches_cpu_reprojection_and_marks_sky_invalid() {
         previous_clip_from_world: previous.clip_from_world,
         camera_offset: Vec3::new(-0.1, 0.0, 0.0),
         extent: [SIZE, SIZE],
+        previous_valid: true,
     };
 
     let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -145,8 +170,15 @@ fn static_motion_matches_cpu_reprojection_and_marks_sky_invalid() {
         render.set_pipeline(&pipeline);
         render.draw(0..3, 0..1);
     }
-    pass.encode(&backend, &mut encoder, &depth_view, &output_view, params)
-        .unwrap();
+    pass.encode(
+        &backend,
+        &mut encoder,
+        &depth_view,
+        &mask_view,
+        &output_view,
+        params,
+    )
+    .unwrap();
 
     let stride = SIZE * BYTES_PER_PIXEL;
     let readback = backend.device.create_buffer(&wgpu::BufferDescriptor {
@@ -203,6 +235,11 @@ fn static_motion_matches_cpu_reprojection_and_marks_sky_invalid() {
     let invalid = decode(10, 10);
     assert_eq!(&invalid[..2], &[0.0, 0.0]);
     assert!(invalid[3] < 0.5);
+    assert_eq!(
+        decode(60, 50),
+        [0.0; 4],
+        "dynamic samples must be invalid even at finite depth"
+    );
 
     let (px, py) = (50, 50);
     let gpu = decode(px, py);
@@ -250,4 +287,415 @@ fn half_to_f32(bits: u16) -> f32 {
         sign | ((exponent + 127 - 15) << 23) | (mantissa << 13)
     };
     f32::from_bits(value)
+}
+
+fn read_texture(backend: &Backend, texture: &wgpu::Texture, bytes_per_pixel: u32) -> Vec<u8> {
+    let stride = (texture.width() * bytes_per_pixel).div_ceil(256) * 256;
+    let buffer = backend.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("scene-motion-oracle-readback"),
+        size: u64::from(stride * texture.height()),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(texture.height()),
+            },
+        },
+        texture.size(),
+    );
+    backend.queue.submit([encoder.finish()]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+        tx.send(result).unwrap()
+    });
+    backend
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    rx.recv().unwrap().unwrap();
+    let data = buffer.get_mapped_range(..).unwrap();
+    let result = data
+        .chunks_exact(stride as usize)
+        .flat_map(|row| {
+            row[..(texture.width() * bytes_per_pixel) as usize]
+                .iter()
+                .copied()
+        })
+        .collect();
+    drop(data);
+    buffer.unmap();
+    result
+}
+
+fn halves(bytes: &[u8]) -> Vec<[f32; 4]> {
+    bytes
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|pixel| {
+            std::array::from_fn(|c| {
+                half_to_f32(u16::from_le_bytes([pixel[2 * c], pixel[2 * c + 1]]))
+            })
+        })
+        .collect()
+}
+
+/// Real primary shaders, including the material's early low-quality return,
+/// stored forward-Z scene depth, spectral displacement, and conforming updates.
+/// The independent oracle uses f64 source views + the actual quantized depth,
+/// not the GPU uniform inverse or triangle/TileKey identity.
+#[test]
+fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
+    use thessa_graphics::{Quality, RayTracingRequest, RequestedGraphics};
+    use thessa_rcbt_core::{
+        HeightPage,
+        lighting::SurfaceLighting,
+        tile_anchor::{TileAnchor, TileKey},
+    };
+    use thessa_render_core::mesh::*;
+    use thessa_render_wgpu::{
+        display::HDR_FORMAT,
+        mesh::{MeshRenderer, SurfaceSettings},
+        motion::SceneMotion,
+        terrain::{TerrainCapacity, TerrainPatch, TerrainRenderer},
+    };
+    let Some(backend) = backend() else {
+        return;
+    };
+    let make_target = |format| {
+        backend.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene-motion-oracle"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let color = make_target(HDR_FORMAT);
+    let depth = make_target(wgpu::TextureFormat::Depth32Float);
+    let color_view = color.create_view(&Default::default());
+    let depth_view = depth.create_view(&Default::default());
+    let radius = 3_200_000.0;
+    let mut request = RequestedGraphics::default();
+    request.renderer.ray_tracing = RayTracingRequest::Off;
+    request.renderer.specular_reflections = false;
+    request.renderer.terrain_normal_maps = false;
+    request.shadows.enabled = false;
+    request.terrain_topology.quality = Quality::Low;
+    request.ocean.quality = Quality::Low;
+    request.ocean.significant_height_m = 0.1;
+    request.ocean.geometry_distance_m = 20000.0;
+    let source = MeshAsset {
+        primitives: vec![Primitive {
+            vertices: [[-0.5, -0.5, -4.0], [0.5, -0.5, -4.0], [0.0, 0.5, -4.0]]
+                .map(|position| Vertex {
+                    position,
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0; 2],
+                })
+                .to_vec(),
+            indices: vec![0, 1, 2],
+            material: 0,
+        }],
+        materials: vec![Material {
+            double_sided: true,
+            ..Default::default()
+        }],
+        textures: vec![],
+        images: vec![],
+    };
+    let lights = SurfaceLighting {
+        ambient_lux: [1.0; 4],
+        ..Default::default()
+    };
+    for conforming in [false, true] {
+        request.terrain_topology.enabled = conforming;
+        for (ocean, agl, mesh_quality, water_material_loaded) in [
+            (false, 2.0, Quality::Low, false),
+            (false, 50.0, Quality::High, false),
+            (false, 400_000.0, Quality::Low, false),
+            (true, 50.0, Quality::High, false),
+            (true, 50.0, Quality::Low, true),
+        ] {
+            request.ocean.enabled = ocean;
+            let page = HeightPage::bake(&[if ocean { 0.0 } else { 100.0 }; 4], 2, 0.001).unwrap();
+            let keys = if !conforming && ocean {
+                // Near pages resolve spectral displacement; root pages reduce
+                // the wave field to its zero-mean DC mode by footprint policy.
+                (511..513)
+                    .flat_map(|y| (511..513).map(move |x| TileKey::new(4, 10, x, y).unwrap()))
+                    .collect::<Vec<_>>()
+            } else {
+                (0..6)
+                    .map(|face| TileKey::new(face, 0, 0, 0).unwrap())
+                    .collect()
+            };
+            let patches = keys
+                .into_iter()
+                .map(|key| TerrainPatch {
+                    anchor: TileAnchor::new(key, radius).unwrap(),
+                    page: &page,
+                })
+                .collect::<Vec<_>>();
+            let make_view = |x: f64| ViewParams {
+                world_from_view: DMat4::from_translation(DVec3::new(
+                    x,
+                    0.0,
+                    radius + if ocean { 0.0 } else { 100.0 } + agl,
+                )),
+                world_position_m: DVec3::new(
+                    x,
+                    0.0,
+                    radius + if ocean { 0.0 } else { 100.0 } + agl,
+                ),
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                    0.9,
+                    1.0,
+                    if agl < 3.0 { 0.1 } else { 1.0 },
+                    1e8,
+                ),
+                exposure: 1.0,
+            };
+            let mut reference = None;
+            for enabled in [false, true] {
+                request.temporal.motion_vectors = enabled;
+                let settings = backend.resolve_graphics(&request);
+                let mut motion = SceneMotion::new(&backend, &settings, [SIZE, SIZE]).unwrap();
+                assert_eq!(motion.is_some(), enabled);
+                let mut terrain = TerrainRenderer::with_capacity_lighting_and_ocean(
+                    &backend,
+                    &patches,
+                    HDR_FORMAT,
+                    TerrainCapacity {
+                        patches: 6,
+                        height_grid_size: 2,
+                        material_layers: 6,
+                    },
+                    Some(&settings),
+                    Some(thessa_render_core::ocean::SeaState {
+                        gravity_m_s2: 9.81,
+                        depth_m: 100.0,
+                        wind_speed_m_s: 10.0,
+                        wind_direction_rad: 0.0,
+                        significant_height_m: 0.1,
+                        seed: 17,
+                    }),
+                )
+                .unwrap();
+                if water_material_loaded {
+                    let ids = (8..14).collect::<Vec<_>>();
+                    let pages = ids
+                        .iter()
+                        .map(|&id| {
+                            (
+                                id,
+                                (
+                                    1,
+                                    thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8(
+                                        [10, 40, 80, 0].repeat(128 * 128),
+                                    )
+                                    .unwrap(),
+                                ),
+                            )
+                        })
+                        .collect();
+                    terrain.update_materials(&backend, &ids, &pages).unwrap();
+                }
+                let mut mesh = MeshRenderer::with_surface(
+                    &backend,
+                    &source,
+                    SurfaceSettings {
+                        format: HDR_FORMAT,
+                        capacity: 1,
+                        quality: mesh_quality,
+                        reflections: false,
+                        shadows: None,
+                        ray_tracing: Some(&settings),
+                    },
+                )
+                .unwrap();
+                terrain.update_lighting(&backend, &lights).unwrap();
+                let previous = make_view(0.0);
+                // Settle the actual persistent CBT, not a special test raster.
+                for _ in 0..24 {
+                    terrain
+                        .update_view_for_extent(&backend, &previous, [SIZE, SIZE])
+                        .unwrap();
+                    terrain.update_ocean(&backend, 0.0).unwrap();
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    terrain.encode_surface(&mut encoder);
+                    backend.queue.submit([encoder.finish()]);
+                }
+                if ocean {
+                    assert!(terrain.ocean_stats().geometry_bytes > 0);
+                    if !conforming {
+                        assert!(terrain.ocean_stats().deformed_patches > 0);
+                    }
+                }
+                let mut current = make_view(agl * 0.005);
+                current.world_from_view *= DMat4::from_rotation_y(0.003);
+                let mut rgb = Vec::new();
+                for frame in 0..6 {
+                    let mut view = if frame == 0 { previous } else { current };
+                    if frame >= 4 {
+                        view.exposure = 2.0;
+                    }
+                    if frame == 5 {
+                        view.clip_from_view.x_axis.x *= 1.01;
+                    }
+                    terrain
+                        .update_view_for_extent(&backend, &view, [SIZE, SIZE])
+                        .unwrap();
+                    terrain.update_ocean(&backend, frame as f64 * 0.1).unwrap();
+                    mesh.update(
+                        &backend,
+                        &view,
+                        &lights,
+                        &[MeshInstance {
+                            position_m: view.world_position_m,
+                            rotation: glam::DQuat::IDENTITY,
+                            scale: if agl < 3.0 { 0.1 } else { 1.0 },
+                        }],
+                    )
+                    .unwrap();
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    terrain.encode_surface(&mut encoder);
+                    // false deliberately: resolved diagnostics MUST force Store.
+                    terrain.encode_opaque_scene_ops(
+                        &mut encoder,
+                        &color_view,
+                        &depth_view,
+                        Some(&mesh),
+                        !enabled,
+                    );
+                    if let Some(motion) = &motion {
+                        motion
+                            .encode(&backend, &mut encoder, &depth_view, &color_view, &view)
+                            .unwrap();
+                    }
+                    terrain.encode_plume(&mut encoder, &color_view, &depth_view);
+                    backend.queue.submit([encoder.finish()]);
+                    let scene_bytes = read_texture(&backend, &color, 8);
+                    rgb.extend(
+                        scene_bytes
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
+                            .flat_map(|p| p[..6].iter().copied()),
+                    );
+                    if let Some(motion) = &mut motion {
+                        assert_eq!(motion.target_bytes(), u64::from(SIZE * SIZE * 8));
+                        let vectors = halves(&read_texture(&backend, motion.texture(), 8));
+                        if frame != 1 {
+                            assert!(
+                                vectors.iter().all(|&p| p == [0.0; 4]),
+                                "initial, uncommitted, reset/resize frames must be invalid"
+                            );
+                        } else {
+                            let scene = halves(&scene_bytes);
+                            let depths = read_texture(&backend, &depth, 4);
+                            let mut valid = 0;
+                            let mut invalid_finite = 0;
+                            let mut max_error_px = 0.0f64;
+                            for (i, &gpu) in vectors.iter().enumerate() {
+                                let z = f32::from_le_bytes(
+                                    depths[4 * i..4 * i + 4].try_into().unwrap(),
+                                );
+                                if z >= 1.0 || scene[i][3] < 1.0 {
+                                    assert_eq!(gpu, [0.0; 4]);
+                                    invalid_finite += usize::from(z < 1.0);
+                                    continue;
+                                }
+                                valid += 1;
+                                assert_eq!(gpu[3], 1.0);
+                                let uv = [
+                                    (i as u32 % SIZE) as f64 + 0.5,
+                                    (i as u32 / SIZE) as f64 + 0.5,
+                                ]
+                                .map(|v| v / SIZE as f64);
+                                let world = world_from_depth(
+                                    view.world_from_view * view.clip_from_view.inverse(),
+                                    uv,
+                                    f64::from(z),
+                                )
+                                .unwrap();
+                                let clip = previous.clip_from_view
+                                    * previous.world_from_view.inverse()
+                                    * world.extend(1.0);
+                                let expected = [
+                                    clip.x / clip.w * 0.5 + 0.5 - uv[0],
+                                    0.5 - clip.y / clip.w * 0.5 - uv[1],
+                                ];
+                                for c in 0..2 {
+                                    max_error_px = max_error_px
+                                        .max((f64::from(gpu[c]) - expected[c]).abs() * SIZE as f64);
+                                }
+                            }
+                            assert!(
+                                invalid_finite > 10,
+                                "mesh mask must cover real finite depth"
+                            );
+                            if ocean {
+                                assert_eq!(
+                                    valid, 0,
+                                    "displaced ocean must never publish static motion even with rough fallback material"
+                                );
+                            } else {
+                                assert!(valid > 1000);
+                            }
+                            assert!(
+                                max_error_px < 0.02,
+                                "planet-scale f64 oracle error {max_error_px} px"
+                            );
+                            println!(
+                                "scene_motion conforming={conforming} ocean={ocean} camera_altitude_above_page_m={agl} valid={valid} invalid_finite={invalid_finite} max_error_px={max_error_px:.6}"
+                            );
+                        }
+                        // Frame 0 intentionally remains uncommitted until its
+                        // readback above. Encode does not advance the source.
+                        if frame == 0 {
+                            motion.commit(previous);
+                        }
+                        if frame == 1 {
+                            motion.reset();
+                        }
+                        if frame == 2 {
+                            motion.commit(current);
+                            assert!(motion.resize(&backend, [0, SIZE]).is_err());
+                            motion.resize(&backend, [32, 32]).unwrap();
+                            motion.resize(&backend, [SIZE, SIZE]).unwrap();
+                        }
+                        if frame >= 3 {
+                            motion.commit(view);
+                        }
+                    }
+                }
+                if enabled {
+                    assert_eq!(
+                        reference.as_ref().unwrap(),
+                        &rgb,
+                        "motion diagnostics must not change even HDR RGB bits"
+                    );
+                } else {
+                    reference = Some(rgb);
+                }
+            }
+        }
+    }
 }

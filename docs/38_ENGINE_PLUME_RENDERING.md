@@ -512,8 +512,11 @@ measurement. Resource bounds per allocated consumer are two pipelines,
 impostor and unit-cone vertices. Counters report submitted draws, march budget
 and frame/profile/texture upload bytes, not visible-pixel counts or GPU times.
 The headless diagnostic prints them as `native_plume`.
-Capture metadata uses `native-topology-v6-plume`: the existing
-`render.scene_classify_and_raster` interval now includes this active plume pass.
+The initial checkpoint used `native-topology-v6-plume`, with plume inside
+`render.scene_classify_and_raster`. Current `native-topology-v7-motion`
+captures isolate plume plus translucent sky in `render.scene_overlays`, after
+the optional opaque-only motion diagnostic (doc 76). Sum opaque raster and
+scene overlays before comparing the old combined scope.
 Both capture adapters explicitly record native nozzle lighting as unapplied /
 unavailable, independently of the shared requested/resolved light toggle.
 

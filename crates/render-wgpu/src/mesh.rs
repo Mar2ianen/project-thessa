@@ -34,7 +34,8 @@ pub struct SurfaceSettings<'a> {
     /// Specular reflections (terrain and mesh) on/off.
     pub reflections: bool,
     pub shadows: Option<&'a crate::shadows::ShadowAtlas>,
-    /// Resolved graphics settings; `None` keeps the raster-only path.
+    /// Resolved graphics settings for RT and the optional temporal mask;
+    /// `None` keeps raster-only rendering with ordinary opaque alpha.
     pub ray_tracing: Option<&'a thessa_graphics::ResolvedGraphicsSettings>,
 }
 
@@ -396,7 +397,17 @@ impl MeshRenderer {
                         || crate::shadows::NO_SHADOWS.into(),
                         |_| crate::shadows::receiver_shader(2)
                     ),
-                    include_str!("mesh.wgsl")
+                    // Every mesh is conservatively motion-invalid until its
+                    // previous pose is available. Replace both early and full
+                    // material returns; never change RGB or the disabled path.
+                    include_str!("mesh.wgsl").replace(
+                        "view.exposure,1.0)",
+                        if ray_tracing.is_some_and(|s| s.temporal_motion_vectors) {
+                            "view.exposure,0.0)"
+                        } else {
+                            "view.exposure,1.0)"
+                        },
+                    )
                 )
                 .into(),
             ),

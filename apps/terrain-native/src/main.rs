@@ -565,6 +565,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         );
         let exposure = manual_exposure(resolved.exposure_ev100);
+        let mut motion =
+            thessa_render_wgpu::motion::SceneMotion::new(&backend, &resolved, [width, height])?;
+        println!(
+            "native_motion_vectors={} target_bytes={} opaque_only=true taa=false jitter=false",
+            motion.is_some(),
+            motion.as_ref().map_or(0, |m| m.target_bytes()),
+        );
         let stream_started = Instant::now();
         while stream_started.elapsed().as_secs_f64() < prestream_seconds {
             scene.tick(
@@ -646,11 +653,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 stream_started.elapsed().as_secs_f64(),
             )?;
             let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
-            renderer.update_view_for_extent(
-                &backend,
-                &scene.view(width, height, exposure),
-                [width, height],
-            )?;
+            let view = scene.view(width, height, exposure);
+            renderer.update_view_for_extent(&backend, &view, [width, height])?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
             scene.update_plume(&backend, &mut renderer, width, height, exposure)?;
             scene.update_sky_layers(&backend, &sky_layers, width, height, exposure)?;
@@ -681,12 +685,32 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 2);
             }
-            renderer.encode_scene_ops(
+            renderer.encode_opaque_scene_ops(
                 &mut encoder,
                 display.scene_color(&target.color),
                 &target.depth,
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
-                sky_layers.enabled(),
+                sky_layers.enabled() || motion.is_some(),
+            );
+            if let Some(perf) = &perf {
+                perf.mark(&mut encoder, 3);
+            }
+            if let Some(motion) = &motion {
+                motion.encode(
+                    &backend,
+                    &mut encoder,
+                    &target.depth,
+                    display.scene_color(&target.color),
+                    &view,
+                )?;
+            }
+            if let Some(perf) = &perf {
+                perf.mark(&mut encoder, 4);
+            }
+            renderer.encode_plume(
+                &mut encoder,
+                display.scene_color(&target.color),
+                &target.depth,
             );
             sky_layers.encode(
                 &backend,
@@ -695,11 +719,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &target.depth,
             );
             if let Some(perf) = &perf {
-                perf.mark(&mut encoder, 3);
+                perf.mark(&mut encoder, 5);
             }
             display.encode(&mut encoder, &target.color);
             if let Some(perf) = &perf {
-                perf.mark(&mut encoder, 4);
+                perf.mark(&mut encoder, 6);
             }
             #[cfg(feature = "hud")]
             let commands = if let (Some(hud), Some(output)) = (&mut hud, hud_output) {
@@ -716,7 +740,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             #[cfg(not(feature = "hud"))]
             let commands = Vec::<wgpu::CommandBuffer>::new();
             if let Some(perf) = &perf {
-                perf.mark(&mut encoder, 5);
+                perf.mark(&mut encoder, 7);
                 perf.resolve(&mut encoder);
             }
             backend.queue.submit(
@@ -724,6 +748,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .into_iter()
                     .chain(std::iter::once(encoder.finish())),
             );
+            if let Some(motion) = &mut motion {
+                motion.commit(view);
+            }
             let cpu_submit_s = perf.as_ref().map(|_| start.elapsed().as_secs_f64());
             backend.device.poll(wgpu::PollType::wait_indefinitely())?;
             let wall_s = start.elapsed().as_secs_f64();
@@ -750,7 +777,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         timings.sort_by(f64::total_cmp);
         if let (Some(perf), Some(path)) = (&perf, &perf_capture) {
-            perf.write(path,&backend,&scene,&display,&sky_layers,width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step} clock={:?}",scene.flight_clock()))?;
+            perf.write(path,&backend,&scene,&display,&sky_layers,motion.as_ref(),width,height,format!("terrain-native vehicle_preview={vehicle_preview} live_flight={live_flight} server_flight={server_flight} sweep={sweep} hud={hud_enabled} prestream_s={prestream_seconds} sim_step_s={sim_step} clock={:?}",scene.flight_clock()))?;
         }
         streaming_timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];

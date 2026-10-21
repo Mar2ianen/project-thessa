@@ -7,7 +7,8 @@ struct MotionParams {
 
 @group(0) @binding(0) var<uniform> params: MotionParams;
 @group(0) @binding(1) var current_depth: texture_depth_2d;
-@group(0) @binding(2) var motion_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var scene_color: texture_2d<f32>;
+@group(0) @binding(3) var motion_out: texture_storage_2d<rgba16float, write>;
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -19,7 +20,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let pixel = vec2<f32>(id.xy) + vec2<f32>(0.5);
     let uv = pixel / vec2<f32>(extent);
     let depth = textureLoad(current_depth, vec2<i32>(id.xy), 0);
-    var valid = depth < 1.0;
+    // extent.z marks a committed previous rendered frame. Scene alpha is an
+    // explicit mask, never an inference from depth or a legitimate zero vector.
+    var valid = params.extent.z > 0.5 && depth >= 0.0 && depth < 1.0
+        && textureLoad(scene_color, vec2<i32>(id.xy), 0).a >= 1.0;
     var motion = vec2<f32>(0.0);
 
     if (valid) {
@@ -40,7 +44,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 motion = previous_uv - uv;
                 // A NaN comparison is false; reject it before publishing a
                 // vector that would poison history sampling.
-                valid = motion.x == motion.x && motion.y == motion.y;
+                valid = all(abs(motion) <= vec2<f32>(65504.0));
             }
         }
     }

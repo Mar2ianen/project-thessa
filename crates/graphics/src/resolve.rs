@@ -276,6 +276,8 @@ pub struct ResolvedGraphicsSettings {
     pub resolution_scale: f32,
     pub vsync: bool,
     pub hdr: bool,
+    #[serde(default)]
+    pub temporal_motion_vectors: bool,
     pub bloom: bool,
     pub exposure_ev100: f32,
     pub auto_exposure: bool,
@@ -492,6 +494,13 @@ impl ResolvedGraphicsSettings {
     pub fn from_requested(requested: &RequestedGraphics, caps: &Capabilities) -> Self {
         let mut notes = Vec::new();
         let hdr = requested.renderer.hdr && caps.hdr_render_target_supported != Some(false);
+        let temporal_motion_vectors = requested.temporal.motion_vectors && hdr;
+        if requested.temporal.motion_vectors && !temporal_motion_vectors {
+            notes.push(
+                "motion-vector diagnostics require a supported RGBA16Float HDR target; using the non-temporal reference"
+                    .into(),
+            );
+        }
         if requested.renderer.hdr && !hdr {
             notes.push(
                 "HDR scene target unsupported: using direct LDR without postprocessing".into(),
@@ -634,6 +643,7 @@ impl ResolvedGraphicsSettings {
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
             hdr,
+            temporal_motion_vectors,
             bloom: requested.renderer.bloom,
             exposure_ev100: if requested.renderer.exposure_ev100.is_finite() {
                 requested.renderer.exposure_ev100.clamp(-16.0, 32.0)
@@ -906,6 +916,10 @@ impl ResolvedGraphicsSettings {
         );
         map.insert("vsync".to_string(), self.vsync.to_string());
         map.insert("hdr".to_string(), self.hdr.to_string());
+        map.insert(
+            "temporal_motion_vectors".to_string(),
+            self.temporal_motion_vectors.to_string(),
+        );
         map.insert("bloom".to_string(), self.bloom.to_string());
         map.insert(
             "exposure_ev100".to_string(),
@@ -1083,6 +1097,47 @@ mod tests {
         let resolved =
             ResolvedGraphicsSettings::from_requested(&RequestedGraphics::default(), &caps);
         assert_eq!(resolved.ray_tracing, ResolvedRayTracing::Local);
+    }
+
+    #[test]
+    fn motion_diagnostics_roundtrip_default_and_hdr_fallback() {
+        let mut requested = RequestedGraphics::default();
+        assert!(!requested.temporal.motion_vectors);
+        for enabled in [false, true] {
+            requested.temporal.motion_vectors = enabled;
+            assert_eq!(
+                RequestedGraphics::from_toml(&toml::to_string(&requested).unwrap()).unwrap(),
+                requested
+            );
+            for hdr in [false, true] {
+                requested.renderer.hdr = hdr;
+                for supported in [None, Some(false), Some(true)] {
+                    let caps = Capabilities {
+                        hdr_render_target_supported: supported,
+                        ..Default::default()
+                    };
+                    let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+                    let expected = enabled && hdr && supported != Some(false);
+                    assert_eq!(resolved.temporal_motion_vectors, expected);
+                    assert_eq!(
+                        resolved.as_meta_map()["temporal_motion_vectors"],
+                        expected.to_string()
+                    );
+                    assert_eq!(
+                        resolved
+                            .notes
+                            .iter()
+                            .any(|n| n.contains("motion-vector diagnostics")),
+                        enabled && !expected
+                    );
+                }
+            }
+        }
+        assert!(
+            crate::describe()
+                .iter()
+                .any(|m| m.path == "temporal.motion_vectors" && m.restart_required)
+        );
     }
 
     #[test]

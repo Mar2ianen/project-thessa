@@ -151,6 +151,15 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
+/// Native temporal signal diagnostics. No history or resolve is enabled yet.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct TemporalSettings {
+    /// Produce native-resolution camera motion with explicit invalid masks.
+    /// Requires HDR; disabled allocates no motion target or pipeline.
+    #[serde(default)]
+    pub motion_vectors: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RendererSettings {
     /// Native material quality: Low approximates diffuse/ambient Fresnel by F0.
@@ -744,6 +753,8 @@ pub struct RequestedGraphics {
     #[serde(default)]
     pub renderer: RendererSettings,
     #[serde(default)]
+    pub temporal: TemporalSettings,
+    #[serde(default)]
     pub atmosphere: AtmosphereSettings,
     #[serde(default)]
     pub clouds: CloudSettings,
@@ -776,6 +787,7 @@ impl Default for RequestedGraphics {
             version: 1,
             preset: Preset::High,
             renderer: RendererSettings::default(),
+            temporal: TemporalSettings::default(),
             atmosphere: AtmosphereSettings::default(),
             clouds: CloudSettings::default(),
             night_lights: NightLightsSettings::default(),

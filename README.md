@@ -100,7 +100,11 @@ The checked-in vertical slice currently contains:
   Bevy. `cargo run --release -p thessa-render-wgpu --example terrain_frame -- terrain.png`
   produces a synthetic terrain screenshot and offscreen latency benchmark;
   it does **not** replace the production client's complete scene/UI/input yet
-  (doc 39, implementation checkpoint);
+   (doc 39, implementation checkpoint);
+  Opt-in `[temporal].motion_vectors` diagnostics now use stored opaque scene
+  depth with explicit ocean/mesh invalid masks and submitted-camera tracking
+  ([doc 76](docs/76_TEMPORAL_RECONSTRUCTION.md)). This does not enable jitter,
+  TAA, colour history, upscaling or frame generation.
 - `apps/terrain-native`: Bevy-free window/headless migration viewer using the
   same frozen canonical field, HIGHLANDS bookmark, height/material builders and
   stellar ephemerides as the game. Run `cargo run --release -p thessa-terrain-native`

@@ -49,6 +49,13 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 fleet_meshes = true # native retained body meshes; false adds no fleet GPU resources/draws
 fleet_quality = "high" # low/medium/high: cull meshes below 8/2/0.5 projected pixels
 
+[temporal]
+# Diagnostic precursor to TAA, not a visible antialiasing mode. Requires HDR;
+# stores scene depth and produces RGBA16F camera motion before plume/clouds.
+# Ocean and all rigid meshes are invalid until object motion is implemented.
+# Disabled is allocation/dispatch-free. No jitter or colour history yet.
+motion_vectors = false
+
 [terrain_topology]
 # Native persistent conforming CBT; false retains regular patches at zero extra cost.
 # Low/medium/high: 32768/65536/131072 allocation slots, 1/2/4 update waves,

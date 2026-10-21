@@ -1,13 +1,13 @@
 # 76 — Temporal reconstruction foundation
 
-**Status:** audit plus two foundation stages. T2a implements deterministic Halton
+**Status:** audit plus three signal-foundation stages. T2a implements deterministic Halton
 jitter, static-surface reprojection and depth reconstruction in `render-core`,
 with a view-block constructor that preserves the unjittered history projection.
 T3a adds a standalone GPU depth-reprojection motion-vector pass with a hardware
-CPU-oracle test. Neither stage is wired into the native scene loop: jitter is
-unused, depth retention is not enforced end-to-end, and no temporal resolve,
-history resource or SDK adapter exists. The current renderer remains the
-non-temporal reference.
+CPU-oracle test. T3b wires opt-in motion diagnostics into both native loops,
+enforces stored opaque scene depth and masks ocean/all rigid meshes. Jitter
+remains unused; no temporal resolve, colour-history resource or SDK adapter
+exists. Visible rendering remains the non-temporal reference.
 
 Temporal reconstruction is not one post-process. It is a contract between the
 authoritative simulation, the frames the renderer actually produces, and the
@@ -48,8 +48,8 @@ design was written.
    but the scene loop has no per-pixel velocity output, no previous-frame
    transform set and no previous displaced-surface state. Matching `TileKey` is
    not triangle identity across CBT split/merge. Since then, T3a added a
-   standalone static-depth reprojection pass; it is not yet called by the
-   scene loop and carries no ocean/vehicle motion term.
+   standalone static-depth reprojection pass; T3b now calls it in the scene
+   loop with explicit ocean/all-mesh invalid masks, not object motion.
 4. **Presentation belongs to the app.** `apps/terrain-native/src/window.rs`
    submits and presents directly. `crates/render-wgpu/src/display.rs` owns only
    the HDR-to-SDR transform. Frame generation needs an explicit presentation
@@ -108,8 +108,11 @@ motion_valid: bool
 ```
 
 The jittered and unjittered projections are distinct values. Raster uses the
-jittered projection. Reconstruction, motion vectors and history validation use
-the unjittered projection. Shadow, ray-tracing and other secondary passes use the
+jittered projection. Motion is measured between unjittered UVs: remove the
+current jitter from the sample UV before applying the unjittered inverse, then
+apply the previous jitter when sampling a jittered history texture. Applying an
+unjittered inverse directly to a jittered pixel's centre reconstructs the wrong
+ray. Shadow, ray-tracing and other secondary passes use the
 unjittered view unless their own contract says otherwise.
 
 History is invalidated on:
@@ -165,7 +168,8 @@ history clamping does not treat them as moving terrain.
 - Preserve both projections. Do not reconstruct the unjittered matrix by
   subtracting an assumed offset from an arbitrary matrix.
 - The resolve samples the current scene through the jittered projection and
-  reconstructs through the unjittered inverse.
+  reconstructs through its matching inverse, or removes jitter from sample UV
+  before applying the unjittered inverse. T3b does not jitter primary visibility.
 - When temporal reconstruction is active, scene depth must be stored. The
   renderer API must make that a required input, not an implicit assumption about
   an attachment that another pass may discard.
@@ -220,9 +224,9 @@ presenter contract before an FG adapter is attempted. Required properties:
 | --- | --- | --- |
 | T1 | This audit/contract | Reviewed, no code claims. |
 | T2a | Jitter/reprojection math + preserved unjittered view block | Implemented; deterministic CPU tests; zero jitter byte-identical. |
-| T2b | Renderer wiring + required depth storage | No visual change when disabled; depth contract enforced across passes. |
+| T2b | Renderer jitter wiring + required depth storage | Stored depth is enforced in T3b; primary jitter wiring remains open. |
 | T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
-| T3b | Scene integration for T3a | Pass consumes real stored depth in the native frame; invalid masks for ocean/vehicles. |
+| T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/all-mesh invalid masks, submitted-camera tracking and GPU scene oracle. |
 | T4 | Native-resolution TAA with history validation | Static and panning survey captures; no history reuse after cancel/resize; ghosting bounded against a no-TAA reference. |
 | T5 | Dynamic mesh and ocean motion (or explicit invalid masks) | Ships/ocean do not ghost; invalid pixels fall back. |
 | T6 | TAAU upscale and two-history quality tiers | Matched native/upscaled captures; memory budget recorded. |
@@ -266,10 +270,88 @@ invalidation. A native TAA reference is required before comparing adapters.
   runs the pass and compares sampled vectors with an independent CPU
   `world_from_depth`/projection oracle; it also checks the invalid-alpha path.
   The unit test pins the 160-byte uniform layout and validation.
-- The native scene loop does not call this pass yet, no settings expose it, and
-  no history/TAA consumer exists. Ocean waves and moving rigid/deforming meshes
-  remain outside the static contract. This stage adds no visible output and
-  makes no performance claim.
+- At the T3a checkpoint the scene loop did not call the pass. T3b below adds
+  integration and explicit invalid masks; no history/TAA consumer exists.
+
+### T3b delivered
+
+- `[temporal].motion_vectors = false` is the default. This diagnostic switch
+  resolves through `RequestedGraphics -> ResolvedGraphicsSettings`; HDR-off or
+  explicitly unsupported HDR falls back to off with a note. No automatic HDR
+  enable, primary jitter, colour history or visible antialiasing is implied.
+  Native-resolution RGBA16F signals have no reduced-quality variant yet: off
+  is the zero-work fallback, rather than silently changing vector resolution.
+- Native window and headless loops encode opaque terrain/mesh/clear background,
+  motion, plume/cloud/star/aurora overlays, display and HUD, in that order.
+  Resolved motion diagnostics force scene-depth `Store` even if the caller
+  passes `store_depth = false`. `encode_scene_ops` remains a compatibility
+  wrapper with the original opaque-then-plume order when no diagnostic is used.
+- Native HDR alpha becomes a static-geometry validity mask **only when enabled**.
+  Water with any optical wave contribution is invalid. The entire spectral
+  displacement height-admission band is conservatively invalid, including
+  rough/dry fragments: vertex-level displacement material sampling can differ
+  from the fragment's filtered material. Every rigid mesh,
+  including the early Low-material shader path, is conservatively invalid
+  until previous object transforms exist. Sky/far depth is invalid separately.
+  Shared Bevy shaders and disabled native alpha/RGB are unchanged.
+- `SceneMotion` allocates only the motion texture (8 bytes/pixel), compute
+  pipeline and 160-byte uniform. At 2560×1600 the texture is 31.25 MiB, excluding
+  existing HDR/depth, driver/pipeline overhead and transient bind groups. Depth
+  already exists; this mode adds its store bandwidth, not a duplicate depth
+  allocation. No per-frame host readback, simulation work or display pass is
+  added. The app still owns submit/present.
+- Encoding does not age the camera source. Only a submitted real frame calls
+  `commit`; the first frame, explicit reset, resize/reconfigure and changed
+  projection/exposure invalidate vectors. Rejected extents preserve resources.
+  Camera-cut, body/source/material/light epochs and disocclusion rejection must
+  still be wired before a history consumer is enabled.
+- The buffer describes **opaque** motion, not the composited translucent image.
+  A future resolve/SDK consumer must either run at that boundary or add proper
+  translucent/reactive masks; the diagnostic is not yet an SDK-ready full frame.
+- The GPU scene oracle exercises the real regular/conforming terrain pipelines,
+  rough fallback and loaded water materials, Low/High mesh materials, translation
+  plus rotation, reset and resize, plus
+  stored scene depth with the caller deliberately requesting discard. Source
+  radius is 3,200 km, target is 64×64, camera altitude above the source page is
+  2 m / 50 m / 400 km. Compared with f64 source views and actual Depth32Float
+  samples, final observed worst component errors were 0.000122 px near the surface
+  and 0.001446 px at 400 km (test envelope 0.02 px). These are fixture bounds,
+  not a universal planetary depth-precision claim. All 136 mesh pixels and all
+  4,096 water pixels were invalid. On/off runs preserve HDR RGB bits exactly
+  across all six frames, including live CBT/ocean updates and projection/exposure
+  changes. No subjective preference or visible improvement is claimed.
+- Capture layout is `native-topology-v7-motion`: `render.motion_vectors` is
+  separate from opaque raster and `render.scene_overlays`. Actual mode and
+  texture bytes are recorded, not inferred from the requested switch.
+
+### T3b verification and measured cost
+
+Evidence: [native-temporal-signals-2026-10-21.json](artifacts/native-temporal-signals-2026-10-21.json).
+The same release binary was run off/on/on/off at 1280×720, WORLD00's fixed
+land target, 50 m radial eye clearance, epoch/step zero, HUD/audio off,
+30 warmup + 60 measured frames per block. Hardware: Radeon 880M, Vulkan/RADV,
+Mesa 26.2.5-arch1.1. The mode allocated 7,372,800 texture bytes when enabled
+and zero when disabled. The enabled motion-scope medians were 0.366 and
+0.197 ms (p95 0.411 and 0.434 ms); disabled empty timestamp intervals were
+about 0.020 ms. These timings exclude the extra depth-store bandwidth, which
+belongs to the opaque raster scope. They are not isolated shader throughput.
+Whole-frame GPU medians ranged from 89.91 to 105.53 ms; asynchronous streaming,
+scheduling and thermal noise prevent a stable whole-frame cost/speedup claim.
+Each capture reported 368 visible patches; counts alone do not prove identical
+resident data. Independent processes produced different PNG hashes, so those
+screenshots are not a pixel-parity oracle. The fixed-resident GPU regression
+above, rather than these screenshots, establishes unchanged RGB for its cases.
+No blind subjective comparison was performed for this non-visible diagnostic
+stage; neither aesthetic improvement nor full visual acceptance is claimed.
+
+Both real native-window modes (HUD/no HUD) presented eight frames with motion
+enabled and exited cleanly, in addition to the native CLI/hardware suite.
+The required Bevy `--ignored` command ran but selected zero tests in this
+checkout (there are no ignored tests in that crate); the ordinary render-feature
+suite was run separately. Renderer hardware tests ran on the actual adapter,
+not an adapter-less fallback. The first native suite failed three server cases
+because its sibling server executable was missing; building `thessa-server`
+and repeating the suite resolved that prerequisite failure.
 
 ## 10. Regression and benchmark protocol
 

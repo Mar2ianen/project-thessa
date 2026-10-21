@@ -1,0 +1,100 @@
+{
+  "date": "2026-10-21",
+  "branch": "feat/native-temporal-foundation",
+  "parent_source_commit": "0ad6495",
+  "scope": "T3b: native opaque-depth camera-motion diagnostics, not TAA or an SDK-ready composited frame",
+  "executable_sha256": "c64ee65677b3154029a28e71322159c70e6d62e61c9b95c3f36256fed94bcc8b",
+  "hardware": "Linux x86-64; AMD Radeon 880M Graphics (RADV STRIX1); Vulkan; radv; Mesa 26.2.5-arch1.1",
+  "settings": {
+    "switch": "[temporal].motion_vectors",
+    "default": false,
+    "requires": "resolved HDR; unsupported/disabled HDR resolves diagnostics to off with a note",
+    "disabled_motion_texture_bytes": 0,
+    "enabled_motion_texture_bytes_1280x720": 7372800,
+    "additional_depth_texture_bytes": 0,
+    "extra_depth_store_bandwidth": "not isolated; accounted inside opaque raster, outside the motion scope",
+    "generated_frame_simulation_or_history_advancement": "not implemented; only submitted real frames commit previous camera"
+  },
+  "gpu_oracle": {
+    "command": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp cargo test -p thessa-render-wgpu --test motion_vectors -- --nocapture",
+    "log": "target/temporal-t3b-final-motion.log",
+    "cases": "standalone depth-gradient oracle plus real regular/conforming terrain, Low/High mesh shaders, rough fallback and loaded water material, spectral ocean admission, reset, resize, exposure and projection changes",
+    "extent": [64, 64],
+    "planet_radius_m": 3200000,
+    "camera_altitudes_above_source_page_m": [2, 50, 400000],
+    "camera_path": "translation 0.005 times altitude and yaw 0.003 radians; six frames per on/off scene",
+    "reference": "f64 source views and actual Depth32Float samples; independent of GPU uniform inverse and triangle identity",
+    "max_component_error_px_near_surface": 0.000122,
+    "max_component_error_px_400km": 0.001446,
+    "test_error_envelope_px": 0.02,
+    "static_land_valid_pixels": 3960,
+    "invalid_mesh_pixels": 136,
+    "invalid_water_pixels": 4096,
+    "hdr_rgb_bits_unchanged_on_off": true,
+    "limits": "Fixture bounds only. No general planetary depth precision, object motion, disocclusion or colour-history validation claim. Conservative mask may reject static geometry near water."
+  },
+  "release_captures": {
+    "directory": "apps/terrain-native/target/test-tmp/temporal-t3b",
+    "local_commands_configs_hashes_and_summary": "capture-summary.json, per-block .toml/.json/.log/.png files",
+    "baseline": "same release binary with diagnostics off, not an unmodified parent executable",
+    "order": ["off", "on", "on", "off"],
+    "extent": [1280, 720],
+    "land_target_lat_lon_deg": [23.565679258039204, 165.13881581863882],
+    "radial_eye_clearance_m": 50,
+    "epoch_s": 0,
+    "simulation_step_s": 0,
+    "warmup_frames_per_block": 30,
+    "measured_frames_per_block": 60,
+    "prestream_seconds": 3,
+    "audio": "--mute",
+    "hud": "--no-hud",
+    "rt": "off",
+    "command_template": "target/release/thessa-terrain-native --graphics <block.toml> --no-hud --mute --headless <block.png> --perf-capture <block.json> --frames 60 --width 1280 --height 720 --prestream-seconds 3 --survey-lat 23.565679258039204 --survey-lon 165.13881581863882 --survey-eye-agl 50 --sim-time 0 --sim-step 0",
+    "off_config_sha256": "2b8136bed9394fa3d6f54173db1064f6fb494eabf93e51c64ec5297a94a9e2f9",
+    "on_config_sha256": "f3903f43b8ea3bc8db20098865b1cd20e0d253b445f69885f49a238cb41ce75d",
+    "motion_scope_medians_ms": [0.019517, 0.365895, 0.196814, 0.019637],
+    "motion_scope_p95_ms": [0.023725, 0.411301, 0.433985, 0.048813],
+    "gpu_span_medians_ms": [105.529187, 89.910711, 91.326642, 92.888770],
+    "frame_wall_medians_ms": [107.861519, 93.433806, 94.157914, 96.566058],
+    "visible_patch_counts": [368, 368, 368, 368],
+    "capture_sha256": [
+      "4331a23f8974517f5837d732b7711d31107c10243e8b34e00845ae048572b181",
+      "95a53b29d05f6b28581c5c48c0c650eb4e3899809e1bb03dc809e4e24d7c13c9",
+      "b3b443284805f1ccfbe18c4edf81620fb9c83aeee6a3c8f19eb32c03c108e7c4",
+      "0560a319997d02e196bd408dd1185d4fd5ea40d1e93c0fc783f8463513ddb2c7"
+    ],
+    "limits": "Four serial blocks only; scheduling, streaming and thermal noise not eliminated. Empty off interval still has timestamp overhead. No speedup or stable whole-frame regression claim. Equal patch counts are not resident-data identity; PNG hashes differ between processes and are not used as a pixel-parity oracle."
+  },
+  "window_smoke": {
+    "command_template": "target/release/thessa-terrain-native --graphics <on.toml> <--hud|--no-hud> --mute --frames 8 --width 640 --height 360",
+    "results": "both runs exited 0, reported enabled=true and window_presented_frames=8",
+    "logs": [
+      "apps/terrain-native/target/test-tmp/temporal-t3b/window-no-hud.log",
+      "apps/terrain-native/target/test-tmp/temporal-t3b/window-hud.log"
+    ]
+  },
+  "verification": {
+    "tmpdir_prefix_for_all_cargo_commands": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp",
+    "architecture": "python3 tools/agent-qa/check_architecture.py: passed",
+    "format": "cargo fmt --all -- --check: passed",
+    "clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings: passed",
+    "workspace_lib_bins": "cargo test --workspace --lib --bins: 2027 passed, 0 failed, 44 ignored; target/temporal-t3b-workspace-final.log",
+    "workspace_lib_bins_log_sha256": "4e1ff6d6135a61652d90c3a13965722208736aa8541ba61ad50f155019359c52",
+    "workspace_integration": "cargo test --workspace --test '*': 100 passed, 0 failed, 84 ignored; target/temporal-t3b-integration-final.log",
+    "workspace_integration_log_sha256": "2f325efe25f10abda698ebfc33749761b86e226ac643c34a5fdde47c229e807e",
+    "renderer_ignored_hardware": "cargo test -p thessa-render-wgpu --lib --tests -- --ignored: 79 passed, 0 failed",
+    "native_ignored_hardware_cli": "cargo test -p thessa-terrain-native -- --ignored: 43 passed, 0 failed",
+    "bevy_required_ignored_command": "cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored: exited 0 but selected zero tests; no ignored tests remain in this crate in this checkout, not eight hardware passes",
+    "bevy_render_feature": "cargo test -p thessa-bevy-rcbt --features render --lib: 25 passed, 0 failed; target/temporal-t3b-bevy-render-final.log",
+    "bevy_render_feature_log_sha256": "e8adbd7cdeaa5d153285690a0a2fc2504d95a54c4e838504324abbd2a94c4b33",
+    "native_no_hud_compile": "cargo check -p thessa-terrain-native --no-default-features: passed",
+    "release": "cargo build --release -p thessa-terrain-native: passed",
+    "input_manifest": "target/temporal-t3b-inputs.json pins 13 modified Rust/WGSL/TOML source/config/test files; unchanged after final checks and captures",
+    "initial_failure": "Three native server tests failed because target/debug/thessa-server was absent. cargo build -p thessa-server followed by a full native ignored-suite repeat passed. Initial failure log retained at target/temporal-t3b-native-gpu-initial-missing-server.log."
+  },
+  "deliberately_omitted": [
+    "No blind preference votes: this diagnostic has no intended visible change. Fixed-resident GPU RGB equality is correctness evidence, not subjective or universal visual acceptance.",
+    "No primary-view jitter, colour history, TAA/TAAU, dynamic object/ocean vectors, SDK integration or frame generation.",
+    "No complete history epochs, disocclusion checks, generated-frame presentation boundary, universal precision envelope, isolated depth bandwidth or peak driver/VRAM budget."
+  ]
+}

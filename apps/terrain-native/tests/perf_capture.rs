@@ -232,20 +232,27 @@ fn capture_cli_rejects_window_mode_and_non_json_paths_before_startup() {
 #[test]
 #[ignore = "hardware: requires a wgpu adapter, serial offscreen perf capture"]
 fn native_headless_capture_exports_measured_frames_and_capability_truth() {
-    for (hdr, topology) in [(false, false), (true, false), (true, true)] {
-        check_capture(hdr, topology);
+    for (hdr, topology, motion) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+        (true, true, true),
+    ] {
+        check_capture(hdr, topology, motion);
     }
 }
 
-fn check_capture(hdr: bool, topology: bool) {
+fn check_capture(hdr: bool, topology: bool, motion: bool) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = root.join("target/test-tmp").join(format!(
-        "native-perf-{}-{hdr}-{topology}",
+        "native-perf-{}-{hdr}-{topology}-{motion}",
         std::process::id()
     ));
     std::fs::create_dir_all(&scratch).unwrap();
     let graphics = scratch.join("graphics.toml");
-    std::fs::write(&graphics,format!("version=1\n[renderer]\nhdr={hdr}\nray_tracing=\"off\"\nauto_exposure=true\nbloom=true\n[terrain_topology]\nenabled={topology}\nquality=\"low\"\n")).unwrap();
+    std::fs::write(&graphics,format!("version=1\n[renderer]\nhdr={hdr}\nray_tracing=\"off\"\nauto_exposure=true\nbloom=true\n[terrain_topology]\nenabled={topology}\nquality=\"low\"\n[temporal]\nmotion_vectors={motion}\n")).unwrap();
     let json = scratch.join("capture.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
         .current_dir(root.join("../.."))
@@ -279,11 +286,13 @@ fn check_capture(hdr: bool, topology: bool) {
     assert!(capture.metadata.platform.gpu.is_some());
     let backend =
         thessa_render_wgpu::Backend::bring_up_for_graphics_profiled(&Default::default()).unwrap();
-    let supported = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 6).is_some();
+    let supported = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 8).is_some();
     let names = [
         "render.surface_and_shadows",
         "render.rt_as_build",
         "render.scene_classify_and_raster",
+        "render.motion_vectors",
+        "render.scene_overlays",
         "render.display_transform",
         "render.ui",
     ];
@@ -320,7 +329,7 @@ fn check_capture(hdr: bool, topology: bool) {
             .resolved
             .get("gpu_scope_layout")
             .map(String::as_str),
-        Some("native-topology-v6-plume")
+        Some("native-topology-v7-motion")
     );
     if topology
         && thessa_render_wgpu::probe_capabilities(&backend.adapter).terrain_conforming_supported
@@ -338,6 +347,18 @@ fn check_capture(hdr: bool, topology: bool) {
             == Some(true);
     let meta = &capture.metadata.graphics.resolved;
     assert_eq!(meta["native_hdr"], enabled.to_string());
+    assert_eq!(
+        meta["native_motion_vectors"],
+        (enabled && motion).to_string()
+    );
+    assert_eq!(
+        meta["native_motion_target_bytes"],
+        if enabled && motion {
+            (1280u64 * 720 * 8).to_string()
+        } else {
+            "0".into()
+        }
+    );
     assert_eq!(
         meta["native_hdr_target_bytes"],
         if enabled {

@@ -158,6 +158,10 @@ pub struct TemporalSettings {
     /// Requires HDR; disabled allocates no motion target or pipeline.
     #[serde(default)]
     pub motion_vectors: bool,
+    /// Diagnostic primary-visibility Halton jitter, not antialiasing. Requires
+    /// motion diagnostics; without a resolve the image deliberately trembles.
+    #[serde(default)]
+    pub jitter: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

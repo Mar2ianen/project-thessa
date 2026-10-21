@@ -1,13 +1,15 @@
 # 76 — Temporal reconstruction foundation
 
-**Status:** audit plus three signal-foundation stages. T2a implements deterministic Halton
+**Status:** audit plus four signal-foundation stages. T2a implements deterministic Halton
 jitter, static-surface reprojection and depth reconstruction in `render-core`,
 with a view-block constructor that preserves the unjittered history projection.
 T3a adds a standalone GPU depth-reprojection motion-vector pass with a hardware
 CPU-oracle test. T3b wires opt-in motion diagnostics into both native loops,
-enforces stored opaque scene depth and masks ocean/all rigid meshes. Jitter
-remains unused; no temporal resolve, colour-history resource or SDK adapter
-exists. Visible rendering remains the non-temporal reference.
+enforces stored opaque scene depth and masks ocean/all rigid meshes. T2b adds
+opt-in primary terrain/mesh jitter with matching depth reconstruction and
+jitter-free motion. No temporal resolve, colour-history resource or SDK adapter
+exists. Default rendering remains the non-temporal reference; the explicit
+jitter diagnostic visibly shifts samples without antialiasing them.
 
 Temporal reconstruction is not one post-process. It is a contract between the
 authoritative simulation, the frames the renderer actually produces, and the
@@ -135,9 +137,14 @@ difference of independent depth buffers.
 For static planetary/CBT terrain:
 
 1. Reconstruct the camera-relative current world position from current depth and
-   the unjittered inverse view-projection in f64.
+   the matching raster inverse view-projection. If using an unjittered inverse,
+   remove the current pixel jitter from sample UV first. View matrices/origin
+   deltas are derived in f64 before the GPU's f32 calculation.
 2. Project that world position with the previous unjittered view-projection.
-3. Convert both positions to UV and store `previous_uv - current_uv`.
+3. Convert both positions to unjittered UV and store
+   `previous_unjittered_uv - (raster_uv - current_jitter_px / extent)`.
+   To sample a previous jittered texture, a future resolve adds the previous
+   jitter to that unjittered source UV; velocity itself never includes jitter.
 4. Reject/repair samples whose current and previous depths are inconsistent
    beyond the projected error budget.
 
@@ -169,7 +176,8 @@ history clamping does not treat them as moving terrain.
   subtracting an assumed offset from an arbitrary matrix.
 - The resolve samples the current scene through the jittered projection and
   reconstructs through its matching inverse, or removes jitter from sample UV
-  before applying the unjittered inverse. T3b does not jitter primary visibility.
+  before applying the unjittered inverse. T2b now implements the matching-inverse
+  path for the opt-in primary jitter diagnostic.
 - When temporal reconstruction is active, scene depth must be stored. The
   renderer API must make that a required input, not an implicit assumption about
   an attachment that another pass may discard.
@@ -224,7 +232,7 @@ presenter contract before an FG adapter is attempted. Required properties:
 | --- | --- | --- |
 | T1 | This audit/contract | Reviewed, no code claims. |
 | T2a | Jitter/reprojection math + preserved unjittered view block | Implemented; deterministic CPU tests; zero jitter byte-identical. |
-| T2b | Renderer jitter wiring + required depth storage | Stored depth is enforced in T3b; primary jitter wiring remains open. |
+| T2b | Renderer jitter wiring + required depth storage | Implemented: opt-in primary terrain/mesh jitter, matching depth inverse, jitter-free motion, unjittered secondary policy and submitted-frame sequence. No resolve yet. |
 | T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
 | T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/all-mesh invalid masks, submitted-camera tracking and GPU scene oracle. |
 | T4 | Native-resolution TAA with history validation | Static and panning survey captures; no history reuse after cancel/resize; ghosting bounded against a no-TAA reference. |
@@ -250,8 +258,8 @@ invalidation. A native TAA reference is required before comparing adapters.
   including depth round-trip, composed static reprojection, behind-camera
   rejection, camera-translation sign, w/depth preservation under jitter, and
   byte identity for zero jitter.
-- Nothing calls `new_jittered` yet. The native client therefore renders exactly
-  as before; this stage makes no image or performance claim.
+- At the T2a checkpoint nothing called `new_jittered`. T2b below adds the
+  opt-in caller without claiming visible antialiasing or aesthetic improvement.
 
 ### T3a delivered
 
@@ -308,7 +316,7 @@ invalidation. A native TAA reference is required before comparing adapters.
 - The buffer describes **opaque** motion, not the composited translucent image.
   A future resolve/SDK consumer must either run at that boundary or add proper
   translucent/reactive masks; the diagnostic is not yet an SDK-ready full frame.
-- The GPU scene oracle exercises the real regular/conforming terrain pipelines,
+- At the T3b checkpoint, the GPU scene oracle exercised the real regular/conforming terrain pipelines,
   rough fallback and loaded water materials, Low/High mesh materials, translation
   plus rotation, reset and resize, plus
   stored scene depth with the caller deliberately requesting discard. Source
@@ -352,6 +360,90 @@ suite was run separately. Renderer hardware tests ran on the actual adapter,
 not an adapter-less fallback. The first native suite failed three server cases
 because its sibling server executable was missing; building `thessa-server`
 and repeating the suite resolved that prerequisite failure.
+
+### T2b delivered: primary jitter and depth/motion consistency
+
+- `[temporal].jitter = false` is a separate diagnostic, **not TAA**. It requires
+  resolved motion diagnostics (and therefore HDR). Unmet prerequisites resolve
+  to zero jitter with a note. Enabling it prints a warning: the displayed image
+  deliberately trembles because no reconstruction pass exists yet. It is not a
+  production quality tier or a recommendation to enable temporal antialiasing.
+- The existing `SceneMotion` owns the deterministic Halton sample index. The
+  apps query it after acquiring a real frame and use the same sample for terrain,
+  meshes and depth-based motion. Only `commit` after queue submission increments
+  the index; queries, encoding, presentation and skipped/failed frames do not.
+  Reset/resize restarts the sequence and clears the previous camera. Projection
+  or exposure changes still invalidate motion independently of sample index.
+- Primary terrain gets a separate 464-byte view uniform only when jitter is
+  resolved; off allocates no additional uniform. Classification and clear-sky
+  background retain the original unjittered buffer. Conforming topology reads
+  `unjittered_clip_from_world` explicitly, even if given a jittered view block:
+  jitter does not change its policy/generation or wake publication by itself.
+  Shadows use their own projection; RT geometry/model/origin state is unchanged.
+  Plume, sky layers and HUD retain their existing unjittered cameras.
+- After the ordinary mesh/instance update, `update_primary_jitter` replaces only
+  its raster view uniform. This costs an extra 464-byte upload per nonzero-jitter
+  mesh consumer, but no new instance/shadow/RT publication; zero jitter is a
+  no-op after the ordinary update. Existing callers remain unchanged. This
+  ordering is required: an ordinary mesh update overwrites the sampled view.
+- Motion reconstructs depth with the current **jittered** inverse and compares
+  against the previous **unjittered** camera, subtracting current jitter from
+  current UV. A stationary camera must therefore report zero motion despite
+  changing primary samples. The two jitter coordinates occupy unused padding
+  words in the existing 160-byte motion uniform; no new texture, pass or
+  history allocation is added. `MotionParams.current_jitter` is validated
+  against the existing ±0.5-pixel bound, not silently clamped.
+- CPU coverage reconstructs known points with the matching inverse and rejects
+  the incorrect convention. The real GPU oracle now tests seven frames, with
+  both moving and stationary cameras, regular/conforming terrain, two water
+  material cases, Low/High meshes, resets, resize and projection/exposure
+  changes. The zero-jitter diagnostic still preserves HDR RGB bits. The jitter
+  test requires primary RGB to change, rather than merely uploading an unused
+  offset. Separate GPU tests require exact clear-sky image identity and stable
+  conforming view-policy/generation across eight jitter samples.
+- This remains an opaque signal test, **not** a ghosting/history acceptance
+  result. In particular, unjittered translucent overlays currently depth-clip
+  against sampled primary depth: the small edge mismatch is not a validated
+  resolved-depth/reactive-mask solution. T4 must define that composition boundary,
+  retain previous jitter for history lookup, validate disocclusion and epoch
+  resets, and prove actual TAA quality before any SDK/FG integration.
+
+T2b evidence: [native-primary-jitter-2026-10-21.json](artifacts/native-primary-jitter-2026-10-21.json).
+Final local gates passed: 2,029 workspace lib/bin tests, 102 integration tests,
+79 renderer hardware tests and 43 native hardware/CLI tests, plus fmt, Clippy,
+architecture, no-HUD compilation and the Bevy render-feature suite. The actual
+GPU scene's worst motion component error against its f64 depth oracle was
+0.001445 px moving and 0.000012 px stationary at 64×64 (0.02 px test envelope).
+This is not a universal depth-precision or ghosting bound.
+
+The same release binary was captured jitter-off/on/on/off at WORLD00's fixed
+land target, 50 m radial eye clearance, 1280×720, epoch/step zero, HUD/audio off,
+30 warmup + 60 measured frames per block. Metadata reported 90 submitted samples
+per block and 368 visible patches. On Radeon 880M/Vulkan/RADV Mesa
+26.2.5-arch1.1, motion-scope medians were 0.169/0.176/0.176/0.193 ms; whole GPU
+medians ranged from 90.40 to 99.31 ms. No stable speedup/regression claim follows
+from four blocks under asynchronous streaming and scheduling/thermal noise.
+An additional muted sweep and eight-frame native HUD/no-HUD windows all exited
+successfully with jitter enabled. These are runtime smoke captures, not TAA or
+independent subjective visual acceptance.
+
+#### T4 integration findings (not implemented)
+
+- `DisplayTransform` retains a bind group for its own HDR view. A resolve cannot
+  merely allocate a different texture: either the display must explicitly accept
+  that source or the resolved result must be published back to the existing HDR
+  composition target. History must be captured **before** plume/cloud/star/aurora
+  overlays; the post-overlay display target is not a reusable opaque history.
+- `plume_common.wgsl::unproject` and `sky_layers.wgsl::cloud_fragment` interpret
+  scene depth with their own camera projection. Publishing unjittered resolved
+  colour without also specifying compatible depth/occlusion sampling leaves a
+  subpixel composition mismatch. This requires a measured sampled/resolved-depth
+  policy, not an assumption that scalar depth is independent of the sample ray.
+- `Scene::tick` already returns `geometry_changed` and `materials_changed`.
+  Reuse those publication events for history invalidation rather than adding a
+  second terrain observer. Add the missing cut/map/body/light/exposure epochs
+  at the existing scene boundary; per-frame CBT identity alone is not history
+  validity and must not force unrelated simulation work.
 
 ## 10. Regression and benchmark protocol
 

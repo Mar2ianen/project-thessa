@@ -150,6 +150,7 @@ fn static_motion_matches_cpu_reprojection_and_marks_sky_invalid() {
         camera_offset: Vec3::new(-0.1, 0.0, 0.0),
         extent: [SIZE, SIZE],
         previous_valid: true,
+        current_jitter: thessa_render_core::temporal::JitterOffset::ZERO,
     };
 
     let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -353,6 +354,15 @@ fn halves(bytes: &[u8]) -> Vec<[f32; 4]> {
 /// not the GPU uniform inverse or triangle/TileKey identity.
 #[test]
 fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
+    scene_oracle(false);
+}
+
+#[test]
+fn jittered_scene_depth_matches_f64_and_static_camera_has_zero_motion() {
+    scene_oracle(true);
+}
+
+fn scene_oracle(jitter_enabled: bool) {
     use thessa_graphics::{Quality, RayTracingRequest, RequestedGraphics};
     use thessa_rcbt_core::{
         HeightPage,
@@ -396,6 +406,7 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
     request.renderer.ray_tracing = RayTracingRequest::Off;
     request.renderer.specular_reflections = false;
     request.renderer.terrain_normal_maps = false;
+    request.temporal.jitter = jitter_enabled;
     request.shadows.enabled = false;
     request.terrain_topology.quality = Quality::Low;
     request.ocean.quality = Quality::Low;
@@ -541,6 +552,10 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                     let mut encoder = backend.device.create_command_encoder(&Default::default());
                     terrain.encode_surface(&mut encoder);
                     backend.queue.submit([encoder.finish()]);
+                    backend
+                        .device
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .unwrap();
                 }
                 if ocean {
                     assert!(terrain.ocean_stats().geometry_bytes > 0);
@@ -551,16 +566,42 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                 let mut current = make_view(agl * 0.005);
                 current.world_from_view *= DMat4::from_rotation_y(0.003);
                 let mut rgb = Vec::new();
-                for frame in 0..6 {
+                for frame in 0..7 {
                     let mut view = if frame == 0 { previous } else { current };
-                    if frame >= 4 {
+                    if frame >= 5 {
                         view.exposure = 2.0;
                     }
-                    if frame == 5 {
+                    if frame == 6 {
                         view.clip_from_view.x_axis.x *= 1.01;
                     }
+                    let jitter = motion
+                        .as_ref()
+                        .map_or(thessa_render_core::temporal::JitterOffset::ZERO, |m| {
+                            m.jitter()
+                        });
+                    if let Some(motion) = &motion {
+                        let index = match frame {
+                            0 | 3 | 4 => 0,
+                            1 | 5 => 1,
+                            _ => 2,
+                        };
+                        assert_eq!(motion.submitted_frames(), index);
+                        assert_eq!(
+                            jitter,
+                            motion.jitter(),
+                            "querying a sample must not advance it"
+                        );
+                        assert_eq!(
+                            jitter,
+                            if jitter_enabled {
+                                thessa_render_core::temporal::JitterOffset::halton(index)
+                            } else {
+                                thessa_render_core::temporal::JitterOffset::ZERO
+                            }
+                        );
+                    }
                     terrain
-                        .update_view_for_extent(&backend, &view, [SIZE, SIZE])
+                        .update_view_jittered(&backend, &view, [SIZE, SIZE], jitter)
                         .unwrap();
                     terrain.update_ocean(&backend, frame as f64 * 0.1).unwrap();
                     mesh.update(
@@ -574,6 +615,8 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                         }],
                     )
                     .unwrap();
+                    mesh.update_primary_jitter(&backend, &view, [SIZE, SIZE], jitter)
+                        .unwrap();
                     let mut encoder = backend.device.create_command_encoder(&Default::default());
                     terrain.encode_surface(&mut encoder);
                     // false deliberately: resolved diagnostics MUST force Store.
@@ -602,7 +645,7 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                     if let Some(motion) = &mut motion {
                         assert_eq!(motion.target_bytes(), u64::from(SIZE * SIZE * 8));
                         let vectors = halves(&read_texture(&backend, motion.texture(), 8));
-                        if frame != 1 {
+                        if frame != 1 && frame != 2 {
                             assert!(
                                 vectors.iter().all(|&p| p == [0.0; 4]),
                                 "initial, uncommitted, reset/resize frames must be invalid"
@@ -630,19 +673,32 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                                 ]
                                 .map(|v| v / SIZE as f64);
                                 let world = world_from_depth(
-                                    view.world_from_view * view.clip_from_view.inverse(),
+                                    view.world_from_view
+                                        * jitter
+                                            .apply(view.clip_from_view, [SIZE, SIZE])
+                                            .unwrap()
+                                            .inverse(),
                                     uv,
                                     f64::from(z),
                                 )
                                 .unwrap();
-                                let clip = previous.clip_from_view
-                                    * previous.world_from_view.inverse()
+                                let source = if frame == 1 { previous } else { current };
+                                let clip = source.clip_from_view
+                                    * source.world_from_view.inverse()
                                     * world.extend(1.0);
                                 let expected = [
-                                    clip.x / clip.w * 0.5 + 0.5 - uv[0],
-                                    0.5 - clip.y / clip.w * 0.5 - uv[1],
+                                    clip.x / clip.w * 0.5 + 0.5 - uv[0]
+                                        + jitter.pixels[0] / SIZE as f64,
+                                    0.5 - clip.y / clip.w * 0.5 - uv[1]
+                                        + jitter.pixels[1] / SIZE as f64,
                                 ];
                                 for c in 0..2 {
+                                    if frame == 2 {
+                                        assert!(
+                                            f64::from(gpu[c]).abs() * (SIZE as f64) < 0.02,
+                                            "stationary camera must not report jitter as motion"
+                                        );
+                                    }
                                     max_error_px = max_error_px
                                         .max((f64::from(gpu[c]) - expected[c]).abs() * SIZE as f64);
                                 }
@@ -664,7 +720,7 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                                 "planet-scale f64 oracle error {max_error_px} px"
                             );
                             println!(
-                                "scene_motion conforming={conforming} ocean={ocean} camera_altitude_above_page_m={agl} valid={valid} invalid_finite={invalid_finite} max_error_px={max_error_px:.6}"
+                                "scene_motion jitter={jitter_enabled} frame={frame} conforming={conforming} ocean={ocean} camera_altitude_above_page_m={agl} valid={valid} invalid_finite={invalid_finite} max_error_px={max_error_px:.6}"
                             );
                         }
                         // Frame 0 intentionally remains uncommitted until its
@@ -673,27 +729,36 @@ fn scene_motion_masks_dynamics_matches_f64_and_resets_without_changing_rgb() {
                             motion.commit(previous);
                         }
                         if frame == 1 {
-                            motion.reset();
+                            motion.commit(current);
                         }
                         if frame == 2 {
+                            motion.reset();
+                        }
+                        if frame == 3 {
                             motion.commit(current);
                             assert!(motion.resize(&backend, [0, SIZE]).is_err());
                             motion.resize(&backend, [32, 32]).unwrap();
                             motion.resize(&backend, [SIZE, SIZE]).unwrap();
                         }
-                        if frame >= 3 {
+                        if frame >= 4 {
                             motion.commit(view);
                         }
                     }
                 }
-                if enabled {
+                if enabled && !jitter_enabled {
                     assert_eq!(
                         reference.as_ref().unwrap(),
                         &rgb,
                         "motion diagnostics must not change even HDR RGB bits"
                     );
-                } else {
+                } else if !enabled {
                     reference = Some(rgb);
+                } else {
+                    assert_ne!(
+                        reference.as_ref().unwrap(),
+                        &rgb,
+                        "jitter diagnostic must affect primary visibility, not silently remain unused"
+                    );
                 }
             }
         }

@@ -108,10 +108,16 @@ impl State {
             [config.width, config.height],
         )?;
         eprintln!(
-            "native motion diagnostics: enabled={} target_bytes={}; opaque-only, no TAA/jitter",
+            "native motion diagnostics: enabled={} target_bytes={} jitter={}; opaque-only, no TAA",
             motion.is_some(),
             motion.as_ref().map_or(0, |m| m.target_bytes()),
+            motion.as_ref().is_some_and(|m| m.jitter_enabled()),
         );
+        if resolved.temporal_jitter {
+            eprintln!(
+                "primary jitter diagnostics are enabled without a temporal resolve; visible subpixel trembling is expected, not antialiasing"
+            );
+        }
         #[cfg(feature = "hud")]
         let hud = hud_enabled.then(|| {
             let gpu = crate::hud::Hud::new(&backend, config.format);
@@ -303,10 +309,17 @@ impl State {
             now_s,
         )?;
         let view = scene.view(self.config.width, self.config.height, self.exposure);
-        self.renderer.update_view_for_extent(
+        let jitter = self
+            .motion
+            .as_ref()
+            .map_or(thessa_render_core::temporal::JitterOffset::ZERO, |m| {
+                m.jitter()
+            });
+        self.renderer.update_view_jittered(
             &self.backend,
             &view,
             [self.config.width, self.config.height],
+            jitter,
         )?;
         self.renderer.update_shadows(
             &self.backend,
@@ -338,6 +351,12 @@ impl State {
                 self.config.width,
                 self.config.height,
                 self.exposure,
+            )?;
+            mesh.update_primary_jitter(
+                &self.backend,
+                &view,
+                [self.config.width, self.config.height],
+                jitter,
             )?;
             mesh.sync_rt_terrain(&self.backend, &self.renderer)?;
         }

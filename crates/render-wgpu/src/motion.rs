@@ -16,6 +16,7 @@
 
 use crate::{Backend, BackendError};
 use glam::{Mat4, Vec3};
+use thessa_render_core::temporal::JitterOffset;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const BYTES_PER_PIXEL: u32 = 8;
@@ -23,8 +24,8 @@ pub const BYTES_PER_PIXEL: u32 = 8;
 /// Inputs for one motion-vector encoding.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionParams {
-    /// Inverse of the current **unjittered** clip-from-world matrix, in the
-    /// current camera-relative frame.
+    /// Inverse of the current raster projection (including jitter), in the
+    /// current camera-relative frame. Must match the sampled depth.
     pub current_world_from_clip: Mat4,
     /// Previous **unjittered** clip-from-world matrix, in the previous
     /// camera-relative frame.
@@ -36,6 +37,9 @@ pub struct MotionParams {
     pub extent: [u32; 2],
     /// False on first frame, after resize/cut, or without a committed source.
     pub previous_valid: bool,
+    /// Offset actually applied to current primary visibility. Motion excludes
+    /// this sampling displacement; history sampling must reapply previous jitter.
+    pub current_jitter: JitterOffset,
 }
 
 impl MotionParams {
@@ -54,11 +58,11 @@ impl MotionParams {
             self.camera_offset.x,
             self.camera_offset.y,
             self.camera_offset.z,
-            0.0,
+            self.current_jitter.pixels[0] as f32,
             self.extent[0] as f32,
             self.extent[1] as f32,
             f32::from(self.previous_valid),
-            0.0,
+            self.current_jitter.pixels[1] as f32,
         ] {
             out[at..at + 4].copy_from_slice(&word.to_le_bytes());
             at += 4;
@@ -73,6 +77,7 @@ impl MotionParams {
             || !self.camera_offset.is_finite()
             || self.extent[0] == 0
             || self.extent[1] == 0
+            || self.current_jitter.ndc(self.extent).is_none()
         {
             return Err(BackendError::Device(
                 "invalid motion-vector parameters".into(),
@@ -237,6 +242,8 @@ pub struct SceneMotion {
     view: wgpu::TextureView,
     extent: [u32; 2],
     previous: Option<crate::view::ViewParams>,
+    jitter_enabled: bool,
+    submitted_frames: u64,
 }
 
 impl SceneMotion {
@@ -261,11 +268,30 @@ impl SceneMotion {
             view,
             extent,
             previous: None,
+            jitter_enabled: settings.temporal_jitter,
+            submitted_frames: 0,
         }))
     }
 
     pub fn target_bytes(&self) -> u64 {
         u64::from(self.extent[0]) * u64::from(self.extent[1]) * u64::from(BYTES_PER_PIXEL)
+    }
+
+    pub fn jitter_enabled(&self) -> bool {
+        self.jitter_enabled
+    }
+
+    /// Next primary sample; querying/encoding/skipping a frame never advances it.
+    pub fn jitter(&self) -> JitterOffset {
+        if self.jitter_enabled {
+            JitterOffset::halton(self.submitted_frames)
+        } else {
+            JitterOffset::ZERO
+        }
+    }
+
+    pub fn submitted_frames(&self) -> u64 {
+        self.submitted_frames
     }
 
     /// Diagnostic/adapter access; no host readback occurs in the normal loop.
@@ -275,6 +301,7 @@ impl SceneMotion {
 
     pub fn reset(&mut self) {
         self.previous = None;
+        self.submitted_frames = 0;
     }
 
     /// Invalid extents preserve live resources. Even an unchanged valid extent
@@ -301,8 +328,13 @@ impl SceneMotion {
         scene_color: &wgpu::TextureView,
         current: &crate::view::ViewParams,
     ) -> Result<(), BackendError> {
-        let block = crate::view::ViewUniformBlock::new(current)
-            .ok_or_else(|| BackendError::Device("invalid current motion view".into()))?;
+        let block = crate::view::ViewUniformBlock::new_jittered(
+            current,
+            current.world_position_m,
+            self.jitter(),
+            self.extent,
+        )
+        .ok_or_else(|| BackendError::Device("invalid current motion view".into()))?;
         let previous = self.previous.as_ref().unwrap_or(current);
         let previous_block = crate::view::ViewUniformBlock::new(previous)
             .ok_or_else(|| BackendError::Device("invalid previous motion view".into()))?;
@@ -320,6 +352,7 @@ impl SceneMotion {
                 previous_valid: self.previous.is_some()
                     && previous.clip_from_view == current.clip_from_view
                     && previous.exposure == current.exposure,
+                current_jitter: self.jitter(),
             },
         )
     }
@@ -327,6 +360,7 @@ impl SceneMotion {
     /// Commit only a successfully submitted primary-visibility frame.
     pub fn commit(&mut self, view: crate::view::ViewParams) {
         self.previous = Some(view);
+        self.submitted_frames = self.submitted_frames.wrapping_add(1);
     }
 }
 
@@ -377,6 +411,7 @@ mod tests {
             camera_offset: Vec3::new(-0.25, 0.5, -0.75),
             extent: [1920, 1080],
             previous_valid: true,
+            current_jitter: JitterOffset::ZERO,
         }
     }
 
@@ -396,6 +431,19 @@ mod tests {
         assert_eq!(word(148), 1080.0);
         assert_eq!(word(152), 1.0);
         assert!(params().validate().is_ok());
+        let mut sampled = params();
+        sampled.current_jitter = JitterOffset::new([0.5, -0.25]);
+        let bytes = sampled.to_bytes();
+        assert_eq!(f32::from_le_bytes(bytes[140..144].try_into().unwrap()), 0.5);
+        assert_eq!(
+            f32::from_le_bytes(bytes[156..160].try_into().unwrap()),
+            -0.25
+        );
+        assert!(sampled.validate().is_ok());
+        for bad in [f64::NAN, f64::INFINITY, 0.50001] {
+            sampled.current_jitter = JitterOffset::new([bad, 0.0]);
+            assert!(sampled.validate().is_err());
+        }
 
         let mut invalid = params();
         invalid.extent[0] = 0;

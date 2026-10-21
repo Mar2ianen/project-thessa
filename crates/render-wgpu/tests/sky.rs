@@ -24,6 +24,10 @@ fn backend() -> Option<Backend> {
 }
 
 fn renderer(backend: &Backend, empty: bool) -> (TerrainRenderer, TileAnchor) {
+    renderer_sampled(backend, empty, false)
+}
+
+fn renderer_sampled(backend: &Backend, empty: bool, jitter: bool) -> (TerrainRenderer, TileAnchor) {
     let anchor = TileAnchor::new(TileKey::new(4, 10, 512, 512).unwrap(), 6_000_000.0).unwrap();
     let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
     // Isolate background depth/composition from the legitimate material
@@ -31,6 +35,7 @@ fn renderer(backend: &Backend, empty: bool) -> (TerrainRenderer, TileAnchor) {
     // terrain_environment; it must not be mistaken for a depth overwrite.
     let settings = thessa_graphics::ResolvedGraphicsSettings {
         specular_reflections: false,
+        temporal_jitter: jitter,
         ..Default::default()
     };
     let mut terrain = TerrainRenderer::with_capacity_and_lighting(
@@ -98,6 +103,41 @@ fn srgb(value: f32) -> u8 {
         1.055 * value.powf(1.0 / 2.4) - 0.055
     };
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+#[test]
+fn primary_jitter_does_not_move_clear_sky_and_unresolved_jitter_is_rejected() {
+    use thessa_render_core::temporal::JitterOffset;
+    let Some(backend) = backend() else {
+        return;
+    };
+    let target = OffscreenTarget::new(&backend, 65, 33).unwrap();
+    let camera = view(DQuat::IDENTITY, DVec3::ZERO, 1.0);
+    let (mut ordinary, _) = renderer(&backend, true);
+    assert!(
+        ordinary
+            .update_view_jittered(&backend, &camera, [65, 33], JitterOffset::halton(0))
+            .is_err()
+    );
+    let (mut terrain, _) = renderer_sampled(&backend, true, true);
+    let mut binding = EnvironmentBinding::new(&backend.device);
+    binding.update(&backend, Some(&field(8, 4)));
+    terrain.share_environment(&backend, Some(&binding));
+    assert!(terrain.sky_enabled());
+    let baseline = draw(&backend, &mut terrain, &target, &camera);
+    for index in 0..8 {
+        terrain
+            .update_view_jittered(&backend, &camera, [65, 33], JitterOffset::halton(index))
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        terrain.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        assert_eq!(
+            target.read_rgba8(&backend).unwrap(),
+            baseline,
+            "clear-sky rays must not inherit the primary raster projection"
+        );
+    }
 }
 
 #[test]

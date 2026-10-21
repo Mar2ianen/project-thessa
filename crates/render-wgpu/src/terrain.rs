@@ -159,6 +159,9 @@ pub struct TerrainRenderer {
     frames: wgpu::Buffer,
     frame_staging: Vec<u8>,
     view: wgpu::Buffer,
+    /// Separate primary projection only in the opt-in jitter diagnostic. The
+    /// classifier, topology policy and clear sky retain `view` without jitter.
+    primary_view: Option<wgpu::Buffer>,
     vertices: wgpu::Buffer,
     draw: wgpu::Buffer,
     geometry: wgpu::ComputePipeline,
@@ -606,6 +609,14 @@ impl TerrainRenderer {
             &[0; ViewUniformBlock::BYTE_LEN],
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
+        let primary_view = settings.filter(|s| s.temporal_jitter).map(|_| {
+            upload(
+                device,
+                "cbt-primary-view",
+                &[0; ViewUniformBlock::BYTE_LEN],
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            )
+        });
         let transform = upload(
             device,
             "cbt-body-rotation",
@@ -835,7 +846,10 @@ impl TerrainRenderer {
         );
         let raster_layout = raster.get_bind_group_layout(0);
         let entries = [
-            (0, view.as_entire_binding()),
+            (
+                0,
+                primary_view.as_ref().unwrap_or(&view).as_entire_binding(),
+            ),
             (1, transform.as_entire_binding()),
             (
                 2,
@@ -992,6 +1006,7 @@ impl TerrainRenderer {
             frames,
             frame_staging: frames_data,
             view,
+            primary_view,
             vertices,
             draw,
             geometry,
@@ -1535,6 +1550,39 @@ impl TerrainRenderer {
         params: &ViewParams,
         extent: [u32; 2],
     ) -> Result<(), BackendError> {
+        self.update_view_jittered(
+            backend,
+            params,
+            extent,
+            thessa_render_core::temporal::JitterOffset::ZERO,
+        )
+    }
+
+    /// Primary raster jitter only. LOD/classification, sky and secondary passes
+    /// keep the unjittered view. Nonzero jitter requires resolved jitter settings
+    /// at construction; rejection occurs before any camera-buffer write.
+    pub fn update_view_jittered(
+        &mut self,
+        backend: &Backend,
+        params: &ViewParams,
+        extent: [u32; 2],
+        jitter: thessa_render_core::temporal::JitterOffset,
+    ) -> Result<(), BackendError> {
+        if !jitter.is_zero() && self.primary_view.is_none() {
+            return Err(BackendError::Device(
+                "primary jitter is not resolved for this terrain renderer".into(),
+            ));
+        }
+        let primary = if self.primary_view.is_some() {
+            Some(
+                ViewUniformBlock::new_jittered(params, params.world_position_m, jitter, extent)
+                    .ok_or_else(|| {
+                        BackendError::Device("invalid primary camera uniforms".into())
+                    })?,
+            )
+        } else {
+            None
+        };
         let camera = params.world_position_m.to_array();
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
@@ -1566,6 +1614,9 @@ impl TerrainRenderer {
             }
         }
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
+        if let (Some(buffer), Some(primary)) = (&self.primary_view, primary) {
+            backend.queue.write_buffer(buffer, 0, &primary.to_bytes());
+        }
         self.camera = camera;
         Ok(())
     }

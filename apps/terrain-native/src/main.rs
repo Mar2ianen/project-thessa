@@ -568,10 +568,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut motion =
             thessa_render_wgpu::motion::SceneMotion::new(&backend, &resolved, [width, height])?;
         println!(
-            "native_motion_vectors={} target_bytes={} opaque_only=true taa=false jitter=false",
+            "native_motion_vectors={} target_bytes={} opaque_only=true taa=false jitter={}",
             motion.is_some(),
             motion.as_ref().map_or(0, |m| m.target_bytes()),
+            motion.as_ref().is_some_and(|m| m.jitter_enabled()),
         );
+        if resolved.temporal_jitter {
+            eprintln!(
+                "primary jitter diagnostics are enabled without a temporal resolve; visible subpixel trembling is expected, not antialiasing"
+            );
+        }
         let stream_started = Instant::now();
         while stream_started.elapsed().as_secs_f64() < prestream_seconds {
             scene.tick(
@@ -654,7 +660,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
             let stream_ms = stream_start.elapsed().as_secs_f64() * 1000.0;
             let view = scene.view(width, height, exposure);
-            renderer.update_view_for_extent(&backend, &view, [width, height])?;
+            let jitter = motion
+                .as_ref()
+                .map_or(thessa_render_core::temporal::JitterOffset::ZERO, |m| {
+                    m.jitter()
+                });
+            renderer.update_view_jittered(&backend, &view, [width, height], jitter)?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
             scene.update_plume(&backend, &mut renderer, width, height, exposure)?;
             scene.update_sky_layers(&backend, &sky_layers, width, height, exposure)?;
@@ -665,6 +676,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
             if let Some(mesh) = &mut mesh_renderer {
                 scene.update_mesh(&backend, mesh, width, height, exposure)?;
+                mesh.update_primary_jitter(&backend, &view, [width, height], jitter)?;
                 mesh.sync_rt_terrain(&backend, &renderer)?;
             }
             let mut encoder = backend.device.create_command_encoder(&Default::default());

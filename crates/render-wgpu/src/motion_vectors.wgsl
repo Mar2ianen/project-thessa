@@ -1,8 +1,8 @@
 struct MotionParams {
     current_world_from_clip: mat4x4<f32>,
     previous_clip_from_world: mat4x4<f32>,
-    camera_offset: vec4<f32>,
-    extent: vec4<f32>,
+    camera_offset: vec4<f32>, // xyz: origin delta, w: current jitter x in pixels
+    extent: vec4<f32>, // xy: target extent, z: previous valid, w: jitter y in pixels
 };
 
 @group(0) @binding(0) var<uniform> params: MotionParams;
@@ -41,7 +41,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     previous.x / previous.w * 0.5 + 0.5,
                     0.5 - previous.y / previous.w * 0.5,
                 );
-                motion = previous_uv - uv;
+                // Reconstruction used the matching jittered inverse. The
+                // velocity contract excludes sampling jitter, not camera
+                // motion: current unjittered UV = raster UV - jitter / extent.
+                let current_jitter = vec2<f32>(params.camera_offset.w, params.extent.w);
+                motion = previous_uv - (uv - current_jitter / params.extent.xy);
                 // A NaN comparison is false; reject it before publishing a
                 // vector that would poison history sampling.
                 valid = all(abs(motion) <= vec2<f32>(65504.0));

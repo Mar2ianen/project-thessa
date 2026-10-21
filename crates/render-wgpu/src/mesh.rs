@@ -728,6 +728,25 @@ impl MeshRenderer {
             .as_ref()
             .map(|_| (self.instances.clone(), self.shadow_revision))
     }
+
+    /// Override only primary camera sampling after the ordinary instance update,
+    /// before encoding. Does not touch instance/shadow/RT state. The zero-jitter
+    /// path needs no extra upload because `update` already publishes that view.
+    pub fn update_primary_jitter(
+        &mut self,
+        backend: &Backend,
+        view: &ViewParams,
+        extent: [u32; 2],
+        jitter: thessa_render_core::temporal::JitterOffset,
+    ) -> Result<(), BackendError> {
+        if jitter.is_zero() {
+            return Ok(());
+        }
+        let block = ViewUniformBlock::new_jittered(view, view.world_position_m, jitter, extent)
+            .ok_or_else(|| fail("invalid primary mesh camera"))?;
+        backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
+        Ok(())
+    }
     /// Encode acceleration-structure builds (TLAS/BLAS) outside the render pass,
     /// before draw_into_pass(). Empty draw sets do no AS work.
     pub fn encode_rt(&mut self, encoder: &mut wgpu::CommandEncoder) {

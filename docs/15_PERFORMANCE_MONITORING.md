@@ -38,6 +38,10 @@ sum `scene_classify_and_raster + scene_overlays` for that historical boundary.
 Motion diagnostics report actual `native_motion_vectors` and
 `native_motion_target_bytes`; off allocates no motion target/pipeline. They
 do not enable TAA/history or change visible scene RGB (doc 76).
+The separate default-off `[temporal].jitter` diagnostic deliberately changes
+primary visibility without resolving it. `native_primary_jitter` records the
+applied mode, and `native_jitter_submitted_frames` counts real submitted frames
+since reset (including capture warmup), not physics ticks or generated frames.
 The v3 scene target is RGBA16Float when native HDR resolves on, otherwise the
 original RGBA8 sRGB target. Compare formats/quality, not only matching scope
 names, with historical v2 captures. Native capture metadata records actual

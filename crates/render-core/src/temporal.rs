@@ -141,13 +141,10 @@ pub fn project_uv_depth(
 
 /// Reconstruct an absolute world position from a y-down UV and DirectX depth.
 ///
-/// `world_from_clip_unjittered` must be the inverse of the unjittered
-/// projection, not of the jittered primary-visibility matrix.
-pub fn world_from_depth(
-    world_from_clip_unjittered: DMat4,
-    uv: [f64; 2],
-    depth: f64,
-) -> Option<DVec3> {
+/// The inverse must match the projection that produced `uv` and `depth`.
+/// For a jittered raster sample, use the jittered inverse (or remove jitter from
+/// UV before using the unjittered inverse). Never mix these conventions.
+pub fn world_from_depth(world_from_clip: DMat4, uv: [f64; 2], depth: f64) -> Option<DVec3> {
     if !uv.iter().all(|value| value.is_finite())
         || !(0.0..=1.0).contains(&uv[0])
         || !(0.0..=1.0).contains(&uv[1])
@@ -157,7 +154,7 @@ pub fn world_from_depth(
         return None;
     }
     let ndc = DVec3::new(uv[0] * 2.0 - 1.0, 1.0 - uv[1] * 2.0, depth);
-    let homogeneous = world_from_clip_unjittered * ndc.extend(1.0);
+    let homogeneous = world_from_clip * ndc.extend(1.0);
     if !homogeneous.is_finite() || homogeneous.w.abs() <= f64::MIN_POSITIVE {
         return None;
     }
@@ -228,6 +225,30 @@ mod tests {
 
     fn perspective() -> DMat4 {
         dcamera::rh::proj::directx::perspective(1.0, 1.5, 0.1, 1_000.0)
+    }
+
+    #[test]
+    fn jittered_depth_requires_its_matching_inverse_and_motion_excludes_jitter() {
+        let extent = [1920, 1080];
+        let base = perspective();
+        let point = DVec3::new(0.3, -0.2, -10.0);
+        let (unjittered_uv, _) = project_uv_depth(base, point).unwrap();
+        for index in 0..16 {
+            let jitter = JitterOffset::halton(index);
+            let sampled = jitter.apply(base, extent).unwrap();
+            let (sample_uv, depth) = project_uv_depth(sampled, point).unwrap();
+            let reconstructed = world_from_depth(sampled.inverse(), sample_uv, depth).unwrap();
+            assert!((point - reconstructed).length() < 1e-10);
+            let wrong = world_from_depth(base.inverse(), sample_uv, depth).unwrap();
+            assert!(
+                (point - wrong).length() > 1e-6,
+                "unjittered inverse at a jittered pixel must not accidentally pass"
+            );
+            let corrected_uv =
+                std::array::from_fn(|c| sample_uv[c] - jitter.pixels[c] / f64::from(extent[c]));
+            let motion = motion_uv(corrected_uv, unjittered_uv).unwrap();
+            assert!(motion.iter().all(|v| v.abs() < 1e-15));
+        }
     }
 
     fn camera_at(x: f64) -> DMat4 {

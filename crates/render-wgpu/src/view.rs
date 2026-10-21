@@ -63,7 +63,8 @@ impl ViewUniformBlock {
     /// `clip_from_view`, `clip_from_world`, `view_from_clip` and
     /// `world_from_clip` describe the jittered sample. The separate
     /// `unjittered_clip_from_world` field is always built from the original
-    /// projection and is the only matrix temporal reprojection may use.
+    /// projection. Reconstruct stored depth with the matching jittered inverse;
+    /// compare motion in unjittered UVs after removing the current pixel jitter.
     ///
     /// A zero offset is valid for any extent and is byte-identical to
     /// [`Self::new_relative`]. A non-zero offset requires a non-empty extent.

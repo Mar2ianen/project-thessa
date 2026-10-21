@@ -278,6 +278,8 @@ pub struct ResolvedGraphicsSettings {
     pub hdr: bool,
     #[serde(default)]
     pub temporal_motion_vectors: bool,
+    #[serde(default)]
+    pub temporal_jitter: bool,
     pub bloom: bool,
     pub exposure_ev100: f32,
     pub auto_exposure: bool,
@@ -495,6 +497,10 @@ impl ResolvedGraphicsSettings {
         let mut notes = Vec::new();
         let hdr = requested.renderer.hdr && caps.hdr_render_target_supported != Some(false);
         let temporal_motion_vectors = requested.temporal.motion_vectors && hdr;
+        let temporal_jitter = requested.temporal.jitter && temporal_motion_vectors;
+        if requested.temporal.jitter && !temporal_jitter {
+            notes.push("primary jitter diagnostics require resolved motion-vector diagnostics; using zero jitter".into());
+        }
         if requested.temporal.motion_vectors && !temporal_motion_vectors {
             notes.push(
                 "motion-vector diagnostics require a supported RGBA16Float HDR target; using the non-temporal reference"
@@ -644,6 +650,7 @@ impl ResolvedGraphicsSettings {
             vsync: requested.renderer.vsync,
             hdr,
             temporal_motion_vectors,
+            temporal_jitter,
             bloom: requested.renderer.bloom,
             exposure_ev100: if requested.renderer.exposure_ev100.is_finite() {
                 requested.renderer.exposure_ev100.clamp(-16.0, 32.0)
@@ -920,6 +927,7 @@ impl ResolvedGraphicsSettings {
             "temporal_motion_vectors".to_string(),
             self.temporal_motion_vectors.to_string(),
         );
+        map.insert("temporal_jitter".into(), self.temporal_jitter.to_string());
         map.insert("bloom".to_string(), self.bloom.to_string());
         map.insert(
             "exposure_ev100".to_string(),
@@ -1137,6 +1145,45 @@ mod tests {
             crate::describe()
                 .iter()
                 .any(|m| m.path == "temporal.motion_vectors" && m.restart_required)
+        );
+    }
+
+    #[test]
+    fn jitter_diagnostics_require_motion_and_hdr() {
+        let mut requested = RequestedGraphics::default();
+        assert!(!requested.temporal.jitter);
+        requested.temporal.jitter = true;
+        for motion in [false, true] {
+            requested.temporal.motion_vectors = motion;
+            for hdr in [false, true] {
+                requested.renderer.hdr = hdr;
+                assert_eq!(
+                    RequestedGraphics::from_toml(&toml::to_string(&requested).unwrap()).unwrap(),
+                    requested
+                );
+                for supported in [None, Some(false), Some(true)] {
+                    let caps = Capabilities {
+                        hdr_render_target_supported: supported,
+                        ..Default::default()
+                    };
+                    let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+                    let expected = motion && hdr && supported != Some(false);
+                    assert_eq!(resolved.temporal_jitter, expected);
+                    assert_eq!(
+                        resolved.as_meta_map()["temporal_jitter"],
+                        expected.to_string()
+                    );
+                    assert_eq!(
+                        resolved.notes.iter().any(|n| n.contains("zero jitter")),
+                        !expected
+                    );
+                }
+            }
+        }
+        assert!(
+            crate::describe()
+                .iter()
+                .any(|m| m.path == "temporal.jitter" && m.restart_required)
         );
     }
 

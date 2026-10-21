@@ -176,6 +176,9 @@ pub(crate) fn base_capture_metadata(
         ("native_hdr", display.enabled().to_string()),
         ("native_motion_vectors", motion.is_some().to_string()),
         ("native_motion_target_bytes", motion.map_or(0, |m| m.target_bytes()).to_string()),
+        ("native_primary_jitter", motion.is_some_and(|m| m.jitter_enabled()).to_string()),
+        ("native_jitter_submitted_frames", motion.map_or(0, |m| m.submitted_frames()).to_string()),
+        ("native_jitter_scope", "Halton primary terrain/meshes only; motion excludes sampling jitter; no resolve/TAA; secondary view unchanged".into()),
         ("native_motion_scope", "render.motion_vectors; stored opaque depth + alpha mask, before translucent overlays; no TAA/history".into()),
         (
             "native_hdr_target_bytes",

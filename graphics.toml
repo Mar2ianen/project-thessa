@@ -53,8 +53,11 @@ fleet_quality = "high" # low/medium/high: cull meshes below 8/2/0.5 projected pi
 # Diagnostic precursor to TAA, not a visible antialiasing mode. Requires HDR;
 # stores scene depth and produces RGBA16F camera motion before plume/clouds.
 # Ocean and all rigid meshes are invalid until object motion is implemented.
-# Disabled is allocation/dispatch-free. No jitter or colour history yet.
+# Disabled is allocation/dispatch-free. No colour history/resolve yet.
 motion_vectors = false
+# Diagnostic only: requires motion_vectors, visibly jitters primary terrain and
+# meshes without resolving them. Shadows/LOD/RT/sky/HUD remain unjittered.
+jitter = false
 
 [terrain_topology]
 # Native persistent conforming CBT; false retains regular patches at zero extra cost.

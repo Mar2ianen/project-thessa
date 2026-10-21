@@ -75,6 +75,9 @@ The checked-in vertical slice currently contains:
   World-addressed rock/plant descriptors preserve identities across query LOD
   and density, with the existing offline plant bake consumer
   ([doc 70](docs/70_WORLD_SCATTER_IDENTITY.md)); native foliage remains unimplemented.
+  A plant-only callback now borrows the canonical attached field for 32 m ground
+  and placement slope, material-consistent ecological cover and coarse lake/ocean
+  rejection; this CPU foundation is not runtime instance streaming or rendering.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

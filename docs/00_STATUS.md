@@ -93,7 +93,7 @@ do not update in place).
 | `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 framing/orbit/pan/zoom, body/PRIMARY selection/follow, cached Kepler curves, physics-JIT coast-cache consumer sharing execution guards and bounded interval, dominant-body Ap/Pe/escape/local-wake readouts, exclusive input ownership, shared-device egui and headless capture | powered/live executable JIT futures (never substituted with conditional coasts), remote JIT/next-wake transport, richer celestial appearance and independent usability/platform acceptance |
 | `68_NATIVE_NIGHT_LIGHTS.md` | 🟡 native primary-terrain optical slice | direct retained inhabited-land mask producer, resolved Low/Medium/High budgets, cached startup-only bake/upload, regular/conforming shared primary emission and zero-work disable; CPU parity and hardware numerical/source tests | calibrated radiance/activity, multi-source illumination/eclipses, secondary-ray emission and whole-frame visual/temporal acceptance |
 | `69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md` | 🟡 primary terrain normal/sky-reflection slice | optional RG8 material normals through shared native residency, metric-correct cube-sphere gradients and slope blending, bounded substrate/exposure/cover response and small geology-linked roughness priors, resolved disable/+2/+1/+0 mip tiers and raster Lambert oracle; shared sky/cloud rough GGX with resolved 4/8/16 clear directions or 1/2/4 cloud columns; regular/conforming reflection oracles and scoped GPU diagnostic | calibrated natural substrate relief/strata, vegetation, general HDR/cloud quadrature error/convergence, primary scene-object reflections and close-up/visual/platform acceptance |
-| `70_WORLD_SCATTER_IDENTITY.md` | 🟡 world scatter foundation | fixed world-local IDs, cross-LOD/query unions, density subsets, local callback eligibility and explicit budgets; existing offline plant bake consumer; historical compatibility and roundoff/allocation regressions | full runtime terrain placement, instance streaming, shared-mesh native foliage/rocks and collision ownership |
+| `70_WORLD_SCATTER_IDENTITY.md` | 🟡 world scatter and canonical CPU sampling | fixed world-local IDs, cross-LOD/query unions, density subsets and explicit budgets; existing offline plant consumer plus a borrowed attached-field plant callback with fixed ground/placement/material scales and coarse basin/ocean rejection | resident-mesh root agreement, local water geometry, instance streaming, shared-mesh native foliage/rocks and collision ownership |
 | `71_NATIVE_SURFACE_ACCEPTANCE.md` | 🟡 reproducible surface camera | fixed numeric targets, exact radial 50 m/2 m eye clearance, source/camera metadata and unchanged default survey/launch ownership | resident-mesh clearance/convergence, complete 2 km visual coverage and blind visual acceptance |
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
@@ -143,6 +143,14 @@ The [world scatter foundation](70_WORLD_SCATTER_IDENTITY.md) replaces tile/densi
 seeding with fixed world-local IDs, exact partition unions and nested density
 subsets, explicit resource/density errors, and the existing offline plant consumer.
 It does not implement native runtime foliage or full runtime-terrain placement.
+
+WORLD-03 adds a plant-only canonical surface callback for the existing scatter
+kernel, reusing the attached field's final height, metric geometry, ecology and
+coarse hydrology descriptors. This closes the CPU sampler handoff, not native
+plant publication, contact/obstacle ownership or finer shoreline geometry. The
+existing offline frozen-DEM consumer deliberately keeps its historical behavior;
+no erosion artifact, world height or historical plant ID is rewritten. See
+[doc 70](70_WORLD_SCATTER_IDENTITY.md) for contracts, evidence and limitations.
 
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606

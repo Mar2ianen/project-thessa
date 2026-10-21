@@ -702,7 +702,7 @@ const GPU_MATERIAL_PAGE_CELLS: usize = 125;
 // Material classification must not depend on the page's LOD.  This is long
 // enough to reject unresolved grain while retaining the slope that drives
 // rock/vegetation/snow transitions.
-const MATERIAL_SLOPE_WAVELENGTH_M: f64 = 256.0;
+pub(crate) const MATERIAL_SLOPE_WAVELENGTH_M: f64 = 256.0;
 
 /// Build the fixed 128x128 material page for one canonical cube-sphere tile.
 ///

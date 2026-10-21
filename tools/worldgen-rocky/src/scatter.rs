@@ -18,6 +18,36 @@ const JITTER_BITS: u8 = 24;
 const MAX_ROCK_DENSITY_PER_KM2: f64 = 640.0;
 pub const PLANT_DENSITY_PER_KM2: f64 = 3000.0;
 
+/// Fixed canonical ground/placement cutoff and geometry scale, in metres.
+/// This is a plant placement contract, not a query/render LOD or erosion grid.
+pub const PLANT_SURFACE_WAVELENGTH_M: f64 = 32.0;
+
+/// Plant-only callback adapter for the caller's existing canonical field,
+/// including its attached global/regional erosion and retained analytic bands.
+/// Borrow the field from `TerrainStream::field` / `canonical_world_field`;
+/// this function neither loads nor caches another world.
+///
+/// Ground and placement slope use the fixed 32 m contract (a centred +/-16 m
+/// final-height stencil). Ecological cover uses the same fixed 256 m geometry
+/// as material pages, not the zero slope from `sample_surface` or a tile LOD.
+/// Water retains the coarse basin-cell descriptor limitations of
+/// `PlanetField::water_height_m`. No rock-density noise is invented here.
+/// `dir` must be a finite body-fixed unit direction; the scatter kernel
+/// guarantees this precondition for its surface callback.
+pub fn canonical_plant_surface(field: &crate::field::PlanetField, dir: [f64; 3]) -> ScatterSurface {
+    let sample = field.sample_surface(dir, PLANT_SURFACE_WAVELENGTH_M);
+    let slope = field.surface_geometry(dir, PLANT_SURFACE_WAVELENGTH_M).0;
+    let material_slope = field
+        .surface_geometry(dir, crate::lod::MATERIAL_SLOPE_WAVELENGTH_M)
+        .0;
+    ScatterSurface::plants(
+        sample.height_m,
+        slope,
+        Some(field.water_height_m(dir)),
+        crate::ecology::vegetation_cover(&sample, material_slope),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScatterKind {
     SmallRock,
@@ -455,3 +485,7 @@ fn pick_rock_kind(seed: u64, id: ScatterId, s: ScatterSurface) -> ScatterKind {
 #[cfg(test)]
 #[path = "scatter_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "scatter_runtime_tests.rs"]
+mod runtime_tests;

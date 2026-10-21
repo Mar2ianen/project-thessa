@@ -1095,24 +1095,13 @@ fn frozen_slope(world: &FrozenSurface, dir: [f64; 3]) -> f64 {
 }
 
 fn frozen_water_height(world: &FrozenSurface, dir: [f64; 3]) -> Option<f64> {
-    let (lat, lon) = crate::sphere::latlon_from_dir(dir);
-    let r = ((lat + 90.0) / world.recipe.grid_step_deg).round() as usize;
-    let c = ((lon + 180.0).rem_euclid(360.0) / world.recipe.grid_step_deg).round() as usize
-        % world.lons.len();
-    Some(
-        world
-            .lakes
-            .iter()
-            .filter(|lake| {
-                !lake.salt_flat
-                    && lake
-                        .cells
-                        .binary_search(&[r.min(world.lats.len() - 1), c])
-                        .is_ok()
-            })
-            .map(|lake| lake.surface_height_m)
-            .fold(0.0, f64::max),
-    )
+    Some(crate::field::basin_water_height_m(
+        &world.lakes,
+        world.recipe.grid_step_deg,
+        world.lats.len(),
+        world.lons.len(),
+        dir,
+    ))
 }
 
 fn plant_prototypes() -> Vec<PlantMesh> {

@@ -1,7 +1,8 @@
 # 70 — World-addressed rock and plant scatter
 
-**Status:** WORLD-01 foundation, renderer-neutral descriptors and the existing
-offline plant consumer. No production runtime foliage/rock renderer, streaming
+**Status:** WORLD-01 foundation, WORLD-03 CPU canonical plant-surface adapter,
+renderer-neutral descriptors and the existing offline plant consumer.
+No production runtime foliage/rock renderer, streaming
 instance cache, collision ownership, graphics quality integration or visual
 acceptance is claimed. The historical snapshots in docs 49–52 remain historical.
 
@@ -11,7 +12,9 @@ acceptance is claimed. The historical snapshots in docs 49–52 remain historica
 placement kernel; there is no retained parallel legacy placement API. Repository
 consumer inspection found only `offline.rs::bake_plants`, now using this API.
 Rock descriptors share that kernel but have no production rendering consumer.
-Existing native terrain/appearance code is unchanged.
+Existing native terrain/appearance code is unchanged. The WORLD-03 adapter
+below supplies the existing kernel from an attached `PlanetField`; it does not
+add a production instance-streaming consumer or replace the offline callback.
 
 Inputs are world seed, datum radius in metres, an existing `lod::TileKey` query
 window, rock/plant population, explicit policy and a pure local final-surface
@@ -170,10 +173,10 @@ DEM, not the attached `PlanetField`'s preserved fine analytic bands or regional
 erosion hierarchy (doc 52). Ecological interpolation is a stored final-bake proxy,
 not a fresh high-resolution ecology solve. Lake membership retains the existing
 nearest hydrology-cell descriptor boundary, not resolved shore/channel geometry;
-rivers/wetland ponds have no resolved water mask here. The API can consume a
-future coherent final runtime sampler without changing candidate IDs, but this
-change does not claim that integration. The offline callback does not evaluate
-unused analytic biome/geology metadata or use it to override final cover.
+rivers/wetland ponds have no resolved water mask here. The API can consume the
+coherent attached-field sampler below without changing candidate IDs. The
+offline callback deliberately retains its historical frozen-DEM behavior; it
+does not evaluate unused analytic biome/geology metadata or override final cover.
 
 New `PlantInstance.id` values are retained in the existing frozen wire format;
 the optional additive field leaves historical schema-2/3/4 bakes readable with
@@ -197,6 +200,168 @@ The final cheap-callback L10 plant diagnostic visited 1,048,576 candidates and
 returned 117,401 items: median 33.336 ms, sample p95 34.108 ms over 15 iterations.
 It ran under different concurrent load from the earlier 55.4 ms observation;
 this is not a measured speedup, runtime canonical-field cost, or renderer result.
+
+## WORLD-03: canonical plant-surface callback
+
+`scatter::canonical_plant_surface(&PlanetField, direction)` is a narrow plant-only
+adapter for `scatter_region`. It borrows the caller's field: production callers
+already obtain the canonical `Arc<PlanetField>` from `TerrainStream::field()` or
+`flight-authority::launch_site::canonical_world_field()`. There is no new loader,
+provider, cache, streamer, or renderer. The adapter samples whichever field it
+is given; attachment/source validation remains the existing field owner's job.
+Both new public samplers (`canonical_plant_surface` and `water_height_m`) require
+a **finite body-fixed unit direction**. The scatter kernel guarantees this
+precondition; these are not fallible validation APIs for arbitrary vectors.
+
+```rust,ignore
+let field = terrain_stream.field(); // Existing source-checked canonical Arc.
+let batch = scatter_region(
+    field.params.seed,
+    field.params.radius_m,
+    region,
+    ScatterPopulation::Plants,
+    policy,
+    |dir| canonical_plant_surface(field, dir),
+)?;
+```
+
+The fixed contracts are intentionally distinct and never depend on query LOD,
+camera, density, worker order, or mesh resolution:
+
+| Input | Source and physical scale |
+| --- | --- |
+| Signed ground elevation, SI metres | `sample_surface(dir, PLANT_SURFACE_WAVELENGTH_M)` at **32 m** minimum wavelength; exactly the direct `height_m(dir, 32)` value, without height corrections or storage quantization |
+| Placement slope, rise/run | `surface_geometry(dir, 32).0`, centred **±16 m** final-height stencil, including attached global/regional erosion and retained analytic relief |
+| Ecological cover | `ecology::vegetation_cover` using that final 32 m semantic sample and **256 m** geometry slope, shared directly with the existing `lod::MATERIAL_SLOPE_WAVELENGTH_M` source of truth (±128 m stencil) |
+| Water elevation, SI metres | `PlanetField::water_height_m(dir)`: ocean datum **0 m**, or the larger non-saline lake descriptor elevation at the nearest hydrology cell |
+
+The 32 m constant is a placement contract, deliberately independent of texture
+quality. `sample_surface` alone leaves `slope_hint = 0`; that value and the older
+approximate `sample` slope hint are not placement geometry. Using the finer
+placement slope for ecology would also change the material's existing cover
+contract. The adapter evaluates no new `rocky01` noise: the existing
+`ScatterSurface::plants` constructor supplies unused rock placeholders. It is
+not a rock-surface adapter. The fixed-address kernel, IDs, policy, and historical
+plant identifiers/wire compatibility are unchanged.
+
+### Physical and numerical limits
+
+The geometry API differentiates height against datum-sphere arc metres. With
+half-stencil distance `d`, a smooth directional height function's central
+derivative truncation is bounded by `max_abs_third_derivative * d² / 6` per
+component (`d = 16 m` for placement; `128 m` for material). The slope magnitude
+error is at most the norm of the component errors, before floating-point height
+evaluation error. At nonzero elevation this is the existing datum-sphere metric,
+not a new relief-surface arc-length correction. No universal third-derivative
+bound is established across noise knots, DEM triangle edges, clamps, or regional
+blend boundaries; there is **no global absolute physical slope-error guarantee**.
+The WORLD00 landmark regression uses the existing 1e−5 m height tolerance and
+1e−9 rise/run tolerance against its rounded documented slope; these are numerical
+regression tolerances, not terrain/model accuracy bounds.
+
+A 32 m cutoff preserves finer analytic relief relative to the frozen DEM, but
+does not establish 32 m resolved erosion: bundled regional erosion is nominally
+256 m. Nor does a sampled plant acquire a new collision height contract; its
+stored ground is exactly the chosen canonical 32 m surface. Finer surface bands
+may differ and are not corrected or bounded by this checkpoint.
+
+The water accessor and offline wrapper share the **extracted, unchanged**
+nearest-cell basin lookup: round latitude/longitude to a hydrology cell, wrap
+longitude, clamp the pole row, ignore saline basins, and take the maximum above
+the ocean datum. Dimensions come from the hydrology grid, not the 2° climate
+context. The bundled attachment uses 0.5° cells (approximately 27.93 km meridional
+spacing at R = 3,200,000 m; nearest-cell latitude support ±13.96 km), not metre-scale
+lake geometry. Water elevation 0 on positive land is a comparison threshold,
+not a wet/dry declaration. This is not a shoreline-position error envelope,
+resolved river/wetland-pond mask, water-volume solve, or continuous coastal
+distance field. Unsupported local water geometry remains a known gap.
+
+Frozen validation accepts unsorted basin cells, while the retained lookup uses
+binary search. `with_frozen_erosion` therefore sorts **only the field-owned cloned
+cell vectors**, once at attachment. The accepted frozen input, validator,
+extracted helper, and historical offline wrapper/output behavior are unchanged.
+An accepted reversed-cell bundled fixture reproduced a silent miss at cell
+`[17, 342]` (0 m instead of 413.0495928638749 m); the regression now matches the
+sorted control at every cell in that lake and checks that the input stays reversed.
+
+### CPU evidence and timing
+
+Baseline: `20c3098d558bfbe9b232a0163813e9cdc52b31f0`, branch
+`feat/canonical-plant-sampling`, exclusive worktree
+`/home/chechulin/Projects/project-thessa-plant-sampling`. No frozen erosion
+artifact or dated WORLD00 audit was modified. The focused tests reconstruct the
+same bundled, source-checked attachment as the existing WORLD00 example and
+launch-site loader, without a game-crate dependency or erosion rebake.
+
+`scatter_runtime_tests.rs` verifies the existing WORLD00 land/ocean special
+cases; separate placement/material slopes and cover consistency over 81 nearby
+points; attached 0.5° lake membership/saline exclusion; non-vacuous rejection of
+otherwise eligible plants in bundled fresh basin 241; and exact parent/reversed
+children/repeat/density-subset descriptors and per-instance direct ground height
+in `(face=1, L14, x=6018, y=11888)`. A shared-helper regression pins dry/ocean
+fallback, salt exclusion, maximum level, nearest-cell membership, poles, and the
+longitude seam. Existing offline scatter tests retain their original fixtures
+and exercise the unchanged wrapper behavior.
+
+Every Cargo command uses this worktree's **own** target:
+
+```bash
+TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp \
+  CARGO_TARGET_DIR="$PWD/target" \
+  cargo test -p thessa-worldgen-rocky --lib --bins
+TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp \
+  CARGO_TARGET_DIR="$PWD/target" \
+  cargo clippy -p thessa-worldgen-rocky --all-targets --all-features -- -D warnings
+```
+
+Actually run: **229 library + 5 CLI tests passed**; the timing diagnostic is
+ignored in normal tests and was subsequently run explicitly in release mode.
+Scoped all-target/all-feature Clippy, changed-file
+`rustfmt --edition 2024 --check`, `git diff --check`, the architecture metadata
+gate (12 guarded crates), and the unmodified WORLD00 example regression
+(`cargo test -p thessa-worldgen-rocky --example surface_patch_audit`, 1 passed)
+also passed. Logs are in this worktree's `target/world03-evidence/`:
+`worldgen-tests.log`, `clippy.log`, `architecture.log`, and
+`world00-regression.log`. These are CPU/source gates, not whole-workspace CI.
+`unsorted-lake-before-fix.log` records the failing accepted-input regression;
+`unsorted-lake-after-fix.log` records its pass after field-only normalization.
+
+An explicitly ignored CPU timing diagnostic reuses the same actual attached
+field, sampling its WORLD00 parent window `(1, L12, 1504, 2972)` at density scales
+0, 0.25, and 1. Nonzero cases visit 65,536 canonical cells. Attachment loading,
+parent/child equality, and exact stored-height checks are outside timing; each
+of 15 timed queries includes candidate enumeration, actual field/ecology/water
+sampling, allocation, sorting, and drop. Output columns are scenario, density
+scale, visited candidates, surface samples, items, median ms, nearest-rank p95
+ms. **Do not run while the parent's native GPU gates are active.** Afterwards:
+
+```bash
+TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp \
+  CARGO_TARGET_DIR="$PWD/target" \
+  cargo test --release -p thessa-worldgen-rocky --lib \
+  scatter::runtime_tests::canonical_plant_batch_cost -- --exact --ignored --nocapture
+```
+
+After the parent's native GPU gates finished, the release diagnostic passed
+on Linux x86-64, AMD Ryzen AI 9 H 365, rustc 1.99.1:
+
+| Density scale | Candidates | Surface samples | Items | Median ms | Sample p95 ms |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0 | 0 | 0 | 0.000040 | 0.000100 |
+| 0.25 | 65,536 | 1,303 | 910 | 32.435672 | 32.782649 |
+| 1 | 65,536 | 5,166 | 3,752 | 81.865647 | 122.619487 |
+
+Exact command/build output, counters, and timings are in
+`target/world03-evidence/canonical-plants-cost.log`; hardware/compiler metadata
+are in `cpu.txt` and `rustc.txt` there. This agent launched no other test/build job
+alongside the timed run, but process affinity, thermals, and unrelated
+machine activity were not controlled. The near-zero row is timer-scale overhead,
+not a stable nanosecond performance budget. This is an actual canonical CPU
+sampling cost diagnostic, **not a speedup comparison**, frame-budget acceptance,
+renderer/visual/collision result, or whole-workspace CI. The earlier cheap-callback
+timings used different surfaces/scenarios and are not a same-workload baseline.
+README/status integration was synchronized by the parent; final combined
+workspace/hardware checks are recorded separately from these isolated CPU gates.
 
 ## Evidence and reproduction
 

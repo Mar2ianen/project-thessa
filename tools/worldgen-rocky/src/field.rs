@@ -289,6 +289,11 @@ impl PlanetField {
         // coarser rerouting that would erase smaller basins and tributaries.
         self.context.rivers = world.rivers.clone();
         self.context.lakes = world.lakes.clone();
+        // Frozen validation permits unordered cells. Normalize only our clone
+        // for binary lookup; leave accepted artifacts and offline behavior alone.
+        for lake in &mut self.context.lakes {
+            lake.cells.sort_unstable();
+        }
         self.context.hydrology_step_deg = world.recipe.grid_step_deg;
         self.context.salt_spill_m = vec![vec![None; world.lons.len()]; world.lats.len()];
         for lake in &world.lakes {
@@ -318,6 +323,22 @@ impl PlanetField {
 
     pub fn hydrology_grid_step_deg(&self) -> f64 {
         self.context.hydrology_step_deg
+    }
+
+    /// Ocean datum (0 m) or the higher non-saline basin-cell water elevation,
+    /// in metres above the same datum as `height_m`. Compare against final
+    /// ground height to determine submergence; zero does not mean wet land.
+    /// This retains the offline nearest hydrology-cell membership, not a
+    /// resolved shoreline, river/channel surface, or actual water inventory.
+    /// `dir` must be a finite body-fixed unit direction, as supplied by scatter.
+    pub fn water_height_m(&self, dir: [f64; 3]) -> f64 {
+        basin_water_height_m(
+            &self.context.lakes,
+            self.context.hydrology_step_deg,
+            self.context.salt_spill_m.len(),
+            self.context.salt_spill_m[0].len(),
+            dir,
+        )
     }
 
     /// Meridional spacing of the regional ocean-distance context, in metres.
@@ -950,6 +971,27 @@ impl PlanetField {
     }
 }
 
+/// Shared historical offline water contract. The dimensions belong to the
+/// hydrology grid (which can be finer than the field's 2-degree context).
+/// Binary lookup requires sorted basin cells. Attachment normalizes the
+/// field-owned clone; the historical offline caller retains its old behavior.
+pub(crate) fn basin_water_height_m(
+    lakes: &[crate::hydro::LakeBasin],
+    grid_step_deg: f64,
+    rows: usize,
+    cols: usize,
+    dir: [f64; 3],
+) -> f64 {
+    let (lat, lon) = crate::sphere::latlon_from_dir(dir);
+    let r = ((lat + 90.0) / grid_step_deg).round() as usize;
+    let c = ((lon + 180.0).rem_euclid(360.0) / grid_step_deg).round() as usize % cols;
+    lakes
+        .iter()
+        .filter(|lake| !lake.salt_flat && lake.cells.binary_search(&[r.min(rows - 1), c]).is_ok())
+        .map(|lake| lake.surface_height_m)
+        .fold(0.0, f64::max)
+}
+
 fn stencil_geometry(h: [f64; 5], distance_m: f64) -> (f64, f64) {
     let gx = (h[1] - h[2]) / (2.0 * distance_m);
     let gy = (h[3] - h[4]) / (2.0 * distance_m);
@@ -1377,6 +1419,56 @@ mod tests {
 
     fn test_field() -> PlanetField {
         PlanetField::build(test_params(), vec![], vec![], vec![], vec![]).expect("field builds")
+    }
+
+    #[test]
+    fn basin_water_lookup_keeps_ocean_floor_salt_exclusion_rounding_and_wrap() {
+        let lake = crate::hydro::LakeBasin {
+            id: 0,
+            // Exact poles have canonical longitude zero, hence column 4.
+            cells: vec![[0, 4], [2, 0], [2, 2], [4, 4]],
+            surface_height_m: 123.5,
+            max_depth_m: 100.0,
+            area_m2: 1.0,
+            capacity_m3: 1.0,
+            aridity01: 0.0,
+            salt_flat: false,
+            inflow_m3_yr: None,
+            evaporation_m3_yr: None,
+        };
+        let at = |lakes: &[crate::hydro::LakeBasin], lat, lon| {
+            basin_water_height_m(lakes, 45.0, 5, 8, dir_from_latlon(lat, lon))
+        };
+        assert_eq!(at(&[], 0.0, 0.0), 0.0);
+        for (lat, lon) in [
+            (-90.0, -180.0),
+            (90.0, -180.0),
+            (0.0, -180.0),
+            (0.0, 180.0),
+            (0.0, 179.0),
+            (0.0, -90.0),
+        ] {
+            assert_eq!(at(std::slice::from_ref(&lake), lat, lon), 123.5);
+        }
+        assert_eq!(at(std::slice::from_ref(&lake), 0.0, -70.0), 123.5);
+        assert_eq!(at(std::slice::from_ref(&lake), 0.0, -65.0), 0.0);
+        let salt = crate::hydro::LakeBasin {
+            salt_flat: true,
+            surface_height_m: 999.0,
+            ..lake.clone()
+        };
+        assert_eq!(at(std::slice::from_ref(&salt), 0.0, -90.0), 0.0);
+        assert_eq!(at(&[lake.clone(), salt], 0.0, -90.0), 123.5);
+        let below_datum = crate::hydro::LakeBasin {
+            surface_height_m: -10.0,
+            ..lake.clone()
+        };
+        assert_eq!(at(&[below_datum], 0.0, -90.0), 0.0);
+        let higher = crate::hydro::LakeBasin {
+            surface_height_m: 234.5,
+            ..lake.clone()
+        };
+        assert_eq!(at(&[lake, higher], 0.0, -90.0), 234.5);
     }
 
     #[test]

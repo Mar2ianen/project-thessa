@@ -1,15 +1,22 @@
-//! Deterministic surface scatter descriptors (no rendering dependency).
+//! World-addressed rock and plant descriptors, without a renderer dependency.
 //!
-//! Rocks are NOT baked into global maps. A runtime tile regenerates identical
-//! scatter from (planet_seed, tile_id, biome/geology/slope context).
-//!
-//! Density rules: plains sparse, talus/ejecta dense, dunes ~empty,
-//! glaciers carry ice blocks.
+//! A tile is a query window, never a random seed. Version 1 candidates occupy
+//! fixed level-20 cube cells; density only thins that immutable population.
+//! Positions are body-fixed unit directions plus final ground height in metres.
+//! See `docs/70_WORLD_SCATTER_IDENTITY.md` for limits and numerical contracts.
 
 use crate::{
     biomes::{Biome, Geology},
+    ecology::VegetationCover,
+    lod::{TileKey, cbt_node_for_tile},
     rng,
 };
+
+/// Part of the version-1 address/placement contract, not a render LOD setting.
+pub const CANDIDATE_LEVEL: u8 = 20;
+const JITTER_BITS: u8 = 24;
+const MAX_ROCK_DENSITY_PER_KM2: f64 = 640.0;
+pub const PLANT_DENSITY_PER_KM2: f64 = 3000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScatterKind {
@@ -25,35 +32,373 @@ pub enum ScatterKind {
     LycopsidTree,
 }
 
-/// One deterministic scatter item in tile-local metres.
+/// Collision-free fixed64 address *within a world*. Persist the world identity
+/// alongside it. Zero is never generated.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct ScatterId(pub u64);
+
+impl ScatterId {
+    /// Decode/validate the canonical cell, reusing the existing CBT address map.
+    pub fn cell(self) -> Option<TileKey> {
+        let node = thessa_rcbt_core::Node::new(
+            self.0 >> 1,
+            crate::lod::CBT_FACE_DEPTH + 2 * CANDIDATE_LEVEL,
+        )
+        .ok()?;
+        crate::lod::tile_for_cbt_node(node)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScatterPopulation {
+    Rocks = 0,
+    Plants = 1,
+}
+
+/// One world-space instance. Yaw is about radial up, relative to the canonical
+/// `sphere::enu_basis(direction)` east/north frame; scale is dimensionless.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScatterItem {
+    pub id: ScatterId,
     pub kind: ScatterKind,
-    /// Tile-local position, metres from tile origin.
-    pub x_m: f64,
-    pub y_m: f64,
-    /// Uniform scale multiplier.
+    pub direction: [f64; 3],
+    pub ground_height_m: f64,
     pub scale: f64,
-    /// Yaw radians.
     pub yaw_rad: f64,
 }
 
-/// Context a tile provides.
+/// Local final-surface inputs, evaluated at the candidate, never at tile centre.
+/// Density is per datum-sphere square kilometre, not per relief-surface area.
 #[derive(Debug, Clone, Copy)]
-pub struct ScatterContext {
-    pub planet_seed: u64,
-    pub tile_id: u64,
+pub struct ScatterSurface {
+    pub ground_height_m: f64,
+    /// Rise/run, not normalized slope or radians; sampled at a fixed world scale.
+    pub slope_rise_run: f64,
+    /// Local water elevation in metres above the same datum; None means dry.
+    /// Ground at or below this surface rejects both populations.
+    pub water_height_m: Option<f64>,
+    /// Rock classification only; ignored for the plant population.
     pub biome: Biome,
+    /// Rock classification only; ignored for the plant population.
     pub geology: Geology,
-    /// 0 flat .. 1 cliff.
-    pub slope01: f64,
-    /// 1.0 on fresh ejecta / below cliffs, 0.0 elsewhere.
+    /// Rock density multiplier input only, constrained to [0, 1].
     pub rocky01: f64,
-    /// Tile edge length in metres.
-    pub tile_size_m: f64,
+    /// Plant population only: fractional ecological cover for clumps/crowns,
+    /// not individual grass blades.
+    pub vegetation: VegetationCover,
 }
 
-/// Base density per km^2 for a biome before modifiers.
+impl ScatterSurface {
+    /// Plant-only input without evaluating unused rock classification fields.
+    pub fn plants(
+        ground_height_m: f64,
+        slope_rise_run: f64,
+        water_height_m: Option<f64>,
+        vegetation: VegetationCover,
+    ) -> Self {
+        Self {
+            ground_height_m,
+            slope_rise_run,
+            water_height_m,
+            vegetation,
+            biome: Biome::RockyPlain,
+            geology: Geology::Regolith,
+            rocky01: 0.0,
+        }
+    }
+}
+
+/// Quality thins candidates; budgets reject whole queries, never truncate them.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ScatterPolicy {
+    pub density_scale: f64,
+    pub max_candidates: u64,
+    pub max_items: usize,
+    pub min_plant_height_m: f64,
+    pub max_plant_slope_rise_run: f64,
+}
+
+impl Default for ScatterPolicy {
+    fn default() -> Self {
+        Self {
+            density_scale: 1.0,
+            max_candidates: 1 << 24,
+            max_items: 1_024_000,
+            min_plant_height_m: 2.0,
+            max_plant_slope_rise_run: 0.25,
+        }
+    }
+}
+
+impl ScatterPolicy {
+    pub fn validate(self) -> Result<(), ScatterError> {
+        if !self.density_scale.is_finite()
+            || self.density_scale < 0.0
+            || !self.min_plant_height_m.is_finite()
+            || !self.max_plant_slope_rise_run.is_finite()
+            || self.max_plant_slope_rise_run < 0.0
+        {
+            return Err(ScatterError::InvalidRequest("invalid scatter policy"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScatterError {
+    InvalidRequest(&'static str),
+    InvalidSurface(ScatterId),
+    CandidateBudgetExceeded {
+        required: u64,
+        limit: u64,
+    },
+    ItemBudgetExceeded {
+        limit: usize,
+    },
+    AllocationFailed {
+        additional: usize,
+    },
+    DensityCapacityExceeded {
+        requested_per_km2: f64,
+        capacity_per_km2: f64,
+    },
+}
+
+impl std::fmt::Display for ScatterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "scatter: {self:?}")
+    }
+}
+impl std::error::Error for ScatterError {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScatterBatch {
+    /// Strictly increasing IDs. Union/deduplicate by ID for overlapping windows.
+    pub items: Vec<ScatterItem>,
+    pub candidates_visited: u64,
+    pub surface_samples: u64,
+}
+
+/// Enumerate a bounded window of the immutable world population. The callback
+/// must be a pure final-surface sampler independent of region and request order.
+/// It runs only after conservative density rejection. Errors return no partial
+/// batch. Valid TileKey levels are 0..=27, matching the existing CBT adapter.
+pub fn scatter_region(
+    planet_seed: u64,
+    radius_m: f64,
+    region: TileKey,
+    population: ScatterPopulation,
+    policy: ScatterPolicy,
+    mut surface_at: impl FnMut([f64; 3]) -> ScatterSurface,
+) -> Result<ScatterBatch, ScatterError> {
+    policy.validate()?;
+    if !radius_m.is_finite() || radius_m <= 0.0 || !(radius_m * radius_m).is_finite() {
+        return Err(ScatterError::InvalidRequest(
+            "radius must be finite positive metres",
+        ));
+    }
+    if region.face >= 6
+        || region.level > 27
+        || region.x >= 1_u32 << region.level
+        || region.y >= 1_u32 << region.level
+    {
+        return Err(ScatterError::InvalidRequest("invalid cube-sphere region"));
+    }
+    let mut batch = ScatterBatch {
+        items: Vec::new(),
+        candidates_visited: 0,
+        surface_samples: 0,
+    };
+    if policy.density_scale == 0.0 {
+        return Ok(batch);
+    }
+    let ceiling = match population {
+        ScatterPopulation::Rocks => MAX_ROCK_DENSITY_PER_KM2,
+        ScatterPopulation::Plants => PLANT_DENSITY_PER_KM2,
+    } * policy.density_scale;
+    // Largest cell Jacobian is at the face centre. Refuse saturation even if
+    // local cover later rejects everything: density must never silently clip.
+    let max_cell_area_km2 = (2.0 * radius_m / (1_u64 << CANDIDATE_LEVEL) as f64).powi(2) / 1e6;
+    let capacity = 1.0 / max_cell_area_km2;
+    if !capacity.is_finite() {
+        return Err(ScatterError::InvalidRequest(
+            "radius is below numeric scatter range",
+        ));
+    }
+    if !ceiling.is_finite() || ceiling > capacity {
+        return Err(ScatterError::DensityCapacityExceeded {
+            requested_per_km2: ceiling,
+            capacity_per_km2: capacity,
+        });
+    }
+    let bounds = |index: u32| {
+        if region.level <= CANDIDATE_LEVEL {
+            let shift = CANDIDATE_LEVEL - region.level;
+            (index << shift, (index + 1) << shift)
+        } else {
+            let cell = index >> (region.level - CANDIDATE_LEVEL);
+            (cell, cell + 1)
+        }
+    };
+    let (x0, x1) = bounds(region.x);
+    let (y0, y1) = bounds(region.y);
+    let required = u64::from(x1 - x0) * u64::from(y1 - y0);
+    if required > policy.max_candidates {
+        return Err(ScatterError::CandidateBudgetExceeded {
+            required,
+            limit: policy.max_candidates,
+        });
+    }
+    batch.candidates_visited = required;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let cell = TileKey {
+                face: region.face,
+                level: CANDIDATE_LEVEL,
+                x,
+                y,
+            };
+            let id = ScatterId((cbt_node_for_tile(cell).unwrap().id() << 1) | population as u64);
+            let random = |channel| rng::hash01(planet_seed, channel, id.0 as i64, 0);
+            // Midpoints of a 24-bit subcell grid: strictly interior, even when
+            // hash01 rounds to 1.0. Dyadic ownership is exact through level 27.
+            let jitter = |channel| {
+                let q = ((random(channel) * (1_u64 << JITTER_BITS) as f64) as u32)
+                    .min((1 << JITTER_BITS) - 1);
+                (q as f64 + 0.5) / (1_u64 << JITTER_BITS) as f64
+            };
+            let (jx, jy) = (jitter(402), jitter(403));
+            if region.level > CANDIDATE_LEVEL {
+                let n = (1_u64 << CANDIDATE_LEVEL) as f64;
+                let rn = (1_u64 << region.level) as f64;
+                if (((x as f64 + jx) / n * rn) as u32 != region.x)
+                    || (((y as f64 + jy) / n * rn) as u32 != region.y)
+                {
+                    continue;
+                }
+            }
+            let n = (1_u64 << CANDIDATE_LEVEL) as f64;
+            let u = 2.0 * (x as f64 + jx) / n - 1.0;
+            let v = 2.0 * (y as f64 + jy) / n - 1.0;
+            let area_km2 = max_cell_area_km2 / (1.0 + u * u + v * v).powf(1.5);
+            let keep = random(401);
+            if keep >= ceiling * area_km2 {
+                continue;
+            }
+            let direction = cell.direction(jx, jy);
+            batch.surface_samples += 1;
+            let mut surface = surface_at(direction);
+            validate_surface(surface, id, population)?;
+            if population == ScatterPopulation::Plants && surface.vegetation.total() > 1.0 {
+                let total = surface.vegetation.total();
+                surface.vegetation.ground01 /= total;
+                surface.vegetation.canopy01 /= total;
+                surface.vegetation.reeds01 /= total;
+            }
+            if surface
+                .water_height_m
+                .is_some_and(|h| surface.ground_height_m <= h)
+            {
+                continue;
+            }
+            let density = match population {
+                ScatterPopulation::Rocks => {
+                    base_density_per_km2(surface.biome) * (1.0 + 3.0 * surface.rocky01)
+                }
+                ScatterPopulation::Plants => {
+                    if surface.ground_height_m < policy.min_plant_height_m
+                        || surface.slope_rise_run > policy.max_plant_slope_rise_run
+                    {
+                        continue;
+                    }
+                    PLANT_DENSITY_PER_KM2 * surface.vegetation.total()
+                }
+            } * policy.density_scale;
+            if keep >= density * area_km2 {
+                continue;
+            }
+            let kind = match population {
+                ScatterPopulation::Rocks => pick_rock_kind(planet_seed, id, surface),
+                ScatterPopulation::Plants => {
+                    let choice = random(431) * surface.vegetation.total();
+                    if choice < surface.vegetation.reeds01 {
+                        ScatterKind::ReedClump
+                    } else if choice < surface.vegetation.reeds01 + surface.vegetation.canopy01 {
+                        ScatterKind::LycopsidTree
+                    } else {
+                        ScatterKind::FernClump
+                    }
+                }
+            };
+            if batch.items.len() == policy.max_items {
+                return Err(ScatterError::ItemBudgetExceeded {
+                    limit: policy.max_items,
+                });
+            }
+            if batch.items.len() == batch.items.capacity() {
+                let additional =
+                    (policy.max_items - batch.items.len()).min(batch.items.capacity().max(1024));
+                try_reserve_items(&mut batch.items, additional)?;
+            }
+            batch.items.push(ScatterItem {
+                id,
+                kind,
+                direction,
+                ground_height_m: surface.ground_height_m,
+                scale: 0.5 + random(404) * 1.8,
+                yaw_rad: random(405) * std::f64::consts::TAU,
+            });
+        }
+    }
+    batch.items.sort_unstable_by_key(|item| item.id);
+    Ok(batch)
+}
+
+/// Fallible growth for the large descriptor/instance buffers, not a guarantee
+/// against allocations performed by callbacks or unrelated library code.
+pub(crate) fn try_reserve_items<T>(
+    items: &mut Vec<T>,
+    additional: usize,
+) -> Result<(), ScatterError> {
+    items
+        .try_reserve_exact(additional)
+        .map_err(|_| ScatterError::AllocationFailed { additional })
+}
+
+fn validate_surface(
+    s: ScatterSurface,
+    id: ScatterId,
+    population: ScatterPopulation,
+) -> Result<(), ScatterError> {
+    if !s.ground_height_m.is_finite()
+        || !s.slope_rise_run.is_finite()
+        || s.slope_rise_run < 0.0
+        || s.water_height_m.is_some_and(|h| !h.is_finite())
+        || (population == ScatterPopulation::Rocks
+            && (!s.rocky01.is_finite() || !(0.0..=1.0).contains(&s.rocky01)))
+        || (population == ScatterPopulation::Plants
+            && ([
+                s.vegetation.ground01,
+                s.vegetation.canopy01,
+                s.vegetation.reeds01,
+            ]
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0)
+                // Stored covers admit 1e-12; bilinear arithmetic adds a few
+                // ulps. Only this bounded overshoot is normalized above.
+                || s.vegetation.total()
+                    > 1.0 + crate::ecology::COVER_SUM_TOLERANCE + 8.0 * f64::EPSILON))
+    {
+        return Err(ScatterError::InvalidSurface(id));
+    }
+    Ok(())
+}
+
+/// Base density per km² before the local rocky modifier (bounded by 4).
 pub fn base_density_per_km2(biome: Biome) -> f64 {
     match biome {
         Biome::SandDesert | Biome::DuneField => 2.0,
@@ -84,96 +429,22 @@ pub fn base_density_per_km2(biome: Biome) -> f64 {
     }
 }
 
-/// Deterministic jittered-grid placement (stable Poisson-like distribution).
-/// Same inputs => byte-identical items, any tile order.
-pub fn scatter_tile(ctx: ScatterContext) -> Vec<ScatterItem> {
-    let per_km2 = base_density_per_km2(ctx.biome) * (1.0 + 3.0 * ctx.rocky01);
-    scatter_distribution(ctx, per_km2, |seed, gx, gy| pick_kind(seed, ctx, gx, gy))
-}
-
-/// Carboniferous-inspired instance descriptors over the existing placement
-/// kernel. This does not render plants or bake them into the global map.
-pub fn scatter_vegetation(
-    ctx: ScatterContext,
-    cover: crate::ecology::VegetationCover,
-) -> Vec<ScatterItem> {
-    let total = cover.total();
-    if !total.is_finite()
-        || total <= 0.0
-        || total > 1.0
-        || [cover.ground01, cover.canopy01, cover.reeds01]
-            .iter()
-            .any(|v| !v.is_finite() || *v < 0.0)
-    {
-        return Vec::new();
-    }
-    // Density describes clumps/crowns, not individual grass blades.
-    scatter_distribution(ctx, total * 3000.0, |seed, gx, gy| {
-        let selection = rng::hash01(seed, 431, gx, gy) * total;
-        if selection < cover.reeds01 {
-            ScatterKind::ReedClump
-        } else if selection < cover.reeds01 + cover.canopy01 {
-            ScatterKind::LycopsidTree
-        } else {
-            ScatterKind::FernClump
-        }
-    })
-}
-
-fn scatter_distribution(
-    ctx: ScatterContext,
-    per_km2: f64,
-    kind_at: impl Fn(u64, i64, i64) -> ScatterKind,
-) -> Vec<ScatterItem> {
-    let area_km2 = (ctx.tile_size_m / 1000.0).powi(2);
-    let mut target = (per_km2 * area_km2).round() as usize;
-    target = target.min(4000);
-    let seed = ctx.planet_seed ^ ctx.tile_id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let grid = (target as f64).sqrt().ceil().max(1.0) as usize;
-    let mut items = Vec::new();
-    let cell = ctx.tile_size_m / grid as f64;
-    for gx in 0..grid {
-        for gy in 0..grid {
-            if items.len() >= target {
-                break;
-            }
-            let keep = rng::hash01(seed, 401, gx as i64, gy as i64);
-            // Keep probability scaled so expected count == target.
-            let cells = (grid * grid) as f64;
-            if keep > target as f64 / cells {
-                continue;
-            }
-            let jx = rng::hash01(seed, 402, gx as i64, gy as i64);
-            let jy = rng::hash01(seed, 403, gx as i64, gy as i64);
-            let kind = kind_at(seed, gx as i64, gy as i64);
-            items.push(ScatterItem {
-                kind,
-                x_m: (gx as f64 + jx) * cell,
-                y_m: (gy as f64 + jy) * cell,
-                scale: 0.5 + rng::hash01(seed, 404, gx as i64, gy as i64) * 1.8,
-                yaw_rad: rng::hash01(seed, 405, gx as i64, gy as i64) * std::f64::consts::TAU,
-            });
-        }
-    }
-    items
-}
-
-fn pick_kind(seed: u64, ctx: ScatterContext, gx: i64, gy: i64) -> ScatterKind {
-    // Ice biomes carry ice blocks; volcanic geology carries blocks.
+fn pick_rock_kind(seed: u64, id: ScatterId, s: ScatterSurface) -> ScatterKind {
+    let random = |channel| rng::hash01(seed, channel, id.0 as i64, 0);
     if matches!(
-        ctx.biome,
+        s.biome,
         Biome::Glacier | Biome::PolarIceCap | Biome::Snowfield
-    ) && rng::hash01(seed, 406, gx, gy) < 0.6
+    ) && random(406) < 0.6
     {
         return ScatterKind::IceBlock;
     }
-    if matches!(ctx.geology, Geology::Basaltic) && rng::hash01(seed, 407, gx, gy) < 0.3 {
+    if s.geology == Geology::Basaltic && random(407) < 0.3 {
         return ScatterKind::VolcanicBlock;
     }
-    if ctx.slope01 > 0.6 && rng::hash01(seed, 408, gx, gy) < 0.5 {
+    if s.slope_rise_run > 0.6 && random(408) < 0.5 {
         return ScatterKind::TalusField;
     }
-    match rng::hash01(seed, 409, gx, gy) {
+    match random(409) {
         v if v < 0.55 => ScatterKind::SmallRock,
         v if v < 0.8 => ScatterKind::Boulder,
         v if v < 0.9 => ScatterKind::LargeBoulder,
@@ -182,88 +453,5 @@ fn pick_kind(seed: u64, ctx: ScatterContext, gx: i64, gy: i64) -> ScatterKind {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ctx(biome: Biome) -> ScatterContext {
-        ScatterContext {
-            planet_seed: 7,
-            tile_id: 123,
-            biome,
-            geology: Geology::Regolith,
-            slope01: 0.2,
-            rocky01: 0.0,
-            tile_size_m: 1000.0,
-        }
-    }
-
-    #[test]
-    fn deterministic_regeneration() {
-        let a = scatter_tile(ctx(Biome::RockyPlain));
-        let b = scatter_tile(ctx(Biome::RockyPlain));
-        assert_eq!(a.len(), b.len());
-        assert_eq!(a.first(), b.first());
-    }
-
-    #[test]
-    fn vegetation_descriptors_reuse_stable_placement_and_cover_types() {
-        let context = ctx(Biome::Wetland);
-        let cover = crate::ecology::VegetationCover {
-            ground01: 0.2,
-            canopy01: 0.2,
-            reeds01: 0.6,
-        };
-        let items = scatter_vegetation(context, cover);
-        assert_eq!(items, scatter_vegetation(context, cover));
-        assert!(items.len() <= 4000 && !items.is_empty());
-        for kind in [
-            ScatterKind::FernClump,
-            ScatterKind::LycopsidTree,
-            ScatterKind::ReedClump,
-        ] {
-            assert!(items.iter().any(|item| item.kind == kind));
-        }
-        assert!(
-            items
-                .iter()
-                .all(|item| (0.0..context.tile_size_m).contains(&item.x_m)
-                    && (0.0..context.tile_size_m).contains(&item.y_m))
-        );
-        assert!(
-            scatter_vegetation(
-                context,
-                crate::ecology::VegetationCover {
-                    ground01: 0.0,
-                    canopy01: 0.0,
-                    reeds01: 0.0
-                }
-            )
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn dunes_nearly_empty_ejecta_dense() {
-        let dunes = scatter_tile(ctx(Biome::DuneField)).len();
-        let ejecta = scatter_tile(ctx(Biome::EjectaField)).len();
-        assert!(dunes < ejecta, "{dunes} vs {ejecta}");
-        assert!(dunes <= 4);
-    }
-
-    #[test]
-    fn talus_below_cliffs() {
-        let mut c = ctx(Biome::MountainRange);
-        c.slope01 = 0.8;
-        let items = scatter_tile(c);
-        assert!(items.iter().any(|i| i.kind == ScatterKind::TalusField));
-    }
-
-    #[test]
-    fn different_tiles_differ() {
-        let mut c = ctx(Biome::RockyPlain);
-        c.tile_id = 999;
-        let a = scatter_tile(ctx(Biome::RockyPlain));
-        let b = scatter_tile(c);
-        assert_ne!(a.first(), b.first());
-    }
-}
+#[path = "scatter_tests.rs"]
+mod tests;

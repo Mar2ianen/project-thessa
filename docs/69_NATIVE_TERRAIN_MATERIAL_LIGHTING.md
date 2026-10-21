@@ -473,10 +473,8 @@ reuses those sources to stop height-only sand/wet paint from masking inland
 lowlands and exposed cliffs. It changes optical coverage, not substrate relief
 or vegetation geometry; the maritime source is explicitly regional/coarse.
 
-In particular, the current `scatter::scatter_distribution` is tile-seeded and
-changes its grid with requested density. Identical inputs are deterministic,
-but a different tile level/density is **not** a stable subset of the same
-world instances. Native plant/rock rendering must first extend/reuse that
-contract (or the existing frozen regional descriptors) with persistent
-world-space candidate identity and hash-threshold density subsets; it must
-not simply rerun the tile kernel at each visual LOD and call the result stable.
+The subsequent [world scatter foundation](70_WORLD_SCATTER_IDENTITY.md) replaces
+the former tile-seeded/density-dependent kernel with fixed world-local candidate
+addresses and hash-threshold density subsets. Its existing offline consumer
+uses the final frozen global DEM; full native runtime terrain placement and
+plant/rock rendering remain separate integration work.

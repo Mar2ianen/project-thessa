@@ -72,6 +72,9 @@ The checked-in vertical slice currently contains:
 - `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
   landmarks, LOD, obstacle reports, and client texture export. Recipe conformance
   is partial; authored ocean bounds now reach canonical datum calibration.
+  World-addressed rock/plant descriptors preserve identities across query LOD
+  and density, with the existing offline plant bake consumer
+  ([doc 70](docs/70_WORLD_SCATTER_IDENTITY.md)); native foliage remains unimplemented.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

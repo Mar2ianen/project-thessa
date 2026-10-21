@@ -6,6 +6,9 @@ use crate::{
     field::TerrainSample,
 };
 
+/// Stored cover may exceed unity only by this floating-point validation margin.
+pub(crate) const COVER_SUM_TOLERANCE: f64 = 1e-12;
+
 /// Primary ecological biome, independent of tile IDs and rendering quality.
 /// Geology and relief tags survive: an old impact floor can support a forest.
 pub fn classify_ecological_site(

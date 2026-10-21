@@ -11,6 +11,8 @@ pub struct OfflineRecipe {
     pub runoff: crate::erosion::RunoffErosion,
     /// Explicit close-range vegetation regions; no global billion-plant bake.
     pub vegetation_tiles: Vec<TileKey>,
+    /// Shared scatter contract; budgets apply to the entire requested union.
+    pub scatter: crate::scatter::ScatterPolicy,
 }
 
 impl Default for OfflineRecipe {
@@ -19,6 +21,7 @@ impl Default for OfflineRecipe {
             grid_step_deg: 0.5,
             runoff: Default::default(),
             vegetation_tiles: Vec::new(),
+            scatter: Default::default(),
         }
     }
 }
@@ -26,6 +29,7 @@ impl Default for OfflineRecipe {
 impl OfflineRecipe {
     pub fn validate(&self) -> Result<(), String> {
         self.runoff.validate()?;
+        self.scatter.validate().map_err(|e| e.to_string())?;
         let n = 180.0 / self.grid_step_deg;
         if !self.grid_step_deg.is_finite()
             || !(0.125..=10.0).contains(&self.grid_step_deg)
@@ -354,6 +358,9 @@ pub struct FrozenSource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlantInstance {
+    /// Absent on historical schema-2/3/4 bakes; new bakes retain world addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<crate::scatter::ScatterId>,
     pub kind: crate::scatter::ScatterKind,
     pub direction: [f64; 3],
     pub ground_height_m: f64,
@@ -544,7 +551,7 @@ fn finish_compile(
     };
     (world.material_rgba, world.ecological_cover) =
         bake_materials(field, &world, &catchments, &moisture);
-    world.vegetation = bake_plants(field, &world);
+    world.vegetation = bake_plants(&world)?;
     world.tiles = bake_native_tiles(&world)?;
     Ok(world)
 }
@@ -689,7 +696,7 @@ impl FrozenSurface {
                 row.len() != cols
                     || row.iter().any(|c| {
                         !c.total().is_finite()
-                            || c.total() > 1.0 + 1e-12
+                            || c.total() > 1.0 + crate::ecology::COVER_SUM_TOLERANCE
                             || c.ground01 < 0.0
                             || c.canopy01 < 0.0
                             || c.reeds01 < 0.0
@@ -713,7 +720,7 @@ impl FrozenSurface {
         }
         if !self.sediment_volume_error_m3.is_finite()
             || self.prototypes.len() != 3
-            || self.vegetation.len() > 256 * 4000
+            || self.vegetation.len() > self.recipe.scatter.max_items
         {
             return Err("invalid frozen geometry budget or sediment counter".into());
         }
@@ -788,6 +795,16 @@ impl FrozenSurface {
             {
                 return Err("invalid frozen plant instance".into());
             }
+        }
+        if self.vegetation.iter().any(|p| p.id.is_some())
+            && (self.vegetation.iter().any(|p| p.id.is_none())
+                || self
+                    .vegetation
+                    .iter()
+                    .any(|p| p.id.unwrap().0 & 1 != 1 || p.id.unwrap().cell().is_none())
+                || self.vegetation.windows(2).any(|p| p[0].id >= p[1].id))
+        {
+            return Err("addressed frozen plants need unique ascending plant IDs".into());
         }
         Ok(())
     }
@@ -865,6 +882,10 @@ impl FrozenSurface {
     }
 }
 
+#[cfg(test)]
+#[path = "scatter_offline_tests.rs"]
+mod scatter_tests;
+
 /// Sea-level intersections of the frozen triangulated DEM, not random coast
 /// decoration. The same diagonal is used by read-only height sampling.
 fn shoreline(grid: &HeightGrid) -> Vec<[[f64; 3]; 2]> {
@@ -903,62 +924,68 @@ fn shoreline(grid: &HeightGrid) -> Vec<[[f64; 3]; 2]> {
     segments
 }
 
-fn bake_plants(field: &PlanetField, world: &FrozenSurface) -> Vec<PlantInstance> {
+fn bake_plants(world: &FrozenSurface) -> Result<Vec<PlantInstance>, String> {
     let mut tiles = world.recipe.vegetation_tiles.clone();
     tiles.sort();
     tiles.dedup();
-    let mut plants = Vec::new();
-    for tile in tiles {
-        let span = tile.span_m(world.radius_m);
-        let center = field.sample_surface(tile.direction(0.5, 0.5), 32.0);
-        let ctx = crate::scatter::ScatterContext {
-            planet_seed: world.seed,
-            tile_id: crate::lod::cbt_node_for_tile(tile).unwrap().id(),
-            biome: center.biome,
-            geology: center.geology,
-            slope01: 0.0,
-            rocky01: 0.0,
-            tile_size_m: span,
-        };
-        // Reuse the existing placement kernel. Maximum cover creates candidate
-        // locations; each location is then rejected using its own final terrain.
-        let candidates = crate::scatter::scatter_vegetation(
-            ctx,
-            crate::ecology::VegetationCover {
-                ground01: 1.0,
-                canopy01: 0.0,
-                reeds01: 0.0,
-            },
-        );
-        for (i, candidate) in candidates.into_iter().enumerate() {
-            let dir = tile.direction(candidate.x_m / span, candidate.y_m / span);
-            let ground_height = world.height_m(dir);
-            if inside_lake(world, dir, ground_height) {
-                continue;
+    // Ancestors precede descendants in TileKey order. Remove overlapping query
+    // windows before budgeting; do not instantiate a planet-global population.
+    let mut covered = std::collections::BTreeSet::new();
+    tiles.retain(|tile| {
+        let mut parent = tile.parent();
+        while let Some(key) = parent {
+            if covered.contains(&key) {
+                return false;
             }
-            let cover = world.cover_at(dir);
-            let selection = crate::rng::hash01(world.seed ^ ctx.tile_id, 450, i as i64, 0);
-            if selection >= cover.total() || ground_height < 2.0 || frozen_slope(world, dir) > 0.25
-            {
-                continue;
-            }
-            let kind = if selection < cover.reeds01 {
-                crate::scatter::ScatterKind::ReedClump
-            } else if selection < cover.reeds01 + cover.canopy01 {
-                crate::scatter::ScatterKind::LycopsidTree
-            } else {
-                crate::scatter::ScatterKind::FernClump
-            };
-            plants.push(PlantInstance {
-                kind,
-                direction: dir,
-                ground_height_m: ground_height,
-                scale: candidate.scale,
-                yaw_rad: candidate.yaw_rad,
-            });
+            parent = key.parent();
         }
+        covered.insert(*tile);
+        true
+    });
+    let mut plants = Vec::new();
+    let mut remaining = world.recipe.scatter;
+    for tile in tiles {
+        let batch = crate::scatter::scatter_region(
+            world.seed,
+            world.radius_m,
+            tile,
+            crate::scatter::ScatterPopulation::Plants,
+            remaining,
+            |dir| {
+                let ground_height_m = world.height_m(dir);
+                // Frozen ecological coverage was derived from final terrain,
+                // not from this analytic source's old centre-biome sample.
+                crate::scatter::ScatterSurface::plants(
+                    ground_height_m,
+                    frozen_slope(world, dir),
+                    frozen_water_height(world, dir),
+                    world.cover_at(dir),
+                )
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        remaining.max_candidates -= batch.candidates_visited;
+        remaining.max_items -= batch.items.len();
+        if batch.items.len() > plants.capacity() - plants.len() {
+            let additional = batch
+                .items
+                .len()
+                .max(plants.capacity().max(1024))
+                .min(world.recipe.scatter.max_items - plants.len());
+            crate::scatter::try_reserve_items(&mut plants, additional)
+                .map_err(|e| e.to_string())?;
+        }
+        plants.extend(batch.items.into_iter().map(|item| PlantInstance {
+            id: Some(item.id),
+            kind: item.kind,
+            direction: item.direction,
+            ground_height_m: item.ground_height_m,
+            scale: item.scale,
+            yaw_rad: item.yaw_rad,
+        }));
     }
-    plants
+    plants.sort_unstable_by_key(|plant| plant.id);
+    Ok(plants)
 }
 
 type MaterialAndCover = (Vec<Vec<[u8; 4]>>, Vec<Vec<crate::ecology::VegetationCover>>);
@@ -1055,28 +1082,37 @@ fn bake_materials(
 fn frozen_slope(world: &FrozenSurface, dir: [f64; 3]) -> f64 {
     let (east, north, _) = crate::sphere::enu_basis(dir);
     let angle = 32.0 / world.radius_m;
-    let h = world.height_m(dir);
     let delta = |axis: [f64; 3]| {
-        world.height_m(std::array::from_fn(|i| {
+        let forward = world.height_m(std::array::from_fn(|i| {
             dir[i] * angle.cos() + axis[i] * angle.sin()
-        })) - h
+        }));
+        let backward = world.height_m(std::array::from_fn(|i| {
+            dir[i] * angle.cos() - axis[i] * angle.sin()
+        }));
+        (forward - backward) / 64.0
     };
-    delta(east).hypot(delta(north)) / 32.0
+    delta(east).hypot(delta(north))
 }
 
-fn inside_lake(world: &FrozenSurface, dir: [f64; 3], ground_height: f64) -> bool {
+fn frozen_water_height(world: &FrozenSurface, dir: [f64; 3]) -> Option<f64> {
     let (lat, lon) = crate::sphere::latlon_from_dir(dir);
     let r = ((lat + 90.0) / world.recipe.grid_step_deg).round() as usize;
     let c = ((lon + 180.0).rem_euclid(360.0) / world.recipe.grid_step_deg).round() as usize
         % world.lons.len();
-    world.lakes.iter().any(|lake| {
-        !lake.salt_flat
-            && ground_height < lake.surface_height_m
-            && lake
-                .cells
-                .binary_search(&[r.min(world.lats.len() - 1), c])
-                .is_ok()
-    })
+    Some(
+        world
+            .lakes
+            .iter()
+            .filter(|lake| {
+                !lake.salt_flat
+                    && lake
+                        .cells
+                        .binary_search(&[r.min(world.lats.len() - 1), c])
+                        .is_ok()
+            })
+            .map(|lake| lake.surface_height_m)
+            .fold(0.0, f64::max),
+    )
 }
 
 fn plant_prototypes() -> Vec<PlantMesh> {
@@ -1433,6 +1469,7 @@ mod tests {
                     x: 4096,
                     y: 4096,
                 }],
+                scatter: Default::default(),
             },
         )
         .unwrap()

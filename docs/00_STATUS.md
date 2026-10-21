@@ -106,6 +106,11 @@ placement and launch authority are unchanged. See
 [doc 71](71_NATIVE_SURFACE_ACCEPTANCE.md); close-up captures are not themselves
 terrain convergence or visual acceptance.
 
+The [world scatter foundation](70_WORLD_SCATTER_IDENTITY.md) replaces tile/density
+seeding with fixed world-local IDs, exact partition unions and nested density
+subsets, explicit resource/density errors, and the existing offline plant consumer.
+It does not implement native runtime foliage or full runtime-terrain placement.
+
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606
 remained byte-identical; the only edit during the run was configuration comments,

@@ -42,6 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut chase = false;
     let mut survey_site = None;
     let mut survey_distance = None;
+    let mut survey_lat = None;
+    let mut survey_lon = None;
+    let mut survey_eye_agl = None;
     let mut throttle_preset = None;
     let mut engine_on = false;
     let mut flight_step = None;
@@ -147,6 +150,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .parse::<f32>()?,
                 );
             }
+            "--survey-lat" => {
+                survey_lat = Some(
+                    args.next()
+                        .ok_or("--survey-lat requires degrees")?
+                        .parse()?,
+                );
+            }
+            "--survey-lon" => {
+                survey_lon = Some(
+                    args.next()
+                        .ok_or("--survey-lon requires degrees")?
+                        .parse()?,
+                );
+            }
+            "--survey-eye-agl" => {
+                survey_eye_agl = Some(
+                    args.next()
+                        .ok_or("--survey-eye-agl requires metres")?
+                        .parse()?,
+                );
+            }
             "--throttle" => {
                 throttle_preset = Some(
                     args.next()
@@ -196,6 +220,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 println!(
                     "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                );
+                println!(
+                    "Fixed survey: --survey-lat -90..90 --survey-lon -180..180 (east-positive, required together, conflicts with --site) sets a numeric terrain target, not a launch site. --survey-eye-agl 2..2000000 places the eye exactly above canonical ground/sea datum at its actual direction (1m height sampling), instead of distance-based elevation/5m clearance; 2m uses a 0.1m near plane. Survey-only; incompatible with flight, preview, docking and map. Bookmark selection clears both overrides. --perf-capture records the final resolved survey camera/source, not a trajectory or coastal acceptance."
                 );
                 println!(
                     "--throttle FRACTION (0..=1, requires --flight or --server-flight) presets throttle intent before the first frame. --engine-on arms engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, hold F to temporarily invert SAS, CapsLock precision; R/Y/G/P toggle RCS/wheels/gear/chutes. Mouse Aim uses the cursor with a 6% deadband; stick keys take over. Camera drag, UI capture, focus loss and pause cannot also steer. Server input acceptance means queued, not acknowledged; systems checkboxes show demands."
@@ -327,6 +354,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if survey_site.is_some_and(|site| site >= thessa_flight_authority::SURVEY_SITE_LABELS.len()) {
         return Err("--site requires 0, 1 or 2".into());
     }
+    let fixed_survey_site = validate_fixed_survey(
+        survey_lat,
+        survey_lon,
+        survey_eye_agl,
+        survey_site,
+        live_flight || vehicle_preview || docking || map_open,
+    )?;
     if survey_site.is_some() && (live_flight || vehicle_preview) {
         return Err(
             "--site is survey-only; incompatible with flight modes or --vehicle-preview".into(),
@@ -400,6 +434,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(site) = survey_site {
         scene.select_site(site);
     }
+    if let Some(lat_lon) = fixed_survey_site {
+        scene.select_fixed_survey_site(lat_lon);
+    }
+    scene.survey_eye_agl_m = survey_eye_agl;
     if let Some(distance) = survey_distance {
         // Applied after the site reset so deterministic close-up captures are
         // not silently overwritten by bookmark framing.
@@ -897,4 +935,86 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// Same manual-camera convention as the current Bevy PBR host (EV100).
 fn manual_exposure(ev100: f32) -> f32 {
     thessa_render_core::display::manual_exposure(ev100)
+}
+
+/// Validate presentation-only survey demands before loading assets or a GPU.
+fn validate_fixed_survey(
+    lat: Option<f64>,
+    lon: Option<f64>,
+    eye_agl: Option<f64>,
+    bookmark: Option<usize>,
+    unavailable: bool,
+) -> Result<Option<[f64; 2]>, &'static str> {
+    if unavailable && (lat.is_some() || lon.is_some() || eye_agl.is_some()) {
+        return Err("fixed survey controls are incompatible with flight, preview, docking or map");
+    }
+    if eye_agl.is_some_and(|m| !m.is_finite() || !(2.0..=2_000_000.0).contains(&m)) {
+        return Err("--survey-eye-agl must be finite and within 2..=2000000 m");
+    }
+    match (lat, lon) {
+        (None, None) => Ok(None),
+        (Some(lat), Some(lon)) => {
+            if bookmark.is_some() {
+                return Err("--survey-lat/--survey-lon conflict with --site");
+            }
+            if !lat.is_finite()
+                || !(-90.0..=90.0).contains(&lat)
+                || !lon.is_finite()
+                || !(-180.0..=180.0).contains(&lon)
+            {
+                return Err(
+                    "survey coordinates must be finite latitude -90..=90, longitude -180..=180 degrees east",
+                );
+            }
+            Ok(Some([lat, lon]))
+        }
+        _ => Err("--survey-lat and --survey-lon are required together"),
+    }
+}
+
+#[cfg(test)]
+mod survey_cli_tests {
+    use super::validate_fixed_survey;
+
+    #[test]
+    fn defaults_and_numeric_survey_bounds() {
+        assert_eq!(
+            validate_fixed_survey(None, None, None, None, false),
+            Ok(None)
+        );
+        for lat in [-90.0, 0.0, 90.0] {
+            for lon in [-180.0, 0.0, 180.0] {
+                for agl in [2.0, 50.0, 2_000_000.0] {
+                    assert_eq!(
+                        validate_fixed_survey(Some(lat), Some(lon), Some(agl), None, false),
+                        Ok(Some([lat, lon]))
+                    );
+                }
+            }
+        }
+        assert!(validate_fixed_survey(None, None, Some(2.0), Some(0), false).is_ok());
+    }
+
+    #[test]
+    fn rejects_incomplete_invalid_and_conflicting_survey_demands() {
+        for (lat, lon) in [
+            (Some(0.0), None),
+            (None, Some(0.0)),
+            (Some(90.01), Some(0.0)),
+            (Some(-90.01), Some(0.0)),
+            (Some(0.0), Some(180.01)),
+            (Some(0.0), Some(-180.01)),
+            (Some(f64::NAN), Some(0.0)),
+            (Some(0.0), Some(f64::INFINITY)),
+        ] {
+            assert!(validate_fixed_survey(lat, lon, None, None, false).is_err());
+        }
+        for agl in [f64::NAN, f64::INFINITY, -2.0, 0.0, 1.99, 2_000_001.0] {
+            assert!(validate_fixed_survey(None, None, Some(agl), None, false).is_err());
+        }
+        assert!(validate_fixed_survey(Some(0.0), Some(0.0), None, Some(0), false).is_err());
+        for (lat, lon, agl) in [(Some(0.0), Some(0.0), None), (None, None, Some(2.0))] {
+            assert!(validate_fixed_survey(lat, lon, agl, None, true).is_err());
+        }
+    }
 }

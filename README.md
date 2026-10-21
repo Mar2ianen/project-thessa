@@ -99,7 +99,11 @@ The checked-in vertical slice currently contains:
   same frozen canonical field, HIGHLANDS bookmark, height/material builders and
   stellar ephemerides as the game. Run `cargo run --release -p thessa-terrain-native`
    (egui HUD, Left/Right orbit, Up/Down zoom, Esc exit when UI does not capture input), or add
-  `-- --headless terrain.png --frames 120` for a screenshot/frame benchmark.
+   `-- --headless terrain.png --frames 120` for a screenshot/frame benchmark.
+  Numeric surface targets (`--survey-lat`/`--survey-lon`) and exact radial eye
+  clearance (`--survey-eye-agl 50` or `2`) support reproducible close-ups;
+  [doc 71](docs/71_NATIVE_SURFACE_ACCEPTANCE.md) describes their source,
+  framing and acceptance limits.
   Live async height/material streaming shares the extracted client selection,
   dependency/priority policies, bounded Rayon executor and height/material
   job/cache lifecycles in GPL `thessa-terrain-stream`. Source snapshots/revisions

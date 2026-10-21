@@ -198,11 +198,7 @@ impl Stats {
             data,
             display_body_name: data
                 .and_then(|data| scene.body_name(data.display_body).map(str::to_owned)),
-            survey_label: scene
-                .sites
-                .get(scene.site)
-                .map(|site| site.1)
-                .unwrap_or("—"),
+            survey_label: scene.survey_site_label(),
             survey_distance: f64::from(scene.survey.distance_m()),
             previous_cpu_ms: cpu_ms,
             sim_time_s: scene.sample.time.0,

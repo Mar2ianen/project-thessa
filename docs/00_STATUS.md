@@ -100,6 +100,12 @@ actual canonical zero crossing and a 2×2 km sampled land/water neighborhood,
 with a fixed nearby land target and numeric regression. It is a CPU audit site,
 not close-surface visual acceptance, finer erosion or production vegetation.
 
+The native survey supports fixed numeric targets and explicit 50 m/2 m radial
+eye clearance with final-camera/source capture metadata; default survey
+placement and launch authority are unchanged. See
+[doc 71](71_NATIVE_SURFACE_ACCEPTANCE.md); close-up captures are not themselves
+terrain convergence or visual acceptance.
+
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606
 remained byte-identical; the only edit during the run was configuration comments,

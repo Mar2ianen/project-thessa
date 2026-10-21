@@ -64,6 +64,11 @@ pub struct Scene {
     /// The default site is HIGHLANDS, like the previous survey bookmark.
     pub sites: [([f64; 3], &'static str); 3],
     pub site: usize,
+    /// Numeric target overrides the bookmark only in the survey presentation.
+    fixed_survey_site: Option<[f64; 2]>,
+    /// Exact radial clearance at the actual eye direction; `None` preserves
+    /// the shipped distance-based placement and minimum-altitude policy.
+    pub survey_eye_agl_m: Option<f64>,
     celestial: CelestialPresentation,
     pub sample: Sample,
     /// Body optics plus the field's bounded refresh policy; `None` for a body
@@ -497,6 +502,8 @@ impl Scene {
             survey: thessa_flight_authority::survey::SurveyCamera::survey_default(),
             sites,
             site: 1,
+            fixed_survey_site: None,
+            survey_eye_agl_m: None,
             celestial,
             environment,
             gpu_environment: None,
@@ -526,6 +533,24 @@ impl Scene {
             return;
         };
         self.site = site;
+        self.fixed_survey_site = None;
+        self.survey_eye_agl_m = None;
+        self.select_survey_direction(dir);
+    }
+
+    /// CLI-validated latitude/longitude in degrees (east-positive). This never
+    /// changes `launch_site`, field state, or the flight authority.
+    pub fn select_fixed_survey_site(&mut self, lat_lon: [f64; 2]) {
+        if self.vehicle_preview() {
+            return;
+        }
+        self.fixed_survey_site = Some(lat_lon);
+        self.select_survey_direction(thessa_worldgen_rocky::sphere::dir_from_latlon(
+            lat_lon[0], lat_lon[1],
+        ));
+    }
+
+    fn select_survey_direction(&mut self, dir: [f64; 3]) {
         let up = DVec3::from(dir);
         self.center =
             up * (self.stream.radius_m() + self.stream.field().height_m(dir, 32.0).max(0.0));
@@ -535,6 +560,15 @@ impl Scene {
             .try_normalize()
             .unwrap_or_else(|| up.any_orthonormal_vector());
         self.survey.reset_site();
+    }
+
+    #[cfg(feature = "hud")]
+    pub fn survey_site_label(&self) -> &'static str {
+        if self.fixed_survey_site.is_some() {
+            "FIXED COORDINATES"
+        } else {
+            self.sites.get(self.site).map_or("—", |site| site.1)
+        }
     }
 
     fn vehicle_source() -> Result<thessa_render_core::mesh::MeshAsset, String> {
@@ -1782,37 +1816,101 @@ impl Scene {
         let ground = self
             .stream
             .field()
-            .height_m(frame.render_to_body_point(eye).normalize().to_array(), 32.0)
+            .height_m(
+                frame.render_to_body_point(eye).normalize().to_array(),
+                self.survey_ground_wavelength_m(),
+            )
             .max(0.0);
         let minimum = self.stream.radius_m()
             + ground
             + thessa_flight_authority::survey::MIN_ALTITUDE_MARGIN_M;
-        let body_eye =
-            SurveyCamera::enforce_minimum_altitude(frame.render_to_body_point(eye), minimum);
+        let body_eye = if let Some(agl) = self.survey_eye_agl_m {
+            frame.render_to_body_point(eye).try_normalize()?
+                * (self.stream.radius_m() + ground + agl)
+        } else {
+            SurveyCamera::enforce_minimum_altitude(frame.render_to_body_point(eye), minimum)
+        };
         eye = frame.body_to_render_point(body_eye);
         let target = center;
-        let up_ref = DVec3::new(site_up.x as f64, site_up.y as f64, site_up.z as f64);
+        let mut up_ref = DVec3::new(site_up.x as f64, site_up.y as f64, site_up.z as f64);
         let axis = (eye - target).normalize();
-        if !eye.is_finite()
-            || !up_ref.is_finite()
-            || !axis.is_finite()
-            || axis.dot(up_ref).abs() > 1.0 - 1e-6
-        {
+        if !eye.is_finite() || !up_ref.is_finite() || !axis.is_finite() {
             return None;
+        }
+        if axis.dot(up_ref).abs() > 1.0 - 1e-6 {
+            self.survey_eye_agl_m?;
+            // An explicit high eye over a nearby target can look almost
+            // radially down. Keep its pose instead of silently falling back
+            // to distance-based elevation; geographic east is a finite roll
+            // reference even at the poles (see site-frame construction).
+            up_ref = frame.body_to_render_direction(self.east);
         }
         let base = glam::dcamera::rh::view::look_at_mat4(eye, target, up_ref).inverse();
         let world_from_view = base * glam::DMat4::from_quat(self.survey.look().as_dquat());
-        Some(frame.view_in_body(&ViewParams {
-            world_from_view,
-            clip_from_view: glam::dcamera::rh::proj::directx::perspective(
-                0.9,
-                width as f64 / height as f64,
-                1.0,
-                1e8,
-            ),
-            world_position_m: eye,
-            exposure,
-        }))
+        Some(
+            frame.view_in_body(&ViewParams {
+                world_from_view,
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                    0.9,
+                    width as f64 / height as f64,
+                    self.survey_eye_agl_m
+                        .map_or(1.0, |agl| (agl * 0.05).min(1.0)),
+                    1e8,
+                ),
+                world_position_m: eye,
+                exposure,
+            }),
+        )
+    }
+
+    fn survey_ground_wavelength_m(&self) -> f64 {
+        if self.survey_eye_agl_m.is_some() {
+            1.0
+        } else {
+            32.0
+        }
+    }
+
+    /// Final survey pose, not a per-frame camera trajectory. Reuse the exact
+    /// view supplied to the renderer and the existing portable capture map.
+    pub fn survey_capture_metadata(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> std::collections::BTreeMap<String, String> {
+        if self.vehicle_preview() || self.map_active() {
+            return Default::default();
+        }
+        let Some(view) = self.survey_view(width, height, 1.0) else {
+            return [("native_survey_camera".into(), "unavailable".into())].into();
+        };
+        let eye = view.world_position_m;
+        let eye_dir = eye.normalize();
+        let ground = self
+            .stream
+            .field()
+            .height_m(eye_dir.to_array(), self.survey_ground_wavelength_m())
+            .max(0.0);
+        let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
+        let lat_lon = thessa_worldgen_rocky::sphere::latlon_from_dir(self.up.to_array());
+        [
+            ("native_survey_site", self.fixed_survey_site.map_or_else(|| format!("bookmark:{}:{}", self.site, self.sites[self.site].1), |p| format!("fixed:{},{}", p[0], p[1]))),
+            ("native_survey_target_lat_lon_deg", format!("{},{}", lat_lon.0, lat_lon.1)),
+            ("native_survey_eye_body_m", format!("{:?}", eye.to_array())),
+            ("native_survey_target_body_m", format!("{:?}", self.center.to_array())),
+            ("native_survey_forward_body", format!("{:?}", forward.to_array())),
+            ("native_survey_look_target_body_m", format!("{:?}", (eye + forward * (self.center - eye).length()).to_array())),
+            ("native_survey_distance_m", self.survey.distance_m().to_string()),
+            ("native_survey_requested_eye_agl_m", self.survey_eye_agl_m.map_or_else(|| "distance-based".into(), |m| m.to_string())),
+            ("native_survey_actual_eye_agl_m", (eye.length() - self.stream.radius_m() - ground).to_string()),
+            ("native_survey_eye_ground_datum_m", ground.to_string()),
+            ("native_survey_ground_min_wavelength_m", self.survey_ground_wavelength_m().to_string()),
+            ("native_survey_fov_y_rad", (2.0 * (1.0 / view.clip_from_view.y_axis.y).atan()).to_string()),
+            ("native_survey_near_m", self.survey_eye_agl_m.map_or(1.0, |agl| (agl * 0.05).min(1.0)).to_string()),
+            ("native_survey_ground_source", "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance".into()),
+            ("native_survey_analytic_source_signature", self.stream.field().source_signature().unwrap_or_else(|e| format!("unavailable:{e}"))),
+            ("native_survey_frozen_erosion_attached", self.stream.field().has_frozen_erosion().to_string()),
+        ].into_iter().map(|(k,v)| (k.into(),v)).collect()
     }
 
     /// Owned pilot-camera framing of the vehicle, staged in body space. The
@@ -2591,6 +2689,8 @@ mod tests {
     #[test]
     fn survey_eye_matches_pre_extraction_placement_in_render_and_body_frames() {
         let mut scene = Scene::load(Default::default()).unwrap();
+        assert!(scene.fixed_survey_site.is_none());
+        assert!(scene.survey_eye_agl_m.is_none());
         for time in [0.0, 72_000.0, -144_000.0] {
             scene
                 .set_presentation_time(thessa_sim_core::SimTime(time))
@@ -2624,6 +2724,15 @@ mod tests {
                         body_eye
                     };
                     let view = scene.survey_view(1280, 720, 1.0).unwrap();
+                    assert_eq!(
+                        view.clip_from_view,
+                        glam::dcamera::rh::proj::directx::perspective(
+                            0.9,
+                            1280.0 / 720.0,
+                            1.0,
+                            1e8
+                        )
+                    );
                     assert!((view.world_position_m - expected).length() < 1e-8);
                     assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
                     let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
@@ -2631,6 +2740,133 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fixed_survey_eye_agl_matches_actual_canonical_ground_at_50_and_2_m() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        let launch_site = scene.launch_site;
+        let mut target_ground_differs = false;
+        let mut submerged_eye_sampled = false;
+        for lat_lon in [
+            [23.0, 165.0],
+            [0.0, 180.0],
+            [0.0, -180.0],
+            [90.0, 0.0],
+            [-90.0, 180.0],
+        ] {
+            scene.select_fixed_survey_site(lat_lon);
+            for time in [0.0, 72_000.0] {
+                scene
+                    .set_presentation_time(thessa_sim_core::SimTime(time))
+                    .unwrap();
+                for distance in [80.0, 5000.0, 2_000_000.0] {
+                    scene.survey.set_distance_m(distance);
+                    for agl in [50.0, 2.0, 2_000_000.0] {
+                        scene.survey_eye_agl_m = Some(agl);
+                        let view = scene.survey_view(1280, 720, 1.0).unwrap();
+                        assert!(thessa_render_wgpu::view::ViewUniformBlock::new(&view).is_some());
+                        let eye = view.world_position_m;
+                        let canonical_height = scene
+                            .stream
+                            .field()
+                            .height_m(eye.normalize().to_array(), 1.0);
+                        submerged_eye_sampled |= canonical_height < 0.0;
+                        let ground = canonical_height.max(0.0);
+                        let actual = eye.length() - scene.stream.radius_m() - ground;
+                        assert!(
+                            (actual - agl).abs() < 1e-6,
+                            "{lat_lon:?}: {actual} != {agl}"
+                        );
+                        let target_ground = scene.center.length() - scene.stream.radius_m();
+                        target_ground_differs |= (target_ground - ground).abs() > 1.0;
+                        let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
+                        assert!((forward - (scene.center - eye).normalize()).length() < 1e-8);
+                        let near = (agl * 0.05).min(1.0);
+                        let near_clip =
+                            view.clip_from_view * glam::DVec4::new(0.0, 0.0, -near, 1.0);
+                        assert!((near_clip.z / near_clip.w).abs() < 1e-12);
+                        // Near-plane corners fit inside the radial clearance;
+                        // this is not a bound on arbitrary sloping resident meshes.
+                        let half_y = near * (0.9_f64 * 0.5).tan();
+                        assert!(
+                            (near * near + half_y * half_y * (1.0 + (1280.0_f64 / 720.0).powi(2)))
+                                .sqrt()
+                                < agl
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            target_ground_differs,
+            "fixture must detect target-plane altitude substitution"
+        );
+        assert!(
+            submerged_eye_sampled,
+            "fixture must exercise the sea-datum clamp"
+        );
+        assert_eq!(scene.launch_site, launch_site);
+        assert!(!scene.live_flight());
+        assert!(!scene.vehicle_preview());
+    }
+
+    #[test]
+    fn fixed_survey_site_metadata_and_bookmark_reset_preserve_ownership() {
+        let mut scene = Scene::load(Default::default()).unwrap();
+        #[cfg(feature = "hud")]
+        assert_eq!(
+            crate::hud::Stats::from_scene(&scene, 0, 0.0).survey_label,
+            "HIGHLANDS"
+        );
+        scene.select_fixed_survey_site([23.0, 165.0]);
+        #[cfg(feature = "hud")]
+        assert_eq!(
+            crate::hud::Stats::from_scene(&scene, 0, 0.0).survey_label,
+            "FIXED COORDINATES"
+        );
+        scene.survey_eye_agl_m = Some(2.0);
+        scene.survey.set_distance_m(80.0);
+        scene.survey.drag(10.0, 20.0, true);
+        let meta = scene.survey_capture_metadata(1280, 720);
+        assert_eq!(meta["native_survey_site"], "fixed:23,165");
+        assert!(
+            (meta["native_survey_actual_eye_agl_m"]
+                .parse::<f64>()
+                .unwrap()
+                - 2.0)
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(meta["native_survey_near_m"], "0.1");
+        assert!((meta["native_survey_fov_y_rad"].parse::<f64>().unwrap() - 0.9).abs() < 1e-12);
+        assert_eq!(
+            meta["native_survey_analytic_source_signature"],
+            scene.stream.field().source_signature().unwrap()
+        );
+        assert_ne!(
+            meta["native_survey_target_body_m"],
+            meta["native_survey_look_target_body_m"]
+        );
+        scene.select_site(0);
+        #[cfg(feature = "hud")]
+        assert_eq!(
+            crate::hud::Stats::from_scene(&scene, 0, 0.0).survey_label,
+            "COAST"
+        );
+        assert!(scene.fixed_survey_site.is_none());
+        assert!(scene.survey_eye_agl_m.is_none());
+        assert_eq!(scene.survey.distance_m(), 5000.0);
+        scene.enable_live_flight().unwrap();
+        let center = scene.center;
+        let state = scene.flight.as_ref().unwrap().state;
+        scene.select_fixed_survey_site([0.0, 0.0]);
+        assert_eq!(scene.center, center);
+        assert_eq!(
+            scene.flight.as_ref().unwrap().state.position_inertial_m,
+            state.position_inertial_m
+        );
+        assert!(scene.survey_capture_metadata(1280, 720).is_empty());
     }
 
     #[test]

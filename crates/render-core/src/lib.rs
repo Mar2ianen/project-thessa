@@ -8,6 +8,7 @@ pub mod environment;
 pub mod mesh;
 pub mod ocean;
 pub mod shadow;
+pub mod temporal;
 
 /// Camera pose in a caller-selected coordinate frame, in SI metres. Projection
 /// and photometric exposure are supplied by the camera/graphics policy owner.

@@ -13,12 +13,18 @@
 //!
 //! A non-invertible `world_from_view` yields `None` instead of a poisoned
 //! block — the frame must fall back or skip, never upload NaN.
+//!
+//! Primary visibility may be sub-pixel jittered by the temporal owner. The
+//! jittered projection is stored in `clip_from_view` / `clip_from_world`;
+//! `unjittered_clip_from_world` always preserves the projection needed for
+//! history reprojection. Callers that do not request jitter are unchanged.
 
 #[cfg(test)]
 use glam::DVec3;
 use glam::{DMat4, Mat4, Vec3};
 /// Compatibility re-export. The semantic camera input has no backend dependency.
 pub use thessa_render_core::ViewParams;
+use thessa_render_core::temporal::JitterOffset;
 
 /// The 464-byte block the CBT shaders bind. Field order matches the WGSL
 /// `ViewUniforms` struct exactly; see module docs.
@@ -39,9 +45,7 @@ impl ViewUniformBlock {
     /// Size of [`Self::to_bytes`] in bytes.
     pub const BYTE_LEN: usize = 464;
 
-    /// Derive every matrix from the inputs. The own engine has no jitter
-    /// yet, so `unjittered_clip_from_world` equals `clip_from_world` by
-    /// construction (kept as a separate field for shader compatibility).
+    /// Derive every matrix from the inputs without jitter.
     pub fn new(params: &ViewParams) -> Option<Self> {
         Self::new_relative(params, params.world_position_m)
     }
@@ -51,6 +55,24 @@ impl ViewUniformBlock {
     /// vertices in `(point - anchor_m)` coordinates are transformed into view/clip space
     /// correctly without re-anchoring vertex buffers.
     pub fn new_relative(params: &ViewParams, anchor_m: glam::DVec3) -> Option<Self> {
+        Self::new_jittered(params, anchor_m, JitterOffset::ZERO, [1, 1])
+    }
+
+    /// Derive primary-visibility matrices with a sub-pixel jitter.
+    ///
+    /// `clip_from_view`, `clip_from_world`, `view_from_clip` and
+    /// `world_from_clip` describe the jittered sample. The separate
+    /// `unjittered_clip_from_world` field is always built from the original
+    /// projection and is the only matrix temporal reprojection may use.
+    ///
+    /// A zero offset is valid for any extent and is byte-identical to
+    /// [`Self::new_relative`]. A non-zero offset requires a non-empty extent.
+    pub fn new_jittered(
+        params: &ViewParams,
+        anchor_m: glam::DVec3,
+        jitter: JitterOffset,
+        extent: [u32; 2],
+    ) -> Option<Self> {
         if params.world_from_view.determinant().abs() <= f64::MIN_POSITIVE
             || !is_finite_mat4(&params.world_from_view)
             || !is_finite_mat4(&params.clip_from_view)
@@ -77,11 +99,14 @@ impl ViewUniformBlock {
         let offset = params.world_position_m - anchor_m;
         world_from_view.w_axis = glam::dvec4(offset.x, offset.y, offset.z, 1.0);
         let view_from_world = world_from_view.inverse();
-        let clip_from_view = params.clip_from_view;
+        let unjittered_clip_from_view = params.clip_from_view;
+        let clip_from_view = jitter.apply(unjittered_clip_from_view, extent)?;
         let clip_from_world = clip_from_view * view_from_world;
+        let unjittered_clip_from_world = unjittered_clip_from_view * view_from_world;
         let world_from_clip = clip_from_world.inverse();
         let view_from_clip = clip_from_view.inverse();
         if !is_finite_mat4(&clip_from_world)
+            || !is_finite_mat4(&unjittered_clip_from_world)
             || !is_finite_mat4(&world_from_clip)
             || !is_finite_mat4(&view_from_clip)
         {
@@ -89,7 +114,7 @@ impl ViewUniformBlock {
         }
         Some(Self {
             clip_from_world: narrow(clip_from_world)?,
-            unjittered_clip_from_world: narrow(clip_from_world)?,
+            unjittered_clip_from_world: narrow(unjittered_clip_from_world)?,
             world_from_clip: narrow(world_from_clip)?,
             world_from_view: narrow(world_from_view)?,
             view_from_world: narrow(view_from_world)?,
@@ -169,6 +194,95 @@ mod tests {
         assert_eq!(block.view_from_clip, Mat4::IDENTITY);
         assert_eq!(block.world_position, Vec3::ZERO);
         assert_eq!(block.exposure, 1.25);
+    }
+
+    #[test]
+    fn zero_jitter_is_byte_identical_and_preserves_both_matrices() {
+        let params = ViewParams {
+            world_from_view: translation(0.0, 0.0, 10.0),
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.5, 0.1, 1_000.0),
+            world_position_m: DVec3::new(0.0, 0.0, 10.0),
+            exposure: 0.75,
+        };
+        let base = ViewUniformBlock::new(&params).unwrap();
+        let zero = ViewUniformBlock::new_jittered(
+            &params,
+            params.world_position_m,
+            JitterOffset::ZERO,
+            [0, 0],
+        )
+        .unwrap();
+        assert_eq!(base.to_bytes(), zero.to_bytes());
+        assert_eq!(zero.clip_from_world, zero.unjittered_clip_from_world);
+    }
+
+    #[test]
+    fn jitter_keeps_history_projection_and_moves_only_primary_visibility() {
+        let params = ViewParams {
+            world_from_view: translation(0.0, 0.0, 10.0),
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.5, 0.1, 1_000.0),
+            world_position_m: DVec3::new(0.0, 0.0, 10.0),
+            exposure: 1.0,
+        };
+        let extent = [2000, 1000];
+        let base = ViewUniformBlock::new(&params).unwrap();
+        let jittered = ViewUniformBlock::new_jittered(
+            &params,
+            params.world_position_m,
+            JitterOffset::new([0.5, -0.25]),
+            extent,
+        )
+        .unwrap();
+        assert_eq!(
+            jittered.unjittered_clip_from_world,
+            base.unjittered_clip_from_world
+        );
+        assert_ne!(jittered.clip_from_world, base.clip_from_world);
+
+        let point = glam::Vec4::new(0.0, 0.0, -5.0, 1.0);
+        let a = base.clip_from_world * point;
+        let b = jittered.clip_from_world * point;
+        assert!((a.w - b.w).abs() < 1e-6);
+        let ndc_delta = [b.x / b.w - a.x / a.w, b.y / b.w - a.y / a.w];
+        assert!((ndc_delta[0] - 0.0005).abs() < 1e-6);
+        assert!((ndc_delta[1] - 0.0005).abs() < 1e-6);
+
+        let identity = jittered.world_from_clip * jittered.clip_from_world;
+        for (actual, expected) in identity
+            .to_cols_array()
+            .into_iter()
+            .zip(Mat4::IDENTITY.to_cols_array())
+        {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn jitter_rejects_invalid_extent_and_offset() {
+        let params = ViewParams {
+            world_from_view: DMat4::IDENTITY,
+            clip_from_view: DMat4::IDENTITY,
+            world_position_m: DVec3::ZERO,
+            exposure: 1.0,
+        };
+        assert!(
+            ViewUniformBlock::new_jittered(
+                &params,
+                DVec3::ZERO,
+                JitterOffset::new([0.25, 0.0]),
+                [0, 1080],
+            )
+            .is_none()
+        );
+        assert!(
+            ViewUniformBlock::new_jittered(
+                &params,
+                DVec3::ZERO,
+                JitterOffset::new([0.51, 0.0]),
+                [1920, 1080],
+            )
+            .is_none()
+        );
     }
 
     #[test]

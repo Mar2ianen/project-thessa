@@ -1,0 +1,129 @@
+{
+  "task": "WORLD-02",
+  "date": "2026-10-21",
+  "baseline": "20c3098",
+  "branch": "fix/native-coastal-water-sampling",
+  "initial_test_commit": "1b45c9c",
+  "scope": "Primary terrain cloud receiver planet-occlusion boundary only; no authoritative terrain, erosion, physics, vegetation or graphics-setting changes.",
+  "owned_files": [
+    "crates/render-wgpu/src/clouds.wgsl",
+    "crates/render-wgpu/src/terrain.rs",
+    "crates/render-wgpu/tests/cloud_terrain.rs",
+    "crates/render-wgpu/tests/cloud_visibility.rs",
+    "README.md",
+    "docs/00_STATUS.md",
+    "docs/65_NATIVE_SKY_AUDIT.md",
+    "docs/71_NATIVE_SURFACE_ACCEPTANCE.md",
+    "docs/74_COASTAL_CLOUD_RECEIVERS.md",
+    "docs/artifacts/coastal-cloud-receivers-2026-10-21.json"
+  ],
+  "root_cause": "Generated datum-clamped terrain has chord-meshed interiors, while camera-relative fragments are reconstructed as planetary f32 positions for cloud queries. The generic strict interior predicate can classify daylight sea receivers as inside the planet and return zero before integrating weather. Atlas disable does not disable the separate cloud receiver gate.",
+  "fix": "Only the shared primary terrain hook uses cloud_terrain_sun_visibility: h=max(length(origin)-radius,0), b=dot(origin,unit_sun); block iff b<0 and b*b>h*(2*radius+h). Disabled early returns, original cloud-column origin/integration/weather, and generic strict mesh/volume helpers remain unchanged. No arbitrary altitude bias or geometry movement.",
+  "source_sha256": {
+    "crates/render-wgpu/src/clouds.wgsl": "9146f5c6e6af648fe71a3e816b5a583deafa253ebef5855040b2664ec44943da",
+    "crates/render-wgpu/src/terrain.rs": "cc5f7e9ff60fd32e704eb368251444e43b6d285d2cd6211442bd8f0d0aa4cfb1",
+    "crates/render-wgpu/tests/cloud_terrain.rs": "b4e63b38ba23d42bcc3e474856c1477bac9df84b89b927313e51dd513c87c95c",
+    "crates/render-wgpu/tests/cloud_visibility.rs": "8c411988de5af6bfb050c38641d8d082ec4d571371de6c1c7c70960326fec337"
+  },
+  "evidence_directory": "target/test-tmp/coastal-cloud-shadow-2026-10-21",
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan, radv Mesa 26.2.5-arch1.1; Linux x86-64",
+  "regressions": {
+    "before": {
+      "source_worktree": "/home/chechulin/Projects/project-thessa-cloud-tests",
+      "base": "20c3098",
+      "command": "TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp CARGO_TARGET_DIR=/home/chechulin/Projects/project-thessa-gpui/target cargo test -p thessa-render-wgpu --test cloud_terrain -- --ignored --nocapture --test-threads=1",
+      "log": "regression-before.log",
+      "log_sha256": "e9348f981d1c2e95c1ae227d129c9d7e03e671ac263e2cb1638d490b1904cb8a",
+      "result": "Expected failure: daylight 3732/4225 covered ROI pixels differ beyond tolerance; maximum RGB difference 128/255 versus allowed 1/255. Genuine sloped night-side occultation test passed."
+    },
+    "cache_cleaned_after": {
+      "log": "regression-after-clean.log",
+      "log_sha256": "cf2d407fe695b7e47b1010ad66692c8969e0d3af18b0bd8be41c90b6c00e6c04",
+      "result": "2 actual-renderer tests + 1 shared-WGSL compute test passed; daylight changed pixels 0/4225 and max RGB difference 0; genuine night-side maximum RGB 0. Tangent +/- cases were added subsequently and are included in final gates."
+    },
+    "compute_contract": "Four orientations, 11 daylight/interior/chord/limb cases with independent f64 closest-point oracle; exact axis datum tangent and +/-0.001 slope perturbations; generic underground rejection; disabled flags; nonzero weather vs independent Simpson integration and safe >1km rebase. Visibility tolerance 1e-5; optical/rebase 0.002.",
+    "final_targeted_regressions": {
+      "passed": 3,
+      "failed": 0,
+      "includes_added_tangent_perturbations": true,
+      "log": "gates-final/cloud-regressions.log",
+      "log_sha256": "02e6c3994ae6150c00ce31f08d812360778dd2e8d2d5e8a1b4511843ac161349"
+    },
+    "invalid_attempts_retained": "regression-after.log reused the stale baseline shader after switching worktrees with a shared Cargo target. compute-first.log exposed the absent helper. cargo clean -p thessa-render-wgpu then rebuilding restored correct source execution; these stale runs are not passes. First final-gate Clippy attempt in gates/clippy.log caught test-only chunks_exact_to_as_chunks; fixed with as_chunks before the final retry."
+  },
+  "captures": {
+    "commands_hashes": "capture-commands.json, capture-build-inputs.json, capture-summary.json",
+    "before_executable_sha256": "bde878d3b0ebf4f167e91a534e059a2200b5c6cc8025aa01f95e7f8ff57d8b9a",
+    "after_executable_sha256": "1032d0aaa9e06de255cc0cad184c880a1b049a1b9680d18c69450b1780b0277c",
+    "graphics_sha256": "c89da01cd677df59b00de27a2f7ff33b916eb4395d3ce8fae5ddd1d32c462700",
+    "image_sha256": {
+      "before-overview.png": "7e95e65ba2b6aee0dac1f5adcde637df3de1b597d37b612ab37beef2375a4f63",
+      "after-overview.png": "36b02db9bff3f762a0663da6d3526a6e0f0bc3902a831b2cc319d08a89495878",
+      "before-close50.png": "b917f02432da4f85a4e20caa3e41283ac82d214e8d7de6943e6a9023fffd9cdc",
+      "after-close50.png": "16ef61926007d4ae78e1a51af140d400bd7847a71abe88231171d455bc30ab7d",
+      "before-standing2.png": "0c67da0d2b4a6c41ee8a41a324a8112ca83ea6f391eaefe5b5f6a02cfdc09da8",
+      "after-standing2.png": "ee64c09e4cb6ee83edeca97481539c1aeacd0abbeacc9af0d05133c8764a7f71"
+    },
+    "scenario": "WORLD00 land target 23.565679258039204 N, 165.13881581863882 E. Before then after per case; frozen epoch and step 0; 1280x720; 20 seconds prestream; 32 measured frames after warmup; mute, no HUD. Overview distance/AGL 1800/800m, close50 80/50m, standing2 80/2m. All clouds, cloud receiver shadows, atlas shadows, material normals and specular settings remain enabled.",
+    "paired_camera_metadata_exactly_equal": true,
+    "all_six_material_misses": 0,
+    "matched_visible_wanted_cache_counts": "overview 372/372/496, close50 368/368/490, standing2 371/371/494; matching counts are not resident-ID snapshots",
+    "streaming_qualification": "First after-overview had 4 height jobs in flight; all other final frames had zero. A 60-second-prestream corrected overview drained all jobs with identical camera/counts. Its image differs at 233 pixels from the blind-reviewed overview; do not claim byte equality or independent blind review of that repeat.",
+    "drained_repeat_evidence": "drained-command.json / drained-summary.json / after-overview-drained.json",
+    "drained_repeat_image_sha256": "c3213faaf49ec17b6dbe0ec26f86c741092f63bc0895a73c279c27cd5ebd1354",
+    "overview_water_roi": {
+      "xywh": [900, 80, 350, 120],
+      "pixels": 42000,
+      "dark_rgb_sum_below_180_before": 6902,
+      "dark_rgb_sum_below_180_after": 0,
+      "changed_pixels": 6909,
+      "maximum_channel_delta_u8": 117,
+      "boundary": "Artifact-specific diagnostic, not a universal water quality metric or an independently judged preference score."
+    },
+    "whole_client_gpu_p50_before_ms": [74.16507456010437, 74.27073531685066, 70.90083746920824],
+    "whole_client_gpu_p50_after_ms": [87.99212612931633, 82.4713966749859, 77.94888384460259],
+    "drained_corrected_overview_gpu_p50_ms": 76.45598732272339,
+    "cost_boundary": "First after timings are materially higher. Previously falsely rejected pixels now integrate real cloud columns. Single serial captures under varying load and no counterbalanced repeat establish neither stable regression magnitude nor speedup. No CPU-tail, allocation, RSS/VRAM high-water or performance acceptance claim."
+  },
+  "independent_reviews": {
+    "root_cause_trace": "ses_ea2c3c7cbffe5Ga47s23RZ6ReN read-only source trace; parent ran the discriminating clouds.cast_shadows=false capture",
+    "source_and_tests": "ses_ea2bd3c4bffeb8Qw8Iv9WmIsWv: no blocking source/test issue; did not independently reproduce parent GPU results; requires explicit regular-raster/secondary/limb/performance limits",
+    "raster_test_owner": "ses_ea2bd7431ffe5wzGjlLpn2cXH8, isolated cloud_terrain.rs path",
+    "compute_test_owner": "ses_ea2bb4e09ffezcKRhMfmauQVxb, isolated cloud_visibility.rs path; parent added tangent perturbations and fixed Clippy",
+    "new_blind_preference": {
+      "judge": "ses_ea2b6cb0effecvMUluj0ZiRp0V",
+      "frozen_votes": {"world00-overview": "B", "world00-close50": "A", "world00-standing2": "A"},
+      "decoded_result": "Corrected receiver preferred in all three pairs, high/high/medium confidence, primarily removal of the black pattern. One reviewer/one shuffle; no complete physical, temporal or aesthetic acceptance.",
+      "votes_and_score": "blind-review/votes.jsonl / blind-score.json; origins kept in separate private-key directory until votes frozen",
+      "remaining_visible_defects": "Very smooth/flat ground, sparse fine detail, blurred/angular coast boundaries and stepped horizon edges."
+    },
+    "older_material_pairs_now_reviewed": "ses_ea2be7e81ffe7EOfLFwq7Xb501: old sandy overview preferred, close50 and standing2 ties. Correct causal cover treatment is not proof of better natural appearance; old sand paint was not restored to win preference."
+  },
+  "final_verification": {
+    "status": "All 12 local command gates passed on 752 unchanged source/configuration/asset inputs; rebuilt release binary exactly matches the captured corrected binary.",
+    "directory": "target/test-tmp/coastal-cloud-shadow-2026-10-21/gates-final",
+    "results_commands_seconds_log_hashes": "results.json",
+    "input_manifests": "inputs-before.json / inputs-after.json / input-changes.json",
+    "unchanged_input_count": 752,
+    "results_json_sha256": "d2d438e55d9197b7bbe2dd9b88096e3d4113acea57362bd6669baf7066bac150",
+    "identical_before_after_manifest_sha256": "147c92b9b757bcd1017825e2a990e18ddfa4243f4e816f0d2c72439b26c0eb04",
+    "checks": {
+      "workspace_fmt": "passed",
+      "workspace_all_targets_all_features_clippy": "passed, -D warnings",
+      "architecture": "passed",
+      "targeted_cloud_hardware": {"passed": 3, "failed": 0},
+      "workspace_lib_bins": {"passed": 2003, "failed": 0, "ignored": 43},
+      "workspace_integration": {"passed": 98, "failed": 0, "ignored": 84},
+      "renderer_ignored_hardware": {"passed": 79, "failed": 0},
+      "debug_server_build": "passed prerequisite for real-server CLI tests",
+      "native_ignored_hardware_and_cli": {"passed": 43, "failed": 0},
+      "required_legacy_bevy_ignored_command": "passed with zero matching ignored tests; not hardware coverage",
+      "WORLD00_release_numeric_regression": {"passed": 1, "failed": 0},
+      "native_release_build": "passed; binary SHA256 1032d0aaa9e06de255cc0cad184c880a1b049a1b9680d18c69450b1780b0277c"
+    },
+    "remote_ci_claimed": false
+  },
+  "deliberately_omitted": "No new planetary-scale conforming or displaced-ocean raster fixture; those use the same primary hook but source reuse is not separate execution evidence. Generic secondary terrain receiver correction, wave self-occlusion, exact limb/reconstruction/convergence envelopes, temporal/platform acceptance, natural relief/vegetation geometry and stable performance acceptance remain open.",
+  "next_isolated_work": "Connect fixed world-addressed descriptors to the canonical runtime surface sampler and existing mesh/shadow publication, with quality-independent physical obstacle ownership. Do not replace missing geology/vegetation with global noise or claim complete Bevy retirement.",
+  "main_merged": false
+}

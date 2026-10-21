@@ -684,7 +684,7 @@ impl TerrainRenderer {
             None
         };
         let mut hooks = format!(
-            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun)*cloud_sun_visibility(p,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
+            "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun)*cloud_terrain_sun_visibility(p,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
         hooks.push_str(&if reflections {
             format!("fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec4<f32>{{let response=env_specular_response(p,n,v,r,vec3(0.04),a,{land_environment_samples}u,vec3<u32>({cloud_directions}u,{cloud_steps}u,{cloud_sun_steps}u));return vec4(response.radiance,response.reflectance.r);}}\nfn cbt_land_transmission(n:vec3<f32>,l:vec3<f32>,r:f32)->f32{{return 1.0-env_directional_reflectance(n,l,r,vec3(0.04),{land_environment_samples}u).r;}}\nfn cbt_land_ambient_transmission(r:f32)->f32{{return 1.0-env_average_reflectance(r,vec3(0.04),{land_environment_samples}u).r;}}\n")

@@ -296,6 +296,9 @@ The checked-in vertical slice currently contains:
       common sky environment and a depth-clipped primary volume with ordered
       cloud extinction, including orbital foreground terrain. Atmosphere/cloud
       multiple scattering and wider visual/platform acceptance remain open.
+      Primary terrain uses a [datum-aware cloud receiver](docs/74_COASTAL_CLOUD_RECEIVERS.md)
+      to avoid false planetary self-shadowing on chord-meshed water; generic
+      volume/mesh interior rejection remains strict.
       Native windows also reuse the shared procedural engine/acoustic routing;
       `--audio-cabin` selects the diagnostic cabin and `--mute` skips audio
       device creation. Headless captures are always silent.

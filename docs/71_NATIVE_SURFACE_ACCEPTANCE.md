@@ -98,9 +98,9 @@ values by less than 1 nm (arithmetic residual, not terrain accuracy). All final
 height jobs are drained and material misses are
 zero, with matching visible/wanted/cache counts. Resident-ID snapshots were
 not captured, and the 800 m overview is not a certified footprint-coverage test.
-Three pairs are prepared for blind review, but no new independent votes were
-obtained after subagent usage exhaustion. Water stippling and missing vegetation
-geometry remain visible; this does not close visual acceptance. Exact commands,
+At that checkpoint the three prepared blind pairs were unreviewed because of
+subagent usage exhaustion. Water stippling and missing vegetation geometry were
+visible; it did not close visual acceptance. Exact commands,
 hashes, counters and verification:
 [`artifacts/world-surface-foundation-2026-10-21.json`](artifacts/world-surface-foundation-2026-10-21.json).
 
@@ -108,8 +108,13 @@ Three extra actual overview controls independently disable shadows, specular
 reflection and terrain normals through shared settings. The stippling persists;
 at least 99.58% of a fixed 350×120 water ROI remains byte-identical in each.
 All have identical final camera metadata and drained/miss-free terrain counters.
-This is a reproducible rendering defect for the next isolated investigation,
-not proof of a specific source or a reason to change physical relief/noise.
+Those controls alone did not prove a source or justify changing relief/noise.
+The subsequent [cloud receiver correction](74_COASTAL_CLOUD_RECEIVERS.md) isolates
+the separate `clouds.cast_shadows` gate and removes the dominant false planetary
+self-shadow pattern while preserving cloud integration. It also records the
+now-completed blind material review (old overview preferred, two ties) and the
+three-pair blinded preference for the receiver fix. Missing geometry/detail,
+full resident convergence and complete WORLD00 acceptance remain open.
 
 ## Verification boundary
 

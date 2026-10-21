@@ -53,6 +53,23 @@ fn cloud_sun_visibility(position:vec3<f32>,sun:u32)->f32 {
     if(cloud_frame.wind.y==0.0 || cloud_frame.wind.w==0.0){return 1.0;}
     return exp(-cloud_optical_depth(cloud_frame.camera_radius.xyz+position,normalize(cloud_frame.directions[sun].xyz),max(8u,u32(cloud_frame.deck.w))));
 }
+// Generated terrain samples are clamped to the datum before meshing. Its
+// planar triangle interiors (and reconstructed f32 planetary positions) may
+// nevertheless lie below that sphere. Use the producer's radial lower bound
+// for planetary occlusion, not an arbitrary shadow bias or a global tolerance
+// on volume/mesh queries. Weather and shell integration are unchanged.
+fn cloud_terrain_sun_visibility(position:vec3<f32>,sun:u32)->f32 {
+    if(cloud_frame.wind.y==0.0 || cloud_frame.wind.w==0.0){return 1.0;}
+    let origin=cloud_frame.camera_radius.xyz+position;
+    let direction=normalize(cloud_frame.directions[sun].xyz);
+    let radius=cloud_frame.camera_radius.w;
+    let height=max(0.0,length(origin)-radius);
+    let b=dot(origin,direction);
+    // For a non-interior origin a forward sphere hit exists only on an inward
+    // ray with positive discriminant. This avoids cancellation in near roots.
+    if(b<0.0 && b*b>height*(2.0*radius+height)){return 0.0;}
+    return exp(-cloud_column_tau(origin,direction,1e30,max(8u,u32(cloud_frame.deck.w))));
+}
 fn cloud_hg(g:f32,c:f32)->f32 {return (1.0-g*g)/(4.0*CLOUD_PI*pow(max(0.0001,1.0+g*g-2.0*g*c),1.5));}
 fn cloud_source(point:vec3<f32>,direction:vec3<f32>,sun_steps:u32)->vec3<f32> {
     var source=cloud_frame.ambient.rgb/CLOUD_PI;

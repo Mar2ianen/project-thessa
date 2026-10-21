@@ -97,6 +97,7 @@ do not update in place).
 | `71_NATIVE_SURFACE_ACCEPTANCE.md` | 🟡 reproducible surface camera | fixed numeric targets, exact radial 50 m/2 m eye clearance, source/camera metadata and unchanged default survey/launch ownership | resident-mesh clearance/convergence, complete 2 km visual coverage and blind visual acceptance |
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
+| `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
 
 The [WORLD00 coastal baseline](72_WORLD_SURFACE_BASELINE.md) now identifies an
 actual canonical zero crossing and a 2×2 km sampled land/water neighborhood,
@@ -120,6 +121,23 @@ usage limit; water stippling, flat cover, absent vegetation geometry and broader
 surface acceptance remain open. These are local checks, not remote CI or a
 speedup/parity claim. See
 [`artifacts/world-surface-foundation-2026-10-21.json`](artifacts/world-surface-foundation-2026-10-21.json).
+
+The subsequent [primary cloud receiver correction](74_COASTAL_CLOUD_RECEIVERS.md)
+isolates the dominant water stippling to false planetary interior rejection,
+not relief/material noise. It restores datum-supported surface visibility while
+keeping cloud integration and strict generic volume/mesh semantics. Three new
+blind pairs favor the correction; the older material-only review preferred the
+old sandy overview with two ties. Neither result establishes natural ground
+detail, vegetation, shadow convergence or complete surface acceptance. The
+first corrected timing observations were higher; no stable cost or speedup
+claim is made.
+
+WORLD-02 passed 12 local gates on 752 unchanged inputs: 2,003 workspace lib/bin
+tests, 98 integration tests, 79 ignored renderer hardware tests and 43 ignored
+native hardware/CLI tests, plus targeted cloud regression, format, all-feature
+Clippy, architecture, WORLD00 numeric regression and release build. The rebuilt
+binary matches the captured correction. Exact scope and evidence:
+[`artifacts/coastal-cloud-receivers-2026-10-21.json`](artifacts/coastal-cloud-receivers-2026-10-21.json).
 
 The [world scatter foundation](70_WORLD_SCATTER_IDENTITY.md) replaces tile/density
 seeding with fixed world-local IDs, exact partition unions and nested density

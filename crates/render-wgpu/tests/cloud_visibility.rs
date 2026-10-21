@@ -26,9 +26,9 @@ const CASES: &[(&str, f64, usize)] = &[
     ("same sun blocked at sea level", 0.0, 2),
 ];
 
-fn directions(normal: DVec3) -> [DVec3; 3] {
+fn directions(normal: DVec3, depression: f64) -> [DVec3; 3] {
     let tangent = normal.any_orthonormal_vector();
-    [normal, -normal, (tangent - 0.01 * normal).normalize()]
+    [normal, -normal, (tangent - depression * normal).normalize()]
 }
 
 // Independent f64 closest-point-on-forward-ray oracle, not shader root algebra.
@@ -51,13 +51,14 @@ fn probe(
     camera: DVec3,
     alpha: u8,
     enabled_and_shadows: [f32; 2],
+    depression: f64,
 ) -> Vec<[f32; 2]> {
     // CloudFrame is eleven vec4s (176 bytes), matching the publication ABI.
     let mut frame = [[0.0_f32; 4]; 11];
     frame[0] = camera.as_vec3().extend(RADIUS as f32).to_array();
     frame[1] = [2000.0, 3000.0, 0.0002, 32.0];
     frame[2] = [0.0, enabled_and_shadows[0], 4.0, enabled_and_shadows[1]];
-    for (record, direction) in frame[4..7].iter_mut().zip(directions(normal)) {
+    for (record, direction) in frame[4..7].iter_mut().zip(directions(normal, depression)) {
         *record = direction.as_vec3().extend(0.0).to_array();
     }
     let bytes = frame
@@ -165,7 +166,9 @@ fn probe(
         .unwrap();
     let bytes = readback.slice(..).get_mapped_range().unwrap();
     let result = bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|pair| {
             std::array::from_fn(|i| f32::from_le_bytes(pair[i * 4..i * 4 + 4].try_into().unwrap()))
         })
@@ -213,7 +216,15 @@ fn terrain_datum_visibility_preserves_planet_occlusion_and_cloud_extinction() {
     let lon = 165.13881581863882_f64.to_radians();
     let world00 = DVec3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin());
     for normal in [world00, DVec3::X, DVec3::Y, DVec3::Z] {
-        let values = probe(&backend, &pipeline, normal, DVec3::ZERO, 0, [1.0, 1.0]);
+        let values = probe(
+            &backend,
+            &pipeline,
+            normal,
+            DVec3::ZERO,
+            0,
+            [1.0, 1.0],
+            0.01,
+        );
         for (&(name, altitude, sun), actual) in CASES.iter().zip(values) {
             for (component, terrain) in [true, false].into_iter().enumerate() {
                 // Tiny generic interior offsets can round onto the datum in
@@ -223,7 +234,7 @@ fn terrain_datum_visibility_preserves_planet_occlusion_and_cloud_extinction() {
                 }
                 let expected = if clear_planet(
                     normal * (RADIUS + altitude),
-                    directions(normal)[sun],
+                    directions(normal, 0.01)[sun],
                     terrain,
                 ) {
                     1.0
@@ -237,7 +248,36 @@ fn terrain_datum_visibility_preserves_planet_occlusion_and_cloud_extinction() {
             }
         }
     }
-    let opaque = probe(&backend, &pipeline, world00, DVec3::ZERO, 255, [1.0, 1.0]);
+    // Axis-aligned datum/tangent rays are exactly representable. Do not impose
+    // an exact grazing classification on non-axis f32 uncertainty bands.
+    for normal in [DVec3::X, DVec3::Y, DVec3::Z] {
+        for depression in [-0.001, 0.0, 0.001] {
+            let values = probe(
+                &backend,
+                &pipeline,
+                normal,
+                DVec3::ZERO,
+                0,
+                [1.0, 1.0],
+                depression,
+            );
+            let expected = if depression > 0.0 { 0.0 } else { 1.0 };
+            assert!(
+                (values[10][0] - expected).abs() <= VISIBILITY_TOLERANCE,
+                "datum tangent +/- perturbation: normal={normal:?} depression={depression} actual={:?}",
+                values[10]
+            );
+        }
+    }
+    let opaque = probe(
+        &backend,
+        &pipeline,
+        world00,
+        DVec3::ZERO,
+        255,
+        [1.0, 1.0],
+        0.01,
+    );
     // Independent Simpson quadrature of the radial Beer-Lambert column through
     // the whole deck. This is not the shader's 32-point midpoint quadrature.
     let n = 4096;
@@ -276,7 +316,7 @@ fn terrain_datum_visibility_preserves_planet_occlusion_and_cloud_extinction() {
     assert!((opaque[positive][0] - opaque[positive][1]).abs() <= VISIBILITY_TOLERANCE);
     // Rebase only at a safe >1 km altitude, not in the datum uncertainty band.
     let camera = world00 * (RADIUS + 2500.0) + world00.any_orthonormal_vector() * 2000.0;
-    let rebased = probe(&backend, &pipeline, world00, camera, 255, [1.0, 1.0]);
+    let rebased = probe(&backend, &pipeline, world00, camera, 255, [1.0, 1.0], 0.01);
     for (a, b) in opaque[positive].into_iter().zip(rebased[positive]) {
         assert!(
             (a - b).abs() <= OPTICAL_TOLERANCE,
@@ -284,7 +324,7 @@ fn terrain_datum_visibility_preserves_planet_occlusion_and_cloud_extinction() {
         );
     }
     for flags in [[0.0, 1.0], [1.0, 0.0]] {
-        let disabled = probe(&backend, &pipeline, world00, DVec3::ZERO, 255, flags);
+        let disabled = probe(&backend, &pipeline, world00, DVec3::ZERO, 255, flags, 0.01);
         assert!(
             disabled
                 .into_iter()

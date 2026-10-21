@@ -67,6 +67,12 @@ from this inventory. Metal/WebGPU and independent visual acceptance remain open.
 
 ## First corrective implementation after the audit
 
+Later surface acceptance exposed false cloud receiver self-occlusion on the
+datum sphere. [Doc 74](74_COASTAL_CLOUD_RECEIVERS.md) records the primary-terrain
+boundary correction, failed-before planetary-scale regression and remaining
+strict secondary/volume semantics; it does not change this audit's original
+snapshot or imply complete sky/surface acceptance.
+
 The shared `aurora_emission` API now takes the explicit datum radius separately
 from its planet-centric point. Its altitude window returns exact zeros at and
 outside the faces; tilted magnetic poles use a magnetic-axis longitude basis.

@@ -1,12 +1,13 @@
 # 76 — Temporal reconstruction foundation
 
-**Status:** audit plus the first backend-neutral contract stage (T2a). Deterministic
-Halton jitter, camera/static-surface reprojection and depth reconstruction are
-implemented and unit-tested in `render-core`; `ViewUniformBlock::new_jittered`
-preserves the unjittered history projection while shifting primary visibility.
-No renderer consumes jitter yet, depth retention is not enforced end-to-end, and
-no temporal resolve, GPU motion-vector buffer, history resource or SDK adapter
-exists. The current renderer remains the non-temporal reference.
+**Status:** audit plus two foundation stages. T2a implements deterministic Halton
+jitter, static-surface reprojection and depth reconstruction in `render-core`,
+with a view-block constructor that preserves the unjittered history projection.
+T3a adds a standalone GPU depth-reprojection motion-vector pass with a hardware
+CPU-oracle test. Neither stage is wired into the native scene loop: jitter is
+unused, depth retention is not enforced end-to-end, and no temporal resolve,
+history resource or SDK adapter exists. The current renderer remains the
+non-temporal reference.
 
 Temporal reconstruction is not one post-process. It is a contract between the
 authoritative simulation, the frames the renderer actually produces, and the
@@ -42,10 +43,13 @@ design was written.
    selects `StoreOp::Discard` unless a downstream pass asks for storage
    (`encode_scene` hard-codes `true`). A temporal pass cannot assume that the
    current depth attachment still contains the frame.
-3. **No motion-vector producer exists.** `ViewParams` and `BodyFrame` provide the
-   correct f64 camera/body transforms, but there is no per-pixel velocity output,
-   no previous-frame transform set, and no previous displaced surface state.
-   Matching `TileKey` is not triangle identity across CBT split/merge.
+3. **No scene-integrated motion-vector producer existed at the audit.**
+   `ViewParams` and `BodyFrame` provide the correct f64 camera/body transforms,
+   but the scene loop has no per-pixel velocity output, no previous-frame
+   transform set and no previous displaced-surface state. Matching `TileKey` is
+   not triangle identity across CBT split/merge. Since then, T3a added a
+   standalone static-depth reprojection pass; it is not yet called by the
+   scene loop and carries no ocean/vehicle motion term.
 4. **Presentation belongs to the app.** `apps/terrain-native/src/window.rs`
    submits and presents directly. `crates/render-wgpu/src/display.rs` owns only
    the HDR-to-SDR transform. Frame generation needs an explicit presentation
@@ -177,15 +181,20 @@ At 2560×1600:
 | --- | --- | --- |
 | One colour history | RGBA16Float | 32,768,000 (31.25 MiB) |
 | Two colour histories | RGBA16Float | 65,536,000 (62.5 MiB) |
-| Velocity | RG16Float | 16,384,000 (15.625 MiB) |
+| Velocity | RGBA16Float | 32,768,000 (31.25 MiB) |
 | Depth | Depth32Float | 16,384,000 (15.625 MiB) |
-| **Total, two histories + velocity + depth** | | **98,304,000 (93.75 MiB)** |
+| **Total, two histories + velocity + depth** | | **114,688,000 (109.375 MiB)** |
 
 This excludes scene targets, shadow/RT resources, material pages, UI and driver
 overhead. On UMA that is real system memory, not free VRAM. Quality tiers must
 choose history count/resolution and enable/disable motion or upscaling with an
 explicit fallback; `enabled = false` must allocate no history, velocity or depth
 for temporal use.
+
+The T3a pass uses RGBA16F, not RG16F, because core WebGPU does not guarantee
+RG16F as a storage-writable format; alpha carries vector validity. An
+adapter-specific RG16F path would need explicit feature probing and would halve
+only the velocity line.
 
 The first native resolve should be native-resolution TAA, not TAAU: one colour
 history, no second upscale history. TAAU/SR adapters can add their own histories
@@ -212,7 +221,8 @@ presenter contract before an FG adapter is attempted. Required properties:
 | T1 | This audit/contract | Reviewed, no code claims. |
 | T2a | Jitter/reprojection math + preserved unjittered view block | Implemented; deterministic CPU tests; zero jitter byte-identical. |
 | T2b | Renderer wiring + required depth storage | No visual change when disabled; depth contract enforced across passes. |
-| T3 | Static terrain/CBT camera motion vectors | Reprojection error bounded on a fixed fixture; no triangle-identity assumption. |
+| T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
+| T3b | Scene integration for T3a | Pass consumes real stored depth in the native frame; invalid masks for ocean/vehicles. |
 | T4 | Native-resolution TAA with history validation | Static and panning survey captures; no history reuse after cancel/resize; ghosting bounded against a no-TAA reference. |
 | T5 | Dynamic mesh and ocean motion (or explicit invalid masks) | Ships/ocean do not ghost; invalid pixels fall back. |
 | T6 | TAAU upscale and two-history quality tiers | Matched native/upscaled captures; memory budget recorded. |
@@ -238,6 +248,28 @@ invalidation. A native TAA reference is required before comparing adapters.
   byte identity for zero jitter.
 - Nothing calls `new_jittered` yet. The native client therefore renders exactly
   as before; this stage makes no image or performance claim.
+
+### T3a delivered
+
+- `crates/render-wgpu/src/motion.rs` and `motion_vectors.wgsl` implement a
+  fullscreen compute pass that reconstructs a camera-relative world position
+  from stored depth, applies the current-to-previous camera offset, projects it
+  with the previous unjittered matrix and writes
+  `previous_uv - current_uv` into `RGBA16Float`. Alpha `1` is valid; `0`
+  marks sky, behind-camera or otherwise invalid samples instead of pretending a
+  zero vector is valid.
+- The pass takes no history and keeps no per-frame state. The caller supplies
+  the current unjittered inverse, the previous unjittered matrix and a small
+  `f64`-derived camera offset; absolute planetary translations never enter the
+  `f32` uniform.
+- `crates/render-wgpu/tests/motion_vectors.rs` renders a depth-only gradient,
+  runs the pass and compares sampled vectors with an independent CPU
+  `world_from_depth`/projection oracle; it also checks the invalid-alpha path.
+  The unit test pins the 160-byte uniform layout and validation.
+- The native scene loop does not call this pass yet, no settings expose it, and
+  no history/TAA consumer exists. Ocean waves and moving rigid/deforming meshes
+  remain outside the static contract. This stage adds no visible output and
+  makes no performance claim.
 
 ## 10. Regression and benchmark protocol
 

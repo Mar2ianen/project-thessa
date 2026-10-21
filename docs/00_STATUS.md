@@ -162,6 +162,14 @@ limitations, including the fern's intrinsic root gap. This is not planet-wide
 streaming, grounded botanical assets, collision ownership or final surface
 acceptance. See [doc 75](75_NATIVE_SURFACE_PLANTS.md).
 
+The 2026-10-21 WORLD04 capture stage passed 14 local command gates on 755
+unchanged test inputs, with the captured executable reproduced byte-for-byte by
+the committed source, plus one independent blind review. The legacy Bevy
+`--ignored` command matched zero tests and is not counted as hardware coverage;
+actual GPU suites are the renderer and native runs. Evidence:
+[`artifacts/native-surface-plants-2026-10-21.json`](artifacts/native-surface-plants-2026-10-21.json).
+No remote CI or stable performance acceptance is claimed.
+
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606
 remained byte-identical; the only edit during the run was configuration comments,

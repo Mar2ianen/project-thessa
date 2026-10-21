@@ -226,3 +226,84 @@ The integration owner updates current README/status/feature indexes, executes
 combined hardware gates and paired captures using the same executable/settings,
 and records world signature/epoch/target and cost alongside the captures.
 No GPU test or visual acceptance is self-certified by this CPU implementation.
+
+## Parent captures and independent blind review
+
+The parent captured eight actual silent 1280x720 frames: the previous executable's
+disabled 50 m control; the new executable with plants off/High at WORLD00 overview
+(distance 1800 m, eye AGL 800 m), close-up (80/50 m) and standing (80/2 m); and
+Low at 80/50 m. All use frozen epoch/step 0, 60 s prestream, 30 warmup and 32
+measured frames, with unchanged clouds, cloud shadows, atlas, materials and
+reflection settings. Final survey camera metadata matches exactly for every pair.
+All final height/material jobs and material misses are zero. Visible/wanted/height
+cache counts match (372/372/496, 368/368/490, 371/371/494); resident-ID snapshots
+were not captured. Enabling the source also admits the already-requested shared
+mesh/terrain RT scene: total RT instances become 594/590/593, not just 222 plants.
+
+High retains/submits 222 plants, three draws, 8,240 triangles and 14,784 bytes of
+reported per-frame upload. Prototype payload is 15,984 bytes and the rigid-instance
+buffer is 14,208 bytes. These small payloads are **not** total GPU memory: the
+close-up's shared RT scene uses 33,533,808 bytes of its existing 32 MiB budget.
+Low retains 52 plants with 3,328 instance-buffer bytes and 3,904 reported upload
+bytes. Off reports zero plant samples, candidates, prototypes, instances,
+preparation time and upload, with no survey mesh/RT scene. The previous/new
+disabled close-up differs at eight pixels (maximum channel difference 20/255);
+do not claim byte-identical output. Final camera and world counters are equal.
+
+An independent reviewer saw only scrubbed, randomly shuffled A/B images; the
+answer key stayed separate until all four votes were recorded. Results:
+
+- Overview: **tie**, high confidence; tiny silhouettes do not materially improve
+  the flat/blurred terrain.
+- 50 m and 2 m: **High preferred to disabled**, medium confidence, for spatial
+  depth/composition. Faceted umbrella crowns, straight/cropped trunks, dark canopy
+  undersides, sparse ground detail and blocky shadows remain visible defects.
+- Matched 50 m density variants: **High preferred to Low**, medium confidence,
+  for that composition; not an ecological or object-count correctness claim.
+
+This is one reviewer and one shuffle (all High frames happened to be A), not a
+statistical aesthetic ranking. Preference does not certify root contact, shadow
+placement, temporal/LOD stability, botanical realism or complete surface
+acceptance. The geometry remains an explicitly schematic prototype.
+
+### Observed cost, not performance acceptance
+
+| View | Off GPU median ms | High GPU median ms |
+| --- | --- | --- |
+| Overview | 76.301 | 76.699 |
+| 50 m | 82.274 | 96.187 |
+| 2 m | 79.025 | 93.200 |
+
+Low at 50 m measured 90.365 ms. These are whole-client GPU timestamps, not
+isolated foliage cost or game FPS. The close-up increases must not be hidden:
+geometry, shared RT membership and shading are added. Serial single-process
+captures with one order, uncontrolled thermals/machine state and no
+counterbalanced repeats establish neither a stable regression magnitude nor a
+speedup or accepted frame budget. High startup preparation measured
+8.106/8.122/5.405 ms; Low 1.324 ms. These include CPU descriptor/prototype
+preparation but exclude GPU renderer/AS creation. No allocation/RSS/VRAM
+high-water or whole-platform acceptance is claimed.
+
+Exact binary/image/configuration/source hashes, commands, votes and limitations
+are recorded in
+[`artifacts/native-surface-plants-2026-10-21.json`](artifacts/native-surface-plants-2026-10-21.json).
+
+### Combined local verification
+
+Fourteen local command gates passed on committed `HEAD 71f43ed`: formatting,
+whole-workspace all-target/all-feature clippy with `-D warnings`, architecture
+check, 2,024 workspace lib/bin tests (45 ignored), 102 integration tests (85
+ignored and executed by the hardware suites), feature-off native check, the two
+focused plant GPU lifecycle/root oracles, the WORLD00 release regression, 79
+renderer hardware tests, server build, 45 native hardware/CLI tests, the legacy
+Bevy command and a release build. The 755 tracked test-input manifests were
+byte-identical before and after the run (`input-changes.json` is empty). The
+release rebuild reproduced the captured executable byte-for-byte
+(`b5f33c40f647f12e33c7aecb18115d72f6f05f583311b13a625814690660aed2`), so the
+captures correspond to the committed producer rather than only to a working tree.
+
+The legacy `cargo test -p thessa-bevy-rcbt --features render --lib -- --ignored`
+gate exits successfully but currently matches **zero** tests: that crate has no
+`#[ignore]` tests after the Bevy retirement. It must not be cited as GPU
+coverage; the actual hardware coverage above comes from `thessa-render-wgpu` and
+`thessa-terrain-native`. These are local results, not remote CI.

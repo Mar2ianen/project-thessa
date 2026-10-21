@@ -1,18 +1,21 @@
 # 70 — World-addressed rock and plant scatter
 
 **Status:** WORLD-01 foundation, WORLD-03 CPU canonical plant-surface adapter,
-renderer-neutral descriptors and the existing offline plant consumer.
-No production runtime foliage/rock renderer, streaming
-instance cache, collision ownership, graphics quality integration or visual
-acceptance is claimed. The historical snapshots in docs 49–52 remain historical.
+renderer-neutral descriptors and the existing offline plant consumer. WORLD04
+adds a bounded native survey prototype consumer with shared graphics quality
+policy ([doc 75](75_NATIVE_SURFACE_PLANTS.md)). No production foliage/rock
+streaming, instance cache, collision ownership or visual acceptance is claimed.
+The historical snapshots in docs 49–52 remain historical.
 
 ## Contract and consumer boundary
 
 `tools/worldgen-rocky/src/scatter.rs::scatter_region` replaces the tile-seeded
 placement kernel; there is no retained parallel legacy placement API. Repository
-consumer inspection found only `offline.rs::bake_plants`, now using this API.
+consumer inspection initially found only `offline.rs::bake_plants`, now using
+this API. WORLD04 additionally uses the canonical callback from the bounded
+native survey adapter in `apps/terrain-native/src/surface_plants.rs`.
 Rock descriptors share that kernel but have no production rendering consumer.
-Existing native terrain/appearance code is unchanged. The WORLD-03 adapter
+Authoritative native terrain/appearance sources are unchanged. The WORLD-03 adapter
 below supplies the existing kernel from an attached `PlanetField`; it does not
 add a production instance-streaming consumer or replace the offline callback.
 

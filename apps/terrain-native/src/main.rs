@@ -16,6 +16,7 @@ mod perf;
 mod plume;
 mod scene;
 mod sky_layers;
+mod surface_plants;
 mod window;
 
 mod audio;
@@ -821,6 +822,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 mesh.source_publications, mesh.epoch_withheld, mesh.size_culled
             );
         }
+        println!("surface_plants={:?}", scene.surface_plants_metadata());
         println!(
             "shadow_atlas_bytes={} shadow_active_layers={} shadow_rendered_passes={} terrain_shadow_draws={:?} material_quality={:?} specular_reflections={}",
             renderer.shadows().map_or(0, |s| s.storage_bytes()),

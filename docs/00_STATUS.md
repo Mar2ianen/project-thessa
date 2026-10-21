@@ -93,12 +93,12 @@ do not update in place).
 | `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 framing/orbit/pan/zoom, body/PRIMARY selection/follow, cached Kepler curves, physics-JIT coast-cache consumer sharing execution guards and bounded interval, dominant-body Ap/Pe/escape/local-wake readouts, exclusive input ownership, shared-device egui and headless capture | powered/live executable JIT futures (never substituted with conditional coasts), remote JIT/next-wake transport, richer celestial appearance and independent usability/platform acceptance |
 | `68_NATIVE_NIGHT_LIGHTS.md` | 🟡 native primary-terrain optical slice | direct retained inhabited-land mask producer, resolved Low/Medium/High budgets, cached startup-only bake/upload, regular/conforming shared primary emission and zero-work disable; CPU parity and hardware numerical/source tests | calibrated radiance/activity, multi-source illumination/eclipses, secondary-ray emission and whole-frame visual/temporal acceptance |
 | `69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md` | 🟡 primary terrain normal/sky-reflection slice | optional RG8 material normals through shared native residency, metric-correct cube-sphere gradients and slope blending, bounded substrate/exposure/cover response and small geology-linked roughness priors, resolved disable/+2/+1/+0 mip tiers and raster Lambert oracle; shared sky/cloud rough GGX with resolved 4/8/16 clear directions or 1/2/4 cloud columns; regular/conforming reflection oracles and scoped GPU diagnostic | calibrated natural substrate relief/strata, vegetation, general HDR/cloud quadrature error/convergence, primary scene-object reflections and close-up/visual/platform acceptance |
-| `70_WORLD_SCATTER_IDENTITY.md` | 🟡 world scatter and canonical CPU sampling | fixed world-local IDs, cross-LOD/query unions, density subsets and explicit budgets; existing offline plant consumer plus a borrowed attached-field plant callback with fixed ground/placement/material scales and coarse basin/ocean rejection | resident-mesh root agreement, local water geometry, instance streaming, shared-mesh native foliage/rocks and collision ownership |
+| `70_WORLD_SCATTER_IDENTITY.md` | 🟡 world scatter and canonical CPU sampling | fixed world-local IDs, cross-LOD/query unions, density subsets and explicit budgets; existing offline plant consumer plus a borrowed attached-field plant callback; bounded native survey plant consumer in doc 75 | resident-mesh root agreement, local water geometry, instance streaming, production foliage/rocks and collision ownership |
 | `71_NATIVE_SURFACE_ACCEPTANCE.md` | 🟡 reproducible surface camera | fixed numeric targets, exact radial 50 m/2 m eye clearance, source/camera metadata and unchanged default survey/launch ownership | resident-mesh clearance/convergence, complete 2 km visual coverage and blind visual acceptance |
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
-| `75_NATIVE_SURFACE_PLANTS.md` | 🔵 prepared settings policy | opt-in requested/resolved plant density tiers, bounded budgets, zero-budget disabled state and metadata tests | native sampler/mesh consumer, actual hardware/visual checks, instance streaming and collision ownership |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in requested/resolved density tiers, one retained L14 canonical plant window, grouped sources in the existing opaque/shadow path, RT-budget preflight/raster fallback and zero-work disable | actual resident-mesh root agreement, botanical geometry, independent visual/performance acceptance, instance streaming and collision ownership |
 
 The [WORLD00 coastal baseline](72_WORLD_SURFACE_BASELINE.md) now identifies an
 actual canonical zero crossing and a 2×2 km sampled land/water neighborhood,
@@ -143,7 +143,8 @@ binary matches the captured correction. Exact scope and evidence:
 The [world scatter foundation](70_WORLD_SCATTER_IDENTITY.md) replaces tile/density
 seeding with fixed world-local IDs, exact partition unions and nested density
 subsets, explicit resource/density errors, and the existing offline plant consumer.
-It does not implement native runtime foliage or full runtime-terrain placement.
+Its bounded native survey-only prototype consumer is tracked separately in
+doc 75; production foliage and full runtime-terrain placement remain incomplete.
 
 WORLD-03 adds a plant-only canonical surface callback for the existing scatter
 kernel, reusing the attached field's final height, metric geometry, ecology and
@@ -152,6 +153,14 @@ plant publication, contact/obstacle ownership or finer shoreline geometry. The
 existing offline frozen-DEM consumer deliberately keeps its historical behavior;
 no erosion artifact, world height or historical plant ID is rewritten. See
 [doc 70](70_WORLD_SCATTER_IDENTITY.md) for contracts, evidence and limitations.
+
+WORLD04 connects those canonical descriptors to the existing native opaque mesh,
+shadow atlas and environment path for one selected L14 survey window. The shared
+`[surface_plants]` settings default off; quality thins nested render subsets,
+not authoritative obstacles. Existing simple prototypes retain their geometry
+limitations, including the fern's intrinsic root gap. This is not planet-wide
+streaming, grounded botanical assets, collision ownership or final surface
+acceptance. See [doc 75](75_NATIVE_SURFACE_PLANTS.md).
 
 The 2026-10-20 native plume stage passed all 27 local command gates, including
 workspace/feature-off and actual GPU suites. Of 607 tracked test inputs, 606

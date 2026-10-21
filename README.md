@@ -74,13 +74,13 @@ The checked-in vertical slice currently contains:
   is partial; authored ocean bounds now reach canonical datum calibration.
   World-addressed rock/plant descriptors preserve identities across query LOD
   and density, with the existing offline plant bake consumer
-  ([doc 70](docs/70_WORLD_SCATTER_IDENTITY.md)); native foliage remains unimplemented.
+  ([doc 70](docs/70_WORLD_SCATTER_IDENTITY.md)).
   A plant-only callback now borrows the canonical attached field for 32 m ground
   and placement slope, material-consistent ecological cover and coarse lake/ocean
-  rejection; this CPU foundation is not runtime instance streaming or rendering.
-  A disabled-by-default `[surface_plants]` settings policy is prepared for a
-  bounded native consumer ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); settings
-  alone do not render plants or establish physical obstacle ownership.
+  rejection. Disabled-by-default `[surface_plants]` enables a bounded native
+  survey-only prototype consumer through the existing opaque mesh/shadow path
+  ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)). Production vegetation streaming,
+  grounded botanical assets and physical obstacle ownership remain unimplemented.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

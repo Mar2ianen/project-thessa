@@ -18,6 +18,9 @@ mod fleet_mesh;
 pub use fleet_mesh::SceneMeshes;
 
 pub struct Scene {
+    // Mesh extraction/capture use &Scene. Retain only the small preparation/draw
+    // report here; descriptor/source ownership stays in the existing mesh owner.
+    surface_plants_diagnostics: std::cell::RefCell<crate::surface_plants::Diagnostics>,
     #[cfg(feature = "hud")]
     pub map: crate::map::Source,
     primary_presentation: Option<(u64, thessa_flight_authority::presentation::FlightPose)>,
@@ -473,6 +476,7 @@ impl Scene {
             },
         )?;
         let mut scene = Self {
+            surface_plants_diagnostics: Default::default(),
             ocean_gravity_m_s2,
             primary_presentation: None,
             last_primary_revision: 0,
@@ -1351,10 +1355,16 @@ impl Scene {
         backend: &Backend,
         format: wgpu::TextureFormat,
     ) -> Result<Option<SceneMeshes>, BackendError> {
-        self.vehicle
-            .as_ref()
-            .map(|(source, _)| SceneMeshes::new(self, backend, source, format))
-            .transpose()
+        if let Some((source, _)) = &self.vehicle {
+            SceneMeshes::new(self, backend, source, format).map(Some)
+        } else if backend
+            .resolve_graphics(&self.requested)
+            .surface_plants_enabled
+        {
+            SceneMeshes::new(self, backend, &fleet_mesh::empty_asset(), format).map(Some)
+        } else {
+            Ok(None)
+        }
     }
     pub fn mesh_renderer_with_shadows(
         &self,
@@ -1362,19 +1372,73 @@ impl Scene {
         format: wgpu::TextureFormat,
         terrain: &TerrainRenderer,
     ) -> Result<Option<SceneMeshes>, BackendError> {
-        self.vehicle
-            .as_ref()
-            .map(|(source, _)| {
-                SceneMeshes::with_shadows(
-                    self,
-                    backend,
-                    source,
-                    format,
-                    terrain.shadows(),
-                    terrain.ray_source(),
-                )
-            })
-            .transpose()
+        if self.vehicle.is_none()
+            && !backend
+                .resolve_graphics(&self.requested)
+                .surface_plants_enabled
+        {
+            return Ok(None);
+        }
+        let empty = fleet_mesh::empty_asset();
+        let source = self.vehicle.as_ref().map_or(&empty, |(source, _)| source);
+        SceneMeshes::with_shadows(
+            self,
+            backend,
+            source,
+            format,
+            terrain.shadows(),
+            terrain.ray_source(),
+        )
+        .map(Some)
+    }
+
+    fn surface_plants_context(
+        &self,
+        settings: &thessa_graphics::ResolvedGraphicsSettings,
+    ) -> crate::surface_plants::Context {
+        use crate::surface_plants::Context;
+        if !settings.surface_plants_enabled {
+            Context::Disabled
+        } else if self.vehicle.is_some() || self.flight.is_some() || self.docking.is_some() {
+            Context::Withheld("unsupported_vehicle_flight_or_docking_view")
+        } else if self.map_active() {
+            Context::Withheld("unsupported_map_view")
+        } else {
+            Context::Survey(crate::surface_plants::survey_window(self.up))
+        }
+    }
+
+    pub fn surface_plants_metadata(&self) -> std::collections::BTreeMap<String, String> {
+        let settings = thessa_graphics::ResolvedGraphicsSettings::from_requested(
+            &self.requested,
+            &thessa_graphics::Capabilities::unknown(),
+        );
+        use crate::surface_plants::{Context, Diagnostics};
+        match self.surface_plants_context(&settings) {
+            Context::Disabled => Diagnostics {
+                reason: "disabled",
+                ..Default::default()
+            }
+            .metadata(),
+            Context::Withheld(reason) => Diagnostics {
+                reason,
+                ..Default::default()
+            }
+            .metadata(),
+            Context::Survey(window) => {
+                let diagnostics = self.surface_plants_diagnostics.borrow();
+                if diagnostics.window == Some(window) {
+                    diagnostics.metadata()
+                } else {
+                    Diagnostics {
+                        reason: "pending_survey_preparation",
+                        window: Some(window),
+                        ..Default::default()
+                    }
+                    .metadata()
+                }
+            }
+        }
     }
     /// Read-only extraction from local authority or the server-fed replica.
     /// The provisional deck belongs only to the explicit starter X-15, never
@@ -2867,6 +2931,59 @@ mod tests {
             state.position_inertial_m
         );
         assert!(scene.survey_capture_metadata(1280, 720).is_empty());
+    }
+
+    #[test]
+    fn surface_plants_context_uses_selected_target_not_camera_or_render_lod() {
+        use crate::surface_plants::{Context, survey_window};
+        let mut scene = Scene::load(Default::default()).unwrap();
+        let settings = |scene: &Scene| {
+            thessa_graphics::ResolvedGraphicsSettings::from_requested(
+                &scene.requested,
+                &thessa_graphics::Capabilities::unknown(),
+            )
+        };
+        assert_eq!(
+            scene.surface_plants_context(&settings(&scene)),
+            Context::Disabled
+        );
+        assert_eq!(
+            scene.surface_plants_metadata()["native_surface_plants_status"],
+            "disabled"
+        );
+        scene.requested.surface_plants.enabled = true;
+        for site in 0..3 {
+            scene.select_site(site);
+            assert_eq!(
+                scene.surface_plants_context(&settings(&scene)),
+                Context::Survey(survey_window(scene.sites[site].0.into()))
+            );
+        }
+        scene.select_fixed_survey_site([23.565679258039204, 165.13881581863882]);
+        let context = scene.surface_plants_context(&settings(&scene));
+        scene.survey.set_distance_m(20.0);
+        scene.survey.drag(100.0, 50.0, false);
+        scene.survey_eye_agl_m = Some(2.0);
+        scene.requested.surface_plants.quality = thessa_graphics::Quality::Low;
+        assert_eq!(context, scene.surface_plants_context(&settings(&scene)));
+        #[cfg(feature = "hud")]
+        {
+            scene.set_map_open(true);
+            assert_eq!(
+                scene.surface_plants_context(&settings(&scene)),
+                Context::Withheld("unsupported_map_view")
+            );
+            scene.set_map_open(false);
+        }
+        scene.enable_vehicle_preview().unwrap();
+        assert_eq!(
+            scene.surface_plants_context(&settings(&scene)),
+            Context::Withheld("unsupported_vehicle_flight_or_docking_view")
+        );
+        assert_eq!(
+            scene.surface_plants_metadata()["native_surface_plants_surface_samples"],
+            "0"
+        );
     }
 
     #[test]

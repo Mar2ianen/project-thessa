@@ -45,7 +45,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: true,
             restart_required: true,
-            description: "Prepared bounded survey-only policy, awaiting native consumer integration. Disabled resolves density and budgets to zero; skip sampler, jobs and mesh work. Not production vegetation or collision.",
+            description: "Bounded survey-only prototype plants through the native opaque mesh/shadow path. Disabled resolves density and budgets to zero and skips plant sampling/mesh work. Not production vegetation streaming or collision.",
         },
         SettingMeta {
             path: "surface_plants.quality",

@@ -72,6 +72,8 @@ impl Track {
 
 /// Bounds are game wire/graphics policy, not a second GPU backend or pass.
 pub struct SceneMeshes {
+    plant_context: Option<crate::surface_plants::Context>,
+    plants: Option<crate::surface_plants::Prepared>,
     terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
     terrain_reason: Option<String>,
     shadows: Option<thessa_render_wgpu::shadows::ShadowAtlas>,
@@ -102,6 +104,15 @@ pub struct SceneMeshes {
 // errors never accumulate across updates. COM recentering changes all origins
 // equally; the 1 nm subtraction envelope is far below the 1 mm mesh budget.
 const RENDER_ORIGIN_ERROR_M: f64 = 1e-9;
+
+pub(super) fn empty_asset() -> MeshAsset {
+    MeshAsset {
+        primitives: vec![],
+        materials: vec![],
+        textures: vec![],
+        images: vec![],
+    }
+}
 
 fn in_body_frame(mut instance: MeshInstance, frame: thessa_render_core::BodyFrame) -> MeshInstance {
     instance.position_m = frame.render_to_body_point(instance.position_m);
@@ -250,15 +261,32 @@ impl SceneMeshes {
         terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
     ) -> Result<Self, BackendError> {
         let resolved = backend.resolve_graphics(&scene.requested);
+        let context = scene.surface_plants_context(&resolved);
+        let (plants, diagnostics) =
+            crate::surface_plants::prepare(context, &resolved, scene.stream.field())
+                .map_err(BackendError::Device)?;
+        *scene.surface_plants_diagnostics.borrow_mut() = diagnostics;
+        // A whole raster batch survives an undersized optional TLAS budget.
+        // Withhold RT only for this consumer, before any GPU publication; never
+        // truncate instances or mutate the scene/global resolved policy.
+        let plant_rt_admitted = plants
+            .as_ref()
+            .is_none_or(|plants| plants.rt_admitted(&resolved));
+        let source = plants.as_ref().map_or(source, |plants| &plants.asset);
+        let capacity = plants.as_ref().map_or_else(
+            || if scene.docking.is_some() { 2 } else { 1 },
+            |plants| plants.instances.len(),
+        );
         let (quality, enabled, min_pixels) = (
             resolved.surface_quality,
             resolved.fleet_meshes,
             resolved.fleet_min_pixels,
         );
         Ok(Self {
+            plant_context: scene.vehicle.is_none().then_some(context),
             shadows: shadows.cloned(),
             environment_revision: None,
-            inner: if scene.server_flight() {
+            inner: if scene.server_flight() || source.primitives.is_empty() {
                 None
             } else {
                 Some(MeshRenderer::with_surface_and_terrain(
@@ -266,11 +294,11 @@ impl SceneMeshes {
                     source,
                     thessa_render_wgpu::mesh::SurfaceSettings {
                         format,
-                        capacity: if scene.docking.is_some() { 2 } else { 1 },
+                        capacity,
                         quality,
                         reflections: resolved.specular_reflections,
                         shadows,
-                        ray_tracing: Some(&resolved),
+                        ray_tracing: plant_rt_admitted.then_some(&resolved),
                     },
                     terrain.as_ref(),
                 )?)
@@ -287,11 +315,16 @@ impl SceneMeshes {
             tracks: BTreeMap::new(),
             primary_primitives: source.primitives.len(),
             radii: BTreeMap::new(),
-            instances: Vec::with_capacity(64),
+            instances: if scene.vehicle.is_some() {
+                Vec::with_capacity(64)
+            } else {
+                Vec::new()
+            },
             ranges: vec![0..1; source.primitives.len()],
             source_publications: 0,
             epoch_withheld: 0,
             size_culled: 0,
+            plants,
         })
     }
 
@@ -354,11 +387,45 @@ impl SceneMeshes {
         height: u32,
         exposure: f32,
     ) -> Result<(), BackendError> {
+        if let Some(context) = self.plant_context {
+            let next = scene.surface_plants_context(&self.resolved);
+            if next != context {
+                // At most one retained selected window. Reuse source selection,
+                // shared shadow atlas and environment; no cache or scheduler.
+                let empty = empty_asset();
+                let source = scene.vehicle.as_ref().map_or(&empty, |(source, _)| source);
+                *self = Self::with_shadows(
+                    scene,
+                    backend,
+                    source,
+                    self.format,
+                    self.shadows.as_ref(),
+                    self.terrain.clone(),
+                )?;
+            }
+        }
         let view = scene.view(width, height, exposure);
         self.update_environment(scene, backend);
         let Some((primary, primary_instance)) = &scene.vehicle else {
             return if let Some(inner) = &mut self.inner {
-                inner.update(backend, &view, &scene.lighting(), &[])
+                if let Some(plants) = &self.plants {
+                    debug_assert_eq!(plants.descriptors.len(), plants.instances.len());
+                    inner.update_selected(
+                        backend,
+                        &view,
+                        &scene.lighting(),
+                        &plants.instances,
+                        Some(&plants.ranges),
+                    )?;
+                    let stats = inner.draw_stats();
+                    let mut diagnostics = scene.surface_plants_diagnostics.borrow_mut();
+                    diagnostics.submitted_instances = stats.instances;
+                    diagnostics.draw_calls = stats.draw_calls;
+                    diagnostics.frame_upload_bytes = stats.frame_upload_bytes;
+                    Ok(())
+                } else {
+                    inner.update(backend, &view, &scene.lighting(), &[])
+                }
             } else {
                 Ok(())
             };
@@ -609,6 +676,148 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use thessa_sim_core::{RenderGeometry, RenderMesh, RenderPart};
+
+    #[test]
+    #[ignore = "requires a wgpu adapter"]
+    fn survey_plants_retain_body_fixed_descriptors_and_submit_grouped_ranges() {
+        use thessa_render_wgpu::terrain::OffscreenTarget;
+        let backend = Backend::bring_up().unwrap();
+        let mut requested = thessa_graphics::RequestedGraphics::default();
+        requested.surface_plants.enabled = true;
+        requested.shadows.enabled = true;
+        requested.shadows.quality = thessa_graphics::Quality::Low;
+        requested.shadows.cascades = 1;
+        requested.shadows.map_size = 256;
+        let mut scene = Scene::load(requested).unwrap();
+        scene.select_fixed_survey_site([23.565679258039204, 165.13881581863882]);
+        let settings = backend.resolve_graphics(&scene.requested);
+        let page = thessa_rcbt_core::HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+        let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor: TileAnchor::new(TileKey::new(0, 0, 0, 0).unwrap(), scene.stream.radius_m())
+                    .unwrap(),
+                page: &page,
+            }],
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: 1,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        terrain.publish_partition(&backend, &[]).unwrap();
+        let mut meshes = scene
+            .mesh_renderer_with_shadows(&backend, OffscreenTarget::FORMAT, &terrain)
+            .unwrap()
+            .unwrap();
+        // Freeze atlas camera/lights to isolate mesh-source cache invalidation.
+        // This tests real depth encoding/cache lifetime, not pixel occlusion.
+        let shadow_camera = scene.center + scene.up * 50.0;
+        let lighting = scene.lighting();
+        let draw_shadows =
+            |scene: &Scene, meshes: &mut SceneMeshes, terrain: &mut TerrainRenderer| {
+                scene.update_mesh(&backend, meshes, 320, 240, 1.0).unwrap();
+                terrain
+                    .update_shadows(&backend, shadow_camera, &lighting)
+                    .unwrap();
+                assert!(terrain.shadows().unwrap().storage_bytes() > 0);
+                assert!(terrain.shadows().unwrap().active_passes() > 0);
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                terrain.encode_surface(&mut encoder);
+                terrain.encode_shadows(&mut encoder, meshes.opaque());
+                backend.queue.submit([encoder.finish()]);
+                terrain.last_shadow_passes()
+            };
+        let plants = meshes.plants.as_ref().unwrap();
+        let descriptors = plants.descriptors.clone();
+        let instances = plants.instances.clone();
+        let draw_calls = plants.asset.primitives.len();
+        let triangles: u64 = plants
+            .asset
+            .primitives
+            .iter()
+            .zip(&plants.ranges)
+            .map(|(p, r)| p.indices.len() as u64 / 3 * u64::from(r.end - r.start))
+            .sum();
+        let preparation_ms = scene.surface_plants_diagnostics.borrow().preparation_ms;
+        assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
+        assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+        assert_eq!(meshes.draw_stats().instances as usize, descriptors.len());
+        assert_eq!(meshes.draw_stats().draw_calls, draw_calls);
+        assert_eq!(meshes.draw_stats().triangles, triangles);
+        scene.survey.set_distance_m(80.0);
+        scene.set_presentation_time(SimTime(1234.0)).unwrap();
+        assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
+        assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+        assert_eq!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+        assert_eq!(meshes.plants.as_ref().unwrap().instances, instances);
+        assert_eq!(
+            scene.surface_plants_diagnostics.borrow().preparation_ms,
+            preparation_ms
+        );
+        #[cfg(feature = "hud")]
+        {
+            let window = crate::surface_plants::survey_window(scene.up);
+            scene.set_map_open(true);
+            assert!(
+                draw_shadows(&scene, &mut meshes, &mut terrain) > 0,
+                "removing plant casters must invalidate cached depth"
+            );
+            assert!(meshes.inner.is_none() && meshes.plants.is_none());
+            assert_eq!(
+                scene.surface_plants_metadata()["native_surface_plants_candidate_visits"],
+                "0"
+            );
+            assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+            scene.set_map_open(false);
+            assert!(
+                draw_shadows(&scene, &mut meshes, &mut terrain) > 0,
+                "returning to survey must regenerate and readmit the same window"
+            );
+            assert_eq!(
+                scene.surface_plants_diagnostics.borrow().window,
+                Some(window)
+            );
+            assert_eq!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+            assert_eq!(meshes.plants.as_ref().unwrap().instances, instances);
+            let preparation_ms = scene.surface_plants_diagnostics.borrow().preparation_ms;
+            assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+            assert_eq!(
+                scene.surface_plants_diagnostics.borrow().preparation_ms,
+                preparation_ms
+            );
+        }
+        // A new selected window replaces the retained source once, not per frame.
+        scene.select_site(1);
+        assert!(
+            draw_shadows(&scene, &mut meshes, &mut terrain) > 0,
+            "replacing the selected plant window must invalidate cached depth"
+        );
+        let window = crate::surface_plants::survey_window(scene.up);
+        assert_eq!(
+            scene.surface_plants_diagnostics.borrow().window,
+            Some(window)
+        );
+        assert_eq!(scene.surface_plants_diagnostics.borrow().candidates, 4096);
+        let preparation_ms = scene.surface_plants_diagnostics.borrow().preparation_ms;
+        assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+        assert_eq!(
+            scene.surface_plants_diagnostics.borrow().preparation_ms,
+            preparation_ms
+        );
+        // Settings are restart-required: test disabled constructor recreation,
+        // not live enable/quality mutation of the existing renderer.
+        scene.requested.surface_plants.enabled = false;
+        assert!(
+            scene
+                .mesh_renderer(&backend, OffscreenTarget::FORMAT)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     fn builtin_primary() -> thessa_flight_net::geometry::FleetVehicleGeometry {
         thessa_flight_net::geometry::FleetVehicleGeometry {

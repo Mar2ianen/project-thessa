@@ -368,8 +368,8 @@ pub struct PlantInstance {
     pub yaw_rad: f64,
 }
 
-/// Indexed prototype geometry, metre-local and renderer-neutral. Consumers
-/// upload it through the existing native mesh path; no runtime plant generation.
+/// Indexed prototype geometry, metre-local and renderer-neutral, reusable by
+/// offline bakes and native mesh publication; not vegetation growth or physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlantMesh {
     pub kind: crate::scatter::ScatterKind,
@@ -1104,7 +1104,7 @@ fn frozen_water_height(world: &FrozenSurface, dir: [f64; 3]) -> Option<f64> {
     ))
 }
 
-fn plant_prototypes() -> Vec<PlantMesh> {
+pub fn plant_prototypes() -> Vec<PlantMesh> {
     use crate::scatter::ScatterKind;
     [
         ScatterKind::FernClump,

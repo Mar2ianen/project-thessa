@@ -159,6 +159,9 @@ pub struct RendererSettings {
     /// Native primary terrain normal plane; restart required for residency.
     #[serde(default = "default_true")]
     pub terrain_normal_maps: bool,
+    /// Experimental native soil/gravel swatch and bounded sub-L17 pages.
+    #[serde(default)]
+    pub terrain_ground_detail: bool,
     #[serde(default = "default_true")]
     pub specular_reflections: bool,
     /// Maximum native depth-atlas storage across three lights and all cascades.
@@ -221,6 +224,7 @@ impl Default for RendererSettings {
         Self {
             surface_quality: Quality::High,
             terrain_normal_maps: true,
+            terrain_ground_detail: false,
             specular_reflections: true,
             shadow_memory_mib: default_shadow_memory(),
             fleet_meshes: true,

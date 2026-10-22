@@ -705,6 +705,13 @@ impl TerrainRenderer {
         let raster_source = shaders::CBT_RASTER_WGSL
             .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
             .replace(
+                "const MATERIAL_MAX_LEVEL: f32 = 17.0;",
+                &format!(
+                    "const MATERIAL_MAX_LEVEL: f32 = {}.0;",
+                    settings.map_or(17, |s| s.terrain_material_max_level())
+                ),
+            )
+            .replace(
                 "const MATERIAL_NORMALS_ENABLED: bool = false;",
                 &format!("const MATERIAL_NORMALS_ENABLED: bool = {normal_maps};"),
             )

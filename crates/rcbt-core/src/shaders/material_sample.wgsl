@@ -14,6 +14,27 @@ struct MaterialCoordinates {
     local: vec2<f32>,
 };
 
+// Exact symmetric angular chord without subtracting nearly equal unit vectors.
+// Unlike a linearized Jacobian, it stays bounded at coarse grazing footprints.
+fn material_chart_chord(q: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
+    let a = q - d * 0.5;
+    let la = length(a);
+    let lb = length(a + d);
+    // Rationalize lb-la before dividing: small d must not lose its low bits.
+    let length_delta = (2.0 * dot(a, d) + dot(d, d)) / (lb + la);
+    return (d - a * (length_delta / la)) / lb;
+}
+
+// Axis permutations/signs do not change chord lengths: all six cube faces.
+fn material_chart_footprint(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, radius: f32) -> f32 {
+    let q = vec3<f32>((address.uv + address.offset) * 2.0 - 1.0, 1.0);
+    let q_dx = vec3<f32>(dx * 2.0, 0.0);
+    let q_dy = vec3<f32>(dy * 2.0, 0.0);
+    let tangent_dx = material_chart_chord(q, q_dx);
+    let tangent_dy = material_chart_chord(q, q_dy);
+    return max(length(tangent_dx), length(tangent_dy)) * radius;
+}
+
 fn material_coordinates(address: MaterialAddress, extent: f32) -> MaterialCoordinates {
     let base = address.uv * extent;
     let relative = fract(base) + address.offset * extent;

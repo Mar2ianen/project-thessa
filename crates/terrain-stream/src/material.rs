@@ -40,6 +40,8 @@ pub struct MaterialStream {
     refinement: Option<(u64, u64)>,
     cache_budget: usize,
     normal_maps: bool,
+    ground_detail: bool,
+    max_level: u8,
 }
 
 impl MaterialStream {
@@ -53,8 +55,20 @@ impl MaterialStream {
 
     pub fn with_source_and_normals(
         cache_budget: usize,
+        source: MaterialPageStore,
+        normal_maps: bool,
+    ) -> Self {
+        Self::with_detail(cache_budget, source, normal_maps, false, 17)
+    }
+
+    /// Immutable producer policy: restart/invalidate the stream when changing
+    /// it, so old pages cannot masquerade as the new optical representation.
+    pub fn with_detail(
+        cache_budget: usize,
         mut source: MaterialPageStore,
         normal_maps: bool,
+        ground_detail: bool,
+        max_level: u8,
     ) -> Self {
         source.trim_to_budget(cache_budget);
         Self {
@@ -64,6 +78,12 @@ impl MaterialStream {
             refinement: None,
             cache_budget,
             normal_maps,
+            ground_detail,
+            max_level: if ground_detail {
+                max_level.clamp(17, 22)
+            } else {
+                17
+            },
         }
     }
 
@@ -115,8 +135,9 @@ impl MaterialStream {
         geometry_sources: impl IntoIterator<Item = TileKey>,
     ) {
         let normal_maps = self.normal_maps;
+        let ground_detail = self.ground_detail;
         self.reconcile_with(demand, geometry_sources, |key| {
-            crate::spawn_material_job_with_normals(field.clone(), key, normal_maps)
+            crate::spawn_material_job_with_detail(field.clone(), key, normal_maps, ground_detail)
         });
     }
 
@@ -127,8 +148,12 @@ impl MaterialStream {
         mut spawn: impl FnMut(TileKey) -> JobHandle<CbtMaterialPage>,
     ) {
         if self.needs_refinement(demand.selection_epoch, demand.pixel_angle) {
-            self.refined =
-                selection::material_view_selection(demand.fine, demand.view, demand.pixel_angle);
+            self.refined = selection::material_view_selection_with_limit(
+                demand.fine,
+                demand.view,
+                demand.pixel_angle,
+                self.max_level,
+            );
             self.refinement = Some((demand.selection_epoch, demand.pixel_angle.to_bits()));
         }
         let wanted = selection::material_demand(

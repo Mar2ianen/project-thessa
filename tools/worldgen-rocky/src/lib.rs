@@ -17,6 +17,7 @@ pub mod features;
 pub mod field;
 pub mod geothermal;
 pub mod gores;
+mod ground_detail;
 pub mod height;
 pub mod hydro;
 pub mod landmarks;

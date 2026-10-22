@@ -1513,6 +1513,113 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 #[test]
 #[ignore = "requires a wgpu adapter; run with --ignored"]
+fn gpu_local_material_footprints_match_f64_across_pixel_scales() {
+    let gpu = Gpu::new();
+    let radius = 3_200_000.0;
+    let mut inputs = Vec::new();
+    let mut expected = Vec::new();
+    for face in 0..6 {
+        for uv in [[0.01f32, 0.99f32], [0.5, 0.5], [0.866, 0.726], [0.0, 1.0]] {
+            for footprint in [
+                0.001,
+                0.01,
+                0.024,
+                0.1,
+                1.0,
+                100.0,
+                10_000.0,
+                3_200_000.0,
+                12_800_000.0,
+            ] {
+                for skew in [0.0, 0.75] {
+                    let step = (footprint / radius) as f32;
+                    let dx = [step, step * skew];
+                    let dy = [-step * 0.25, step * 0.5];
+                    inputs.extend(
+                        [uv[0], uv[1], dx[0], dx[1], dy[0], dy[1], 0.0, 0.0].map(f32::to_bits),
+                    );
+                    // Independent f64 central differences of the actual six
+                    // normalized cube-face projections, not the WGSL identity.
+                    let project = |uv: [f64; 2]| {
+                        let [u, v] = uv.map(|v| v * 2.0 - 1.0);
+                        let q = match face {
+                            0 => [1.0, v, -u],
+                            1 => [-1.0, v, u],
+                            2 => [u, 1.0, -v],
+                            3 => [u, -1.0, v],
+                            4 => [u, v, 1.0],
+                            _ => [-u, v, -1.0],
+                        };
+                        let length = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+                        q.map(|v| v / length)
+                    };
+                    let difference = |d: [f32; 2]| {
+                        let a = project(std::array::from_fn(|i| {
+                            f64::from(uv[i]) - f64::from(d[i]) * 0.5
+                        }));
+                        let b = project(std::array::from_fn(|i| {
+                            f64::from(uv[i]) + f64::from(d[i]) * 0.5
+                        }));
+                        a.into_iter()
+                            .zip(b)
+                            .map(|(a, b)| (a - b).powi(2))
+                            .sum::<f64>()
+                            .sqrt()
+                            * radius
+                    };
+                    expected.push(difference(dx).max(difference(dy)));
+                }
+            }
+        }
+    }
+    let shader = format!(
+        "{}\n{}",
+        thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
+            .split("// Gradients")
+            .next()
+            .unwrap()
+            .replace("@binding(16)", "@binding(0)"),
+        r#"
+@group(0) @binding(1) var<storage, read> points: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(64)
+fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= arrayLength(&result)) { return; }
+    let a = points[gid.x * 2u];
+    let b = points[gid.x * 2u + 1u];
+    let address = MaterialAddress(a.xy, 0u, vec2(0.0));
+    result[gid.x] = vec4(material_chart_footprint(address, a.zw, b.xy, 3200000.0), 0.0, 0.0, 0.0);
+}"#
+    );
+    let directory = gpu.buffer(&[0; 4], false);
+    let input = gpu.buffer(&inputs, false);
+    let output = gpu.buffer(&vec![0; expected.len() * 4], false);
+    gpu.dispatch(
+        &shader,
+        &[("check", expected.len().div_ceil(64) as u32)],
+        &[&directory, &input, &output],
+        &[],
+        &[2],
+    );
+    for (i, (actual, expected)) in gpu
+        .read(&output)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected)
+        .enumerate()
+    {
+        let actual = f64::from(f32::from_bits(actual[0]));
+        assert!(
+            (actual - expected).abs() <= 1e-6 + expected * 2e-6,
+            "footprint case {i}: {actual} vs {expected}"
+        );
+        assert!(actual <= 2.0 * radius * (1.0 + 1e-6));
+    }
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
 fn gpu_split_material_coordinates_match_f64_across_levels_and_page_edges() {
     let gpu = Gpu::new();
     let mut inputs = Vec::new();

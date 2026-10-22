@@ -52,11 +52,21 @@ pub fn spawn_material_job_with_normals(
     key: thessa_worldgen_rocky::lod::TileKey,
     normal_maps: bool,
 ) -> JobHandle<thessa_rcbt_core::material_page::CbtMaterialPage> {
+    spawn_material_job_with_detail(field, key, normal_maps, false)
+}
+
+pub fn spawn_material_job_with_detail(
+    field: std::sync::Arc<thessa_worldgen_rocky::field::PlanetField>,
+    key: thessa_worldgen_rocky::lod::TileKey,
+    normal_maps: bool,
+    ground_detail: bool,
+) -> JobHandle<thessa_rcbt_core::material_page::CbtMaterialPage> {
     JobHandle::spawn(move || {
-        let page = thessa_worldgen_rocky::lod::build_gpu_material_page_with_normals(
+        let page = thessa_worldgen_rocky::lod::build_gpu_material_page_with_ground_detail(
             &field,
             key,
             normal_maps,
+            ground_detail,
         );
         thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8_with_normals(
             page.rgba,

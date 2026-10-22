@@ -156,7 +156,10 @@ The checked-in vertical slice currently contains:
      The bounded survey plants now distinguish lycopsid stems and foliage through
      the shared mesh material, with unchanged geometry and draw count (doc 77).
      Regular-patch material sampling preserves local chart precision; the tested
-     forest-floor colour prototype was rejected, not shipped (doc 77).
+      forest-floor colour-noise prototype was rejected, not shipped (doc 77).
+      A distinct default-off CC0 soil/gravel experiment can refine regular-patch
+      materials to L20/L21/L22 by quality; cross-LOD appearance and visual
+      acceptance remain open (doc 77).
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
     textures; bounded stellar shadow rays supplement the shared atlas on meshes
      and reflected hits. The background now samples that same sky field at far

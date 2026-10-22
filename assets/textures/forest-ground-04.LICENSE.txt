@@ -1,0 +1,20 @@
+SPDX-License-Identifier: CC0-1.0
+
+Forest Ground 04 — Rob Tuytel (photography, processing), Rico Cilliers (minor adjustment).
+Source: https://polyhaven.com/a/forest_ground_04
+License: https://polyhaven.com/license
+CC0 legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+Retrieved: 2026-10-22 via the public asset API and direct asset downloads.
+
+forest-ground-04.bin.gz is a derived 512x512 material swatch, not project code.
+It contains sRGB reflectance RGB8, linear roughness R8, and relative height R16.
+The importer verifies the source PNG checksums, averages 2x2 pixels (RGB in linear
+light), quantizes and packs them with a deterministic gzip header. Runtime uses
+the existing flate2 dependency; Pillow and NumPy are offline tooling only.
+Reproduce with tools/worldgen-rocky/import_ground_detail.py; exact download URLs
+and hashes are recorded in the surface-showcase evidence.
+
+This is an authored optical proxy for soil/gravel/organic debris, not measured
+Thessa geology, botanical taxonomy, collision geometry or sediment inventory.
+The renderer uses an explicit 3.15 m swatch width and 0.018 m relative height
+range as rendering priors, not a claim about the scan's calibrated dimensions.

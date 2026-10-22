@@ -473,6 +473,8 @@ impl Scene {
             field,
             StreamingPolicy {
                 normal_maps: stream_settings.terrain_normal_maps,
+                ground_detail: stream_settings.terrain_ground_detail,
+                material_max_level: stream_settings.terrain_material_max_level(),
                 ..StreamingPolicy::default()
             },
         )?;

@@ -315,6 +315,18 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
     texel_m: f64,
     normal_detail_enabled: bool,
 ) -> SurfaceAppearance {
+    surface_appearance_with_ground_detail(field, sample, dir, texel_m, normal_detail_enabled, None)
+        .0
+}
+
+pub(crate) fn surface_appearance_with_ground_detail(
+    field: &PlanetField,
+    sample: &TerrainSample,
+    dir: [f64; 3],
+    texel_m: f64,
+    normal_detail_enabled: bool,
+    ground: Option<crate::ground_detail::GroundSample>,
+) -> (SurfaceAppearance, f64) {
     let noise = |channel, scale, octaves| {
         if texel_m > 0.0 {
             let mut sum = 0.0;
@@ -428,17 +440,20 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
         // so large swells do not render as a mirror-flat fill at glancing sun.
         let sparkle = 1.0 + grain * 0.10 + micro * 0.06;
         let base = mix(c, [0.75, 0.84, 0.86], ice).map(|x| (x * sparkle).clamp(0.0, 1.0) as f32);
-        return SurfaceAppearance {
-            albedo_srgb: base,
-            // Foam is matte (kills the glint in the surf, like real white water);
-            // ice stays rough; open water keeps the sun-glint roughness.
-            roughness: (0.16 + 0.58 * ice + 0.49 * foam * (1.0 - ice)) as f32,
-            normal_detail_scale: 0.0,
-            vegetation: 0.0,
-            snow: ice as f32,
-            snow_cover: ice as f32,
-            frost_cover: 0.0,
-        };
+        return (
+            SurfaceAppearance {
+                albedo_srgb: base,
+                // Foam is matte (kills the glint in the surf, like real white water);
+                // ice stays rough; open water keeps the sun-glint roughness.
+                roughness: (0.16 + 0.58 * ice + 0.49 * foam * (1.0 - ice)) as f32,
+                normal_detail_scale: 0.0,
+                vegetation: 0.0,
+                snow: ice as f32,
+                snow_cover: ice as f32,
+                frost_cover: 0.0,
+            },
+            0.0,
+        );
     }
     let moisture = (sample.moisture01 + regional * 0.24).clamp(0.0, 1.0);
     let ecological_cover = crate::ecology::vegetation_cover(sample, sample.slope_hint);
@@ -470,20 +485,36 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
     });
     let plant = plant.map(|c| c * (1.0 + cover_texture * 0.22));
     let mut color = mix(dry, plant, vegetation);
+    // Resolved soil/gravel beneath canopy is a material swatch, not another
+    // macro cover-noise field. Existing later covers retain their ownership.
+    let mut ground_weight = 0.0;
+    if let Some(ground) = ground {
+        ground_weight =
+            (ecological_cover.canopy01 + ecological_cover.ground01 * 0.5) * (1.0 - exposed);
+        color = std::array::from_fn(|i| {
+            crate::ground_detail::encode_srgb(
+                crate::ground_detail::decode_srgb(color[i]) * (1.0 - ground_weight)
+                    + f64::from(ground.albedo_linear[i]) * (1.0 - damp * 0.25) * ground_weight,
+            )
+        });
+    }
     // Saturated lowland soil / vegetation, not invented pond geometry. The
     // regional drainage source is continuous; local slopes reject cliff faces.
     let wetland = sample.wetland_potential01 * (1.0 - smooth(0.02, 0.1, sample.slope_hint));
     let wet_ground = mix([0.20, 0.23, 0.16], [0.10, 0.26, 0.16], vegetation);
     color = mix(color, wet_ground, wetland);
+    ground_weight *= 1.0 - wetland;
     // Elevation alone cannot replace every highland substrate with the same
     // grey rock. Actual exposure and retained ecological cover choose the mix.
     let rock = exposed.max(smooth(1900.0, 4400.0, h) * (1.0 - vegetation) * (1.0 - loose_cover));
     let stone = stone.map(|c| c * (1.0 + outcrop_texture * 0.20 + weathering * 0.12));
     color = mix(color, stone, rock);
+    ground_weight *= 1.0 - rock;
     // Gentle concave/depositional ground carries loose weathered material;
     // steep convex outcrops retain the underlying rock. No slope-independent
     // white salt overlay is introduced.
     color = mix(color, soil, loose_cover * (1.0 - vegetation) * 0.55);
+    ground_weight *= 1.0 - loose_cover * (1.0 - vegetation) * 0.55;
     // Salt fringe: the outer playa ring (above the 50 m core depth) keeps
     // its plants while the crust washes over it, instead of a hard playa
     // polygon. Inside the core the crust zones from damp margin to dry
@@ -493,6 +524,7 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
             .1
             .map(|c| c * (1.0 + weathering * 0.18));
         color = mix(color, crust, (sample.salt01 / 0.25 * 0.55).clamp(0.0, 1.0));
+        ground_weight *= 1.0 - (sample.salt01 / 0.25 * 0.55).clamp(0.0, 1.0);
     }
     if sample.geology == Geology::Evaporite {
         color = mix(
@@ -500,6 +532,7 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
             [0.80, 0.77, 0.70],
             (sample.salt01 * 0.5).clamp(0.0, 1.0),
         );
+        ground_weight *= 1.0 - (sample.salt01 * 0.5).clamp(0.0, 1.0);
         // Damp saline mud mottles the crust in patches instead of one flat
         // fill; real playas are never a uniform polygon.
         let damp_patch = smooth(-0.1, 0.25, variation) * sample.salt01.clamp(0.0, 1.0);
@@ -508,6 +541,7 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
             [0.45, 0.47, 0.35],
             (damp_patch * 0.5).clamp(0.0, 1.0),
         );
+        ground_weight *= 1.0 - (damp_patch * 0.5).clamp(0.0, 1.0);
     }
     color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
     // Bare ground (little vegetation to carry the cover texture) gets its
@@ -528,6 +562,7 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
     let snow_cover = (snow * snow_available * (1.0 + hollow * moisture * 0.3)).clamp(0.0, 1.0)
         * (1.0 - exposed * 0.9);
     color = mix(color, [0.88, 0.92, 0.94], snow_cover);
+    ground_weight *= 1.0 - snow_cover;
     // Frost on grass: the sub-zero band where snow cover is partial or thin.
     // Below ~258 K snow does the talking; above ~278 K there is nothing to
     // freeze. In between, moisture-gated patches of pale crystals settle over
@@ -542,6 +577,7 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
         // below would only iron out the snow's own micro-relief.
         * (1.0 - snow_cover);
     color = mix(color, [0.78, 0.83, 0.88], (frost * 0.75).clamp(0.0, 1.0));
+    ground_weight *= 1.0 - (frost * 0.75).clamp(0.0, 1.0);
     // Micro-relief brightness on the final albedo: overlapping covers (snow,
     // rock) would otherwise mute the pre-mix grain to invisibility. Uses the
     // independent micro signal, so it adds instead of fighting the patches.
@@ -571,19 +607,26 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
     let visible_substrate = (1.0 - vegetation.clamp(0.0, 1.0))
         * (1.0 - snow_cover)
         * (1.0 - (frost * 0.75).clamp(0.0, 1.0));
-    let roughness = (land_roughness(vegetation, exposed, damp, outcrop_texture, frost) as f64
+    let mut roughness = (land_roughness(vegetation, exposed, damp, outcrop_texture, frost) as f64
         + substrate_roughness_delta(substrate, rock) * visible_substrate)
         .clamp(0.45, 0.98) as f32;
-    SurfaceAppearance {
-        albedo_srgb: color.map(|c| c.clamp(0.0, 1.0) as f32),
-        // Frost crystals glitter: pull roughness down where they settle.
-        roughness,
-        normal_detail_scale: normal_detail_scale as f32,
-        vegetation: vegetation as f32,
-        snow: snow as f32,
-        snow_cover: snow_cover as f32,
-        frost_cover: (frost * 0.75).clamp(0.0, 1.0) as f32,
+    if let Some(ground) = ground {
+        let floor_roughness = (ground.roughness - damp as f32 * 0.15).clamp(0.45, 0.98);
+        roughness += (floor_roughness - roughness) * ground_weight as f32;
     }
+    (
+        SurfaceAppearance {
+            albedo_srgb: color.map(|c| c.clamp(0.0, 1.0) as f32),
+            // Frost crystals glitter: pull roughness down where they settle.
+            roughness,
+            normal_detail_scale: normal_detail_scale as f32,
+            vegetation: vegetation as f32,
+            snow: snow as f32,
+            snow_cover: snow_cover as f32,
+            frost_cover: (frost * 0.75).clamp(0.0, 1.0) as f32,
+        },
+        ground_weight,
+    )
 }
 
 #[cfg(test)]
@@ -682,6 +725,42 @@ mod palette_tests {
 #[cfg(test)]
 mod frost_tests {
     use super::*;
+
+    #[test]
+    fn resolved_ground_does_not_override_water_wetland_rock_or_opaque_snow() {
+        let mut field = field();
+        field.params.surface_climate.precipitation_m_yr = 1000.0;
+        let dir = crate::sphere::dir_from_latlon(38.0, -171.0);
+        let ground = crate::ground_detail::GroundSample {
+            albedo_linear: [0.2, 0.1, 0.05],
+            roughness: 0.7,
+            height_m: 0.003,
+        };
+        for scenario in 0..4 {
+            let mut s = sample(285.0, 0.9);
+            match scenario {
+                0 => s.height_m = -100.0,
+                1 => {
+                    s.wetland_potential01 = 1.0;
+                    s.slope_hint = 0.0;
+                }
+                2 => s.slope_hint = 10.0,
+                _ => {
+                    s.temperature_k = 250.0;
+                    s.slope_hint = 0.0;
+                }
+            }
+            let legacy =
+                surface_appearance_filtered_with_normal_detail(&field, &s, dir, 0.024, true);
+            let (new, weight) =
+                surface_appearance_with_ground_detail(&field, &s, dir, 0.024, true, Some(ground));
+            assert!(weight < 1e-12, "scenario={scenario} weight={weight}");
+            assert_eq!(legacy.albedo_srgb, new.albedo_srgb, "scenario={scenario}");
+            assert_eq!(legacy.roughness, new.roughness, "scenario={scenario}");
+            assert_eq!(legacy.vegetation, new.vegetation);
+            assert_eq!(legacy.snow_cover, new.snow_cover);
+        }
+    }
 
     #[test]
     fn cold_dry_ground_does_not_receive_unlimited_snow_cover() {

@@ -205,8 +205,9 @@ initial stale-stride failure was corrected rather than dropping the test.
 The shared sampler's zero-offset constructor preserves callers that
 only have direction data. The conforming raster, terrain rays and ocean still
 use that legacy direction path: this stage does **not** establish centimetre
-addressing for every consumer. Screen-space page-level selection still uses
-direction derivatives and the production material limit remains L17.
+addressing for every consumer. At WORLD06d, screen-space page-level selection
+still used direction derivatives and the material limit remained L17; the
+opt-in continuation below changes these two regular-patch constraints.
 
 The GPU coordinate oracle compares 3,150 split-coordinate cases to independent
 `f64` arithmetic: six faces, anchor and requested levels 0/10/17/20/22, outer
@@ -246,3 +247,99 @@ certificate. Prior close/overview baselines had overlapping CPU checks and are
 not timing baselines. The captures still show nearly uniform ground, schematic
 plants and coarse shoreline/fallback boundaries: local coordinate accuracy is a
 prerequisite, **not** the requested convincing surface zone or planet expansion.
+
+## WORLD06e — Opt-in resolved ground experiment (not visually accepted)
+
+`renderer.terrain_ground_detail = false` is the default. Enabling it requests a
+CC0 soil/gravel optical swatch through the existing canonical material producer,
+normal plane, mips, residency and raster path. There is no additional GPU pass,
+texture-array plane, geometry, collision, population or simulation state.
+The resolver disables this experiment when conforming topology is active and
+reports the reason: that consumer still lacks precise local material addresses.
+Unsupported conforming topology may itself fall back to regular patches, where
+the experiment remains available. Secondary rays/ocean are not upgraded.
+
+The asset is Poly Haven **Forest Ground 04**, by Rob Tuytel and Rico Cilliers.
+Source PNG MD5s are pinned in `tools/worldgen-rocky/import_ground_detail.py`;
+the derived 512-square swatch contains sRGB reflectance, perceptual roughness
+and relative height. RGB downsampling and runtime mips operate in linear light.
+The 3.15 m repeat and 18 mm relative-height range are explicit authored optical
+priors, not measured Thessa geology or calibrated scan dimensions. See
+`assets/textures/forest-ground-04.LICENSE.txt`; no new runtime dependency is added.
+The body-fixed, seed-phased triplanar projection has no page/camera/worker ID.
+It filters the scan before sampling and derives material normals from physical
+chart chords; coverage weights apply **after** differentiating the height, so
+a habitat boundary cannot become a false cliff. Existing water, wetland, rock,
+salt, snow and frost layers retain their ordered ownership.
+
+With the experiment enabled, resolved `surface_quality` Low/Medium/High caps
+material refinement at L20/L21/L22 (nominal 4.88/2.44/1.22 cm texels at WORLD00's
+radius). Disabled retains L17 and performs no swatch decode/sampling. The same
+512-leaf demand, 1024 CPU-page source budget, bounded worker queue and 256 GPU
+layers remain in use; higher resolution does not imply more cache capacity or
+planet-wide fine residency. Material policy is immutable for a stream lifetime:
+changing it requires restart, avoiding mixed old/new optical pages.
+The packed asset is 1,382,947 bytes in the executable; its ten decoded mips hold
+6,990,500 bytes of float samples, allocated once only when resolved detail is
+sampled. Coarse pages use pinned constants without decoding. This CPU source
+cost is separate from existing GPU layer storage/upload telemetry; normal
+generation still has its independent disabled state.
+
+Regular raster computes symmetric angular chords analytically from the local
+cube-chart derivatives, rather than subtracting nearly equal absolute `f32`
+directions. Rationalizing the normalization-length difference preserves small
+chords while bounding coarse footprints by the sphere's diameter. The shader
+ceiling follows the resolved material tier. This
+is separate from depth-buffer precision and does not migrate forward-Z.
+The GPU footprint oracle compares 432 cases (six chart projections, four chart
+locations, nine scales from 1 mm to 12,800 km and two derivative skews) against
+independent `f64` central differences. The fixture tolerance is 1 micrometre plus
+2 ppm of footprint, not a global image-error or temporal envelope. The existing
+actual-raster sharp-boundary test now also exercises L21 and L22: 162 camera
+samples across all faces/three levels, within two RGB8 codes of linear-light
+bilinear filtering, with strictly increasing subtexel-motion samples.
+
+The first full hardware gate caught two genuine regressions in the initially
+linearized footprint: coarse grazing pixels could acquire an unbounded footprint
+and incorrectly replace resident materials with the globe fallback. The existing
+grazing-GGX and dielectric-furnace tests failed; their tolerances were **not**
+changed. Replacing the linearized metric with the exact stable angular chord
+restored those tests, and the footprint oracle was expanded through planetary
+pixel scales to pin this case. The failed gate log is retained separately from
+the subsequent verification.
+
+The first preview blended legacy green cover into resolved floor only below
+25 cm texels. It produced an obvious brown detail island around the camera and
+was not retained as the production algorithm. All enabled land pages now sample
+the same floor material, with the last linear-light mip used as a constant
+coarse fallback. Its mean is pinned against the decoded asset within 2e-7 per
+channel; those coarse samples need no asset decoding. Finest source resolution
+was also extended to L22 rather than magnifying the L17 material.
+
+**Open limitations:** this floor swatch is not a canopy representation hierarchy,
+3D gravel, a calibrated BRDF or a general biome asset catalogue. Globe-map
+fallback boundaries, scan repetition, normal filtering, close assets, motion,
+and independent preference acceptance remain unaccepted. Do not enable it by
+default or call the surface complete. The rejected WORLD06c noise experiment
+above remains rejected; this is a distinct imported-material experiment.
+
+Final verification passed: formatting, architecture guard, workspace Clippy,
+2,036 unit/bin tests, 103 integration tests, 82 ignored renderer hardware tests
+on Radeon 880M/Vulkan/RADV, and the release build. The mandated Bevy ignored
+command selected zero tests after migration. Final silent standing/close/overview
+captures are `target/surface-showcase/ground-detail/v3-on-*.png`, with a matched
+same-binary standing disabled control, JSON/CSV and logs alongside them. One
+blind pair is prepared with its key separate; zero votes have been collected.
+
+The standing frame has eight L21 GPU material pages but **no L22 residency**.
+L22 is a supported ceiling and isolated raster-oracle result, not verified live
+coverage. All captures retain 222 plant descriptors and three plant draws. The
+final standing off/on GPU medians are 93.315/93.955 ms (one serial diagnostic pair,
+not performance acceptance). The separate 32-page paired producer fixture reports
+134.994/139.684 ms page medians without/with the swatch; it is not a frame or
+streaming-latency benchmark. The ground no longer changes back to green at the
+old source-texel activation threshold, but it remains a flat optical proxy,
+plants are schematic and the shore is coarse. No convincing-zone or planetary
+visual delivery is claimed. Commands, hashes, numerical bounds, failed attempts
+and limitations are recorded in
+[`native-ground-detail-2026-10-23.json`](artifacts/native-ground-detail-2026-10-23.json).

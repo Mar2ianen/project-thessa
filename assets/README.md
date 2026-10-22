@@ -1,6 +1,6 @@
 # Prototype visual assets
 
-This directory contains temporary visual assets for the Bevy client:
+This directory contains prototype visual assets for the clients:
 
 - `textures/khepri-surface-v1.png` — hot volcanic Khepri surface;
 - `textures/janus-surface-v1.png` — cold rocky Janus surface;
@@ -14,6 +14,10 @@ This directory contains temporary visual assets for the Bevy client:
 - `textures/borea-surface-v1.png` — icy/basaltic Borea surface;
 - `textures/nereid-atmosphere-v1.png` — warm Nereid gas-giant bands;
 - `textures/vesper-atmosphere-v1.png` — cold Vesper gas-giant bands.
+- `textures/forest-ground-04.bin.gz` — derived CC0 soil/gravel optical swatch
+  for the opt-in native ground-detail experiment. See
+  `textures/forest-ground-04.LICENSE.txt` for authors, provenance, scales and
+  the reproducible importer. Not collision geometry or measured Thessa geology.
 
 The v1 maps were generated with ImageGen on 2026-09-07 from prototype
 descriptions. They are not physically accurate surface maps and are not part

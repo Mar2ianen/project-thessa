@@ -19,6 +19,7 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
     let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
     let settings = thessa_graphics::ResolvedGraphicsSettings {
         terrain_normal_maps: false,
+        terrain_ground_detail: true,
         specular_reflections: false,
         shadow_enabled: false,
         ..Default::default()
@@ -30,9 +31,10 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
         .flat_map(|i| [if i % 128 < 64 { 32 } else { 224 }, 0, 0, 255])
         .collect();
     let material = CbtMaterialPage::from_rgba8(rgba).unwrap();
-    for face in 0..6 {
+    for (face, level) in (0..6).flat_map(|face| [17, 21, 22].map(|level| (face, level))) {
         // Away from face centre, to catch direction/chart cancellation.
-        let key = TileKey::new(face, 17, 113_491, 95_110).unwrap();
+        let scale = 1 << (level - 17);
+        let key = TileKey::new(face, level, 113_491 * scale, 95_110 * scale).unwrap();
         let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
         let mut renderer = TerrainRenderer::with_capacity_and_lighting(
             &backend,
@@ -76,7 +78,10 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
                 )
                 .inverse(),
                 clip_from_view: glam::dcamera::rh::proj::directx::perspective(
-                    0.01, 1.0, 0.01, 1000.0,
+                    0.01 / f64::from(scale),
+                    1.0,
+                    0.01,
+                    1000.0,
                 ),
                 world_position_m: eye,
                 exposure: 1.0,
@@ -93,7 +98,7 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
             let expected = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
             assert!(
                 actual.abs_diff(expected) <= 2,
-                "face={face} step={step} actual={actual} expected={expected}"
+                "face={face} level={level} step={step} actual={actual} expected={expected}"
             );
             reds.push(actual);
         }

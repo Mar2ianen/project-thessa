@@ -358,6 +358,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/material_sample.wgsl"),
     include_str!("shaders/material_normal.wgsl"),
     r#"
+const MATERIAL_MAX_LEVEL: f32 = 17.0;
 struct Params {
     leaf_count: u32,
     vertices_per_patch: u32,
@@ -560,10 +561,9 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // replaced a detailed coast with stair-stepped blurry blocks in one view.
     // World-addressed page LOD/mips now filter the intervening scales.
     let footprint = max(length(dpdx(direction)), length(dpdy(direction)));
-    let footprint_m = footprint * bitcast<f32>(params.radius_bits);
+    var footprint_m = footprint * bitcast<f32>(params.radius_bits);
     let globe_texel_m = 3.14159265 * bitcast<f32>(params.radius_bits)
         / f32(textureDimensions(albedo_texture).y);
-    var detail_weight = 1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m);
     var address = material_address(direction);
     // A zero divisor is the conforming stream's explicit legacy fallback.
     let chart_offset = input.material_chart.xy / max(input.material_chart.z, 0.000001);
@@ -571,6 +571,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let chart_dy = dpdy(chart_offset);
     if (input.material_chart.z > 0.0) {
         address = MaterialAddress(input.material_anchor, input.material_face, chart_offset);
+        // Evaluate normalized cube-chart chords analytically. Differencing
+        // rounded absolute directions loses centimetre-scale footprints at a
+        // planetary radius, even when the page address itself is precise.
+        footprint_m = material_chart_footprint(address, chart_dx, chart_dy, bitcast<f32>(params.radius_bits));
     }
     // Project both derivatives in this fragment's face. A derivative across
     // a face-number switch must not become an enormous false mip footprint.
@@ -578,11 +582,12 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         chart_dx, input.material_chart.z > 0.0);
     let address_dy = select(material_face_uv(direction + dpdy(direction), address.face) - address.uv,
         chart_dy, input.material_chart.z > 0.0);
+    var detail_weight = 1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m);
     // A material texel must cover the same physical footprint regardless of
     // which geometry leaf happens to rasterize it. Trilinear page levels are
     // chosen in screen space rather than inheriting a coarse mesh page.
     let material_lod = clamp(log2(2.0 * bitcast<f32>(params.radius_bits)
-        / (125.0 * max(footprint_m, 0.001))), 0.0, 17.0);
+        / (125.0 * max(footprint_m, 0.001))), 0.0, MATERIAL_MAX_LEVEL);
     let coarse = material_at_level_raster(address, address_dx, address_dy, u32(floor(material_lod)));
     let fine = material_at_level_raster(address, address_dx, address_dy, u32(ceil(material_lod)));
     let coverage = mix(coarse.coverage, fine.coverage, fract(material_lod));

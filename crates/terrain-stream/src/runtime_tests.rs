@@ -16,6 +16,8 @@ fn policy() -> StreamingPolicy {
         material_cache: 6,
         draw_capacity: 6,
         normal_maps: true,
+        ground_detail: false,
+        material_max_level: 17,
     }
 }
 

@@ -114,6 +114,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Stellar and ambient-environment reflection; not scene-object ray tracing.",
         },
         SettingMeta {
+            path: "renderer.terrain_ground_detail",
+            label: "Experimental native ground detail",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: true,
+            description: "Body-fixed CC0 soil/gravel optical proxy through existing material pages. Surface quality limits refinement to L20/L21/L22; conforming topology falls back to legacy materials. Disabled retains L17 and skips swatch decoding/sampling. Restart required.",
+        },
+        SettingMeta {
             path: "renderer.shadow_memory_mib",
             label: "Native shadow atlas budget",
             kind: SettingKind::Int,

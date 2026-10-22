@@ -12,6 +12,42 @@ fn main() {
     )
     .expect("frozen surface");
     let field = source.with_frozen_erosion(&frozen).expect("matched source");
+    if std::env::args().any(|arg| arg == "--ground-detail") {
+        let mut paired = [Vec::new(), Vec::new()];
+        for i in 0..32u32 {
+            let level = [17, 20, 21, 22][i as usize % 4];
+            let key = lod::TileKey {
+                face: 3,
+                level,
+                x: (14936 << (level - 16)) + i / 4,
+                y: 47207 << (level - 16),
+            };
+            for enabled in if (i / 4) % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let start = Instant::now();
+                black_box(lod::build_gpu_material_page_with_ground_detail(
+                    &field, key, true, enabled,
+                ));
+                paired[usize::from(enabled)].push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        for (enabled, timings) in paired.iter_mut().enumerate() {
+            timings.sort_by(f64::total_cmp);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "workload": "32 paired frozen-erosion land pages, face 3, levels 17/20/21/22; counterbalanced",
+                    "ground_detail": enabled == 1, "normal_maps": true, "count": timings.len(),
+                    "page_p50_ms": timings[16], "page_p95_ms": timings[30], "page_max_ms": timings[31],
+                    "not_frame_time_or_loading_benchmark": true,
+                })
+            );
+        }
+        return;
+    }
     let mut timings = Vec::new();
     let mut payload = 0usize;
     let mut normal_payload = 0usize;

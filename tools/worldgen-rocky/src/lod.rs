@@ -2,8 +2,7 @@
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{
     appearance::{
-        surface_appearance, surface_appearance_filtered,
-        surface_appearance_filtered_with_normal_detail, surface_grain_height,
+        surface_appearance, surface_appearance_filtered, surface_grain_height,
         surface_normal_grain_height,
     },
     field::PlanetField,
@@ -727,6 +726,16 @@ pub fn build_gpu_material_page_with_normals(
     key: TileKey,
     normal_maps: bool,
 ) -> GpuMaterialPage {
+    build_gpu_material_page_with_ground_detail(field, key, normal_maps, false)
+}
+
+/// Optional resolved soil/gravel optical swatch, using the same page/mip ABI.
+pub fn build_gpu_material_page_with_ground_detail(
+    field: &PlanetField,
+    key: TileKey,
+    normal_maps: bool,
+    ground_detail: bool,
+) -> GpuMaterialPage {
     let size = GPU_MATERIAL_PAGE_SIZE as usize;
     let cells = GPU_MATERIAL_PAGE_CELLS;
     let texel_m = key.span_m(field.params.radius_m) / cells as f64;
@@ -757,6 +766,20 @@ pub fn build_gpu_material_page_with_normals(
     }
 
     let mut rgba = Vec::with_capacity(size * size * 4);
+    let ground = if ground_detail && samples.iter().any(|s| s.height_m > 0.0) {
+        dirs.iter()
+            .map(|&dir| {
+                crate::ground_detail::sample(dir, field.params.radius_m, field.params.seed, texel_m)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+    let mut ground_weights = Vec::with_capacity(if normal_maps && !ground.is_empty() {
+        size * size
+    } else {
+        0
+    });
     for y in 0..size {
         for x in 0..size {
             let index = y * size + x;
@@ -766,16 +789,17 @@ pub fn build_gpu_material_page_with_normals(
                 prefixes[index].1,
                 MATERIAL_SLOPE_WAVELENGTH_M,
             );
-            let material = {
+            let (material, ground_weight) = {
                 let sample = &mut samples[index];
                 sample.slope_hint = slope;
                 sample.curvature_per_m = curvature;
-                surface_appearance_filtered_with_normal_detail(
+                crate::appearance::surface_appearance_with_ground_detail(
                     field,
                     sample,
                     dirs[index],
                     texel_m,
                     normal_maps,
+                    ground.get(index).copied(),
                 )
             };
             rgba.extend(
@@ -786,6 +810,9 @@ pub fn build_gpu_material_page_with_normals(
             rgba.push((material.roughness.clamp(0.0, 1.0) * 255.0).round() as u8);
             if normal_maps {
                 normal_detail_scales.push(material.normal_detail_scale as f64);
+                if !ground.is_empty() {
+                    ground_weights.push(ground_weight);
+                }
             }
         }
     }
@@ -828,6 +855,24 @@ pub fn build_gpu_material_page_with_normals(
             let detail_scale = normal_detail_scales[y * size + x];
             gradient[0] *= detail_scale;
             gradient[1] *= detail_scale;
+            if !ground.is_empty() && ground_weights[y * size + x] > 0.0 {
+                // Differentiate the unmasked source, then weight the gradient:
+                // a habitat/snow/coast boundary must not become a height cliff.
+                let height = |x: usize, y: usize| f64::from(ground[y * size + x].height_m);
+                let floor_gradient = material_chart_gradient(
+                    key.face,
+                    dirs[y * size + x],
+                    sub(dirs[y * size + x1], dirs[y * size + x0])
+                        .map(|v| v * field.params.radius_m),
+                    sub(dirs[y1 * size + x], dirs[y0 * size + x])
+                        .map(|v| v * field.params.radius_m),
+                    height(x1, y) - height(x0, y),
+                    height(x, y1) - height(x, y0),
+                );
+                for i in 0..2 {
+                    gradient[i] += floor_gradient[i] * ground_weights[y * size + x];
+                }
+            }
             let [dx, dy] = gradient;
             let length = (dx * dx + dy * dy + 1.0).sqrt();
             normal.push(
@@ -1111,6 +1156,65 @@ pub fn build_surface_texture_for_mesh(
 #[cfg(test)]
 mod surface_regressions {
     use super::*;
+    #[test]
+    fn optional_ground_pages_preserve_disabled_and_filter_same_material_at_coarse_levels() {
+        let field = field();
+        let key = TileKey {
+            face: 3,
+            level: 21,
+            x: 14936 << 5,
+            y: 47207 << 5,
+        };
+        let a = build_gpu_material_page_with_ground_detail(&field, key, true, true);
+        let no_normals = build_gpu_material_page_with_ground_detail(&field, key, false, true);
+        assert_eq!(a.rgba, no_normals.rgba);
+        assert!(no_normals.normal.is_empty());
+        let legacy = build_gpu_material_page_with_normals(&field, key, true);
+        let disabled = build_gpu_material_page_with_ground_detail(&field, key, true, false);
+        assert_eq!(legacy.rgba, disabled.rgba);
+        assert_eq!(legacy.normal, disabled.normal);
+        assert_ne!(a.rgba, legacy.rgba, "land fixture must exercise the swatch");
+        assert_ne!(a.normal, legacy.normal);
+        let coarse = TileKey {
+            level: 17,
+            x: key.x >> 4,
+            y: key.y >> 4,
+            ..key
+        };
+        let old = build_gpu_material_page_with_normals(&field, coarse, true);
+        let new = build_gpu_material_page_with_ground_detail(&field, coarse, true, true);
+        assert_ne!(
+            old.rgba, new.rgba,
+            "coarse pages must retain the floor mean, not turn green"
+        );
+        for neighbor in [
+            TileKey {
+                x: key.x + 1,
+                ..key
+            },
+            TileKey {
+                y: key.y + 1,
+                ..key
+            },
+        ] {
+            let b = build_gpu_material_page_with_ground_detail(&field, neighbor, true, true);
+            for i in 1..127 {
+                let (ai, bi) = if neighbor.x != key.x {
+                    (i * 128 + 126, i * 128 + 1)
+                } else {
+                    (126 * 128 + i, 128 + i)
+                };
+                for (left, right, stride) in [(&a.rgba, &b.rgba, 4), (&a.normal, &b.normal, 2)] {
+                    for c in 0..stride {
+                        assert!(
+                            left[ai * stride + c].abs_diff(right[bi * stride + c]) <= 1,
+                            "neighbor={neighbor:?} texel={i} channel={c} stride={stride}"
+                        );
+                    }
+                }
+            }
+        }
+    }
     fn field() -> PlanetField {
         let recipe =
             toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();

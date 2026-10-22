@@ -197,6 +197,17 @@ pub fn material_view_selection(
     view: SelectionView,
     pixel_angle: f64,
 ) -> Vec<TileKey> {
+    material_view_selection_with_limit(base, view, pixel_angle, 17)
+}
+
+/// Same 512-leaf refinement budget; only material resolution changes.
+pub fn material_view_selection_with_limit(
+    base: &[TileKey],
+    view: SelectionView,
+    pixel_angle: f64,
+    max_level: u8,
+) -> Vec<TileKey> {
+    let max_level = max_level.clamp(17, 22);
     let mut cover: BTreeSet<_> = base.iter().copied().collect();
     let error = |key: TileKey| {
         let center = DVec3::from(key.direction(0.5, 0.5)) * view.radius;
@@ -204,7 +215,7 @@ pub fn material_view_selection(
         key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
     };
     let split_candidate = |key: &TileKey| {
-        if key.level >= 17 {
+        if key.level >= max_level {
             return false;
         }
         let Some(frustum) = &view.frustum else {

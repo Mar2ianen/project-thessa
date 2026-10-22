@@ -1,0 +1,123 @@
+{
+  "task": "WORLD06e",
+  "date": "2026-10-23",
+  "branch": "feat/native-surface-showcase",
+  "baseline_commit": "ab466ecee0f27be82beaa9684933d9844a5f5370",
+  "status": "Default-off optical experiment; numerical verification passed, visual acceptance incomplete",
+  "scope": "Existing material producer/pages/mips/residency; CC0 soil/gravel source; bounded refinement; stable regular-raster angular footprints. No simulation, collision, plant geometry, new render pass or additional GPU texture plane.",
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1), Vulkan, radv, Mesa 26.2.5-arch1.1",
+  "cargo_environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"},
+  "configuration": {
+    "switch": "renderer.terrain_ground_detail",
+    "default": false,
+    "quality_ceiling_low_medium_high": [20, 21, 22],
+    "disabled_ceiling": 17,
+    "conforming": "Resolver disables the experiment and reports the local-coordinate limitation; regular-patch fallback remains supported",
+    "demand_leaf_budget": 512,
+    "cpu_source_pages": 1024,
+    "gpu_layers": 256,
+    "packed_asset_bytes": 1382947,
+    "decoded_mip_sample_bytes": 6990500,
+    "swatch_repeat_m": 3.15,
+    "relative_height_range_m": 0.018,
+    "scale_status": "Authored optical priors, not measured scan dimensions or Thessa geology"
+  },
+  "asset": {
+    "name": "Forest Ground 04",
+    "authors": ["Rob Tuytel", "Rico Cilliers"],
+    "license": "CC0-1.0",
+    "page": "https://polyhaven.com/a/forest_ground_04",
+    "license_page": "https://polyhaven.com/license",
+    "importer": "tools/worldgen-rocky/import_ground_detail.py",
+    "reproduce": "python3 tools/worldgen-rocky/import_ground_detail.py target/surface-showcase/ground-detail assets/textures/forest-ground-04.bin.gz",
+    "output_sha256": "da33e51d5cda6c1f7caf2bb36ef091f33d6dc134e6693e2d7187a91ff8a0c887",
+    "downloads": [
+      {"url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_diff_1k.png", "md5": "8f4318ba5044aa147999b08a10302fb4", "sha256": "59fd7ca8dbfb83cd7adb487c67b744d80805a5abac60ce1fc89f2cd90c53c3cf"},
+      {"url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_rough_1k.png", "md5": "d9a63bc30621bf8edd1a3a44d2245a16", "sha256": "d5827ac9071ae7cf98920bf1166b2b343ac0349fd3b0dc1b570f29ae67bea62c"},
+      {"url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_disp_1k.png", "md5": "fb41f8f219e76d6a52095f12bb3c20b2", "sha256": "d96e043c2b97120897b53414be520fd6a1ac6dcbb29b06f90ac4acff9c1e85df"}
+    ]
+  },
+  "numerical_oracles": {
+    "footprint_cases": 432,
+    "footprint_reference": "Independent f64 central differences of all six normalized cube projections; four chart locations, nine scales from 1 mm to 12800 km, two derivative skews",
+    "footprint_error_bound_m": "1e-6 + reference * 2e-6",
+    "footprint_upper_bound": "2 * radius * (1 + 1e-6)",
+    "raster_camera_samples": 162,
+    "raster_levels": [17, 21, 22],
+    "raster_reference": "Six faces, nine strictly increasing subtexel-motion samples at each level; independent linear-light bilinear filtering; RGB8 error <= 2",
+    "swatch_mips": "Ten levels preserve linear RGB/roughness/height means within 2e-7 per channel; pinned coarse constants, periodic continuity, deterministic bounded world-space sampling",
+    "producer_regressions": "Disabled output exact; normal policy cannot change albedo/roughness; neighboring inner edges agree within one code; water/wetland/exposed rock/opaque snow keep ownership"
+  },
+  "checks": [
+    {"command": ["cargo", "fmt", "--all", "--", "--check"], "exit": 0, "log": "target/surface-showcase/ground-detail/fmt-verified.log", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+    {"command": ["python3", "tools/agent-qa/check_architecture.py"], "exit": 0, "log": "target/surface-showcase/ground-detail/architecture-verified.log", "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"},
+    {"command": ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"], "exit": 0, "log": "target/surface-showcase/ground-detail/clippy-verified.log", "sha256": "53a172d5ace2f254755882282756110c70818c1298fbb1772beee51c7574ff18"},
+    {"command": ["cargo", "test", "--workspace", "--lib", "--bins"], "exit": 0, "passed_tests": 2036, "log": "target/surface-showcase/ground-detail/unit-verified.log", "sha256": "17f40b87ae2ddec835e34055144673ffea30babb5e1abc39d315ac45cf13bb21"},
+    {"command": ["cargo", "test", "--workspace", "--test", "*"], "exit": 0, "passed_tests": 103, "log": "target/surface-showcase/ground-detail/integration-verified.log", "sha256": "baede67a1712480b86df091b2313db41624ed911fd578d9b0d262b3a31f7354d"},
+    {"command": ["cargo", "test", "-p", "thessa-bevy-rcbt", "--features", "render", "--lib", "--", "--ignored"], "exit": 0, "passed_tests": 0, "note": "Required migrated Bevy command selects zero tests; not additional GPU coverage", "log": "target/surface-showcase/ground-detail/bevy-hardware-verified.log", "sha256": "7d24f5e736d7403211233cab23531ce7187eb870cbe8b413081c8cb107642f71"},
+    {"command": ["cargo", "test", "-p", "thessa-render-wgpu", "--", "--ignored"], "exit": 0, "passed_tests": 82, "log": "target/surface-showcase/ground-detail/renderer-hardware-verified.log", "sha256": "7ec94df41c9097a7b2743e2b8efde7f6700f6de5c2f29fac9389760d8bf81bd9"},
+    {"command": ["cargo", "build", "--release", "-p", "thessa-terrain-native"], "exit": 0, "log": "target/surface-showcase/ground-detail/build-verified.log", "sha256": "d7ecb82cf4856348a893b39d42ed2bf46621fc6b614b2ecdff9d52dd23424d1b"}
+  ],
+  "negative_evidence": {
+    "initial_preview": "target/surface-showcase/ground-detail/on-standing2.png",
+    "initial_preview_rejection": "25 cm to 6.25 cm floor activation created a brown detail island surrounded by legacy green cover. Replaced by the same material and filtered mean at every enabled page level.",
+    "initial_preview_reproduction_limit": "Exploratory executable not retained; captures, command JSON, binary hash and algorithm description retained",
+    "failed_hardware_log": "target/surface-showcase/ground-detail/renderer-hardware-final.log",
+    "failed_tests": ["grazing_terrain_environment_remains_bounded", "rough_dielectric_diffuse_and_specular_share_the_same_directional_energy"],
+    "failure": "Linearized angular footprint became unbounded at coarse grazing pixels and selected globe fallback; e.g. reflection RGB8 103 instead of 145",
+    "correction": "Stable exact symmetric angular chord; existing environment tests and tolerances unchanged; footprint oracle expanded to planetary pixel scales"
+  },
+  "captures": {
+    "commands": "target/surface-showcase/ground-detail/capture-commands-v3.json",
+    "binary": "target/surface-showcase/ground-detail/ground-native-v3",
+    "binary_sha256": "60f5058613816215d494db7ca7c8993ad617cbe5762101a70e7c762b68ade4db",
+    "common_arguments": ["--survey-lat", "23.565679258039204", "--survey-lon", "165.13881581863882", "--sim-time", "0", "--sim-step", "0", "--prestream-seconds", "60", "--frames", "32", "--mute", "--no-hud"],
+    "replay": "Use the binary with --graphics target/surface-showcase/ground-detail/<name>.toml, common_arguments, --survey-distance and --survey-eye-agl below, --headless <output>.png --perf-capture <output>.json; 1280x720, 30 warmup frames",
+    "serial_execution": "All final captures ran after builds/tests and before any further CPU/GPU jobs",
+    "unchanged_population": {"descriptors": 222, "plant_draws": 3},
+    "results": [
+      {"name": "v3-off-standing2", "eye_agl_m": 2, "distance_m": 80, "gpu_median_ms": 93.31540041638377, "resolved_max_level": 17, "png_sha256": "0042593a88098b74dfd7afd57ad3a126b86a1ab7ef4619d0e4eff122b23241e6", "settings_sha256": "4cb6f1849ba28e82da90238f67d4a826b4027ccc11c888eabd0cc2f2f9a9c6ea", "resident_levels": [4,0,1,0,1,0,1,0,4,2,13,23,36,30,40,29,36,36,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},
+      {"name": "v3-on-standing2", "eye_agl_m": 2, "distance_m": 80, "gpu_median_ms": 93.95501569333076, "resolved_max_level": 22, "png_sha256": "7ffc860a7e661e6398c5d9e5a38eef662af1be54a9397f53480e1a87815bb6d9", "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5", "resident_levels": [4,0,1,0,1,0,1,0,2,0,2,1,24,26,32,25,32,36,23,14,24,8,0,0,0,0,0,0,0,0,0,0]},
+      {"name": "v3-on-close50", "eye_agl_m": 50, "distance_m": 80, "gpu_median_ms": 93.40222538489914, "resolved_max_level": 22, "png_sha256": "137083d7d6978104759a353ab5d53c63f58cc5bed3019c5b1abd7a15e0f6320a", "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5", "resident_levels": [5,0,1,0,1,0,1,0,4,0,7,9,36,22,36,26,37,45,26,0,0,0,0,0,0,0,0,0,0,0,0,0]},
+      {"name": "v3-on-overview", "eye_agl_m": 800, "distance_m": 1800, "gpu_median_ms": 76.42224320848847, "resolved_max_level": 22, "png_sha256": "29785e84132479757027dc3d7135d87c5226628a6fc31e98c06ae04567ca1c96", "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5", "resident_levels": [5,0,1,0,1,0,1,0,4,5,40,34,52,35,46,32,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}
+    ],
+    "coverage_limit": "Live standing residency reaches L21, not L22. A configured ceiling and isolated L22 raster oracle do not establish production L22 coverage.",
+    "performance_limit": "One serial standing off/on pair is diagnostic only; no counterbalanced frame-performance acceptance, speedup or no-regression claim",
+    "blind_review": "One unlabeled pair under target/surface-showcase/ground-detail/review-v3; key separately under private-v3; zero votes, no subjective acceptance"
+  },
+  "producer_benchmark": {
+    "command": ["cargo", "bench", "-p", "thessa-worldgen-rocky", "--bench", "material_pages", "--", "--ground-detail"],
+    "log": "target/surface-showcase/ground-detail/producer-benchmark.log",
+    "workload": "32 paired frozen-erosion face-3 pages, levels 17/20/21/22; normal maps enabled; AB/BA counterbalanced within each level; includes first swatch decode",
+    "off_page_p50_ms": 134.994087,
+    "on_page_p50_ms": 139.684481,
+    "off_page_p95_ms": 147.79417,
+    "on_page_p95_ms": 158.619977,
+    "limit": "CPU producer fixture, not frame time or streaming convergence; no confidence interval or performance acceptance"
+  },
+  "source_files_sha256": {
+    "apps/terrain-native/src/scene.rs": "2564a3ebdecb2e56c0a37934e40be14f4fa504b8faba43bf30624ef2e7b880e8",
+    "crates/graphics/src/metadata.rs": "b0fe66bf170d7102d2f94241003bb7f3677f372136710e21a8194314e40cc064",
+    "crates/graphics/src/resolve.rs": "f502526c956e8be67689ed65f388407acdb7270ed9be718cb652dbd964ff3c09",
+    "crates/graphics/src/settings.rs": "a7a8de36ec195ae8d2d1e480e566a5e6980f3a3e2a86b162e1dee359eb1e31a0",
+    "crates/rcbt-core/src/shaders.rs": "e7b5a3d31048d4b8268ef2f1746f79809c9679a340913acf4dd900377e297943",
+    "crates/rcbt-core/src/shaders/material_sample.wgsl": "5c2dd907240770cfc75e6463926679d73fe3b81b579d89a9261ac74fb9d1b5f1",
+    "crates/render-wgpu/src/terrain.rs": "c6100540d1b89c8e6438130cb3ce892bd00476903d878bcf5d1e575315e10e20",
+    "crates/render-wgpu/tests/material.rs": "a671f4f1547b66549536e22ea0ed616edb414c74195c39486e56f72357dd5d2a",
+    "crates/render-wgpu/tests/retained_surface.rs": "0f4371d01196936c609c182e75679e38b77e8857247e47d51a738d5e36d0f2c2",
+    "crates/terrain-stream/src/lib.rs": "b4e4949d287c587c2fba4329ea9252a1ddfae98ef9a874a042a88c855f08a1e2",
+    "crates/terrain-stream/src/material.rs": "2fd547b1744a582432b53c2047e59317ebed84b9b1ec6023b6930f176605b6cd",
+    "crates/terrain-stream/src/runtime.rs": "01eccf0becd73263802706a3442a94941fc787e9b504bedc331069e327ebdaa7",
+    "crates/terrain-stream/src/runtime_tests.rs": "12dd0825f4bce2b7043a498de8068574056347d2acea5826bb07fa39b4cc8e9d",
+    "crates/terrain-stream/src/selection.rs": "3fa740e3dba8f650c25e0cedad7292bf04d3ed73a3290256130d4bcce10e780d",
+    "crates/terrain-stream/src/tests.rs": "70af92f2187b51b29191bcb6758a0e498c3ce7518b2c7d93a6ee590f3343ea60",
+    "graphics.toml": "76637eb87a3e7140459b7359ea38da23ee6c1a7ae2c0d685b9c03e3b02077934",
+    "tools/worldgen-rocky/benches/material_pages.rs": "27b73439d4a38164cb4c6b108ff4127c8c04f6b1d1db03fa37e15209d1af0270",
+    "tools/worldgen-rocky/import_ground_detail.py": "1932053ee3d3d1dba8152ee3c6003a0901ef8ed1e493aab9ad53ec9a1304fc72",
+    "tools/worldgen-rocky/src/appearance.rs": "45dbfb802578b9e1685f9d32e89d16508e8ce6113be079d89c2e189cdb92fafe",
+    "tools/worldgen-rocky/src/ground_detail.rs": "a06d4ada1b0944c24b1c6988444a45240716bbf861723e69a6b474a5c7330560",
+    "tools/worldgen-rocky/src/lib.rs": "069ebcd0c40777d07c17691288296fb0ae076653fdddc071e6b3ebe808f28d46",
+    "tools/worldgen-rocky/src/lod.rs": "cc5e3e5bc7f8f34ef94541eac34e43eb6a58ad6899549961025224777e2994d8"
+  },
+  "deliberately_omitted": ["Canopy hierarchy and convincing botanical assets", "Discrete gravel/root/branch geometry", "Moving-camera and surface-to-orbit acceptance", "Bounded planet-wide vegetation streaming", "Conforming/secondary-ray material precision", "Depth-convention migration", "Temporal integration", "Full visual/performance acceptance"]
+}

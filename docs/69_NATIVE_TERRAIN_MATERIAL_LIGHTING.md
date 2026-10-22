@@ -5,7 +5,9 @@
 The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
 regular-patch material coordinates as a dyadic chart anchor plus local offset
 through raster interpolation and page lookup. This corrects close-view
-precision, not the material spectrum or production L17 resolution limit.
+precision, not by itself the material spectrum. The default material limit is
+still L17; the opt-in WORLD06e experiment in that continuation permits bounded
+L20/L21/L22 refinement on regular patches only.
 
 ## Source and consumer
 

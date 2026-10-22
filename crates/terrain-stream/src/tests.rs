@@ -185,3 +185,36 @@ fn material_refinement_preserves_area_and_has_fixed_budget() {
         1.0
     );
 }
+
+#[test]
+fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
+    let key = TileKey {
+        face: 4,
+        level: 17,
+        x: 65536,
+        y: 65536,
+    };
+    let dir = DVec3::from(key.direction(0.5, 0.5));
+    let view = SelectionView {
+        eye: dir * (3_200_000.0 + 2.0),
+        stream_origin: dir * 3_200_000.0,
+        forward: -dir,
+        radius: 3_200_000.0,
+        frustum: None,
+    };
+    for limit in [17, 20, 21, 22, 255] {
+        let pages = material_view_selection_with_limit(&[key], view, 1e-5, limit);
+        assert!(pages.len() <= 512);
+        assert_eq!(pages.iter().map(|k| k.level).max().unwrap(), limit.min(22));
+        let relative_area: f64 = pages
+            .iter()
+            .map(|k| 4f64.powi(i32::from(key.level) - i32::from(k.level)))
+            .sum();
+        assert_eq!(relative_area, 1.0);
+        assert!(pages.iter().all(|p| p.face == key.face));
+    }
+    assert_eq!(
+        material_view_selection(&[key], view, 1e-5),
+        material_view_selection_with_limit(&[key], view, 1e-5, 17)
+    );
+}

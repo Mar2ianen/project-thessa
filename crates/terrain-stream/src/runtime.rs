@@ -26,6 +26,8 @@ pub struct StreamingPolicy {
     pub material_cache: usize,
     pub draw_capacity: usize,
     pub normal_maps: bool,
+    pub ground_detail: bool,
+    pub material_max_level: u8,
 }
 impl Default for StreamingPolicy {
     fn default() -> Self {
@@ -35,6 +37,8 @@ impl Default for StreamingPolicy {
             material_cache: 1024,
             draw_capacity: 1024,
             normal_maps: true,
+            ground_detail: false,
+            material_max_level: 17,
         }
     }
 }
@@ -97,7 +101,12 @@ impl TerrainStream {
                 )],
                 |_, ()| (),
             );
-            let page = lod::build_gpu_material_page_with_normals(&field, key, policy.normal_maps);
+            let page = lod::build_gpu_material_page_with_ground_detail(
+                &field,
+                key,
+                policy.normal_maps,
+                policy.ground_detail,
+            );
             materials.set_page(
                 lod::cbt_node_for_tile(key).unwrap().id(),
                 CbtMaterialPage::from_rgba8_with_normals(
@@ -117,10 +126,12 @@ impl TerrainStream {
             heights,
             materials: {
                 materials.set_priority((8..14).collect());
-                MaterialStream::with_source_and_normals(
+                MaterialStream::with_detail(
                     policy.material_cache,
                     materials,
                     policy.normal_maps,
+                    policy.ground_detail,
+                    policy.material_max_level,
                 )
             },
             epoch: 0,

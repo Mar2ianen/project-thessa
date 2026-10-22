@@ -274,6 +274,8 @@ pub struct ResolvedGraphicsSettings {
     pub surface_quality: Quality,
     #[serde(default = "crate::settings::default_true")]
     pub terrain_normal_maps: bool,
+    #[serde(default)]
+    pub terrain_ground_detail: bool,
     pub specular_reflections: bool,
     pub native_shadow_map_size: u32,
     pub shadow_filter_radius: u32,
@@ -362,15 +364,57 @@ impl Default for ResolvedGraphicsSettings {
 mod terrain_topology_tests {
     use super::*;
     #[test]
+    fn ground_detail_falls_back_until_conforming_coordinates_are_precise() {
+        let mut request = RequestedGraphics::default();
+        request.renderer.terrain_ground_detail = true;
+        request.terrain_topology.enabled = true;
+        let settings = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+        assert!(!settings.terrain_ground_detail);
+        assert_eq!(settings.terrain_material_max_level(), 17);
+        assert!(
+            settings
+                .notes
+                .iter()
+                .any(|note| note.contains("ground detail requires regular-patch"))
+        );
+        let fallback = ResolvedGraphicsSettings::from_requested(
+            &request,
+            &Capabilities {
+                terrain_conforming_supported: Some(false),
+                ..Default::default()
+            },
+        );
+        assert!(fallback.terrain_ground_detail);
+        assert!(fallback.terrain_material_max_level() > 17);
+    }
+    #[test]
     fn normal_map_policy_and_filter_tiers_roundtrip() {
         for (quality, bias) in [(Quality::Low, 2), (Quality::Medium, 1), (Quality::High, 0)] {
             let mut request = RequestedGraphics::default();
             request.renderer.surface_quality = quality;
             for enabled in [true, false] {
                 request.renderer.terrain_normal_maps = enabled;
+                request.renderer.terrain_ground_detail = enabled;
                 let resolved =
                     ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
                 assert_eq!(resolved.terrain_normal_maps, enabled);
+                assert_eq!(resolved.terrain_ground_detail, enabled);
+                assert_eq!(
+                    resolved.terrain_material_max_level(),
+                    if enabled {
+                        match quality {
+                            Quality::Low => 20,
+                            Quality::Medium => 21,
+                            Quality::High => 22,
+                        }
+                    } else {
+                        17
+                    }
+                );
+                assert_eq!(
+                    resolved.as_meta_map()["terrain_ground_detail"],
+                    enabled.to_string()
+                );
                 assert_eq!(resolved.terrain_normal_mip_bias(), bias);
                 assert_eq!(
                     resolved.as_meta_map()["terrain_normal_maps"],
@@ -446,6 +490,17 @@ mod terrain_topology_tests {
 }
 
 impl ResolvedGraphicsSettings {
+    /// Native page refinement ceiling; existing residency budgets are unchanged.
+    pub fn terrain_material_max_level(&self) -> u8 {
+        if !self.terrain_ground_detail {
+            return 17;
+        }
+        match self.surface_quality {
+            Quality::Low => 20,
+            Quality::Medium => 21,
+            Quality::High => 22,
+        }
+    }
     /// Extra normal-map mip filtering; coarser tiers reduce texture bandwidth
     /// and resolved detail without changing the canonical surface.
     pub fn terrain_normal_mip_bias(&self) -> u32 {
@@ -589,6 +644,16 @@ impl ResolvedGraphicsSettings {
                 "native shadow atlas memory budget resolves map size to {native_shadow_map_size}"
             ));
         }
+        let terrain_topology = ResolvedTerrainTopology::resolve(
+            requested.terrain_topology,
+            caps.terrain_conforming_supported,
+            &mut notes,
+        );
+        let terrain_ground_detail =
+            requested.renderer.terrain_ground_detail && terrain_topology.capacity == 0;
+        if requested.renderer.terrain_ground_detail && !terrain_ground_detail {
+            notes.push("experimental ground detail requires regular-patch local coordinates; conforming terrain retains L17 materials".into());
+        }
         Self {
             surface_plants_enabled: requested.surface_plants.enabled,
             surface_plants_density_scale: if !requested.surface_plants.enabled {
@@ -641,14 +706,11 @@ impl ResolvedGraphicsSettings {
             },
             surface_quality: requested.renderer.surface_quality,
             terrain_normal_maps: requested.renderer.terrain_normal_maps,
+            terrain_ground_detail,
             specular_reflections: requested.renderer.specular_reflections,
             backend: ResolvedBackend { name: backend_name },
             terrain,
-            terrain_topology: ResolvedTerrainTopology::resolve(
-                requested.terrain_topology,
-                caps.terrain_conforming_supported,
-                &mut notes,
-            ),
+            terrain_topology,
             terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
             material_storage: match requested.renderer.material_storage {
                 crate::settings::MaterialStorageRequest::RgbaArray => {
@@ -871,6 +933,14 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "terrain_normal_maps".into(),
             self.terrain_normal_maps.to_string(),
+        );
+        map.insert(
+            "terrain_ground_detail".into(),
+            self.terrain_ground_detail.to_string(),
+        );
+        map.insert(
+            "terrain_material_max_level".into(),
+            self.terrain_material_max_level().to_string(),
         );
         map.insert(
             "terrain_normal_mip_bias".into(),

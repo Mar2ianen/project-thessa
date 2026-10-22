@@ -48,6 +48,7 @@ pub mod plume;
 pub mod ray_scene;
 pub mod shadows;
 mod sky;
+pub mod temporal_resolve;
 pub mod terrain;
 pub mod terrain_ray;
 mod terrain_topology;

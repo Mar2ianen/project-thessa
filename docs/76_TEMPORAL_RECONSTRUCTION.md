@@ -9,10 +9,10 @@ opt-in motion diagnostics into both native loops, enforces stored opaque scene
 depth and masks ocean/all rigid meshes. T2b adds opt-in primary terrain/mesh
 jitter with matching depth reconstruction and jitter-free motion. T4a adds the
 backend-neutral history-lookup, disocclusion, neighbourhood-clipping and
-accumulation-age contract in `render-core`. No GPU colour history, temporal
-resolve, presentation change or SDK adapter exists yet. Default rendering remains
-the non-temporal reference; the explicit jitter diagnostic visibly shifts samples
-without antialiasing them.
+accumulation-age contract in `render-core`; T4b adds a tested GPU pass that
+implements that contract. The pass is not yet wired into scene history,
+overlays or presentation. Default rendering remains the non-temporal reference;
+the explicit jitter diagnostic visibly shifts samples without antialiasing them.
 
 Temporal reconstruction is not one post-process. It is a contract between the
 authoritative simulation, the frames the renderer actually produces, and the
@@ -239,6 +239,7 @@ presenter contract before an FG adapter is attempted. Required properties:
 | T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
 | T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/all-mesh invalid masks, submitted-camera tracking and GPU scene oracle. |
 | T4a | Backend-neutral resolve contract | Implemented: jitter-aware history lookup, explicit depth-disocclusion test, YCoCg neighbourhood clipping, age/weight policy and fallbacks; CPU tests only. |
+| T4b | GPU resolve pass against T4a | Implemented as a stateless `RGBA16Float` compute pass; hardware fixture matches CPU colour/age for valid history, disocclusion and invalid motion. No scene history/presentation. |
 | T4 | Native-resolution TAA with history validation | Static and panning survey captures; no history reuse after cancel/resize; ghosting bounded against a no-TAA reference. |
 | T5 | Dynamic mesh and ocean motion (or explicit invalid masks) | Ships/ocean do not ghost; invalid pixels fall back. |
 | T6 | TAAU upscale and two-history quality tiers | Matched native/upscaled captures; memory budget recorded. |
@@ -453,9 +454,42 @@ workspace Clippy with warnings denied, formatting and the architecture guard all
 passed. These are CPU-policy tests; no GPU history or visual claim is implied.
 
 T4a does **not** allocate history, store previous depth, modify display output
-or claim antialiasing. T4b must implement the GPU counterpart against this
-contract, and native integration must still solve the overlay/overlay-depth
-boundary recorded below.
+or claim antialiasing. T4b implements the GPU counterpart against this contract;
+native integration must still solve the overlay/overlay-depth boundary recorded
+below.
+
+### T4b delivered: GPU resolve pass
+
+- `crates/render-wgpu/src/temporal_resolve.rs` exposes a stateless
+  `TemporalResolvePass`. Its inputs are current pre-overlay colour, current
+  stored depth, motion vectors, previous resolved colour, previous raster depth
+  and a 192-byte parameter block. It writes an `RGBA16Float` resolved colour
+  target whose alpha is the accumulated frame age, not the scene mask.
+- The shader mirrors the CPU contract: jitter-aware history and previous-depth
+  addresses, the half-open image-domain check, projection of the current depth
+  sample through the previous camera for disocclusion, YCoCg neighbourhood
+  clipping, `1 / (age + 1)` blending with a floor, and fallback to current with
+  age one. `previous_valid == false` disables history entirely.
+- The pass allocates no textures and keeps no state. The caller owns
+  ping-pong/resolved history, previous-depth preservation, epoch resets and the
+  decision to copy the result back to the composition target. Those are
+  deliberately not hidden in the pass; a renderer cannot accidentally enable
+  temporal history merely by constructing it.
+- The pass is independent of `DisplayTransform`. Native integration still has
+  to preserve the opaque history **before** plume/cloud/star/aurora overlays and
+  decide how resolved colour composes with jittered depth. The pass does not
+  claim that this boundary is solved.
+- The hardware oracle uses a 16×16 constant-depth fixture, a checkerboard
+  current image and flat previous history. GPU RGB/age match the independent
+  `render-core` resolver for valid history, depth disocclusion and invalid
+  motion. This validates the shader policy, not real-scene ghosting or TAA
+  image quality.
+
+T4b's targeted hardware test passes. Evidence, source hashes and explicit
+non-claims: [native-temporal-resolve-pass-2026-10-22.json](artifacts/native-temporal-resolve-pass-2026-10-22.json).
+The wider gates for this stage were 2,037 workspace lib/bin tests, 104
+integration tests, workspace Clippy with warnings denied, formatting and the
+architecture guard.
 
 T2b evidence: [native-primary-jitter-2026-10-21.json](artifacts/native-primary-jitter-2026-10-21.json).
 Final local gates passed: 2,029 workspace lib/bin tests, 102 integration tests,

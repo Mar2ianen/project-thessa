@@ -1,0 +1,65 @@
+{
+  "stage": "T4a/T4b",
+  "date": "2026-10-22",
+  "base_commit": "13317cd",
+  "description": "Backend-neutral temporal-resolve contract and a stateless GPU resolve pass. No scene history, presentation change or visible TAA is enabled.",
+  "hardware": {
+    "gpu": "AMD Radeon 880M iGPU",
+    "backend": "RADV Vulkan 1.4",
+    "host": "new-laptop"
+  },
+  "cpu_contract": {
+    "source": "crates/render-core/src/temporal_resolve.rs",
+    "tests": 7,
+    "coverage": [
+      "resolved-unjittered and raw-jittered history lookup",
+      "stationary camera with changing Halton jitter",
+      "half-open image domain and malformed jitter rejection",
+      "previous-depth disocclusion",
+      "all fallback reasons",
+      "YCoCg neighbourhood clipping and zero-variance rejection",
+      "age/weight convergence and capping"
+    ]
+  },
+  "gpu_pass": {
+    "source": "crates/render-wgpu/src/temporal_resolve.rs",
+    "shader": "crates/render-wgpu/src/temporal_resolve.wgsl",
+    "history_format": "RGBA16Float",
+    "uniform_bytes": 192,
+    "fixture": "16x16 constant Depth32Float, checkerboard current colour, flat previous history",
+    "tests": 2,
+    "result": "GPU RGB and age match the independent render-core resolver for valid history, depth disocclusion and invalid motion"
+  },
+  "gates": {
+    "format": "pass",
+    "workspace_clippy_all_targets_all_features_warnings_denied": "pass",
+    "workspace_lib_bins": {
+      "passed": 2037,
+      "failed": 0,
+      "ignored": 44
+    },
+    "workspace_integration": {
+      "passed": 104,
+      "failed": 0,
+      "ignored": 84
+    },
+    "architecture_guard": "OK (12 guarded foundational crates)",
+    "targeted_hardware_after_shader_hardening": {
+      "passed": 2,
+      "failed": 0
+    }
+  },
+  "source_sha256": {
+    "crates/render-core/src/temporal_resolve.rs": "a7f21feade43756f53697db388e26f9616c19503bbfd5e88d7a81d5c4b3bb68e",
+    "crates/render-wgpu/src/temporal_resolve.rs": "e506fb35c4544c41ffc90012ef13d61681709dd4f95a8d93669ba57f71e980be",
+    "crates/render-wgpu/src/temporal_resolve.wgsl": "7cb6b25cdcff5498a60aa8b13c95dc8b142b60770f424f71f5709ac7c9412ba9",
+    "crates/render-wgpu/tests/temporal_resolve.rs": "848650feefb4d7c3f1e1d56763fb8d75987392f3483e9f1ce23230894e9155ec"
+  },
+  "not_claimed": [
+    "no history allocation, previous-depth preservation or scene integration",
+    "no display-source replacement or native composition change",
+    "no real-scene ghosting, TAA image-quality or performance result",
+    "no object/ocean motion vectors",
+    "plume/cloud sampled-depth composition remains unresolved"
+  ]
+}

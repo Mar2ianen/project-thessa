@@ -13,6 +13,98 @@ use thessa_render_wgpu::{
 };
 
 #[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
+fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
+    let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        terrain_normal_maps: false,
+        specular_reflections: false,
+        shadow_enabled: false,
+        ..Default::default()
+    };
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    // A sharp but linearly filtered step exposes coordinate quantization that
+    // a broad colour ramp hides. White ambient PI makes output equal albedo.
+    let rgba: Vec<_> = (0..128 * 128)
+        .flat_map(|i| [if i % 128 < 64 { 32 } else { 224 }, 0, 0, 255])
+        .collect();
+    let material = CbtMaterialPage::from_rgba8(rgba).unwrap();
+    for face in 0..6 {
+        // Away from face centre, to catch direction/chart cancellation.
+        let key = TileKey::new(face, 17, 113_491, 95_110).unwrap();
+        let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
+        let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor,
+                page: &height,
+            }],
+            OffscreenTarget::FORMAT,
+            thessa_render_wgpu::terrain::TerrainCapacity {
+                patches: 1,
+                material_layers: 1,
+                height_grid_size: 2,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        renderer
+            .update_lighting(
+                &backend,
+                &SurfaceLighting {
+                    ambient_lux: [std::f32::consts::PI; 4],
+                    directions: [[0.0; 4]; 3],
+                    colors_lux: [[0.0; 4]; 3],
+                },
+            )
+            .unwrap();
+        let id = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+        let pages = [(id, (1, material.clone()))].into_iter().collect();
+        renderer.update_materials(&backend, &[id], &pages).unwrap();
+        let mut reds = Vec::new();
+        for step in -4..=4 {
+            let u = 0.5 + f64::from(step) / 4096.0;
+            let center = DVec3::from(anchor.project_body_m([u, 0.5], 0.0));
+            let eye = center + DVec3::from(anchor.normal) * 2.0;
+            // A tiny field of view isolates magnification, not mip choice.
+            let view = ViewParams {
+                world_from_view: glam::dcamera::rh::view::look_at_mat4(
+                    eye,
+                    center,
+                    DVec3::from(anchor.raw_axis_v),
+                )
+                .inverse(),
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                    0.01, 1.0, 0.01, 1000.0,
+                ),
+                world_position_m: eye,
+                exposure: 1.0,
+            };
+            renderer.update_view(&backend, &view).unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            renderer.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            let pixels = target.read_rgba8(&backend).unwrap();
+            let actual = pixels[(32 * 65 + 32) * 4];
+            let decode = |v: f64| ((v / 255.0 + 0.055) / 1.055).powf(2.4);
+            let t = 0.5 + (u - 0.5) * 125.0;
+            let linear = decode(32.0) * (1.0 - t) + decode(224.0) * t;
+            let expected = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "face={face} step={step} actual={actual} expected={expected}"
+            );
+            reds.push(actual);
+        }
+        assert!(
+            reds.windows(2).all(|pair| pair[0] < pair[1]),
+            "centimetre-scale camera motion must not stick to world-f32 steps: face={face} {reds:?}"
+        );
+    }
+}
+
+#[test]
 fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots() {
     let backend = match Backend::bring_up() {
         Ok(b) => b,

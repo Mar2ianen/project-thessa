@@ -1240,9 +1240,11 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
             compilation_options: Default::default(),
             cache: None,
         });
-    // vec3 members align to 16 bytes: header16, shared vertex80, primitive16.
+    // vec3 members align to 16 bytes: header16, shared vertex112, primitive16.
+    // The split material chart adds 24 semantic bytes and 8 alignment bytes.
+    const VERTEX_WORDS: usize = 28;
     let sentinel = 0x7fc00001;
-    let words = 4 + 96 * 20 + 32 * 4;
+    let words = 4 + 96 * VERTEX_WORDS + 32 * 4;
     // One dispatch per draw case with the production fan-out workgroup
     // count (16 meshlets for 512 triangles, 17 with the tail). Each
     // workgroup writes its own `mesh_outputs[meshlet]` slice.
@@ -1340,7 +1342,7 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
         let result = &all[meshlet * words..(meshlet + 1) * words];
         assert_eq!(&result[..2], &[96, 32], "meshlet {meshlet} header");
         for i in 0..96 {
-            let vertex: Vec<_> = result[4 + i * 20..4 + i * 20 + 7]
+            let vertex: Vec<_> = result[4 + i * VERTEX_WORDS..4 + i * VERTEX_WORDS + 7]
                 .iter()
                 .copied()
                 .map(f32::from_bits)
@@ -1361,9 +1363,19 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
                 );
             }
             assert!((vertex[4..7].iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 1e-5);
+            let chart = &result[4 + i * VERTEX_WORDS + 20..4 + i * VERTEX_WORDS + 26];
+            assert!(
+                chart[..3]
+                    .iter()
+                    .chain(&chart[4..])
+                    .all(|&v| f32::from_bits(v).is_finite()),
+                "meshlet {meshlet} vertex {i} must initialize the split material chart"
+            );
+            assert!(f32::from_bits(chart[2]) > 0.0);
+            assert_eq!(result[4 + i * VERTEX_WORDS + 26], 4, "material cube face");
         }
         for i in 0..32 {
-            let tri = &result[4 + 96 * 20 + i * 4..4 + 96 * 20 + i * 4 + 3];
+            let tri = &result[4 + 96 * VERTEX_WORDS + i * 4..4 + 96 * VERTEX_WORDS + i * 4 + 3];
             assert_eq!(tri, [i as u32 * 3, i as u32 * 3 + 1, i as u32 * 3 + 2]);
         }
         let _ = triangles;
@@ -1389,7 +1401,10 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     }
     let result = &tailed[16 * words..17 * words];
     assert_eq!(&result[..2], &[3, 1]);
-    assert_eq!(&result[4 + 96 * 20..4 + 96 * 20 + 3], &[0, 1, 2]);
+    assert_eq!(
+        &result[4 + 96 * VERTEX_WORDS..4 + 96 * VERTEX_WORDS + 3],
+        &[0, 1, 2]
+    );
     assert_eq!(
         result[4 + 18],
         11,
@@ -1402,11 +1417,11 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     let skirt_triangles = gpu.buffer(&skirt_words, false);
     let skirted = run_meshlets(&skirt_triangles, &tail_draw, 17);
     let skirt = &skirted[16 * words..17 * words];
-    assert_eq!(f32::from_bits(skirt[4 + 20 + 15]), 1e9);
+    assert_eq!(f32::from_bits(skirt[4 + VERTEX_WORDS + 15]), 1e9);
     let distance = (0..3)
         .map(|axis| {
-            let delta =
-                f32::from_bits(skirt[4 + 20 + axis]) - f32::from_bits(result[4 + 20 + axis]);
+            let delta = f32::from_bits(skirt[4 + VERTEX_WORDS + axis])
+                - f32::from_bits(result[4 + VERTEX_WORDS + axis]);
             delta * delta
         })
         .sum::<f32>()
@@ -1498,6 +1513,94 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 #[test]
 #[ignore = "requires a wgpu adapter; run with --ignored"]
+fn gpu_split_material_coordinates_match_f64_across_levels_and_page_edges() {
+    let gpu = Gpu::new();
+    let mut inputs = Vec::new();
+    let mut expected = Vec::new();
+    for face in 0..6u32 {
+        for anchor_level in [0, 10, 17, 20, 22] {
+            let side = 1u32 << anchor_level;
+            for x in [0, side / 3, side - 1] {
+                let anchor = [(f64::from(x) + 0.5) / f64::from(side), 0.5];
+                for step in [-0.5, -0.49999, -0.0001, 0.0, 0.0001, 0.49999, 0.5] {
+                    let offset = [
+                        (step / f64::from(side)) as f32,
+                        (-step / f64::from(side)) as f32,
+                    ];
+                    for level in [0, 10, 17, 20, 22] {
+                        inputs.extend([
+                            (anchor[0] as f32).to_bits(),
+                            (anchor[1] as f32).to_bits(),
+                            face,
+                            level,
+                            offset[0].to_bits(),
+                            offset[1].to_bits(),
+                            0,
+                            0,
+                        ]);
+                        let extent = f64::from(1u32 << level);
+                        let scaled = std::array::from_fn::<_, 2, _>(|i| {
+                            (anchor[i] + f64::from(offset[i])) * extent
+                        });
+                        let tile = scaled.map(|v| v.floor().clamp(0.0, extent - 1.0));
+                        expected.push([tile[0], tile[1], scaled[0] - tile[0], scaled[1] - tile[1]]);
+                    }
+                }
+            }
+        }
+    }
+    let shader = format!(
+        "{}\n{}",
+        thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
+            .split("// Gradients")
+            .next()
+            .unwrap()
+            .replace("@binding(16)", "@binding(0)"),
+        r#"
+@group(0) @binding(1) var<storage, read> points: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(64)
+fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= arrayLength(&result)) { return; }
+    let point = points[gid.x * 2u];
+    let offset = bitcast<vec2<f32>>(points[gid.x * 2u + 1u].xy);
+    let address = MaterialAddress(bitcast<vec2<f32>>(point.xy), point.z, offset);
+    let coordinates = material_coordinates(address, exp2(f32(point.w)));
+    result[gid.x] = vec4(coordinates.tile, coordinates.local);
+}
+"#
+    );
+    let directory = gpu.buffer(&[0; 4], false);
+    let input = gpu.buffer(&inputs, false);
+    let output = gpu.buffer(&vec![0; expected.len() * 4], false);
+    gpu.dispatch(
+        &shader,
+        &[("check", expected.len().div_ceil(64) as u32)],
+        &[&directory, &input, &output],
+        &[],
+        &[2],
+    );
+    for (index, (actual, expected)) in gpu
+        .read(&output)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected)
+        .enumerate()
+    {
+        let actual = actual.map(|v| f64::from(f32::from_bits(v)));
+        assert_eq!(&actual[..2], &expected[..2], "page index at case {index}");
+        for c in 2..4 {
+            assert!(
+                (actual[c] - expected[c]).abs() < 2e-6,
+                "local-coordinate bound at case {index}: {actual:?} != {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
 fn gpu_material_missing_neighbours_fade_without_erasing_complete_edges() {
     let gpu = Gpu::new();
     let shader = format!(
@@ -1515,7 +1618,7 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= arrayLength(&points)) { return; }
     let point = points[gid.x];
     result[gid.x] = bitcast<u32>(material_resident_weight(
-        MaterialAddress(point.xy, u32(point.z)), u32(point.w), 0.032));
+        MaterialAddress(point.xy, u32(point.z), vec2(0.0)), u32(point.w), 0.032));
 }
 "#,
     );

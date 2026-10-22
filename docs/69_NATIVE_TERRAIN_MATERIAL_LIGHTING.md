@@ -2,6 +2,11 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
+regular-patch material coordinates as a dyadic chart anchor plus local offset
+through raster interpolation and page lookup. This corrects close-view
+precision, not the material spectrum or production L17 resolution limit.
+
 ## Source and consumer
 
 Regular and conforming native terrain now receive the existing shared sky field

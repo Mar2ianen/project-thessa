@@ -1,0 +1,497 @@
+{
+  "task": "WORLD06d",
+  "date": "2026-10-22",
+  "branch": "feat/native-surface-showcase",
+  "baseline_commit": "dc8aaeb",
+  "scope": "Split regular-patch material coordinates through raster interpolation and shared page lookup. No new material source, texture allocation, binding, pass or simulation state.",
+  "source": {
+    "baseline_commit": "dc8aaeb86fa0451d73c25d1de6dd75284a1ffe18",
+    "source_patch_sha256": "fc789ae93cc710cd2938c8a209bbff81792c482578d8440387ef74f78933ea4c",
+    "files": {
+      "crates/rcbt-core/src/shaders.rs": "f4de2f3babe2201abb6dec7816b22a577a13504959394b982ce55525fefc5ffe",
+      "crates/rcbt-core/src/shaders/material_sample.wgsl": "e8752b4e679768efcb11bf6a0b1704ba6105129554a7f24d02aab6a113f2d379",
+      "crates/rcbt-core/src/shaders/material_normal.wgsl": "e8eac00b3048ddc85fe8b281a5734613cb096d7ac551a8941734ecaa2718b071",
+      "crates/render-wgpu/tests/material.rs": "3b23224f2b7e18a734ed319bc68f453cc31b1bdea62cbe7fad78e7543a97db54",
+      "crates/render-wgpu/tests/retained_surface.rs": "76b805ce99eb1be8e94a535d4aaf2838da229c2dd4040e85f6211b9ff9ed8bab"
+    }
+  },
+  "hardware": "AMD Radeon 880M Graphics (RADV STRIX1) / Vulkan / radv / Mesa 26.2.5-arch1.1",
+  "numerical_oracles": {
+    "coordinate_cases": 3150,
+    "coordinate_reference": "Independent f64 sum/scale/floor on six faces; anchor/requested levels 0,10,17,20,22; outer/interior tiles; signed offsets and exact edges.",
+    "page_index_error": 0,
+    "fixture_local_error_bound_page_units": 2e-06,
+    "raster_cases": 54,
+    "raster_reference": "Independent sRGB decode, linear-light bilinear blend, sRGB encode. Ambient PI, diffuse-only, magnified sharp material boundary; nine camera positions on each of six off-centre L17 charts at 3200 km radius.",
+    "raster_rgb8_error_bound": 2,
+    "nominal_camera_step_m": 0.011920928955078125,
+    "raster_monotonic": "Each successive camera position must strictly increase the sampled red channel.",
+    "regression_sensitivity": {
+      "command_file": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/legacy-address-oracle.json",
+      "exit": 101,
+      "expected_failure": "face=0 step=-4 actual=166 expected=147",
+      "scope": "Forcing the new chart varying to zero selects the previous direction address in the same production raster. The intentional failing edit was removed before final gates."
+    }
+  },
+  "checks": [
+    {
+      "name": "fmt-final",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/fmt-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed_tests": 0
+    },
+    {
+      "name": "architecture-final",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/architecture-final.log",
+      "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+      "passed_tests": 0
+    },
+    {
+      "name": "clippy-final",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/clippy-final.log",
+      "sha256": "c4c6a8f2905f9c9b1ddb39b32171d1afdd04804e83698d52fdd510a0601c363e",
+      "passed_tests": 0
+    },
+    {
+      "name": "unit-final",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/unit-final.log",
+      "sha256": "fb0e721049e7892c1d9cdb34b786676eff1ca3e0c1e3f58dcd34b0751b36b610",
+      "passed_tests": 2030
+    },
+    {
+      "name": "integration-final",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--test",
+        "*"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/integration-final.log",
+      "sha256": "d201020567eda03adc344458500e2c82a9e339008d11ad7df59e7817fd64be84",
+      "passed_tests": 103
+    },
+    {
+      "name": "bevy-hardware-final",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-bevy-rcbt",
+        "--features",
+        "render",
+        "--lib",
+        "--",
+        "--ignored"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/bevy-hardware-final.log",
+      "sha256": "42e3fac11b73f828de018c6246f4df59d3e73c7ecd8f1365e451622136fb23a9",
+      "passed_tests": 0
+    },
+    {
+      "name": "renderer-hardware-final",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--",
+        "--ignored"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/renderer-hardware-final.log",
+      "sha256": "d107dbd479d640d953c3678bc6ca279152ab4cc575de083020b235f53c50488a",
+      "passed_tests": 81
+    },
+    {
+      "name": "release-final",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/release-final.log",
+      "sha256": "859d38a33c73877a26b2a148c79095deb98ffb83ab266196f28007b5a8e1c21b",
+      "passed_tests": 0
+    }
+  ],
+  "implementation_notes": {
+    "shared_mesh_emulation_vertex_stride_before": 80,
+    "shared_mesh_emulation_vertex_stride_after": 112,
+    "mesh_emission_oracle": "Initial stale 80-byte readback offsets failed; stride, tail/skirt offsets and new chart-field initialization checks corrected. Final retained suite passes.",
+    "cross_face": "Existing cube reprojection retained; same-face neighbours use integer tile addresses.",
+    "no_new_quality_effect": "Precision correction inside existing material sampling, not a separately enabled graphics effect."
+  },
+  "acceptance": {
+    "visual": "Author defect inspection of 2/50/800 m captures only; no final surface-quality or blind preference acceptance. Ground is still nearly uniform; foliage schematic; coarse shore/fallback boundaries remain.",
+    "performance": "Fresh standing before/after replay ran serially without concurrent builds, 60 s prestream and 32 frozen-epoch frames each. A single pair is diagnostic, not a counterbalanced repeat study or a speedup/no-regression certificate. Prior close/overview baseline captures had CPU-check overlap.",
+    "limits": [
+      "production material demand and page-level selection still capped at L17",
+      "screen-space page-level choice retains direction derivatives",
+      "conforming raster and secondary terrain/ocean callers retain zero-offset direction addressing",
+      "no fine forest-floor material, botanical upgrade, shoreline-convergence claim or planet-wide plant streaming",
+      "fixture numerical bounds are not a global cross-face/LOD temporal error envelope",
+      "actual mesh-shader draw not newly validated: retained mesh-emission test uses its existing compute shim"
+    ]
+  },
+  "capture_commands": [
+    {
+      "name": "before-standing2",
+      "command": [
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/organ-native",
+        "--graphics",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "80",
+        "--survey-eye-agl",
+        "2",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "60",
+        "--frames",
+        "32",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/before-standing2.png",
+        "--perf-capture",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/before-standing2.json"
+      ],
+      "exit": 0,
+      "binary_sha256": "09fb4600c9af2498dd1eb6a0458c52ed06434894a2ca141631f6368caf9d9641"
+    },
+    {
+      "name": "after-standing2",
+      "command": [
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/chart-native",
+        "--graphics",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "80",
+        "--survey-eye-agl",
+        "2",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "60",
+        "--frames",
+        "32",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-standing2.png",
+        "--perf-capture",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-standing2.json"
+      ],
+      "exit": 0,
+      "binary_sha256": "719d17ce68abe1577efb70a0f7449996eefb78a71dc1c8313dec80872bcedf89"
+    },
+    {
+      "name": "after-close50",
+      "command": [
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/chart-native",
+        "--graphics",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "80",
+        "--survey-eye-agl",
+        "50",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "60",
+        "--frames",
+        "32",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-close50.png",
+        "--perf-capture",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-close50.json"
+      ],
+      "exit": 0,
+      "binary_sha256": "719d17ce68abe1577efb70a0f7449996eefb78a71dc1c8313dec80872bcedf89"
+    },
+    {
+      "name": "after-overview",
+      "command": [
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/chart-native",
+        "--graphics",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "1800",
+        "--survey-eye-agl",
+        "800",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "60",
+        "--frames",
+        "32",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-overview.png",
+        "--perf-capture",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-overview.json"
+      ],
+      "exit": 0,
+      "binary_sha256": "719d17ce68abe1577efb70a0f7449996eefb78a71dc1c8313dec80872bcedf89"
+    }
+  ],
+  "captures": [
+    {
+      "name": "standing2",
+      "before_source": "fresh baseline replay, no concurrent builds",
+      "changed_pixels": 98561,
+      "diff_bounds": [
+        0,
+        333,
+        1280,
+        720
+      ],
+      "resident_levels_match": true,
+      "resident_levels": "[4, 0, 1, 0, 1, 0, 1, 0, 4, 2, 13, 23, 36, 30, 40, 29, 36, 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "retained_plants": "222",
+      "draw_calls": "3",
+      "artifacts": {
+        "before": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/before-standing2.png",
+            "sha256": "c59eec60aeaac3d6bde898421b8aaedaab8d17796fd60407ebf16a26acf94e58"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/before-standing2.json",
+            "sha256": "97901fe5884fe3e5f39a3d1d7f1f3ff8fdd6c5050d6d2ccbb101f479ccf4bc2e"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/before-standing2.csv",
+            "sha256": "add477aeb793e9c39505fa80106965798fbd3498c041707ca16131d3dd0697ff"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/before-standing2.log",
+            "sha256": "a6805f4fd4020393fe2f2a74f656fa13eb89ca5db056aa0225e446cbd827187c"
+          }
+        },
+        "after": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-standing2.png",
+            "sha256": "ed371abb6a727b35ea0cb85d6c1ecaedf1162b8face9e6c838289004a8f2a1df"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-standing2.json",
+            "sha256": "b16197d722c8f96cd68ac766de4c7c0b4b3ee78264196a3560fdcc6ef7c96a23"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-standing2.csv",
+            "sha256": "b3c3d7cc524b3ab9c2ce07f72195479018a1085e6c14c5204ad293d2bd208e83"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-standing2.log",
+            "sha256": "2636d522cf3e865d20e7027808e6b905b7fd704c4e03566f8e590131f6108e18"
+          }
+        }
+      },
+      "diagnostic_timings_ms": {
+        "before": {
+          "frame_count": 32,
+          "wall_median": 106.84297199999999,
+          "gpu_median": 104.78104528361894
+        },
+        "after": {
+          "frame_count": 32,
+          "wall_median": 99.6789635,
+          "gpu_median": 97.84406493505098
+        }
+      },
+      "prior_baseline_png_identical": false
+    },
+    {
+      "name": "close50",
+      "before_source": "retained WORLD06b frame; prior CPU-check overlap means its timing is not a performance baseline",
+      "changed_pixels": 196249,
+      "diff_bounds": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "resident_levels_match": true,
+      "resident_levels": "[5, 0, 1, 0, 1, 0, 1, 0, 4, 1, 11, 22, 36, 22, 40, 26, 41, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "retained_plants": "222",
+      "draw_calls": "3",
+      "artifacts": {
+        "before": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.png",
+            "sha256": "ccc1466ae2ca6389dec1eef6a3d09e5ad2a0849356ac75b1493da6c6a5ad913a"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.json",
+            "sha256": "6550d335070899a8002a173748a54d01ecb1006fd42edf4e0ea78dac379405ae"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.csv",
+            "sha256": "275fe2f227b35f00e5195eb27554ca38f567f4154fadcf7cf7d7c1773330d9a1"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.log",
+            "sha256": "536e12543e404514873e6d407fe27b6810c20a324e87175edbb21206ee8b0af1"
+          }
+        },
+        "after": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-close50.png",
+            "sha256": "4384b50d73dc3a54320a306711c4531411e02056c7b15a11a23115c798d721ad"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-close50.json",
+            "sha256": "d8dd6ddef94070648e9f35115b62a6bebd29c8a7a32dd125085efb306a1b9954"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-close50.csv",
+            "sha256": "9bc26f34e46718297aa0ed61da913c5ff92cc6bb9d87245759715d7c4fbb2473"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-close50.log",
+            "sha256": "ea24f68fa19e17635ab23c1a2a9a99c3fdd9f2c7f2240d74c05e90e344e355b4"
+          }
+        }
+      }
+    },
+    {
+      "name": "overview",
+      "before_source": "retained WORLD06b frame; prior CPU-check overlap means its timing is not a performance baseline",
+      "changed_pixels": 31201,
+      "diff_bounds": [
+        0,
+        45,
+        1280,
+        720
+      ],
+      "resident_levels_match": true,
+      "resident_levels": "[5, 0, 1, 0, 1, 0, 1, 0, 4, 5, 40, 34, 52, 35, 46, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "retained_plants": "222",
+      "draw_calls": "3",
+      "artifacts": {
+        "before": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.png",
+            "sha256": "609284e2085ec858f24de6a38fe13bc8dfd04b53fcf9b875dbaaa2144d10d99d"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.json",
+            "sha256": "2d6caf6f848af75bd315e15861c1dd64be2adb67f32bd0767bfdf13008f94568"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.csv",
+            "sha256": "f0c4ba9e678561b9105281f4d1520e1131231a2517fb2cf546d0866b501ed650"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.log",
+            "sha256": "2d4e9683096a3ac47306708418062fc785822c6a215c4744af90c5b3c2ce30a4"
+          }
+        },
+        "after": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-overview.png",
+            "sha256": "bb937be1d7d3adfa148962326252c67f2443efd25fc3fce070e3c7b82d1ea56f"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-overview.json",
+            "sha256": "bec292ebb83757bc574283ef2a9046961bf10afee5db4232f5cc1cecfd7adf8f"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-overview.csv",
+            "sha256": "305218911ca73cced13b20152ec30df641fc16fba252c98c9b9ffbfd09f6132a"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/after-overview.log",
+            "sha256": "5c5462233f70a527a0d04ae6b90b7d39b2a3f7981e8e166274fdc80ddd962371"
+          }
+        }
+      }
+    }
+  ],
+  "baseline_replay_variation": {
+    "changed_pixels": 3,
+    "maximum_channel_delta": 14,
+    "diff_bounds": [
+      103,
+      336,
+      684,
+      369
+    ],
+    "metadata_differences": "Only native_surface_plants_preparation_cpu_ms differs.",
+    "implication": "Full-scene captures are defect diagnostics, not an exact deterministic oracle. Isolated GPU/reference fixtures establish the coordinate bounds."
+  },
+  "blind_review": {
+    "prepared_cases": 3,
+    "votes": 0,
+    "directory": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-coordinates/review",
+    "answer_key": "Separate private directory; not included in review or committed evidence.",
+    "preference": "Not established; ties/invalid comparisons permitted."
+  }
+}

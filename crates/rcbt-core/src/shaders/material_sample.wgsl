@@ -2,9 +2,24 @@
 @group(0) @binding(16) var<storage, read> material_directory: array<vec4<u32>>;
 
 struct MaterialAddress {
+    // Split chart coordinate. Keep the small interpolated displacement separate
+    // from the world-fixed anchor until after scaling to a material page.
     uv: vec2<f32>,
     face: u32,
+    offset: vec2<f32>,
 };
+
+struct MaterialCoordinates {
+    tile: vec2<f32>,
+    local: vec2<f32>,
+};
+
+fn material_coordinates(address: MaterialAddress, extent: f32) -> MaterialCoordinates {
+    let base = address.uv * extent;
+    let relative = fract(base) + address.offset * extent;
+    let tile = clamp(floor(base) + floor(relative), vec2(0.0), vec2(extent - 1.0));
+    return MaterialCoordinates(tile, (floor(base) - tile) + relative);
+}
 
 // Premultiplied resident contribution; uncovered weight uses the globe map.
 struct MaterialSample {
@@ -51,7 +66,7 @@ fn material_address(d: vec3<f32>) -> MaterialAddress {
         face = select(5u, 4u, d.z >= 0.0);
         uv = vec2(select(-d.x, d.x, d.z >= 0.0), d.y) / a.z;
     }
-    return MaterialAddress(clamp(uv * 0.5 + 0.5, vec2(0.0), vec2(0.99999994)), face);
+    return MaterialAddress(clamp(uv * 0.5 + 0.5, vec2(0.0), vec2(0.99999994)), face, vec2(0.0));
 }
 
 // Only missing neighbours need a transition to shared coarser data. A complete
@@ -59,8 +74,9 @@ fn material_address(d: vec3<f32>) -> MaterialAddress {
 // Diagonals prevent a single resident quadrant from leaving a corner seam.
 fn material_resident_weight(address: MaterialAddress, level: u32, feather: f32) -> f32 {
     let extent = exp2(f32(level));
-    let tile = floor(address.uv * extent);
-    let local = fract(address.uv * extent);
+    let coordinates = material_coordinates(address, extent);
+    let tile = coordinates.tile;
+    let local = coordinates.local;
     var weight = 1.0;
     for (var y = -1; y <= 1; y += 1) {
         for (var x = -1; x <= 1; x += 1) {
@@ -71,10 +87,15 @@ fn material_resident_weight(address: MaterialAddress, level: u32, feather: f32) 
             if (y < 0) { distance = max(distance, local.y); }
             if (y > 0) { distance = max(distance, 1.0 - local.y); }
             if (distance >= feather) { continue; }
-            let neighbour_uv = (tile + vec2(f32(x), f32(y)) + 0.5) / extent;
+            let neighbour_tile = tile + vec2(f32(x), f32(y));
+            var id = material_node(address.face, vec2<u32>(max(neighbour_tile, vec2(0.0))), level);
             // Reproject across cube edges rather than clamping to this face.
-            let neighbour = material_address(material_direction(neighbour_uv, address.face));
-            let id = material_node(neighbour.face, vec2<u32>(neighbour.uv * extent), level);
+            // Same-face neighbours already have an exact integer address.
+            if (any(neighbour_tile < vec2(0.0)) || any(neighbour_tile >= vec2(extent))) {
+                let neighbour_uv = (neighbour_tile + 0.5) / extent;
+                let neighbour = material_address(material_direction(neighbour_uv, address.face));
+                id = material_node(neighbour.face, vec2<u32>(neighbour.uv * extent), level);
+            }
             if (material_layer(id) == 0xffffffffu) {
                 weight = min(weight, smoothstep(0.0, feather, distance));
             }
@@ -87,7 +108,7 @@ fn material_resident_weight(address: MaterialAddress, level: u32, feather: f32) 
 fn material_at_level(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, requested: u32) -> MaterialSample {
     var level = requested;
     var extent = exp2(f32(level));
-    var id = material_node(address.face, vec2<u32>(address.uv * extent), level);
+    var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
     var result = MaterialSample(vec4(0.0), 0.0);
     var remaining = 1.0;
     loop {
@@ -96,7 +117,7 @@ fn material_at_level(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, req
             let feather = clamp(max(4.0 / 125.0,
                 2.0 * extent * max(length(dx), length(dy))), 4.0 / 125.0, 0.125);
             let weight = remaining * material_resident_weight(address, level, feather);
-            let uv = (fract(address.uv * extent) * 125.0 + 1.5) / 128.0;
+            let uv = (material_coordinates(address, extent).local * 125.0 + 1.5) / 128.0;
             result.value += textureSampleGrad(material_texture, material_sampler, uv, i32(layer),
                 dx * extent * (125.0 / 128.0), dy * extent * (125.0 / 128.0)) * weight;
             result.coverage += weight;

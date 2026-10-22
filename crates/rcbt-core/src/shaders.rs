@@ -412,6 +412,9 @@ struct VertexOutput {
     @location(3) height_m: f32,
     @location(4) material_uv: vec2<f32>,
     @location(5) @interpolate(flat) material_slot: u32,
+    @location(6) material_chart: vec3<f32>,
+    @location(7) @interpolate(flat) material_anchor: vec2<f32>,
+    @location(8) @interpolate(flat) material_face: u32,
 };
 
 @group(0) @binding(6) var albedo_texture: texture_2d<f32>;
@@ -520,6 +523,14 @@ fn cbt_vertex(vertex_index: u32) -> VertexOutput {
     output.height_m = select(normal.w, 1e9, skirt);
     let material = material_slots[ordinal];
     let tile_uv = vec2(f32(local % 33u), f32(local / 33u)) / 32.0;
+    let chart = material_address(frame.geometry.raw_center.xyz);
+    output.material_anchor = chart.uv;
+    output.material_face = chart.face;
+    // Rational interpolation reproduces projection of the interpolated body
+    // direction, rather than linearly interpolating spherical chart UVs. The
+    // anchor is identical for every vertex of this patch and exactly dyadic.
+    let major = max(abs(body_direction.x), max(abs(body_direction.y), abs(body_direction.z)));
+    output.material_chart = vec3((tile_uv - 0.5) * frame.geometry.radius_half_extent_len.y * major, major);
     let page_uv = tile_uv * bitcast<f32>(material.y) + bitcast<vec2<f32>>(material.zw);
     output.material_uv = (page_uv * 125.0 + 1.5) / 128.0;
     output.material_slot = material.x;
@@ -553,11 +564,20 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let globe_texel_m = 3.14159265 * bitcast<f32>(params.radius_bits)
         / f32(textureDimensions(albedo_texture).y);
     var detail_weight = 1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m);
-    let address = material_address(direction);
+    var address = material_address(direction);
+    // A zero divisor is the conforming stream's explicit legacy fallback.
+    let chart_offset = input.material_chart.xy / max(input.material_chart.z, 0.000001);
+    let chart_dx = dpdx(chart_offset);
+    let chart_dy = dpdy(chart_offset);
+    if (input.material_chart.z > 0.0) {
+        address = MaterialAddress(input.material_anchor, input.material_face, chart_offset);
+    }
     // Project both derivatives in this fragment's face. A derivative across
     // a face-number switch must not become an enormous false mip footprint.
-    let address_dx = material_face_uv(direction + dpdx(direction), address.face) - address.uv;
-    let address_dy = material_face_uv(direction + dpdy(direction), address.face) - address.uv;
+    let address_dx = select(material_face_uv(direction + dpdx(direction), address.face) - address.uv,
+        chart_dx, input.material_chart.z > 0.0);
+    let address_dy = select(material_face_uv(direction + dpdy(direction), address.face) - address.uv,
+        chart_dy, input.material_chart.z > 0.0);
     // A material texel must cover the same physical footprint regardless of
     // which geometry leaf happens to rasterize it. Trilinear page levels are
     // chosen in screen space rather than inheriting a coarse mesh page.

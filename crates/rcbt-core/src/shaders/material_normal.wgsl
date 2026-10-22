@@ -34,7 +34,7 @@ fn material_normal_layer(id: vec2<u32>) -> u32 {
 fn material_at_level_raster(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, requested: u32) -> RasterMaterialSample {
     var level = requested;
     var extent = exp2(f32(level));
-    var id = material_node(address.face, vec2<u32>(address.uv * extent), level);
+    var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
     var result = RasterMaterialSample(vec4(0.0), vec2(0.0), 0.0);
     var remaining = 1.0;
     loop {
@@ -43,7 +43,7 @@ fn material_at_level_raster(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f3
             let feather = clamp(max(4.0 / 125.0,
                 2.0 * extent * max(length(dx), length(dy))), 4.0 / 125.0, 0.125);
             let weight = remaining * material_resident_weight(address, level, feather);
-            let uv = (fract(address.uv * extent) * 125.0 + 1.5) / 128.0;
+            let uv = (material_coordinates(address, extent).local * 125.0 + 1.5) / 128.0;
             let footprint = vec2<f32>(extent * (125.0 / 128.0));
             result.value += textureSampleGrad(material_texture, material_sampler, uv, i32(layer),
                 dx * footprint, dy * footprint) * weight;
@@ -96,7 +96,7 @@ fn material_face_basis(uv: vec2<f32>, face: u32) -> mat3x3<f32> {
 // no normal page was resident, which returns the geometric normal exactly.
 fn material_perturb_normal(geometric: vec3<f32>, address: MaterialAddress, tangent: vec2<f32>, render_from_body: mat4x4<f32>) -> vec3<f32> {
     if (dot(tangent, tangent) <= 0.0) { return geometric; }
-    let basis = material_face_basis(address.uv, address.face);
+    let basis = material_face_basis(address.uv + address.offset, address.face);
     let rotation = mat3x3<f32>(
         render_from_body[0].xyz,
         render_from_body[1].xyz,

@@ -1,0 +1,262 @@
+diff --git a/tools/worldgen-rocky/src/appearance.rs b/tools/worldgen-rocky/src/appearance.rs
+index 564960f..eb07812 100644
+--- a/tools/worldgen-rocky/src/appearance.rs
++++ b/tools/worldgen-rocky/src/appearance.rs
+@@ -198,6 +198,41 @@ fn beach_material_coverage(maritime: f64, sample: &TerrainSample, exposed: f64)
+ fn mix(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
+     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t.clamp(0.0, 1.0))
+ }
++
++/// Fine ground under a canopy is not the canopy's far-field green average.
++/// Authored optical priors only: there is no organic mass/growth inventory.
++/// `patch` is a filtered, world-fixed mixture coordinate, not a lighting term.
++fn canopy_floor(albedo: [f64; 3], canopy: f64, damp: f64, patch: f64, texel_m: f64) -> [f64; 3] {
++    // Resolve floor only below 1 m/texel; at >=2 m/texel the existing canopy
++    // proxy is exact. This is representation bandwidth, not a biome boundary.
++    let weight = canopy.clamp(0.0, 1.0) * band_weight(4.0, texel_m);
++    if weight == 0.0 {
++        return albedo;
++    }
++    let linear = |v: f64| {
++        if v <= 0.04045 {
++            v / 12.92
++        } else {
++            ((v + 0.055) / 1.055).powf(2.4)
++        }
++    };
++    let encode = |v: f64| {
++        if v <= 0.0031308 {
++            v * 12.92
++        } else {
++            1.055 * v.powf(1.0 / 2.4) - 0.055
++        }
++    };
++    let litter = [0.36, 0.26, 0.14].map(linear);
++    let live_ground = [0.16, 0.27, 0.11].map(linear);
++    let floor = mix(litter, live_ground, patch.clamp(0.0, 1.0));
++    let wetting = 1.0 - 0.25 * damp.clamp(0.0, 1.0);
++    // Reflectances mix in linear light, not in encoded display RGB. Wetting
++    // changes the material, never an ambient/shadow multiplier baked into it.
++    std::array::from_fn(|i| {
++        encode(linear(albedo[i]) * (1.0 - weight) + floor[i] * wetting * weight)
++    })
++}
+ pub(crate) fn smooth(a: f64, b: f64, v: f64) -> f64 {
+     let t = ((v - a) / (b - a)).clamp(0.0, 1.0);
+     t * t * (3.0 - 2.0 * t)
+@@ -470,6 +505,10 @@ pub(crate) fn surface_appearance_filtered_with_normal_detail(
+     });
+     let plant = plant.map(|c| c * (1.0 + cover_texture * 0.22));
+     let mut color = mix(dry, plant, vegetation);
++    if ecological_cover.canopy01 > 0.0 && band_weight(4.0, texel_m) > 0.0 {
++        let patch = (0.5 + noise(769, 4.0, 3) * 1.5).clamp(0.0, 1.0);
++        color = canopy_floor(color, ecological_cover.canopy01, damp, patch, texel_m);
++    }
+     // Saturated lowland soil / vegetation, not invented pond geometry. The
+     // regional drainage source is continuous; local slopes reject cliff faces.
+     let wetland = sample.wetland_potential01 * (1.0 - smooth(0.02, 0.1, sample.slope_hint));
+@@ -591,6 +630,61 @@ mod palette_tests {
+     use super::*;
+     use crate::biomes::Geology;
+ 
++    #[test]
++    fn canopy_floor_keeps_coarse_and_nonforest_materials_exact() {
++        let original = [0.12, 0.22, 0.14];
++        for canopy in [0.0, 0.3, 1.0] {
++            for damp in [0.0, 0.5, 1.0] {
++                for patch in [0.0, 0.3, 1.0] {
++                    for texel in [2.0, 3.125, 1000.0] {
++                        assert_eq!(canopy_floor(original, canopy, damp, patch, texel), original);
++                    }
++                    assert_eq!(canopy_floor(original, 0.0, damp, patch, 0.0), original);
++                }
++            }
++        }
++        // The transition is continuous at both footprint limits.
++        let just_below = canopy_floor(original, 1.0, 0.0, 0.0, 2.0 - 1e-6);
++        for (a, b) in just_below.into_iter().zip(original) {
++            assert!((a - b).abs() < 1e-10);
++        }
++        let full = canopy_floor(original, 1.0, 0.0, 0.0, 1.0);
++        let just_above = canopy_floor(original, 1.0, 0.0, 0.0, 1.0 + 1e-6);
++        for (a, b) in just_above.into_iter().zip(full) {
++            assert!((a - b).abs() < 1e-10);
++        }
++    }
++
++    #[test]
++    fn canopy_floor_mixes_bounded_reflectances_in_linear_light() {
++        let original = [0.12, 0.22, 0.14];
++        let litter = [0.36, 0.26, 0.14];
++        let live = [0.16, 0.27, 0.11];
++        let decode = |v: f64| ((v + 0.055) / 1.055).powf(2.4);
++        for (patch, expected) in [(0.0, litter), (1.0, live)] {
++            let actual = canopy_floor(original, 1.0, 0.0, patch, 0.39);
++            for (a, b) in actual.into_iter().zip(expected) {
++                assert!((a - b).abs() < 1e-12);
++            }
++        }
++        let mixed = canopy_floor(original, 1.0, 0.0, 0.5, 0.39);
++        let wet = canopy_floor(original, 1.0, 1.0, 0.5, 0.39);
++        for i in 0..3 {
++            let expected = (decode(litter[i]) + decode(live[i])) * 0.5;
++            assert!((decode(mixed[i]) - expected).abs() < 1e-12);
++            assert!((decode(wet[i]) - expected * 0.75).abs() < 1e-12);
++        }
++        for canopy in [0.0, 0.5, 1.0] {
++            for damp in [0.0, 0.5, 1.0] {
++                for patch in [0.0, 0.5, 1.0] {
++                    for channel in canopy_floor(original, canopy, damp, patch, 0.39) {
++                        assert!(channel.is_finite() && (0.0..=0.36).contains(&channel));
++                    }
++                }
++            }
++        }
++    }
++
+     #[test]
+     fn grain_band_filter_is_continuous_and_zero_beyond_nyquist() {
+         for scale in [0.5, 1.0, 2.0, 4.0, 8.0, 32.0, 128.0, 512.0] {
+@@ -683,6 +777,43 @@ mod palette_tests {
+ mod frost_tests {
+     use super::*;
+ 
++    #[test]
++    fn fine_forest_floor_has_filtered_structure_without_changing_coverage_or_physics() {
++        let field = field();
++        let sample = sample(285.0, 0.95);
++        let center = crate::sphere::dir_from_latlon(23.565679258039204, 165.13881581863882);
++        let mut fine = Vec::new();
++        let mut coarse = Vec::new();
++        for i in 0..128 {
++            let dir = crate::sphere::enu_to_dir(
++                [i as f64 * 0.25, 0.0, 0.0],
++                center,
++                field.params.radius_m,
++            );
++            let a = surface_appearance_filtered(&field, &sample, dir, 0.390625);
++            let b = surface_appearance_filtered(&field, &sample, dir, 3.125);
++            assert_eq!(
++                (a.vegetation, a.snow, a.snow_cover, a.frost_cover),
++                (b.vegetation, b.snow, b.snow_cover, b.frost_cover)
++            );
++            assert_eq!(a.roughness, b.roughness);
++            fine.push(a.albedo_srgb[0]);
++            coarse.push(b.albedo_srgb[0]);
++        }
++        let spread = |v: &[f32]| {
++            v.iter().copied().fold(f32::NEG_INFINITY, f32::max)
++                - v.iter().copied().fold(f32::INFINITY, f32::min)
++        };
++        assert!(
++            spread(&fine) > 0.02,
++            "resolved floor must have material contrast, not only an averaged tint"
++        );
++        assert!(
++            spread(&fine) > spread(&coarse) * 2.0,
++            "unresolved floor must not alias into the coarse canopy proxy"
++        );
++    }
++
+     #[test]
+     fn cold_dry_ground_does_not_receive_unlimited_snow_cover() {
+         let field = field();
+@@ -1332,10 +1463,10 @@ mod lod_fade_tests {
+             coarse < full * 0.2,
+             "coarse texel must agree locally, full={full:.5} coarse={coarse:.5}"
+         );
+-        // Fine texels keep full detail exactly.
++        // Eight texels per metre resolve the finest ~0.97 m floor octave fully.
+         for dir in dirs(8) {
+             let a = surface_appearance(&field, &warm_land(500.0), dir);
+-            let b = surface_appearance_filtered(&field, &warm_land(500.0), dir, 1.0);
++            let b = surface_appearance_filtered(&field, &warm_land(500.0), dir, 0.125);
+             assert_eq!(a.albedo_srgb, b.albedo_srgb);
+             assert_eq!(a.roughness, b.roughness);
+         }
+diff --git a/tools/worldgen-rocky/src/lod.rs b/tools/worldgen-rocky/src/lod.rs
+index 06baf05..c2195eb 100644
+--- a/tools/worldgen-rocky/src/lod.rs
++++ b/tools/worldgen-rocky/src/lod.rs
+@@ -2,9 +2,8 @@
+ //! Tiles cache the field; they never define the terrain or own its random seed.
+ use crate::{
+     appearance::{
+-        surface_appearance, surface_appearance_filtered,
+-        surface_appearance_filtered_with_normal_detail, surface_grain_height,
+-        surface_normal_grain_height,
++        surface_appearance_filtered, surface_appearance_filtered_with_normal_detail,
++        surface_grain_height, surface_normal_grain_height,
+     },
+     field::PlanetField,
+ };
+@@ -440,7 +439,11 @@ pub fn build_tile(field: &PlanetField, key: TileKey, cells: usize) -> TerrainTil
+             let cosine = dot(normal, dir).clamp(0.001, 1.0);
+             let mut sample = field.sample_surface(dir, wavelength);
+             sample.slope_hint = (1.0 / (cosine * cosine) - 1.0).max(0.0).sqrt();
+-            let material = surface_appearance(field, &sample, dir);
++            // Vertex-colour fallback has the mesh's physical sampling footprint,
++            // not infinite texture bandwidth. Do not alias fine floor/grain into
++            // a distant coarse tile when material textures are unavailable.
++            let material =
++                surface_appearance_filtered(field, &sample, dir, key.span_m(radius) / cells as f64);
+             tile.positions.push(sub(pos, anchor).map(|x| x as f32));
+             tile.normals.push(normal.map(|x| x as f32));
+             let rgb = material.albedo_srgb.map(linear);
+@@ -1117,6 +1120,56 @@ mod surface_regressions {
+         crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+             .unwrap()
+     }
++    #[test]
++    fn vertex_colour_fallback_filters_floor_at_mesh_spacing() {
++        let frozen = crate::offline::FrozenSurface::read_gzip(
++            &include_bytes!("../../../data/worldgen/thessa-erosion-v3.surface.json.gz")[..],
++        )
++        .unwrap();
++        let field = field().with_frozen_erosion(&frozen).unwrap();
++        let key = TileKey {
++            face: 1,
++            level: 14,
++            x: 6018,
++            y: 11888,
++        };
++        let cells = 24;
++        let tile = build_tile(&field, key, cells);
++        let spacing = key.span_m(field.params.radius_m) / cells as f64;
++        let mut checked = 0;
++        let mut would_alias = false;
++        for y in (0..=cells).step_by(4) {
++            for x in (0..=cells).step_by(4) {
++                let index = y * (cells + 1) + x;
++                let dir = key.direction(x as f64 / cells as f64, y as f64 / cells as f64);
++                let mut sample = field.sample_surface(dir, (spacing * 2.0).max(32.0));
++                let cosine = dot(tile.normals[index].map(f64::from), dir).clamp(0.001, 1.0);
++                sample.slope_hint = (1.0 / (cosine * cosine) - 1.0).max(0.0).sqrt();
++                if crate::ecology::vegetation_cover(&sample, sample.slope_hint).canopy01 < 0.3 {
++                    continue;
++                }
++                let expected = surface_appearance_filtered(&field, &sample, dir, spacing)
++                    .albedo_srgb
++                    .map(linear);
++                let unfiltered = crate::appearance::surface_appearance(&field, &sample, dir)
++                    .albedo_srgb
++                    .map(linear);
++                for (c, expected) in expected.into_iter().enumerate() {
++                    assert!(
++                        (tile.colors[index][c] - expected).abs() < 1e-4,
++                        "coarse vertex must use its physical footprint"
++                    );
++                    would_alias |= (expected - unfiltered[c]).abs() > 0.002;
++                }
++                checked += 1;
++            }
++        }
++        assert!(
++            checked > 0 && would_alias,
++            "fixture must distinguish filtered forest from an aliased fine-floor sample"
++        );
++    }
++
+     #[test]
+     fn neighboring_material_edges_are_identical_and_opaque() {
+         let field = field();

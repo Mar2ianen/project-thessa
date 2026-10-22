@@ -159,3 +159,90 @@ GPU residency or more texture resolution alone will produce convincing ground.
 The next optical work must distinguish resolved forest floor from the current
 canopy/ground/reed averaged cover while preserving climate, snow, wetland and
 canonical height semantics. No ground change is claimed by WORLD06b.
+
+## WORLD06c — Rejected forest-floor prototype
+
+A canopy-gated, footprint-filtered litter/live-ground colour mixture was tested
+in the existing material producer. It passed its numerical tests but produced
+large blurry patches rather than convincing resolved ground in the standing
+preview. The prototype was removed; production ground remains unchanged.
+The source patch and negative result are preserved in
+[`native-forest-floor-rejected-2026-10-22.json`](artifacts/native-forest-floor-rejected-2026-10-22.json).
+This is an author defect rejection, not independent blind preference evidence.
+
+The preview used 10 seconds of prestream and eight frames, so it is not a matched
+drained-stream acceptance capture or a performance measurement. A baseline
+material-page benchmark was retained, but no before/after performance claim is
+made. Next work needs resolved material structure and filtering at standing
+scale, not stronger macro noise. No external texture asset was imported.
+
+## WORLD06d — Preserve local material coordinates
+
+The regular-patch raster previously reconstructed material UV from a normalized,
+planet-sized `f32` direction. This discards small surface displacements before
+the shader even looks up a detailed material page. A new real-raster oracle
+exposes the defect: at radius 3,200 km, level 17, off-centre chart coordinates,
+the legacy path misses the independently filtered RGB8 reference by 19 code
+values on its first sample. The same fixture passes with split coordinates.
+
+The regular path now transports the existing dyadic tile-centre UV separately
+from its small grid-local displacement. Displacement is interpolated with the
+dominant direction component as a divisor, so projection is rational rather
+than a linear approximation to sphere UV. The common page sampler scales the
+anchor and displacement separately before forming integer tile and local
+coordinates. Albedo, normal maps, page feathering and derivative footprints use
+this same address. Same-face neighbour lookup keeps the integer tile address;
+cross-face neighbours retain the existing cube reprojection.
+
+This is a precision correction, not a new effect or additional quality tier.
+It introduces no texture, allocation, binding, pass, physics state or source
+material. Regular raster vertex output gains six 32-bit components (local
+numerator/divisor, flat anchor and face); existing shadow/geometry buffers are
+unchanged. In the compute emulation of mesh output, WGSL alignment changes the
+shared vertex record from 80 to 112 bytes, not 104; the retained emission oracle
+now checks the new chart fields as well as complete/tail/skirt geometry. Its
+initial stale-stride failure was corrected rather than dropping the test.
+The shared sampler's zero-offset constructor preserves callers that
+only have direction data. The conforming raster, terrain rays and ocean still
+use that legacy direction path: this stage does **not** establish centimetre
+addressing for every consumer. Screen-space page-level selection still uses
+direction derivatives and the production material limit remains L17.
+
+The GPU coordinate oracle compares 3,150 split-coordinate cases to independent
+`f64` arithmetic: six faces, anchor and requested levels 0/10/17/20/22, outer
+and interior tiles, positive/negative displacement, and exact page edges.
+Integer page indices must agree exactly; local error must be below 2e-6 page
+units for this fixture. The regular-raster oracle sweeps nine subtexel camera
+positions on each of six faces, uses a sharp two-colour material boundary,
+linear-light filtering and ambient PI, and checks output within two RGB8 levels
+of the independent reference with strictly increasing samples. Its nominal
+world step is 48.828125/4096 = 0.01192093 m before chart distortion. These are
+numerical bounds for these fixtures, not a global seam/temporal envelope or an
+independent aesthetic judgment.
+
+Local gates passed: formatting, architecture guard, workspace Clippy, 2,030
+workspace lib/bin tests, 103 integration tests and 81 ignored renderer hardware
+tests on Radeon 880M/Vulkan/RADV. The required Bevy ignored command selected zero
+tests; it is not an additional hardware-test result. The release client built
+successfully. Exact commands, shader/test hashes and the intentional legacy-path
+failure are recorded in
+[`native-material-coordinates-2026-10-22.json`](artifacts/native-material-coordinates-2026-10-22.json).
+
+Silent standing/close/overview captures are under
+`target/surface-showcase/material-coordinates/after-{standing2,close50,overview}.png`,
+with metadata and timings beside them. A fresh standing baseline replay and all
+three candidate captures ran serially after builds finished. All views retain
+the previous GPU material-level histograms, 222 plant descriptors and three plant
+draws. The same-binary standing replay differs from the earlier WORLD06b capture
+at three pixels (maximum channel delta 14), so full-scene pixel diffs are not an
+exact deterministic oracle. The isolated raster/reference fixtures above are the
+correctness evidence. Three unlabeled pairs are prepared; no reviewer votes or
+subjective preference result is claimed.
+
+The fresh standing pair reports median GPU frame times of 104.781 ms before and
+97.844 ms after (32 frames each, 60 s prestream). This single pair is diagnostic,
+not a counterbalanced repeat study, a speedup or a throughput/no-regression
+certificate. Prior close/overview baselines had overlapping CPU checks and are
+not timing baselines. The captures still show nearly uniform ground, schematic
+plants and coarse shoreline/fallback boundaries: local coordinate accuracy is a
+prerequisite, **not** the requested convincing surface zone or planet expansion.

@@ -1,0 +1,92 @@
+{
+  "task": "WORLD06c",
+  "date": "2026-10-22",
+  "status": "rejected experiment; not a production material or visual acceptance",
+  "baseline_commit": "dc8aaeb",
+  "source_patch": {
+    "path": "docs/artifacts/native-forest-floor-rejected-2026-10-22.patch",
+    "sha256": "4fee9cbb90087b4fc942327104196836a896a75132ef65e658811661c2d2ea53",
+    "limit": "Contains the rejected optical prototype plus its tested CPU vertex-colour fallback follow-up. The preview binary predates that CPU fallback follow-up; the regular GPU capture does not use vertex-colour fallback."
+  },
+  "scope": "A fine-canopy-gated litter/live-ground reflectance mixture in the existing material producer, plus a physical-footprint vertex-colour fallback. No terrain, ecology, placement, light, shader or GPU-layout changes.",
+  "rejection": "Author defect inspection found large blurry green/brown patches, not resolved litter or convincing ground. Numerical contracts do not establish visual acceptance. The product prototype was removed rather than shipping it as the new default.",
+  "preview": {
+    "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/preview-standing2.png",
+    "sha256": "8880bd38631b2518d853ca19cb366b2701d75e0aaf98cf1aaa9ae70c415f2ba9",
+    "command_file": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/preview-command.json",
+    "scope": "10 seconds prestream / 8 measured frames, fixed WORLD00 standing view, silent/no HUD. Defect preview only; not a matched drained-stream performance/visual comparison.",
+    "command": [
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/preview-native",
+      "--graphics",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+      "--survey-lat",
+      "23.565679258039204",
+      "--survey-lon",
+      "165.13881581863882",
+      "--survey-distance",
+      "80",
+      "--survey-eye-agl",
+      "2",
+      "--sim-time",
+      "0",
+      "--sim-step",
+      "0",
+      "--prestream-seconds",
+      "10",
+      "--frames",
+      "8",
+      "--mute",
+      "--no-hud",
+      "--headless",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/preview-standing2.png",
+      "--perf-capture",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/preview-standing2.json"
+    ],
+    "binary_sha256": "494fd5dd0b57bc3b8433be250339d1771f0dbaf3f2423c1ed4b5ca5a4392785a",
+    "graphics_sha256": "f1f990712198fa54c47c8d26b6d1e6f1952c2f68e9a04cd2a0fda1645002fdd2"
+  },
+  "baseline_material_benchmark": {
+    "command_file": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/baseline-benchmark-command.json",
+    "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/forest-floor/baseline-material-pages.log",
+    "results": [
+      {
+        "albedo_payload_bytes": 33554432,
+        "count": 512,
+        "frozen_erosion": true,
+        "geometry_scale_m": 256.0,
+        "normal_payload_bytes": 16777216,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 155.597058,
+        "page_p50_ms": 107.068202,
+        "page_p95_ms": 129.105484,
+        "payload_bytes": 50331648,
+        "profile": "release/bench",
+        "total_s": 54.93514866,
+        "workload": "512 serial canonical material pages, 128x128, six faces, levels 10..14"
+      },
+      {
+        "count": 64,
+        "normal_maps": false,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 194.420895,
+        "page_p50_ms": 120.058499,
+        "page_p95_ms": 127.24370700000001,
+        "total_s": 7.828138008000001,
+        "workload": "64 paired close-land pages, face 3, levels 14..17, counterbalanced order"
+      },
+      {
+        "count": 64,
+        "normal_maps": true,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 157.406457,
+        "page_p50_ms": 123.39191500000001,
+        "page_p95_ms": 136.690015,
+        "total_s": 8.032590077000002,
+        "workload": "64 paired close-land pages, face 3, levels 14..17, counterbalanced order"
+      }
+    ],
+    "scope": "Retained baseline only. No post-change cost or speedup claim."
+  },
+  "independent_blind_review": "Not performed. An author may reject a defective candidate, but cannot self-certify preference/acceptance.",
+  "next_boundary": "Resolved material structure and filtering at standing-camera scale, not stronger macro noise; preserve exact coarse fallback, common requested/resolved graphics policy and world-fixed precision. No external texture asset was imported."
+}

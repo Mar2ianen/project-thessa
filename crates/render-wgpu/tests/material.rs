@@ -133,6 +133,77 @@ fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots(
 }
 
 #[test]
+fn saturated_material_cache_renders_priority_detail_not_only_coarse_cover() {
+    let backend = match Backend::bring_up() {
+        Ok(backend) => backend,
+        Err(BackendError::NoAdapter) => {
+            eprintln!("SKIP: no GPU");
+            return;
+        }
+        Err(error) => panic!("{error}"),
+    };
+    let key = TileKey::new(4, 10, 512, 512).unwrap();
+    let anchor = TileAnchor::new(key, 6_371_000.0).unwrap();
+    let height = HeightPage::bake(&[120.0; 4], 2, 0.01).unwrap();
+    let mut renderer = TerrainRenderer::with_material_capacity(
+        &backend,
+        &[TerrainPatch {
+            anchor,
+            page: &height,
+        }],
+        OffscreenTarget::FORMAT,
+        4,
+    )
+    .unwrap();
+    let center = DVec3::from(anchor.anchor_body_m);
+    let eye = center + DVec3::from(anchor.normal) * 2_000.0;
+    renderer
+        .update_view(
+            &backend,
+            &ViewParams {
+                world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, DVec3::Y)
+                    .inverse(),
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.0, 1.0, 1.0, 1e6),
+                world_position_m: eye,
+                exposure: 1.0,
+            },
+        )
+        .unwrap();
+    let near = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+    let red = CbtMaterialPage::from_rgba8([255, 0, 0, 255].repeat(128 * 128)).unwrap();
+    let blue = CbtMaterialPage::from_rgba8([0, 0, 255, 255].repeat(128 * 128)).unwrap();
+    let mut source = MaterialPageStore::default();
+    source.set_pages([8, 12, 32, 33, 34, 35].map(|id| (id, red.clone())));
+    source.set_page(near, blue);
+    source.set_priority(vec![near, 32, 33, 34, 35]);
+    let stats = renderer
+        .update_materials(&backend, source.priority(), source.source_pages())
+        .unwrap();
+    assert_eq!(stats.residents, 4);
+    assert_eq!(stats.resident_levels[0], 2, "both faces keep support");
+    assert_eq!(
+        stats.resident_levels[10], 1,
+        "close detail must actually reach the GPU directory"
+    );
+    let target = OffscreenTarget::new(&backend, 257, 257).unwrap();
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    renderer.encode(&mut encoder, &target.color, &target.depth);
+    backend.queue.submit([encoder.finish()]);
+    let image = target.read_rgba8(&backend).unwrap();
+    let mid = (128 * 257 + 128) * 4;
+    assert!(
+        image[mid + 2] > image[mid] + 30,
+        "priority detail must affect RGB, not only counters: {:?}",
+        &image[mid..mid + 4]
+    );
+    let next = renderer
+        .update_materials(&backend, source.priority(), source.source_pages())
+        .unwrap();
+    assert_eq!(next.pages, 0, "stationary demand must not reupload");
+    assert_eq!(next.resident_levels, stats.resident_levels);
+}
+
+#[test]
 #[ignore = "diagnostic hardware: counterbalanced normal-map raster and 128-page upload costs, not a performance assertion"]
 fn material_normal_gpu_and_upload_cost() {
     use thessa_graphics::{Quality, ResolvedGraphicsSettings};

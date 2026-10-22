@@ -883,7 +883,10 @@ Material generations are monotonic across rebuild/eviction; material refinement
 is independent of matching height keys. The old client's material completion
 path no longer discards finer pages just because no height page shares the key;
 its existing source-budget trimming still applies. The GPU array reserves at most 256 raw
-layers, with the shared coarse-ancestor-first fallback under exhaustion.
+ layers, with shared fallback support under exhaustion. The current material
+ admission order protects coarsest resident sources, then traverses each demanded
+ path coarse-to-fine in caller priority rather than globally sorting by level;
+ see [doc 77](77_NATIVE_SURFACE_SHOWCASE.md) for the surface-detail starvation fix.
 These are diagnostic viewer budgets, not newly supported `graphics.toml`
 quality tiers or a replacement for production graphics capability resolution.
 

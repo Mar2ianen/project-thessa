@@ -44,6 +44,13 @@ used as current close-range material pages.
 - All resident ancestors are explicit GPU demand, ordered coarse-first under
   slot exhaustion. CPU eviction uses the same hierarchy; shared fallback pages
   cannot merely be left in opportunistic cold slots.
+
+Current continuation: [doc 77](77_NATIVE_SURFACE_SHOWCASE.md) replaces the global
+coarse-first admission order above with protected coarsest support followed by
+caller-priority coarse-to-fine paths. The earlier order could permanently starve
+nearby fine material pages in a saturated GPU array. The loading sequence below
+is unchanged.
+
 - Cold material demand starts four levels above a requested close page (up to
   256 descendants share one build), then advances two levels at a time to the
   exact target. Height jobs never wait for material jobs. This is loading order,

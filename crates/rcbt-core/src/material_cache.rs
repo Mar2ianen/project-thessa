@@ -11,24 +11,39 @@ use std::{
     fmt,
 };
 
-/// Resident ancestors are explicit GPU demand, not cold opportunistic slots.
-/// Coarse levels come first under exhaustion so residency-edge filtering has
-/// shared fallback data; stable per-level order retains the caller's priority.
+/// Protect coarsest resident support, then refine in the caller's priority order.
+/// Each demanded path is admitted coarse-to-fine, with shared ancestors once.
+/// Sorting *all* paths by level would let a broad distant cover consume every
+/// slot before even the highest-priority close page, permanently losing detail.
 pub fn resident_material_hierarchy(
     demand: impl IntoIterator<Item = u64>,
     mut resident: impl FnMut(u64) -> bool,
 ) -> Vec<u64> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut ids = Vec::new();
+    let mut paths = Vec::new();
     for mut id in demand {
+        let mut path = Vec::new();
         while id >= 8 {
-            if seen.insert(id) && resident(id) {
-                ids.push(id);
+            if resident(id) {
+                path.push(id);
             }
             id >>= 2;
         }
+        paths.push(path);
     }
-    ids.sort_by_key(|id| 64 - id.leading_zeros());
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ids = Vec::new();
+    // Disjoint coarsest sources retain coverage even when another region is
+    // refined first. Missing root pages need no special-case fallback path.
+    for id in paths.iter().filter_map(|path| path.last()).copied() {
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    }
+    for id in paths.into_iter().flat_map(|path| path.into_iter().rev()) {
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    }
     ids
 }
 
@@ -480,20 +495,43 @@ mod tests {
     }
 
     #[test]
+    fn coarse_demand_cannot_starve_the_highest_priority_detail() {
+        let near = 8_u64 << 34; // L17 on face zero.
+        let far = (0..300).map(|i| (9_u64 << 14) + i * 53); // Broad L7 cover.
+        let hierarchy = resident_material_hierarchy(std::iter::once(near).chain(far), |_| true);
+        let mut slots = SlotCache::new(32).unwrap();
+        let demand: Vec<_> = hierarchy.into_iter().map(|id| (id, 1)).collect();
+        slots.update_retaining(&demand);
+        assert!(slots.slot(8).is_some(), "near face retains coarse support");
+        assert!(slots.slot(9).is_some(), "far face retains coarse support");
+        assert!(
+            slots.slot(near).is_some(),
+            "a broad coarse cover must not consume every slot before the first close page"
+        );
+        assert!(
+            slots.update_retaining(&demand).is_empty(),
+            "stationary demand must not churn"
+        );
+    }
+
+    #[test]
     fn material_hierarchy_keeps_shared_fallbacks_under_slot_exhaustion() {
         let resident = [8, 9, 32, 33, 128, 132, 133];
         let hierarchy =
             resident_material_hierarchy([133, 128, 132, 9, 133], |id| resident.contains(&id));
-        assert_eq!(hierarchy, [8, 9, 33, 32, 133, 128, 132]);
+        assert_eq!(hierarchy, [8, 9, 33, 133, 32, 128, 132]);
         let mut slots = SlotCache::new(4).unwrap();
         slots.update_retaining(&hierarchy.into_iter().map(|id| (id, 1)).collect::<Vec<_>>());
         assert!(slots.slot(8).is_some());
         assert!(slots.slot(9).is_some());
-        assert!(slots.slot(32).is_some());
         assert!(slots.slot(33).is_some());
         assert!(
-            slots.slot(133).is_none(),
-            "detail falls back instead of evicting shared edges"
+            slots.slot(133).is_some(),
+            "first priority gets actual detail"
+        );
+        assert!(
+            slots.slot(32).is_none(),
+            "lower priority branches can still sample shared source 8"
         );
     }
 

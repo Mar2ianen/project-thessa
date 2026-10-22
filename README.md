@@ -147,8 +147,11 @@ The checked-in vertical slice currently contains:
     resolved 4/8/16 clear-sky directions, cheaper reflected-cloud columns and
     compile-out specular disable
     ([doc 69](docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)). Optional primary-raster
-    material normals share page residency, with resolved disable and mip-filter
-    quality tiers; natural substrate detail, vegetation and final close-up
+     material normals share page residency, with resolved disable and mip-filter
+     quality tiers. Bounded residency now protects coarse coverage then admits
+     nearby refinement paths instead of starving all fine pages behind distant
+     coarse demand ([surface-first work](docs/77_NATIVE_SURFACE_SHOWCASE.md));
+     natural substrate detail, vegetation and final close-up
     terrain acceptance remain incomplete.
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
     textures; bounded stellar shadow rays supplement the shared atlas on meshes

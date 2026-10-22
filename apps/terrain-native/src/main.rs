@@ -799,6 +799,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             scene.stream.wanted_count()
         );
         println!(
+            "material_gpu_resident_levels={:?}",
+            scene.material_resident_levels
+        );
+        println!(
             "stream_cpu_median_ms={:.3} stream_cpu_p95_ms={:.3} stream_cpu_p99_ms={:.3} stream_cpu_max_ms={:.3} material_upload_bytes={} capacity_rejections={} final_angle_rad={:.3} measured_selections={measured_selections} measured_publications={measured_publications}",
             streaming_timings[streaming_timings.len() / 2],
             streaming_timings[streaming_timings.len() * 95 / 100],

@@ -1,0 +1,701 @@
+{
+  "date": "2026-10-22",
+  "task": "WORLD06a",
+  "branch": "feat/native-surface-showcase",
+  "baseline_commit": "54cdfa6",
+  "scope": "Fix saturated shared CPU/GPU material admission; add actual native GPU residency-level telemetry. No material, placement, terrain, lighting, graphics defaults or temporal changes.",
+  "policy": {
+    "before": "All resident paths globally level-sorted, then capacity-truncated.",
+    "after": "Protect each path coarsest resident support, then deduplicated coarse-to-fine paths in caller demand order; same finite capacity.",
+    "consumers": [
+      "native GPU material cache",
+      "Bevy GPU material cache",
+      "CPU material source eviction"
+    ]
+  },
+  "hardware": "AMD Radeon 880M Graphics / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "capture_boundary": "Frozen epoch 0, simulation step 0; 1280x720, silent/no HUD; fixed WORLD00 camera and previous WORLD05 High TOML; 60 seconds prestream + warmup; captures run serially, CPU builds overlapped so not stable performance evidence.",
+  "commands": {
+    "before": {
+      "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-commands.json",
+      "sha256": "50356bb8bd1b005330521b6a83e8273cc8cd7487a8b2a1c93f366306a0f79a98",
+      "runs": [
+        {
+          "name": "standing2",
+          "command": [
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/baseline-native",
+            "--graphics",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+            "--survey-lat",
+            "23.565679258039204",
+            "--survey-lon",
+            "165.13881581863882",
+            "--survey-distance",
+            "80",
+            "--survey-eye-agl",
+            "2",
+            "--sim-time",
+            "0",
+            "--sim-step",
+            "0",
+            "--prestream-seconds",
+            "60",
+            "--frames",
+            "32",
+            "--mute",
+            "--no-hud",
+            "--headless",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-standing2.png",
+            "--perf-capture",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-standing2.json"
+          ],
+          "exit": 0,
+          "binary_sha256": "fa1c2c5b47e803fa728ae9824b3b2dcfc2137f640f94f932f2f554d1828de454"
+        },
+        {
+          "name": "close50",
+          "command": [
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/baseline-native",
+            "--graphics",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+            "--survey-lat",
+            "23.565679258039204",
+            "--survey-lon",
+            "165.13881581863882",
+            "--survey-distance",
+            "80",
+            "--survey-eye-agl",
+            "50",
+            "--sim-time",
+            "0",
+            "--sim-step",
+            "0",
+            "--prestream-seconds",
+            "60",
+            "--frames",
+            "32",
+            "--mute",
+            "--no-hud",
+            "--headless",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-close50.png",
+            "--perf-capture",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-close50.json"
+          ],
+          "exit": 0,
+          "binary_sha256": "fa1c2c5b47e803fa728ae9824b3b2dcfc2137f640f94f932f2f554d1828de454"
+        },
+        {
+          "name": "overview",
+          "command": [
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/baseline-native",
+            "--graphics",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+            "--survey-lat",
+            "23.565679258039204",
+            "--survey-lon",
+            "165.13881581863882",
+            "--survey-distance",
+            "1800",
+            "--survey-eye-agl",
+            "800",
+            "--sim-time",
+            "0",
+            "--sim-step",
+            "0",
+            "--prestream-seconds",
+            "60",
+            "--frames",
+            "32",
+            "--mute",
+            "--no-hud",
+            "--headless",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-overview.png",
+            "--perf-capture",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-overview.json"
+          ],
+          "exit": 0,
+          "binary_sha256": "fa1c2c5b47e803fa728ae9824b3b2dcfc2137f640f94f932f2f554d1828de454"
+        }
+      ]
+    },
+    "after": {
+      "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-commands.json",
+      "sha256": "a9fba53e048abfcd88b52124dcefcb8cf0a4ecd0b4033a91863549f6a8dbb1f1",
+      "runs": [
+        {
+          "name": "standing2",
+          "command": [
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/detail-native",
+            "--graphics",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+            "--survey-lat",
+            "23.565679258039204",
+            "--survey-lon",
+            "165.13881581863882",
+            "--survey-distance",
+            "80",
+            "--survey-eye-agl",
+            "2",
+            "--sim-time",
+            "0",
+            "--sim-step",
+            "0",
+            "--prestream-seconds",
+            "60",
+            "--frames",
+            "32",
+            "--mute",
+            "--no-hud",
+            "--headless",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.png",
+            "--perf-capture",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.json"
+          ],
+          "exit": 0,
+          "binary_sha256": "e38c248fdb519462247a0ebaa6ade81ec27cf0847c97397e89eca90c5b7ab477"
+        },
+        {
+          "name": "close50",
+          "command": [
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/detail-native",
+            "--graphics",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+            "--survey-lat",
+            "23.565679258039204",
+            "--survey-lon",
+            "165.13881581863882",
+            "--survey-distance",
+            "80",
+            "--survey-eye-agl",
+            "50",
+            "--sim-time",
+            "0",
+            "--sim-step",
+            "0",
+            "--prestream-seconds",
+            "60",
+            "--frames",
+            "32",
+            "--mute",
+            "--no-hud",
+            "--headless",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.png",
+            "--perf-capture",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.json"
+          ],
+          "exit": 0,
+          "binary_sha256": "e38c248fdb519462247a0ebaa6ade81ec27cf0847c97397e89eca90c5b7ab477"
+        },
+        {
+          "name": "overview",
+          "command": [
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/detail-native",
+            "--graphics",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/matched-high.toml",
+            "--survey-lat",
+            "23.565679258039204",
+            "--survey-lon",
+            "165.13881581863882",
+            "--survey-distance",
+            "1800",
+            "--survey-eye-agl",
+            "800",
+            "--sim-time",
+            "0",
+            "--sim-step",
+            "0",
+            "--prestream-seconds",
+            "60",
+            "--frames",
+            "32",
+            "--mute",
+            "--no-hud",
+            "--headless",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.png",
+            "--perf-capture",
+            "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.json"
+          ],
+          "exit": 0,
+          "binary_sha256": "e38c248fdb519462247a0ebaa6ade81ec27cf0847c97397e89eca90c5b7ab477"
+        }
+      ]
+    }
+  },
+  "scenes": [
+    {
+      "name": "standing2",
+      "before": {
+        "gpu_resident_levels": [
+          4,
+          2,
+          39,
+          38,
+          46,
+          32,
+          24,
+          22,
+          27,
+          22,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "artifacts": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-standing2.png",
+            "sha256": "e4515782e65707ebca653a2e1aad80c894b4664a00da4a80e421250edf8c4ead"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-standing2.json",
+            "sha256": "635fb1d3b0bb94c0a31a0aa71837230be69dba6c93aff29b3bf98e1a3017c97b"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-standing2.csv",
+            "sha256": "0d736df2037dfb59c3291e4709ee13b5beff61e76fcf4ed9b34fe104f700f4a1"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-standing2.log",
+            "sha256": "79762af9f3e624582109904cff54d09c4a91d188e5c17f1fffcb92e159dd6910"
+          }
+        }
+      },
+      "after": {
+        "gpu_resident_levels": [
+          4,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          4,
+          2,
+          13,
+          23,
+          36,
+          30,
+          40,
+          29,
+          36,
+          36,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "artifacts": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.png",
+            "sha256": "047470c777861c00006c4af44d291d90c24fce6340876a7369d6b16c2909190b"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.json",
+            "sha256": "19d4004c580a162a607ab86db262ff8927bb1936c390ba90cb1f215c02608a82"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.csv",
+            "sha256": "b0ba46fc5c3510bbd9e6d973d977a23dbc83981ced164a45e2d54c98344f36e5"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.log",
+            "sha256": "5bcf437f40a1dc2221477448d6d72285e53b520915d6368c5d1545a78c9e3027"
+          }
+        }
+      }
+    },
+    {
+      "name": "close50",
+      "before": {
+        "gpu_resident_levels": [
+          5,
+          4,
+          51,
+          30,
+          43,
+          32,
+          24,
+          20,
+          24,
+          23,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "artifacts": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-close50.png",
+            "sha256": "503aa11938235676129c9bea1b3d84b52f3134f123e0068ee37a5e70c081bcbe"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-close50.json",
+            "sha256": "06c70e6e82c80964bf802c57a663a40bc055c4d2ea6135f4c50492e24fc80b89"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-close50.csv",
+            "sha256": "7a2b5c5a293e73b2b3eaa2242d708dd91811df59b60a5f657cb36f7e6b282291"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-close50.log",
+            "sha256": "3c015f33b815537026b864eb57a3f58f73f9ba5c9c1f12085df7afa44429c054"
+          }
+        }
+      },
+      "after": {
+        "gpu_resident_levels": [
+          5,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          4,
+          1,
+          11,
+          22,
+          36,
+          22,
+          40,
+          26,
+          41,
+          45,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "artifacts": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.png",
+            "sha256": "475b916cde969c69b24cbc60e59d35f0db0d049f367db92cc31fedc0887b873a"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.json",
+            "sha256": "23ca00b132433101864a0d1fbe3a1cd7590cd94bfacab0c4411d36301dc5b286"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.csv",
+            "sha256": "8f3239404570a1b2efef2d3d6f32cb93d46f41132820d1f886f7625ee4103d18"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.log",
+            "sha256": "89f5ff47e626a62c7cb3f5fef6c8f4835f63dcc8cad1aaf77d95138f068bb325"
+          }
+        }
+      }
+    },
+    {
+      "name": "overview",
+      "before": {
+        "gpu_resident_levels": [
+          5,
+          5,
+          38,
+          46,
+          49,
+          33,
+          30,
+          27,
+          23,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "artifacts": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-overview.png",
+            "sha256": "8ed8fba7810d62041c00fc1a540a099e66b06f125125411b336551e0bedde198"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-overview.json",
+            "sha256": "185104c7b7d4e9c6e4fad8f7e6d93ae78014e755553c48d4be04f2897422f8d1"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-overview.csv",
+            "sha256": "e97bbaaa1f6d00b6f9bf7965f6303d8fabe2dd52ab4b3e3b5675baa03bdb442a"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/before-overview.log",
+            "sha256": "f8f4b9e661df2d2f44812b03a7a14f616061703199e0a8c9204dc4e558978020"
+          }
+        }
+      },
+      "after": {
+        "gpu_resident_levels": [
+          5,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          4,
+          5,
+          40,
+          34,
+          52,
+          35,
+          46,
+          32,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "artifacts": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.png",
+            "sha256": "be5c639427e1a393928601fcc92347c2fb50bc531e34f2bbdd8e582d7e315250"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.json",
+            "sha256": "1c23755f15dbbdf7b1fa4ea42f3c7958840f57a17860b06f713e5049c21f2d80"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.csv",
+            "sha256": "bed631baa396ec21436a35fbcc474490cfb96df74ffc1667b90a43982ed78f0b"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.log",
+            "sha256": "3af055340efe1fe1365c98183ee4fc626e55c2b9c394f5251afecdd62edf0ef3"
+          }
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "numerical": "Formatting, architecture guard and workspace Clippy passed; 2029 workspace lib/bin tests, 103 workspace integration tests, 79 ignored renderer hardware tests and the separately rerun saturated-cache raster RGB oracle passed. The mandated Bevy ignored-test command selects zero tests on this branch; retained GPU tests have moved into render-wgpu/tests/retained_surface.rs and ran in the renderer suite.",
+    "visual": "Author inspected for defects only. Ground remains poor and plant prototypes remain schematic. Overview shore still shows coarse/fallback boundaries. No blind preference or final visual acceptance claimed.",
+    "performance": "Timing artifacts retained for diagnosis only; no speedup or real-time acceptance claim.",
+    "omitted": [
+      "moving-camera replay",
+      "surface-to-orbit transition",
+      "independent blind review",
+      "planet-wide plant streaming",
+      "calibrated natural materials/foliage",
+      "new showcase asset or lighting changes"
+    ]
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed_tests": 0
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/architecture.log",
+      "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+      "passed_tests": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/workspace-clippy.log",
+      "sha256": "f3bc4fd57e989a9a24b19ce7abfd52ee0b45b3518d41e24824c6700d34ea9d98",
+      "passed_tests": 0
+    },
+    {
+      "name": "workspace-unit",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/workspace-unit.log",
+      "sha256": "b241034f3e2e7ec006e1e87ec8e793f4dfb867859975743ef38aa193642a2e94",
+      "passed_tests": 2029
+    },
+    {
+      "name": "material-gpu-oracle",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "material",
+        "saturated_material_cache",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/material-gpu-oracle.log",
+      "sha256": "bae1fb24456b7976e852059ea81bbcd82f2093248840325448258708ad70199e",
+      "passed_tests": 1
+    },
+    {
+      "name": "workspace-integration",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--test",
+        "*"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/workspace-integration.log",
+      "sha256": "a7de2cd11437c36d3b3a6f3e4620b0ad8593c5152b03a2bc58e7fac035efcfd9",
+      "passed_tests": 103
+    },
+    {
+      "name": "bevy-hardware",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-bevy-rcbt",
+        "--features",
+        "render",
+        "--lib",
+        "--",
+        "--ignored"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/bevy-hardware.log",
+      "sha256": "2d23a50e11f8369aa94635eba55807a6ff9e52129b07cdbe10dc7f3f248f9372",
+      "passed_tests": 0
+    },
+    {
+      "name": "renderer-hardware",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--",
+        "--ignored"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/renderer-hardware.log",
+      "sha256": "96d98e8cf4de813aa181ed6ee487c4e6c5ffcebbc9467a58ce863d257a474b78",
+      "passed_tests": 79
+    }
+  ],
+  "blind_review": {
+    "directory": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/review",
+    "cases": 3,
+    "votes": 0,
+    "status": "prepared only; no independent preference result"
+  }
+}

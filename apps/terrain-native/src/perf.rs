@@ -163,6 +163,7 @@ pub(crate) fn base_capture_metadata(
         .resolved
         .extend(scene.surface_plants_metadata());
     for (key, value) in [
+        ("native_material_resident_levels", format!("{:?}", scene.material_resident_levels)),
         ("native_docking_fixture", scene.docking.is_some().to_string()),
         ("native_docking_clock", "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory".into()),
         ("native_map_open", scene.map_active().to_string()),

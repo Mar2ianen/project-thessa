@@ -32,6 +32,8 @@ pub struct MaterialUpload {
     pub normal_pages: usize,
     pub bytes: usize,
     pub residents: usize,
+    /// Actual GPU directory entries by cube-tile level (not CPU demand).
+    pub resident_levels: [u32; 32],
 }
 
 pub(crate) struct MaterialArray {
@@ -267,6 +269,10 @@ impl MaterialArray {
             .filter(|entry| current(entry.node_id).is_some())
             .collect();
         stats.residents = entries.len();
+        for entry in &entries {
+            let level = (63 - entry.node_id.leading_zeros() - 3) / 2;
+            stats.resident_levels[level as usize] += 1;
+        }
         let normal_directory = if self.normal_maps {
             let normal_entries: Vec<_> = entries
                 .iter()

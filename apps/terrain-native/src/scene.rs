@@ -56,6 +56,7 @@ pub struct Scene {
     pub publications: u64,
     pub regenerated: u64,
     pub material_upload_bytes: u64,
+    pub material_resident_levels: [u32; 32],
     pub capacity_rejections: u64,
     pub center: DVec3,
     pub up: DVec3,
@@ -499,6 +500,7 @@ impl Scene {
             publications: 0,
             regenerated: 0,
             material_upload_bytes: 0,
+            material_resident_levels: [0; 32],
             capacity_rejections: 0,
             center: DVec3::ZERO,
             up: DVec3::Y,
@@ -1748,6 +1750,7 @@ impl Scene {
             self.stream.materials(),
         )?;
         renderer.update_lighting(backend, &self.lighting())?;
+        self.material_resident_levels = stats.resident_levels;
         // A replacement renderer must adopt the current buffers even if the
         // source revision has not changed. No second upload.
         self.publish_presentation(backend, &mut renderer)?;
@@ -1841,6 +1844,7 @@ impl Scene {
                 self.stream.materials(),
             )?;
             self.material_upload_bytes += stats.bytes as u64;
+            self.material_resident_levels = stats.resident_levels;
         }
         self.capacity_rejections += u64::from(update.capacity_rejected);
         Ok(update)

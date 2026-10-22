@@ -83,7 +83,7 @@ impl MaterialPageStore {
         self.generation = next;
     }
 
-    /// Retain nearest resident sources plus the next ancestor for blending.
+    /// Protect coarsest support, then retain caller-priority refinement paths.
     /// Under pressure the ordered hierarchy is truncated to the explicit budget.
     pub fn trim_to_budget(&mut self, budget: usize) {
         if self.pages.len() <= budget {
@@ -173,6 +173,26 @@ mod tests {
         );
         store.trim_to_budget(0);
         assert!(store.source_pages().is_empty());
+    }
+
+    #[test]
+    fn trim_preserves_first_detail_and_other_regions_coarse_support() {
+        let mut store = MaterialPageStore::default();
+        let payload = page(42);
+        store.set_pages([8, 32, 128, 512, 9, 36, 144, 576].map(|id| (id, payload.clone())));
+        store.set_priority(vec![512, 576]);
+        store.trim_to_budget(6);
+        assert_eq!(
+            store.pages.keys().copied().collect::<Vec<_>>(),
+            [8, 9, 32, 36, 128, 512]
+        );
+        let generation = store.generation();
+        store.trim_to_budget(6);
+        assert_eq!(
+            store.generation(),
+            generation,
+            "unchanged budgets must not churn"
+        );
     }
 
     #[test]

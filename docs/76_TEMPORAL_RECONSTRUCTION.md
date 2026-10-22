@@ -1,15 +1,18 @@
 # 76 — Temporal reconstruction foundation
 
-**Status:** audit plus four signal-foundation stages. T2a implements deterministic Halton
-jitter, static-surface reprojection and depth reconstruction in `render-core`,
-with a view-block constructor that preserves the unjittered history projection.
-T3a adds a standalone GPU depth-reprojection motion-vector pass with a hardware
-CPU-oracle test. T3b wires opt-in motion diagnostics into both native loops,
-enforces stored opaque scene depth and masks ocean/all rigid meshes. T2b adds
-opt-in primary terrain/mesh jitter with matching depth reconstruction and
-jitter-free motion. No temporal resolve, colour-history resource or SDK adapter
-exists. Default rendering remains the non-temporal reference; the explicit
-jitter diagnostic visibly shifts samples without antialiasing them.
+**Status:** audit plus four signal-foundation stages and a CPU resolve contract.
+T2a implements deterministic Halton jitter, static-surface reprojection and
+depth reconstruction in `render-core`, with a view-block constructor that
+preserves the unjittered history projection. T3a adds a standalone GPU
+depth-reprojection motion-vector pass with a hardware CPU-oracle test. T3b wires
+opt-in motion diagnostics into both native loops, enforces stored opaque scene
+depth and masks ocean/all rigid meshes. T2b adds opt-in primary terrain/mesh
+jitter with matching depth reconstruction and jitter-free motion. T4a adds the
+backend-neutral history-lookup, disocclusion, neighbourhood-clipping and
+accumulation-age contract in `render-core`. No GPU colour history, temporal
+resolve, presentation change or SDK adapter exists yet. Default rendering remains
+the non-temporal reference; the explicit jitter diagnostic visibly shifts samples
+without antialiasing them.
 
 Temporal reconstruction is not one post-process. It is a contract between the
 authoritative simulation, the frames the renderer actually produces, and the
@@ -235,6 +238,7 @@ presenter contract before an FG adapter is attempted. Required properties:
 | T2b | Renderer jitter wiring + required depth storage | Implemented: opt-in primary terrain/mesh jitter, matching depth inverse, jitter-free motion, unjittered secondary policy and submitted-frame sequence. No resolve yet. |
 | T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
 | T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/all-mesh invalid masks, submitted-camera tracking and GPU scene oracle. |
+| T4a | Backend-neutral resolve contract | Implemented: jitter-aware history lookup, explicit depth-disocclusion test, YCoCg neighbourhood clipping, age/weight policy and fallbacks; CPU tests only. |
 | T4 | Native-resolution TAA with history validation | Static and panning survey captures; no history reuse after cancel/resize; ghosting bounded against a no-TAA reference. |
 | T5 | Dynamic mesh and ocean motion (or explicit invalid masks) | Ships/ocean do not ghost; invalid pixels fall back. |
 | T6 | TAAU upscale and two-history quality tiers | Matched native/upscaled captures; memory budget recorded. |
@@ -407,6 +411,51 @@ and repeating the suite resolved that prerequisite failure.
   resolved-depth/reactive-mask solution. T4 must define that composition boundary,
   retain previous jitter for history lookup, validate disocclusion and epoch
   resets, and prove actual TAA quality before any SDK/FG integration.
+
+### T4a delivered: backend-neutral resolve contract
+
+`thessa_render_core::temporal_resolve` is the CPU reference for the future GPU
+pass. It deliberately owns no texture, render graph or presentation state.
+
+- `history_uv` accepts the current raster UV, jitter-free motion, current and
+  previous jitter, extent and a history-grid convention. It produces the
+  unjittered previous UV, the colour lookup UV and the previous-depth lookup UV.
+  The depth address always includes previous jitter because previous depth is
+  raster data. The preferred `ResolvedUnjittered` colour convention samples the
+  previous accumulated image at the unjittered UV and therefore does **not**
+  add previous jitter to colour. `JitteredScene` remains available for a raw
+  previous raster image and adds previous jitter to both colour and depth.
+- Both jitters are validated through the existing ±0.5-pixel bound before any
+  lookup. A half-open image domain rejects UV `1.0` rather than clamping and
+  reading the opposite edge. Out-of-bounds, non-finite, zero-age, invalid-motion
+  and invalid-epoch candidates fall back to the current colour and reset age.
+- `depth_matches` compares the previous depth sample with the depth obtained by
+  projecting the current reconstructed surface point through the previous
+  camera. The tolerance is an explicit caller policy derived from the depth
+  format and reprojection error budget; the core does not invent a universal
+  tolerance. This is disocclusion validation, not a claim that a single scalar
+  depth is sufficient for every translucent-overlay composition.
+- `neighborhood_bounds` computes YCoCg mean and standard deviation over the
+  current 3×3 neighbourhood. `clip_history` clamps history to that box before
+  blending. A zero-variance neighbourhood therefore rejects a differing history
+  sample instead of hiding a ghost behind a long age.
+- `history_weight` uses `1 / (age + 1)` with an explicit responsiveness floor
+  (default 0.05) and a capped age. Rejected history starts again at age one.
+  The policy is deterministic and frame-count based; it never derives from wall
+  time, presented frames or simulation ticks.
+- The CPU tests cover both history-grid conventions, stationary cameras with
+  changing jitter, malformed jitter/UV inputs, depth disocclusion, all fallback
+  reasons, clipping of an outlier, zero-variance rejection and weight/age
+  convergence.
+
+Local verification for T4a: 2,036 workspace lib/bin tests, 102 integration tests,
+workspace Clippy with warnings denied, formatting and the architecture guard all
+passed. These are CPU-policy tests; no GPU history or visual claim is implied.
+
+T4a does **not** allocate history, store previous depth, modify display output
+or claim antialiasing. T4b must implement the GPU counterpart against this
+contract, and native integration must still solve the overlay/overlay-depth
+boundary recorded below.
 
 T2b evidence: [native-primary-jitter-2026-10-21.json](artifacts/native-primary-jitter-2026-10-21.json).
 Final local gates passed: 2,029 workspace lib/bin tests, 102 integration tests,

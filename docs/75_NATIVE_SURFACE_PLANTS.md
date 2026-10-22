@@ -8,6 +8,11 @@ vegetation streaming nor botanical realism, authoritative collision, or final
 close-up visual acceptance. The current prototypes remain deliberately schematic
 flat-shaded meshes; visible limits are recorded at the end of this document.
 
+The surface-showcase continuation in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
+adds explicit lycopsid stem reflectance through the existing mesh material,
+without changing these silhouettes or placement. Foliage, botanical realism and
+ground detail remain incomplete.
+
 ## Requested and resolved contract
 
 `[surface_plants]` in `graphics.toml` has `enabled = false` and

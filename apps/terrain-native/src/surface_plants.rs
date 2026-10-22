@@ -2,7 +2,9 @@
 use glam::{DMat3, DQuat, DVec3};
 use std::{collections::BTreeMap, ops::Range};
 use thessa_graphics::ResolvedGraphicsSettings;
-use thessa_render_core::mesh::{Material, MeshAsset, MeshInstance, Primitive, Vertex};
+use thessa_render_core::mesh::{
+    Image, Material, MeshAsset, MeshInstance, Primitive, Texture, Vertex, Wrap,
+};
 use thessa_worldgen_rocky::{
     field::PlanetField,
     lod::TileKey,
@@ -31,6 +33,7 @@ pub struct Diagnostics {
     pub retained: usize,
     pub preparation_ms: f64,
     pub prototype_bytes: usize,
+    pub prototype_texture_bytes: usize,
     pub instance_buffer_bytes: usize,
     pub submitted_instances: u32,
     pub draw_calls: usize,
@@ -49,6 +52,7 @@ impl Diagnostics {
             ("native_surface_plants_retained", self.retained.to_string()),
             ("native_surface_plants_preparation_cpu_ms", self.preparation_ms.to_string()),
             ("native_surface_plants_prototype_payload_bytes", self.prototype_bytes.to_string()),
+            ("native_surface_plants_prototype_texture_bytes", self.prototype_texture_bytes.to_string()),
             ("native_surface_plants_instance_buffer_bytes", self.instance_buffer_bytes.to_string()),
             ("native_surface_plants_submitted_instances", self.submitted_instances.to_string()),
             ("native_surface_plants_draw_calls", self.draw_calls.to_string()),
@@ -197,6 +201,12 @@ pub fn prepare(
                 + p.indices.len() * std::mem::size_of::<u32>()
         })
         .sum();
+    diagnostics.prototype_texture_bytes = prepared
+        .asset
+        .images
+        .iter()
+        .map(|image| image.rgba8.len())
+        .sum();
     // Existing MeshRenderer's 64-byte rigid instance ABI. Not total GPU memory:
     // material/uniform/RT/shadow allocations are owned by the shared renderer.
     diagnostics.instance_buffer_bytes = prepared.instances.len() * 64;
@@ -245,9 +255,41 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
             }
         };
         let [r, g, b] = prototype.albedo_srgb.map(linear);
+        // A constant texel per organ preserves one primitive/draw and the same
+        // raster/RT material. UVs never interpolate between stem and foliage:
+        // all three corners of each triangle sample exactly one texel centre.
+        let base_texture = prototype.stem.as_ref().map(|stem| {
+            let image = prepared.asset.images.len();
+            let rgba8 = [prototype.albedo_srgb, stem.albedo_srgb]
+                .into_iter()
+                .flat_map(|rgb| {
+                    rgb.map(|v| (v * 255.0).round() as u8)
+                        .into_iter()
+                        .chain([255])
+                })
+                .collect();
+            prepared.asset.images.push(Image {
+                width: 2,
+                height: 1,
+                rgba8,
+            });
+            let texture = prepared.asset.textures.len();
+            prepared.asset.textures.push(Texture {
+                image,
+                wrap: [Wrap::Clamp; 2],
+                linear: true,
+                min_linear: true,
+            });
+            texture
+        });
         let material = prepared.asset.materials.len();
         prepared.asset.materials.push(Material {
-            base_color: [r, g, b, 1.0],
+            base_color: if base_texture.is_some() {
+                [1.0; 4]
+            } else {
+                [r, g, b, 1.0]
+            },
+            base_texture,
             metallic: 0.0,
             roughness: 0.92,
             // Fronds/crowns are triangle sheets, not closed solid leaves.
@@ -262,10 +304,19 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
                 .positions
                 .into_iter()
                 .zip(prototype.normals)
-                .map(|(position, normal)| Vertex {
+                .enumerate()
+                .map(|(index, (position, normal))| Vertex {
                     position,
                     normal,
-                    uv: [0.0; 2],
+                    uv: if prototype
+                        .stem
+                        .as_ref()
+                        .is_some_and(|stem| index < stem.vertex_count as usize)
+                    {
+                        [0.75, 0.5]
+                    } else {
+                        [0.25, 0.5]
+                    },
                 })
                 .collect(),
             indices: prototype.indices,
@@ -323,6 +374,7 @@ mod tests {
                 (0, 0, 0, 0)
             );
             assert_eq!((stats.prototype_bytes, stats.instance_buffer_bytes), (0, 0));
+            assert_eq!(stats.prototype_texture_bytes, 0);
             assert_eq!(stats.preparation_ms, 0.0);
         }
     }
@@ -403,11 +455,59 @@ mod tests {
                         ((v + 0.055) / 1.055).powf(2.4)
                     }
                 };
-                for (actual, expected) in material.base_color[..3]
-                    .iter()
-                    .zip(prototype.albedo_srgb.map(linear))
-                {
-                    assert!((actual - expected).abs() < 1e-7);
+                if let Some(stem) = prototype.stem {
+                    assert_eq!(material.base_color, [1.0; 4]);
+                    let texture = prepared.asset.textures[material.base_texture.unwrap()];
+                    assert_eq!(texture.wrap, [Wrap::Clamp; 2]);
+                    let image = &prepared.asset.images[texture.image];
+                    assert_eq!((image.width, image.height, image.rgba8.len()), (2, 1, 8));
+                    for (texel, expected) in image
+                        .rgba8
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip([prototype.albedo_srgb, stem.albedo_srgb])
+                    {
+                        assert_eq!(texel[3], 255);
+                        for (&byte, expected) in texel[..3].iter().zip(expected) {
+                            assert!(
+                                (f32::from(byte) / 255.0 - expected).abs() <= 0.5 / 255.0 + 1e-7
+                            );
+                            assert!(
+                                (linear(f32::from(byte) / 255.0) - linear(expected)).abs() < 0.0045
+                            );
+                        }
+                    }
+                    for (index, vertex) in primitive.vertices.iter().enumerate() {
+                        assert_eq!(
+                            vertex.uv,
+                            [
+                                if index < stem.vertex_count as usize {
+                                    0.75
+                                } else {
+                                    0.25
+                                },
+                                0.5
+                            ]
+                        );
+                    }
+                    for triangle in primitive.indices.as_chunks::<3>().0 {
+                        let uv = primitive.vertices[triangle[0] as usize].uv;
+                        assert!(
+                            triangle
+                                .iter()
+                                .all(|&i| primitive.vertices[i as usize].uv == uv),
+                            "organ colour must not interpolate across a triangle"
+                        );
+                    }
+                } else {
+                    assert!(material.base_texture.is_none());
+                    for (actual, expected) in material.base_color[..3]
+                        .iter()
+                        .zip(prototype.albedo_srgb.map(linear))
+                    {
+                        assert!((actual - expected).abs() < 1e-7);
+                    }
                 }
                 end = range.end;
                 prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
@@ -417,6 +517,7 @@ mod tests {
             // Exact producer payload actually published, not a stale pin.
             assert_eq!(stats.prototype_bytes, prototype_payload);
             assert!(prototype_payload > 0);
+            assert_eq!(stats.prototype_texture_bytes, 8);
             prepared.asset.validate().unwrap();
             eprintln!("WORLD04 {quality:?}: {stats:?}");
             previous = prepared.descriptors;

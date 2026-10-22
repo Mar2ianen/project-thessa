@@ -377,6 +377,17 @@ pub struct PlantMesh {
     pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
     pub albedo_srgb: [f32; 3],
+    /// Optional separate stem reflectance. Historical bakes are single-material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stem: Option<PlantStem>,
+}
+
+/// The prototype emitter writes stems before foliage, with separate vertices.
+/// This is optical asset metadata, not wood growth, strength or collision state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlantStem {
+    pub vertex_count: u32,
+    pub albedo_srgb: [f32; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1119,6 +1130,7 @@ pub fn plant_prototypes() -> Vec<PlantMesh> {
             normals: Vec::new(),
             indices: Vec::new(),
             albedo_srgb: [0.16, 0.30, 0.12],
+            stem: None,
         };
         match kind {
             ScatterKind::FernClump => {
@@ -1242,6 +1254,11 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
             &[(0.0, base_radius), (length, tip_radius)],
         );
     }
+    mesh.stem = Some(PlantStem {
+        vertex_count: mesh.positions.len() as u32,
+        // Authored weathered stem reflectance, not a measured fossil spectrum.
+        albedo_srgb: [0.29, 0.25, 0.17],
+    });
     for &(y, reach, leaves, phase) in &CROWN_WHORLS {
         for i in 0..leaves {
             crown_frond(
@@ -1430,6 +1447,22 @@ fn validate_mesh(mesh: &PlantMesh) -> Result<(), String> {
         || mesh.normals.iter().flatten().any(|v| !v.is_finite())
     {
         return Err("invalid baked indexed plant mesh".into());
+    }
+    if let Some(stem) = &mesh.stem {
+        let count = stem.vertex_count as usize;
+        if count == 0
+            || count >= mesh.positions.len()
+            || stem
+                .albedo_srgb
+                .iter()
+                .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || mesh.indices.as_chunks::<3>().0.iter().any(|triangle| {
+                let stem_corners = triangle.iter().filter(|&&i| i < stem.vertex_count).count();
+                stem_corners != 0 && stem_corners != 3
+            })
+        {
+            return Err("invalid plant stem material boundary".into());
+        }
     }
     Ok(())
 }
@@ -1725,6 +1758,45 @@ mod tests {
         assert_eq!(loaded.rivers, w.rivers);
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn plant_stem_palette_is_additive_and_never_interpolates_across_an_organ() {
+        for mesh in plant_prototypes() {
+            if let Some(stem) = &mesh.stem {
+                assert_eq!(mesh.kind, ScatterKind::LycopsidTree);
+                assert!(
+                    stem.vertex_count > 0 && (stem.vertex_count as usize) < mesh.positions.len()
+                );
+                assert_ne!(stem.albedo_srgb, mesh.albedo_srgb);
+                for triangle in mesh.indices.as_chunks::<3>().0 {
+                    assert!(
+                        triangle.iter().all(|&v| v < stem.vertex_count)
+                            || triangle.iter().all(|&v| v >= stem.vertex_count)
+                    );
+                }
+                let mut broken = mesh.clone();
+                broken.stem.as_mut().unwrap().vertex_count = 1;
+                assert!(validate_mesh(&broken).is_err());
+                broken = mesh.clone();
+                broken.stem.as_mut().unwrap().albedo_srgb[0] = f32::NAN;
+                assert!(validate_mesh(&broken).is_err());
+            } else {
+                assert_ne!(mesh.kind, ScatterKind::LycopsidTree);
+            }
+            let value = serde_json::to_value(&mesh).unwrap();
+            let roundtrip: PlantMesh = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(roundtrip, mesh);
+            let mut legacy = value;
+            legacy.as_object_mut().unwrap().remove("stem");
+            let legacy: PlantMesh = serde_json::from_value(legacy).unwrap();
+            assert_eq!(legacy.stem, None);
+            assert_eq!(legacy.positions, mesh.positions);
+            assert_eq!(legacy.normals, mesh.normals);
+            assert_eq!(legacy.indices, mesh.indices);
+            assert_eq!(legacy.albedo_srgb, mesh.albedo_srgb);
+            validate_mesh(&legacy).unwrap();
+        }
     }
 
     #[test]

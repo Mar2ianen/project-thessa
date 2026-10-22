@@ -1,0 +1,388 @@
+{
+  "task": "WORLD06b",
+  "date": "2026-10-22",
+  "branch": "feat/native-surface-showcase",
+  "baseline_commit": "22d7a23",
+  "scope": "Separate authored lycopsid stem and foliage reflectance in the shared mesh/material path. Additive optional optical metadata, no new render pass, primitive, draw or world state.",
+  "source_invariants": [
+    "positions, normals, indices and winding unchanged",
+    "scatter IDs, placement, scale, yaw and canonical ground unchanged",
+    "same graphics settings, camera, frozen epoch, source attachments and residency levels",
+    "native default plants remain off; density quality tiers unchanged"
+  ],
+  "palette": {
+    "foliage_srgb": [
+      0.17,
+      0.28,
+      0.1
+    ],
+    "stem_srgb": [
+      0.29,
+      0.25,
+      0.17
+    ],
+    "image_bytes": 8,
+    "image_layout": "2x1 RGBA8 sRGB; foliage centre u=.25, stem centre u=.75; v=.5; alpha=1; clamp+linear",
+    "primitive_count": 3,
+    "quantization_error_srgb_max": 0.00196078431372549,
+    "tested_linear_error_bound": 0.0045,
+    "physical_limit": "Authored optical prior, not calibrated botanical reflectance or wood physics."
+  },
+  "hardware": "AMD Radeon 880M Graphics / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "captures": [
+    {
+      "name": "standing2",
+      "changed_pixels": 47821,
+      "diff_bounds": [
+        0,
+        0,
+        1280,
+        408
+      ],
+      "resident_levels_match": true,
+      "source_texture_bytes": "8",
+      "draw_calls": "3",
+      "retained": "222",
+      "artifacts": {
+        "before": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.png",
+            "sha256": "047470c777861c00006c4af44d291d90c24fce6340876a7369d6b16c2909190b"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.json",
+            "sha256": "19d4004c580a162a607ab86db262ff8927bb1936c390ba90cb1f215c02608a82"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.csv",
+            "sha256": "b0ba46fc5c3510bbd9e6d973d977a23dbc83981ced164a45e2d54c98344f36e5"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-standing2.log",
+            "sha256": "5bcf437f40a1dc2221477448d6d72285e53b520915d6368c5d1545a78c9e3027"
+          }
+        },
+        "after": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-standing2.png",
+            "sha256": "e3950eaf0e23d958bc516ce54de6b37e62f5ee09bac06758875a176c75e88d49"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-standing2.json",
+            "sha256": "d25b230d704f350f327a11a114c92bfb5f6740d8647daa35b8a85465c89f9252"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-standing2.csv",
+            "sha256": "77b656e9ca0193f31b1d6f1a11f4a6ee16d3d7eebd27a9c08fc39a85937691cd"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-standing2.log",
+            "sha256": "bedddce0ee90f7ca301ae1375b9cafc3501fa491d54616002ce84581bfe3f0f2"
+          }
+        }
+      },
+      "ground_bottom_240_rows_identical": true
+    },
+    {
+      "name": "close50",
+      "changed_pixels": 29591,
+      "diff_bounds": [
+        75,
+        49,
+        1280,
+        720
+      ],
+      "resident_levels_match": true,
+      "source_texture_bytes": "8",
+      "draw_calls": "3",
+      "retained": "222",
+      "artifacts": {
+        "before": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.png",
+            "sha256": "475b916cde969c69b24cbc60e59d35f0db0d049f367db92cc31fedc0887b873a"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.json",
+            "sha256": "23ca00b132433101864a0d1fbe3a1cd7590cd94bfacab0c4411d36301dc5b286"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.csv",
+            "sha256": "8f3239404570a1b2efef2d3d6f32cb93d46f41132820d1f886f7625ee4103d18"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-close50.log",
+            "sha256": "89f5ff47e626a62c7cb3f5fef6c8f4835f63dcc8cad1aaf77d95138f068bb325"
+          }
+        },
+        "after": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.png",
+            "sha256": "ccc1466ae2ca6389dec1eef6a3d09e5ad2a0849356ac75b1493da6c6a5ad913a"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.json",
+            "sha256": "6550d335070899a8002a173748a54d01ecb1006fd42edf4e0ea78dac379405ae"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.csv",
+            "sha256": "275fe2f227b35f00e5195eb27554ca38f567f4154fadcf7cf7d7c1773330d9a1"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-close50.log",
+            "sha256": "536e12543e404514873e6d407fe27b6810c20a324e87175edbb21206ee8b0af1"
+          }
+        }
+      }
+    },
+    {
+      "name": "overview",
+      "changed_pixels": 558,
+      "diff_bounds": [
+        0,
+        49,
+        1278,
+        716
+      ],
+      "resident_levels_match": true,
+      "source_texture_bytes": "8",
+      "draw_calls": "3",
+      "retained": "222",
+      "artifacts": {
+        "before": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.png",
+            "sha256": "be5c639427e1a393928601fcc92347c2fb50bc531e34f2bbdd8e582d7e315250"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.json",
+            "sha256": "1c23755f15dbbdf7b1fa4ea42f3c7958840f57a17860b06f713e5049c21f2d80"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.csv",
+            "sha256": "bed631baa396ec21436a35fbcc474490cfb96df74ffc1667b90a43982ed78f0b"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/after-overview.log",
+            "sha256": "3af055340efe1fe1365c98183ee4fc626e55c2b9c394f5251afecdd62edf0ef3"
+          }
+        },
+        "after": {
+          "png": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.png",
+            "sha256": "609284e2085ec858f24de6a38fe13bc8dfd04b53fcf9b875dbaaa2144d10d99d"
+          },
+          "json": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.json",
+            "sha256": "2d6caf6f848af75bd315e15861c1dd64be2adb67f32bd0767bfdf13008f94568"
+          },
+          "csv": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.csv",
+            "sha256": "f0c4ba9e678561b9105281f4d1520e1131231a2517fb2cf546d0866b501ed650"
+          },
+          "log": {
+            "path": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/after-overview.log",
+            "sha256": "2d4e9683096a3ac47306708418062fc785822c6a215c4744af90c5b3c2ce30a4"
+          }
+        }
+      }
+    }
+  ],
+  "commands": {
+    "capture_file": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/capture-commands.json",
+    "sha256": "1e98412d0bb3da2773e63740427d861cd737619e6aa329c1fe5f7f0947675d54",
+    "shared_flags": [
+      "--graphics",
+      "target/surface-showcase/matched-high.toml",
+      "--survey-lat",
+      "23.565679258039204",
+      "--survey-lon",
+      "165.13881581863882",
+      "--sim-time",
+      "0",
+      "--sim-step",
+      "0",
+      "--prestream-seconds",
+      "60",
+      "--frames",
+      "32",
+      "--mute",
+      "--no-hud"
+    ],
+    "cases": {
+      "standing2": {
+        "survey_distance": 80,
+        "survey_eye_agl": 2
+      },
+      "close50": {
+        "survey_distance": 80,
+        "survey_eye_agl": 50
+      },
+      "overview": {
+        "survey_distance": 1800,
+        "survey_eye_agl": 800
+      }
+    },
+    "baseline_reused": "WORLD06a after captures; their exact visual source is the recorded binary in the previous admission artifact. The subsequent 22d7a23 initialization-histogram assignment has no visual effect."
+  },
+  "checks": [
+    {
+      "name": "fmt-final",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/fmt-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed_tests": 0
+    },
+    {
+      "name": "architecture-final",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/architecture-final.log",
+      "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+      "passed_tests": 0
+    },
+    {
+      "name": "workspace-clippy-final",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/workspace-clippy-final.log",
+      "sha256": "92f0eedd3eda5b36c40d06c97a8c1abd0d20f901861bb152ea7dd056e1bdfe27",
+      "passed_tests": 0
+    },
+    {
+      "name": "workspace-unit",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/workspace-unit.log",
+      "sha256": "a12016298fcbb42d8a5e9510c5db5343770ac3ee728394c79df7d39be26982ba",
+      "passed_tests": 2030
+    },
+    {
+      "name": "integration-build",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--test",
+        "*",
+        "--no-run"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/integration-build.log",
+      "sha256": "d663f9fbac6c5eb5a2179d4aa51521eab4f4edba1501c55a53755b2b39e8f33e",
+      "passed_tests": 0
+    },
+    {
+      "name": "workspace-integration",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--test",
+        "*"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/workspace-integration.log",
+      "sha256": "ffadb44b40a5f17a5b0b7f1f5757575437e6b9fd1c2a1164fa67dbfbbadd782b",
+      "passed_tests": 103
+    },
+    {
+      "name": "bevy-hardware",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-bevy-rcbt",
+        "--features",
+        "render",
+        "--lib",
+        "--",
+        "--ignored"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/bevy-hardware.log",
+      "sha256": "33021272f12214476e2892519ac4426190d4dc8df0f428f8ea5d2d8ac4148291",
+      "passed_tests": 0
+    },
+    {
+      "name": "renderer-hardware",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--",
+        "--ignored"
+      ],
+      "exit": 0,
+      "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/renderer-hardware.log",
+      "sha256": "f78376be08adc170828c5bd07613ac6cc8c39ce4feb6ac1007593142bb05e699",
+      "passed_tests": 79
+    }
+  ],
+  "acceptance": {
+    "visual": "Author defect inspection only: stem is now visibly distinct, but ground, schematic foliage and shoreline limits remain. Blind pairs prepared, zero votes. No final visual acceptance.",
+    "performance": "No performance gain/acceptance claim: serial visual captures had overlapping CPU checks; retained timings are diagnostic only.",
+    "ground": "The bottom 240 rows of the standing frame are bit-identical. This stage deliberately does not change ground materials.",
+    "omissions": [
+      "forest-floor material",
+      "shoreline convergence",
+      "foliage transmission and rich botanical assets",
+      "moving-camera and planet-wide plant streaming",
+      "independent blind preference result"
+    ],
+    "checks": "Formatting, architecture guard and workspace Clippy passed; 2030 lib/bin, 103 integration and 79 ignored renderer hardware tests passed. Bevy ignored command selects zero tests on this branch; retained tests ran in render-wgpu."
+  },
+  "ground_probe": {
+    "scope": "Standalone diagnostic linked against the actual release worldgen/authority; not a new runtime mechanism.",
+    "source": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/ground_probe.rs",
+    "source_sha256": "6024fdd1ab09c22e1f43a0287f99a0cd4f02484e4369704268dbf03ee8bbd719",
+    "command": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/ground-probe-command.json",
+    "log": "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/organ-materials/ground-probe.log",
+    "L17_nominal_texel_m": 0.390625,
+    "L17_rgb_sd_code_values": [
+      0.5446977598851228,
+      0.9143596537032951,
+      0.6473913342331578
+    ],
+    "L17_rgb_ranges": [
+      [
+        30,
+        32
+      ],
+      [
+        56,
+        59
+      ],
+      [
+        34,
+        36
+      ]
+    ]
+  }
+}

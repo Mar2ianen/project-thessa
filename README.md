@@ -152,7 +152,9 @@ The checked-in vertical slice currently contains:
      nearby refinement paths instead of starving all fine pages behind distant
      coarse demand ([surface-first work](docs/77_NATIVE_SURFACE_SHOWCASE.md));
      natural substrate detail, vegetation and final close-up
-    terrain acceptance remain incomplete.
+     terrain acceptance remain incomplete.
+     The bounded survey plants now distinguish lycopsid stems and foliage through
+     the shared mesh material, with unchanged geometry and draw count (doc 77).
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
     textures; bounded stellar shadow rays supplement the shared atlas on meshes
      and reflected hits. The background now samples that same sky field at far

@@ -127,6 +127,42 @@ fn textured_instances_move_rebase_keep_depth_and_reject_failed_updates_atomicall
         .unwrap();
     let center = (64 * 129 + 64) * 4;
     assert_eq!(&pixels[center..center + 4], &[128, 64, 32, 255]);
+    // The native plant adapter reuses this exact base-texture path as an
+    // organ palette: linear filtering at a constant texel-centre UV must not
+    // bleed green foliage into the stem, or vice versa, even with minification.
+    let foliage = [43, 71, 26, 255];
+    let stem = [74, 64, 43, 255];
+    for (u, expected) in [(0.25, foliage), (0.75, stem)] {
+        let mut palette = source();
+        palette.images[0].width = 2;
+        palette.images[0].rgba8 = [foliage, stem].concat();
+        palette.textures[0].wrap = [Wrap::Clamp; 2];
+        palette.textures[0].linear = true;
+        palette.textures[0].min_linear = true;
+        for vertex in &mut palette.primitives[0].vertices {
+            vertex.uv = [u, 0.5];
+        }
+        let mut palette_renderer =
+            MeshRenderer::new(&backend, &palette, OffscreenTarget::FORMAT, 1).unwrap();
+        for scale in [1.0, 0.05] {
+            palette_renderer
+                .update(
+                    &backend,
+                    &view(DVec3::ZERO),
+                    &light,
+                    &[MeshInstance { scale, ..instance }],
+                )
+                .unwrap();
+            let rgba = render(&mut palette_renderer, 1.0);
+            for (&actual, expected) in rgba[center..center + 4].iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "palette must preserve its organ swatch at scale={scale}: {:?}",
+                    &rgba[center..center + 4]
+                );
+            }
+        }
+    }
     assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
     assert_eq!(
         &render(&mut renderer, 0.4)[center..center + 4],

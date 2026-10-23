@@ -1,0 +1,1095 @@
+{
+  "stage": "T4c",
+  "branch": "feat/native-surface-showcase",
+  "source_parent_commit": "c1ecf0e",
+  "retained_capture_baseline_commit": "305e373",
+  "source_commit": "95a3888",
+  "status": "Opt-in native history lifecycle implemented; all 13 local command gates passed on unchanged compiled inputs; three static pairs are matched, and the orbit residency mismatch excludes it from blind preference. Not production TAA, temporal, visual-preference or full-replacement acceptance; the old host and launch defaults are retained.",
+  "implementation": {
+    "scope": [
+      "Scene-owned RGBA16Float ping-pong colour history plus a previous Depth32Float snapshot.",
+      "Resolve encodes after opaque terrain/mesh and motion, before plume/sky/cloud/aurora/UI overlays.",
+      "History commits only after a real frame submission; a dropped encoder advances nothing.",
+      "Resets: terrain publication, conforming/configuration revision, plant epoch, presentation/lighting revision, view mode, projection, exposure, resize.",
+      "Quality tiers: low 2x2 / age 4, medium 3x3 / age 8, high 3x3 / age 32.",
+      "HDR/capability fallback: TAA requires HDR, motion vectors and jitter; unsupported capabilities resolve to off with a note.",
+      "Separate render.temporal_resolve GPU scope includes history compute, colour copy-back and depth snapshot."
+    ],
+    "history_policy": {
+      "weight": "age/(age+1) running mean, capped at 1 - min_current_weight (0.95 default)",
+      "depth_test": "abs(previous_sampled - projected) <= 16*f32::EPSILON normalized depth",
+      "clipping": "3x3 or 2x2 YCoCg neighbourhood, sigma=1",
+      "source_validity": "Scene alpha >= 1 and depth < 1 seed age one even without a previous camera; masked current surfaces seed age zero. Any zero-age tap in the conservative four-tap bilinear history footprint rejects reuse.",
+      "excluded": [
+        "sky and far depth (depth == 1)",
+        "ocean/displaced water",
+        "all rigid meshes, including static plants, while previous object transforms are absent",
+        "previous-history lookup where motion is invalid; an eligible current static surface still seeds age one"
+      ]
+    },
+    "cost": {
+      "target_bytes_formula": "20 bytes/pixel (2 x RGBA16Float colour + Depth32Float)",
+      "example_1280x720_bytes": 18432000,
+      "note": "Resize temporarily retains old and new targets; existing HDR/motion/depth allocation is unchanged."
+    }
+  },
+  "gates": {
+    "count": 13,
+    "unchanged_inputs": 645,
+    "release_binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+    "binary_recipe": "cargo build --release -p thessa-terrain-native",
+    "execution_environment": {
+      "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"
+    },
+    "input_manifest_sha256": "45759ec45df8aaddb74ccb883e4054ff762913829e75d283816518a071692860",
+    "rows": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 1.593,
+        "log": "target/surface-showcase/temporal-history/fmt-gate.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "architecture",
+        "command": [
+          "python3",
+          "tools/agent-qa/check_architecture.py"
+        ],
+        "exit": 0,
+        "seconds": 0.05,
+        "log": "target/surface-showcase/temporal-history/architecture-gate.log",
+        "log_sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 2.68,
+        "log": "target/surface-showcase/temporal-history/clippy-gate.log",
+        "log_sha256": "0b1e231d81440859b41155718d6427cbc5f31abba245264fdd00fa58e506f0d8"
+      },
+      {
+        "name": "workspace-lib-bins",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--lib",
+          "--bins"
+        ],
+        "exit": 0,
+        "seconds": 100.807,
+        "log": "target/surface-showcase/temporal-history/workspace-lib-bins-gate.log",
+        "log_sha256": "787f6f419cf3eeebae334a4e4ab266ca7897b9797a910c69a34d13ba75b36199"
+      },
+      {
+        "name": "workspace-integration",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--test",
+          "*"
+        ],
+        "exit": 0,
+        "seconds": 20.333,
+        "log": "target/surface-showcase/temporal-history/workspace-integration-gate.log",
+        "log_sha256": "77166b9ac19748e454b0a01e6dffd3d4d41e4737b32e21395d84130ae7dd087e"
+      },
+      {
+        "name": "server",
+        "command": [
+          "cargo",
+          "build",
+          "-p",
+          "thessa-server"
+        ],
+        "exit": 0,
+        "seconds": 0.322,
+        "log": "target/surface-showcase/temporal-history/server-gate.log",
+        "log_sha256": "9a30d54c8b16d7e49510b182028079bca120aeebb7d662e88f8566e6196a49f6"
+      },
+      {
+        "name": "native-hardware-cli",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-terrain-native",
+          "--",
+          "--ignored",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 269.416,
+        "log": "target/surface-showcase/temporal-history/native-hardware-cli-gate.log",
+        "log_sha256": "6c8774480a7424947158bdbe0a434bd743be812510b845f404435390d69868a8"
+      },
+      {
+        "name": "renderer-hardware",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-render-wgpu",
+          "--",
+          "--ignored",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 299.886,
+        "log": "target/surface-showcase/temporal-history/renderer-hardware-gate.log",
+        "log_sha256": "8c2a5df892a87079dea3d1203992bbc56974125613032161c0acad841d4041ef"
+      },
+      {
+        "name": "legacy-bevy-command",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-bevy-rcbt",
+          "--features",
+          "render",
+          "--lib",
+          "--",
+          "--ignored"
+        ],
+        "exit": 0,
+        "seconds": 5.851,
+        "log": "target/surface-showcase/temporal-history/legacy-bevy-command-gate.log",
+        "log_sha256": "b9ad41910e561b44d9366eb2e784f1a74fd6e078cd746ae0eafd0bb8264a9be8"
+      },
+      {
+        "name": "feature-off",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "thessa-terrain-native",
+          "--no-default-features"
+        ],
+        "exit": 0,
+        "seconds": 0.817,
+        "log": "target/surface-showcase/temporal-history/feature-off-gate.log",
+        "log_sha256": "bb7cf0a44bd4d1d303ec12b2dd2eec804d65904075508a2fa7848ff6ae6fa58c"
+      },
+      {
+        "name": "world00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "surface_patch_audit"
+        ],
+        "exit": 0,
+        "seconds": 0.733,
+        "log": "target/surface-showcase/temporal-history/world00-gate.log",
+        "log_sha256": "3b504586e5d1b08f4e2a3851bfd70d042cdff76fb0375c4d91c2de40e09dde1e"
+      },
+      {
+        "name": "release-server",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "thessa-server"
+        ],
+        "exit": 0,
+        "seconds": 0.135,
+        "log": "target/surface-showcase/temporal-history/release-server-gate.log",
+        "log_sha256": "85c8dbac64ed6a362d668bf3988686e26e947620bb15cfdbe2e999a0ff8261b2"
+      },
+      {
+        "name": "release-viewer",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "thessa-terrain-native"
+        ],
+        "exit": 0,
+        "seconds": 44.442,
+        "log": "target/surface-showcase/temporal-history/release-viewer-gate.log",
+        "log_sha256": "1b6eab76e4ddae4261d78e203189735ef3f0d8a2b9b02e106a84bf9c0c43c26f"
+      }
+    ],
+    "test_counts": {
+      "workspace-lib-bins": {
+        "passed": 2080,
+        "failed": 0,
+        "ignored": 50
+      },
+      "workspace-integration": {
+        "passed": 117,
+        "failed": 0,
+        "ignored": 90
+      },
+      "native-hardware-cli": {
+        "passed": 47,
+        "failed": 0,
+        "ignored": 0
+      },
+      "renderer-hardware": {
+        "passed": 87,
+        "failed": 0,
+        "ignored": 0
+      },
+      "legacy-bevy-command": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    }
+  },
+  "captures": {
+    "display": [
+      1280,
+      720
+    ],
+    "site": {
+      "lat_deg": 23.565679258039204,
+      "lon_deg": 165.13881581863882,
+      "eye_agl_m": [
+        2,
+        50,
+        800
+      ],
+      "survey_distance_km": 80
+    },
+    "baseline_binary_sha256": "4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422",
+    "current_binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+    "baseline_current_rgb_exact": false,
+    "matrix": [
+      {
+        "name": "baseline-standing",
+        "command": [
+          "target/surface-showcase/temporal-history/baseline-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-False.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/baseline-standing.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/baseline-standing.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 34.678,
+        "binary_sha256": "4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422",
+        "settings_sha256": "a4bbf67533606d5ba64465e72a6c29d26caa0ce9e561b1a3908053d911c2ee4d",
+        "image": "baseline-standing.png",
+        "image_sha256": "8d70dd9dee432fce9bb14f5b026b799b87f8fa017f977b1a9bbebea1cffe6660",
+        "capture_sha256": "2ffb3098b6370eaf2196c281db140aa7c69129224a133f6a581db0dc4dbd38ea",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 152.323,
+        "temporal_scope_median_ms": 0.0,
+        "motion_scope_median_ms": 0.0,
+        "cpu_max_ms": 6.878,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {}
+      },
+      {
+        "name": "standing-False",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-False.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/standing-False.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/standing-False.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 34.759,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "a4bbf67533606d5ba64465e72a6c29d26caa0ce9e561b1a3908053d911c2ee4d",
+        "image": "standing-False.png",
+        "image_sha256": "9ead86edb97754b23faf5e41374e549e6f57542b78c644125c0765bd788bd678",
+        "capture_sha256": "45b44b6aadd3d0677aa567f24ab1b5390300e354471c8f4f3f813da72f180e63",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 149.585,
+        "temporal_scope_median_ms": 0.001,
+        "motion_scope_median_ms": 0.022,
+        "cpu_max_ms": 8.727,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "false",
+          "native_taa_global_reset_frames": "0",
+          "native_taa_history_age_limit": "0",
+          "native_taa_neighborhood_width": "0",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "0",
+          "native_taa_target_bytes": "0"
+        }
+      },
+      {
+        "name": "standing-True",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-True.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/standing-True.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/standing-True.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 35.8,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "f05a5dcb0d1b4c2b47a1ede1571298d469d9aa4218e55048eac0c0afb0f14886",
+        "image": "standing-True.png",
+        "image_sha256": "c2f4a361ff7bc1b9f48385c6b05b0550949a796d88aad4c456b2809573f63941",
+        "capture_sha256": "4c94f5f1cf1dfe15e9bc93f864a44f12177b6b099f20a4b72dd8637c4810d382",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 156.526,
+        "temporal_scope_median_ms": 0.89,
+        "motion_scope_median_ms": 0.203,
+        "cpu_max_ms": 6.805,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "true",
+          "native_taa_global_reset_frames": "1",
+          "native_taa_history_age_limit": "8",
+          "native_taa_neighborhood_width": "3",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "78",
+          "native_taa_target_bytes": "18432000"
+        }
+      },
+      {
+        "name": "close-False",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-False.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "50",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/close-False.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/close-False.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 31.402,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "a4bbf67533606d5ba64465e72a6c29d26caa0ce9e561b1a3908053d911c2ee4d",
+        "image": "close-False.png",
+        "image_sha256": "e2e2367133bc09b23ef8dae3cbeb37913a5dfa68fa3169048157d15c1f591b02",
+        "capture_sha256": "5f079ddfcd60f5da3815610bf613b788e9b03819b4b0bbe1d83fe28222b93b09",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 110.602,
+        "temporal_scope_median_ms": 0.001,
+        "motion_scope_median_ms": 0.015,
+        "cpu_max_ms": 8.048,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "false",
+          "native_taa_global_reset_frames": "0",
+          "native_taa_history_age_limit": "0",
+          "native_taa_neighborhood_width": "0",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "0",
+          "native_taa_target_bytes": "0"
+        }
+      },
+      {
+        "name": "close-True",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-True.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "50",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/close-True.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/close-True.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 31.484,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "f05a5dcb0d1b4c2b47a1ede1571298d469d9aa4218e55048eac0c0afb0f14886",
+        "image": "close-True.png",
+        "image_sha256": "c6d9db7c2a4ff4a93a3b83d69bbe4e7b7e5a255a916ee14ef1052e1c7212ad5d",
+        "capture_sha256": "f245886fbd6a5bb96a100f5614180412c55abccdf1b2786a2d6d7e436b2f5c0d",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 112.341,
+        "temporal_scope_median_ms": 1.034,
+        "motion_scope_median_ms": 0.266,
+        "cpu_max_ms": 7.005,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "true",
+          "native_taa_global_reset_frames": "1",
+          "native_taa_history_age_limit": "8",
+          "native_taa_neighborhood_width": "3",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "78",
+          "native_taa_target_bytes": "18432000"
+        }
+      },
+      {
+        "name": "overview-False",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-False.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "800",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/overview-False.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/overview-False.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 28.454,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "a4bbf67533606d5ba64465e72a6c29d26caa0ce9e561b1a3908053d911c2ee4d",
+        "image": "overview-False.png",
+        "image_sha256": "b2395571b89afe44371f77686e04a11029d612215d2f8f286bfe5e5f60c480bc",
+        "capture_sha256": "eae86cb37918b0783e8adbebc2f9434b8dd6370322977118026b495315ef2ff6",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 67.569,
+        "temporal_scope_median_ms": 0.001,
+        "motion_scope_median_ms": 0.01,
+        "cpu_max_ms": 6.674,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "false",
+          "native_taa_global_reset_frames": "0",
+          "native_taa_history_age_limit": "0",
+          "native_taa_neighborhood_width": "0",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "0",
+          "native_taa_target_bytes": "0"
+        }
+      },
+      {
+        "name": "overview-True",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-True.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "800",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/overview-True.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/overview-True.json"
+        ],
+        "exit": 0,
+        "elapsed_s": 28.564,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "f05a5dcb0d1b4c2b47a1ede1571298d469d9aa4218e55048eac0c0afb0f14886",
+        "image": "overview-True.png",
+        "image_sha256": "586f6f7882dce0604e68dfcd405f4a4d0ec35a62bccd30a24ac527951b46f71d",
+        "capture_sha256": "c210d4f5909a5fc2beaf2822a534d51adb259fbfbbb9d2830c27eb3283a3fbd9",
+        "frames": 48,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 68.397,
+        "temporal_scope_median_ms": 1.073,
+        "motion_scope_median_ms": 0.247,
+        "cpu_max_ms": 7.085,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "true",
+          "native_taa_global_reset_frames": "1",
+          "native_taa_history_age_limit": "8",
+          "native_taa_neighborhood_width": "3",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "78",
+          "native_taa_target_bytes": "18432000"
+        }
+      },
+      {
+        "name": "orbit-False",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-False.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/orbit-False.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/orbit-False.json",
+          "--sweep"
+        ],
+        "exit": 0,
+        "elapsed_s": 48.602,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "a4bbf67533606d5ba64465e72a6c29d26caa0ce9e561b1a3908053d911c2ee4d",
+        "image": "orbit-False.png",
+        "image_sha256": "49264a42cc13c99e034873dcde27ddb76e8caa34c0d816774b63744aa3508ff5",
+        "capture_sha256": "ff121ba10542f59ee53d3856b1fafa6668811671a6cca5cab1e49b3fc955948b",
+        "frames": 96,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 201.792,
+        "temporal_scope_median_ms": 0.001,
+        "motion_scope_median_ms": 0.044,
+        "cpu_max_ms": 18.371,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "false",
+          "native_taa_global_reset_frames": "0",
+          "native_taa_history_age_limit": "0",
+          "native_taa_neighborhood_width": "0",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "0",
+          "native_taa_target_bytes": "0"
+        }
+      },
+      {
+        "name": "orbit-True",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/temporal-history/taa-True.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/temporal-history/orbit-True.png",
+          "--perf-capture",
+          "target/surface-showcase/temporal-history/orbit-True.json",
+          "--sweep"
+        ],
+        "exit": 0,
+        "elapsed_s": 48.893,
+        "binary_sha256": "86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb",
+        "settings_sha256": "f05a5dcb0d1b4c2b47a1ede1571298d469d9aa4218e55048eac0c0afb0f14886",
+        "image": "orbit-True.png",
+        "image_sha256": "8499ac13ed9847041e8d94e65c94de43e972efeb4c2f9a647420b458bc5b9e7c",
+        "capture_sha256": "1c7c88df07830b3333990cf22e06ba80c3c202549e77c93eec2d5de103c867ef",
+        "frames": 96,
+        "gpu": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "gpu_median_ms": 203.925,
+        "temporal_scope_median_ms": 0.996,
+        "motion_scope_median_ms": 0.282,
+        "cpu_max_ms": 18.331,
+        "sim_steps": 0,
+        "sim_times_s": [
+          0.0
+        ],
+        "taa_metadata": {
+          "native_taa": "true",
+          "native_taa_global_reset_frames": "111",
+          "native_taa_history_age_limit": "8",
+          "native_taa_neighborhood_width": "3",
+          "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+          "native_taa_submitted_frames": "126",
+          "native_taa_target_bytes": "18432000"
+        }
+      }
+    ],
+    "comparisons": [
+      {
+        "a": "baseline-standing",
+        "b": "standing-False",
+        "matched_keys": 23,
+        "metadata_mismatches": {},
+        "timing_differences": {
+          "native_surface_plants_preparation_cpu_ms": [
+            "111.276948",
+            "112.846601"
+          ],
+          "native_surface_plants_publication_cpu_ms": [
+            "15.104894",
+            "7.802097"
+          ]
+        },
+        "blind_scene_eligible": true,
+        "changed_pixels": 6,
+        "total_pixels": 921600,
+        "rgb_exact": false,
+        "mean_displayed_rgb": [
+          9.874131944444444e-05,
+          0.00010091145833333333,
+          8.029513888888889e-05
+        ],
+        "max_displayed_rgb": [
+          17,
+          20,
+          16
+        ]
+      },
+      {
+        "a": "standing-False",
+        "b": "standing-True",
+        "matched_keys": 23,
+        "metadata_mismatches": {},
+        "timing_differences": {
+          "native_surface_plants_preparation_cpu_ms": [
+            "112.846601",
+            "168.177973"
+          ],
+          "native_surface_plants_publication_cpu_ms": [
+            "7.802097",
+            "19.081958999999998"
+          ]
+        },
+        "blind_scene_eligible": true,
+        "changed_pixels": 262846,
+        "total_pixels": 921600,
+        "rgb_exact": false,
+        "mean_displayed_rgb": [
+          1.9263736979166666,
+          1.7921571180555556,
+          1.7663606770833333
+        ],
+        "max_displayed_rgb": [
+          134,
+          140,
+          142
+        ]
+      },
+      {
+        "a": "close-False",
+        "b": "close-True",
+        "matched_keys": 23,
+        "metadata_mismatches": {},
+        "timing_differences": {
+          "native_surface_plants_preparation_cpu_ms": [
+            "5.570641999999999",
+            "5.56962"
+          ],
+          "native_surface_plants_publication_cpu_ms": [
+            "16.948016",
+            "16.393253"
+          ]
+        },
+        "blind_scene_eligible": true,
+        "changed_pixels": 282651,
+        "total_pixels": 921600,
+        "rgb_exact": false,
+        "mean_displayed_rgb": [
+          0.7563585069444444,
+          0.6941807725694444,
+          0.6058018663194444
+        ],
+        "max_displayed_rgb": [
+          198,
+          195,
+          198
+        ]
+      },
+      {
+        "a": "overview-False",
+        "b": "overview-True",
+        "matched_keys": 23,
+        "metadata_mismatches": {},
+        "timing_differences": {
+          "native_surface_plants_preparation_cpu_ms": [
+            "8.388418",
+            "8.461375"
+          ],
+          "native_surface_plants_publication_cpu_ms": [
+            "12.57847",
+            "12.533035"
+          ]
+        },
+        "blind_scene_eligible": true,
+        "changed_pixels": 440648,
+        "total_pixels": 921600,
+        "rgb_exact": false,
+        "mean_displayed_rgb": [
+          0.39684678819444447,
+          0.3551584201388889,
+          0.35084526909722225
+        ],
+        "max_displayed_rgb": [
+          124,
+          110,
+          92
+        ]
+      },
+      {
+        "a": "orbit-False",
+        "b": "orbit-True",
+        "matched_keys": 23,
+        "metadata_mismatches": {
+          "native_material_resident_levels": [
+            "[3, 0, 1, 0, 1, 0, 1, 0, 2, 0, 4, 0, 14, 22, 30, 24, 30, 34, 27, 24, 15, 16, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "[3, 0, 1, 0, 1, 0, 1, 0, 2, 0, 4, 0, 11, 21, 30, 24, 31, 35, 28, 19, 15, 19, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+          ]
+        },
+        "timing_differences": {
+          "native_surface_plants_preparation_cpu_ms": [
+            "150.104932",
+            "125.84637500000001"
+          ],
+          "native_surface_plants_publication_cpu_ms": [
+            "0.0044989999999999995",
+            "0.0035870000000000003"
+          ]
+        },
+        "blind_scene_eligible": false,
+        "changed_pixels": 337761,
+        "total_pixels": 921600,
+        "rgb_exact": false,
+        "mean_displayed_rgb": [
+          3.5979090711805557,
+          3.3991786024305557,
+          3.1260167100694445
+        ],
+        "max_displayed_rgb": [
+          136,
+          130,
+          143
+        ]
+      }
+    ],
+    "metadata_mismatches": {
+      "baseline-standing vs standing-False": {},
+      "standing-False vs standing-True": {},
+      "close-False vs close-True": {},
+      "overview-False vs overview-True": {},
+      "orbit-False vs orbit-True": {
+        "native_material_resident_levels": [
+          "[3, 0, 1, 0, 1, 0, 1, 0, 2, 0, 4, 0, 14, 22, 30, 24, 30, 34, 27, 24, 15, 16, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+          "[3, 0, 1, 0, 1, 0, 1, 0, 2, 0, 4, 0, 11, 21, 30, 24, 31, 35, 28, 19, 15, 19, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+        ]
+      }
+    },
+    "total_sim_steps": 0,
+    "enabled_taa_metadata": {
+      "native_taa": "true",
+      "native_taa_global_reset_frames": "1",
+      "native_taa_history_age_limit": "8",
+      "native_taa_neighborhood_width": "3",
+      "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+      "native_taa_submitted_frames": "78",
+      "native_taa_target_bytes": "18432000"
+    },
+    "settings_base_toml": "# Project Thessa requested graphics settings.\n#\n# This file is user intent, not runtime truth. At startup the client expands\n# `preset`, then resolves requested values through hardware/backend\n# capabilities into `ResolvedGraphicsSettings` (see `crates/graphics`):\n#\n#   graphics.toml -> requested -> preset expansion -> capability resolution\n#                  -> ResolvedGraphicsSettings -> renderer + perf metadata\n#\n# The future GUI edits THIS file (typed editor over the same TOML), never a\n# second independent settings system. Unknown future keys are ignored by older\n# builds; physics and world state are never affected by this file.\n#\n# Ray tracing is experimental (legacy Bevy Solari / native wgpu ray queries).\n# `ray_tracing = \"local\"|\"full\"`\n# requests RT device features and fails fast at startup when the GPU/driver\n# cannot provide them. Native `\"auto\"` resolves against the negotiated adapter;\n# the legacy launcher may resolve raster before adapter capabilities are known.\n\nversion = 1\npreset = \"high\" # low | medium | high | ultra | custom (auto-shown when values diverge)\n\n[renderer]\nterrain_ground_detail = true\nsurface_quality = \"high\" # native: low F0 approximation; medium GGX; high normal/MR/AO maps\nterrain_normal_maps = true # native primary terrain; false skips normal generation/upload/sampling\n# surface_quality low/medium/high filters normal detail with +2/+1/+0 extra mip levels.\n# Native terrain: 4/8/16 clear-sky GGX samples at low/medium/high. With clouds,\n# use 1/2/4 directions and 1/2/4 march steps, <=1 sun step (shared transport law).\n# specular_reflections=false compiles out this term. See docs/69.\nspecular_reflections = true # material/stellar + sky environment; native scene reflection also requires ray_tracing\nshadow_memory_mib = 64 # native 3-star cascade atlas cap; reduces resolution, never geometry\n# Native RT also tests opaque scene-object visibility toward each active star\n# when [shadows].enabled=true, including when specular_reflections=false.\n# Terrain visibility still uses the shared raster atlas; ray distance is capped\n# by raytracing.max_distance_m. RT off falls back to that atlas.\nbackend = \"auto\" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)\nray_tracing = \"auto\" # off | local | full | auto\nterrain = \"gpu_auto\" # cpu | gpu_indexed | gpu_auto | gpu_mesh; mesh -> indexed fallback\nterrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64\nmaterial_storage = \"rgba_array\" # rgba_array | microstore_compact; compact holds\n# microstore-encoded pages in residency and decodes at upload time with identical\n# sampling (texture format, mips, filtering); storage/upload tradeoff, never visual\nresolution_scale = 1.0\nvsync = false\nhdr = true # native RGBA16Float + Reinhard to SDR; false is direct LDR, no extra target/pass\nbloom = false # bright-light glow; off by default to preserve terrain contrast\nauto_exposure = false # AE metering curve untuned; deterministic manual EV for now\nexposure_ev100 = 13.0 # manual EV100 when auto_exposure = false\nfleet_meshes = true # native retained body meshes; false adds no fleet GPU resources/draws\nfleet_quality = \"high\" # low/medium/high: cull meshes below 8/2/0.5 projected pixels\n\n[terrain_topology]\n# Native persistent conforming CBT; false retains regular patches at zero extra cost.\n# Low/medium/high: 32768/65536/131072 allocation slots, 1/2/4 update waves,\n# projected split area 1024/256/64 px^2, merge at one eighth (hysteresis).\n# Shared canonical height/material residency is NOT the geometric LOD.\nenabled = false\nquality = \"high\"\n\n[atmosphere]\n# Native background and mesh/RT indirect terms share this quality-tiered sky\n# field and one GPU publication. Disabling releases the field/background draw;\n# HDR uses the shared display pass; native stellar discs use the catalogue pass.\n# Native: shared single-scattering/airglow environment for mesh reflections and\n# derived diffuse ambient. Low/medium/high grids: 8x4 / 16x8 / 32x16; changed\n# inputs refresh at most every 8/4/2 frames. Disabled releases the grid.\n# The physical sky background is implemented; aerial perspective, multiple\n# scattering and external eclipses remain unported in native; see doc 39.\nenabled = true\nquality = \"high\" # low | medium | high (budgets only, never physics)\naerial_perspective = true # horizon haze on: distance fades blue like ISS photos; budgets only\ndensity_scale = 0.3 # visual optical-depth gain; simulation pressure is unchanged\n# (0.55 washed terrain contrast: measured +100 shadow lift vs no-atmosphere\n# reference; 0.3 keeps the blue sky while restoring ground contrast. Revisit\n# when the aerial LUT sampling is refined.)\nmultiple_scattering = false # single-scattering first slice; LUT/MS later\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true # native distant catalogue + physical source discs, independent of scattering\nstars_quality = \"high\" # 8/16/32 atmospheric transmission samples; same flux/catalogue\nray_steps = 24 # view-march steps for CPU queries (4..128)\n\n[clouds]\n# Low-deck volume march + cirrus shell (spec section 10): procedural RGBA\n# baked once on CPU; the low deck is marched per-pixel (Beer-Lambert over the\n# bake + shader detail, sun self-shadow), cirrus stays a thin shell in both\n# paths. CBT tile keys share the terrain LOD address space\n# (see tools/worldgen-rocky lod::cbt_node_for_tile).\n# Native: the same coverage bake drives spherical decks at 3..6 and 9..10 km,\n# depth-clipped composition, terrain/mesh/ocean shadows and reflected rays.\n# Low/non-volumetric uses a one-column fallback; medium/high use resolved steps.\n# No native stochastic integrator, atmospheric multi-scatter, or cloud RT AS.\nenabled = true\nquality = \"high\" # low = 512px bake + shell fallback; medium = 1024px; high = 2048px\nvolumetric = true # true = march the low deck (medium/high); false = shell impostors\nintegrator = \"march\" # \"march\" = real-time stratified march; \"stochastic\" = scattering approximation\nray_steps = 24 # view-march steps for the volume path (4..24 used, more capped); shells ignore it\ncast_shadows = true # low-deck shadows on terrain: sampled from the same bake\n# the shells show (sun-parallax offset, soft alpha shaping); off = free\nlayers = 2 # 1 = low deck, 2 = low + cirrus (Earth-like high thin ice over cumulus)\ncoverage = 0.55 # 0 overcast .. 1 clear (shaped: 0.55 reads broken deck with open ocean)\nopacity = 0.95\nanimate = true # differential deck drift; off = static\n\n[night_lights]\n# Warm emissive city clusters over inhabited land, gated by the terminator\n# in-shader. The mask bakes once at startup from the world's inhabited\n# regions (bake resolution only, never simulated activity); off = free.\n# Native: cached R8 primary-terrain emission, same regular/conforming consumer;\n# intensity=0 also skips mask bake/allocation. No secondary-ray city emission.\nenabled = true\nquality = \"medium\" # low = 128x64, medium = 256x128, high = 512x256 mask\nintensity = 1.0 # 0..2 emissive gain over the mask\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\" # native 64x32/8-step or 128x64/32-step field; animation is independent\naurora_lighting = false # RT emissive proxy (later)\naurora_intensity = 1.0 # 0..4 emission gain over the analytic oval\naurora_animate = true # slide curtains with sim time; off = static oval\n\n[gas_giant]\n# Procedural Nereid/Vesper bands baked once on CPU; no shader, no per-frame cost.\nenabled = true\nquality = \"medium\" # low = 512x256, medium = 1024x512, high = 2048x1024\nanimate_bands = true # slow storm drift; off = static\nlimb_darkening = true # belt/zone contrast baked into the texture\n\n[engine_plume]\n# Field-first plume (docs/38): analytic mean field + RCBT residual (later).\n# Low = baked cone impostor (fallback artifact); Medium/High = analytic\n# per-pixel Beer-Lambert march. Native samples the actual axial stations\n# inside a projected bound and clips against scene depth; legacy uses a ribbon.\n# Propulsion models and vehicle assets exist, but the client renderer is not\n# wired to their live nozzle state yet; it still supplies provisional X-15\n# nozzle/source values. RCBT residual rendering is also future work.\nenabled = true\nquality = \"medium\" # low = cone impostor; medium = volume/8 steps; high = volume/14 steps\nmach_diamonds = true # visual shock-cell toggle; never changes simulation physics\nflicker = true\nlight = true # field-derived legacy nozzle light; native reports this consumer unavailable\n\n[instruments]\n# Native HUD only; legacy Bevy retains its CPU instrument until adapted.\nenabled = true\nquality = \"high\" # logical diameter 192/256/320 points, rendered at native DPI\nlayout = \"aircraft\" # aircraft | rocket; changes display, never flight control\nnavball_renderer = \"auto\" # auto/analytic: texture-free GPU; baked: static R8 grid\n\n[ocean]\n# Native render-only linear spectral sea; legacy Bevy keeps its analytic path.\n# Explicitly opt in: no field, deformation, textures or FFT work when disabled.\nenabled = false\nquality = \"high\" # 32/64/128 samples per band at low/medium/high\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0 # same angle in each body-fixed planar spectrum\nsignificant_height_m = 2.0\ndepth_m = 100.0 # uniform reference, not bathymetry\nseed = 17\ngeometry_patches = 16 # 0..=64; whole near partition falls back if over budget\ngeometry_distance_m = 300.0 # displacement fades from half radius to radius\n\n[raytracing]\n# Participation flags for experimental ray paths. The native mesh consumer\n# also admits the resident generated terrain grid and bounded near-ocean waves.\n# The single mode switch lives in [renderer] ray_tracing.\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true # ray-aware transmittance/sky queries where supported\nclouds = false\nmax_distance_m = 500000.0\n# Native RT scene: consolidated geometry, hit tables and TLAS instances are\n# budgeted here; driver-owned acceleration-structure memory is additional.\n# Terrain charges borrowed vertex slots conservatively; an over-budget active\n# partition falls back whole to raster instead of dropping arbitrary blockers.\nscene_memory_mib = 32\nmax_instances = 4096\n# Specular chain length for object reflections (1 = single mirror bounce).\nreflection_bounces = 2\nray_bias_m = 0.01\n\n[shadows]\n# Native depth reuse is exact: unchanged light matrices and caster inputs need\n# no redraw. Camera origin, geometry/membership and mesh transforms/ranges\n# invalidate it; this does not lower resolution or impose a refresh cadence.\n# Sun shadow cascade cover for the raster path (RT lighting ignores it).\n# Engine default ends at 150 m; planetary cover is explicit here instead\n# of magic numbers in the client.\nenabled = true\nquality = \"high\" # low | medium | high (expands the numbers below on preset apply)\ncascades = 4 # 1..=4\nmax_distance_m = 12000.0 # far end of cover in metres; first cascade ends at max/40\nmap_size = 4096 # per-cascade texel grid, power of two 512..=8192\nnormal_bias_m = 1.5 # normal offset in metres against acne on 32 m mesh cells\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\n",
+    "settings_override": "Append [temporal] taa=false|true and quality=medium to the base TOML.",
+    "matching_note": "CPU preparation/publication timing differences are not scene mismatches. Any material residency mismatch makes the corresponding pair ineligible for blind preference; RGB deltas remain descriptive, not temporal quality metrics."
+  },
+  "blind_review": {
+    "status": "prepared from matched pairs; no independent reviewer votes were collected",
+    "manifest": "target/surface-showcase/temporal-history/arena-input.toml",
+    "rubric": "tools/agent-qa/arena.py",
+    "prepared_cases": [
+      {
+        "id": "world00-standing-opaque-history",
+        "A": "world00-standing-opaque-history/A.png",
+        "B": "world00-standing-opaque-history/B.png",
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "id": "world00-close-opaque-history",
+        "A": "world00-close-opaque-history/A.png",
+        "B": "world00-close-opaque-history/B.png",
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "id": "world00-overview-opaque-history",
+        "A": "world00-overview-opaque-history/A.png",
+        "B": "world00-overview-opaque-history/B.png",
+        "size": [
+          1280,
+          720
+        ]
+      }
+    ],
+    "excluded_pairs": [
+      "orbit-False vs orbit-True"
+    ]
+  },
+  "masked_source_regression": {
+    "before_binary_sha256": "592f813cf07ee21941501a511d5a84716456a7f718b851cd0b8536489aa07204",
+    "before_orbit_image_sha256": "b2a0fd36819664bb680cba5e1b51a95bad0f164ad246246116b463af8e142360",
+    "after_orbit_image_sha256": "8499ac13ed9847041e8d94e65c94de43e972efeb4c2f9a647420b458bc5b9e7c",
+    "observation": "The initial orbit frame exposed duplicated tree silhouettes. Both the corrected diagnostic frame and the final orbit-True.png were inspected without observing those silhouettes; this is implementer inspection of still frames, not independent visual acceptance or a general ghosting bound. Streaming residency differs between the final off/on orbit runs.",
+    "oracles": [
+      "render-core::temporal_resolve::tests::every_rejection_uses_current_and_sets_a_reusable_age",
+      "render-wgpu::scene_temporal::tests::submitted_history_excludes_overlays_and_resets_without_advancing_a_clock",
+      "render-wgpu/tests/temporal_resolve.rs::masked_history_taps_cannot_bleed_through_bilinear_sampling"
+    ]
+  },
+  "limitations": [
+    "Streaming/publication epochs can reset history repeatedly on the orbit sweep; submitted/reset counts are recorded per capture. The retained baseline predates the committed temporal merge, so it is not an isolated T4c regression comparison.",
+    "Depth tolerance is an explicit 16*f32::EPSILON normalized-depth shortcut, not a measured metric disocclusion envelope.",
+    "Overlay shaders still read sampled jittered depth through the unjittered camera; a composed sampled/resolved depth policy and edge oracle remain open.",
+    "No arbitrary camera-cut token beyond the recorded view-mode/map/site tokens.",
+    "No object motion: rigid meshes (including static plants) and water reject history, so no foliage or ocean antialiasing benefit is claimed.",
+    "Static capture pairs and RGB deltas are not evidence of temporal stability, ghosting bounds, or subjective preference.",
+    "No upscaling, SDK, generated frame, simulation tick, stable-FPS or full client replacement claim."
+  ],
+  "evidence": {
+    "checks": "target/surface-showcase/temporal-history/checks.json",
+    "postcheck": "target/surface-showcase/temporal-history/postcheck.json",
+    "captures": "target/surface-showcase/temporal-history/captures.json",
+    "comparisons": "target/surface-showcase/temporal-history/comparisons.json",
+    "arena_input": "target/surface-showcase/temporal-history/arena-input.toml",
+    "record_sha256": {
+      "checks.json": "0100c057093ee1a8ec9fb8972f7515b39916e08323044ad399b8a20266e8bc28",
+      "postcheck.json": "9a5e266bb331b440f904a2f115778fc857ca825a69ac03cbdc61786a357b4227",
+      "captures.json": "339e368e4ff7b0a4f8cbe3e85db26149dcc1127cfa2d0a7fc685b9550674e70a",
+      "comparisons.json": "157c662bc93269eb8936136cf5350254402a5ea797465333ea676ba2c25e13d3",
+      "arena-input.toml": "ec80c6e0dce515b3e1c73d9dc9818fdcc0c020c79eabd5aaa5474d25308fdf06"
+    },
+    "blind_files_sha256": {
+      "REVIEW.md": "923473bdb84d7c5108fd08b0396035fc75057595ba10f5840a69b40ac5ed94a7",
+      "cases.json": "b9d4f58473e0ac41b1e7e9fb601f75748372012b9b13f795ff8e82441001d903",
+      "world00-close-opaque-history/A.png": "e2e2367133bc09b23ef8dae3cbeb37913a5dfa68fa3169048157d15c1f591b02",
+      "world00-close-opaque-history/B.png": "c6d9db7c2a4ff4a93a3b83d69bbe4e7b7e5a255a916ee14ef1052e1c7212ad5d",
+      "world00-overview-opaque-history/A.png": "586f6f7882dce0604e68dfcd405f4a4d0ec35a62bccd30a24ac527951b46f71d",
+      "world00-overview-opaque-history/B.png": "b2395571b89afe44371f77686e04a11029d612215d2f8f286bfe5e5f60c480bc",
+      "world00-standing-opaque-history/A.png": "c2f4a361ff7bc1b9f48385c6b05b0550949a796d88aad4c456b2809573f63941",
+      "world00-standing-opaque-history/B.png": "9ead86edb97754b23faf5e41374e549e6f57542b78c644125c0765bd788bd678"
+    }
+  }
+}

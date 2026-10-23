@@ -303,6 +303,18 @@ pattern, ground bands, wider transport and visual acceptance remain open. See
 docs 75/77/78 and
 [`artifacts/native-stellar-ray-line-2026-10-23.json`](artifacts/native-stellar-ray-line-2026-10-23.json).
 
+T4c (`95a3888`) integrates default-off native opaque history with masked-source
+rejection. All 13 local command gates passed on 645 unchanged inputs, including
+2,080 lib/bin tests, 117 integration tests, 47 native hardware/CLI checks and
+87 renderer hardware checks. All nine final captures succeeded with simulation
+time/step zero. Three matched static blind pairs are prepared but unreviewed;
+orbit is excluded because material residency differs and resets in 111 of 126
+submitted frames. The retained pre-temporal baseline is not bit-exact (six
+pixels differ) or an isolated T4c reference. Composition, metric disocclusion,
+object/ocean motion, streaming accumulation and independent visual acceptance
+remain open. See docs 76/78 and
+[`artifacts/native-temporal-history-2026-10-23.json`](artifacts/native-temporal-history-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

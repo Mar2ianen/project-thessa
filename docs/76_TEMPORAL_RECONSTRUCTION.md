@@ -564,7 +564,7 @@ Their original `1/(age+1)` history-weight formula was corrected during T4c.
   tokens. Projection/exposure changes reject history; pixel reprojection and
   depth tests reject out-of-view/disoccluded history. Arbitrary same-mode camera
   teleports do not yet have an explicit scene cut token.
-- Motion-invalid current pixels (ocean, rigid meshes/plants, invalid sky) are
+- Ineligible current surfaces (ocean, rigid meshes/plants, invalid sky) are
   displayed but store history **age zero**, not age one. The history texture's
   age channel therefore also acts as a reusable-source validity mask. The GPU
   conservatively rejects a bilinear history footprint if any of its four taps
@@ -604,6 +604,44 @@ ghosting envelope (including streaming-reset behaviour), arbitrary cuts,
 astronomical-coordinate error, platform parity and independent visual preference
 are not closed by the history lifecycle fixture. No upscaling, SDK, generated
 frame or new simulation tick is introduced.
+
+### T4c final capture evidence — 2026-10-23
+
+Evidence: [native-temporal-history-2026-10-23.json](artifacts/native-temporal-history-2026-10-23.json),
+implementation `95a3888`. All 13 local command gates passed on 645 unchanged
+compiled/configuration inputs: 2,080 lib/bin tests, 117 integration tests,
+47 native hardware/CLI checks and 87 renderer hardware checks, plus the
+format/architecture/Clippy, feature-off, WORLD00 and server/viewer build gates.
+The legacy Bevy ignored command selected zero tests; no remote-CI result is
+claimed. The native-only release recipe and executable hash are in the artifact.
+
+All nine final captures exited successfully on Radeon 880M, Vulkan/RADV,
+Mesa 26.2.5-arch1.1, at 1280×720 with simulation time/step zero. The canonical
+site is 23.565679258039204 N, 165.13881581863882 E; settings are High with HDR,
+experimental ground detail and understory, then TAA off/on at Medium. Static
+runs measure 48 frames after 30 warmup; orbit measures 96 after 30 warmup.
+
+| Enabled case | Eye AGL | Submitted frames | Global reset frames | Resolve median |
+| --- | --- | --- | --- | --- |
+| Standing | 2 m | 78 | 1 | 0.890 ms |
+| Close | 50 m | 78 | 1 | 1.034 ms |
+| Overview | 800 m | 78 | 1 | 1.073 ms |
+| Orbit sweep | 2 m | 126 | 111 | 0.996 ms |
+
+Standing/close/overview off/on pairs match all 23 compared scene metadata keys;
+CPU preparation/publication timing differences are recorded separately. Three
+blind pairs are prepared, with the origin key outside the review directory;
+no independent reviewer votes exist. Orbit has differing material residency,
+so it is excluded from blind preference. Its reset count shows accumulation
+remains largely reset-bound during streaming. These sequential scope timings
+do not establish game FPS or an isolated whole-renderer cost difference.
+
+The final corrected orbit still was inspected: the previously observed duplicated
+tree silhouettes were not observed. This is implementer inspection of one frame,
+not independent preference or a moving-scene ghosting bound. The retained
+`305e373` standing baseline and current TAA-off image differ at six of 921,600
+pixels (maximum RGB code delta 20); they are not bit-exact. That baseline
+predates the temporal foundation merge and does not isolate the T4c change.
 
 ## 10. Regression and benchmark protocol
 

@@ -113,3 +113,27 @@ history, overlay exclusion and lifecycle resets. The initial orbit frame exposed
 duplicated tree silhouettes; the corrected diagnostic frame no longer shows
 those silhouettes. That inspection is not independent visual preference or a
 general moving-scene ghosting bound.
+
+All nine final captures exited zero with simulation time/step zero; all eight
+current-build captures match the certified executable hash above. At 1280×720,
+the standing/close/overview Medium-TAA runs each submit 78 real frames with one
+global reset; resolve medians are 0.890/1.034/1.073 ms on Radeon 880M,
+Vulkan/RADV, Mesa 26.2.5-arch1.1. Their off/on pairs match all 23 compared scene
+keys. CPU preparation/publication timings are recorded separately from scene
+mismatches. Three blind pairs are prepared with a separate private key, but no
+independent reviewer votes have been collected.
+
+The final orbit run resets globally in 111 of 126 submitted frames. Its off/on
+material residency differs, so orbit is excluded from blind preference and kept
+only as descriptive telemetry. The final corrected still was inspected without
+observing the former duplicated silhouettes; this does not bound moving-scene
+ghosting. The retained `305e373` baseline differs from current standing-off at
+six pixels (maximum RGB code delta 20), and predates the temporal foundation
+merge; it is neither bit-exact nor an isolated T4c reference. No stable-FPS,
+foliage/ocean antialiasing or visual acceptance claim follows.
+
+Evidence:
+[`artifacts/native-temporal-history-2026-10-23.json`](artifacts/native-temporal-history-2026-10-23.json).
+Raw captures, gate logs and blind review files remain local under
+`target/surface-showcase/temporal-history/`; the tracked artifact records their
+hashes, commands, settings, counts and limitations.

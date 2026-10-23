@@ -218,6 +218,17 @@ See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md) and
 [doc 77](77_NATIVE_SURFACE_SHOWCASE.md); exact evidence:
 [`artifacts/native-near-shadow-receivers-2026-10-23.json`](artifacts/native-near-shadow-receivers-2026-10-23.json).
 
+WORLD06i is a candidate shared-GGX hemisphere correction: negative shading-normal
+view cosines no longer masquerade as a visible grazing lobe or normalize a zero
+stretched view. A new 45-case hardware oracle rejects 39 old nonzero/non-finite
+responses and passes after correction; the existing exact/positive grazing
+oracle also passes without changed tolerances. Full local gates pass (2,043
+lib/bin, 105 integration and 84 renderer hardware tests, feature-off and release
+rebuild matching the captured executable). Canonical frames confirm the visible
+ground bands remain; no normal-map visual or stable performance acceptance.
+Evidence:
+[`artifacts/native-ggx-hemisphere-2026-10-23.json`](artifacts/native-ggx-hemisphere-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

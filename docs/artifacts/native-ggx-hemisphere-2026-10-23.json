@@ -1,0 +1,65 @@
+{
+  "stage": "WORLD06i",
+  "baseline": "e6061d5",
+  "branch": "feat/native-surface-showcase",
+  "status": "Verified one-sided GGX support correction; not a solution to the remaining visible ground bands",
+  "hardware": "AMD Radeon 880M / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "cargo_environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"},
+  "source_sha256": {
+    "crates/render-wgpu/src/environment.rs": "1427b67ba1416da6083e36baf47fc929aa9eb55b32059c8762c3f38aefb025ba",
+    "crates/render-wgpu/src/environment.wgsl": "1e3e169a4a409e2855e3ce0bd3a7adde75d5abd34edd5f4fb78cbb86ebaf77c0"
+  },
+  "change": "Shared native VNDF kernel returns zero directional weight for strictly negative shading-normal view cosine before constructing the stretched view; exact-zero finite grazing limit remains unchanged. No normal/view rotation, epsilon expansion, radiance floor, new effect switch, pass, allocation, source field or physics change.",
+  "oracle": {
+    "cases": 45,
+    "negative_nv": [-1.0, -0.5, -0.1, -0.01, -1e-7],
+    "roughness": [0.25, 0.5, 1.0],
+    "samples": [4, 8, 16],
+    "f0_rgb": [0.04, 0.5, 0.9],
+    "uniform_radiance": 100,
+    "expected": "Exact zero reflected RGB and directional reflectance below the one-sided outgoing hemisphere",
+    "old_invalid_cases": 39,
+    "old_opposite_view": "NaN RGB at N.V=-1",
+    "old_example": {"nv":-0.1,"roughness":0.5,"samples":16,"rgb":[7.4403844,18.49697,28.111387]},
+    "positive_grazing": "Existing exact-zero/positive shared-WGSL test still passes the independent converged f64 solid-angle BRDF integral with original bounds",
+    "logs": ["hemisphere-before-v2.log", "hemisphere-after.log", "grazing-after.log"]
+  },
+  "checks": [
+    {"command":["cargo","fmt","--all","--","--check"],"exit":0},
+    {"command":["python3","tools/agent-qa/check_architecture.py"],"exit":0},
+    {"command":["cargo","clippy","--workspace","--all-targets","--all-features","--","-D","warnings"],"exit":0},
+    {"command":["cargo","test","--workspace","--lib","--bins"],"exit":0,"passed":2043},
+    {"command":["cargo","test","--workspace","--test","*"],"exit":0,"passed":105},
+    {"command":["cargo","test","-p","thessa-bevy-rcbt","--features","render","--lib","--","--ignored"],"exit":0,"passed":0,"note":"Retired command; not hardware coverage"},
+    {"command":["cargo","test","-p","thessa-render-wgpu","--","--ignored"],"exit":0,"passed":84},
+    {"command":["cargo","check","-p","thessa-terrain-native","--no-default-features"],"exit":0},
+    {"command":["cargo","build","--release","-p","thessa-terrain-native"],"exit":0}
+  ],
+  "local_evidence": "target/surface-showcase/normal-grazing/checks-v1.json and <name>.log; evidence-components-v1.json includes source/frame SHA256s and controls; release rebuild matches captured executable byte-for-byte (rebuild-verification.json)",
+  "captures": {
+    "commands": "target/surface-showcase/normal-grazing/capture-commands-v1.json",
+    "before_binary": "target/surface-showcase/near-shadow/near-native-v2",
+    "before_binary_sha256": "e1c49284d0d1bf699e7837052321b3f58fdd976884bbd3f9b5b9d446353b9598",
+    "after_binary": "target/surface-showcase/normal-grazing/hemisphere-native-v1",
+    "after_binary_sha256": "8f5bd037384a335356857ef3412edd46c4ee1b6258efe78ecc5017f4e295b2c7",
+    "settings": "target/surface-showcase/ground-detail/v3-on-standing2.toml",
+    "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5",
+    "common_arguments": ["--survey-lat","23.565679258039204","--survey-lon","165.13881581863882","--survey-distance","80","--sim-time","0","--sim-step","0","--prestream-seconds","60","--frames","32","--mute","--no-hud"],
+    "replay": "binary --graphics settings + common_arguments + --survey-eye-agl 2|50 --headless output.png --perf-capture output.json; 1280x720, 30 warmup frames",
+    "controls": "Standing survey/source metadata, residency histogram, plant counts/draws/uploads, anisotropy and map resolution match. All captures retain 222 plant descriptors, three draws, 14784 upload bytes and zero final height/material jobs or misses. Histograms do not prove byte-identical resident IDs/content.",
+    "results": [
+      {"name":"v1-before-standing2","png_sha256":"9541b0dbc82807338fe747dfad9a6f414f43aa82c0e843729951e22b4ba1a475","gpu_median_ms":117.11818600376702},
+      {"name":"v1-after-standing2","png_sha256":"977da40a14d77f6b4fdeb4b62b21edc9c617d99cb7ae42b9a785259f69859bca","gpu_median_ms":107.1109070498271},
+      {"name":"v1-after-close50","png_sha256":"4764b3fa80b486bc00a4b85c6881c0fd84d526e6808f7cb796db37eed39b633d","gpu_median_ms":110.66258027293398,"note":"Candidate only, not a fresh paired cost"}
+    ],
+    "visual": "Horizontal ground bands remain visible; this numerical support fix does not close the visual investigation. One blind standing pair prepared under review-v1, separate key under private-v1; zero votes.",
+    "cost": "Single serial standing pair, not stable speedup or performance acceptance"
+  },
+  "diagnostics": {
+    "commands": "target/surface-showcase/normal-grazing/isolation-commands.json",
+    "no_specular": "Ground bands disappear with material normals retained; diagnostic only, not retained settings",
+    "medium_surface_quality": "Bands change but remain; quality changes more than one resolved sampling budget",
+    "no_clouds": "Bands remain; rejected reflected-cloud-only hypothesis; primary sky also changes so this is not a subjective before/after comparison"
+  },
+  "remaining": ["Ground-normal/reflection banding", "Microvisibility and shading-normal energy compensation", "Unresolved normal variance", "Convincing ground volume/cover and shore", "Thin foliage and coarse shadows", "Independent visual and moving-camera acceptance", "Bounded planetary streaming"]
+}

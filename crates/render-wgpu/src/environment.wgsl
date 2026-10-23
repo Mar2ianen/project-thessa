@@ -97,7 +97,12 @@ struct EnvironmentDirection {
 };
 
 fn env_specular_direction(normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,i:u32,count:u32)->EnvironmentDirection {
-    let nv=max(dot(normal,eye),0.0);
+    let nv=dot(normal,eye);
+    // VNDF sampling requires an outgoing view on the shading hemisphere.
+    // Preserve the exact finite grazing limit at zero, but do not turn a
+    // back-facing bump normal into an artificial grazing reflector. At -1 the
+    // old clamp also normalized a zero stretched view and propagated NaNs.
+    if(nv<0.0){return EnvironmentDirection(normal,vec3(0.0));}
     let helper=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(normal.y)>0.9);
     let tangent=normalize(cross(helper,normal));let bitangent=cross(normal,tangent);
     let r=clamp(roughness,0.02,1.0);let alpha=max(r*r,0.0025);let a2=alpha*alpha;

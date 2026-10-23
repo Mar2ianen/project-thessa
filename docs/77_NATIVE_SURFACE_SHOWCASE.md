@@ -528,3 +528,56 @@ Final formatting, workspace Clippy and release rebuild were repeated after an
 explanatory legacy-host comment edit; the current release is byte-identical to
 the captured v2 executable. Retained source/frame hashes and the parsed
 single-setting near-cover delta were independently checked locally.
+
+## WORLD06i — One-sided shared GGX support (candidate)
+
+The ground-normal investigation used the committed WORLD06h binary and existing
+shared settings, not a new renderer path. Disabling specular reflections removes
+the horizontal bands even with material normals enabled; reducing surface
+quality to Medium changes but does not eliminate them. Disabling clouds leaves
+bands visible, rejecting the reflected-cloud hypothesis. The diagnostic images,
+settings and complete commands are under
+`target/surface-showcase/normal-grazing/isolation-commands.json`. These are
+single-setting diagnostic scenes, not accepted defaults or blind preference
+comparisons: the final scene must keep its physically caused reflections.
+
+Inspection identified an independently reproducible shared-kernel bug: VNDF
+sampling clamped `N.V` to zero even for negative cosines but retained the original
+view vector. That samples a visible grazing lobe for a back-facing shading
+normal; an exactly opposite view also normalizes a zero stretched vector and
+propagates NaNs. The shared kernel now returns zero directional weight strictly
+for `N.V < 0`, retaining its existing finite exact-zero/positive grazing limit.
+No normal/view rotation, radiance floor, source-field change, surface flattening,
+simulation change, new setting, pass or resource is introduced.
+
+The actual-WGSL GPU oracle checks 45 combinations: five negative cosines down to
+-1e-7, roughness 0.25/0.5/1 and 4/8/16 samples, with F0 RGB = 0.04/0.5/0.9.
+Before correction, 39 cases were nonzero/non-finite; at `N.V=-0.1`, roughness
+0.5, 16 samples and uniform radiance 100, the old reflected RGB was
+7.440/18.497/28.111, although the one-sided kernel has no outgoing support.
+At `N.V=-1` it produced NaNs. The unchanged exact-zero output oracle passes after
+correction, and the prior independent solid-angle grazing test also passes with
+its original accuracy/convergence bounds. Failing and passing logs are retained
+as `hemisphere-before-v2.log`, `hemisphere-after.log` and `grazing-after.log`.
+
+This fixes kernel support, not the complete bump-mapped-surface transport model:
+microgeometry visibility, unresolved normal variance and shading-normal energy
+compensation remain unimplemented. Canonical frames must still be inspected;
+no full visual/temporal or performance acceptance follows from the regression.
+
+The v1 canonical standing capture confirms the kernel fix is not a complete
+solution to the horizontal bands: they remain visible. The matched pair retains
+the same survey/source metadata, material residency histogram, 222 plant
+descriptors, three draws and 14,784 upload bytes, with drained height/material
+streams. Its GPU medians are 117.118/107.111 ms before/after; the candidate-only
+50 m view is 110.663 ms. These single serial observations are not a speedup or
+accepted budget. One blind standing pair is prepared with separate keys and
+zero votes. No reflection or normal-map switch is disabled in the candidate.
+
+Full local gates pass: formatting, architecture, workspace Clippy, 2,043 lib/bin
+tests, 105 integration tests, 84 renderer hardware tests, feature-off and release
+build. The mandated retired Bevy command selects zero tests. After formatting,
+the release rebuild matches the captured executable byte-for-byte. This is a
+scoped numerical correction, not a visual acceptance milestone. Exact commands,
+source/binary/frame hashes, rejected hypotheses, results and remaining gaps:
+[`native-ggx-hemisphere-2026-10-23.json`](artifacts/native-ggx-hemisphere-2026-10-23.json).

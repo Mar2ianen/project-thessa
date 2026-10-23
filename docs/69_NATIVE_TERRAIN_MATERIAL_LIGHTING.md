@@ -109,6 +109,23 @@ a complete refracting rough-interface or multiple-scattering solver. Legacy
 Bevy retains its existing macro-normal Schlick outgoing split and unattenuated
 incoming diffuse, without native environment bindings.
 
+The shared native GGX VNDF kernel has one-sided outgoing support: a negative
+`dot(shading_normal, eye)` returns zero weight before constructing the stretched
+view. At exactly zero the existing finite analytic grazing limit is retained;
+there is no positive radiance floor, epsilon hemisphere expansion or normal
+rotation toward the viewer. Previously clamping a negative cosine to zero while
+retaining the original view vector incorrectly produced reflected energy behind
+the shading hemisphere, and an exactly opposite view normalized a zero vector
+and propagated NaNs. The correction applies to the existing shared material
+kernel, not a terrain-specific coefficient or extra effect switch.
+
+A 45-case actual-WGSL GPU regression covers five negative view cosines, three
+roughnesses and 4/8/16 samples, with RGB dielectric/metallic F0 values. Radiance
+and directional reflectance must be exactly zero; the existing converged f64
+solid-angle reference still pins the finite zero/positive grazing limit. This
+does not solve normal-map microvisibility, unresolved slope variance, shading-
+normal energy compensation or all grazing visual artifacts.
+
 ## Tangent-space material normals
 
 The native material page now carries an optional 128×128 linear RG8 normal

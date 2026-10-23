@@ -351,6 +351,50 @@ fn probe() {
         );
     }
 
+    #[test]
+    #[ignore = "hardware: one-sided shared GGX rejects back-facing shading normals without altering the finite grazing limit"]
+    fn environment_ggx_has_no_support_below_the_shading_hemisphere() {
+        let backend = crate::Backend::bring_up().unwrap();
+        let field = EnvironmentRadiance::new(8, 4, vec![[100.0; 3]; 32]).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        let mut body = String::new();
+        let mut cases = Vec::new();
+        for nv in [-1.0_f64, -0.5, -0.1, -0.01, -1e-7] {
+            for roughness in [0.25, 0.5, 1.0] {
+                for samples in [4, 8, 16] {
+                    let index = cases.len();
+                    let x = (1.0 - nv * nv).sqrt();
+                    body.push_str(&format!("let r{index}=env_specular_response(vec3(0.0),vec3(0.0,0.0,1.0),normalize(vec3({x:?},0.0,{nv:?})),{roughness:?},vec3(0.04,0.5,0.9),vec3(100.0),{samples}u,vec3<u32>(0u));probe_out[{index}]=vec4(r{index}.radiance,r{index}.reflectance.r);\n"));
+                    cases.push((nv, roughness, samples));
+                }
+            }
+        }
+        let source = format!(
+            "{}\n{}\n@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{{body}}}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0)
+        );
+        let values = probe(&backend, &binding, source, cases.len() as u64, [1, 1, 1]);
+        let mut invalid = Vec::new();
+        for ((nv, roughness, samples), value) in cases.into_iter().zip(values) {
+            if nv == -0.1 && samples == 16 {
+                eprintln!(
+                    "GGX hemisphere nv={nv} roughness={roughness} samples={samples} value={value:?}"
+                );
+            }
+            if value != [0.0; 4] {
+                invalid.push((nv, roughness, samples, value));
+            }
+        }
+        assert!(
+            invalid.is_empty(),
+            "one-sided GGX has no outgoing support; {} invalid cases, first={:?}",
+            invalid.len(),
+            invalid.first()
+        );
+    }
+
     fn probe(
         backend: &crate::Backend,
         binding: &EnvironmentBinding,

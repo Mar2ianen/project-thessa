@@ -455,8 +455,28 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
             let [base, normal, mr] =
                 crate::surface_plant_materials::append(&mut prepared.asset, stem);
             let material = prepared.asset.materials.len();
+            let base_color = if stem {
+                [1.0; 4]
+            } else {
+                match prototype.kind {
+                    thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
+                        [0.72, 0.70, 0.62, 1.0]
+                    }
+                    thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
+                        [1.0, 0.96, 0.90, 1.0]
+                    }
+                    _ => [1.0; 4],
+                }
+            };
+            let diffuse_transmission = if stem {
+                0.0
+            } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
+                0.32
+            } else {
+                0.45
+            };
             prepared.asset.materials.push(Material {
-                base_color: [1.0; 4],
+                base_color,
                 base_texture: Some(base),
                 normal_texture: Some(normal),
                 metallic_roughness_texture: Some(mr),
@@ -465,7 +485,7 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
                 double_sided: true,
                 // Authored total scattering and partition, not a measured
                 // fossil spectrum; R + T never exceeds the source albedo.
-                diffuse_transmission: if stem { 0.0 } else { 0.45 },
+                diffuse_transmission,
                 ..Default::default()
             });
             prepared.asset.primitives.push(Primitive {

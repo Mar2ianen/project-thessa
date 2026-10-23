@@ -1149,15 +1149,15 @@ fn build_plant_prototypes() -> Vec<PlantMesh> {
         };
         match kind {
             ScatterKind::FernClump => {
-                mesh.albedo_srgb = [0.34, 0.39, 0.16];
+                mesh.albedo_srgb = [0.20, 0.28, 0.10];
                 fern_clump(&mut mesh);
             }
             ScatterKind::ReedClump => {
-                mesh.albedo_srgb = [0.33, 0.35, 0.11];
+                mesh.albedo_srgb = [0.25, 0.30, 0.11];
                 reed_clump(&mut mesh);
             }
             ScatterKind::LycopsidTree => {
-                mesh.albedo_srgb = [0.32, 0.35, 0.14];
+                mesh.albedo_srgb = [0.22, 0.30, 0.12];
                 lycopsid_tree(&mut mesh);
             }
             _ => unreachable!(),

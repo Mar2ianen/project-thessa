@@ -873,6 +873,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Shadow texel grid per cascade (power of two).",
         },
         SettingMeta {
+            path: "shadows.first_cascade_distance_m",
+            label: "First shadow cascade distance",
+            kind: SettingKind::Float,
+            range: "1..=max_distance_m; omitted = legacy",
+            step: "1",
+            unit: "m",
+            advanced: true,
+            restart_required: true,
+            description: "Optional near cover radius. Remaining cascades span geometrically to the same far distance with unchanged map memory. One cascade still covers the far distance. Omission preserves each host's legacy distribution.",
+        },
+        SettingMeta {
             path: "shadows.normal_bias_m",
             label: "Shadow normal bias",
             kind: SettingKind::Float,

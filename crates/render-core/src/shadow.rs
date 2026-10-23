@@ -3,8 +3,34 @@
 use glam::{DMat4, DVec3};
 
 pub fn cascade_radii(distance_m: f64, count: u32) -> Option<Vec<f64>> {
+    cascade_radii_with_first(distance_m, count, None)
+}
+
+/// Optional explicit near cover with the same cascade count/far endpoint.
+/// Omission preserves the original distribution byte-for-byte.
+pub fn cascade_radii_with_first(
+    distance_m: f64,
+    count: u32,
+    first_m: Option<f64>,
+) -> Option<Vec<f64>> {
     if !(1..=4).contains(&count) || !distance_m.is_finite() || distance_m <= 0.0 {
         return None;
+    }
+    if let Some(first) = first_m {
+        if !first.is_finite() || first <= 0.0 || first > distance_m {
+            return None;
+        }
+        return Some(
+            (0..count)
+                .map(|i| {
+                    if i + 1 == count {
+                        distance_m
+                    } else {
+                        first * (distance_m / first).powf(f64::from(i) / f64::from(count - 1))
+                    }
+                })
+                .collect(),
+        );
     }
     Some(
         (0..count)
@@ -96,6 +122,59 @@ pub fn sphere_intersects_clip(clip: DMat4, center: DVec3, radius: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_near_cover_preserves_count_far_endpoint_and_projection_bounds() {
+        for count in 1..=4 {
+            let legacy = cascade_radii(12000.0, count).unwrap();
+            assert_eq!(
+                cascade_radii_with_first(12000.0, count, None).unwrap(),
+                legacy
+            );
+            for first in [1.0, 25.0, 300.0, 12000.0] {
+                let radii = cascade_radii_with_first(12000.0, count, Some(first)).unwrap();
+                assert_eq!(radii.len(), count as usize);
+                assert_eq!(*radii.last().unwrap(), 12000.0);
+                if count > 1 {
+                    assert_eq!(radii[0], first);
+                }
+                assert!(radii.windows(2).all(|r| r[0] <= r[1]));
+                for radius in radii {
+                    let clip = directional_clip(
+                        DVec3::new(3e12, -2e12, 1e12),
+                        DVec3::new(0.2, 0.7, 0.4).normalize(),
+                        radius,
+                        12000.0,
+                        1024,
+                    )
+                    .unwrap();
+                    for p in [
+                        DVec3::ZERO,
+                        DVec3::X * radius,
+                        DVec3::Y * radius,
+                        DVec3::Z * radius,
+                    ] {
+                        let q = clip.project_point3(p);
+                        assert!(q.x.abs() < 1.0 && q.y.abs() < 1.0 && (0.0..1.0).contains(&q.z));
+                        let narrow = clip.as_mat4().project_point3(p.as_vec3()).as_dvec3();
+                        assert!(
+                            (q - narrow).length() * 48000.0 < 0.01,
+                            "<1cm conservative clip-space narrowing envelope"
+                        );
+                    }
+                }
+            }
+        }
+        for bad in [f64::NAN, f64::INFINITY, 0.0, -1.0, 12001.0] {
+            assert!(cascade_radii_with_first(12000.0, 4, Some(bad)).is_none());
+        }
+        let radii = cascade_radii_with_first(12000.0, 4, Some(25.0)).unwrap();
+        assert!((radii[1] / radii[0] - radii[2] / radii[1]).abs() < 1e-12);
+        let old = cascade_radii(12000.0, 4).unwrap()[0];
+        assert!(
+            old / radii[0] > 30.0,
+            "same texel count, over 30x finer first cover"
+        );
+    }
     #[test]
     fn cover_rejects_invalid_inputs_and_bounds_narrowing_at_astronomical_origins() {
         assert!(cascade_radii(f64::NAN, 4).is_none());

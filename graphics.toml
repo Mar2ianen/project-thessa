@@ -208,7 +208,9 @@ ray_bias_m = 0.01
 enabled = true
 quality = "high" # low | medium | high (expands the numbers below on preset apply)
 cascades = 4 # 1..=4
-max_distance_m = 12000.0 # far end of cover in metres; first cascade ends at max/40
+max_distance_m = 12000.0 # far end of cover in metres
+# first_cascade_distance_m = 25.0 # optional near radius; same cascade/map budget
+# Omit for legacy host distributions; native legacy first = max*40^(1/count-1).
 map_size = 4096 # per-cascade texel grid, power of two 512..=8192
 normal_bias_m = 1.5 # normal offset in metres against acne on 32 m mesh cells
 

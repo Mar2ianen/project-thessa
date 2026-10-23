@@ -193,7 +193,12 @@ The checked-in vertical slice currently contains:
       ([doc 68](docs/68_NATIVE_NIGHT_LIGHTS.md)).
      The shared shadow atlas reuses depth only for unchanged light matrices,
      terrain and mesh casters; motion/source changes invalidate it, with no
-     quality or update-rate reduction.
+      quality or update-rate reduction. Optional
+      `shadows.first_cascade_distance_m` redistributes near precision without
+      increasing atlas memory or shortening far cover; omission keeps legacy
+      spacing. Mesh and terrain shadow receivers use the triangle plane rather
+      than smooth/material shading normals
+      ([doc 69](docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)).
      Headless `--perf-capture target/native-perf.json` exports the existing
      `thessa-perf` JSON/CSV format, including hardware GPU command intervals
      where supported (explicitly unavailable otherwise). Normal runs create no

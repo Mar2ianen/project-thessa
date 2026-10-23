@@ -603,10 +603,13 @@ pub struct ShadowSettings {
     /// Cascade count, 1..=4.
     #[serde(default = "default_shadow_cascades")]
     pub cascades: u32,
-    /// Far end of cascade cover in metres. Near stays sub-metre for pilot
-    /// detail; the first cascade ends at max/40.
+    /// Far end of cascade cover in metres.
     #[serde(default = "default_shadow_distance")]
     pub max_distance_m: f64,
+    /// Optional first cascade radius. Remaining cascades span geometrically
+    /// to max_distance_m; omission preserves each host's legacy distribution.
+    #[serde(default)]
+    pub first_cascade_distance_m: Option<f64>,
     /// Shadow texel grid per cascade (power of two, 512..=8192).
     #[serde(default = "default_shadow_map_size")]
     pub map_size: u32,
@@ -638,6 +641,7 @@ impl Default for ShadowSettings {
             quality: Quality::High,
             cascades: default_shadow_cascades(),
             max_distance_m: default_shadow_distance(),
+            first_cascade_distance_m: None,
             map_size: default_shadow_map_size(),
             normal_bias_m: default_shadow_normal_bias(),
         }

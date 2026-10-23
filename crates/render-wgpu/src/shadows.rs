@@ -65,9 +65,10 @@ impl ShadowAtlas {
                 "invalid shadow resolution/filter/bias".into(),
             ));
         }
-        let radii = thessa_render_core::shadow::cascade_radii(
+        let radii = thessa_render_core::shadow::cascade_radii_with_first(
             settings.shadow_max_distance_m,
             settings.shadow_cascades,
+            settings.shadow_first_cascade_distance_m,
         )
         .ok_or_else(|| BackendError::Device("invalid shadow cover".into()))?;
         let layer_count = 3 * radii.len() as u32;

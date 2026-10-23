@@ -444,3 +444,87 @@ disabling terrain normal maps removes the distant ground bands while leaving
 coarse/trunk shadows. This isolates a normal-map response/filtering issue, not a
 reason to erase surface relief or disable shadows in the accepted scene. The
 feature-off build and fixed L14 plant-root GPU diagnostic also pass.
+
+## WORLD06h — Geometric mesh receivers and near shadow precision (candidate)
+
+The optional shared `shadows.first_cascade_distance_m` gives the near cascade an
+explicit radius while preserving cascade count, atlas resolution/memory and far
+cover. Native intermediate radii use geometric spacing; Bevy forwards it into
+the existing engine cascade builder. Omitted configuration keeps each host's
+legacy behavior. Finite requests clamp to 1 m..far cover, non-finite requests
+fall back with a diagnostic, and a single cascade still covers the far endpoint.
+It is an extension of the shared graphics/atlas pipeline, not a second shadow
+system, hidden prerequisite, vendor check or change to simulation/causality.
+
+The canonical-site policy requests four 4096 px cascades and a 64 MiB three-star
+atlas budget, which resolves to 1024 px per layer / 48 MiB. Legacy native radii
+are 754.460/1897.367/4771.624/12000 m; the old comment saying the first was
+`max/40` described the Bevy builder, not this native formula. A 25 m first cover
+redistributes those same maps to 25/195.743/1532.619/12000 m: first-map texels
+improve from 1.479 m to 4.902 cm, including snapping guards. This trades spatial
+precision between cascades, not material spectrum, physical light transport or
+quality by increasing GPU memory. No source height, plant geometry or placement
+changes accompany it.
+
+Targeted CPU tests cover exact legacy equivalence, count/endpoints, monotonic
+geometric spacing, invalid values, requested/resolved round trips, unchanged
+resolution/filter/count budgets and disabled behavior. All new projection
+fixtures remain within a conservative 1 cm clip-space narrowing envelope even
+at 3e12 m origins and 12 km caster reach. The shared production GPU fixture
+runs both legacy and explicit cover, retaining per-light occlusion, cache/forced
+redraw identity and large-origin precision. These are numerical/resource
+oracles; canonical captures and visual/performance acceptance are separate.
+
+The first canonical-site captures, retained as `near-native-v1` and the
+`near-*`/`legacy-lowbias-*` frames under `target/surface-showcase/near-shadow`,
+showed that redistributing cover did not by itself eliminate trunk stripes.
+Reducing the existing metre bias from 1.5 m to 0.02 m was a diagnostic, not a
+retained default or a demonstrated global error bound. Those frames are not
+the corrected receiver candidate.
+
+Inspection then found the mesh receiver used its smooth/normal-mapped shading
+normal to reconstruct the PCF receiver depth plane. Terrain already used the
+raster triangle's geometric plane. Mesh raster now reuses that same derivative
+construction, including orientation and degenerate fallback; BRDF normals and
+caster geometry stay unchanged. The visibility consumer receives geometry,
+including bias for optional ray queries, rather than bump-map perturbations.
+This is a shared mesh correctness fix, not a plant-specific shader or renderer.
+
+A new production GPU regression uses flat z=-4 m geometry, strongly varying
+interpolated normals, zero metre bias and no blocker. Against the exact same
+lighting with shadows disabled, the old implementation produced an 18-code
+sRGB maximum error; the corrected plane passes the unchanged <=1-code tolerance.
+The failing `receiver-before.log` and passing `receiver-after.log` are retained.
+The final candidate must still be judged in matched canonical frames; successful
+oracles and first-map texel size are not visual acceptance.
+
+The final v2 pipeline passes formatting, architecture, workspace Clippy, 2,043
+lib/bin tests, 105 integration tests (including both new actual-GPU fixtures),
+83 ignored renderer hardware tests, the focused native plant lifecycle/contact
+diagnostics, feature-off check and release build. The retired Bevy ignored
+command again selects zero tests. Static streams drain fully; plants remain
+222 descriptors, three draws and 14,784 upload bytes. Near standing/close pairs
+also match survey/source metadata, material residency histograms, anisotropy
+and native map resolution. Equal histograms do not prove equal resident IDs
+or bytes; no stronger content determinism is claimed.
+
+Final GPU medians are 106.669/114.963 ms before/near-after standing and
+127.386/123.936 ms close; overview candidate is 76.005 ms. These are single serial
+pairs, not an accepted budget or speedup. The legacy-cover after-control is
+116.543 ms and differs in a few intermediate material residency counts from
+before despite drained streams: its whole-frame delta is not shadow-only.
+Three blind pairs are prepared with separate keys and zero votes; that legacy
+control pair should be treated as invalid for a pure shadow comparison.
+
+Some trunk stripes, grid-like shadows, aliasing thin leaves and the unconvincing
+ground/shore remain visible. The exact flat-plane correction is retained, but
+neither it nor the 25 m optional cover is final surface/visual acceptance. The
+0.02 m experimental bias is not retained; final near captures keep 1.5 m.
+Commands, source/binary/frame hashes, negative attempts, numerical bounds and
+limits:
+[`native-near-shadow-receivers-2026-10-23.json`](artifacts/native-near-shadow-receivers-2026-10-23.json).
+
+Final formatting, workspace Clippy and release rebuild were repeated after an
+explanatory legacy-host comment edit; the current release is byte-identical to
+the captured v2 executable. Retained source/frame hashes and the parsed
+single-setting near-cover delta were independently checked locally.

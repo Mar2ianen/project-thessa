@@ -2964,6 +2964,7 @@ the typed settings/GUI descriptors, with resolved capture metadata:
 | `shadows.enabled = false` | No atlas, shadow pipelines, passes, frame uploads or shadow receiver bindings. |
 | `shadows.quality` | Low: one comparison per lookup; Medium: 3×3 PCF; High: 5×5 PCF. |
 | `shadows.cascades`, `max_distance_m`, `map_size`, `normal_bias_m` | Shared existing cascade/bias intent, now consumed by native raster shadows. |
+| `shadows.first_cascade_distance_m` | Optional explicit first radius, clamped to 1 m..far cover. Native remaining radii span geometrically to the unchanged far endpoint; Bevy forwards it to its existing cascade builder. Omitted keeps each host's legacy distribution. One cascade still covers the far endpoint. Restart required. |
 | `renderer.shadow_memory_mib` | Default 64 MiB. Resolution is halved until all three sources/cascades fit; default resolves 4096 requested to 1024 native, 48 MiB. |
 
 Presets expand surface quality to Low/Medium/High/High. The atlas uses portable

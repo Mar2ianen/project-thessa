@@ -27,6 +27,54 @@ Default-off selection retains the legacy datum. The existing 512-leaf demand,
 worker/source budgets and GPU layers are unchanged. Captures expose
 `native_material_reference_height_m` and its source/limitation string.
 
+## Near shadow precision
+
+`shadows.first_cascade_distance_m` optionally sets the first shadow cover radius
+without enlarging the atlas, adding cascades or shortening the far cover. For
+two or more cascades, native radii interpolate geometrically from this radius
+to `shadows.max_distance_m`; one cascade retains the far radius. The shared
+resolver clamps finite requests to 1 m..far cover, and a non-finite request
+falls back with a note. Omission preserves each host's legacy distribution;
+native legacy first radius is `far * 40^(1/count - 1)`, not `far / 40`.
+The legacy Bevy adapter forwards the optional first radius into its existing
+cascade builder. No renderer-specific control bypass is introduced.
+
+The 64 MiB three-star/four-cascade native policy resolves the requested 4096 px
+atlas to 1024 px per layer (48 MiB). At 12 km far cover its legacy first radius
+is 754.460 m, giving 1.479 m per texel including the snapping guard. An explicit
+25 m first radius gives 25/195.743/1532.619/12000 m radii and 4.902 cm first-map
+texels with the same allocation/pass budget. This is a precision redistribution,
+not soft-shadow physics or evidence that thin foliage is now resolved.
+`normal_bias_m` remains a separate existing control; changing cover alone does
+not prove contact fidelity or remove material-normal grazing artifacts.
+
+The requested/resolved optional first radius round-trips; captures report
+`shadow_first_cascade_distance_m` (`legacy` when omitted) and
+`shadow_max_distance_m`. The disabled path remains atlas-free. CPU tests pin
+count/endpoints, legacy equivalence, monotonic spacing, invalid inputs and a
+conservative <1 cm f64-to-f32 clip-space narrowing envelope at a 3e12 m origin.
+The production shared-shadow GPU fixture also runs with explicit near cover,
+retaining independent light occlusion, exact cache/forced-redraw equality and
+large-origin behavior. Visual and moving-camera acceptance remain separate.
+
+Opaque mesh receivers now use the same geometric receiver-plane rule as terrain:
+screen derivatives of the interpolated position determine the triangle normal,
+oriented consistently with the visible surface. Interpolated and normal-mapped
+normals remain inputs to lighting, not to PCF depth gradients or geometric ray
+visibility bias. A degenerate derivative retains the existing normal fallback.
+This avoids interpreting a smooth cone side or a bump map as a different shadow
+receiver plane; it does not flatten the BRDF, alter caster geometry or remove
+real leaf/branch shadows. Without a visibility consumer the shader optimizer can
+discard the unused plane calculation; no new pass, allocation or setting is
+introduced for this correctness fix.
+
+The GPU regression uses a single flat, unoccluded quad with strongly varying
+smooth normals and zero metre bias. Enabling shadows previously changed pixels
+by up to 18 sRGB codes; the geometric-plane implementation passes the same
+<=1-code bound against shadows disabled. This is a known-flat-plane lighting
+oracle, not subjective visual acceptance. The normal-map grazing bands on the
+ground remain a separate issue.
+
 ## Source and consumer
 
 Regular and conforming native terrain now receive the existing shared sky field

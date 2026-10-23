@@ -417,23 +417,24 @@ fn setup(
             ..default()
         },
         // Planetary cascade cover from the TOML budget (engine default ends
-        // at 150 m). Near stays sub-metre for pilot detail; first cascade
-        // ends at max/40. Tuned by screenshot, budgeted by preset.
+        // at 150 m). Near starts sub-metre for pilot detail. An explicit first
+        // cover overrides the legacy max/40; count and memory stay preset-budgeted.
         {
-            let (cascades, max_m) = graphics
+            let (cascades, max_m, first_m) = graphics
                 .as_deref()
                 .map(|g| {
                     (
                         g.0.shadow_cascades as usize,
                         g.0.shadow_max_distance_m as f32,
+                        g.0.shadow_first_cascade_distance_m.map(|m| m as f32),
                     )
                 })
-                .unwrap_or((4, 12_000.0));
+                .unwrap_or((4, 12_000.0, None));
             Into::<CascadeShadowConfig>::into(CascadeShadowConfigBuilder {
                 num_cascades: cascades.clamp(1, 4),
                 minimum_distance: 0.5,
                 maximum_distance: max_m,
-                first_cascade_far_bound: max_m / 40.0,
+                first_cascade_far_bound: first_m.unwrap_or(max_m / 40.0),
                 overlap_proportion: 0.2,
             })
         },

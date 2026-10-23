@@ -133,6 +133,15 @@ fn cached_matches_redraw(
 
 #[test]
 fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_origin_precision() {
+    shared_shadow_atlas_fixture(None);
+}
+
+#[test]
+fn explicit_near_shadow_cover_keeps_shared_occlusion_cache_and_large_origin_precision() {
+    shared_shadow_atlas_fixture(Some(3.0));
+}
+
+fn shared_shadow_atlas_fixture(first_m: Option<f64>) {
     let Some(backend) = backend() else {
         return;
     };
@@ -144,6 +153,7 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
     let mut settings =
         ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
     settings.shadow_max_distance_m = 10.0;
+    settings.shadow_first_cascade_distance_m = first_m;
     let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
     let patch = TerrainPatch {
         anchor: TileAnchor::new(TileKey::new(0, 0, 0, 0).unwrap(), 1000.0).unwrap(),
@@ -161,6 +171,16 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
         Some(&settings),
     )
     .unwrap();
+    assert_eq!(
+        terrain.shadows().unwrap().storage_bytes(),
+        3 * 2 * 512 * 512 * 4,
+        "explicit near cover must not change the atlas allocation"
+    );
+    assert_eq!(
+        terrain.shadows().unwrap().caster_distance_m(),
+        30.0,
+        "finite far caster cover is unchanged"
+    );
     terrain.publish_partition(&backend, &[]).unwrap();
     let sun = DVec3::new(1.0, 0.0, 1.0).normalize();
     let other = DVec3::new(-1.0, 0.0, 1.0).normalize();
@@ -321,6 +341,99 @@ fn shared_shadow_atlas_occludes_each_light_independently_and_preserves_large_ori
             .unwrap()
             .is_none(),
         "disabled allocates no atlas/pipelines"
+    );
+}
+
+#[test]
+fn smooth_mesh_shading_normals_do_not_change_the_shadow_receiver_plane() {
+    let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    let mut requested = RequestedGraphics::default();
+    requested.shadows.cascades = 1;
+    requested.shadows.map_size = 512;
+    requested.shadows.normal_bias_m = 0.0;
+    requested.shadows.quality = Quality::High;
+    let mut settings =
+        ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+    settings.shadow_max_distance_m = 10.0;
+    let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let patch = TerrainPatch {
+        anchor: TileAnchor::new(TileKey::new(0, 0, 0, 0).unwrap(), 1000.0).unwrap(),
+        page: &page,
+    };
+    let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &[patch],
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 1,
+            height_grid_size: 2,
+            material_layers: 1,
+        },
+        Some(&settings),
+    )
+    .unwrap();
+    terrain.publish_partition(&backend, &[]).unwrap();
+    let mut source = source();
+    source.primitives.truncate(1);
+    for vertex in &mut source.primitives[0].vertices {
+        // Flat z=-4 geometry, deliberately tilted/smooth interpolated normals.
+        // The analytic receiver plane is still z=-4 everywhere, with no blocker.
+        let x = vertex.position[0] / 3.0 * 0.6;
+        vertex.normal = [x, 0.0, (1.0 - x * x).sqrt()];
+    }
+    let sun = DVec3::new(1.0, 0.2, 1.0).normalize();
+    let lights = SurfaceLighting {
+        directions: [sun.as_vec3().extend(0.0).to_array(), [0.0; 4], [0.0; 4]],
+        colors_lux: [[std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+        ..Default::default()
+    };
+    let render = |shadows: bool, terrain: &mut TerrainRenderer| {
+        let mut mesh = MeshRenderer::with_surface(
+            &backend,
+            &source,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality: Quality::Medium,
+                reflections: false,
+                shadows: if shadows { terrain.shadows() } else { None },
+                ray_tracing: None,
+            },
+        )
+        .unwrap();
+        let view = camera(DVec3::ZERO);
+        terrain.update_view(&backend, &view).unwrap();
+        terrain
+            .update_shadows(&backend, DVec3::ZERO, &lights)
+            .unwrap();
+        mesh.update(
+            &backend,
+            &view,
+            &lights,
+            &[MeshInstance {
+                position_m: DVec3::ZERO,
+                rotation: DQuat::IDENTITY,
+                scale: 1.0,
+            }],
+        )
+        .unwrap();
+        if shadows {
+            draw(&backend, &mut mesh, Some(terrain))
+        } else {
+            draw(&backend, &mut mesh, None)
+        }
+    };
+    let reference = render(false, &mut terrain);
+    let actual = render(true, &mut terrain);
+    let max_error = reference
+        .iter()
+        .zip(&actual)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert!(
+        max_error <= 1,
+        "unoccluded smooth-normal receiver differs by {max_error} sRGB codes with shadows enabled"
     );
 }
 

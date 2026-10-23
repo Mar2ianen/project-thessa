@@ -1,0 +1,87 @@
+{
+  "stage": "WORLD06h",
+  "date": "2026-10-23",
+  "baseline": "46b2647",
+  "branch": "feat/native-surface-showcase",
+  "status": "Verified geometric receiver correction and optional near precision; surface/visual/performance acceptance still incomplete",
+  "hardware": "AMD Radeon 880M Graphics / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "cargo_environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"},
+  "scope": [
+    "Opaque meshes use the raster triangle plane, not smooth/material normals, for shadow receiver depth gradients and geometric visibility bias; matches the existing terrain rule",
+    "Optional requested/resolved shadows.first_cascade_distance_m; existing atlas/count/far-cover budgets; legacy spacing when omitted; same shared setting forwarded to Bevy",
+    "No plant/scatter/material/geometry/physics or authoritative height changes"
+  ],
+  "source_sha256": {
+    "apps/client/src/main.rs": "04f085cb04409333c1af10baf882a103a2dc97d9999567d0f03bb8fa4b82d672",
+    "crates/graphics/src/metadata.rs": "b126301f7c2f3d9b57740e5b43ef9d3bf81e05ff6b6b0e8ea1f463fd04f6cbe8",
+    "crates/graphics/src/resolve.rs": "2d9dd84cb3744d4ba2d1da434571cad8ff31aaedc1486cdfbe8bab404c343dde",
+    "crates/graphics/src/settings.rs": "3d486ffe9797b306fe88398e7f996f9ec928a940a2ba1c895e0e0161326cc1d8",
+    "crates/render-core/src/shadow.rs": "ed9c643d034ccf5de49b3af623cdc8ead14e3b5ba8a70f4c73182d5424b4d7f5",
+    "crates/render-wgpu/src/mesh.wgsl": "7ed78b41c4f647455c4e0a8b4f359a67a2d8bc9fe23b4966b3e474f8bf64b765",
+    "crates/render-wgpu/src/shadows.rs": "4c658be6d38a10360c3b5fa70c6e690711e0c3fc805cbfecb9e62cf3afea4593",
+    "crates/render-wgpu/tests/surface_lighting.rs": "cb8bfc19b3bb54fe112ee21c2952f325638c22d7c011814bc1a32df61871d40b"
+  },
+  "oracles": {
+    "receiver": "Production flat z=-4 m unoccluded quad with strongly tilted smooth normals and zero metre bias. Shadows enabled versus disabled: old maximum error 18 sRGB codes; corrected implementation passes unchanged <=1-code tolerance.",
+    "near": "Exact legacy equivalence when omitted, preserved count/far endpoint, monotonic geometric spacing, invalid inputs, single-cascade far cover, requested/resolved round trips and defensive clamps",
+    "precision": "Conservative <1 cm clip-space f64-to-f32 narrowing envelope at 3e12 m origin and 12 km reach; this is not a universal contact/bias error bound",
+    "gpu": "Legacy and explicit cover retain independent per-light occlusion, exact depth-cache versus forced-redraw equality and large-origin behavior; actual atlas allocation and finite far caster cover asserted unchanged",
+    "disabled": "Existing disabled atlas path retained; optional distance does not enable shadows or add a pass/allocation"
+  },
+  "near_policy": {
+    "configuration": "shadows.first_cascade_distance_m = 25.0; optional/commented in graphics.toml, not enabled by default",
+    "clamp": "Finite requests to 1 m..resolved far cover; non-finite requests fall back to legacy with a note",
+    "legacy_radii_m": [754.4600578097612, 1897.3665961010277, 4771.624372602304, 12000.0],
+    "candidate_radii_m": [25.0, 195.74338205844316, 1532.6188647871058, 12000.0],
+    "allocation": "Same three-star/four-cascade 1024 px layers, 48 MiB under the existing 64 MiB cap",
+    "first_texel_m_including_guard_before_after": [1.4793108738487903, 0.04901885986328125],
+    "limit": "Precision redistribution, not analytic area-light penumbrae or resolved thin-leaf shadows"
+  },
+  "negative_evidence": {
+    "receiver_before": "target/surface-showcase/near-shadow/receiver-before.log; reproducible failed 18-code flat-plane oracle",
+    "receiver_after": "target/surface-showcase/near-shadow/receiver-after.log; same <=1-code bound passes",
+    "first_draft": "near-native-v1 and exploratory-captures.json: near cover alone did not eliminate trunk stripes; 0.02 m normal-bias captures are diagnostics, not a retained default or a proved global bias bound",
+    "residency": "The v2 after-legacy standing control differs in a few intermediate material-page residency counts despite drained streams. Do not treat its full-frame delta as shadow-only. The selected near standing and close pairs match residency histograms, survey/source metadata, plant counts/draws/uploads, anisotropy and map resolution. Histogram equality does not prove byte-identical resident page IDs/content.",
+    "visual": "Final frames retain thin-leaf aliasing, some trunk stripes, grid-like coarse shadows and unconvincing flat ground/shore. Numerical correction is not a claim that all visible stripes are solved."
+  },
+  "checks": [
+    {"command":["cargo","fmt","--all","--","--check"],"exit":0},
+    {"command":["python3","tools/agent-qa/check_architecture.py"],"exit":0},
+    {"command":["cargo","clippy","--workspace","--all-targets","--all-features","--","-D","warnings"],"exit":0},
+    {"command":["cargo","test","--workspace","--lib","--bins"],"exit":0,"passed":2043},
+    {"command":["cargo","test","--workspace","--test","*"],"exit":0,"passed":105,"note":"Includes the two new actual-GPU shared receiver/cover fixtures"},
+    {"command":["cargo","test","-p","thessa-bevy-rcbt","--features","render","--lib","--","--ignored"],"exit":0,"passed":0,"note":"Retired command; not hardware coverage"},
+    {"command":["cargo","test","-p","thessa-render-wgpu","--","--ignored"],"exit":0,"passed":83},
+    {"command":["cargo","test","-p","thessa-terrain-native","--bin","thessa-terrain-native","survey_plants_retain_body_fixed_descriptors","--","--ignored"],"exit":0,"passed":1},
+    {"command":["cargo","test","-p","thessa-terrain-native","--test","plant_ground_contact","fixed_l14_gpu_patch_plant_root_contact","--","--ignored"],"exit":0,"passed":1},
+    {"command":["cargo","check","-p","thessa-terrain-native","--no-default-features"],"exit":0},
+    {"command":["cargo","build","--release","-p","thessa-terrain-native"],"exit":0}
+  ],
+  "local_evidence": "target/surface-showcase/near-shadow/checks-v2.json and <name>.log; evidence-components-v2.json includes source/log/frame SHA256s; complete replay commands in capture-commands-v2.json",
+  "final_verification": "final-checks.json: formatting, workspace all-features/all-targets Clippy and release build repeated after the legacy-host explanatory comment edit. Current release SHA256 matches the captured executable byte-for-byte. All retained source/frame hashes and the parsed single-setting near-cover delta verified.",
+  "captures": {
+    "before_binary": "target/surface-showcase/ground-filtering/filter-native",
+    "before_binary_sha256": "d2db0ff00fc7c2a327cd3096267f96051417813268115d7ae8687616bf6c6adf",
+    "after_binary": "target/surface-showcase/near-shadow/near-native-v2",
+    "after_binary_sha256": "e1c49284d0d1bf699e7837052321b3f58fdd976884bbd3f9b5b9d446353b9598",
+    "baseline_settings": "target/surface-showcase/ground-detail/v3-on-standing2.toml",
+    "baseline_settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5",
+    "near_settings": "target/surface-showcase/near-shadow/near-standing2.toml",
+    "near_settings_sha256": "49880da44866901418b487bd734e98c509c8e651ff169034f410692c317ee92d",
+    "settings_delta": "Parsed settings differ only by the explicit first_cascade_distance_m = 25.0; normal_bias_m remains 1.5 m",
+    "common_arguments": ["--survey-lat","23.565679258039204","--survey-lon","165.13881581863882","--sim-time","0","--sim-step","0","--prestream-seconds","60","--frames","32","--mute","--no-hud"],
+    "replay": "binary --graphics settings + common_arguments + --survey-distance 80 --survey-eye-agl 2|50 (overview: 1800/800) --headless output.png --perf-capture output.json; 1280x720, 30 warmup frames",
+    "controls": "222 plant descriptors, three draws, 14784 frame-upload bytes and 1024 px native shadow layers throughout; zero final height/material jobs and material misses",
+    "results": [
+      {"name":"v2-before-standing2","png_sha256":"90efbe1d59684b04b7b06d45311f5822b05689158f0b2cb616f04709bbee414b","gpu_median_ms":106.66900743508674},
+      {"name":"v2-after-legacy-standing2","png_sha256":"ee64514a251580c8bb26e0d672665f205c18c8471d302947ad2871ae08fe827b","gpu_median_ms":116.54285286367607,"limit":"Intermediate material residency counts differ from before"},
+      {"name":"v2-after-near-standing2","png_sha256":"e19261f8ac130c9bdaa176209893261aba96b7a6dcd1102a6544dedaff66d3e4","gpu_median_ms":114.96305122099116},
+      {"name":"v2-before-close50","png_sha256":"4006a6e621a28c03ed3cb52883fce62dd5abd80dcd59d98d821f21698156d5ee","gpu_median_ms":127.38593485373498},
+      {"name":"v2-after-near-close50","png_sha256":"79f65c999a173394773139b03f9bb367b1b24e01859db25ad537f127264c2ffc","gpu_median_ms":123.93592479189348},
+      {"name":"v2-after-near-overview","png_sha256":"a92b366a77ee40cbe82db7ee28fe1381b29625171eccd4ad1d9d2aca1c8705eb","gpu_median_ms":76.00485015652086}
+    ],
+    "cost_limit": "Single serial before/after pairs; standing increases, close decreases. No accepted budget or stable performance win; overview is candidate-only.",
+    "blind_review": "Three prepared pairs under review-v2, keys under private-v2, zero votes; standing-plane pair has the disclosed residency confound and should be marked invalid for a shadow-only full-frame comparison"
+  },
+  "remaining": ["Grazing material-normal bands", "Coarse shadows and some trunk artifacts", "Thin-leaf aliasing and missing foliage transmission", "Ground volume and understory", "Shore composition", "Moving-camera and independent visual acceptance", "Bounded planetary streaming"]
+}

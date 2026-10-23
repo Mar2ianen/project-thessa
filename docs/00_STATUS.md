@@ -201,6 +201,23 @@ See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md) and
 [doc 77](77_NATIVE_SURFACE_SHOWCASE.md); commands, hashes and limitations:
 [`artifacts/native-ground-filtering-2026-10-23.json`](artifacts/native-ground-filtering-2026-10-23.json).
 
+WORLD06h is a candidate shared shadow correction and precision redistribution:
+meshes now use the true raster triangle receiver plane rather than smooth/bump
+normals, matching terrain; optional first cascade radius keeps far cover,
+count/allocation budget and legacy spacing when omitted. The default capture
+budget otherwise spends 1024 texels across a 754 m first radius. The new GPU
+flat-plane oracle reproduces an 18-code false shadow before correction and passes
+the unchanged <=1-code bound afterward. Targeted CPU and shared-shadow GPU
+oracles and full local gates pass (2,043 lib/bin, 105 integration, 83 ignored
+renderer hardware tests, focused plant GPU diagnostics, feature-off and release
+build). Canonical standing/close GPU medians are 106.669/114.963 ms and
+127.386/123.936 ms before/near-after: not stable performance evidence.
+Thin foliage, some trunk artifacts and grid-like shadows remain; material-normal
+grazing bands are separate and unresolved. No independent visual acceptance.
+See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md) and
+[doc 77](77_NATIVE_SURFACE_SHOWCASE.md); exact evidence:
+[`artifacts/native-near-shadow-receivers-2026-10-23.json`](artifacts/native-near-shadow-receivers-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

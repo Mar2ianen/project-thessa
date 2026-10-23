@@ -42,6 +42,13 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     if (!front && material.double_sided==0u) { discard; }
     var normal=normalize(in.normal)*select(-1.0,1.0,front);
     let dx=dpdx(in.position); let dy=dpdy(in.position);
+    // Match terrain receivers: PCF depth gradients and normal offsets follow
+    // the raster triangle plane, never smooth or normal-mapped shading normals.
+    let plane=cross(dx,dy);
+    var receiver_normal=normal;
+    if (dot(plane,plane)>0.0) {
+        receiver_normal=normalize(plane)*select(-1.0,1.0,dot(plane,normal)>=0.0);
+    }
     let du=dpdx(in.uv); let dv=dpdy(in.uv);
     let map_normal=textureSample(normal_texture,normal_sampler,in.uv).xyz*2.0-1.0;
     let mr=textureSample(mr_texture,mr_sampler,in.uv);
@@ -52,7 +59,7 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     let albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
     var illuminance=light.ambient.rgb;
     var visibility:array<f32,3>;
-    for (var i=0u;i<3u;i++) { if (any(light.colors[i].rgb>vec3(0.0))) { visibility[i]=surface_visibility(in.position,normal,i); illuminance+=light.colors[i].rgb*max(dot(normal,light.directions[i].xyz),0.0)*visibility[i]; } }
+    for (var i=0u;i<3u;i++) { if (any(light.colors[i].rgb>vec3(0.0))) { visibility[i]=surface_visibility(in.position,receiver_normal,i); illuminance+=light.colors[i].rgb*max(dot(normal,light.directions[i].xyz),0.0)*visibility[i]; } }
     if (material.quality==0u && material.reflections==0u) { return vec4(albedo*illuminance*(1.0-material.factors.x)/OCEAN_PI*view.exposure,1.0); }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;

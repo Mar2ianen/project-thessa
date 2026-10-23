@@ -352,6 +352,8 @@ pub struct ResolvedGraphicsSettings {
     pub shadow_enabled: bool,
     pub shadow_cascades: u32,
     pub shadow_max_distance_m: f64,
+    #[serde(default)]
+    pub shadow_first_cascade_distance_m: Option<f64>,
     pub shadow_map_size: u32,
     pub shadow_normal_bias_m: f64,
     /// Human-readable fallback notes, also stored in captures.
@@ -730,6 +732,22 @@ impl ResolvedGraphicsSettings {
         {
             notes.push("terrain anisotropic filtering unavailable/unknown; using isotropic material filtering".into());
         }
+        let shadow_max_distance_m = requested.shadows.max_distance_m.clamp(100.0, 100_000.0);
+        let shadow_first_cascade_distance_m =
+            requested
+                .shadows
+                .first_cascade_distance_m
+                .and_then(|first| {
+                    if first.is_finite() {
+                        Some(first.clamp(1.0, shadow_max_distance_m))
+                    } else {
+                        notes.push(
+                            "non-finite first shadow cascade distance; using legacy distribution"
+                                .into(),
+                        );
+                        None
+                    }
+                });
         Self {
             surface_plants_enabled: requested.surface_plants.enabled,
             surface_plants_density_scale: if !requested.surface_plants.enabled {
@@ -867,7 +885,8 @@ impl ResolvedGraphicsSettings {
             rt_max_distance_m: requested.raytracing.max_distance_m,
             shadow_enabled: requested.shadows.enabled,
             shadow_cascades: requested.shadows.cascades.clamp(1, 4),
-            shadow_max_distance_m: requested.shadows.max_distance_m.clamp(100.0, 100_000.0),
+            shadow_max_distance_m,
+            shadow_first_cascade_distance_m,
             shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
             shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
             notes,
@@ -1143,6 +1162,15 @@ impl ResolvedGraphicsSettings {
             self.rt_reflection_bounces.to_string(),
         );
         map.insert("shadows".to_string(), self.shadow_enabled.to_string());
+        map.insert(
+            "shadow_max_distance_m".into(),
+            self.shadow_max_distance_m.to_string(),
+        );
+        map.insert(
+            "shadow_first_cascade_distance_m".into(),
+            self.shadow_first_cascade_distance_m
+                .map_or_else(|| "legacy".into(), |m| m.to_string()),
+        );
         map.insert(
             "shadow_cascades".to_string(),
             self.shadow_cascades.to_string(),
@@ -1449,6 +1477,54 @@ mod tests {
         let meta = resolved.as_meta_map();
         assert_eq!(meta["shadows"], "true");
         assert_eq!(meta["shadow_cascades"], "4");
+    }
+
+    #[test]
+    fn explicit_first_shadow_cascade_clamps_round_trips_and_preserves_budgets() {
+        let mut request = RequestedGraphics::default();
+        let legacy = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+        assert_eq!(legacy.shadow_first_cascade_distance_m, None);
+        for (first, expected) in [
+            (25.0, Some(25.0)),
+            (-3.0, Some(1.0)),
+            (1e9, Some(12000.0)),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+        ] {
+            request.shadows.first_cascade_distance_m = Some(first);
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+            assert_eq!(resolved.shadow_first_cascade_distance_m, expected);
+            assert_eq!(resolved.shadow_max_distance_m, legacy.shadow_max_distance_m);
+            assert_eq!(resolved.shadow_cascades, legacy.shadow_cascades);
+            assert_eq!(
+                resolved.native_shadow_map_size,
+                legacy.native_shadow_map_size
+            );
+            assert_eq!(resolved.shadow_filter_radius, legacy.shadow_filter_radius);
+            let text = toml::to_string(&resolved).unwrap();
+            assert_eq!(
+                toml::from_str::<ResolvedGraphicsSettings>(&text).unwrap(),
+                resolved
+            );
+        }
+        let old = toml::to_string(&legacy).unwrap();
+        assert_eq!(
+            toml::from_str::<ResolvedGraphicsSettings>(&old)
+                .unwrap()
+                .shadow_first_cascade_distance_m,
+            None
+        );
+        request.shadows.first_cascade_distance_m = Some(25.0);
+        let text = toml::to_string(&request).unwrap();
+        assert_eq!(toml::from_str::<RequestedGraphics>(&text).unwrap(), request);
+        request.shadows.enabled = false;
+        let disabled = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+        assert!(!disabled.shadow_enabled);
+        assert_eq!(
+            disabled.as_meta_map()["shadow_first_cascade_distance_m"],
+            "25"
+        );
     }
 
     #[test]

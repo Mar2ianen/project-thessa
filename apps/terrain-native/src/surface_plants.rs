@@ -14,8 +14,8 @@ use thessa_worldgen_rocky::{
 
 pub const WINDOW_LEVEL: u8 = 14;
 pub const UNDERSTORY_WINDOW_LEVEL: u8 = 18;
-/// 3x3 L18 windows cover a 73 m square around the near-eye cell.
-pub const UNDERSTORY_WINDOW_RADIUS: i64 = 1;
+/// 5x5 L18 windows cover a ~190 m square around the near-eye cell.
+pub const UNDERSTORY_WINDOW_RADIUS: i64 = 2;
 /// Near-ground clumps are only meaningful with the eye close to the surface.
 pub const UNDERSTORY_MAX_EYE_AGL_M: f64 = 4.0;
 
@@ -142,7 +142,7 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD08 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
+                "WORLD08 L14 large plants plus <=25 same-face L18 near-eye windows / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
             } else {"WORLD04 fixed L14 window / fixed64 v1; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
@@ -626,9 +626,9 @@ mod tests {
             );
             let (prepared, stats) = prepare(context, &resolved, field).unwrap();
             let prepared = prepared.unwrap();
-            assert_eq!(stats.understory_windows, 9);
-            assert_eq!(stats.understory_candidates, 36_864);
-            assert_eq!(stats.candidates, 40_960);
+            assert_eq!(stats.understory_windows, 25);
+            assert_eq!(stats.understory_candidates, 102_400);
+            assert_eq!(stats.candidates, 106_496);
             assert!(stats.understory_accepted > 0);
             assert_eq!(stats.retained, prepared.instances.len());
             assert_eq!(
@@ -659,8 +659,8 @@ mod tests {
                     if cell.level == thessa_worldgen_rocky::scatter::CANDIDATE_LEVEL {
                         assert!(
                             cell.face != near.face
-                                || (cell.x >> 2).abs_diff(near.x) > 1
-                                || (cell.y >> 2).abs_diff(near.y) > 1
+                                || (cell.x >> 2).abs_diff(near.x) > UNDERSTORY_WINDOW_RADIUS as u32
+                                || (cell.y >> 2).abs_diff(near.y) > UNDERSTORY_WINDOW_RADIUS as u32
                         );
                     }
                 }

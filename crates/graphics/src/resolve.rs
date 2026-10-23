@@ -176,6 +176,8 @@ impl ActiveCloudRepresentation {
 /// requests are kept and fail fast at device creation with a clear note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Capabilities {
+    /// All native scene colour/depth formats support 4x coverage and colour resolve.
+    pub raster_msaa4_supported: Option<bool>,
     /// Host implements compact material residency (not merely the GPU codec).
     /// Unknown preserves the legacy pre-init path; native must report false
     /// until its production material cache actually consumes compact pages.
@@ -199,6 +201,7 @@ pub struct Capabilities {
 impl Capabilities {
     pub fn unknown() -> Self {
         Self {
+            raster_msaa4_supported: None,
             material_compact_supported: None,
             terrain_conforming_supported: None,
             terrain_anisotropy_supported: None,
@@ -304,6 +307,7 @@ pub struct ResolvedGraphicsSettings {
     pub material_storage: ResolvedMaterialStorage,
     pub ray_tracing: ResolvedRayTracing,
     pub resolution_scale: f32,
+    pub raster_msaa_samples: u32,
     pub vsync: bool,
     pub hdr: bool,
     #[serde(default)]
@@ -809,14 +813,14 @@ impl ResolvedGraphicsSettings {
             surface_understory_max_candidates: if requested.surface_plants.enabled
                 && requested.surface_plants.understory
             {
-                9 * 4096
+                25 * 4096
             } else {
                 0
             },
             surface_understory_max_items: if requested.surface_plants.enabled
                 && requested.surface_plants.understory
             {
-                9 * 4096
+                25 * 4096
             } else {
                 0
             },
@@ -873,6 +877,19 @@ impl ResolvedGraphicsSettings {
             },
             ray_tracing,
             resolution_scale: requested.renderer.resolution_scale,
+            raster_msaa_samples: if requested.renderer.msaa_samples == 4
+                && caps.raster_msaa4_supported == Some(true)
+            {
+                4
+            } else {
+                if requested.renderer.msaa_samples == 4 {
+                    notes.push(
+                        "4x scene MSAA unsupported or unverified; using single-sample raster"
+                            .into(),
+                    );
+                }
+                1
+            },
             vsync: requested.renderer.vsync,
             hdr,
             temporal_motion_vectors,
@@ -1193,6 +1210,10 @@ impl ResolvedGraphicsSettings {
         map.insert("vsync".to_string(), self.vsync.to_string());
         map.insert("hdr".to_string(), self.hdr.to_string());
         map.insert(
+            "raster_msaa_samples".into(),
+            self.raster_msaa_samples.to_string(),
+        );
+        map.insert(
             "temporal_motion_vectors".to_string(),
             self.temporal_motion_vectors.to_string(),
         );
@@ -1299,9 +1320,35 @@ mod tests {
     use crate::settings::RequestedGraphics;
 
     #[test]
+    fn msaa_is_explicit_capability_resolved_and_disabled_by_default() {
+        let mut request = RequestedGraphics::default();
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown())
+                .raster_msaa_samples,
+            1
+        );
+        request.renderer.msaa_samples = 4;
+        for supported in [None, Some(false), Some(true)] {
+            let settings = ResolvedGraphicsSettings::from_requested(
+                &request,
+                &Capabilities {
+                    raster_msaa4_supported: supported,
+                    ..Capabilities::unknown()
+                },
+            );
+            assert_eq!(
+                settings.raster_msaa_samples,
+                if supported == Some(true) { 4 } else { 1 }
+            );
+        }
+        assert!(RequestedGraphics::from_toml("[renderer]\nmsaa_samples=2").is_err());
+    }
+
+    #[test]
     fn surface_plants_tiers_disable_metadata_and_isolation() {
         for supported in [None, Some(false), Some(true)] {
             let caps = Capabilities {
+                raster_msaa4_supported: supported,
                 material_compact_supported: supported,
                 terrain_conforming_supported: supported,
                 terrain_anisotropy_supported: supported,
@@ -1405,11 +1452,11 @@ mod tests {
                 assert_eq!(resolved.surface_understory_enabled, enabled);
                 assert_eq!(
                     resolved.surface_understory_max_candidates,
-                    if enabled { 36864 } else { 0 }
+                    if enabled { 102_400 } else { 0 }
                 );
                 assert_eq!(
                     resolved.surface_understory_max_items,
-                    if enabled { 36864 } else { 0 }
+                    if enabled { 102_400 } else { 0 }
                 );
                 assert_eq!(
                     resolved.surface_plants_density_scale,
@@ -1953,6 +2000,7 @@ mod storage_tests {
         requested.renderer.material_storage = MaterialStorageRequest::MicrostoreCompact;
         for supported in [Some(false), Some(true), None] {
             let caps = Capabilities {
+                raster_msaa4_supported: supported,
                 material_compact_supported: supported,
                 ..Default::default()
             };

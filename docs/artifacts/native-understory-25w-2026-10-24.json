@@ -1,0 +1,30 @@
+{
+  "iteration": 2,
+  "stage": "UNDERSTORY_WINDOW_EXTENSION",
+  "timestamp": "2026-10-24T01:55:30+03:00",
+  "branch": "feat/surface-visual-engineering",
+  "defect": "Abrupt cutoff of understory ferns and reeds at ~25 m due to 3x3 L18 window radius, leaving midground forest floor empty.",
+  "hypothesis": "Expanding UNDERSTORY_WINDOW_RADIUS from 1 to 2 (25 windows, covering ~190 m across) with 102,400 candidate budget will continuously blanket the midground with understory ferns and reeds without exceeding performance budget.",
+  "changes": [
+    "apps/terrain-native/src/surface_plants.rs: set UNDERSTORY_WINDOW_RADIUS = 2, update contract string and tests",
+    "crates/graphics/src/resolve.rs: update surface_understory_max_candidates/items to 25 * 4096 = 102,400"
+  ],
+  "measurements": {
+    "before_9w": {
+      "windows": 9,
+      "understory_accepted": 1891,
+      "total_instances": 2111,
+      "midground_foliage_pct": 43.42,
+      "gpu_frame_s": 0.3605
+    },
+    "after_25w": {
+      "windows": 25,
+      "understory_accepted": 5032,
+      "total_instances": 5245,
+      "midground_foliage_pct": 55.34,
+      "gpu_frame_s": 0.3342
+    }
+  },
+  "decision": "ACCEPT",
+  "reason": "Midground foliage coverage increased by +11.9% (+27.4% relative gain), populating 34.6% of previously bare midground pixels with zero performance regression (334 ms GPU frame time). All invariants preserved."
+}

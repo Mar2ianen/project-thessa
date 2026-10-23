@@ -202,6 +202,9 @@ scene_memory_mib = 32
 max_instances = 4096
 # Specular chain length for object reflections (1 = single mirror bounce).
 reflection_bounces = 2
+# Native stellar shadows keep the physical ray line and exclude the receiver's
+# normal-distance bias along it (t_min = bias / N.L); near blockers may be missed.
+# Reflection origins retain their existing geometric-normal offset.
 ray_bias_m = 0.01
 
 [shadows]

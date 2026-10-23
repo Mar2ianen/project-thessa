@@ -1631,6 +1631,80 @@ fn scene_ray_shadows_work_without_reflections_or_an_atlas() {
 }
 
 #[test]
+fn ray_shadow_bias_does_not_move_the_stellar_ray_sideways() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let mut request = requested(RayTracingRequest::Local);
+    request.renderer.specular_reflections = false;
+    request.shadows.enabled = true;
+    request.raytracing.ray_bias_m = 0.01;
+    let settings = backend.resolve_graphics(&request);
+    let mut asset = source();
+    asset.primitives = vec![quad(1.0, 1), quad(0.002, 1)];
+    asset.materials[1].base_color = [1.0; 4];
+    let mut placed = [
+        MeshInstance {
+            position_m: DVec3::new(0.0, 0.0, -2.0),
+            rotation: DQuat::IDENTITY,
+            scale: 1.0,
+        },
+        MeshInstance {
+            position_m: DVec3::new(0.99, 0.0, -1.0),
+            rotation: DQuat::IDENTITY,
+            scale: 1.0,
+        },
+    ];
+    let d = std::f32::consts::FRAC_1_SQRT_2;
+    let lights = SurfaceLighting {
+        directions: [[d, 0.0, d, 0.0], [0.0; 4], [0.0; 4]],
+        colors_lux: [[std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+        ..Default::default()
+    };
+    let mut mesh = MeshRenderer::with_surface(
+        &backend,
+        &asset,
+        SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 2,
+            quality: settings.surface_quality,
+            reflections: false,
+            shadows: None,
+            ray_tracing: Some(&settings),
+        },
+    )
+    .unwrap();
+    // At z=-1 the physical centre ray crosses x=1, not the old normal-offset
+    // ray's x=0.99. A nearby disjoint blade must not invent a shadow.
+    let clear = center(&draw(&backend, &mut mesh, &placed, &[0..1, 1..2], &lights));
+    assert_rgb_near(clear, [0.48 * d; 3]);
+    placed[1].position_m.x = 1.0;
+    let blocked = center(&draw(&backend, &mut mesh, &placed, &[0..1, 1..2], &lights));
+    assert_eq!(
+        blocked, [0; 3],
+        "moving the same blade onto the physical ray must block it"
+    );
+    request.raytracing.max_distance_m = 0.005;
+    let settings = backend.resolve_graphics(&request);
+    let mut short = MeshRenderer::with_surface(
+        &backend,
+        &asset,
+        SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 2,
+            quality: settings.surface_quality,
+            reflections: false,
+            shadows: None,
+            ray_tracing: Some(&settings),
+        },
+    )
+    .unwrap();
+    let excluded = center(&draw(&backend, &mut short, &placed, &[0..1, 1..2], &lights));
+    assert_rgb_near(excluded, [0.48 * d; 3]);
+    assert!(short.rt_stats().active);
+}
+
+#[test]
 fn shadow_rays_occlude_a_reflected_hit_without_occluding_the_reflection_ray() {
     let Some(backend) = backend(RayTracingRequest::Local) else {
         return;

@@ -876,3 +876,63 @@ All 756 compiled/configuration inputs stayed unchanged. The native-only release
 recipe reproduces captured SHA256 `7945e0cd…` exactly. A joint native/server
 release build also passes but unifies additional `syn`/`hashbrown` features and
 produces a different viewer hash; it is not mislabeled as the capture binary.
+
+## WORLD07b — Stellar ray-line preservation, not shadow removal
+
+The next isolated visibility controls keep WORLD07a's site/camera, settings,
+epoch, source and 96-frame sweep. RT-off and shadows-off remove the dark plant
+marks; reflections-off does not. That alone is **not** proof of acne: opaque
+forks and narrow leaves really cast shadows. A new analytic quad fixture instead
+proves a specific defect: shifting a diagonal stellar ray 1 cm along the
+receiver normal lets a disjoint 4 mm blade block it. Before the fix, the centre
+pixel is black instead of the expected 157 RGB8 codes. Moving the blade onto the
+true line must still block it.
+
+The existing shared `surface_visibility` now keeps the original stellar line and
+excludes receiver bias along it: `t_min = bias / (N.L)`. A nonpositive cosine or
+exclusion beyond `t_max` skips the query. Primary/secondary mesh receivers share
+the correction; raster/cloud visibility, reflection-ray offsets, materials,
+placement, graphics tiers/defaults, AS lifecycle and simulation are unchanged.
+
+The actual fern/reed/lycopsid producer is also checked against independent f64
+triangle rays, two stellar directions, and default 1 cm / diagnostic 0.1 mm
+biases. In 720 selected primary interiors per bias, the previous shift yields
+38/2 visibility disagreements with the near-zero geometric reference, including
+13/0 invented blockers. The corrected line has 13/1 disagreements, all skipped
+near blockers and **zero** invented blockers. Shadow-edge hits are excluded
+from RGB certification at an explicit 0.03 barycentric margin; this is not an
+edge-coverage or universal numerical-error guarantee. The physical reference is
+stable between 1e-7/1e-8 m offsets. The default bias is unchanged because these
+local fixtures do not establish a smaller far-coordinate error bound.
+
+Final matched still difference is mean absolute displayed RGB
+`[0.381, 0.459, 0.197]`, maxima `[101,104,52]`. Twenty scene/source/plant metadata
+keys match, and all measured frames have epoch zero and zero simulation steps.
+CPU/GPU medians are 4.845/203.463 ms, versus 5.143/204.083 ms for WORLD07a:
+these single runs show no claimed throughput improvement or acceptable FPS.
+The main visible diagonal branch pattern and sparse/speckled foliage remain;
+this is not a wholesale shadow-acne fix or final visual acceptance.
+
+A separate 2560×1440 same-camera capture, downfiltered by averaging decoded
+linear RGB in exact 2×2 blocks, is a diagnostic coverage reference, not a shipped
+AA setting. It still shows sparse authored crowns. Resolution also changes
+terrain/material demand, so its whole-frame difference is not isolated plant-AA
+proof. Existing foil widths project below one pixel over much of the cover;
+temporal/spatial filtering, hierarchy and canopy representation remain open.
+The physical shadow correction must not be replaced with brighter leaves,
+shadow disablement or artistic normal damping to conceal those gaps.
+
+A blind pair is prepared under
+`target/surface-showcase/foliage-controls/review/`, with its key outside that
+directory. No independent vote has been recorded. Commands, settings and binary
+hashes, geometric-reference scope, counterfactuals, crops and final comparison:
+[`artifacts/native-stellar-ray-line-2026-10-23.json`](artifacts/native-stellar-ray-line-2026-10-23.json).
+
+All 13 local command gates pass: formatting, architecture, workspace all-target/
+all-feature Clippy, 2,051 lib/bin and 109 integration tests, 47 native ignored
+hardware/CLI checks, 86 renderer hardware tests, native feature-off, WORLD00 and
+separate server/viewer release builds. The legacy Bevy command still selects
+zero tests. The plant oracle checks 1,392 RGB interiors after 48 shadow-edge
+exclusions among 1,440 selected samples. All 757 compiled/configuration inputs
+are unchanged; rebuilding the exact native-only recipe reproduces capture
+SHA256 `4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422`.

@@ -531,6 +531,9 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
 }
 
 #[cfg(test)]
+mod ray_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use thessa_worldgen_rocky::scatter::ScatterKind;

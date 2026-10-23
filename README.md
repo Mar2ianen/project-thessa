@@ -85,9 +85,11 @@ The checked-in vertical slice currently contains:
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
   lattice inside nine L18 windows, reusing the same quality tiers, prototypes,
   opaque mesh and shadow paths. Same-site near-window changes use one shared
-  worker with stale-result rejection; this is not a vegetation streamer. Production
-  vegetation streaming, fully modeled botanical assets and physical obstacle
-  ownership remain unimplemented.
+  worker with stale-result rejection; this is not a vegetation streamer. Shared
+  stellar shadow rays now preserve their physical line instead of offsetting
+  sideways into narrow leaves; finite receiver-bias and subpixel-coverage gaps
+  remain. Production vegetation streaming, fully modeled botanical assets and
+  physical obstacle ownership remain unimplemented.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

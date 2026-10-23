@@ -22,7 +22,7 @@ conflict-free Git merge is not sufficient evidence for changing launch defaults.
 | Source, identity, precision, residency | docs 63/70/72/77; preserve canonical sources, world-local IDs, exact zero material normals, bounded fallback and regular/conforming oracles | scoped tests exist; not universal terrain/visual accuracy |
 | Near ground cover and update lifetime | `surface_plants`, `SceneMeshes`, shared `terrain_stream::JobHandle`; retain valid applied source, coalesce requests, reject stale output, measure request/worker/publication separately | WORLD07a same-site worker and compatible GPU-source reuse; setup/site changes and capacity/layout-changing reconstruction remain synchronous; 73 m cover and high GPU cost remain |
 | Ground optical transport | doc 69 and WORLD06h–l; consistent direct/sky/substrate normal treatment with projected-area, reciprocity and energy oracles before a matched capture | characteristic ground bands unresolved; no grain-amplitude concealment |
-| Foliage, ground contact, near/far composition | docs 70/75/77; inspect diagonal foliage defects and streamed-root agreement, then compare matched standing/close/overview and moving views | authored prototypes, sparse cover, finite boundary; no final botanical or blind preference acceptance |
+| Foliage, ground contact, near/far composition | docs 70/75/77; WORLD07b fixes sideways-biased stellar rays with analytic and actual-producer visibility oracles; still inspect streamed-root agreement, then compare matched standing/close/overview and moving views | authored prototypes, sparse cover, finite boundary, subpixel coverage and finite-bias visibility gaps; no final botanical or blind preference acceptance |
 | Water, shore, sky and shadows | docs 56/60/65/74; preserve shared surface/epoch, caster/receiver and finite-ray transport contracts through a composed camera path | remaining finite aerial perspective, water/sky transport and wider convergence stay open; no fake optical compensation |
 | Movement and surface-to-orbit | existing survey/headless capture and bounded terrain streamer; frozen simulation camera sweep, repeated window crossings, mode changes, coarse fallback and return to exact identities | static frames alone do not close this gate; no whole-planet high-detail instantiation |
 | Temporal reconstruction | separate `feat/native-temporal-foundation` worktree; history/reset/disocclusion and simulation-ownership tests on the integrated tree | not merged or presented as finished here; generated frames must never advance physics/history |
@@ -74,3 +74,21 @@ with unchanged sources: `cargo tree` confirms widened unified `syn` and
 recipe difference; it was resolved by rebuilding with the exact capture recipe,
 not by changing source or editing the expected capture hash. Evidence:
 [`artifacts/native-async-understory-2026-10-23.json`](artifacts/native-async-understory-2026-10-23.json).
+
+## Executed WORLD07b integration checks
+
+The physical stellar-ray correction passes 13 local gates: formatting,
+architecture, all-target/all-feature workspace Clippy, 2,051 lib/bin tests,
+109 integration tests (including the new analytic GPU ray-line regression),
+47 native hardware/CLI checks (including actual-producer visibility), 86
+renderer hardware checks, native feature-off, WORLD00 regression and debug/
+release server plus release viewer builds. The legacy Bevy ignored command
+selects zero tests, not additional coverage. All 757 compiled/configuration
+inputs are unchanged, and the exact native-only release recipe reproduces
+captured SHA256
+`4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422`.
+No remote-CI, blind preference, stable-FPS or full replacement acceptance follows.
+The remaining major diagonal branch marks, sparse/subpixel foliage, ground
+normal transport and temporal/host obligations remain in the sequential ledger.
+Evidence:
+[`artifacts/native-stellar-ray-line-2026-10-23.json`](artifacts/native-stellar-ray-line-2026-10-23.json).

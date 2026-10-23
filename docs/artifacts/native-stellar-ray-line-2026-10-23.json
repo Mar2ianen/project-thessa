@@ -1,0 +1,1024 @@
+{
+  "stage": "WORLD07b",
+  "baseline_commit": "dc9777f",
+  "branch": "feat/native-surface-showcase",
+  "status": "Implemented, matched capture and all 13 local command gates passed; not visual or main-replacement acceptance",
+  "implementation": {
+    "changed_path": "crates/render-wgpu/src/ray_query.wgsl::surface_visibility",
+    "old": "Trace from position + geometric_normal * bias, t_min=bias; shifts the light line sideways",
+    "new": "Trace from position on the physical stellar line, t_min=bias/dot(geometric_normal,stellar_direction); no query at nonpositive cosine or t_min >= t_max",
+    "retained": [
+      "shared primary and secondary visibility hook",
+      "raster atlas and cloud visibility product",
+      "RT disabled/shadow disabled fallback and no new allocation/pass",
+      "existing settings, quality and RT distance/budget",
+      "reflection-ray origin offsets",
+      "plant geometry, placement, material reflectance and authoritative time"
+    ],
+    "limitation": "Finite receiver exclusion can still skip genuine nearby blockers; this is not a general ray-origin rounding-error solution, far-coordinate guarantee or coverage antialiasing"
+  },
+  "analytic_regression": {
+    "path": "crates/render-wgpu/tests/ray_scene.rs::ray_shadow_bias_does_not_move_the_stellar_ray_sideways",
+    "scene": "White receiver at z=-2, camera centre primary ray, diagonal stellar direction (1,0,1)/sqrt(2), disjoint 4mm quad centred at (0.99,0,-1), 1cm bias",
+    "before_rgb8": [
+      0,
+      0,
+      0
+    ],
+    "expected_rgb8": [
+      157,
+      157,
+      157
+    ],
+    "tolerance_rgb8": 2,
+    "also_checks": [
+      "same blade shifted onto true line at (1,0,-1) must block",
+      "exclusion beyond t_max avoids invalid query and retains unblocked fallback"
+    ]
+  },
+  "actual_producer_oracle": {
+    "path": "apps/terrain-native/src/surface_plants/ray_tests.rs",
+    "prototypes": "existing production fern/reed/lycopsid through surface_plants::convert; test replaces reflectance with uniform grey to isolate visibility",
+    "camera": "257x257, 0.9 rad vertical FOV; prototypes at depths 2.5/3/12m, scale 1",
+    "sample_selection": "project every seventh actual triangle centre, de-duplicate pixels, trace closest primary triangle independently in f64, exclude primary barycentric edge <0.03; shadow-hit edge samples <0.03 are counted but not RGB-certified",
+    "physical_reference": "f64 triangle rays with offsets/min_t 1e-7m and 1e-8m; convergence asserted per selected ray",
+    "biases_m": [
+      0.01,
+      0.0001
+    ],
+    "selected_per_bias": 720,
+    "old_physical_disagreements_per_bias": [
+      38,
+      2
+    ],
+    "old_false_blockers_per_bias": [
+      13,
+      0
+    ],
+    "new_physical_disagreements_per_bias": [
+      13,
+      1
+    ],
+    "new_false_blockers_per_bias": [
+      0,
+      0
+    ],
+    "rgb_error_envelope_codes": 2,
+    "old_log_sha256": "3f533a4679e4ac2263fb0ff5de86bfd9a369e38fcc61ad4b796359ed63b62257",
+    "boundary": "tests sparse stable interiors, not all pixel coverage, canonical-scene exact pixel attribution, material transport, arbitrary distances/scales or botanical realism",
+    "rgb_certification": "Uniform grey RGB channels all checked within 2 codes outside primary/shadow-edge exclusions; a low-bias boundary sample was observed to differ before explicit shadow-edge exclusion, so no edge-precision claim is made.",
+    "final_rows": [
+      {
+        "selected": 113,
+        "shadow_edges_excluded": 0,
+        "physical_disagreements": 3,
+        "skipped_blockers": 3,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "FernClump",
+        "bias_m": 0.01,
+        "sun": "DVec3(0.5970223141259935, 0.6965260331469925, 0.3980148760839957)"
+      },
+      {
+        "selected": 113,
+        "shadow_edges_excluded": 2,
+        "physical_disagreements": 7,
+        "skipped_blockers": 7,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "FernClump",
+        "bias_m": 0.01,
+        "sun": "DVec3(-0.792593923901217, 0.22645540682891918, 0.5661385170722979)"
+      },
+      {
+        "selected": 113,
+        "shadow_edges_excluded": 1,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "FernClump",
+        "bias_m": 0.0001,
+        "sun": "DVec3(0.5970223141259935, 0.6965260331469925, 0.3980148760839957)"
+      },
+      {
+        "selected": 113,
+        "shadow_edges_excluded": 2,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "FernClump",
+        "bias_m": 0.0001,
+        "sun": "DVec3(-0.792593923901217, 0.22645540682891918, 0.5661385170722979)"
+      },
+      {
+        "selected": 17,
+        "shadow_edges_excluded": 1,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "ReedClump",
+        "bias_m": 0.01,
+        "sun": "DVec3(0.5970223141259935, 0.6965260331469925, 0.3980148760839957)"
+      },
+      {
+        "selected": 17,
+        "shadow_edges_excluded": 1,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "ReedClump",
+        "bias_m": 0.01,
+        "sun": "DVec3(-0.792593923901217, 0.22645540682891918, 0.5661385170722979)"
+      },
+      {
+        "selected": 17,
+        "shadow_edges_excluded": 0,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "ReedClump",
+        "bias_m": 0.0001,
+        "sun": "DVec3(0.5970223141259935, 0.6965260331469925, 0.3980148760839957)"
+      },
+      {
+        "selected": 17,
+        "shadow_edges_excluded": 1,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "ReedClump",
+        "bias_m": 0.0001,
+        "sun": "DVec3(-0.792593923901217, 0.22645540682891918, 0.5661385170722979)"
+      },
+      {
+        "selected": 230,
+        "shadow_edges_excluded": 11,
+        "physical_disagreements": 1,
+        "skipped_blockers": 1,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "LycopsidTree",
+        "bias_m": 0.01,
+        "sun": "DVec3(0.5970223141259935, 0.6965260331469925, 0.3980148760839957)"
+      },
+      {
+        "selected": 230,
+        "shadow_edges_excluded": 8,
+        "physical_disagreements": 2,
+        "skipped_blockers": 2,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "LycopsidTree",
+        "bias_m": 0.01,
+        "sun": "DVec3(-0.792593923901217, 0.22645540682891918, 0.5661385170722979)"
+      },
+      {
+        "selected": 230,
+        "shadow_edges_excluded": 12,
+        "physical_disagreements": 0,
+        "skipped_blockers": 0,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "LycopsidTree",
+        "bias_m": 0.0001,
+        "sun": "DVec3(0.5970223141259935, 0.6965260331469925, 0.3980148760839957)"
+      },
+      {
+        "selected": 230,
+        "shadow_edges_excluded": 9,
+        "physical_disagreements": 1,
+        "skipped_blockers": 1,
+        "false_blockers": 0,
+        "gpu_errors": 0,
+        "kind": "LycopsidTree",
+        "bias_m": 0.0001,
+        "sun": "DVec3(-0.792593923901217, 0.22645540682891918, 0.5661385170722979)"
+      }
+    ],
+    "selected_total": 1440,
+    "rgb_certified_total": 1392,
+    "final_hardware_log_sha256": "5045ff08a56fcf7c2050c105fa51a1ee57ffa584ae7a83e6f4da2d0a9a5a2c04"
+  },
+  "counterfactual_capture": {
+    "baseline_binary_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+    "platform": {
+      "os": "linux",
+      "cpu": "x86_64",
+      "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+      "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+    },
+    "scene": "WORLD00 fixed site 23.565679258039204 N,165.13881581863882 E; standing 2m eye AGL; distance80m; frozen epoch/step0; sweep .006rad/frame; prestream60s; 30warmup+96 measured frames; HUD/audio off",
+    "controls": {
+      "rt-off": {
+        "image_sha256": "2970c545e9e0cd5049b0bd438772a8557c8bcd308606d57b726ec6e57ac828df",
+        "perf_sha256": "b38f2763184e30792ce1f1f1f2a5ad54565dc56765f0b6a45d1ac76337e30962",
+        "resolved": {
+          "cloud_shadows": "true",
+          "native_cloud_ground_shadows": "true",
+          "native_surface_plants_retained": "1994",
+          "native_surface_plants_window": "1,14,6018,11888",
+          "native_surface_understory_window": "1,18,96294,190217",
+          "native_surface_understory_windows": "9",
+          "native_survey_actual_eye_agl_m": "2.0000000001693046",
+          "native_survey_distance_m": "80",
+          "native_survey_eye_body_m": "[-2835057.3819225994, 1279309.2703944019, -752237.7676371629]",
+          "native_survey_eye_ground_datum_m": "4.910487947816225",
+          "native_survey_forward_body": "[0.4834095843553879, 0.6586279426298303, -0.5766492928466552]",
+          "native_survey_fov_y_rad": "0.9",
+          "native_survey_frozen_erosion_attached": "true",
+          "native_survey_ground_min_wavelength_m": "1",
+          "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+          "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_near_m": "0.1",
+          "native_survey_requested_eye_agl_m": "2",
+          "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+          "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+          "ray_tracing": "off",
+          "shadows": "true",
+          "specular_reflections": "true",
+          "native_survey_analytic_source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+        },
+        "sim_steps": 0,
+        "mean_abs_rgb": [
+          1.4131976996527778,
+          1.6114995659722222,
+          0.7378493923611111
+        ],
+        "max_abs_rgb": [
+          102,
+          104,
+          53
+        ],
+        "regions": {
+          "crown": [
+            1.2961328125,
+            1.2742578125,
+            0.7140234375
+          ],
+          "near_trunk": [
+            0.6926984126984127,
+            0.6098015873015873,
+            0.34174603174603174
+          ],
+          "fern_ground": [
+            1.4638793103448275,
+            1.7358477011494253,
+            0.8017385057471265
+          ]
+        }
+      },
+      "shadows-off": {
+        "image_sha256": "1d4f923681ff667cc93207a103403d5b85180e6467c9094f6f656684715b6f08",
+        "perf_sha256": "2533ffe519d3e1454a57ba18d8985e59386749ed4182dd0c3d15281cd9eddc31",
+        "resolved": {
+          "cloud_shadows": "true",
+          "native_cloud_ground_shadows": "true",
+          "native_surface_plants_retained": "1994",
+          "native_surface_plants_window": "1,14,6018,11888",
+          "native_surface_understory_window": "1,18,96294,190217",
+          "native_surface_understory_windows": "9",
+          "native_survey_actual_eye_agl_m": "2.0000000001693046",
+          "native_survey_distance_m": "80",
+          "native_survey_eye_body_m": "[-2835057.3819225994, 1279309.2703944019, -752237.7676371629]",
+          "native_survey_eye_ground_datum_m": "4.910487947816225",
+          "native_survey_forward_body": "[0.4834095843553879, 0.6586279426298303, -0.5766492928466552]",
+          "native_survey_fov_y_rad": "0.9",
+          "native_survey_frozen_erosion_attached": "true",
+          "native_survey_ground_min_wavelength_m": "1",
+          "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+          "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_near_m": "0.1",
+          "native_survey_requested_eye_agl_m": "2",
+          "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+          "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+          "ray_tracing": "local",
+          "shadows": "false",
+          "specular_reflections": "true",
+          "native_survey_analytic_source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+        },
+        "sim_steps": 0,
+        "mean_abs_rgb": [
+          2.9755381944444443,
+          3.1407118055555556,
+          1.7998676215277778
+        ],
+        "max_abs_rgb": [
+          105,
+          105,
+          54
+        ],
+        "regions": {
+          "crown": [
+            1.3225390625,
+            1.2966015625,
+            0.73078125
+          ],
+          "near_trunk": [
+            8.110198412698413,
+            7.0945238095238095,
+            5.032539682539682
+          ],
+          "fern_ground": [
+            2.1635344827586205,
+            2.434353448275862,
+            1.2162787356321838
+          ]
+        }
+      },
+      "reflections-off": {
+        "image_sha256": "71cafee73b690de998f7c2e30b13b8a51fb4acc89e7a01e915ef8a4ca082abf3",
+        "perf_sha256": "2a844b567cded168382ae60e8307062962d61f70b1e0028b18699b972cd1f9a3",
+        "resolved": {
+          "cloud_shadows": "true",
+          "native_cloud_ground_shadows": "true",
+          "native_surface_plants_retained": "1994",
+          "native_surface_plants_window": "1,14,6018,11888",
+          "native_surface_understory_window": "1,18,96294,190217",
+          "native_surface_understory_windows": "9",
+          "native_survey_actual_eye_agl_m": "2.0000000001693046",
+          "native_survey_distance_m": "80",
+          "native_survey_eye_body_m": "[-2835057.3819225994, 1279309.2703944019, -752237.7676371629]",
+          "native_survey_eye_ground_datum_m": "4.910487947816225",
+          "native_survey_forward_body": "[0.4834095843553879, 0.6586279426298303, -0.5766492928466552]",
+          "native_survey_fov_y_rad": "0.9",
+          "native_survey_frozen_erosion_attached": "true",
+          "native_survey_ground_min_wavelength_m": "1",
+          "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+          "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_near_m": "0.1",
+          "native_survey_requested_eye_agl_m": "2",
+          "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+          "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+          "ray_tracing": "local",
+          "shadows": "true",
+          "specular_reflections": "false",
+          "native_survey_analytic_source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+        },
+        "sim_steps": 0,
+        "mean_abs_rgb": [
+          5.661148003472222,
+          4.861461588541666,
+          10.15378146701389
+        ],
+        "max_abs_rgb": [
+          137,
+          138,
+          145
+        ],
+        "regions": {
+          "crown": [
+            2.0316015625,
+            1.6983984375,
+            2.8875
+          ],
+          "near_trunk": [
+            9.870119047619047,
+            11.478333333333333,
+            17.66174603174603
+          ],
+          "fern_ground": [
+            10.141422413793103,
+            8.541867816091955,
+            18.085474137931033
+          ]
+        }
+      },
+      "spatial-2x": {
+        "image_sha256": "4fd7f7176b5d4a6fabcb337d0bbe41dbd64d3490bbc40f1a6f94f9ef8f6e6510",
+        "perf_sha256": "42c18a793d90f300fe79363cbf2f9acce51d255b7455715c59490c9631a99115",
+        "resolved": {
+          "cloud_shadows": "true",
+          "native_cloud_ground_shadows": "true",
+          "native_surface_plants_retained": "1994",
+          "native_surface_plants_window": "1,14,6018,11888",
+          "native_surface_understory_window": "1,18,96294,190217",
+          "native_surface_understory_windows": "9",
+          "native_survey_actual_eye_agl_m": "2.0000000001693046",
+          "native_survey_distance_m": "80",
+          "native_survey_eye_body_m": "[-2835057.3819225994, 1279309.2703944019, -752237.7676371629]",
+          "native_survey_eye_ground_datum_m": "4.910487947816225",
+          "native_survey_forward_body": "[0.4834095843553879, 0.6586279426298303, -0.5766492928466552]",
+          "native_survey_fov_y_rad": "0.9",
+          "native_survey_frozen_erosion_attached": "true",
+          "native_survey_ground_min_wavelength_m": "1",
+          "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+          "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_near_m": "0.1",
+          "native_survey_requested_eye_agl_m": "2",
+          "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+          "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+          "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+          "ray_tracing": "local",
+          "shadows": "true",
+          "specular_reflections": "true",
+          "native_survey_analytic_source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+        },
+        "sim_steps": 0,
+        "mean_abs_rgb": [
+          3.2439366319444445,
+          3.0571571180555557,
+          2.886127387152778
+        ],
+        "max_abs_rgb": [
+          126,
+          127,
+          143
+        ],
+        "regions": {
+          "crown": [
+            3.6589453125,
+            3.7378515625,
+            4.358828125
+          ],
+          "near_trunk": [
+            1.066825396825397,
+            1.0421031746031746,
+            0.9830952380952381
+          ],
+          "fern_ground": [
+            5.423333333333333,
+            5.049971264367816,
+            4.708074712643678
+          ]
+        }
+      }
+    },
+    "commands": [
+      {
+        "name": "rt-off",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/foliage-controls/rt-off.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "60",
+          "--sweep",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/foliage-controls/rt-off.png",
+          "--perf-capture",
+          "target/surface-showcase/foliage-controls/rt-off.json"
+        ],
+        "exit": 0,
+        "binary_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+        "settings_sha256": "8ae7dec7f3b9e9df168a991a7270f49edcfbbb80fec4f9c0992764926c5c3c69"
+      },
+      {
+        "name": "shadows-off",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/foliage-controls/shadows-off.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "60",
+          "--sweep",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/foliage-controls/shadows-off.png",
+          "--perf-capture",
+          "target/surface-showcase/foliage-controls/shadows-off.json"
+        ],
+        "exit": 0,
+        "binary_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+        "settings_sha256": "d49b595433f0c9ee968f693cea0246af068d13d27781784d1d124f6bb2155310"
+      },
+      {
+        "name": "reflections-off",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/foliage-controls/reflections-off.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "60",
+          "--sweep",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/foliage-controls/reflections-off.png",
+          "--perf-capture",
+          "target/surface-showcase/foliage-controls/reflections-off.json"
+        ],
+        "exit": 0,
+        "binary_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+        "settings_sha256": "fa1f53b0bd6fa1a331d4538ab85aec4ba3754cbaa4a7ffb8b1a5ff23f8083ccd"
+      }
+    ],
+    "conclusion": "RT-off and shadows-off remove dark marks while reflections-off retains them; this isolates visibility but does not prove every branch mark is nonphysical",
+    "spatial_reference": {
+      "command": {
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/understory/understory.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "60",
+          "--sweep",
+          "--frames",
+          "96",
+          "--width",
+          "2560",
+          "--height",
+          "1440",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/foliage-controls/spatial-2x.png",
+          "--perf-capture",
+          "target/surface-showcase/foliage-controls/spatial-2x.json"
+        ],
+        "exit": 0,
+        "binary_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385"
+      },
+      "image_sha256": "c9c8f1dd06f3c6b6daddbb534896226aac0a9f2becf253892f8cc46b4b5d115b",
+      "method": "2560x1440 capture; decode displayed sRGB to linear, mean exact 2x2 pixel blocks, re-encode sRGB. Not a production quality mode or temporal reconstruction.",
+      "limits": "resolution changes terrain/material demand, so full-frame differences are not isolated plant-AA proof; only same-descriptor foliage inspection is scoped. A short hardware oracle overlapped this diagnostic; its timing is not performance evidence."
+    },
+    "projected_width_audit": {
+      "purpose": "Geometry-scale audit only, not observed raster coverage or an AA error bound",
+      "source": "tools/worldgen-rocky/src/offline.rs::fern_frond/ribbon; ribbon widths are half widths; length_m maximum 1.10 m",
+      "fov_y_rad": 0.9,
+      "image_height": 720,
+      "focal_px": 745.2566500684364,
+      "assumptions": "face-on screen-width bound at a given camera-space depth, no occlusion or foreshortening; sin(pi*t)^.65 <= 1 for broad-section bound",
+      "rows": [
+        {
+          "scale": 0.35,
+          "distance_m": 5.0,
+          "rachis_base_width_px": 0.6260155860574865,
+          "pinna_attachment_width_px": 0.31300779302874326,
+          "pinna_tip_width_px": 0.08346874480766488,
+          "largest_pinna_broad_section_px_upper_bound": 3.0528693413403434
+        },
+        {
+          "scale": 0.35,
+          "distance_m": 15.0,
+          "rachis_base_width_px": 0.20867186201916219,
+          "pinna_attachment_width_px": 0.10433593100958109,
+          "pinna_tip_width_px": 0.02782291493588829,
+          "largest_pinna_broad_section_px_upper_bound": 1.0176231137801144
+        },
+        {
+          "scale": 0.35,
+          "distance_m": 30.0,
+          "rachis_base_width_px": 0.10433593100958109,
+          "pinna_attachment_width_px": 0.052167965504790546,
+          "pinna_tip_width_px": 0.013911457467944146,
+          "largest_pinna_broad_section_px_upper_bound": 0.5088115568900572
+        },
+        {
+          "scale": 0.35,
+          "distance_m": 60.0,
+          "rachis_base_width_px": 0.052167965504790546,
+          "pinna_attachment_width_px": 0.026083982752395273,
+          "pinna_tip_width_px": 0.006955728733972073,
+          "largest_pinna_broad_section_px_upper_bound": 0.2544057784450286
+        },
+        {
+          "scale": 0.9,
+          "distance_m": 5.0,
+          "rachis_base_width_px": 1.609754364147823,
+          "pinna_attachment_width_px": 0.8048771820739115,
+          "pinna_tip_width_px": 0.2146339152197097,
+          "largest_pinna_broad_section_px_upper_bound": 7.850235449160882
+        },
+        {
+          "scale": 0.9,
+          "distance_m": 15.0,
+          "rachis_base_width_px": 0.5365847880492743,
+          "pinna_attachment_width_px": 0.26829239402463717,
+          "pinna_tip_width_px": 0.0715446384065699,
+          "largest_pinna_broad_section_px_upper_bound": 2.6167451497202943
+        },
+        {
+          "scale": 0.9,
+          "distance_m": 30.0,
+          "rachis_base_width_px": 0.26829239402463717,
+          "pinna_attachment_width_px": 0.13414619701231859,
+          "pinna_tip_width_px": 0.03577231920328495,
+          "largest_pinna_broad_section_px_upper_bound": 1.3083725748601471
+        },
+        {
+          "scale": 0.9,
+          "distance_m": 60.0,
+          "rachis_base_width_px": 0.13414619701231859,
+          "pinna_attachment_width_px": 0.06707309850615929,
+          "pinna_tip_width_px": 0.017886159601642474,
+          "largest_pinna_broad_section_px_upper_bound": 0.6541862874300736
+        }
+      ]
+    }
+  },
+  "verification": {
+    "state": "All 13 command gates passed; captured native-only release hash reproduced exactly",
+    "commands": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 1.7670580000267364,
+        "log": "target/surface-showcase/foliage-controls/fmt-gate.log"
+      },
+      {
+        "name": "architecture",
+        "command": [
+          "python3",
+          "tools/agent-qa/check_architecture.py"
+        ],
+        "exit": 0,
+        "seconds": 0.0684983580140397,
+        "log": "target/surface-showcase/foliage-controls/architecture-gate.log"
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 2.9008264589938335,
+        "log": "target/surface-showcase/foliage-controls/clippy-gate.log"
+      },
+      {
+        "name": "workspace-lib-bins",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--lib",
+          "--bins"
+        ],
+        "exit": 0,
+        "seconds": 52.86612101900391,
+        "log": "target/surface-showcase/foliage-controls/workspace-lib-bins-gate.log"
+      },
+      {
+        "name": "workspace-integration",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--test",
+          "*"
+        ],
+        "exit": 0,
+        "seconds": 18.462843481975142,
+        "log": "target/surface-showcase/foliage-controls/workspace-integration-gate.log"
+      },
+      {
+        "name": "server",
+        "command": [
+          "cargo",
+          "build",
+          "-p",
+          "thessa-server"
+        ],
+        "exit": 0,
+        "seconds": 0.22123432997614145,
+        "log": "target/surface-showcase/foliage-controls/server-gate.log"
+      },
+      {
+        "name": "native-hardware-cli",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-terrain-native",
+          "--",
+          "--ignored",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 235.57837065303465,
+        "log": "target/surface-showcase/foliage-controls/native-hardware-cli-gate.log"
+      },
+      {
+        "name": "renderer-hardware",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-render-wgpu",
+          "--",
+          "--ignored",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 332.63014493801165,
+        "log": "target/surface-showcase/foliage-controls/renderer-hardware-gate.log"
+      },
+      {
+        "name": "legacy-bevy-command",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-bevy-rcbt",
+          "--features",
+          "render",
+          "--lib",
+          "--",
+          "--ignored"
+        ],
+        "exit": 0,
+        "seconds": 7.626312796957791,
+        "log": "target/surface-showcase/foliage-controls/legacy-bevy-command-gate.log"
+      },
+      {
+        "name": "feature-off",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "thessa-terrain-native",
+          "--no-default-features"
+        ],
+        "exit": 0,
+        "seconds": 1.3288466179510579,
+        "log": "target/surface-showcase/foliage-controls/feature-off-gate.log"
+      },
+      {
+        "name": "world00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "surface_patch_audit"
+        ],
+        "exit": 0,
+        "seconds": 1.155844762979541,
+        "log": "target/surface-showcase/foliage-controls/world00-gate.log"
+      },
+      {
+        "name": "release-server",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "thessa-server"
+        ],
+        "exit": 0,
+        "seconds": 56.483515736006666,
+        "log": "target/surface-showcase/foliage-controls/release-server-gate.log"
+      },
+      {
+        "name": "release-viewer",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "thessa-terrain-native"
+        ],
+        "exit": 0,
+        "seconds": 0.19951087201479822,
+        "log": "target/surface-showcase/foliage-controls/release-viewer-gate.log"
+      }
+    ],
+    "counts": {
+      "workspace-lib-bins": {
+        "passed": 2051,
+        "failed": 0,
+        "ignored": 49
+      },
+      "workspace-integration": {
+        "passed": 109,
+        "failed": 0,
+        "ignored": 90
+      },
+      "native-hardware-cli": {
+        "passed": 47,
+        "failed": 0,
+        "ignored": 0
+      },
+      "renderer-hardware": {
+        "passed": 86,
+        "failed": 0,
+        "ignored": 0
+      },
+      "legacy-bevy-command": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "world00": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "postcheck": {
+      "unchanged_inputs": 757,
+      "input_manifest_sha256": "def5b4c5e9bc7e8ff0a34170c10462d2bbaac5562f565ad672b5b2dbcfcac58c",
+      "captured_sha256": "4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422",
+      "rebuilt_sha256": "4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422",
+      "binary_identical": true
+    },
+    "cargo_environment": {
+      "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"
+    }
+  },
+  "acceptance": {
+    "numerical": "analytic visibility regression and bounded plant interior reference only",
+    "independent_blind_votes": 0,
+    "visual_acceptance": false,
+    "stable_performance": false,
+    "temporal": false,
+    "main_promoted": false,
+    "blind_review_directory": "target/surface-showcase/foliage-controls/review",
+    "review_key_policy": "Key stored separately; no origin key or fabricated vote committed."
+  },
+  "final_capture": {
+    "command": {
+      "command": [
+        "target/release/thessa-terrain-native",
+        "--graphics",
+        "target/surface-showcase/understory/understory.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "80",
+        "--survey-eye-agl",
+        "2",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "60",
+        "--sweep",
+        "--frames",
+        "96",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "target/surface-showcase/foliage-controls/fixed-shadow-line.png",
+        "--perf-capture",
+        "target/surface-showcase/foliage-controls/fixed-shadow-line.json"
+      ],
+      "exit": 0,
+      "binary_sha256": "4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422",
+      "settings_sha256": "9c949421a75a4e32f14608a48775c09b5acf0f71aef3953534c208c7ab7e06b6"
+    },
+    "analysis": {
+      "matched_camera_source_plant_keys": 20,
+      "mean_abs_rgb": [
+        0.380849609375,
+        0.45947482638888887,
+        0.1967361111111111
+      ],
+      "max_abs_rgb": [
+        101,
+        104,
+        52
+      ],
+      "regions": {
+        "crown": {
+          "mean_abs_rgb": [
+            0.0905859375,
+            0.081484375,
+            0.048125
+          ],
+          "max_abs_rgb": [
+            86,
+            74,
+            48
+          ]
+        },
+        "near_trunk": {
+          "mean_abs_rgb": [
+            0.4899603174603175,
+            0.41484126984126984,
+            0.24968253968253967
+          ],
+          "max_abs_rgb": [
+            70,
+            94,
+            39
+          ]
+        },
+        "fern_ground": {
+          "mean_abs_rgb": [
+            0.47107758620689655,
+            0.5977873563218391,
+            0.22823275862068965
+          ],
+          "max_abs_rgb": [
+            73,
+            102,
+            43
+          ]
+        }
+      },
+      "frames": {
+        "baseline": {
+          "cpu_median_ms": 5.1433915,
+          "cpu_p95_ms": 12.225092,
+          "cpu_max_ms": 27.684816,
+          "gpu_median_ms": 204.08344106533815,
+          "sim_steps": 0,
+          "times": [
+            0.0
+          ]
+        },
+        "fixed": {
+          "cpu_median_ms": 4.844635500000001,
+          "cpu_p95_ms": 12.679819,
+          "cpu_max_ms": 17.495064000000003,
+          "gpu_median_ms": 203.46280184313014,
+          "sim_steps": 0,
+          "times": [
+            0.0
+          ]
+        }
+      },
+      "png_sha256": "9f3346ba91cc7846d2c4e28492a834874851d79f4c1ca8e8c34eefa2bb6cea6f",
+      "perf_sha256": "655c6a171fa1aa2d7b9f77bf232af4ca47ed28b1eac37a7a750131d6067f9250"
+    },
+    "scope": "Matched diagnostic, not a benchmark win or blind preference; 20 scene/source/plant keys identical; settings and binary hashes explicit. All measured samples have zero physics steps."
+  }
+}

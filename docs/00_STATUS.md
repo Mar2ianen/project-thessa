@@ -98,7 +98,7 @@ do not update in place).
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
-| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in density tiers, L14 canonical plant window plus optional nine-window L18/L24 understory, one shared background job for same-site near changes with stale-result rejection and compatible GPU-source reuse, shared opaque/shadow path, RT preflight/fallback, zero-work disable and authored fern/reed/forked-crown geometry | actual resident-mesh root agreement, botanical realism, GPU cost and wider stable performance acceptance, planetary instance streaming and collision ownership |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in density tiers, L14 canonical plant window plus optional nine-window L18/L24 understory, one shared background job for same-site near changes with stale-result rejection and compatible GPU-source reuse, shared opaque/shadow path with physical stellar ray-line preservation and bounded actual-producer visibility oracles, RT preflight/fallback, zero-work disable and authored fern/reed/forked-crown geometry | actual resident-mesh root agreement, finite-bias/edge visibility, botanical realism, GPU cost and wider stable performance acceptance, planetary instance streaming and collision ownership |
 | `77_NATIVE_SURFACE_SHOWCASE.md` | 🟡 surface-first work in progress | actual GPU material-level telemetry; protected coarse support plus caller-priority refinement replaces detail-starving global level admission; separate stem/foliage reflectance; regular-patch split-coordinate material sampling and local derivative footprint; default-off CC0 ground-swatch experiment with L20/L21/L22 caps and same-material coarse means; rejected colour-noise prototype recorded, not shipped | canopy/floor representation hierarchy, convincing ground/foliage/water composition, moving-camera and blind acceptance, bounded planet-wide vegetation streaming |
 | `78_NATIVE_MAIN_INTEGRATION.md` | 🟡 integration preparation | latest-main workflow incorporated into the topic branch; sequential layer/host-replacement and exact-candidate promotion checklist | unresolved visual/transport/streaming/temporal/host obligations, full replacement and main promotion |
 
@@ -290,6 +290,17 @@ capture; no visual, stable-FPS or planetary-streaming acceptance follows. Latest
 main is incorporated into the topic branch, not promoted; remaining sequential
 replacement gates are in doc 78. Evidence:
 [`artifacts/native-async-understory-2026-10-23.json`](artifacts/native-async-understory-2026-10-23.json).
+
+WORLD07b fixes a specific stellar-visibility error: normal-offset shadow origins
+could move the light ray into a disjoint narrow blade. The shared mesh hook now
+preserves the physical line and excludes only a configured receiver interval.
+An analytic quad regression and actual-producer f64 visibility oracle accompany
+matched frozen-time captures. In 720 selected plant interiors, default-bias
+invented blockers drop from 13 to zero; 13 genuine nearby blockers are still
+skipped by finite bias. Sparse/subpixel foliage, the major diagonal branch
+pattern, ground bands, wider transport and visual acceptance remain open. See
+docs 75/77/78 and
+[`artifacts/native-stellar-ray-line-2026-10-23.json`](artifacts/native-stellar-ray-line-2026-10-23.json).
 
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace

@@ -29,7 +29,12 @@ fn rt_trace(origin:vec3<f32>,direction:vec3<f32>,t_min:f32,t_max:f32,flags:u32)-
 // can unshadow the other. No rays when the resolved shadow effect is disabled.
 fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32 {
     let atlas=shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);
-    if (!RT_SHADOWS || atlas<=0.0 || dot(normal,light.directions[sun].xyz)<=0.0) { return atlas; }
-    let hit=rt_trace(position+normal*RT_BIAS,light.directions[sun].xyz,RT_BIAS,RT_TMAX,RAY_FLAG_TERMINATE_ON_FIRST_HIT);
+    let cosine=dot(normal,light.directions[sun].xyz);
+    if (!RT_SHADOWS || atlas<=0.0 || cosine<=0.0) { return atlas; }
+    // Exclude the receiver's normal-distance bias along the SAME stellar ray.
+    // Moving its origin sideways can hit a disjoint narrow leaf and invent shadow.
+    let min_t=RT_BIAS/cosine;
+    if (min_t>=RT_TMAX) { return atlas; }
+    let hit=rt_trace(position,light.directions[sun].xyz,min_t,RT_TMAX,RAY_FLAG_TERMINATE_ON_FIRST_HIT);
     return select(atlas,0.0,hit.hit);
 }

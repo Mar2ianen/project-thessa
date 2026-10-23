@@ -647,3 +647,34 @@ map release/stale rejection and successful source reuse run on the real adapter.
 This closes the tested foreground sampling wait, not all stutter, GPU cost,
 near/far transitions or visual acceptance. Full scope and immutable inputs:
 [`artifacts/native-async-understory-2026-10-23.json`](artifacts/native-async-understory-2026-10-23.json).
+
+### WORLD07b — Keep stellar visibility on the physical ray
+
+Counterfactual captures with RT, shadows or reflections disabled isolate the
+dark plant marks to stellar scene visibility, not the reflection lobe. This
+does not make every dark branch mark an artifact: opaque leaves and forks
+really occlude each other. A separate analytic receiver/blade fixture exposes
+a narrower defect: offsetting the origin along the receiver normal can move
+the stellar ray sideways into a disjoint 4 mm blade. The original renderer
+returns black where the physical ray must be clear.
+
+The shared primary/secondary `surface_visibility` hook now traces from the
+receiver on the unchanged stellar line and excludes its normal-distance bias
+with `t_min = ray_bias_m / (N.L)`. Nonpositive `N.L` retains the existing
+no-query path; exclusion beyond the configured maximum distance also avoids
+the query. A blade on the true ray still blocks it. Raster atlas/cloud visibility,
+reflection origins, quality tiers, defaults and AS lifetime are unchanged.
+No artistic attenuation, altered plant geometry or extra pass is introduced.
+
+The independent f64 oracle uses the actual fern/reed/lycopsid triangle producer,
+uniform grey material, two stellar directions and biases 0.01/0.0001 m. It
+compares interior primary pixels to analytic direct shading and triangle
+visibility; shadow hits within 0.03 barycentric distance of an edge are counted
+separately, not certified for raster/intersection edge precision. The physical
+comparison converges between 1e-7/1e-8 m reference offsets. At the default bias,
+the previous origin shift created 13 false blockers in 720 selected samples;
+the new ray has none. Thirteen genuine blockers are still skipped by finite
+receiver exclusion, versus one at 0.0001 m. The default is **not** silently
+lowered: neither fixture establishes a universal far-coordinate bias bound.
+This fixes a causal shadow defect, not foliage coverage/AA, all close-contact
+visibility, ground bands, canopy closure or final visual acceptance.

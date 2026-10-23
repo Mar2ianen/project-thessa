@@ -87,6 +87,153 @@ fn version_one_address_and_transform_fixture() {
 }
 
 #[test]
+fn understory_has_disjoint_ids_nested_density_and_exact_window_unions() {
+    let tile = region(0, 18, 131_072, 131_072);
+    let high = query(tile, ScatterPopulation::Understory, 1.0);
+    assert!(!high.items.is_empty());
+    assert_eq!(high.candidates_visited, 4096);
+    assert_eq!(high, query(tile, ScatterPopulation::Understory, 1.0));
+    let legacy = query(tile, ScatterPopulation::Plants, 1.0);
+    for item in &high.items {
+        assert_eq!(item.id.cell().unwrap().level, UNDERSTORY_CANDIDATE_LEVEL);
+        assert_eq!(item.id.0 & 1, 1);
+        assert!(matches!(
+            item.kind,
+            ScatterKind::FernClump | ScatterKind::ReedClump
+        ));
+        assert!(!legacy.items.iter().any(|old| old.id == item.id));
+    }
+    let mut previous = Vec::new();
+    for density in [0.0, 0.25, 0.5, 1.0] {
+        let items = query(tile, ScatterPopulation::Understory, density).items;
+        assert!(items.iter().all(|item| high.items.contains(item)));
+        assert!(previous.iter().all(|item| items.contains(item)));
+        previous = items;
+    }
+    let mut children: Vec<_> = tile
+        .children()
+        .into_iter()
+        .rev()
+        .flat_map(|child| query(child, ScatterPopulation::Understory, 1.0).items)
+        .collect();
+    children.sort_unstable_by_key(|item| item.id);
+    assert_eq!(high.items, children);
+    // Fine windows still own a candidate once, rather than cloning a parent-cell plant.
+    let cell = high.items[0].id.cell().unwrap();
+    let parent = query(cell, ScatterPopulation::Understory, 1.0);
+    let mut fine: Vec<_> = cell
+        .children()
+        .into_iter()
+        .flat_map(|child| query(child, ScatterPopulation::Understory, 1.0).items)
+        .collect();
+    fine.sort_unstable_by_key(|item| item.id);
+    assert_eq!(parent.items, fine);
+}
+
+#[test]
+fn understory_uses_ground_or_reed_habitat_and_explicit_spacing_and_budgets() {
+    let tile = region(0, 18, 131_072, 131_072);
+    let run = |cover: VegetationCover, spacing: f64| {
+        scatter_region(
+            7,
+            RADIUS_M,
+            tile,
+            ScatterPopulation::Understory,
+            ScatterPolicy {
+                understory_spacing_m: spacing,
+                ..Default::default()
+            },
+            |dir| {
+                let mut s = surface(dir);
+                s.vegetation = cover;
+                s
+            },
+        )
+    };
+    assert!(
+        run(
+            VegetationCover {
+                ground01: 0.0,
+                canopy01: 1.0,
+                reeds01: 0.0
+            },
+            1.0
+        )
+        .unwrap()
+        .items
+        .is_empty()
+    );
+    let fern = run(
+        VegetationCover {
+            ground01: 1.0,
+            canopy01: 0.0,
+            reeds01: 0.0,
+        },
+        1.0,
+    )
+    .unwrap();
+    assert!(fern.items.iter().all(|i| i.kind == ScatterKind::FernClump));
+    let reeds = run(
+        VegetationCover {
+            ground01: 0.0,
+            canopy01: 0.0,
+            reeds01: 1.0,
+        },
+        1.0,
+    )
+    .unwrap();
+    assert_eq!(fern.items.len(), reeds.items.len());
+    assert!(reeds.items.iter().all(|i| i.kind == ScatterKind::ReedClump));
+    let sparse = run(
+        VegetationCover {
+            ground01: 1.0,
+            canopy01: 0.0,
+            reeds01: 0.0,
+        },
+        2.0,
+    )
+    .unwrap();
+    assert!(sparse.items.len() < fern.items.len());
+    assert!(sparse.items.iter().all(|i| fern.items.contains(i)));
+    let empty = VegetationCover {
+        ground01: 0.0,
+        canopy01: 0.0,
+        reeds01: 0.0,
+    };
+    for spacing in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(run(empty, spacing).is_err());
+    }
+    assert!(matches!(
+        run(empty, 0.001),
+        Err(ScatterError::DensityCapacityExceeded { .. })
+    ));
+    let result = scatter_region(
+        7,
+        RADIUS_M,
+        tile,
+        ScatterPopulation::Understory,
+        ScatterPolicy {
+            max_candidates: 4095,
+            ..Default::default()
+        },
+        |_| panic!("budget rejection must precede sampling"),
+    );
+    assert_eq!(
+        result,
+        Err(ScatterError::CandidateBudgetExceeded {
+            required: 4096,
+            limit: 4095
+        })
+    );
+    eprintln!(
+        "understory full_ground_count={} sparse_2m_count={} candidates={}",
+        fern.items.len(),
+        sparse.items.len(),
+        fern.candidates_visited
+    );
+}
+
+#[test]
 fn parent_and_reversed_children_have_exact_ids_and_transforms() {
     for population in [ScatterPopulation::Rocks, ScatterPopulation::Plants] {
         // Centre, cube edges/corners, and both polar faces; no lat/lon singularity.

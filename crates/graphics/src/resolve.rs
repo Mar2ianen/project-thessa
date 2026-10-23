@@ -264,6 +264,13 @@ pub struct ResolvedGraphicsSettings {
     /// Output ceiling, not a reservation or a target population count.
     #[serde(default)]
     pub surface_plants_max_items: u32,
+    /// Optional near-eye layer in nine L18 windows on a separate L24 lattice.
+    #[serde(default)]
+    pub surface_understory_enabled: bool,
+    #[serde(default)]
+    pub surface_understory_max_candidates: u64,
+    #[serde(default)]
+    pub surface_understory_max_items: u32,
     #[serde(default)]
     pub terrain_topology: ResolvedTerrainTopology,
     pub instruments: ResolvedInstruments,
@@ -769,6 +776,22 @@ impl ResolvedGraphicsSettings {
             } else {
                 0
             },
+            surface_understory_enabled: requested.surface_plants.enabled
+                && requested.surface_plants.understory,
+            surface_understory_max_candidates: if requested.surface_plants.enabled
+                && requested.surface_plants.understory
+            {
+                9 * 4096
+            } else {
+                0
+            },
+            surface_understory_max_items: if requested.surface_plants.enabled
+                && requested.surface_plants.understory
+            {
+                9 * 4096
+            } else {
+                0
+            },
             instruments: resolve_instruments(requested.instruments),
             ocean: requested.ocean.clone(),
             ocean_size: match requested.ocean.quality {
@@ -1021,6 +1044,18 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "surface_plants_max_items".into(),
             self.surface_plants_max_items.to_string(),
+        );
+        map.insert(
+            "surface_understory_enabled".into(),
+            self.surface_understory_enabled.to_string(),
+        );
+        map.insert(
+            "surface_understory_max_candidates".into(),
+            self.surface_understory_max_candidates.to_string(),
+        );
+        map.insert(
+            "surface_understory_max_items".into(),
+            self.surface_understory_max_items.to_string(),
         );
         map.insert(
             "surface_quality".into(),
@@ -1300,11 +1335,67 @@ mod tests {
             "surface_plants_density_scale",
             "surface_plants_max_candidates",
             "surface_plants_max_items",
+            "surface_understory_enabled",
+            "surface_understory_max_candidates",
+            "surface_understory_max_items",
         ] {
             legacy.as_table_mut().unwrap().remove(key).unwrap();
         }
         let restored: ResolvedGraphicsSettings = legacy.try_into().unwrap();
         assert_eq!(restored, baseline);
+    }
+
+    #[test]
+    fn near_understory_is_opt_in_parent_gated_and_uses_existing_density_tiers() {
+        let caps = Capabilities::unknown();
+        for quality in [Quality::Low, Quality::Medium, Quality::High] {
+            for enabled in [false, true] {
+                let mut request = RequestedGraphics {
+                    preset: crate::Preset::Custom,
+                    ..Default::default()
+                };
+                request.surface_plants.enabled = enabled;
+                request.surface_plants.quality = quality;
+                let baseline = ResolvedGraphicsSettings::from_requested(&request, &caps);
+                request.surface_plants.understory = true;
+                let resolved = ResolvedGraphicsSettings::from_requested(&request, &caps);
+                assert_eq!(resolved.surface_understory_enabled, enabled);
+                assert_eq!(
+                    resolved.surface_understory_max_candidates,
+                    if enabled { 36864 } else { 0 }
+                );
+                assert_eq!(
+                    resolved.surface_understory_max_items,
+                    if enabled { 36864 } else { 0 }
+                );
+                assert_eq!(
+                    resolved.surface_plants_density_scale,
+                    baseline.surface_plants_density_scale
+                );
+                let meta = resolved.as_meta_map();
+                assert_eq!(meta["surface_understory_enabled"], enabled.to_string());
+                let mut unrelated = resolved.clone();
+                unrelated.surface_understory_enabled = false;
+                unrelated.surface_understory_max_candidates = 0;
+                unrelated.surface_understory_max_items = 0;
+                assert_eq!(unrelated, baseline);
+                assert_eq!(
+                    toml::from_str::<ResolvedGraphicsSettings>(
+                        &toml::to_string(&resolved).unwrap()
+                    )
+                    .unwrap(),
+                    resolved
+                );
+            }
+        }
+        let mut request = RequestedGraphics::from_toml(
+            "[surface_plants]\nenabled=true\nunderstory=true\nquality='low'",
+        )
+        .unwrap();
+        assert!(request.surface_plants.understory);
+        request.apply_preset(crate::Preset::High);
+        assert!(request.surface_plants.understory);
+        assert!(RequestedGraphics::from_toml("[surface_plants]\nunderstory=1").is_err());
     }
 
     #[test]

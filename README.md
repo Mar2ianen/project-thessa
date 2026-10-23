@@ -81,9 +81,12 @@ The checked-in vertical slice currently contains:
   survey-only prototype consumer through the existing opaque mesh/shadow path
   ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); the prototypes now use grounded
   arching fronds, tapered trunks and per-kind albedo, with matched old/new
-  captures and a blind preference review. Production vegetation streaming,
-  fully modeled botanical assets and physical obstacle ownership remain
-  unimplemented.
+  captures and a blind preference review. An optional default-off near-eye
+  understory adds canonical fern/reed clumps on a separate fixed L24 identity
+  lattice inside nine L18 windows, reusing the same quality tiers, prototypes,
+  opaque mesh and shadow paths; it is not a vegetation streamer. Production
+  vegetation streaming, fully modeled botanical assets and physical obstacle
+  ownership remain unimplemented.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

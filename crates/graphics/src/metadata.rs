@@ -59,6 +59,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Nested density subsets 0.25/0.5/1.0; fixed 4096-candidate/4096-item ceiling at every tier. Identity, habitat and ground height are independent of quality.",
         },
         SettingMeta {
+            path: "surface_plants.understory",
+            label: "Near-ground fern/reed layer",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Additional bounded near-eye canonical fern/reed clumps on a separate fixed L24 identity lattice. Uses the parent plant density tier and shared mesh/shadow paths; requires plants enabled. Disabled skips all near-layer sampling and resources. Not calibrated ecological coverage or planet-wide streaming.",
+        },
+        SettingMeta {
             path: "terrain_topology.enabled",
             label: "Native conforming terrain",
             kind: SettingKind::Bool,
@@ -1013,9 +1024,14 @@ mod tests {
             .iter()
             .filter(|meta| meta.path.starts_with("surface_plants."))
             .collect();
-        assert_eq!(plants.len(), 2);
+        assert_eq!(plants.len(), 3);
         for (path, kind, range) in [
             ("surface_plants.enabled", SettingKind::Bool, "true | false"),
+            (
+                "surface_plants.understory",
+                SettingKind::Bool,
+                "true | false",
+            ),
             (
                 "surface_plants.quality",
                 SettingKind::Enum,

@@ -14,6 +14,9 @@ use crate::{
 
 /// Part of the version-1 address/placement contract, not a render LOD setting.
 pub const CANDIDATE_LEVEL: u8 = 20;
+/// Separate identity lattice for near-ground fern/reed clumps. Its CBT depth
+/// keeps these IDs disjoint from the unchanged level-20 rocks/large plants.
+pub const UNDERSTORY_CANDIDATE_LEVEL: u8 = 24;
 const JITTER_BITS: u8 = 24;
 const MAX_ROCK_DENSITY_PER_KM2: f64 = 640.0;
 pub const PLANT_DENSITY_PER_KM2: f64 = 3000.0;
@@ -73,11 +76,15 @@ pub struct ScatterId(pub u64);
 impl ScatterId {
     /// Decode/validate the canonical cell, reusing the existing CBT address map.
     pub fn cell(self) -> Option<TileKey> {
-        let node = thessa_rcbt_core::Node::new(
-            self.0 >> 1,
-            crate::lod::CBT_FACE_DEPTH + 2 * CANDIDATE_LEVEL,
-        )
-        .ok()?;
+        let id = self.0 >> 1;
+        let depth = u8::try_from(63_u32.checked_sub(id.leading_zeros())?).ok()?;
+        if depth != crate::lod::CBT_FACE_DEPTH + 2 * CANDIDATE_LEVEL
+            && (depth != crate::lod::CBT_FACE_DEPTH + 2 * UNDERSTORY_CANDIDATE_LEVEL
+                || self.0 & 1 == 0)
+        {
+            return None;
+        }
+        let node = thessa_rcbt_core::Node::new(id, depth).ok()?;
         crate::lod::tile_for_cbt_node(node)
     }
 }
@@ -86,6 +93,7 @@ impl ScatterId {
 pub enum ScatterPopulation {
     Rocks = 0,
     Plants = 1,
+    Understory = 2,
 }
 
 /// One world-space instance. Yaw is about radial up, relative to the canonical
@@ -150,6 +158,14 @@ pub struct ScatterPolicy {
     pub max_items: usize,
     pub min_plant_height_m: f64,
     pub max_plant_slope_rise_run: f64,
+    /// Reference centre spacing for a fully eligible fern/reed habitat, metres.
+    /// An authored plant-density prior, not a calibrated canopy-coverage law.
+    pub understory_spacing_m: f64,
+    /// Authored dimensionless size range for near-ground clumps. The existing
+    /// 0.5..2.3 range remains for the larger plant survey; understory uses
+    /// shorter geometry so it reads as ground cover rather than a wall.
+    pub understory_min_scale: f64,
+    pub understory_max_scale: f64,
 }
 
 impl Default for ScatterPolicy {
@@ -160,6 +176,9 @@ impl Default for ScatterPolicy {
             max_items: 1_024_000,
             min_plant_height_m: 2.0,
             max_plant_slope_rise_run: 0.25,
+            understory_spacing_m: 0.8,
+            understory_min_scale: 0.35,
+            understory_max_scale: 0.9,
         }
     }
 }
@@ -171,6 +190,12 @@ impl ScatterPolicy {
             || !self.min_plant_height_m.is_finite()
             || !self.max_plant_slope_rise_run.is_finite()
             || self.max_plant_slope_rise_run < 0.0
+            || !self.understory_spacing_m.is_finite()
+            || self.understory_spacing_m <= 0.0
+            || !self.understory_min_scale.is_finite()
+            || !self.understory_max_scale.is_finite()
+            || self.understory_min_scale <= 0.0
+            || self.understory_max_scale < self.understory_min_scale
         {
             return Err(ScatterError::InvalidRequest("invalid scatter policy"));
         }
@@ -246,13 +271,20 @@ pub fn scatter_region(
     if policy.density_scale == 0.0 {
         return Ok(batch);
     }
-    let ceiling = match population {
+    let candidate_level = if population == ScatterPopulation::Understory {
+        UNDERSTORY_CANDIDATE_LEVEL
+    } else {
+        CANDIDATE_LEVEL
+    };
+    let reference_density = match population {
         ScatterPopulation::Rocks => MAX_ROCK_DENSITY_PER_KM2,
         ScatterPopulation::Plants => PLANT_DENSITY_PER_KM2,
-    } * policy.density_scale;
+        ScatterPopulation::Understory => 1e6 / policy.understory_spacing_m.powi(2),
+    };
+    let ceiling = reference_density * policy.density_scale;
     // Largest cell Jacobian is at the face centre. Refuse saturation even if
     // local cover later rejects everything: density must never silently clip.
-    let max_cell_area_km2 = (2.0 * radius_m / (1_u64 << CANDIDATE_LEVEL) as f64).powi(2) / 1e6;
+    let max_cell_area_km2 = (2.0 * radius_m / (1_u64 << candidate_level) as f64).powi(2) / 1e6;
     let capacity = 1.0 / max_cell_area_km2;
     if !capacity.is_finite() {
         return Err(ScatterError::InvalidRequest(
@@ -266,11 +298,11 @@ pub fn scatter_region(
         });
     }
     let bounds = |index: u32| {
-        if region.level <= CANDIDATE_LEVEL {
-            let shift = CANDIDATE_LEVEL - region.level;
+        if region.level <= candidate_level {
+            let shift = candidate_level - region.level;
             (index << shift, (index + 1) << shift)
         } else {
-            let cell = index >> (region.level - CANDIDATE_LEVEL);
+            let cell = index >> (region.level - candidate_level);
             (cell, cell + 1)
         }
     };
@@ -288,11 +320,12 @@ pub fn scatter_region(
         for x in x0..x1 {
             let cell = TileKey {
                 face: region.face,
-                level: CANDIDATE_LEVEL,
+                level: candidate_level,
                 x,
                 y,
             };
-            let id = ScatterId((cbt_node_for_tile(cell).unwrap().id() << 1) | population as u64);
+            let tag = u64::from(population != ScatterPopulation::Rocks);
+            let id = ScatterId((cbt_node_for_tile(cell).unwrap().id() << 1) | tag);
             let random = |channel| rng::hash01(planet_seed, channel, id.0 as i64, 0);
             // Midpoints of a 24-bit subcell grid: strictly interior, even when
             // hash01 rounds to 1.0. Dyadic ownership is exact through level 27.
@@ -302,8 +335,8 @@ pub fn scatter_region(
                 (q as f64 + 0.5) / (1_u64 << JITTER_BITS) as f64
             };
             let (jx, jy) = (jitter(402), jitter(403));
-            if region.level > CANDIDATE_LEVEL {
-                let n = (1_u64 << CANDIDATE_LEVEL) as f64;
+            if region.level > candidate_level {
+                let n = (1_u64 << candidate_level) as f64;
                 let rn = (1_u64 << region.level) as f64;
                 if (((x as f64 + jx) / n * rn) as u32 != region.x)
                     || (((y as f64 + jy) / n * rn) as u32 != region.y)
@@ -311,7 +344,7 @@ pub fn scatter_region(
                     continue;
                 }
             }
-            let n = (1_u64 << CANDIDATE_LEVEL) as f64;
+            let n = (1_u64 << candidate_level) as f64;
             let u = 2.0 * (x as f64 + jx) / n - 1.0;
             let v = 2.0 * (y as f64 + jy) / n - 1.0;
             let area_km2 = max_cell_area_km2 / (1.0 + u * u + v * v).powf(1.5);
@@ -323,7 +356,7 @@ pub fn scatter_region(
             batch.surface_samples += 1;
             let mut surface = surface_at(direction);
             validate_surface(surface, id, population)?;
-            if population == ScatterPopulation::Plants && surface.vegetation.total() > 1.0 {
+            if population != ScatterPopulation::Rocks && surface.vegetation.total() > 1.0 {
                 let total = surface.vegetation.total();
                 surface.vegetation.ground01 /= total;
                 surface.vegetation.canopy01 /= total;
@@ -339,13 +372,18 @@ pub fn scatter_region(
                 ScatterPopulation::Rocks => {
                     base_density_per_km2(surface.biome) * (1.0 + 3.0 * surface.rocky01)
                 }
-                ScatterPopulation::Plants => {
+                ScatterPopulation::Plants | ScatterPopulation::Understory => {
                     if surface.ground_height_m < policy.min_plant_height_m
                         || surface.slope_rise_run > policy.max_plant_slope_rise_run
                     {
                         continue;
                     }
-                    PLANT_DENSITY_PER_KM2 * surface.vegetation.total()
+                    reference_density
+                        * if population == ScatterPopulation::Understory {
+                            surface.vegetation.ground01 + surface.vegetation.reeds01
+                        } else {
+                            surface.vegetation.total()
+                        }
                 }
             } * policy.density_scale;
             if keep >= density * area_km2 {
@@ -363,6 +401,15 @@ pub fn scatter_region(
                         ScatterKind::FernClump
                     }
                 }
+                ScatterPopulation::Understory => {
+                    let choice =
+                        random(431) * (surface.vegetation.ground01 + surface.vegetation.reeds01);
+                    if choice < surface.vegetation.reeds01 {
+                        ScatterKind::ReedClump
+                    } else {
+                        ScatterKind::FernClump
+                    }
+                }
             };
             if batch.items.len() == policy.max_items {
                 return Err(ScatterError::ItemBudgetExceeded {
@@ -374,12 +421,18 @@ pub fn scatter_region(
                     (policy.max_items - batch.items.len()).min(batch.items.capacity().max(1024));
                 try_reserve_items(&mut batch.items, additional)?;
             }
+            let scale = if population == ScatterPopulation::Understory {
+                policy.understory_min_scale
+                    + random(404) * (policy.understory_max_scale - policy.understory_min_scale)
+            } else {
+                0.5 + random(404) * 1.8
+            };
             batch.items.push(ScatterItem {
                 id,
                 kind,
                 direction,
                 ground_height_m: surface.ground_height_m,
-                scale: 0.5 + random(404) * 1.8,
+                scale,
                 yaw_rad: random(405) * std::f64::consts::TAU,
             });
         }
@@ -410,7 +463,7 @@ fn validate_surface(
         || s.water_height_m.is_some_and(|h| !h.is_finite())
         || (population == ScatterPopulation::Rocks
             && (!s.rocky01.is_finite() || !(0.0..=1.0).contains(&s.rocky01)))
-        || (population == ScatterPopulation::Plants
+        || (population != ScatterPopulation::Rocks
             && ([
                 s.vegetation.ground01,
                 s.vegetation.canopy01,

@@ -743,6 +743,8 @@ impl Default for TerrainTopologySettings {
 pub struct SurfacePlantsSettings {
     pub enabled: bool,
     pub quality: Quality,
+    /// Additional bounded near-eye fern/reed layer; not planetary streaming.
+    pub understory: bool,
 }
 
 impl Default for SurfacePlantsSettings {
@@ -750,6 +752,7 @@ impl Default for SurfacePlantsSettings {
         Self {
             enabled: false,
             quality: Quality::High,
+            understory: false,
         }
     }
 }
@@ -1213,7 +1216,11 @@ mod tests {
                 let config = RequestedGraphics::from_toml(&text).unwrap();
                 assert_eq!(
                     config.surface_plants,
-                    SurfacePlantsSettings { enabled, quality }
+                    SurfacePlantsSettings {
+                        enabled,
+                        quality,
+                        understory: false
+                    }
                 );
                 assert_eq!(
                     RequestedGraphics::from_toml(&toml::to_string(&config).unwrap()).unwrap(),
@@ -1250,7 +1257,11 @@ mod tests {
                 config.apply_preset(preset);
                 assert_eq!(
                     config.surface_plants,
-                    SurfacePlantsSettings { enabled, quality }
+                    SurfacePlantsSettings {
+                        enabled,
+                        quality,
+                        understory: false
+                    }
                 );
                 assert!(!config.is_custom());
                 config.surface_plants.quality = if quality == Quality::Low {

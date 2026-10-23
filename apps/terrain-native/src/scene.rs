@@ -1407,6 +1407,24 @@ impl Scene {
             Context::Withheld("unsupported_vehicle_flight_or_docking_view")
         } else if self.map_active() {
             Context::Withheld("unsupported_map_view")
+        } else if settings.surface_understory_enabled
+            && self
+                .survey_eye_agl_m
+                .is_some_and(|agl| agl <= crate::surface_plants::UNDERSTORY_MAX_EYE_AGL_M)
+        {
+            // Radial ground/AGL clamping changes radius, not this direction.
+            // Reuse the survey's offset/frame without another height sample.
+            let frame = self.sample.frame;
+            let up = frame.body_to_render_direction(self.up);
+            let Some((offset, _)) = self.survey.offsets(up) else {
+                return Context::Withheld("unsupported_understory_survey_pose");
+            };
+            let eye = frame
+                .render_to_body_point(frame.body_to_render_point(self.center) + offset.as_dvec3());
+            Context::SurveyWithUnderstory {
+                canopy: crate::surface_plants::survey_window(self.up),
+                understory: crate::surface_plants::understory_window(eye.normalize()),
+            }
         } else {
             Context::Survey(crate::surface_plants::survey_window(self.up))
         }
@@ -1418,7 +1436,8 @@ impl Scene {
             &thessa_graphics::Capabilities::unknown(),
         );
         use crate::surface_plants::{Context, Diagnostics};
-        match self.surface_plants_context(&settings) {
+        let context = self.surface_plants_context(&settings);
+        match context {
             Context::Disabled => Diagnostics {
                 reason: "disabled",
                 ..Default::default()
@@ -1429,9 +1448,13 @@ impl Scene {
                 ..Default::default()
             }
             .metadata(),
-            Context::Survey(window) => {
+            Context::Survey(window) | Context::SurveyWithUnderstory { canopy: window, .. } => {
                 let diagnostics = self.surface_plants_diagnostics.borrow();
-                if diagnostics.window == Some(window) {
+                let near = match context {
+                    Context::SurveyWithUnderstory { understory, .. } => Some(understory),
+                    _ => None,
+                };
+                if diagnostics.window == Some(window) && diagnostics.understory_window == near {
                     diagnostics.metadata()
                 } else {
                     Diagnostics {
@@ -2937,6 +2960,50 @@ mod tests {
             state.position_inertial_m
         );
         assert!(scene.survey_capture_metadata(1280, 720).is_empty());
+    }
+
+    #[test]
+    fn near_understory_context_tracks_the_actual_eye_without_reassigning_canopy() {
+        use crate::surface_plants::{Context, survey_window, understory_window};
+        let mut scene = Scene::load(Default::default()).unwrap();
+        scene.requested.surface_plants.enabled = true;
+        scene.requested.surface_plants.understory = true;
+        scene.select_fixed_survey_site([23.565679258039204, 165.13881581863882]);
+        let canopy = survey_window(scene.up);
+        let mut windows = std::collections::BTreeSet::new();
+        for time in [0.0, 1000.0] {
+            scene
+                .set_presentation_time(thessa_sim_core::SimTime(time))
+                .unwrap();
+            for distance in [20.0, 80.0, 1000.0] {
+                scene.survey.set_distance_m(distance);
+                for agl in [2.0, 50.0] {
+                    scene.survey_eye_agl_m = Some(agl);
+                    let settings = thessa_graphics::ResolvedGraphicsSettings::from_requested(
+                        &scene.requested,
+                        &thessa_graphics::Capabilities::unknown(),
+                    );
+                    let eye = scene.view(1280, 720, 1.0).world_position_m.normalize();
+                    let near = understory_window(eye);
+                    if agl <= crate::surface_plants::UNDERSTORY_MAX_EYE_AGL_M {
+                        assert_eq!(
+                            scene.surface_plants_context(&settings),
+                            Context::SurveyWithUnderstory {
+                                canopy,
+                                understory: near
+                            }
+                        );
+                        windows.insert(near);
+                    } else {
+                        assert_eq!(
+                            scene.surface_plants_context(&settings),
+                            Context::Survey(canopy)
+                        );
+                    }
+                }
+            }
+        }
+        assert!(windows.len() > 1);
     }
 
     #[test]

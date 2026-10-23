@@ -43,19 +43,24 @@ talus rules; the misleading old `slope01` name is removed.
 
 ## Version-1 fixed64 identity and ownership
 
-Each population has one candidate per **fixed level-20 cube cell**. This level
-is a world placement contract, never derived from requested density or render
-LOD. A candidate's `ScatterId(u64)` packs
+Rocks and plants have one candidate per **fixed level-20 cube cell**. The
+optional near-eye understory is a separate, explicitly versioned population with
+one candidate per **fixed level-24 cube cell**. Both levels are world placement
+contracts, never derived from requested density or render LOD. A candidate's
+`ScatterId(u64)` packs
 
 ```text
 (lod::cbt_node_for_tile(canonical_cell).id() << 1) | population_bit
-population_bit: 0 = rocks, 1 = plants
+population_bit: 0 = rocks, 1 = plants or understory
 ```
 
-This reuses the existing cube face/Morton/CBT address mapping, is collision-free
-within a world, and is not a probabilistic hash of a render tile. `ScatterId::cell`
-validates/decodes the same existing address mechanism. IDs are **world-local**:
-persist the owning world/body identity and placement-contract version with them;
+The shared tag is disambiguated by the validated node depth: level 20 is
+plants, level 24 is understory. Their node-ID ranges cannot alias, so existing
+rock/plant identities are unchanged. `ScatterId::cell` accepts exactly those two
+depth/tag combinations and decodes the same existing address mechanism. This
+extension is part of the placement contract; it is not a renderer LOD. IDs are
+**world-local**: persist the owning world/body identity and placement-contract
+version with them;
 the seed alone is not a globally unique world identifier. Seed changes move
 candidates but do not make the local address space globally unique. Changing
 the fixed lattice/hash/channel contract requires an explicit placement version
@@ -74,7 +79,8 @@ Every point is strictly inside one cube face and one half-open cell. Thus cube
 seams/corners and the exact poles (cell edges) have no duplicate candidates;
 there is no pole-specific longitude lattice or seam alias to reconcile. No
 candidate is deliberately placed exactly on a face edge or pole. Queries finer
-than level 20 filter the same dyadic position through level 27. Directions are
+than the population's candidate level filter the same dyadic position through
+level 27. Directions are
 always evaluated from the canonical cell, never reconstructed from the query.
 
 Successful batches are strictly ID-sorted. A parent batch is exactly the sorted
@@ -104,10 +110,13 @@ a useful conservative count scale is `sqrt(expected_count)`. This is a model of
 pseudo-random sampling, not a proof of cryptographic/statistical independence.
 
 At R = 3,200,000 m, the maximum cell Jacobian is 37.252903 m² and the supported
-global density ceiling is **26,843.5456 instances/km²**. The conservative
-population envelopes are `640 * density_scale` for rocks and
-`3000 * density_scale` for plants. Requests above capacity return
-`DensityCapacityExceeded`, even if the eventual local mask would be empty;
+global level-20 density ceiling is **26,843.5456 instances/km²**. The
+conservative population envelopes are `640 * density_scale` for rocks,
+`3000 * density_scale` for plants and, at the reference spacing, up to
+`1e6 / understory_spacing_m² * density_scale` for understory. The level-24
+understory lattice has a much larger cell capacity; its requested density is
+still checked against that lattice rather than assumed safe. Requests above
+capacity return `DensityCapacityExceeded`, even if the eventual local mask would be empty;
 there is no clipped probability or silent density saturation. In particular,
 full-cover plants support scale up to approximately 8.94785 on this body. Larger
 bodies have a lower ceiling; this finite address population is an explicit
@@ -140,9 +149,11 @@ canonical cells and no blue-noise claim.
 ## Budgets and offline final-surface scope
 
 `ScatterPolicy` defaults to 16,777,216 candidate visits, 1,024,000 output items,
-density scale 1, minimum plant elevation 2 m and maximum plant slope 0.25.
-Candidate work is exactly preflighted as `4^(20-query_level)` for level ≤20,
-or one overlapping cell for finer windows; the latter may own no candidate.
+density scale 1, minimum plant elevation 2 m, maximum plant slope 0.25 and
+`understory_spacing_m = 0.8` and understory clump scales 0.35–0.9. Candidate
+work is exactly preflighted as
+`4^(candidate_level-query_level)` for coarser/equal windows, or one overlapping
+cell for finer windows; the latter may own no candidate.
 `CandidateBudgetExceeded` is returned before sampling/allocation. Output-budget
 exhaustion returns `ItemBudgetExceeded` and **no partial batch**. Invalid inputs
 or sampled surface values also return errors. Zero density performs zero visits,

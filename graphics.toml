@@ -69,8 +69,14 @@ quality = "high"
 # items at 4096; these budgets do not reserve resources. Disabled resolves
 # density/budgets to zero and skips sampler/jobs/mesh work. No RT/shadow
 # architecture, physics or collision changes. See docs/75.
+# `understory = true` adds a bounded near-eye fern/reed layer on a separate L24
+# identity lattice inside nine same-face L18 windows (up to 36,864 candidates).
+# It uses the same quality density subset and shared prototype/mesh/shadow path,
+# replaces only coarse ground clumps inside that fine cover, and keeps trees plus
+# the coarse far fallback. False preserves the WORLD04 representation exactly.
 enabled = false
 quality = "high"
+understory = false
 
 [atmosphere]
 # Native background and mesh/RT indirect terms share this quality-tiered sky

@@ -680,16 +680,31 @@ mod tests {
     #[test]
     #[ignore = "requires a wgpu adapter"]
     fn survey_plants_retain_body_fixed_descriptors_and_submit_grouped_ranges() {
+        survey_plant_lifecycle(false);
+    }
+
+    #[test]
+    #[ignore = "hardware: bounded near-eye understory reuses grouped raster/shadow paths, follows window boundaries and restores exact descriptors"]
+    fn near_understory_reuses_the_shared_plant_and_shadow_lifecycle() {
+        survey_plant_lifecycle(true);
+    }
+
+    fn survey_plant_lifecycle(understory: bool) {
         use thessa_render_wgpu::terrain::OffscreenTarget;
         let backend = Backend::bring_up().unwrap();
         let mut requested = thessa_graphics::RequestedGraphics::default();
         requested.surface_plants.enabled = true;
+        requested.surface_plants.understory = understory;
         requested.shadows.enabled = true;
         requested.shadows.quality = thessa_graphics::Quality::Low;
         requested.shadows.cascades = 1;
         requested.shadows.map_size = 256;
         let mut scene = Scene::load(requested).unwrap();
         scene.select_fixed_survey_site([23.565679258039204, 165.13881581863882]);
+        if understory {
+            scene.survey.set_distance_m(80.0);
+            scene.survey_eye_agl_m = Some(2.0);
+        }
         let settings = backend.resolve_graphics(&scene.requested);
         let page = thessa_rcbt_core::HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
         let mut terrain = TerrainRenderer::with_capacity_and_lighting(
@@ -790,6 +805,22 @@ mod tests {
                 preparation_ms
             );
         }
+        if understory {
+            let near = scene.surface_plants_diagnostics.borrow().understory_window;
+            scene.survey.set_distance_m(160.0);
+            assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
+            assert_ne!(
+                scene.surface_plants_diagnostics.borrow().understory_window,
+                near
+            );
+            assert_ne!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+            assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+            scene.survey.set_distance_m(80.0);
+            assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
+            assert_eq!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+            assert_eq!(meshes.plants.as_ref().unwrap().instances, instances);
+            assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+        }
         // A new selected window replaces the retained source once, not per frame.
         scene.select_site(1);
         assert!(
@@ -801,7 +832,9 @@ mod tests {
             scene.surface_plants_diagnostics.borrow().window,
             Some(window)
         );
-        assert_eq!(scene.surface_plants_diagnostics.borrow().candidates, 4096);
+        let stats = scene.surface_plants_diagnostics.borrow();
+        assert_eq!(stats.candidates, 4096 + stats.understory_candidates);
+        drop(stats);
         let preparation_ms = scene.surface_plants_diagnostics.borrow().preparation_ms;
         assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
         assert_eq!(

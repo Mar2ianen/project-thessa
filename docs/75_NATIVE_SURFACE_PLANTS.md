@@ -12,15 +12,19 @@ and smooth stem normals without turning them into botanical reconstructions.
 The surface-showcase continuation in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
 adds explicit lycopsid stem reflectance through the existing mesh material,
 without changing placement. Its later WORLD06f stage changes silhouettes through
-the same prototype producer and material path. Botanical realism and final
-surface composition remain incomplete.
+the same prototype producer and material path. Its WORLD07 continuation adds an
+opt-in bounded near-eye fern/reed layer; it remains experimental, default-off,
+synchronously prepared and visibly a prototype rather than closed forest.
+Botanical realism and final surface composition remain incomplete.
 
 ## Requested and resolved contract
 
-`[surface_plants]` in `graphics.toml` has `enabled = false` and
-`quality = "high"` by default. Missing/partial sections retain these defaults.
-Quality uses the existing `Quality` enum; invalid values fail TOML parsing.
-Unknown keys retain the shared parser's forward-compatible behavior.
+`[surface_plants]` in `graphics.toml` has `enabled = false`,
+`quality = "high"` and `understory = false` by default. Missing/partial sections
+retain these defaults. Quality uses the existing `Quality` enum; invalid values
+fail TOML parsing. Unknown keys retain the shared parser's forward-compatible
+behavior. `understory` requires the parent consumer to be enabled; it is
+restart-required and does not add a new capability or renderer mode.
 
 `RequestedGraphics.surface_plants: SurfacePlantsSettings` enters the existing
 `ResolvedGraphicsSettings::from_requested` pipeline. It resolves flat fields:
@@ -31,6 +35,9 @@ Unknown keys retain the shared parser's forward-compatible behavior.
 | `surface_plants_density_scale` | `f64` | 0 | 0.25 | 0.5 | 1 |
 | `surface_plants_max_candidates` | `u64` | 0 | 4096 | 4096 | 4096 |
 | `surface_plants_max_items` | `u32` | 0 | 4096 | 4096 | 4096 |
+| `surface_understory_enabled` | `bool` | false | opt-in | opt-in | opt-in |
+| `surface_understory_max_candidates` | `u64` | 0 | 36,864 | 36,864 | 36,864 |
+| `surface_understory_max_items` | `u32` | 0 | 36,864 | 36,864 | 36,864 |
 
 Counts follow existing resolved count conventions. The consumer must perform a
 checked conversion of `max_items` if its scatter API accepts `usize`. Density
@@ -41,8 +48,8 @@ with zero density/budgets.
 Low/Medium/High/Ultra presets set quality to Low/Medium/High/High, preserving
 explicit enabled/disabled intent (as for ocean and topology). Custom leaves
 plant policy untouched. Explicit quality overrides remain intact when parsing;
-divergence from an applied preset reports custom. Both GUI descriptors require
-restart for the initial retained survey representation.
+divergence from an applied preset reports custom. All three GUI descriptors
+require restart for the retained survey representation.
 
 ## Bounded consumer boundary
 
@@ -514,3 +521,87 @@ gate exits successfully but currently matches **zero** tests: that crate has no
 `#[ignore]` tests after the Bevy retirement. It must not be cited as GPU
 coverage; the actual hardware coverage above comes from `thessa-render-wgpu` and
 `thessa-terrain-native`. These are local results, not remote CI.
+
+## WORLD07 — Bounded near-eye understory
+
+`surface_plants.understory = true` adds a second, opt-in descriptor population
+without replacing the WORLD04 consumer. The large-plant survey remains the fixed
+L14 window around the selected canonical target. The near layer uses the actual
+survey eye direction and nine same-face level-18 query windows (a 3×3 window
+around the containing cell); each L18 window owns 4,096 level-24 candidate cells,
+so the resolved candidate ceiling is 36,864. Face-edge windows are clamped and
+deduplicated. The eye direction is the renderer's body-fixed survey offset, not a
+new camera-height or terrain query; radial ground/AGL clamping does not change it.
+
+The L24 lattice is a separate placement contract: understory IDs use the existing
+fixed64 node address plus population tag 1, and `ScatterId::cell` disambiguates
+them from level-20 plants by node depth. Existing rock/plant IDs are unchanged.
+Habitat is the canonical `canonical_plant_surface` ground/reeds coverage, with the
+same water, minimum-height and slope rejection as the parent plants. Fern versus
+reed choice is deterministic from the world seed and ID. `understory_spacing_m`
+defaults to an authored 0.8 m reference centre spacing and clump scales to
+0.35–0.9; these are plant-density/size priors, not a meter-scale canopy
+simulation. Requested density is compared with the L24 cell capacity and fails
+explicitly on saturation rather than clipping.
+
+The layer reuses the existing prototype producer, per-kind material, grouped
+draw ranges, opaque pass, environment and shadow atlas. Inside the nine-window
+fine cover it replaces coarse fern/reed clumps; it retains every lycopsid tree
+and the coarse fern/reed fallback outside that cover. Thus default-off preserves
+every WORLD04 descriptor and ID exactly, while enabling the layer does not
+duplicate a coarse and a fine clump at the same place. Descriptor order is
+restored by sorted ID; prototype draw grouping is unchanged.
+
+Both candidate and item budgets are cumulative and fail the whole preparation
+before returning a partial representation. The near layer uses the parent
+Low/Medium/High density subset (`.25/.5/1`) and does not introduce another
+quality setting or hidden toggle. A camera move into a different L18 window,
+or an explicit eye AGL above 4 m (which selects the coarse-only survey), changes
+the bounded representation synchronously, retaining the existing "prepare once
+per selected window" lifecycle; this is not background streaming. An enabled
+understory with no eligible eye pose is a valid coarse-only fallback, not an
+error, and never retains a stale near layer.
+No collision, persistence, planetary vegetation LOD, biome simulation or plant
+RT representation is added. The existing `rt_vehicles` preflight and raster
+fallback still apply to the combined planted source.
+
+Linux hardware coverage is the ignored
+`near_understory_reuses_the_shared_plant_and_shadow_lifecycle` fixture, which
+checks grouped draw/shadow reuse, exact descriptor and instance restoration after
+a window round trip, and map-view release. CPU oracles pin disjoint IDs, nested
+density, exact parent/child window unions, ground/reed habitat, explicit spacing
+validation, budget errors and parent-gated settings isolation. These establish
+implementation contracts, not ecological realism or visual acceptance.
+
+### WORLD07 matched standing result
+
+The final candidate executable
+`3dc8490b7297ce9619374413a20cbcf55ab277dbf9d150858297f90f3031e969`
+was compared with identical `graphics.toml` inputs except
+`surface_plants.understory` at the fixed reference site, standing eye AGL 2 m,
+80 m survey distance, frozen simulation time/step, 60 s prestream, 30 warmups and
+32 measured 1280×720 frames. Baseline retained 222 plants (three draws,
+14,208 instance bytes). Understory retained 2,020: 1,800 near clumps plus 220
+coarse survivors, after replacing two coarse clumps; it submitted three draws,
+129,280 instance bytes, 36,864 candidate visits and 5,881 surface samples.
+Preparation was 5.768 ms baseline and 113.061 ms understory on this CPU.
+Median GPU frame time was 105.470 ms baseline and 147.359 ms understory; the
+combined source kept the existing ray-scene preflight policy
+(`shared_policy_with_preflighted_instance_budget`). These are single local
+diagnostics, not stable-performance acceptance.
+
+Displayed RGB difference versus baseline has mean absolute
+`[5.115, 4.067, 4.129]` codes (max `[137,116,117]`), so the layer is visibly
+present rather than a sub-code no-op. The eye-level frame shows plausible
+knee-to-waist fern/reed clumps, but the site remains a sparse, bare-ground
+savanna; there is no grass mat, canopy closure, botanical realism or final
+aesthetic acceptance. The 73 m fine cover and the coarse far population still
+meet at a representational boundary. Repeated synchronous regeneration costs
+113 ms whenever the eye crosses an L18 window, so this is an experimental
+default-off layer, not a shipped streaming solution.
+
+At 50 m eye AGL the layer is intentionally omitted and the coarse survey is
+retained; the standing captures remain the only visual A/B evidence. The
+pre-existing dark diagonal foliage/occlusion artifacts visible in both sides of
+the matched pair are not introduced by this layer. Evidence:
+[`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).

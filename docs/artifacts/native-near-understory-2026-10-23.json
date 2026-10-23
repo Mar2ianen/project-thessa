@@ -1,0 +1,192 @@
+{
+  "stage": "WORLD07",
+  "baseline_commit": "363395b",
+  "branch": "feat/native-surface-showcase",
+  "status": "Implemented and captured candidate; synchronous cost and sparse ground cover remain explicit limits",
+  "settings": {
+    "baseline": "target/surface-showcase/understory/baseline.toml",
+    "understory": "target/surface-showcase/understory/understory.toml",
+    "difference": "surface_plants.understory false/true only",
+    "settings_sha256": {
+      "baseline": "3256af61e0858d710a6f30e259a42e3988fbe330d781df3b692a4322bc4583da",
+      "understory": "9c949421a75a4e32f14608a48775c09b5acf0f71aef3953534c208c7ab7e06b6"
+    }
+  },
+  "capture_contract": {
+    "resolution": [
+      1280,
+      720
+    ],
+    "site_lat_lon_deg": [
+      23.565679258039204,
+      165.13881581863882
+    ],
+    "eye_agl_m": 2,
+    "survey_distance_m": 80,
+    "sim_time_s": 0,
+    "sim_step_s": 0,
+    "prestream_s": 60,
+    "warmup_frames": 30,
+    "measured_frames": 32,
+    "hud": false,
+    "audio": "muted",
+    "binary": "target/release/thessa-terrain-native",
+    "binary_sha256": "3dc8490b7297ce9619374413a20cbcf55ab277dbf9d150858297f90f3031e969"
+  },
+  "captures": [
+    {
+      "side": "baseline",
+      "png": "v4-baseline-standing2.png",
+      "png_sha256": "9a492531a8632dba4c9708249a3b65d45c5f8f4f9ed95e20f7d95c597b443bbf",
+      "perf": "v4-baseline-standing2.json",
+      "perf_sha256": "b006d057ea2b27cf883650965854fb7568f87d71ca53114c80cd1cfe8819c530",
+      "plants": 222,
+      "retained": 222,
+      "draws": 3,
+      "instance_buffer_bytes": 14208,
+      "preparation_ms": 5.7678590000000005,
+      "gpu_median_ms": 105.47037501865198,
+      "rt_policy": "shared_policy_with_preflighted_instance_budget"
+    },
+    {
+      "side": "understory",
+      "png": "v4-understory-standing2.png",
+      "png_sha256": "a48d3e821584b5658cfe77ae94242e834e59dcb800aa3ea1241508d0a08fa94d",
+      "perf": "v4-understory-standing2.json",
+      "perf_sha256": "57808dbf5a4c7ee43cc69ea4ae1d2538e300831bde9ce8c1e648472c62afc5b3",
+      "plants": 2022,
+      "retained": 2020,
+      "draws": 3,
+      "instance_buffer_bytes": 129280,
+      "preparation_ms": 113.06106000000001,
+      "gpu_median_ms": 147.35920431305124,
+      "rt_policy": "shared_policy_with_preflighted_instance_budget",
+      "understory_windows": 9,
+      "understory_candidate_visits": 36864,
+      "understory_surface_samples": 5881,
+      "understory_accepted": 1800,
+      "replaced_coarse_clumps": 2
+    }
+  ],
+  "image_difference": {
+    "mean_absolute_displayed_rgb_codes": [
+      5.115266927083334,
+      4.06650390625,
+      4.129441189236111
+    ],
+    "max_absolute_displayed_rgb_codes": [
+      137,
+      116,
+      117
+    ]
+  },
+  "capture_commands": "capture-commands-v4.json",
+  "capture_commands_sha256": "032d1f7619197e704fdd4beb5b1d0400313e03bc924dd90e7eccc52fcbc10dfb",
+  "contract": {
+    "identity": "separate L24 candidate lattice; existing fixed64 node address with tag 1; level disambiguates plants (20) and understory (24)",
+    "query_windows": "9 same-face L18 windows; 4096 level-24 candidates each; 36864 cumulative candidate ceiling",
+    "spacing_m": 0.8,
+    "scale_range": [
+      0.35,
+      0.9
+    ],
+    "habitat": "canonical ground/reeds cover, water/min-height/slope rejection reused",
+    "coarse_replacement": "fern/reed clumps inside the nine windows replaced; all lycopsid trees and coarse far fallback retained",
+    "quality": "parent Low/Medium/High density scale .25/.5/1; no separate understory quality",
+    "eye_agl_limit_m": 4,
+    "disabled": "understory=false skips all near sampling and preserves WORLD04 exactly",
+    "failure": "invalid settings/spacing, candidate budget, item budget or allocation errors return no partial representation"
+  },
+  "tests": {
+    "cpu_scatter": "14 worldgen scatter tests including disjoint IDs, nested density, exact window unions, habitat, spacing validation and budget failures",
+    "cpu_native": "parent-gated resolved settings, eye-owned window tracking, canonical nested bounded preparation across Low/Medium/High",
+    "hardware": "near_understory_reuses_the_shared_plant_and_shadow_lifecycle: grouped draws/shadow reuse, exact descriptor/instance restoration after window round trip and map release",
+    "limitations": "No botanical realism, collision, persistence, background streaming, ecological succession, plant RT representation or blind aesthetic acceptance"
+  },
+  "performance_boundary": {
+    "accepted": false,
+    "notes": "113.061 ms synchronous preparation on an L18 window change and +41.9 ms median GPU frame time in the matched standing capture. The combined planted source kept the shared ray-scene preflight policy. No stable frame budget is claimed."
+  },
+  "visual_boundary": {
+    "accepted": false,
+    "notes": "Visible ground cover at standing eye level, but still sparse bare-ground savanna rather than closed forest. The 73 m fine-cover boundary to coarse plants is a representation limit. Pre-existing dark diagonal foliage artifacts appear on both sides of the pair."
+  },
+  "verification": {
+    "state": "Full local gates pass on the captured tree; release binary matches the capture binary",
+    "checks": [
+      {
+        "name": "fmt-check",
+        "exit": 0,
+        "seconds": 1.6315848699887283,
+        "log": "target/surface-showcase/understory/fmt-check-final.log"
+      },
+      {
+        "name": "architecture",
+        "exit": 0,
+        "seconds": 0.04744499904336408,
+        "log": "target/surface-showcase/understory/architecture-final.log"
+      },
+      {
+        "name": "clippy",
+        "exit": 0,
+        "seconds": 1.3609090850222856,
+        "log": "target/surface-showcase/understory/clippy-final.log"
+      },
+      {
+        "name": "workspace-lib-bins",
+        "exit": 0,
+        "seconds": 38.859637763991486,
+        "log": "target/surface-showcase/understory/workspace-lib-bins-final.log"
+      },
+      {
+        "name": "workspace-integration",
+        "exit": 0,
+        "seconds": 11.576079280988779,
+        "log": "target/surface-showcase/understory/workspace-integration-final.log"
+      },
+      {
+        "name": "native-understory-hardware",
+        "exit": 0,
+        "seconds": 3.0471997630083933,
+        "log": "target/surface-showcase/understory/native-understory-hardware-final.log"
+      },
+      {
+        "name": "renderer-hardware",
+        "exit": 0,
+        "seconds": 283.1198004860198,
+        "log": "target/surface-showcase/understory/renderer-hardware-final.log"
+      },
+      {
+        "name": "feature-off",
+        "exit": 0,
+        "seconds": 2.5699145589605905,
+        "log": "target/surface-showcase/understory/feature-off-final.log"
+      },
+      {
+        "name": "release",
+        "exit": 0,
+        "seconds": 52.48462786199525,
+        "log": "target/surface-showcase/understory/release-final.log"
+      }
+    ],
+    "counts": {
+      "lib_bins_passed": 2049,
+      "lib_bins_ignored": 48,
+      "integration_passed": 108,
+      "integration_ignored": 90,
+      "renderer_hardware_passed": 86,
+      "native_understory_hardware_passed": 1
+    },
+    "unchanged_inputs": 756,
+    "cargo_environment": {
+      "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"
+    }
+  },
+  "acceptance": {
+    "visual": false,
+    "independent_votes": 0,
+    "stable_performance": false,
+    "temporal": false,
+    "planetary_streaming": false
+  }
+}

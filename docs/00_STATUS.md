@@ -593,3 +593,13 @@ fleet observations (but is rebuilt for v10).
 | `details/01_DOCKING_PORTS.md` | 🟡 D1 contact-scene slice | persisted protocol, fixed-joint install/removal, pressure gate, corrected latest-substep joint-load readback, authored ports, server fleet ownership and snapshots; native solved two-craft replay, D1 rest surfaces, inspector and structural cue | calibrated capture/class ratings, petal actuation, jointed-stack control, interactive ownership/commands, live-flight patch/normal overlays and complete structural integration |
 | `REFERENCES.md` | 📚 reference | UX-only refs; Nyx/ANISE isolation; no copied code |
 | `adr/0007–0011` | ✅ accepted | licensing, render boundary, autopilot graphs, aero boundary, RCBT boundary |
+
+WORLD07 adds a default-off, parent-gated near-eye fern/reed layer to the bounded
+survey plant consumer: nine L18 windows sampled on a disjoint L24 lattice,
+canonical habitat/ground and the shared prototype/mesh/shadow/environment paths.
+Inside the 73 m cover it replaces coarse ground clumps while retaining trees and
+the far fallback; `understory=false` preserves WORLD04 exactly. The matched
+standing pair retained 222 → 2,020 plants and measured 105.470 → 147.359 ms
+median GPU time and 113 ms synchronous preparation. The frame remains sparse bare-ground savanna, not closed forest; no
+performance, streaming or aesthetic acceptance is claimed. See docs 70/75/77 and
+[`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).

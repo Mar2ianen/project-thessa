@@ -15,12 +15,21 @@ use thessa_worldgen_rocky::{
 };
 
 pub const WINDOW_LEVEL: u8 = 14;
+pub const UNDERSTORY_WINDOW_LEVEL: u8 = 18;
+/// 3x3 L18 windows cover a 73 m square around the near-eye cell.
+pub const UNDERSTORY_WINDOW_RADIUS: i64 = 1;
+/// Near-ground clumps are only meaningful with the eye close to the surface.
+pub const UNDERSTORY_MAX_EYE_AGL_M: f64 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
     Disabled,
     Withheld(&'static str),
     Survey(TileKey),
+    SurveyWithUnderstory {
+        canopy: TileKey,
+        understory: TileKey,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -39,6 +48,12 @@ pub struct Diagnostics {
     pub draw_calls: usize,
     pub frame_upload_bytes: usize,
     pub rt_policy: &'static str,
+    pub understory_window: Option<TileKey>,
+    pub understory_windows: usize,
+    pub understory_candidates: u64,
+    pub understory_samples: u64,
+    pub understory_accepted: usize,
+    pub replaced_coarse_clumps: usize,
 }
 
 impl Diagnostics {
@@ -58,7 +73,15 @@ impl Diagnostics {
             ("native_surface_plants_draw_calls", self.draw_calls.to_string()),
             ("native_surface_plants_frame_upload_bytes", self.frame_upload_bytes.to_string()),
             ("native_surface_plants_rt_policy", if self.rt_policy.is_empty() { "no_plant_rt" } else { self.rt_policy }.to_string()),
-            ("native_surface_plants_contract", "WORLD04 fixed L14 window / fixed64 v1; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path".into()),
+            ("native_surface_understory_window", self.understory_window.map_or_else(|| "none".into(),|w|format!("{},{},{},{}",w.face,w.level,w.x,w.y))),
+            ("native_surface_understory_windows", self.understory_windows.to_string()),
+            ("native_surface_understory_candidate_visits", self.understory_candidates.to_string()),
+            ("native_surface_understory_surface_samples", self.understory_samples.to_string()),
+            ("native_surface_understory_accepted", self.understory_accepted.to_string()),
+            ("native_surface_understory_replaced_coarse_clumps", self.replaced_coarse_clumps.to_string()),
+            ("native_surface_plants_contract", if self.understory_window.is_some() {
+                "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
+            } else {"WORLD04 fixed L14 window / fixed64 v1; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }
@@ -93,6 +116,14 @@ impl Prepared {
 /// Same dominant-axis cube chart as lod::TileKey::direction and material_address.
 /// Ties choose X, then Y, then Z; clamping owns the outer face edge once.
 pub fn survey_window(dir: DVec3) -> TileKey {
+    window_at_level(dir, WINDOW_LEVEL)
+}
+
+pub fn understory_window(dir: DVec3) -> TileKey {
+    window_at_level(dir, UNDERSTORY_WINDOW_LEVEL)
+}
+
+fn window_at_level(dir: DVec3, level: u8) -> TileKey {
     let a = dir.abs();
     let (face, u, v) = if a.x >= a.y && a.x >= a.z {
         if dir.x >= 0.0 {
@@ -111,11 +142,11 @@ pub fn survey_window(dir: DVec3) -> TileKey {
     } else {
         (5, -dir.x / a.z, dir.y / a.z)
     };
-    let n = 1_u32 << WINDOW_LEVEL;
+    let n = 1_u32 << level;
     let cell = |v| (((v + 1.0) * 0.5 * f64::from(n)) as u32).min(n - 1);
     TileKey {
         face,
-        level: WINDOW_LEVEL,
+        level,
         x: cell(u),
         y: cell(v),
     }
@@ -136,7 +167,7 @@ pub fn prepare(
     settings: &ResolvedGraphicsSettings,
     field: &PlanetField,
 ) -> Result<(Option<Prepared>, Diagnostics), String> {
-    let window = match context {
+    let (window, near_window) = match context {
         Context::Disabled => {
             return Ok((
                 None,
@@ -155,12 +186,18 @@ pub fn prepare(
                 },
             ));
         }
-        Context::Survey(window) => window,
+        Context::Survey(window) => (window, None),
+        Context::SurveyWithUnderstory { canopy, understory } => (
+            canopy,
+            settings.surface_understory_enabled.then_some(understory),
+        ),
     };
+    // A high/unspecified eye AGL deliberately falls back to the coarse survey;
+    // it is not an error and must not retain a stale near layer.
     let started = std::time::Instant::now();
     let max_items = usize::try_from(settings.surface_plants_max_items)
         .map_err(|_| "surface plant item budget does not fit usize")?;
-    let batch = scatter_region(
+    let mut batch = scatter_region(
         field.params.seed,
         field.params.radius_m,
         window,
@@ -187,6 +224,88 @@ pub fn prepare(
         retained: batch.items.len(),
         ..Default::default()
     };
+    if let Some(near) = near_window {
+        if near.level != UNDERSTORY_WINDOW_LEVEL
+            || near.face >= 6
+            || near.x >= 1 << near.level
+            || near.y >= 1 << near.level
+        {
+            return Err("invalid near-understory window".into());
+        }
+        diagnostics.understory_window = Some(near);
+        let edge = (1_u32 << near.level) - 1;
+        let windows: std::collections::BTreeSet<_> = (-UNDERSTORY_WINDOW_RADIUS
+            ..=UNDERSTORY_WINDOW_RADIUS)
+            .flat_map(|dy| {
+                (-UNDERSTORY_WINDOW_RADIUS..=UNDERSTORY_WINDOW_RADIUS).map(move |dx| TileKey {
+                    face: near.face,
+                    level: near.level,
+                    x: (i64::from(near.x) + dx).clamp(0, i64::from(edge)) as u32,
+                    y: (i64::from(near.y) + dy).clamp(0, i64::from(edge)) as u32,
+                })
+            })
+            .collect();
+        // Replace coarse clumps only inside the fine cover; keep all trees and
+        // the coarse far fallback. Default-off preserves every original ID.
+        let coarse_count = batch.items.len();
+        batch.items.retain(|item| {
+            if item.kind == thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree {
+                return true;
+            }
+            let cell = item.id.cell().expect("shared scatter generated a valid ID");
+            let shift = cell.level - near.level;
+            !windows.contains(&TileKey {
+                face: cell.face,
+                level: near.level,
+                x: cell.x >> shift,
+                y: cell.y >> shift,
+            })
+        });
+        diagnostics.replaced_coarse_clumps = coarse_count - batch.items.len();
+        diagnostics.understory_windows = windows.len();
+        for region in windows {
+            let remaining_candidates = settings
+                .surface_understory_max_candidates
+                .checked_sub(diagnostics.understory_candidates)
+                .ok_or("understory candidate budget exhausted")?;
+            let remaining_items = usize::try_from(settings.surface_understory_max_items)
+                .map_err(|_| "understory item budget does not fit usize")?
+                .checked_sub(diagnostics.understory_accepted)
+                .ok_or("understory item budget exhausted")?;
+            let near_batch = scatter_region(
+                field.params.seed,
+                field.params.radius_m,
+                region,
+                ScatterPopulation::Understory,
+                ScatterPolicy {
+                    density_scale: settings.surface_plants_density_scale,
+                    max_candidates: remaining_candidates,
+                    max_items: remaining_items,
+                    ..Default::default()
+                },
+                |dir| canonical_plant_surface(field, dir),
+            )
+            .map_err(|e| e.to_string())?;
+            diagnostics.understory_candidates += near_batch.candidates_visited;
+            diagnostics.understory_samples += near_batch.surface_samples;
+            diagnostics.understory_accepted += near_batch.items.len();
+            batch
+                .items
+                .try_reserve(near_batch.items.len())
+                .map_err(|_| "understory descriptor allocation failed")?;
+            batch.items.extend(near_batch.items);
+        }
+        diagnostics.candidates += diagnostics.understory_candidates;
+        diagnostics.samples += diagnostics.understory_samples;
+        diagnostics.accepted += diagnostics.understory_accepted;
+        diagnostics.retained = batch.items.len();
+        diagnostics.reason = if batch.items.is_empty() {
+            "no_eligible_plants"
+        } else {
+            "applied_survey_with_near_understory"
+        };
+        batch.items.sort_unstable_by_key(|item| item.id);
+    }
     if batch.items.is_empty() {
         diagnostics.preparation_ms = started.elapsed().as_secs_f64() * 1000.0;
         return Ok((None, diagnostics));
@@ -376,6 +495,114 @@ mod tests {
             assert_eq!((stats.prototype_bytes, stats.instance_buffer_bytes), (0, 0));
             assert_eq!(stats.prototype_texture_bytes, 0);
             assert_eq!(stats.preparation_ms, 0.0);
+        }
+    }
+
+    #[test]
+    fn near_understory_is_nested_canonical_bounded_and_reuses_prototype_groups() {
+        let scene = crate::scene::Scene::load(Default::default()).unwrap();
+        let field = scene.stream.field();
+        let dir = thessa_worldgen_rocky::sphere::dir_from_latlon(LAND[0], LAND[1]);
+        let canopy = survey_window(dir.into());
+        let near = understory_window(dir.into());
+        let context = Context::SurveyWithUnderstory {
+            canopy,
+            understory: near,
+        };
+        let mut previous = Vec::new();
+        for quality in [
+            thessa_graphics::Quality::Low,
+            thessa_graphics::Quality::Medium,
+            thessa_graphics::Quality::High,
+        ] {
+            let mut requested = thessa_graphics::RequestedGraphics::default();
+            requested.surface_plants.enabled = true;
+            requested.surface_plants.understory = true;
+            requested.surface_plants.quality = quality;
+            let resolved = ResolvedGraphicsSettings::from_requested(
+                &requested,
+                &thessa_graphics::Capabilities::unknown(),
+            );
+            let (prepared, stats) = prepare(context, &resolved, field).unwrap();
+            let prepared = prepared.unwrap();
+            assert_eq!(stats.understory_windows, 9);
+            assert_eq!(stats.understory_candidates, 36_864);
+            assert_eq!(stats.candidates, 40_960);
+            assert!(stats.understory_accepted > 0);
+            assert_eq!(stats.retained, prepared.instances.len());
+            assert_eq!(
+                stats.accepted - stats.replaced_coarse_clumps,
+                stats.retained
+            );
+            assert!(
+                previous
+                    .iter()
+                    .all(|item| prepared.descriptors.contains(item))
+            );
+            let (coarse, _) = prepare(Context::Survey(canopy), &settings(quality), field).unwrap();
+            let trees: Vec<_> = coarse
+                .unwrap()
+                .descriptors
+                .into_iter()
+                .filter(|i| i.kind == ScatterKind::LycopsidTree)
+                .collect();
+            for item in &prepared.descriptors {
+                if item.kind == ScatterKind::LycopsidTree {
+                    assert!(trees.contains(item));
+                } else {
+                    let cell = item.id.cell().unwrap();
+                    assert!(
+                        cell.level == thessa_worldgen_rocky::scatter::UNDERSTORY_CANDIDATE_LEVEL
+                            || cell.level == thessa_worldgen_rocky::scatter::CANDIDATE_LEVEL
+                    );
+                    if cell.level == thessa_worldgen_rocky::scatter::CANDIDATE_LEVEL {
+                        assert!(
+                            cell.face != near.face
+                                || (cell.x >> 2).abs_diff(near.x) > 1
+                                || (cell.y >> 2).abs_diff(near.y) > 1
+                        );
+                    }
+                }
+                assert_eq!(item.ground_height_m, field.height_m(item.direction, 32.0));
+            }
+            for tree in trees {
+                assert!(prepared.descriptors.contains(&tree));
+            }
+            assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
+            assert!(prepared.ranges.len() <= 3);
+            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 462_672);
+            let (_, disabled) = prepare(Context::Disabled, &resolved, field).unwrap();
+            assert_eq!(
+                (
+                    disabled.understory_candidates,
+                    disabled.understory_samples,
+                    disabled.understory_accepted
+                ),
+                (0, 0, 0)
+            );
+            assert_eq!(disabled.preparation_ms, 0.0);
+            let mut bad = resolved.clone();
+            bad.surface_understory_max_candidates = 4095;
+            assert!(prepare(context, &bad, field).is_err());
+            let (coarse_only, fallback) =
+                prepare(Context::Survey(canopy), &resolved, field).unwrap();
+            assert!(coarse_only.is_some());
+            assert_eq!(fallback.understory_windows, 0);
+            assert_eq!(fallback.understory_candidates, 0);
+            assert_eq!(fallback.understory_accepted, 0);
+            eprintln!(
+                "near_understory quality={quality:?} clumps={} trees={} total={} samples={} prep_ms={}",
+                stats.understory_accepted,
+                prepared
+                    .descriptors
+                    .iter()
+                    .filter(|i| i.kind == ScatterKind::LycopsidTree)
+                    .count(),
+                stats.retained,
+                stats.understory_samples,
+                stats.preparation_ms
+            );
+            previous = prepared.descriptors;
         }
     }
 

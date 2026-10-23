@@ -786,3 +786,36 @@ command selects zero tests. Release SHA256 remains byte-identical to WORLD06k;
 existing README claims remain accurate. No new visual, performance, temporal
 or planetary-streaming acceptance is claimed. Evidence:
 [`native-normal-geometry-reference-2026-10-23.json`](artifacts/native-normal-geometry-reference-2026-10-23.json).
+
+## WORLD07 — Bounded near-eye understory and its measured limits
+
+This stage extends the existing survey plant consumer instead of adding a new
+renderer or vegetation simulation. `surface_plants.understory = true` derives
+nine same-face L18 query windows from the actual near-eye survey direction and
+samples a disjoint L24 identity lattice. The 73 m fine cover uses canonical
+habitat, ground height, deterministic kind/scale/yaw and the shared prototype,
+material, grouped-draw, opaque and shadow paths. It replaces coarse fern/reed
+clumps inside that cover, retains every lycopsid tree and preserves the coarse
+far fallback; `false` reproduces the WORLD04 representation exactly. The parent
+Low/Medium/High density subset remains the only quality control.
+
+The matched fixed-site standing pair (identical inputs except the boolean,
+frozen time, 1280×720, 60 s prestream, 32 frames) retained 222 baseline plants
+and 2,020 understory plants. The latter included 1,800 near clumps, three draws,
+36,864 candidate visits, 5,881 surface samples and 113.061 ms CPU
+preparation in the release capture. Median GPU time rose
+105.470 → 147.359 ms; the combined source retained the existing ray-instance
+preflight policy (`shared_policy_with_preflighted_instance_budget`). Displayed RGB mean
+absolute difference is `[5.115, 4.067, 4.129]` codes, so the layer is visually
+present; this is not a performance or aesthetic acceptance. The frame still
+reads as sparse bare-ground savanna, not closed forest, and the 73 m boundary to
+the coarse population remains visible in principle.
+
+The layer is omitted above 4 m requested eye AGL, keeping the coarse survey at
+50 m/overview poses rather than paying for an invisible near patch. Crossing an
+L18 boundary regenerates the bounded batch synchronously and costs the measured
+CPU interval; there is no background plant streamer, persistence, collision,
+ecological succession or plant RT model. Pre-existing dark diagonal foliage
+artifacts appear identically in both sides of the pair and are not attributed to
+this change. No blind votes or final surface acceptance exist. Evidence:
+[`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).

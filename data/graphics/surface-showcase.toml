@@ -86,7 +86,7 @@ layout = "aircraft"
 navball_renderer = "auto"
 
 [ocean]
-enabled = false
+enabled = true
 quality = "high"
 wind_speed_m_s = 10.0
 wind_direction_rad = 0.0
@@ -115,7 +115,7 @@ quality = "high"
 cascades = 4
 max_distance_m = 12000.0
 map_size = 4096
-normal_bias_m = 1.5
+normal_bias_m = 0.04
 
 [debug]
 show_atmosphere_bounds = false
@@ -127,4 +127,7 @@ quality = "high"
 understory = true
 
 [temporal]
-taa=false
+taa = true
+quality = "high"
+motion_vectors = true
+jitter = true

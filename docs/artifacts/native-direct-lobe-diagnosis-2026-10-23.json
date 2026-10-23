@@ -1,0 +1,121 @@
+{
+  "stage": "WORLD06j",
+  "baseline": "4a536c0",
+  "branch": "feat/native-surface-showcase",
+  "status": "Diagnostic continuation, not a shipped visual correction; retain only an independent anisotropic-sky GPU oracle and documentation",
+  "hardware": "AMD Radeon 880M / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "retained_source": {
+    "path": "crates/render-wgpu/src/environment.rs",
+    "sha256": "4feba1b641dabaf770f5ca3ba62122dc474dee7ebe395fe463bd3a52e67853db",
+    "test": "environment::tests::anisotropic_grazing_environment_matches_independent_reference",
+    "production_render_changes": false
+  },
+  "oracle": {
+    "cases": 27,
+    "field": "Synthetic oblique 32x16 bilinear scalar field: dark lower hemisphere, smooth bright lobe, analytic source radiance <=100; not the canonical scene sky",
+    "normal_tangent_tilt": [-0.05, 0.0, 0.05],
+    "positive_nv": [0.001, 0.02, 0.2],
+    "roughness": [0.6, 0.85, 1.0],
+    "actual_shared_wgsl_samples": [16, 4096],
+    "independent_reference": "Uniform incident solid-angle midpoint quadrature with f64 literal GGX BRDF, independent of VNDF sampling/PDF; CPU samples the same bilinear grid",
+    "reference_grids": [[256,512],[512,1024]],
+    "absolute_linear_radiance_bounds": {"production16":0.04,"dense4096":0.0001,"reference_convergence":0.00003},
+    "measured_maxima": {"production16":0.031700052035095294,"dense4096":0.0000301841771234157,"reference_convergence":0.00001246742934518652},
+    "limitations": "Fixture-specific source-scale envelopes, not relative accuracy in a weak reflected term, arbitrary HDR or sky-grid/cloud convergence; production quality remains 4/8/16 samples"
+  },
+  "local_evidence_root": "target/surface-showcase/normal-grazing",
+  "common_capture_arguments": ["--survey-lat","23.565679258039204","--survey-lon","165.13881581863882","--survey-distance","80","--survey-eye-agl","2","--sim-time","0","--sim-step","0","--prestream-seconds","60","--frames","4","--mute","--no-hud"],
+  "capture_contract": "1280x720, 30 warmups, four measured frames; binary --graphics settings + common arguments + --headless name.png --perf-capture name.json",
+  "settings": {
+    "canonical": "target/surface-showcase/ground-detail/v3-on-standing2.toml",
+    "canonical_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5",
+    "clear": "target/surface-showcase/normal-grazing/no-clouds-standing2.toml",
+    "clear_sha256": "b0dcfb83177fd3d78e80fd7daecee077857d6a4aec9fe7b159ac2b20a23caf2f",
+    "parsed_delta": {"clouds.enabled":[true,false]},
+    "delta_log": "settings-delta-j.json"
+  },
+  "controls": "All six captures match the material residency histogram, 222 plant descriptors, three draws, 14784 frame upload bytes and drained height/material streams. Histograms do not prove identical resident IDs/content. False-colour/source-isolation diagnostics are not valid appearance candidates.",
+  "diagnostics": [
+    {
+      "name":"dense clear-sky quadrature",
+      "commands":"dense256-commands.json",
+      "patch":"dense256-source.patch",
+      "baseline_binary":"hemisphere-native-v1",
+      "baseline_binary_sha256":"8f5bd037384a335356857ef3412edd46c4ee1b6258efe78ecc5017f4e295b2c7",
+      "candidate_binary":"dense256-native",
+      "candidate_binary_sha256":"2236cdff83122b12c7123666b2312f67ec2ee3839891d0c21f05394902d307f4",
+      "frames":[
+        {"name":"v2-clear16-standing2","png_sha256":"6feb9ba8398559911d9802e63d654e9b5cb2c13918608a25913c41772432234c","gpu_median_ms":25.843743432563784},
+        {"name":"v2-clear256-standing2","png_sha256":"56e449a2367e4168a95fc4eb35fdc02f2f01617a8bf3926db76e04251f79011b","gpu_median_ms":167.92127249723626}
+      ],
+      "mean_absolute_rgb_codes":[0.018336588541666667,0.018983289930555557,0.029379340277777777],
+      "result":"Bands remain; reject a sampling-budget increase as the fix",
+      "provenance_caveat":"The raw manifest terrain_assembly_sha256 records the live diagnostic workspace, not the preserved baseline binary's build source; baseline provenance is WORLD06i"
+    },
+    {
+      "name":"split direct/environment sources",
+      "commands":"split-commands.json",
+      "patch":"split-source.patch",
+      "binary":"split-native",
+      "binary_sha256":"14fd6a515ae7c01e644e830837896072424aef40ea1c599096371bb9d4a70dd8",
+      "frame":"v3-split-standing2",
+      "png_sha256":"fddcb52b362c9ac7818e57b712c397b6da3eafb783d305b40e8cf94902bda2bd",
+      "result":"Existing diffuse/energy split retained; left environment-only side loses the characteristic bands, right direct-only side retains them"
+    },
+    {
+      "name":"false-colour normal/view support",
+      "commands":"support-commands.json",
+      "patch":"support-source.patch",
+      "binary":"support-native",
+      "binary_sha256":"91ecbafc9111292ef0844e7233c6d7cb9d227eb7e379448cbbfb501b7cd2658d",
+      "frame":"v4-support-standing2",
+      "png_sha256":"8e741947c2a856311d01c820f5dc2f369fa932641224c3f35937bc057db0b5f5",
+      "result":"RGB encodes signed shading N.V, macro N.V and outgoing support before display transform; mask contours track the bands, not a final physical model/oracle"
+    },
+    {
+      "name":"unretained two-facet direct-only prototype",
+      "commands":"folded-prototype-commands.json",
+      "patch":"folded-prototype-source.patch",
+      "binary":"folded-prototype-native",
+      "binary_sha256":"468895b294fdf9e3fbe43c390bcb432bfaad7dff42f4f6c3821620e8a746f045",
+      "frames":[
+        {"name":"v5-folded-clear-standing2","png_sha256":"03217f4039c7b0e38599e5d7408bebf65156f3d620a91915c870406c22953aee","gpu_median_ms":25.78252712081337},
+        {"name":"v5-folded-standing2","png_sha256":"9cb6635930c82dc4256662005619c9bcdb21a876c7ec828f5ebdc6950aaa94a3","gpu_median_ms":109.72631635990479}
+      ],
+      "reference":"Schuessler et al. 2017, Microfacet-based Normal Mapping for Robust Monte Carlo Path Tracing, equations 4/8/13/15; https://jo.dreggn.org/home/2017_normalmap.pdf",
+      "paper_sha256":"cabec923fe3aaa48d0363f785d062a7c946200438558eba69294dce18393cfc5",
+      "result":"Some contours softened, bands remain; removed because visual result is inadequate and sky/substrate transport is not consistently integrated or independently geometry/energy verified. Not a production feature or accepted approximation"
+    }
+  ],
+  "celestial_probe": {
+    "source":"direct_light_probe.rs",
+    "log":"direct-light-probe.log",
+    "contract":"Temporary example reusing the actual celestial module, canonical system bake and epoch-zero presentation; removed after run",
+    "elevations_deg":[62.341072276138306,62.36838848527603,62.36839092883656],
+    "irradiance_w_m2":[958.1194835922662,10.898400199856985,0.013656144400790706],
+    "result":"All three sources well above the local horizon, not a hidden-below-datum-star case"
+  },
+  "verification": {
+    "state":"Full local gates passed; temporary renderer diagnostics removed",
+    "cargo_environment":{"TMPDIR":"/home/chechulin/Projects/project-thessa/target/tmp"},
+    "command_manifest":"checks-j.json",
+    "rebuild_manifest":"rebuild-verification-j.json",
+    "commands":[
+      {"command":["cargo","fmt","--all","--","--check"],"exit":0},
+      {"command":["python3","tools/agent-qa/check_architecture.py"],"exit":0},
+      {"command":["cargo","clippy","--workspace","--all-targets","--all-features","--","-D","warnings"],"exit":0},
+      {"command":["cargo","test","--workspace","--lib","--bins"],"exit":0,"passed":2043},
+      {"command":["cargo","test","--workspace","--test","*"],"exit":0,"passed":105},
+      {"command":["cargo","test","-p","thessa-bevy-rcbt","--features","render","--lib","--","--ignored"],"exit":0,"passed":0,"note":"Retired command, not hardware coverage"},
+      {"command":["cargo","test","-p","thessa-render-wgpu","--","--ignored","--nocapture"],"exit":0,"passed":85},
+      {"command":["cargo","check","-p","thessa-terrain-native","--no-default-features"],"exit":0},
+      {"command":["cargo","build","--release","-p","thessa-terrain-native"],"exit":0}
+    ],
+    "renderer_hardware_log_sha256":"973ca4ddd715279a7ce871929e3110e79d3cdd5163ee6731e37ff5470ba4c239",
+    "release_sha256":"8f5bd037384a335356857ef3412edd46c4ee1b6258efe78ecc5017f4e295b2c7",
+    "release_matches_WORLD06i":true,
+    "readme":"Existing prototype/normal-map/visual-acceptance statements remain accurate; no README edit needed"
+  },
+  "acceptance": {"visual":false,"independent_votes":0,"stable_performance":false,"temporal":false,"planetary_streaming":false},
+  "next_boundary":"A normal-transport/filtering correction needs independent projected-geometry, reciprocity/energy and disable/quality evidence, plus consistent direct/sky/substrate treatment; do not ship a direct-only masking multiplier"
+}

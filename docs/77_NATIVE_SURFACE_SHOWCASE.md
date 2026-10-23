@@ -581,3 +581,79 @@ the release rebuild matches the captured executable byte-for-byte. This is a
 scoped numerical correction, not a visual acceptance milestone. Exact commands,
 source/binary/frame hashes, rejected hypotheses, results and remaining gaps:
 [`native-ggx-hemisphere-2026-10-23.json`](artifacts/native-ggx-hemisphere-2026-10-23.json).
+
+## WORLD06j — Direct-lobe / outgoing-support diagnosis
+
+This is a diagnostic continuation of `4a536c0`, not a shipped visual correction.
+It keeps one independent GPU quadrature oracle and removes all temporary render
+changes. The standing scene, canonical geometry/ecology, material sources,
+graphics settings and production sampling budgets remain unchanged.
+
+### Rejected quadrature fix
+
+A clear-sky control and a temporary 256-sample terrain build share the same
+settings, frozen epoch, survey camera, material residency histogram, 222 plant
+descriptors, three draws and drained streams. The visible horizontal bands
+remain. Whole-frame mean absolute RGB code differences are only
+0.01834/0.01898/0.02938; individual changed pixels are not a substitute for a
+subjective comparison. GPU medians are 25.844/167.921 ms for four measured frames
+after 30 warmups. This is a short diagnostic, not a stable performance estimate;
+there is no reason to retain this cost increase as a visual fix. Its temporary
+assembly patch, executable and commands are preserved locally as
+`dense256-source.patch`, `dense256-native` and `dense256-commands.json`.
+
+A retained 27-case actual-WGSL probe compares 16 and 4096 samples to independent
+uniform incident-solid-angle f64 quadrature of the same bilinear 32x16 field.
+The synthetic sky has an oblique horizon, a smooth bright lobe and an absolute
+source bound of 100; it is not the canonical scene's actual sky. Small normal
+tilts (-0.05/0/0.05), view cosines 0.001/0.02/0.2 and roughness 0.6/0.85/1 are
+covered. Measured maximum linear-radiance errors are 0.0317001 for 16 samples,
+0.0000301842 for 4096 samples and 0.0000124674 for 256-to-512 reference-grid
+convergence. Pinned bounds are respectively 0.04/0.0001/0.00003. These are scoped
+absolute source-scale envelopes; a small percentage of source radiance can
+still be a significant relative error in a weak reflected term. No general HDR,
+sky-grid, cloud quadrature or image-quality guarantee is inferred.
+
+### Isolated direct lobe and rejected partial visibility prototype
+
+A temporary split fragment retains the existing diffuse/energy split but shows
+only environment reflection on the left and only direct stellar reflection on
+the right. The characteristic bands remain on the direct-only side, not the
+environment-only side. A second false-colour fragment encodes signed shading
+`N.V`, macro `N.V` and the shading-normal outgoing-support mask; its contours
+track the bands. These false-colour/source-isolation frames are diagnostics,
+not appearance candidates or valid blind preference pairs.
+
+A CPU probe reused the actual celestial presentation and baked ephemeris at
+epoch zero: all three stars are approximately 62.34–62.37 degrees above the
+local horizon. Irradiances are 958.119/10.8984/0.013656 W/m². This does not support
+a hidden-below-datum-star explanation for this case. The remaining investigation
+concerns shading-normal projected area, microvisibility and resolved/unresolved
+normal filtering; neither the cloud boundary nor sky sample count explains it.
+
+A temporary direct-only prototype independently evaluated the single-scattering
+two-facet construction from Schüssler et al., *Microfacet-based Normal Mapping
+for Robust Monte Carlo Path Tracing* (2017), equations 4/8/13/15:
+<https://jo.dreggn.org/home/2017_normalmap.pdf>. Both perturbed and compensating
+tangent facets used the existing GGX material. The standing clear/cloudy frames
+soften some contours but remain inadequate. More importantly, the prototype did
+not extend environment reflection and substrate transmission consistently, and
+has no accepted geometry/energy oracle. It is **removed**, not exposed through a
+local toggle, retained as a production approximation or presented as a complete
+normal-mapping model. Its patch and captures are preserved for reproducibility.
+
+All diagnostic executables, six PNG/JSON/CSV/log captures, command manifests,
+source patches, celestial probe and paper hash are under
+`target/surface-showcase/normal-grazing/`; none of these short diagnostic timings
+establishes a performance win. All six captures have matching level histograms,
+222 plants, three draws and drained streams, but histograms do not prove identical
+resident page IDs/content. Independent visual review remains pending.
+
+Full local gates pass: formatting, architecture, workspace Clippy, 2,043 lib/bin
+tests, 105 integration tests, 85 renderer hardware tests, feature-off and release
+build. The mandated retired Bevy command selects zero tests. The restored release
+is byte-identical to the captured WORLD06i executable: none of the temporary
+sampling, split-source, false-colour or two-facet changes remains. Existing README
+prototype/visual-acceptance statements remain accurate. Exact commands, hashes,
+negative evidence and limitations:
+[`native-direct-lobe-diagnosis-2026-10-23.json`](artifacts/native-direct-lobe-diagnosis-2026-10-23.json).

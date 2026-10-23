@@ -126,6 +126,28 @@ solid-angle reference still pins the finite zero/positive grazing limit. This
 does not solve normal-map microvisibility, unresolved slope variance, shading-
 normal energy compensation or all grazing visual artifacts.
 
+WORLD06j isolates the remaining reference-scene ground bands to the direct
+stellar GGX lobe, not insufficient clear-sky quadrature: a temporary 256-sample
+clear-sky capture retains the bands, while an environment-only half-frame does
+not. A false-colour outgoing-support capture reproduces their contours where
+the bump normal crosses the view hemisphere. The temporary diagnostics are not
+renderer settings or retained production paths. The shared direct kernel still
+uses the shading-normal projected area; a complete macro/micro visibility and
+filtering treatment is not implemented. A direct-only two-facet prototype was
+removed: it softened the contours but did not close the visual defect and did
+not consistently extend sky transport or the substrate energy split.
+
+The retained anisotropic-environment hardware oracle uses 27 combinations of
+three small normal tilts, view cosines 0.001/0.02/0.2 and roughness 0.6/0.85/1.
+A synthetic oblique 32x16 field is bounded by radiance 100. Uniform incident
+solid-angle f64 quadrature samples the same bilinear grid, independently of the
+GPU's VNDF sampling/PDF. The 256x512 and 512x1024 reference grids must converge
+within 0.00003; 4096 actual-WGSL samples must agree within 0.0001; production's
+16 samples have a fixture-specific absolute envelope of 0.04. These are linear
+radiance bounds, not relative error near zero, arbitrary-HDR accuracy, sky-grid
+convergence or surface visual acceptance. Production quality budgets remain
+4/8/16; test-only dense sampling does not introduce a new effect tier.
+
 ## Tangent-space material normals
 
 The native material page now carries an optional 128×128 linear RG8 normal

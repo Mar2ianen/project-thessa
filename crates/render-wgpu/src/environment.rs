@@ -559,6 +559,121 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>){{
         }
     }
 
+    #[test]
+    #[ignore = "hardware: anisotropic-sky grazing GGX versus independent converged solid-angle integration"]
+    fn anisotropic_grazing_environment_matches_independent_reference() {
+        use glam::DVec3;
+        let backend = crate::Backend::bring_up().unwrap();
+        // Synthetic oblique sky: dark lower hemisphere and a smooth bright
+        // lobe. Its analytic radiance is bounded by 100; this is not a captured
+        // canonical sky or a general HDR error guarantee.
+        let up = DVec3::new(-0.886, 0.4, -0.235).normalize();
+        let tangent = up.cross(DVec3::Y).normalize();
+        let bright = (up * 0.2 + tangent).normalize();
+        let mut texels = Vec::new();
+        for y in 0..16 {
+            let elevation = ((f64::from(y) + 0.5) / 16.0 - 0.5) * std::f64::consts::PI;
+            for x in 0..32 {
+                let phi = ((f64::from(x) + 0.5) / 32.0 - 0.5) * std::f64::consts::TAU;
+                let d = DVec3::new(
+                    elevation.cos() * phi.cos(),
+                    elevation.sin(),
+                    elevation.cos() * phi.sin(),
+                );
+                let radiance = if d.dot(up) > 0.0 {
+                    5.0 + 95.0 * (20.0 * (d.dot(bright) - 1.0)).exp()
+                } else {
+                    0.0
+                };
+                texels.push([radiance as f32; 3]);
+            }
+        }
+        let field = EnvironmentRadiance::new(32, 16, texels).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        let mut body = String::new();
+        let mut cases = Vec::new();
+        for slope in [-0.05, 0.0, 0.05] {
+            let normal = (up + tangent * slope).normalize();
+            for nv in [0.001_f64, 0.02, 0.2] {
+                let t = (tangent - normal * normal.dot(tangent)).normalize();
+                let eye = normal * nv + t * (1.0 - nv * nv).sqrt();
+                for roughness in [0.6_f64, 0.85, 1.0] {
+                    let i = cases.len();
+                    let n = normal.to_array();
+                    let v = eye.to_array();
+                    body.push_str(&format!(
+                        r#"
+let n{i}=normalize(vec3({:?},{:?},{:?}));
+let v{i}=normalize(vec3({:?},{:?},{:?}));
+let a{i}=env_specular_response(vec3(0.0),n{i},v{i},{roughness:?},vec3(0.04),vec3(0.0),16u,vec3<u32>(0u));
+let b{i}=env_specular_response(vec3(0.0),n{i},v{i},{roughness:?},vec3(0.04),vec3(0.0),4096u,vec3<u32>(0u));
+probe_out[{i}]=vec4(a{i}.radiance.r,b{i}.radiance.r,a{i}.reflectance.r,b{i}.reflectance.r);
+"#,
+                        n[0], n[1], n[2], v[0], v[1], v[2]
+                    ));
+                    cases.push((normal, eye, nv, roughness));
+                }
+            }
+        }
+        let source = format!(
+            "{}\n{}\n@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{{body}}}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0)
+        );
+        let values = probe(&backend, &binding, source, cases.len() as u64, [1, 1, 1]);
+        for ((normal, eye, nv, r), v) in cases.into_iter().zip(values) {
+            // Uniform incident solid-angle midpoint quadrature, independent of
+            // VNDF sampling/PDF. Sample the same published bilinear grid on CPU
+            // so this tests the integrator rather than sky-grid discretization.
+            let reference = |size: usize| {
+                let t = normal.cross(DVec3::Y).normalize();
+                let b = normal.cross(t);
+                let a2 = (r * r).max(0.0025).powi(2);
+                let k = (r + 1.0).powi(2) / 8.0;
+                let mut sum = 0.0;
+                for y in 0..size {
+                    let mu = (y as f64 + 0.5) / size as f64;
+                    let sine = (1.0 - mu * mu).sqrt();
+                    for x in 0..size * 2 {
+                        let phi = std::f64::consts::TAU * (x as f64 + 0.5) / (size * 2) as f64;
+                        let light = normal * mu + (t * phi.cos() + b * phi.sin()) * sine;
+                        let half = (eye + light).normalize();
+                        let nh = normal.dot(half);
+                        let d = a2 / (std::f64::consts::PI * (nh * nh * (a2 - 1.0) + 1.0).powi(2));
+                        let fresnel = 0.04 + 0.96 * (1.0 - eye.dot(half)).powi(5);
+                        let weight =
+                            d * fresnel * mu / (4.0 * (nv * (1.0 - k) + k) * (mu * (1.0 - k) + k));
+                        sum += weight * f64::from(field.sample(light.as_vec3().to_array())[0]);
+                    }
+                }
+                sum * std::f64::consts::TAU / (2 * size * size) as f64
+            };
+            let expected = reference(512);
+            let coarser = reference(256);
+            eprintln!(
+                "anisotropic_grazing nv={nv} r={r} n={normal:?} production16={} dense4096={} solid_angle512={expected} convergence={} error16={} error4096={}",
+                v[0],
+                v[1],
+                (expected - coarser).abs(),
+                (f64::from(v[0]) - expected).abs(),
+                (f64::from(v[1]) - expected).abs()
+            );
+            assert!(
+                (expected - coarser).abs() < 0.00003,
+                "independent reference convergence"
+            );
+            assert!(
+                (f64::from(v[1]) - expected).abs() < 0.0001,
+                "dense GGX must match the independent reference to 1e-6 peak source radiance"
+            );
+            assert!(
+                (f64::from(v[0]) - expected).abs() < 0.04,
+                "16 samples must remain within the fixture's 4e-4 peak-source envelope"
+            );
+        }
+    }
+
     // Integrate D*G*F/(4*N.V) over incident solid angle, independent of the
     // shader's visible-normal importance sampler and sampling PDF. Gv/N.V has
     // a finite limit 1/k; no epsilon or artificial light source is needed.

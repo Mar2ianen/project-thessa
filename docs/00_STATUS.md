@@ -229,6 +229,17 @@ ground bands remain; no normal-map visual or stable performance acceptance.
 Evidence:
 [`artifacts/native-ggx-hemisphere-2026-10-23.json`](artifacts/native-ggx-hemisphere-2026-10-23.json).
 
+WORLD06j adds an anisotropic-environment GPU/f64 quadrature oracle and narrows the
+remaining ground-band diagnosis to the direct stellar lobe and bump-normal view
+support. A temporary 256-sample capture did not remove the bands; source-isolation,
+false-colour support and direct-only two-facet prototype captures are preserved.
+All temporary render changes were removed: the incomplete visibility prototype
+is not a production feature. Full local gates pass (2,043 lib/bin, 105 integration,
+85 renderer hardware tests, feature-off, Clippy and release build); the release
+remains byte-identical to WORLD06i. No new visual or performance acceptance is
+claimed. Evidence:
+[`artifacts/native-direct-lobe-diagnosis-2026-10-23.json`](artifacts/native-direct-lobe-diagnosis-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

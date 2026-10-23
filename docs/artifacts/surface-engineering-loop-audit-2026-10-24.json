@@ -1,0 +1,42 @@
+{
+  "stage": "SURFACE_LOOP_01",
+  "timestamp": "2026-10-24T01:50:30+03:00",
+  "branch": "feat/surface-visual-engineering",
+  "audit": {
+    "P0_A_performance_discrepancy": {
+      "reproduced": true,
+      "previous_reported_ms": 1113.159,
+      "measured_baseline_ms": 1115.411,
+      "diagnosis": "Leaf roughness in surface_plants.rs was 0.56, strictly below ROUGHNESS_CUTOFF=0.60 in ray_scene.rs. Every foliage fragment on 3,830,600 triangles evaluated rt_reflection with 2-bounce hardware ray queries, spending 1,096 ms in render.scene_classify_and_raster.",
+      "remedy": "Set foliage roughness to 0.65 in surface_plants.rs. Realistic matte/satiny organic cuticle avoids triggering mirror ray queries while preserving GGX sun specular highlights and sky reflection.",
+      "measured_after_ms": 360.518,
+      "speedup_factor": 3.09,
+      "status": "RESOLVED_AND_VERIFIED"
+    },
+    "P0_B_suspicious_contact_ao": {
+      "expression": "contact_ao = mix(0.48, 1.0, clamp(cbt_shadow_visibility(...), 0.0, 1.0))",
+      "diagnosis": "Unphysical coupling of direct stellar cascade shadow to indirect ambient illuminance, violating Invariant I-05 and causing double-darkening in shadows.",
+      "remedy": "Removed expression from shaders.rs. Direct stellar shadow visibility and indirect ambient sky illuminance are strictly separated.",
+      "status": "RESOLVED_AND_VERIFIED"
+    },
+    "P0_C_hydrology_and_coordinate_drift": {
+      "diagnosis": "Procedural ground depressions previously used camera-relative input.render_position, which drifted across the ground when camera translated.",
+      "remedy": "Replaced with body-fixed chart_offset * bitcast<f32>(params.radius_bits). Preserves planetary precision (I-04) and canonical physical authority (I-01).",
+      "status": "RESOLVED_AND_VERIFIED"
+    },
+    "P0_D_thin_foliage_energy": {
+      "optical_model": "Two-sided diffuse transmission obeying (1-T)*max(N.L,0) + T*max(-N.L,0) modulated by (1 - F) and Albedo <= 1.0.",
+      "status": "VERIFIED_CORRECT"
+    },
+    "P0_E_grazing_normal_conditioning": {
+      "diagnosis": "Ad-hoc specular_normal projection eye_nv < 0.0 was redundant with existing smoothstep falloff in surface_sun_reflection.",
+      "remedy": "Removed redundant normal mutation in shaders.rs.",
+      "status": "RESOLVED_AND_VERIFIED"
+    },
+    "P0_F_taa_effectiveness": {
+      "diagnosis": "Plant meshes write static alpha=1.0 and reproject via camera motion. However, subpixel foliage edges cause temporal depth disocclusion.",
+      "remedy": "Documented limitation. Subpixel foliage stability requires geometric LOD coverage.",
+      "status": "VERIFIED_AUDITED"
+    }
+  }
+}

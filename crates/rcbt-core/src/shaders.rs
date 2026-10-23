@@ -608,10 +608,36 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         roughness += textureSampleGrad(roughness_texture, surface_sampler, uv, dx, dy).g
             * (1.0 - detail_weight);
     }
+    // Local gravitational up in render space (spherical planetary radial vector):
+    let surface_up = normalize((render_from_body * vec4(direction, 0.0)).xyz);
+    let slope_cosine = clamp(dot(receiver_normal, surface_up), 0.0, 1.0);
+    // Classify base water before soil modification: open water owns its own wave
+    // normal and must remain inert to land material normal perturbation.
+    let base_water = (1.0 - smoothstep(0.22, 0.65, roughness))
+        * (1.0 - smoothstep(0.25, 1.0, input.height_m));
+    // Coastal ground moisture and reflective depressions on land:
+    // Lowland areas near the coastal water line saturate with moisture, darkening soil
+    // and reducing surface roughness to create reflective wet sheen and puddles in flat depressions.
+    let coastal_moisture = (1.0 - base_water) * (1.0 - smoothstep(0.0, 16.0, input.height_m)) * smoothstep(0.70, 0.96, slope_cosine);
+    let wet_soil = coastal_moisture * 0.85;
+    // Darken and enrich soil with warm organic peat hue (R > G > B):
+    albedo = mix(albedo, albedo * vec3(0.28, 0.22, 0.14), wet_soil);
+    roughness = mix(roughness, 0.35, wet_soil * 0.80);
+    // Continuous multi-octave depression field on body-fixed horizontal ground tangent plane:
+    let ground_coord = chart_offset * bitcast<f32>(params.radius_bits) * 0.25;
+    let n1 = sin(ground_coord.x * 1.8 + ground_coord.y * 1.2) * cos(ground_coord.y * 1.6 - ground_coord.x * 0.7);
+    let n2 = sin(ground_coord.x * 4.3 - ground_coord.y * 3.1) * cos(ground_coord.y * 3.9 + ground_coord.x * 2.4);
+    let n3 = sin(ground_coord.x * 9.7 + ground_coord.y * 7.5) * cos(ground_coord.y * 8.8 - ground_coord.x * 5.9);
+    let depression = n1 * 0.55 + n2 * 0.32 + n3 * 0.13;
+    let puddle_mask = coastal_moisture * smoothstep(0.12, 0.45, depression) * smoothstep(0.85, 0.98, slope_cosine);
+    if (puddle_mask > 0.0) {
+        albedo = mix(albedo, vec3(0.015, 0.020, 0.018), puddle_mask * 0.95);
+        roughness = mix(roughness, 0.025, puddle_mask * 0.96);
+    }
     // Classify before material-normal perturbation: water owns its own wave
     // normal, even where filtering includes a normal-bearing land neighbour.
-    let water_material = (1.0 - smoothstep(0.22, 0.65, roughness))
-        * (1.0 - smoothstep(0.25, 1.0, input.height_m));
+    let water_material = max(base_water, (1.0 - smoothstep(0.22, 0.65, roughness))
+        * (1.0 - smoothstep(0.25, 1.0, input.height_m)));
     // Premultiplied surface gradients: uncovered weight is flat. Preserve
     // coverage and the same globe transition as albedo rather than magnifying
     // a tiny resident normal contribution to full strength.
@@ -655,16 +681,35 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let eye = ocean_safe_normalize(view.world_position - input.render_position, normal);
     var radiance = diffuse;
     if (cbt_specular_enabled() && water_material < 1.0) {
+        // Condition shading normal for view reflection: when the macro surface is
+        // front-facing, visible microfacets cannot point below the view horizon.
+        // In puddles, water levels with local gravity (surface_up) creating sky reflection.
+        var specular_normal = mix(shaded_normal, surface_up, puddle_mask * 0.92);
         var land_reflection = vec3(0.0);
         for (var i = 0u; i < 3u; i = i + 1u) {
             if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
-                land_reflection += ocean_sun_reflection(shaded_normal, eye, lighting.directions[i].xyz,
+                land_reflection += ocean_sun_reflection(specular_normal, eye, lighting.directions[i].xyz,
                     lighting.colors_lux[i].rgb, roughness, 0.04)
                     * cbt_shadow_visibility(input.render_position, receiver_normal, i);
             }
         }
-        let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
+        let environment = cbt_land_environment(input.render_position,specular_normal,eye,roughness,lighting.ambient_lux.rgb);
         land_reflection += environment.rgb;
+        if (puddle_mask > 0.0) {
+            let puddle_reflected = reflect(-eye, specular_normal);
+            let puddle_fresnel = ocean_schlick(0.04, max(dot(specular_normal, eye), 0.0));
+            var puddle_sky_illuminance = lighting.ambient_lux.rgb;
+            for (var i = 0u; i < 3u; i = i + 1u) {
+                puddle_sky_illuminance += lighting.colors_lux[i].rgb
+                    * max(dot(surface_up, lighting.directions[i].xyz), 0.0) * lighting.ocean_appearance.y;
+            }
+            let puddle_sky_rad = puddle_sky_illuminance / OCEAN_PI;
+            let puddle_sky = ocean_sky_radiance(puddle_reflected, surface_up,
+                puddle_sky_rad * vec3(0.20, 0.28, 0.42),
+                puddle_sky_rad * vec3(0.50, 0.58, 0.65),
+                puddle_sky_rad * vec3(0.02, 0.02, 0.02));
+            land_reflection += puddle_sky * puddle_fresnel * puddle_mask;
+        }
         var land_ambient = lighting.ambient_lux.rgb;
         if (any(land_ambient > vec3(0.0))) {
             land_ambient *= cbt_land_ambient_transmission(roughness);

@@ -2,9 +2,7 @@
 use glam::{DMat3, DQuat, DVec3};
 use std::{collections::BTreeMap, ops::Range};
 use thessa_graphics::ResolvedGraphicsSettings;
-use thessa_render_core::mesh::{
-    Image, Material, MeshAsset, MeshInstance, Primitive, Texture, Vertex, Wrap,
-};
+use thessa_render_core::mesh::{Material, MeshAsset, MeshInstance, Primitive, Vertex};
 use thessa_worldgen_rocky::{
     field::PlanetField,
     lod::TileKey,
@@ -442,84 +440,60 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
         if start == end {
             continue;
         }
-        // Match the existing terrain's continuous IEC sRGB -> linear convention
-        // (lod::linear), without quantizing the producer's f32 albedo to bytes.
-        let linear = |v: f32| {
-            if v <= 0.04045 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
+        let stem_end = prototype
+            .stem
+            .as_ref()
+            .map_or(0, |stem| stem.vertex_count as usize);
+        let parts = [
+            (0..stem_end, true),
+            (stem_end..prototype.positions.len(), false),
+        ];
+        for (vertices, stem) in parts {
+            if vertices.is_empty() {
+                continue;
             }
-        };
-        let [r, g, b] = prototype.albedo_srgb.map(linear);
-        // A constant texel per organ preserves one primitive/draw and the same
-        // raster/RT material. UVs never interpolate between stem and foliage:
-        // all three corners of each triangle sample exactly one texel centre.
-        let base_texture = prototype.stem.as_ref().map(|stem| {
-            let image = prepared.asset.images.len();
-            let rgba8 = [prototype.albedo_srgb, stem.albedo_srgb]
-                .into_iter()
-                .flat_map(|rgb| {
-                    rgb.map(|v| (v * 255.0).round() as u8)
-                        .into_iter()
-                        .chain([255])
-                })
-                .collect();
-            prepared.asset.images.push(Image {
-                width: 2,
-                height: 1,
-                rgba8,
+            let [base, normal, mr] =
+                crate::surface_plant_materials::append(&mut prepared.asset, stem);
+            let material = prepared.asset.materials.len();
+            prepared.asset.materials.push(Material {
+                base_color: [1.0; 4],
+                base_texture: Some(base),
+                normal_texture: Some(normal),
+                metallic_roughness_texture: Some(mr),
+                metallic: 0.0,
+                roughness: if stem { 0.85 } else { 0.65 },
+                double_sided: true,
+                // Authored total scattering and partition, not a measured
+                // fossil spectrum; R + T never exceeds the source albedo.
+                diffuse_transmission: if stem { 0.0 } else { 0.45 },
+                ..Default::default()
             });
-            let texture = prepared.asset.textures.len();
-            prepared.asset.textures.push(Texture {
-                image,
-                wrap: [Wrap::Clamp; 2],
-                linear: true,
-                min_linear: true,
+            prepared.asset.primitives.push(Primitive {
+                ambient_visibility: prototype
+                    .ambient_visibility
+                    .get(vertices.clone())
+                    .unwrap_or(&[])
+                    .to_vec(),
+                vertices: vertices
+                    .clone()
+                    .map(|index| Vertex {
+                        position: prototype.positions[index],
+                        normal: prototype.normals[index],
+                        uv: prototype.uvs.get(index).copied().unwrap_or([0.0; 2]),
+                    })
+                    .collect(),
+                indices: prototype
+                    .indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .filter(|triangle| vertices.contains(&(triangle[0] as usize)))
+                    .flat_map(|triangle| triangle.map(|i| i - vertices.start as u32))
+                    .collect(),
+                material,
             });
-            texture
-        });
-        let material = prepared.asset.materials.len();
-        prepared.asset.materials.push(Material {
-            base_color: if base_texture.is_some() {
-                [1.0; 4]
-            } else {
-                [r, g, b, 1.0]
-            },
-            base_texture,
-            metallic: 0.0,
-            roughness: 0.92,
-            // Fronds/crowns are triangle sheets, not closed solid leaves.
-            double_sided: true,
-            ..Default::default()
-        });
-        if prototype.positions.len() != prototype.normals.len() {
-            return Err("plant prototype position/normal mismatch".into());
+            prepared.ranges.push(start..end);
         }
-        prepared.asset.primitives.push(Primitive {
-            vertices: prototype
-                .positions
-                .into_iter()
-                .zip(prototype.normals)
-                .enumerate()
-                .map(|(index, (position, normal))| Vertex {
-                    position,
-                    normal,
-                    uv: if prototype
-                        .stem
-                        .as_ref()
-                        .is_some_and(|stem| index < stem.vertex_count as usize)
-                    {
-                        [0.75, 0.5]
-                    } else {
-                        [0.25, 0.5]
-                    },
-                })
-                .collect(),
-            indices: prototype.indices,
-            material,
-        });
-        prepared.ranges.push(start..end);
     }
     if prepared.descriptors.len() != items.len() {
         return Err(
@@ -696,8 +670,8 @@ mod tests {
                 assert!(prepared.descriptors.contains(&tree));
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
-            assert!(prepared.ranges.len() <= 3);
-            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 462_672);
+            assert!(prepared.ranges.len() <= 4);
+            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 1_400_000);
             let (_, disabled) = prepare(Context::Disabled, &resolved, field).unwrap();
             assert_eq!(
                 (
@@ -779,10 +753,9 @@ mod tests {
                 );
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
-            let mut end = 0;
             let mut prototype_payload = 0;
+            let mut seen = std::collections::BTreeMap::new();
             for (range, primitive) in prepared.ranges.iter().zip(&prepared.asset.primitives) {
-                assert_eq!(range.start, end);
                 assert!(range.end > range.start);
                 let group = &prepared.descriptors[range.start as usize..range.end as usize];
                 assert!(group.iter().all(|d| d.kind == group[0].kind));
@@ -791,95 +764,44 @@ mod tests {
                     .into_iter()
                     .find(|p| p.kind == group[0].kind)
                     .unwrap();
-                assert_eq!(
-                    primitive
-                        .vertices
-                        .iter()
-                        .map(|v| v.position)
-                        .collect::<Vec<_>>(),
-                    prototype.positions
-                );
-                assert_eq!(primitive.indices, prototype.indices);
-                assert_eq!(
-                    primitive
-                        .vertices
-                        .iter()
-                        .map(|v| v.normal)
-                        .collect::<Vec<_>>(),
-                    prototype.normals
-                );
+                let offset = *seen.entry(group[0].kind as u8).or_insert(0usize);
+                let end = offset + primitive.vertices.len();
                 let material = &prepared.asset.materials[primitive.material];
+                let stem = prototype
+                    .stem
+                    .as_ref()
+                    .is_some_and(|s| offset < s.vertex_count as usize);
+                assert_eq!(material.diffuse_transmission, if stem { 0.0 } else { 0.45 });
                 assert_eq!(material.metallic, 0.0);
-                let linear = |v: f32| {
-                    if v <= 0.04045 {
-                        v / 12.92
-                    } else {
-                        ((v + 0.055) / 1.055).powf(2.4)
-                    }
-                };
-                if let Some(stem) = prototype.stem {
-                    assert_eq!(material.base_color, [1.0; 4]);
-                    let texture = prepared.asset.textures[material.base_texture.unwrap()];
-                    assert_eq!(texture.wrap, [Wrap::Clamp; 2]);
-                    let image = &prepared.asset.images[texture.image];
-                    assert_eq!((image.width, image.height, image.rgba8.len()), (2, 1, 8));
-                    for (texel, expected) in image
-                        .rgba8
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .zip([prototype.albedo_srgb, stem.albedo_srgb])
-                    {
-                        assert_eq!(texel[3], 255);
-                        for (&byte, expected) in texel[..3].iter().zip(expected) {
-                            assert!(
-                                (f32::from(byte) / 255.0 - expected).abs() <= 0.5 / 255.0 + 1e-7
-                            );
-                            assert!(
-                                (linear(f32::from(byte) / 255.0) - linear(expected)).abs() < 0.0045
-                            );
-                        }
-                    }
-                    for (index, vertex) in primitive.vertices.iter().enumerate() {
-                        assert_eq!(
-                            vertex.uv,
-                            [
-                                if index < stem.vertex_count as usize {
-                                    0.75
-                                } else {
-                                    0.25
-                                },
-                                0.5
-                            ]
-                        );
-                    }
-                    for triangle in primitive.indices.as_chunks::<3>().0 {
-                        let uv = primitive.vertices[triangle[0] as usize].uv;
-                        assert!(
-                            triangle
-                                .iter()
-                                .all(|&i| primitive.vertices[i as usize].uv == uv),
-                            "organ colour must not interpolate across a triangle"
-                        );
-                    }
-                } else {
-                    assert!(material.base_texture.is_none());
-                    for (actual, expected) in material.base_color[..3]
-                        .iter()
-                        .zip(prototype.albedo_srgb.map(linear))
-                    {
-                        assert!((actual - expected).abs() < 1e-7);
-                    }
+                assert!(material.base_texture.is_some());
+                assert!(material.normal_texture.is_some());
+                assert!(material.metallic_roughness_texture.is_some());
+                for (i, v) in primitive.vertices.iter().enumerate() {
+                    assert_eq!(v.position, prototype.positions[offset + i]);
+                    assert_eq!(v.normal, prototype.normals[offset + i]);
+                    assert_eq!(
+                        v.uv,
+                        prototype.uvs.get(offset + i).copied().unwrap_or([0.0; 2])
+                    );
                 }
-                end = range.end;
+                let indices: Vec<_> = prototype
+                    .indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .filter(|t| (offset..end).contains(&(t[0] as usize)))
+                    .flat_map(|t| t.map(|i| i - offset as u32))
+                    .collect();
+                assert_eq!(indices, primitive.indices);
+                seen.insert(group[0].kind as u8, end);
                 prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
                     + primitive.indices.len() * std::mem::size_of::<u32>();
             }
-            assert_eq!(end as usize, prepared.instances.len());
-            // Exact producer payload actually published, not a stale pin.
+            for prototype in thessa_worldgen_rocky::offline::plant_prototypes() {
+                assert_eq!(seen[&(prototype.kind as u8)], prototype.positions.len());
+            }
             assert_eq!(stats.prototype_bytes, prototype_payload);
-            assert!(prototype_payload > 0);
-            assert_eq!(stats.prototype_texture_bytes, 8);
+            assert_eq!(stats.prototype_texture_bytes, 3_219_456);
             prepared.asset.validate().unwrap();
             eprintln!("WORLD04 {quality:?}: {stats:?}");
             previous = prepared.descriptors;
@@ -928,7 +850,12 @@ mod tests {
             };
             let prepared = convert(vec![item], 3_200_000.0).unwrap();
             assert_eq!(
-                prepared.asset.primitives[0].vertices.len(),
+                prepared
+                    .asset
+                    .primitives
+                    .iter()
+                    .map(|p| p.vertices.len())
+                    .sum::<usize>(),
                 prototype.positions.len()
             );
             assert!(prototype.positions.iter().all(|p| p[1] >= 0.0));

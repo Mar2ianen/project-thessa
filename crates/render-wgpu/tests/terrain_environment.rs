@@ -15,6 +15,9 @@ use thessa_render_wgpu::{
 };
 use wgpu::util::DeviceExt;
 
+#[path = "terrain_environment/normal_geometry.rs"]
+mod normal_geometry;
+
 fn scene(
     backend: &Backend,
     quality: Quality,

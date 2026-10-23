@@ -185,6 +185,38 @@ This is an encoding correction, not a microvisibility/filtering solution or
 visual acceptance. Reproduction and measurements:
 [`native-signed-material-normals-2026-10-23.json`](artifacts/native-signed-material-normals-2026-10-23.json).
 
+### Independent projected-geometry boundary (WORLD06l)
+
+`tests/terrain_environment/normal_geometry.rs` supplies a **CPU reference**, not
+a selected renderer transport model. Its unit-period triangular height field
+has dimensionless slopes +/-s, is extruded along y, and carries opaque Lambert
+facets with reflectance 0.5. Exact first-peak visibility intervals are checked
+against 12,800 explicit ray/segment intersections. Integrating visible facet
+area times the local view cosine must recover the macro projected area. The
+BRDF integrates **joint** light/view visibility and divides by both macro
+projected areas; reciprocity, the flat Lambert limit and single-bounce passive
+energy are then checked separately. Four slopes (0/0.02/0.2/1), five view cosines
+(0.001/0.01/0.1/0.5/1) and five azimuths are exercised. Sixteen directional-energy
+fixtures compare 64x128 and 128x256 midpoint quadrature with an absolute 0.0001
+reflected/input-energy convergence envelope, not a relative weak-signal bound.
+
+A temporary test-only hook in the actual canonical page producer also measured
+23 selected L17–L22 pages along the standing camera's 0/10/40/80 m forward strip.
+Procedural grain RMS slopes are 0.095923–0.185048, versus 0.000586–0.005933 for
+the weighted imported-height contribution: ratios 16.51–170.37. Ground coverage
+means are 0.70487–0.70560. These are raw per-page source contributions, not an
+inventory of resident page IDs, pixel footprints, mesh normals or actual BRDF
+outgoing support. The instrumentation was removed; no source amplitude, material
+mixing, visibility multiplier or lighting law changed.
+
+The reference establishes neither a physically complete normal-mapping model
+nor agreement of current production GGX/sky/substrate transport with this
+triangle-wave surface. GGX facets, multiple scattering, general geometry,
+normal-filtering error and canonical-image acceptance remain open. In
+particular, the large source ratio does **not** justify attenuating the legacy
+relief solely to hide the bands. Evidence:
+[`native-normal-geometry-reference-2026-10-23.json`](artifacts/native-normal-geometry-reference-2026-10-23.json).
+
 Generation and residency:
 
 - `build_gpu_material_page` evaluates `surface_normal_grain_height` on land

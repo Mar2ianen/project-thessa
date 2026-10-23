@@ -257,6 +257,18 @@ performance or aesthetic acceptance follows from this numerical regression
 Evidence:
 [`artifacts/native-signed-material-normals-2026-10-23.json`](artifacts/native-signed-material-normals-2026-10-23.json).
 
+WORLD06l adds three CPU projected-geometry reference tests: exact facet
+visibility versus 12,800 ray/segment cases, macro projected-area coverage,
+reciprocity/flat-Lambert limits and passive single-bounce energy with a pinned
+quadrature-convergence envelope. A temporary actual-producer probe finds legacy
+grain RMS slopes 16.51–170.37 times the weighted imported contribution on 23
+selected canonical pages; this is not actual raster-footprint/visibility proof.
+All instrumentation is removed and production transport is unchanged. Full local
+gates pass (2,044 lib/bin, 108 integration and 86 renderer hardware tests, Clippy,
+architecture, feature-off and release identity); no normal-transport correction
+or visual acceptance is claimed. See docs 69/77 and
+[`artifacts/native-normal-geometry-reference-2026-10-23.json`](artifacts/native-normal-geometry-reference-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

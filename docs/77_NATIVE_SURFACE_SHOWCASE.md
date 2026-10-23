@@ -736,3 +736,53 @@ No blind votes or final visual, temporal, stable-performance or planetary-stream
 acceptance is claimed.
 Commands, hashes, numerical envelopes and capture evidence:
 [`native-signed-material-normals-2026-10-23.json`](artifacts/native-signed-material-normals-2026-10-23.json).
+
+## WORLD06l — Projected-geometry reference and canonical slope decomposition
+
+This continuation retains **three CPU reference tests, not a renderer change**.
+The source decomposition uses a temporary test-only hook in the actual shared
+material producer, after material-strength scaling and after imported-height
+gradient addition. It samples the 126x126 interior texels of 23 distinct pages
+at L17–L22, selected along the final WORLD06k standing camera's 0/10/40/80 m
+forward strip. Camera input, frozen erosion and source signature come from the
+same canonical setup; duplicate selected pages are omitted.
+
+Procedural grain RMS slopes are 0.095923–0.185048, compared with
+0.000586–0.005933 for the weighted imported source (ratio 16.51–170.37).
+Mean optical ground weights are 0.70487–0.70560. The legacy and imported sources
+are currently additive; this measurement does not establish that one should
+be deleted or that the terrain is a flat substrate under a separate cover.
+Selected source pages are not actual resident GPU page IDs or per-pixel
+footprints; there is no canonical outgoing-support or visibility proof here.
+No source amplitude, normal strength, roughness, coverage or transport is changed.
+
+The independent reference in
+`crates/render-wgpu/tests/terrain_environment/normal_geometry.rs` uses a periodic
+triangular height field, unit x period, slopes +/-s and y extrusion. Facets are
+opaque Lambertian with reflectance 0.5. It derives exact visible intervals from
+the next geometric peak, then verifies them against 12,800 explicit ray/segment
+intersection cases. Projected visible facet area recovers the macro cosine to
+an absolute 1e-14 bound. The BRDF integrates joint light/view-visible area and
+both local cosines, normalized by both macro projected areas; swapping incoming
+and outgoing directions must agree within 1e-12, and the flat limit must recover
+0.5/pi within 1e-14. These are geometric/transport tests, not visual preference.
+
+Sixteen incident-direction/slope fixtures integrate the single-bounce BRDF with
+64x128 and 128x256 midpoint grids. Fine-grid reflectance is within [0,0.5] plus
+1e-12 roundoff; maximum observed coarse/fine discrepancy is 0.000023180 against
+a pinned absolute 0.0001 reflected/input-energy envelope. Multiple scattering is
+deliberately absent from this reference, so lost inter-facet transport is not
+silently reintroduced as a radiance multiplier. The reference is not GGX, the
+actual canonical microgeometry, a production model or a normal-filtering bound.
+
+Temporary producer instrumentation and its executable/source patch, the raw
+JSON decomposition, an independent Python reference prototype and its results
+are preserved under `target/surface-showcase/normal-source/`. Producer hooks are
+removed. No new scene capture is needed or claimed: production rendering is
+unchanged from WORLD06k. Full local gates pass on 756 unchanged inputs: 2,044
+lib/bin, 108 integration and 86 renderer hardware tests, formatting, architecture,
+all-feature Clippy, feature-off and release build. The mandated retired Bevy
+command selects zero tests. Release SHA256 remains byte-identical to WORLD06k;
+existing README claims remain accurate. No new visual, performance, temporal
+or planetary-streaming acceptance is claimed. Evidence:
+[`native-normal-geometry-reference-2026-10-23.json`](artifacts/native-normal-geometry-reference-2026-10-23.json).

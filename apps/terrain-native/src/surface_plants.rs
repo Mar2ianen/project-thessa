@@ -456,7 +456,11 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
                 crate::surface_plant_materials::append(&mut prepared.asset, stem);
             let material = prepared.asset.materials.len();
             let base_color = if stem {
-                [1.0; 4]
+                if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree {
+                    [1.0, 0.89, 0.70, 1.0]
+                } else {
+                    [1.0; 4]
+                }
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {

@@ -35,6 +35,30 @@ fn material_chart_footprint(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f3
     return max(length(tangent_dx), length(tangent_dy)) * radius;
 }
 
+// Resident source resolution follows the footprint's minor axis, bounded by
+// the actual sampler's anisotropic tap ratio. Coverage/globe transitions still
+// use the conservative major-axis footprint above.
+fn material_chart_filter_footprint(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, radius: f32, anisotropy: f32) -> f32 {
+    if (anisotropy <= 1.0) { return material_chart_footprint(address, dx, dy, radius); }
+    let q = vec3<f32>((address.uv + address.offset) * 2.0 - 1.0, 1.0);
+    let x = material_chart_chord(q, vec3<f32>(dx * 2.0, 0.0));
+    let y = material_chart_chord(q, vec3<f32>(dy * 2.0, 0.0));
+    // Millimetre footprints on a planet have ~1e-10 angular derivatives;
+    // their squared cross product underflows/flushes to zero on real GPUs.
+    // Normalize the metric before forming areas, then restore its scale.
+    let scale = max(length(x), length(y));
+    let sx = x / max(scale, 1e-20);
+    let sy = y / max(scale, 1e-20);
+    let a = dot(sx,sx);
+    let b = dot(sx,sy);
+    let c = dot(sy,sy);
+    let major = sqrt(max(0.0, 0.5 * (a + c + length(vec2<f32>(a-c, 2.0*b)))));
+    // Product of singular values equals the parallelogram area. This avoids
+    // cancellation in the smaller eigenvalue for near-collinear derivatives.
+    let minor = length(cross(sx,sy)) / max(major, 1e-20);
+    return max(minor, major / anisotropy) * scale * radius;
+}
+
 fn material_coordinates(address: MaterialAddress, extent: f32) -> MaterialCoordinates {
     let base = address.uv * extent;
     let relative = fract(base) + address.offset * extent;

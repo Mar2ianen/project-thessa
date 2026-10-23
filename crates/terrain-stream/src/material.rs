@@ -42,6 +42,7 @@ pub struct MaterialStream {
     normal_maps: bool,
     ground_detail: bool,
     max_level: u8,
+    reference_height_m: f64,
 }
 
 impl MaterialStream {
@@ -84,6 +85,7 @@ impl MaterialStream {
             } else {
                 17
             },
+            reference_height_m: 0.0,
         }
     }
 
@@ -92,6 +94,10 @@ impl MaterialStream {
     }
     pub fn pending_count(&self) -> usize {
         self.jobs.len()
+    }
+    /// Cached optical selection reference, not authoritative geometry elevation.
+    pub fn reference_height_m(&self) -> f64 {
+        self.reference_height_m
     }
     pub fn needs_refinement(&self, epoch: u64, pixel_angle: f64) -> bool {
         self.refinement != Some((epoch, pixel_angle.to_bits()))
@@ -134,6 +140,17 @@ impl MaterialStream {
         demand: MaterialDemand<'_>,
         geometry_sources: impl IntoIterator<Item = TileKey>,
     ) {
+        if self.ground_detail && self.needs_refinement(demand.selection_epoch, demand.pixel_angle) {
+            // One canonical reference per selection epoch, not per page/tick.
+            // Treating elevated ground as datum made a standing camera appear
+            // hundreds of metres from highlands and starved fine material LOD.
+            let direction = demand.view.eye.normalize_or_zero();
+            self.reference_height_m = if direction != glam::DVec3::ZERO {
+                field.height_m(direction.to_array(), 32.0)
+            } else {
+                0.0
+            };
+        }
         let normal_maps = self.normal_maps;
         let ground_detail = self.ground_detail;
         self.reconcile_with(demand, geometry_sources, |key| {
@@ -148,17 +165,19 @@ impl MaterialStream {
         mut spawn: impl FnMut(TileKey) -> JobHandle<CbtMaterialPage>,
     ) {
         if self.needs_refinement(demand.selection_epoch, demand.pixel_angle) {
-            self.refined = selection::material_view_selection_with_limit(
+            self.refined = selection::material_view_selection_at_height(
                 demand.fine,
                 demand.view,
                 demand.pixel_angle,
                 self.max_level,
+                self.reference_height_m,
             );
             self.refinement = Some((demand.selection_epoch, demand.pixel_angle.to_bits()));
         }
-        let wanted = selection::material_demand(
+        let wanted = selection::material_demand_at_height(
             self.refined.iter().copied().chain(geometry_sources),
             demand.view,
+            self.reference_height_m,
         );
         let ids = wanted
             .iter()

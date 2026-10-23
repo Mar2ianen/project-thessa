@@ -218,3 +218,51 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
         material_view_selection_with_limit(&[key], view, 1e-5, 17)
     );
 }
+
+#[test]
+fn elevated_material_reference_measures_distance_to_ground_not_the_body_datum() {
+    let key = TileKey {
+        face: 4,
+        level: 17,
+        x: 65536,
+        y: 65536,
+    };
+    let dir = DVec3::from(key.direction(0.5, 0.5));
+    let radius = 3_200_000.0;
+    for elevation in [-1000.0, 0.0, 1000.0] {
+        let view = SelectionView {
+            eye: dir * (radius + elevation + 2.0),
+            stream_origin: dir * (radius + elevation),
+            forward: -dir,
+            radius,
+            frustum: Some(lod::SelectionFrustum {
+                forward: (-dir).to_array(),
+                cos_limit: 0.0,
+            }),
+        };
+        let refined = material_view_selection_at_height(&[key], view, 0.001, 22, elevation);
+        assert!(refined.len() <= 512);
+        assert_eq!(refined.iter().map(|k| k.level).max().unwrap(), 22);
+        assert_eq!(
+            refined
+                .iter()
+                .map(|k| 4f64.powi(i32::from(key.level) - i32::from(k.level)))
+                .sum::<f64>(),
+            1.0
+        );
+        let legacy = material_view_selection_with_limit(&[key], view, 0.001, 22);
+        if elevation == 0.0 {
+            assert_eq!(legacy, refined);
+            assert_eq!(
+                material_demand(refined.iter().copied(), view),
+                material_demand_at_height(refined.iter().copied(), view, 0.0)
+            );
+        } else {
+            assert_eq!(
+                legacy,
+                vec![key],
+                "datum-distance bug must be exposed by the fixture"
+            );
+        }
+    }
+}

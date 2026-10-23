@@ -352,6 +352,7 @@ fn resolve_terrain_capabilities(
     let caps = Capabilities {
         material_compact_supported: Some(true), // Legacy CPU predecode residency.
         terrain_conforming_supported: Some(false), // Native renderer integration only.
+        terrain_anisotropy_supported: None, // Native ground-detail sampler policy is not applied here.
         // Always available: without the `mesh-shaders` crate feature this
         // reports false and terrain resolves to the indexed path.
         terrain_mesh_supported: Some(thessa_bevy_rcbt::mesh_shader_supported(&device)),

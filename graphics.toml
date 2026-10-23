@@ -24,6 +24,8 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 surface_quality = "high" # native: low F0 approximation; medium GGX; high normal/MR/AO maps
 terrain_normal_maps = true # native primary terrain; false skips normal generation/upload/sampling
 terrain_ground_detail = false # experimental CC0 soil/gravel proxy; regular-patch quality bounds pages at L20/L21/L22
+# Enabled detail also resolves 1/4/16x anisotropy by surface quality when supported;
+# unsupported/unknown adapters fall back to isotropic filtering. No physics change.
 # surface_quality low/medium/high filters normal detail with +2/+1/+0 extra mip levels.
 # Native terrain: 4/8/16 clear-sky GGX samples at low/medium/high. With clouds,
 # use 1/2/4 directions and 1/2/4 march steps, <=1 sun step (shared transport law).

@@ -451,8 +451,13 @@ impl TerrainRenderer {
         anchors.resize(capacity, first.anchor);
         let frames_data = frame_bytes(&anchors, [0.0; 3])?;
         let normal_maps = settings.is_none_or(|s| s.terrain_normal_maps);
-        let materials =
-            crate::material::MaterialArray::new(backend, material_layers, capacity, normal_maps)?;
+        let materials = crate::material::MaterialArray::new(
+            backend,
+            material_layers,
+            capacity,
+            normal_maps,
+            settings.map_or(1, |s| s.terrain_material_anisotropy),
+        )?;
         let mut node_ids = Vec::with_capacity(capacity);
         let mut residuals = Vec::with_capacity(residual_bytes as usize);
         let mut page_slots = Vec::with_capacity(patches.len());
@@ -703,6 +708,13 @@ impl TerrainRenderer {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
         }
         let raster_source = shaders::CBT_RASTER_WGSL
+            .replace(
+                "const MATERIAL_ANISOTROPY: f32 = 1.0;",
+                &format!(
+                    "const MATERIAL_ANISOTROPY: f32 = {}.0;",
+                    settings.map_or(1, |s| s.terrain_material_anisotropy)
+                ),
+            )
             .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
             .replace(
                 "const MATERIAL_MAX_LEVEL: f32 = 17.0;",

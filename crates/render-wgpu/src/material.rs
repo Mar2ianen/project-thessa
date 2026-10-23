@@ -67,8 +67,17 @@ impl MaterialArray {
         layers: u32,
         geometry_count: usize,
         normal_maps: bool,
+        anisotropy: u16,
     ) -> Result<Self, BackendError> {
         let limits = backend.device.limits();
+        if !(1..=16).contains(&anisotropy)
+            || (anisotropy > 1 && backend.caps.terrain_anisotropy_supported != Some(true))
+        {
+            return Err(BackendError::Device(
+                "material anisotropy invalid or unsupported; resolve graphics settings first"
+                    .into(),
+            ));
+        }
         let directory_len = (u64::from(layers).max(1) * 4).next_power_of_two();
         if layers == 0
             || layers > limits.max_texture_array_layers
@@ -122,6 +131,7 @@ impl MaterialArray {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: anisotropy,
             ..Default::default()
         });
         let cache =
@@ -368,7 +378,7 @@ mod tests {
             }
             Err(e) => panic!("{e}"),
         };
-        let mut array = MaterialArray::new(&backend, 16, 1, false).unwrap();
+        let mut array = MaterialArray::new(&backend, 16, 1, false, 1).unwrap();
         assert_eq!(
             array.normal_texture.size(),
             wgpu::Extent3d {
@@ -397,7 +407,7 @@ mod tests {
                 .iter()
                 .all(|entry| *entry == [0; 4])
         );
-        let mut enabled = MaterialArray::new(&backend, 16, 1, true).unwrap();
+        let mut enabled = MaterialArray::new(&backend, 16, 1, true, 1).unwrap();
         assert!(enabled.prepare(&backend, &[12], &[12], &pages).is_err());
     }
 
@@ -411,17 +421,21 @@ mod tests {
             }
             Err(e) => panic!("{e}"),
         };
-        assert!(MaterialArray::new(&backend, 0, 2, true).is_err());
+        assert!(MaterialArray::new(&backend, 0, 2, true, 1).is_err());
+        for invalid in [0, 17] {
+            assert!(MaterialArray::new(&backend, 2, 2, false, invalid).is_err());
+        }
         assert!(
             MaterialArray::new(
                 &backend,
                 backend.device.limits().max_texture_array_layers + 1,
                 2,
-                true
+                true,
+                1
             )
             .is_err()
         );
-        let mut array = MaterialArray::new(&backend, 2, 2, true).unwrap();
+        let mut array = MaterialArray::new(&backend, 2, 2, true, 1).unwrap();
         let page = CbtMaterialPage::from_rgba8(vec![128; 128 * 128 * 4]).unwrap();
         let mut pages = MaterialPages::from([
             (12, (1, page.clone())),

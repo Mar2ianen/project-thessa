@@ -153,6 +153,9 @@ impl TerrainStream {
     pub fn material_demand(&self) -> &[u64] {
         self.materials.source().priority()
     }
+    pub fn material_reference_height_m(&self) -> f64 {
+        self.materials.reference_height_m()
+    }
     pub fn pending_jobs(&self) -> (usize, usize) {
         (self.heights.pending_count(), self.materials.pending_count())
     }

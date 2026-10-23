@@ -186,6 +186,21 @@ canonical root, material, draw grouping, density tier or physics is changed.
 The corresponding numerical/adapter checks are not botanical, temporal or
 independent visual acceptance. Current details are in doc 75 and doc 77.
 
+WORLD06g is a candidate continuation of the default-off ground experiment:
+local canonical elevation now informs material demand distance, and surface
+quality resolves 1/4/16x anisotropic filtering with an explicit isotropic
+capability fallback. Regular-patch material LOD uses the bounded elliptical
+footprint; geometry, physics, source material and cache budgets are unchanged.
+Synthetic CPU/GPU oracles and the full local gates pass (2,041 lib/bin, 103
+integration and 83 renderer hardware tests). The standing capture now retains
+eight L22 material pages rather than stopping at L21; its local reference is
+5.008 m above datum. One fresh standing pair measured 116.204/111.124 ms GPU
+median, not an accepted speedup. This does not establish convincing ground, seam-free
+anisotropic page filtering, moving-camera acceptance or planetary streaming.
+See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md) and
+[doc 77](77_NATIVE_SURFACE_SHOWCASE.md); commands, hashes and limitations:
+[`artifacts/native-ground-filtering-2026-10-23.json`](artifacts/native-ground-filtering-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

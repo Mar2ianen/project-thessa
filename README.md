@@ -159,7 +159,8 @@ The checked-in vertical slice currently contains:
      Regular-patch material sampling preserves local chart precision; the tested
       forest-floor colour-noise prototype was rejected, not shipped (doc 77).
       A distinct default-off CC0 soil/gravel experiment can refine regular-patch
-      materials to L20/L21/L22 by quality; cross-LOD appearance and visual
+       materials to L20/L21/L22 with capability-resolved 1/4/16x anisotropy by
+       quality and a terrain-aware local distance reference; cross-LOD appearance and visual
       acceptance remain open (doc 77).
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
     textures; bounded stellar shadow rays supplement the shared atlas on meshes

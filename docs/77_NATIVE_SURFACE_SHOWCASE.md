@@ -387,3 +387,60 @@ integration tests, 82 renderer hardware tests and two focused native plant GPU
 diagnostics. Exact commands, source/binary/frame hashes, cost, failed attempts
 and omissions:
 [`native-botanical-geometry-2026-10-23.json`](artifacts/native-botanical-geometry-2026-10-23.json).
+
+## WORLD06g — Terrain-aware demand and grazing material filtering (candidate)
+
+The opt-in ground experiment now uses the canonical field's local height at the
+eye direction (32 m wavelength, cached with material selection) rather than
+treating every material page as if it lay on the zero-elevation datum. Refinement,
+frustum testing and material admission share that reference. No body radius,
+geometry, height source, physics or cache budget changes. It is a local reference,
+not exact relief under every page. Disabled detail preserves legacy selection.
+Synthetic standing fixtures at elevations -1,000/0/+1,000 m reach L22 within the
+same 512-leaf, area-preserving bound; the legacy datum fixture remains L17 at
+nonzero elevation. Epoch/pixel-scale caching and disabled datum behavior are
+regression tested. Runtime captures record the actual reference and its limits.
+
+The production material sampler previously had no anisotropy, and page selection
+used the largest footprint even though its other axis could resolve much more.
+The same ground-detail switch and surface-quality policy now resolve 1/4/16x
+anisotropy through the adapter's capability probe; unknown/unsupported hardware
+falls back to 1x, and conforming/disabled ground detail retain 1x. The raster
+chooses page resolution from `max(minor_axis, major_axis / sampler_anisotropy)`;
+coverage/globe transitions retain the conservative footprint. This changes
+filtering accuracy/bandwidth, not the material source, lighting or simulation.
+
+The GPU footprint oracle now checks 864 cases and four outputs per case: the old
+conservative footprint and 1/4/16x bounded elliptical metrics. Independent f64
+cube-projection finite differences and Gram eigenvalues supply the reference,
+with the existing 1 micrometre + 2 ppm tolerance. The first implementation
+underflowed tiny squared cross products at millimetre scales; normalizing the
+metric before computing its area fixed that failure without changing tolerances.
+A production grazing-raster fixture uses red ancestor pages and a blue fine page
+to verify that 16x admits fine material while 1x keeps the coarse representation.
+It is an addressing/filter-policy oracle, not a photorealistic texture or temporal
+acceptance test.
+
+The full local gates passed: formatting, architecture, workspace Clippy, 2,041
+lib/bin tests, 103 integration tests, 83 renderer hardware tests and release
+build. The retired Bevy hardware command again selected zero tests. A fresh
+matched standing pair measured 116.204/111.124 ms median GPU time before/after;
+one serial pair is not stable performance evidence. The candidate reference
+height is 5.008 m and eight material pages reach L22, versus a finest resident
+L21 before. All static captures end with zero height/material jobs and material
+misses; plants remain 222 descriptors, three draws and 14,784 upload bytes.
+
+The foreground still reads as a flat optical proxy. Sharper distant horizontal
+bands remain visible, and the canopy, coarse shadows and empty understory are
+not convincing. Neither successful GPU oracles nor L22 residency establish
+visual acceptance. One blind standing pair is prepared, with separate keys and
+zero votes. Candidate close/overview frames are diagnostics, not fresh paired
+cost measurements. Reproduction/evidence:
+[`native-ground-filtering-2026-10-23.json`](artifacts/native-ground-filtering-2026-10-23.json).
+
+Two single-setting diagnostic captures separate the failures: disabling raster
+shadows removes the dark trunk stripes but leaves the horizontal ground bands;
+disabling terrain normal maps removes the distant ground bands while leaving
+coarse/trunk shadows. This isolates a normal-map response/filtering issue, not a
+reason to erase surface relief or disable shadows in the accepted scene. The
+feature-off build and fixed L14 plant-root GPU diagnostic also pass.

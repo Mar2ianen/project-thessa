@@ -182,6 +182,8 @@ pub struct Capabilities {
     pub material_compact_supported: Option<bool>,
     /// Persistent topology's eight compute storage bindings are available.
     pub terrain_conforming_supported: Option<bool>,
+    /// Adapter supports anisotropic texture filtering.
+    pub terrain_anisotropy_supported: Option<bool>,
     /// Enabled mesh feature and sufficient terrain shader limits on the device.
     pub terrain_mesh_supported: Option<bool>,
     /// `Some(true)` when the adapter exposes ray-query features.
@@ -197,6 +199,7 @@ impl Capabilities {
         Self {
             material_compact_supported: None,
             terrain_conforming_supported: None,
+            terrain_anisotropy_supported: None,
             ray_query_supported: None,
             is_discrete_gpu: None,
             terrain_mesh_supported: None,
@@ -276,6 +279,8 @@ pub struct ResolvedGraphicsSettings {
     pub terrain_normal_maps: bool,
     #[serde(default)]
     pub terrain_ground_detail: bool,
+    #[serde(default = "default_terrain_anisotropy")]
+    pub terrain_material_anisotropy: u16,
     pub specular_reflections: bool,
     pub native_shadow_map_size: u32,
     pub shadow_filter_radius: u32,
@@ -360,9 +365,64 @@ impl Default for ResolvedGraphicsSettings {
     }
 }
 
+fn default_terrain_anisotropy() -> u16 {
+    1
+}
+
 #[cfg(test)]
 mod terrain_topology_tests {
     use super::*;
+    #[test]
+    fn terrain_anisotropy_tracks_resolved_detail_quality_and_capabilities() {
+        let mut request = RequestedGraphics::default();
+        for supported in [None, Some(false), Some(true)] {
+            for (quality, taps) in [(Quality::Low, 1), (Quality::Medium, 4), (Quality::High, 16)] {
+                request.renderer.surface_quality = quality;
+                for enabled in [false, true] {
+                    request.renderer.terrain_ground_detail = enabled;
+                    let settings = ResolvedGraphicsSettings::from_requested(
+                        &request,
+                        &Capabilities {
+                            terrain_anisotropy_supported: supported,
+                            ..Default::default()
+                        },
+                    );
+                    let expected = if enabled && supported == Some(true) {
+                        taps
+                    } else {
+                        1
+                    };
+                    assert_eq!(settings.terrain_material_anisotropy, expected);
+                    assert_eq!(
+                        settings.as_meta_map()["terrain_material_anisotropy"],
+                        expected.to_string()
+                    );
+                }
+            }
+        }
+        request.renderer.terrain_ground_detail = true;
+        request.terrain_topology.enabled = true;
+        let settings = ResolvedGraphicsSettings::from_requested(
+            &request,
+            &Capabilities {
+                terrain_anisotropy_supported: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(settings.terrain_material_anisotropy, 1);
+        let serialized = toml::to_string(&ResolvedGraphicsSettings::default()).unwrap();
+        let legacy = serialized
+            .lines()
+            .filter(|line| !line.starts_with("terrain_material_anisotropy ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            toml::from_str::<ResolvedGraphicsSettings>(&legacy)
+                .unwrap()
+                .terrain_material_anisotropy,
+            1
+        );
+    }
     #[test]
     fn ground_detail_falls_back_until_conforming_coordinates_are_precise() {
         let mut request = RequestedGraphics::default();
@@ -654,6 +714,22 @@ impl ResolvedGraphicsSettings {
         if requested.renderer.terrain_ground_detail && !terrain_ground_detail {
             notes.push("experimental ground detail requires regular-patch local coordinates; conforming terrain retains L17 materials".into());
         }
+        let terrain_material_anisotropy =
+            if terrain_ground_detail && caps.terrain_anisotropy_supported == Some(true) {
+                match requested.renderer.surface_quality {
+                    Quality::Low => 1,
+                    Quality::Medium => 4,
+                    Quality::High => 16,
+                }
+            } else {
+                1
+            };
+        if terrain_ground_detail
+            && requested.renderer.surface_quality != Quality::Low
+            && terrain_material_anisotropy == 1
+        {
+            notes.push("terrain anisotropic filtering unavailable/unknown; using isotropic material filtering".into());
+        }
         Self {
             surface_plants_enabled: requested.surface_plants.enabled,
             surface_plants_density_scale: if !requested.surface_plants.enabled {
@@ -707,6 +783,7 @@ impl ResolvedGraphicsSettings {
             surface_quality: requested.renderer.surface_quality,
             terrain_normal_maps: requested.renderer.terrain_normal_maps,
             terrain_ground_detail,
+            terrain_material_anisotropy,
             specular_reflections: requested.renderer.specular_reflections,
             backend: ResolvedBackend { name: backend_name },
             terrain,
@@ -943,6 +1020,10 @@ impl ResolvedGraphicsSettings {
             self.terrain_material_max_level().to_string(),
         );
         map.insert(
+            "terrain_material_anisotropy".into(),
+            self.terrain_material_anisotropy.to_string(),
+        );
+        map.insert(
             "terrain_normal_mip_bias".into(),
             self.terrain_normal_mip_bias().to_string(),
         );
@@ -1118,6 +1199,7 @@ mod tests {
             let caps = Capabilities {
                 material_compact_supported: supported,
                 terrain_conforming_supported: supported,
+                terrain_anisotropy_supported: supported,
                 terrain_mesh_supported: supported,
                 ray_query_supported: supported,
                 is_discrete_gpu: supported,

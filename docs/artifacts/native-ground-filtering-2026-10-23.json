@@ -1,0 +1,69 @@
+{
+  "stage": "WORLD06g",
+  "date": "2026-10-23",
+  "baseline": "297cd41",
+  "branch": "feat/native-surface-showcase",
+  "status": "Default-off ground experiment; numerical/addressing evidence, not visual or performance acceptance",
+  "scope": "Canonical local height reference for shared bounded material demand; capability-resolved quality-tier anisotropy and bounded elliptical regular-raster page selection. No physics, displacement, new texture source, cache budget or render pass.",
+  "hardware": "AMD Radeon 880M Graphics / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "cargo_environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"},
+  "policy": {
+    "surface_quality_low_medium_high": [1, 4, 16],
+    "unknown_or_unsupported": "1x with a fallback note; no vendor/OS inference",
+    "disabled_or_conforming": "1x, legacy datum demand, no additional source work",
+    "demand": "Canonical field height at eye direction, fixed 32 m wavelength; cached per selection epoch/pixel-angle invalidation. Shared by refinement distance, frustum and admission, not exact per-tile terrain or collision height.",
+    "filter": "max(minor singular value, major singular value / resolved anisotropy); old conservative footprint retained for coverage/globe transitions",
+    "budgets": "512 demand leaves and existing source/worker/GPU-layer limits unchanged",
+    "legacy_host": "Bevy reports anisotropy capability unknown: native sampler policy is not silently claimed there"
+  },
+  "oracles": {
+    "cpu": "Standing synthetic fixtures at -1000/0/+1000 m reach L22 within 512 leaves with exact area preservation; legacy datum fixture remains L17 away from datum. Cache invalidation and disabled behavior pinned.",
+    "gpu_metric": "864 cases, four channels: conservative and 1/4/16x metrics. Independent f64 finite-difference cube projection plus Gram eigenvalues; absolute error <=1e-6 m + 2e-6 * reference, unchanged tolerance.",
+    "gpu_raster": "Production regular raster, grazing eye: red ancestor and blue fine page. Isotropic selects red, 16x selects blue, both retain opaque terrain coverage. Not texture-fidelity or motion acceptance.",
+    "resolver": "Enabled/disabled, quality tiers, known/unknown/unsupported capability, conforming fallback, metadata and old serialized settings missing the new field"
+  },
+  "negative_attempts": [
+    {"log":"footprints-v2.log","failure":"Millimetre-scale squared cross products underflowed on the real GPU; normalized metric before computing its area, without weakening tolerance"},
+    {"log":"initial-clippy-verified.log","failure":"Legacy host capability literal missed the new field; explicit unknown capability added"},
+    {"failure":"Initial isolation capture script matched [shadows] inside a comment rather than a TOML section; assertion stopped before launching a capture. Replaced with anchored section parsing plus parsed-value assertions."}
+  ],
+  "checks": [
+    {"command":["cargo","fmt","--all","--","--check"],"exit":0},
+    {"command":["python3","tools/agent-qa/check_architecture.py"],"exit":0},
+    {"command":["cargo","clippy","--workspace","--all-targets","--all-features","--","-D","warnings"],"exit":0},
+    {"command":["cargo","test","--workspace","--lib","--bins"],"exit":0,"passed":2041},
+    {"command":["cargo","test","--workspace","--test","*"],"exit":0,"passed":103},
+    {"command":["cargo","test","-p","thessa-bevy-rcbt","--features","render","--lib","--","--ignored"],"exit":0,"passed":0,"note":"Retired command; not GPU coverage"},
+    {"command":["cargo","test","-p","thessa-render-wgpu","--","--ignored"],"exit":0,"passed":83},
+    {"command":["cargo","build","--release","-p","thessa-terrain-native"],"exit":0},
+    {"command":["cargo","check","-p","thessa-terrain-native","--no-default-features"],"exit":0},
+    {"command":["cargo","test","-p","thessa-terrain-native","--test","plant_ground_contact","fixed_l14_gpu_patch_plant_root_contact","--","--ignored"],"exit":0,"passed":1}
+  ],
+  "local_evidence": "target/surface-showcase/ground-filtering/checks.json and <name>.log; evidence-components.json includes per-log, per-source and frame SHA256s; capture-commands.json contains complete replay commands",
+  "captures": {
+    "before_binary": "target/surface-showcase/botanical-geometry/botanical-native-v2",
+    "before_binary_sha256": "c0ca6d9aa333cb41f6fd248057b0534b806c90b87511c08cea07f83239b17dc9",
+    "after_binary": "target/surface-showcase/ground-filtering/filter-native",
+    "after_binary_sha256": "d2db0ff00fc7c2a327cd3096267f96051417813268115d7ae8687616bf6c6adf",
+    "settings": "target/surface-showcase/ground-detail/v3-on-standing2.toml",
+    "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5",
+    "common_arguments": ["--survey-lat","23.565679258039204","--survey-lon","165.13881581863882","--sim-time","0","--sim-step","0","--prestream-seconds","60","--frames","32","--mute","--no-hud"],
+    "replay": "binary --graphics settings + common_arguments + --survey-distance 80 --survey-eye-agl 2|50 (overview: 1800/800) --headless output.png --perf-capture output.json; 1280x720, 30 warmup frames",
+    "controls": "Standing pair matches all native_survey_* metadata; all four captures retain 222 plant descriptors, three draws and 14784 upload bytes, with zero final height/material jobs and zero material misses",
+    "results": [
+      {"name":"before-standing2","png_sha256":"fd19d274f54011a07a203fec853ab02dd7ae03a45c3195e75d3ab3cc9aeb5f6f","gpu_median_ms":116.20368844708443,"finest_resident_level":21},
+      {"name":"after-standing2","png_sha256":"692d823cf223ff52592bb6748883b7aa77fb17008c366f074de2d51a50fd7ab8","gpu_median_ms":111.12389678001023,"reference_height_m":5.007671312155324,"resident_l22":8},
+      {"name":"after-close50","png_sha256":"b46dee88109ea34a1530acca4ab73d1e8b3c351105b407541e490d174a54b47b","gpu_median_ms":124.18751782176591,"reference_height_m":5.007671312148492,"finest_resident_level":18},
+      {"name":"after-overview","png_sha256":"a62fda5cf8d7b285d80c6d27398e675f1aa340428f5c07f8a0e4b00ce187a1dc","gpu_median_ms":80.15695921515083,"reference_height_m":9.189423749879307,"finest_resident_level":15}
+    ],
+    "cost_limit": "One fresh standing pair only; close/overview are candidate diagnostics, not fresh paired timings. Historical WORLD06f frames are separately preserved. No stable speedup claim.",
+    "visual_limit": "Foreground remains a flat optical proxy; distant horizontal banding, thin-leaf aliasing, coarse mesh shadows, sparse understory and incomplete shore composition remain. More resident texels are not visual acceptance.",
+    "blind_review": "One shuffled standing pair under review, separate key under private; zero votes",
+    "isolation_commands": "isolation-commands.json; parsed TOML changes exactly one setting each",
+    "isolation": [
+      {"name":"no-shadows","png_sha256":"da7c947a12c81580e7d4493c12c2de565ef090b57c012f68c57f5c902de3c8da","gpu_median_ms":100.9478421501961,"observation":"Horizontal ground bands remain, while trunk self-shadow stripes disappear"},
+      {"name":"no-normals","png_sha256":"1217fed2c3817b99ddd162b68a241a3f52629ff9b014bfa554add49539df0f45","gpu_median_ms":112.79976094267275,"observation":"Distant horizontal ground bands disappear, while coarse/trunk shadows remain; identifies normal-map response as a separate problem, not fixed by shadow resolution"}
+    ]
+  },
+  "remaining": ["Normal-map grazing banding", "Seam and moving-camera tests for anisotropic pages", "Near shadow allocation", "Ground volume and cover", "Independent blind review", "Bounded planetary streaming"]
+}

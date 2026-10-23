@@ -1531,7 +1531,7 @@ fn gpu_local_material_footprints_match_f64_across_pixel_scales() {
                 3_200_000.0,
                 12_800_000.0,
             ] {
-                for skew in [0.0, 0.75] {
+                for skew in [0.0, 0.75, 4.0, 16.0] {
                     let step = (footprint / radius) as f32;
                     let dx = [step, step * skew];
                     let dy = [-step * 0.25, step * 0.5];
@@ -1560,14 +1560,24 @@ fn gpu_local_material_footprints_match_f64_across_pixel_scales() {
                         let b = project(std::array::from_fn(|i| {
                             f64::from(uv[i]) + f64::from(d[i]) * 0.5
                         }));
-                        a.into_iter()
-                            .zip(b)
-                            .map(|(a, b)| (a - b).powi(2))
-                            .sum::<f64>()
-                            .sqrt()
-                            * radius
+                        std::array::from_fn::<_, 3, _>(|i| (b[i] - a[i]) * radius)
                     };
-                    expected.push(difference(dx).max(difference(dy)));
+                    let x = difference(dx);
+                    let y = difference(dy);
+                    let dot = |a: [f64; 3], b: [f64; 3]| {
+                        a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f64>()
+                    };
+                    let (a, b, c) = (dot(x, x), dot(x, y), dot(y, y));
+                    let discriminant = ((a - c).powi(2) + 4.0 * b * b).sqrt();
+                    let major = ((a + c + discriminant) * 0.5).max(0.0).sqrt();
+                    let minor = ((a + c - discriminant) * 0.5).max(0.0).sqrt();
+                    let conservative = a.max(c).sqrt();
+                    expected.push([
+                        conservative,
+                        conservative,
+                        minor.max(major / 4.0),
+                        minor.max(major / 16.0),
+                    ]);
                 }
             }
         }
@@ -1588,7 +1598,10 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
     let a = points[gid.x * 2u];
     let b = points[gid.x * 2u + 1u];
     let address = MaterialAddress(a.xy, 0u, vec2(0.0));
-    result[gid.x] = vec4(material_chart_footprint(address, a.zw, b.xy, 3200000.0), 0.0, 0.0, 0.0);
+    result[gid.x] = vec4(material_chart_footprint(address, a.zw, b.xy, 3200000.0),
+        material_chart_filter_footprint(address, a.zw, b.xy, 3200000.0, 1.0),
+        material_chart_filter_footprint(address, a.zw, b.xy, 3200000.0, 4.0),
+        material_chart_filter_footprint(address, a.zw, b.xy, 3200000.0, 16.0));
 }"#
     );
     let directory = gpu.buffer(&[0; 4], false);
@@ -1609,12 +1622,14 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
         .zip(expected)
         .enumerate()
     {
-        let actual = f64::from(f32::from_bits(actual[0]));
-        assert!(
-            (actual - expected).abs() <= 1e-6 + expected * 2e-6,
-            "footprint case {i}: {actual} vs {expected}"
-        );
-        assert!(actual <= 2.0 * radius * (1.0 + 1e-6));
+        for (channel, (&actual, expected)) in actual.iter().zip(expected).enumerate() {
+            let actual = f64::from(f32::from_bits(actual));
+            assert!(
+                (actual - expected).abs() <= 1e-6 + expected * 2e-6,
+                "footprint case {i}, channel {channel}: {actual} vs {expected}"
+            );
+            assert!(actual <= 2.0 * radius * (1.0 + 1e-6));
+        }
     }
 }
 

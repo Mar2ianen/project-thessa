@@ -110,6 +110,104 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
 }
 
 #[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
+fn grazing_anisotropic_raster_admits_fine_pages_without_changing_coverage() {
+    let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    if backend.caps.terrain_anisotropy_supported != Some(true) {
+        eprintln!("SKIP anisotropic sampler fixture: adapter explicitly lacks filtering support");
+        return;
+    }
+    let key = TileKey::new(4, 17, 65536, 65536).unwrap();
+    let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
+    let fine = TileKey::new(4, 21, key.x * 16 + 8, key.y * 16 + 8).unwrap();
+    let fine_anchor = TileAnchor::new(fine, 3_200_000.0).unwrap();
+    let center = DVec3::from(fine_anchor.project_body_m([0.5, 0.5], 0.0));
+    let normal = center.normalize();
+    let tangent = DVec3::Y.reject_from_normalized(normal).normalize();
+    let eye = center + (normal * 0.05 + tangent * (1.0_f64 - 0.05f64.powi(2)).sqrt()) * 2.0;
+    let view = ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, normal).inverse(),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.15, 1.0, 0.001, 1000.0),
+        world_position_m: eye,
+        exposure: 1.0,
+    };
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    let mut pages = thessa_rcbt_core::material_page::MaterialPages::new();
+    for level in 0..=21 {
+        let tile = TileKey::new(4, level, fine.x >> (21 - level), fine.y >> (21 - level)).unwrap();
+        let rgba = if level == 21 {
+            [0, 0, 255, 255]
+        } else {
+            [255, 0, 0, 255]
+        };
+        pages.insert(
+            thessa_rcbt_core::conforming_surface::page_id(tile).unwrap(),
+            (
+                1,
+                CbtMaterialPage::from_rgba8(rgba.repeat(128 * 128)).unwrap(),
+            ),
+        );
+    }
+    let fine_id = thessa_rcbt_core::conforming_surface::page_id(fine).unwrap();
+    for anisotropy in [1, 16] {
+        let settings = thessa_graphics::ResolvedGraphicsSettings {
+            terrain_ground_detail: true,
+            terrain_material_anisotropy: anisotropy,
+            terrain_normal_maps: false,
+            specular_reflections: false,
+            shadow_enabled: false,
+            ..Default::default()
+        };
+        let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor,
+                page: &height,
+            }],
+            OffscreenTarget::FORMAT,
+            thessa_render_wgpu::terrain::TerrainCapacity {
+                patches: 1,
+                material_layers: 32,
+                height_grid_size: 2,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        renderer
+            .update_materials(&backend, &[fine_id], &pages)
+            .unwrap();
+        renderer
+            .update_lighting(
+                &backend,
+                &SurfaceLighting {
+                    ambient_lux: [std::f32::consts::PI; 4],
+                    directions: [[0.0; 4]; 3],
+                    colors_lux: [[0.0; 4]; 3],
+                },
+            )
+            .unwrap();
+        renderer.update_view(&backend, &view).unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        renderer.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        let image = target.read_rgba8(&backend).unwrap();
+        let pixel = &image[(32 * 65 + 32) * 4..][..4];
+        if anisotropy == 1 {
+            assert!(
+                pixel[0] > 220 && pixel[2] < 10,
+                "coarse isotropic page: {pixel:?}"
+            );
+        } else {
+            assert!(
+                pixel[2] > 220 && pixel[0] < 10,
+                "fine anisotropic page: {pixel:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots() {
     let backend = match Backend::bring_up() {
         Ok(b) => b,

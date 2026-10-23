@@ -26,6 +26,33 @@ fn pending(
 }
 
 #[test]
+fn optical_height_reference_is_epoch_cached_and_disabled_keeps_the_datum() {
+    let field = crate::tests::field();
+    let mut stream = MaterialStream::with_detail(0, MaterialPageStore::default(), false, true, 22);
+    let mut input = demand(&[], 0);
+    stream.reconcile(&field, input, []);
+    let first = field.height_m(input.view.eye.normalize().to_array(), 32.0);
+    assert_eq!(stream.reference_height_m(), first);
+    input.view.eye = -input.view.eye;
+    stream.reconcile(&field, input, []);
+    assert_eq!(
+        stream.reference_height_m(),
+        first,
+        "no requery before selection/pixel-scale invalidation"
+    );
+    input.selection_epoch += 1;
+    stream.reconcile(&field, input, []);
+    assert_eq!(
+        stream.reference_height_m(),
+        field.height_m(input.view.eye.normalize().to_array(), 32.0)
+    );
+    let mut disabled = MaterialStream::new(0);
+    disabled.reconcile(&field, input, []);
+    assert_eq!(disabled.reference_height_m(), 0.0);
+    assert_eq!(stream.pending_count(), 0);
+}
+
+#[test]
 fn job_budget_defers_to_heights_and_deduplicates_shared_ancestors() {
     let mut stream = MaterialStream::new(32);
     let roots: Vec<_> = (0..6).map(TileKey::root).collect();

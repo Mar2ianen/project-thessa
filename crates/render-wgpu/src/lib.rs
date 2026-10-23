@@ -448,6 +448,12 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        terrain_anisotropy_supported: Some(
+            adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::ANISOTROPIC_FILTERING),
+        ),
         material_compact_supported: None, // Host support is not an adapter property.
         terrain_conforming_supported: Some(
             limits.max_storage_buffers_per_shader_stage >= 8

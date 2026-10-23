@@ -207,10 +207,24 @@ pub fn material_view_selection_with_limit(
     pixel_angle: f64,
     max_level: u8,
 ) -> Vec<TileKey> {
+    material_view_selection_at_height(base, view, pixel_angle, max_level, 0.0)
+}
+
+/// Optical-detail distance reference only. The caller obtains the local
+/// elevation from the same canonical field used by geometry selection; this
+/// does not move geometry or change the body datum/texel metric.
+pub(crate) fn material_view_selection_at_height(
+    base: &[TileKey],
+    view: SelectionView,
+    pixel_angle: f64,
+    max_level: u8,
+    reference_height_m: f64,
+) -> Vec<TileKey> {
     let max_level = max_level.clamp(17, 22);
+    let surface_radius = view.radius + reference_height_m;
     let mut cover: BTreeSet<_> = base.iter().copied().collect();
     let error = |key: TileKey| {
-        let center = DVec3::from(key.direction(0.5, 0.5)) * view.radius;
+        let center = DVec3::from(key.direction(0.5, 0.5)) * surface_radius;
         let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
         key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
     };
@@ -221,7 +235,7 @@ pub fn material_view_selection_with_limit(
         let Some(frustum) = &view.frustum else {
             return true;
         };
-        let delta = DVec3::from(key.direction(0.5, 0.5)) * view.radius - view.eye;
+        let delta = DVec3::from(key.direction(0.5, 0.5)) * surface_radius - view.eye;
         let distance = delta.length();
         if distance <= 0.0 {
             return true;
@@ -252,13 +266,22 @@ pub fn material_demand(
     keys: impl IntoIterator<Item = TileKey>,
     view: SelectionView,
 ) -> Vec<TileKey> {
+    material_demand_at_height(keys, view, 0.0)
+}
+
+pub(crate) fn material_demand_at_height(
+    keys: impl IntoIterator<Item = TileKey>,
+    view: SelectionView,
+    reference_height_m: f64,
+) -> Vec<TileKey> {
     let mut wanted: Vec<_> = keys
         .into_iter()
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
     wanted.sort_by_cached_key(|key| {
-        let delta = DVec3::from(key.direction(0.5, 0.5)) * view.radius - view.eye;
+        let delta =
+            DVec3::from(key.direction(0.5, 0.5)) * (view.radius + reference_height_m) - view.eye;
         (
             delta.normalize_or_zero().dot(view.forward) < -0.15,
             delta.length_squared().to_bits(),

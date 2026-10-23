@@ -122,7 +122,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: true,
-            description: "Body-fixed CC0 soil/gravel optical proxy through existing material pages. Surface quality limits refinement to L20/L21/L22; conforming topology falls back to legacy materials. Disabled retains L17 and skips swatch decoding/sampling. Restart required.",
+            description: "Body-fixed CC0 soil/gravel optical proxy through existing material pages. Surface quality bounds refinement at L20/L21/L22 and sampler anisotropy at 1/4/16 when supported; automatic isotropic fallback otherwise. Conforming topology falls back to legacy materials. Disabled retains L17 and skips swatch work. Restart required.",
         },
         SettingMeta {
             path: "renderer.shadow_memory_mib",

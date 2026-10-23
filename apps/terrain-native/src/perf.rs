@@ -164,6 +164,8 @@ pub(crate) fn base_capture_metadata(
         .extend(scene.surface_plants_metadata());
     for (key, value) in [
         ("native_material_resident_levels", format!("{:?}", scene.material_resident_levels)),
+        ("native_material_reference_height_m", scene.stream.material_reference_height_m().to_string()),
+        ("native_material_reference_height_source", "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height".into()),
         ("native_docking_fixture", scene.docking.is_some().to_string()),
         ("native_docking_clock", "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory".into()),
         ("native_map_open", scene.map_active().to_string()),

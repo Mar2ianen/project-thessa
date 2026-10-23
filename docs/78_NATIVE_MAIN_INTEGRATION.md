@@ -1,13 +1,14 @@
 # 78 — Native replacement and main integration readiness
 
-**Status:** preparation in progress; not replacement or visual acceptance.
+**Status:** default-off native capability integrated into main on 2026-10-23;
+replacement and visual acceptance remain open.
 
-The surface branch now incorporates `origin/main` through `d2bb846` without
-rewriting history. The incoming commit only installs the Ponytail workflow and
-updates agent instructions; there are no competing product changes at this
-checkpoint. Further work stays on `feat/native-surface-showcase` until the
-following gates have evidence. Main integration and deleting the old host are
-separate decisions: a green opt-in renderer is not full client replacement.
+The surface candidate incorporated `origin/main` through `d2bb846` without
+rewriting history, passed the local gates below and was promoted to main as
+`99a1462`. The incoming main commit only installed the Ponytail workflow and
+updated agent instructions; it introduced no competing product changes at that
+checkpoint. Main integration and deleting the old host remain separate
+decisions: the merged opt-in capability is not full client replacement.
 
 At the preparation checkpoint `e23467c`, main is an ancestor and the committed
 topic adds 106 commits affecting 476 paths. The delta includes shared authority,
@@ -27,7 +28,7 @@ conflict-free Git merge is not sufficient evidence for changing launch defaults.
 | Movement and surface-to-orbit | existing survey/headless capture and bounded terrain streamer; frozen simulation camera sweep, repeated window crossings, mode changes, coarse fallback and return to exact identities | static frames alone do not close this gate; no whole-planet high-detail instantiation |
 | Temporal reconstruction | temporal commits through `f931a8f` merged as `c1ecf0e`; opt-in scene history now uses the shared resolve in both native loops, with submitted-only advancement and publication resets | T4c lifecycle integration is partial; composed depth, full cut/reset coverage and real-scene ghosting/visual acceptance remain open; no SDK/FG or foliage-history claim |
 | Host replacement | doc 66 source-to-consumer ledger and doc 39; account for launchers, controls, maps, server, audio, fixtures, settings and supported fallbacks | do not remove Bevy, old assets/tests or entry points before the ledger closes; do not label unavailable settings as applied |
-| Main promotion | latest-main ancestry, scope review, full gates on exact integration candidate, immutable capture hashes, honest README/status/launch defaults | main unchanged by this preparation; no force push or destructive branch replacement |
+| Main promotion | latest-main ancestry, scope review, full gates on exact integration candidate, immutable capture hashes, honest README/status/launch defaults | completed as `99a1462` after the T4c gates and documentation-only evidence commit; history preserved and defaults retained |
 
 Temporal reconciliation: committed history through `f931a8f` is now merged,
 preserving both terrain anisotropy and temporal alpha-mask shader generation.
@@ -137,3 +138,29 @@ Evidence:
 Raw captures, gate logs and blind review files remain local under
 `target/surface-showcase/temporal-history/`; the tracked artifact records their
 hashes, commands, settings, counts and limitations.
+
+## Main promotion record — 2026-10-23
+
+- Fetched origin immediately before promotion; remote main remained `d2bb846`,
+  an ancestor of implementation `95a3888` and evidence candidate `99a1462`.
+- Verified a clean candidate, local-main ancestry and that main was not checked
+  out in another worktree. Preserved identity Mar2ianen /
+  `92949303+Mar2ianen@users.noreply.github.com` and all existing commit authors.
+- Pushed `feat/native-surface-showcase` from `305e373` to `99a1462`, then
+  fast-forwarded local main and pushed remote main from `d2bb846` to `99a1462`.
+  Both pushes succeeded without force; `git ls-remote --heads origin` confirmed
+  the two remote refs at `99a146200bf2c49bfbca6308acef640e332753c3`.
+- The evidence candidate changes only README/docs relative to the tested
+  implementation. All 645 compiled/configuration input hashes and the certified
+  release hash were rechecked, together with all nine image/capture/settings
+  identities, 13 gate log hashes/counts and the three eligible blind cases.
+  The architecture guard and `git diff --check` passed again. The full cargo
+  suite was not repeated for documentation-only changes; no remote-CI outcome
+  is claimed. This promotion-record follow-up also changes documentation only.
+- Ground detail, understory and TAA remain default-off. Launch defaults and the
+  old host are retained. The five separate temporal-worktree drafts still match
+  their recorded hashes and were neither edited nor staged.
+
+The remaining sequential visual, transport, streaming, temporal and host
+obligations above are unchanged by this promotion. Blind preference remains
+unreviewed; orbit remains ineligible because residency differs.

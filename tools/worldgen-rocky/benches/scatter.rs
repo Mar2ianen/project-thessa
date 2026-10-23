@@ -25,6 +25,56 @@ fn site(dir: [f64; 3]) -> ScatterSurface {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--prototypes") {
+        let prototypes = thessa_worldgen_rocky::offline::plant_prototypes();
+        let counts: Vec<_> = prototypes
+            .iter()
+            .map(|p| {
+                use thessa_worldgen_rocky::lod::{cross, dot, sub};
+                let foliage_area_m2: f64 = p
+                    .indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .filter(|tri| {
+                        p.stem
+                            .as_ref()
+                            .is_none_or(|stem| tri[0] >= stem.vertex_count)
+                    })
+                    .map(|tri| {
+                        let [a, b, c] = tri.map(|i| p.positions[i as usize].map(f64::from));
+                        let n = cross(sub(b, a), sub(c, a));
+                        dot(n, n).sqrt() * 0.5
+                    })
+                    .sum();
+                serde_json::json!({
+                    "kind": format!("{:?}", p.kind), "vertices": p.positions.len(),
+                    "triangles": p.indices.len() / 3,
+                    "producer_payload_bytes": p.positions.len() * 24 + p.indices.len() * 4,
+                    "foliage_area_m2": foliage_area_m2,
+                })
+            })
+            .collect();
+        for _ in 0..32 {
+            black_box(thessa_worldgen_rocky::offline::plant_prototypes());
+        }
+        let mut times = Vec::new();
+        for _ in 0..1024 {
+            let start = Instant::now();
+            black_box(thessa_worldgen_rocky::offline::plant_prototypes());
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        times.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            serde_json::json!({
+                "workload": "1024 serial complete three-kind prototype builds after 32 warmups",
+                "prototypes": counts, "p50_ms": times[512], "p95_ms": times[972],
+                "max_ms": times[1023], "not_frame_time_or_placement": true,
+            })
+        );
+        return;
+    }
     println!("scenario,population,density_scale,candidates,surface_samples,items,p50_ms,p95_ms");
     for (name, tile) in [
         (

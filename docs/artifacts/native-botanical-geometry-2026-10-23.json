@@ -1,0 +1,88 @@
+{
+  "stage": "WORLD06f",
+  "date": "2026-10-23",
+  "branch": "feat/native-surface-showcase",
+  "baseline": "479d831acc5100a413a0d31628ff364ff63114b3",
+  "status": "Opt-in prototype iteration; no independent visual or performance acceptance",
+  "scope": "Shared prototype geometry and normals only. No scatter IDs, canonical roots, scales/yaws, materials, quality density tiers, simulation, collisions or grouped draw count changed.",
+  "hardware": "AMD Radeon 880M / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "cargo_environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"},
+  "source_sha256": {
+    "tools/worldgen-rocky/src/offline.rs": "07489091d43c7a77a01780e553db6fc9e342b504f8f3994599818e3857e658ec",
+    "tools/worldgen-rocky/benches/scatter.rs": "2df843455de61922587fce808e0992d68629cc332eb9ca7a5cca935331987f8f",
+    "apps/terrain-native/src/surface_plants.rs": "dbf595c2fd7dca4fb22ec63d3efbe41dd217c1ae66ad29eedf2293b0a9c175c1"
+  },
+  "geometry": {
+    "triangles_before_after": [632, 4284],
+    "native_static_payload_bytes_before_after": [68256, 462672],
+    "source_vertex_limit": 8192,
+    "fern": {"triangles": 1716, "vertices": 5148, "one_sided_area_m2": 0.9289757879664408},
+    "reed": {"triangles": 144, "vertices": 432, "one_sided_area_m2": 1.8900226249866896},
+    "tree": {"triangles": 2424, "vertices": 7272, "foliage_area_m2": 23.892373729204348, "terminals": 4, "leaves_per_terminal": 56},
+    "limitations": "Authored optical geometry, not calibrated botany. Intersecting branches, no watertight union, transmission, mesh LOD, wind, bark or collision. Quality still thins instance density. Historical frozen prototypes are not rebaked."
+  },
+  "oracles": {
+    "cone_normal_vector_error": 2e-7,
+    "cone_chord_inset_fixture_m": 0.008,
+    "rotated_translated_position_error_m": 1e-6,
+    "rotated_translated_normal_vector_error": 3e-6,
+    "area_bounds": "Tree foliage 20..30 m²; nondegenerate triangle area >1e-6 m² for new leaves/twigs, >1e-4 m² for unchanged reeds",
+    "fern_gap": "Independent projected triangle hits on pinna and rachis, miss in their neighboring air gap",
+    "adapter": "Positions/normals/indices preserved; organ UV ownership, deterministic descriptors, nested quality subsets and disabled zero work retained",
+    "root_limit": "Fixed L14 GPU patch diagnostic passed; not an actual streamed-resident root-contact guarantee"
+  },
+  "checks": [
+    {"name":"fmt-verified","command":["cargo","fmt","--all","--","--check"],"exit":0,"passed":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+    {"name":"architecture-verified","command":["python3","tools/agent-qa/check_architecture.py"],"exit":0,"passed":0,"sha256":"f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"},
+    {"name":"clippy-verified","command":["cargo","clippy","--workspace","--all-targets","--all-features","--","-D","warnings"],"exit":0,"passed":0,"sha256":"e688dc554260a3b20fb86bf68c714e80fbb92f8581f933be42c891a96244858f"},
+    {"name":"unit-verified","command":["cargo","test","--workspace","--lib","--bins"],"exit":0,"passed":2038,"sha256":"65b5d7039ad059df2f6efffeb5ab1aa99bf6a8464b7e69b39aaea92d57d91536"},
+    {"name":"integration-verified","command":["cargo","test","--workspace","--test","*"],"exit":0,"passed":103,"sha256":"b99a66b6f1b39eec79959044c3e55b7ee67591f24a261731afb55f4400a4c296"},
+    {"name":"renderer-hardware-verified","command":["cargo","test","-p","thessa-render-wgpu","--","--ignored"],"exit":0,"passed":82,"sha256":"6ab0993de00ed62a7a337627301c18d64936fbf901d4ef23f8e4749f52972b49"},
+    {"name":"bevy-hardware-verified","command":["cargo","test","-p","thessa-bevy-rcbt","--features","render","--lib","--","--ignored"],"exit":0,"passed":0,"note":"Migrated command selects zero tests; not hardware coverage","sha256":"e1fe3e328a0ab3b7f87face5fd3269619ae9d917d80397dcae9cf31725ccdca2"},
+    {"name":"plant-lifecycle-verified","command":["cargo","test","-p","thessa-terrain-native","--bin","thessa-terrain-native","survey_plants_retain_body_fixed_descriptors","--","--ignored"],"exit":0,"passed":1,"sha256":"6b0784af5bf632ba764638d62fabdf35af2bc587797e0cae80c75f3efbd94248"},
+    {"name":"plant-root-verified","command":["cargo","test","-p","thessa-terrain-native","--test","plant_ground_contact","fixed_l14_gpu_patch_plant_root_contact","--","--ignored"],"exit":0,"passed":1,"sha256":"61c2d71e3f2759364b081c49c22e6cabcf7b361ea8be0ee8865fc561505f1939"},
+    {"name":"feature-off-verified","command":["cargo","check","-p","thessa-terrain-native","--no-default-features"],"exit":0,"passed":0,"sha256":"14e8867d289bb80d2d8f443c70421134356d46eb74f8f079db3febaef613a202"},
+    {"name":"build-verified","command":["cargo","build","--release","-p","thessa-terrain-native"],"exit":0,"passed":0,"sha256":"0778b082419db86f3315469bf58a09cf0d0647086d07073bbbe766f2d379492f"}
+  ],
+  "check_logs": "target/surface-showcase/botanical-geometry/<name>.log; complete command records in checks-v2.json",
+  "negative_evidence": {
+    "initial_validator_failure": "prototypes-tests.log; 4096-vertex validator rejected the new mesh. Validator/tests were explicitly enlarged and bounded, not bypassed.",
+    "sparse_crown": "after-standing2.png and after-close50.png; exploratory-commands.json; 28 leaves per terminal, 0.58..0.88 m blades disappeared at 50 m. Not retained.",
+    "sparse_binary": "target/surface-showcase/botanical-geometry/botanical-native"
+  },
+  "captures": {
+    "directory": "target/surface-showcase/botanical-geometry",
+    "commands": "capture-commands-v2.json",
+    "before_binary": "target/surface-showcase/ground-detail/ground-native-v3",
+    "before_binary_sha256": "60f5058613816215d494db7ca7c8993ad617cbe5762101a70e7c762b68ade4db",
+    "after_binary": "target/surface-showcase/botanical-geometry/botanical-native-v2",
+    "after_binary_sha256": "c0ca6d9aa333cb41f6fd248057b0534b806c90b87511c08cea07f83239b17dc9",
+    "settings": "target/surface-showcase/ground-detail/v3-on-standing2.toml",
+    "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5",
+    "common_arguments": ["--survey-lat","23.565679258039204","--survey-lon","165.13881581863882","--sim-time","0","--sim-step","0","--prestream-seconds","60","--frames","32","--mute","--no-hud"],
+    "replay": "binary --graphics settings + common_arguments + --survey-distance 80 --survey-eye-agl 2|50 (overview: 1800/800) --headless output.png --perf-capture output.json; 1280x720, 30 warmup frames",
+    "stationary_controls": "All native_survey_* camera/source fields match exactly per pair; 222 descriptors, 3 draws, 14784 frame-upload bytes before/after; final height/material jobs and material misses zero",
+    "results": [
+      {"name":"v2-before-standing2","png_sha256":"f6fd24f5ac4aac8f5ab6cbded259f8ad4ea2a273973394f1ae6b9000a8d74509","gpu_median_ms":99.24837814754534},
+      {"name":"v2-after-standing2","png_sha256":"9e0f689e676fafbb80ff8d25c4b60bd5dc258fbd64578a7606efdb2c8317e462","gpu_median_ms":111.60953449768783},
+      {"name":"v2-before-close50","png_sha256":"dbaed5c2af4f9b04d5bd70d15f8ab32fc1c3bb7903548a31a301d5c9d65a8069","gpu_median_ms":95.59085881552076},
+      {"name":"v2-after-close50","png_sha256":"69790559f2244427956a7d72a961c52c9dfdc2fb4369f12bee0bb4e76b528362","gpu_median_ms":124.5316316422863},
+      {"name":"v2-before-overview","png_sha256":"62cc25bd199c1fc2e4fafd1efce461f509671673b13e24226bd6bef07e02e7b2","gpu_median_ms":76.50919842447567},
+      {"name":"v2-after-overview","png_sha256":"20b6a0874fa3bd0fd65b037b7a87ab782b40d93cca2bbdf5800a8c3c8b610dab","gpu_median_ms":78.09626386847306},
+      {"name":"v2-after-low-close50","png_sha256":"a2cf24fdb7e3ee10cbbf262f3c94b2fd635812a392c1f0ce5213670a109919d0","gpu_median_ms":86.6559473731327,"plants":52,"frame_upload_bytes":3904},
+      {"name":"v2-after-sweep-standing2","png_sha256":"a12cd695016c37881461e0c9c8a722dcdf4ffa97f83c54ba1be1e58811f40519","gpu_median_ms":127.7127758556862,"frames":64,"sweep_rad_per_frame":0.006,"height_jobs_final":4}
+    ],
+    "cost_limit": "Serial runs after builds/tests, AB/BA order differs by view but only one pair each. Close cost increases are visible, not a speedup or stable accepted budget. No overlapping build/GPU job in final captures.",
+    "motion_limit": "Sweep endpoint/telemetry only, not a recorded sequence, pixel-stability oracle or temporal acceptance; four height jobs remain at endpoint",
+    "blind": "Three shuffled pairs under review-v2; answer keys separate under private-v2; zero votes"
+  },
+  "producer_benchmark": {
+    "command": ["cargo","bench","-p","thessa-worldgen-rocky","--bench","scatter","--","--prototypes"],
+    "logs": ["producer-before.log","producer-after-v2.log"],
+    "workload": "1024 serial complete three-kind builds after 32 warmups; baseline is parent geometry plus the same timing harness",
+    "p50_ms_before_after": [0.019447,0.168944],
+    "p95_ms_before_after": [0.02135,0.187249],
+    "limit": "Source production only, not scatter, upload, RT build, frame time or statistically accepted performance"
+  },
+  "remaining": ["Leaf aliasing and missing transmission", "Mesh LOD and close-view cost", "Ground blur/volume", "Empty understory and bounded vegetation window", "Coarse shore/shadows", "Moving-camera and independent visual acceptance", "Bounded planetary streaming"]
+}

@@ -5,13 +5,15 @@
 prototypes, per-kind albedo and a second matched capture/blind-review stage are
 recorded on `feat/native-plant-prototypes` (WORLD05). This is neither planet-wide
 vegetation streaming nor botanical realism, authoritative collision, or final
-close-up visual acceptance. The current prototypes remain deliberately schematic
-flat-shaded meshes; visible limits are recorded at the end of this document.
+close-up visual acceptance. The current prototypes remain deliberately authored
+meshes; the WORLD06f continuation below adds separate fern pinnae, forked crowns
+and smooth stem normals without turning them into botanical reconstructions.
 
 The surface-showcase continuation in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
 adds explicit lycopsid stem reflectance through the existing mesh material,
-without changing these silhouettes or placement. Foliage, botanical realism and
-ground detail remain incomplete.
+without changing placement. Its later WORLD06f stage changes silhouettes through
+the same prototype producer and material path. Botanical realism and final
+surface composition remain incomplete.
 
 ## Requested and resolved contract
 
@@ -113,18 +115,17 @@ memory and terrain admission checks; preflight alone is not a claim of active RT
 
 ### Representation limits
 
-The survey prototypes are hand-built schematic meshes, not botanical assets or
-photogrammetry. The WORLD05 geometry pass replaces the original eight-spoke fern,
-five-stem reed and umbrella-crown tree with grounded, arching foliage. Fern
-fronds now begin at local Y = 0; the adapter still applies no vertical offset and
-does **not** lower roots to hide geometry. Reeds use ten vertical tapered blades
-plus a six-blade basal tussock. The lycopsid uses a ten-sided tapered trunk with
-four stub forks and 24 arching fronds in three whorls. All three remain unindexed
-flat-shaded triangle soups using the existing double-sided material; there is no
-foliage transmission, LOD, wind, growth, per-kind shader or collision ownership.
-The trunk is visibly faceted at 2 m, crown undersides stay dark, thin fronds can
-alias into dark speckle at 50 m, and the fork stubs are near-vertical rather than
-spreading branches. Stems have no terrain-conforming footprint. Canonical 32 m
+The survey prototypes are authored meshes, not botanical reconstructions or
+photogrammetry. WORLD05 grounded the arching foliage; WORLD06f adds nine paired
+pinnae along each fern rachis and replaces the tree's stub forks/whorls with two
+ascending forks, four leafy terminals and smooth cone normals. Fern fronds still
+begin at local Y = 0; the adapter applies no vertical offset and does **not** lower
+roots to hide geometry. Reeds retain ten vertical tapered blades plus a six-blade
+basal tussock. All three remain split-vertex indexed triangle lists using the
+existing double-sided material; there is no foliage transmission, mesh LOD, wind,
+growth, per-kind shader or collision ownership. Thin blades can alias or disappear
+at a distance, undersides have no transmitted light, and smooth normals do not
+remove the stem's polygonal silhouette. Stems have no terrain-conforming footprint. Canonical 32 m
 root height need not equal the current interpolated resident triangle (which may
 use a different wavelength/representation).
 
@@ -231,9 +232,9 @@ At WORLD00 `(1,L14,6018,11888)` with the unchanged canonical attachment:
 | Medium | 4096 | 134 | 98 | 15984 | 6272 |
 | High | 4096 | 298 | 222 | 15984 | 14208 |
 
-Those WORLD04 rows predate the WORLD05 geometry pass. Current prototype payload
-is 68,256 B at every quality; the retained counts, rigid-instance bytes and
-per-frame upload bytes are unchanged (see WORLD05 below).
+Those WORLD04 rows predate the WORLD05 geometry pass (68,256 B). WORLD06f raises
+the current prototype payload to 462,672 B at every quality; the retained counts,
+rigid-instance bytes and per-frame upload bytes are unchanged (see below).
 
 An initial unoptimized diagnostic observed preparation at approximately
 1.77/3.05/6.41 ms respectively. These single CPU test observations are not a
@@ -391,6 +392,86 @@ No allocation/RSS/VRAM high-water, frame-budget or platform acceptance is claime
 
 Exact hashes, commands, camera arguments, votes and limitations are recorded in
 [`artifacts/native-plant-prototypes-2026-10-21.json`](artifacts/native-plant-prototypes-2026-10-21.json).
+
+## WORLD06f — Pinnate ferns and forked crowns
+
+This continuation changes only the shared `offline::plant_prototypes` source,
+its bounded validation/tests and a CPU benchmark. The native adapter still
+forwards positions, normals and indices unchanged; a regression assertion now
+checks the normals explicitly. Historical frozen bakes are not rewritten and
+retain their stored prototypes. There is no new setting, material/texture,
+render pass or camera-specific asset: the existing requested/resolved
+`surface_plants` disabled/Low/Medium/High density policy owns this representation.
+Disabled and withheld contexts still return before any prototype production.
+
+Ferns have 13 arching rachises, each with nine opposed pairs of narrow pinnae.
+The spaces between pinnae are actual geometric gaps, not painted black or alpha
+discard, and enter existing raster, shadows and optional RT identically. The
+lycopsid proxy branches twice into four terminals, each with 56 individually
+arching leaves on three short internodes. These dimensions are authored optical
+geometry, not a plant growth model or a taxonomic reconstruction. Stem branches
+intersect rather than forming a watertight boolean union; terminal caps close
+their visible ends. No physics/collision/biomass state is implied.
+
+The main stem uses 16 sides, forks 12 and terminal shoots 8. Analytic cone-side
+normals smooth only the circumference; ring slope changes keep their creases
+and terminal caps keep separate planar normals. The existing shared mesh/RT
+normal path consumes them, not a foliage-only lighting multiplier.
+
+| Kind | Previous → new triangles | New split vertices | Native vertex/index payload B |
+| --- | --- | --- | --- |
+| Fern clump | 156 → 1,716 | 5,148 | 185,328 |
+| Reed clump | 144 → 144 | 432 | 15,552 |
+| Lycopsid | 332 → 2,424 | 7,272 | 261,792 |
+| **All three** | **632 → 4,284** | **12,852** | **462,672** |
+
+The source validator's per-prototype ceiling rises from 4,096 to 8,192 vertices
+to accommodate real pinnae. A regression rejects over-budget data. This is not
+a larger scatter window or instance ceiling. Producer position/normal/index
+payload grows from 53,088 to 359,856 B; native payload includes the existing UV
+fields. Materials, the 8-byte stem/foliage palette, grouped draw count and
+64-byte rigid-instance ABI do not change. More submitted triangles, shared
+shadow work and RT geometry are a real cost, not a performance win.
+
+Tests retain root/extents/determinism, organ ownership, nondegenerate triangles
+and upward/outward winding. The tree's authored one-sided foliage area is pinned
+between 20 and 30 m²; its maximum horizontal reach is bounded at 3.4 m (the old
+2.6 m bound no longer describes its larger crown). The area floor is 1e-6 m² for new pinnae/twig caps
+and the unchanged 1e-4 m² for reeds. Leaf normals must still match their winding;
+stem normals must agree with outward face normals (dot > 0.90). A cone fixture
+pins analytic normals within 2e-7 Euclidean vector error and chord inset below
+8 mm for its 0.4 m base/16 sides. Rigidly rotated/translated copies agree within
+1 micrometre in position and 3e-6 in unit-normal vector. These are optical fixture
+envelopes, not contact or canopy-lighting guarantees. An independent projected
+triangle test hits a fern pinna and rachis but misses the adjacent air gap.
+
+The initial 28-leaf terminal experiment had only 3,388 total prototype triangles.
+Its 0.58–0.88 m leaves disappeared into dots at 50 m: more triangle detail alone
+did not provide a readable crown. Those exploratory frames remain under
+`target/surface-showcase/botanical-geometry/after-{standing2,close50}.png`; this
+version was not retained. The replacement uses 1.05–1.45 m leaves with more real
+surface area, not an alpha dilation or lighting multiplier. The serial
+`scatter --prototypes` benchmark measures 1,024 complete three-kind builds after
+32 warmups; it is not scatter, upload, RT build, frame time or stable performance
+acceptance. No claim of botanical/visual acceptance follows from tests or counts.
+
+The final producer benchmark measured 0.019447/0.168944 ms median and
+0.021350/0.187249 ms p95 before/after. Final serial full-scene GPU medians were
+99.248/111.610 ms standing, 95.591/124.532 ms close and 76.509/78.096 ms overview.
+These increases are not performance acceptance; the more detailed source needs
+distance-aware representation work. Low close retained 52 descriptors and
+measured 86.656 ms. Static High retains 222 descriptors, three draws and 14,784
+frame-upload bytes, with no pending height/material jobs or material misses.
+The 64-frame orbit sweep retained the same population but ended with four height
+jobs: one endpoint and telemetry do not establish motion/temporal acceptance.
+
+Formatting, architecture, workspace Clippy, 2,038 lib/bin tests, 103 integration
+tests, 82 renderer hardware tests, the focused native plant lifecycle and fixed
+L14 contact diagnostics, feature-off check and release build passed locally.
+The mandated retired Bevy command selected zero tests. Three blind pairs are
+prepared with separate keys and zero votes. Commands, hashes, negative attempts
+and limits are in
+[`native-botanical-geometry-2026-10-23.json`](artifacts/native-botanical-geometry-2026-10-23.json).
 
 ### WORLD05 combined local verification
 

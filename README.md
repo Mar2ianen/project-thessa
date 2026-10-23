@@ -153,8 +153,9 @@ The checked-in vertical slice currently contains:
      coarse demand ([surface-first work](docs/77_NATIVE_SURFACE_SHOWCASE.md));
      natural substrate detail, vegetation and final close-up
      terrain acceptance remain incomplete.
-     The bounded survey plants now distinguish lycopsid stems and foliage through
-     the shared mesh material, with unchanged geometry and draw count (doc 77).
+      The bounded survey plants distinguish stems and foliage through the shared
+      mesh material; pinnate fern geometry and forked crowns use smooth stem
+      normals without extra draws (docs 75/77). Visual acceptance remains open.
      Regular-patch material sampling preserves local chart precision; the tested
       forest-floor colour-noise prototype was rejected, not shipped (doc 77).
       A distinct default-off CC0 soil/gravel experiment can refine regular-patch

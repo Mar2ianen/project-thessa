@@ -45,7 +45,7 @@ owner may inspect frames for defects but cannot self-certify visual acceptance.
 Performance requires same-workload measurements on the Radeon 880M/RADV baseline;
 neither increased detail nor a different cloud/RT setting is a speedup result.
 
-Current evidence remains WORLD05's
+Starting evidence was WORLD05's
 [`native-plant-prototypes-2026-10-21.json`](artifacts/native-plant-prototypes-2026-10-21.json).
 Its frames demonstrate prototype geometry, not the requested final visual quality.
 
@@ -343,3 +343,47 @@ plants are schematic and the shore is coarse. No convincing-zone or planetary
 visual delivery is claimed. Commands, hashes, numerical bounds, failed attempts
 and limitations are recorded in
 [`native-ground-detail-2026-10-23.json`](artifacts/native-ground-detail-2026-10-23.json).
+
+## WORLD06f — Botanical geometry continuation (not visually accepted)
+
+The same shared `offline::plant_prototypes` producer now emits fern pinnae as
+separate leaf geometry and lycopsid crowns on two successive fork levels. The
+tree has four terminals with 56 leaves each, smooth cone-side stem normals and
+closed terminal ends. No scatter, canonical root, yaw/scale, density policy,
+optical material, grouped draw, shadow pass, simulation or collision state is
+changed. Historical frozen prototypes are not rebaked. See
+[doc 75](75_NATIVE_SURFACE_PLANTS.md#world06f--pinnate-ferns-and-forked-crowns)
+for dimensions, bounded payload, geometric/error oracles and remaining limits.
+
+The first forked-crown attempt used 28 leaves per terminal, only 0.58–0.88 m
+long. Its narrow blades collapsed into dots at the matched 50 m camera; the
+more detailed branching did not compensate for sparse projected leaf area.
+That attempt is retained as negative evidence, not shipped as the solution.
+The replacement has 1.05–1.45 m leaves, with authored one-sided foliage area
+20–30 m² pinned by a geometric regression. These are actual leaves entering the
+existing primary/shadow/ray mesh paths, not opaque canopy cards, fake ambient
+brightening or camera-facing geometry. This is still an authored alien-tree
+proxy, not a fossil reconstruction or validated growth/leaf-transport model.
+
+Total prototype triangles increase from 632 to 4,284; native static vertex/index
+payload grows from 68,256 to 462,672 B. Per-prototype source validation is bounded
+at 8,192 vertices. The existing default-off plant setting and Low/Medium/High
+nested density subsets remain the disabled/cheaper fallbacks. More source and
+submitted/shadow/RT triangles are deliberate costs and must not be called a
+speedup. No new textures, render passes or material-specific shader are added.
+
+The final 2/50/800 m matched captures retain exactly the same survey/source
+metadata, 222 descriptors, three draws and 14,784 frame-upload bytes, with drained
+stationary streams. Whole-client GPU medians increase from 99.248 to 111.610 ms,
+95.591 to 124.532 ms and 76.509 to 78.096 ms respectively. These are single serial
+pairs, not accepted performance; distant dense foliage still needs mesh LOD.
+The crown is readable in the candidate, but thin leaves alias, shadows show a
+coarse grid, understory is sparse and the ground/shore remain unconvincing. A
+64-frame orbit sweep records an endpoint and telemetry only, not a motion review.
+Three independent-review pairs are prepared; zero votes, no visual acceptance.
+
+All required local code gates passed, including 2,038 unit/bin tests, 103
+integration tests, 82 renderer hardware tests and two focused native plant GPU
+diagnostics. Exact commands, source/binary/frame hashes, cost, failed attempts
+and omissions:
+[`native-botanical-geometry-2026-10-23.json`](artifacts/native-botanical-geometry-2026-10-23.json).

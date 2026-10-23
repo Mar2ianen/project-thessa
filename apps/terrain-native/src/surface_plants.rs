@@ -446,6 +446,14 @@ mod tests {
                     prototype.positions
                 );
                 assert_eq!(primitive.indices, prototype.indices);
+                assert_eq!(
+                    primitive
+                        .vertices
+                        .iter()
+                        .map(|v| v.normal)
+                        .collect::<Vec<_>>(),
+                    prototype.normals
+                );
                 let material = &prepared.asset.materials[primitive.material];
                 assert_eq!(material.metallic, 0.0);
                 let linear = |v: f32| {

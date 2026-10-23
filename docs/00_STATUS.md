@@ -98,7 +98,7 @@ do not update in place).
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
-| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in requested/resolved density tiers, one retained L14 canonical plant window, grouped sources in the existing opaque/shadow path, RT-budget preflight/raster fallback, zero-work disable and grounded arching prototype geometry | actual resident-mesh root agreement, botanical realism, stable performance acceptance, instance streaming and collision ownership |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in requested/resolved density tiers, one retained L14 canonical plant window, grouped sources in the existing opaque/shadow path, RT-budget preflight/raster fallback, zero-work disable, geometric fern pinnae, forked crowns and smooth cone-side stem normals | actual resident-mesh root agreement, botanical realism, stable performance acceptance, instance streaming and collision ownership |
 | `77_NATIVE_SURFACE_SHOWCASE.md` | 🟡 surface-first work in progress | actual GPU material-level telemetry; protected coarse support plus caller-priority refinement replaces detail-starving global level admission; separate stem/foliage reflectance; regular-patch split-coordinate material sampling and local derivative footprint; default-off CC0 ground-swatch experiment with L20/L21/L22 caps and same-material coarse means; rejected colour-noise prototype recorded, not shipped | canopy/floor representation hierarchy, convincing ground/foliage/water composition, moving-camera and blind acceptance, bounded planet-wide vegetation streaming |
 
 The [WORLD00 coastal baseline](72_WORLD_SURFACE_BASELINE.md) now identifies an
@@ -178,6 +178,13 @@ the committed source, plus one independent blind review. The legacy Bevy
 actual GPU suites are the renderer and native runs. Evidence:
 [`artifacts/native-surface-plants-2026-10-21.json`](artifacts/native-surface-plants-2026-10-21.json).
 No remote CI or stable performance acceptance is claimed.
+
+WORLD06f refines the same shared plant source with actual pinna gaps and forked
+leafy terminals, smooth stem normals and bounded 8,192-vertex validation. Native
+prototype payload is now 462,672 B, not the WORLD05 68,256 B; no scatter ID,
+canonical root, material, draw grouping, density tier or physics is changed.
+The corresponding numerical/adapter checks are not botanical, temporal or
+independent visual acceptance. Current details are in doc 75 and doc 77.
 
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace

@@ -80,10 +80,12 @@ The checked-in vertical slice currently contains:
   rejection. Disabled-by-default `[surface_plants]` enables a bounded native
   survey-only prototype consumer through the existing opaque mesh/shadow path
   ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); the prototypes now use grounded
-  arching fronds, tapered trunks and per-kind albedo, with matched old/new
-  captures and a blind preference review. An optional default-off near-eye
+  broad arching leaves, tapered trunks and per-kind albedo. WORLD08 reduces
+  prototype triangles while increasing real fern/crown leaf area; visual
+  acceptance remains open. An optional default-off near-eye
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
-  lattice inside nine L18 windows, reusing the same quality tiers, prototypes,
+  lattice inside nine L18 windows, with world-addressed eight-metre colony
+  occupancy and canonical ecological eligibility, reusing the same quality tiers, prototypes,
   opaque mesh and shadow paths. Same-site near-window changes use one shared
   worker with stale-result rejection; this is not a vegetation streamer. Shared
   stellar shadow rays now preserve their physical line instead of offsetting

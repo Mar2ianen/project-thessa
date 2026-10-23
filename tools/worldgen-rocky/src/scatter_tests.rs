@@ -87,6 +87,39 @@ fn version_one_address_and_transform_fixture() {
 }
 
 #[test]
+fn understory_colonies_are_bounded_continuous_and_world_addressed() {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for seed in [7, 42, 2026] {
+        // A dry-land latitude circle: adjacent probes are about 3 cm apart,
+        // while the full path crosses multiple eight-metre colonies.
+        for i in 0..1024 {
+            let direction = crate::lod::normalize([1.0, 0.2, i as f64 * 1e-8]);
+            let near = crate::lod::normalize([1.0, 0.2, (i + 1) as f64 * 1e-8]);
+            let density = understory_patch_density(seed, RADIUS_M, direction);
+            assert_eq!(density, understory_patch_density(seed, RADIUS_M, direction));
+            assert!((0.15..=1.85).contains(&density));
+            assert!((density - understory_patch_density(seed, RADIUS_M, near)).abs() < 0.02);
+            min = min.min(density);
+            max = max.max(density);
+        }
+        // Crossing a cube-face ownership boundary must not change the field.
+        let a = crate::lod::normalize([1.0, 1.0 - 1e-10, 0.2]);
+        let b = crate::lod::normalize([1.0, 1.0 + 1e-10, 0.2]);
+        assert!(
+            (understory_patch_density(seed, RADIUS_M, a)
+                - understory_patch_density(seed, RADIUS_M, b))
+            .abs()
+                < 0.001
+        );
+    }
+    assert!(
+        max - min > 1.0,
+        "colonies must include gaps and dense areas"
+    );
+}
+
+#[test]
 fn understory_has_disjoint_ids_nested_density_and_exact_window_unions() {
     let tile = region(0, 18, 131_072, 131_072);
     let high = query(tile, ScatterPopulation::Understory, 1.0);

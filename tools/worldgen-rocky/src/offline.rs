@@ -1182,7 +1182,7 @@ fn fern_clump(mesh: &mut PlantMesh) {
     }
 }
 
-/// Tapered reed bed: eight curved blades around a low tussock instead of
+/// Tapered reed bed: ten curved blades around a low tussock instead of
 /// six-sided needles. Blade bases stay on local Y = 0.
 fn reed_clump(mesh: &mut PlantMesh) {
     const STEMS: usize = 10;
@@ -1190,7 +1190,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
     const LEAN_M: [f64; STEMS] = [0.24, 0.36, 0.18, 0.30, 0.42, 0.22, 0.34, 0.20, 0.28, 0.26];
     const BASE_R_M: [f64; STEMS] = [0.10, 0.03, 0.15, 0.06, 0.11, 0.02, 0.14, 0.08, 0.05, 0.12];
     const WIDTH_M: [f64; STEMS] = [
-        0.075, 0.085, 0.070, 0.080, 0.090, 0.072, 0.082, 0.068, 0.078, 0.065,
+        0.040, 0.052, 0.038, 0.048, 0.055, 0.042, 0.050, 0.036, 0.046, 0.035,
     ];
     for i in 0..STEMS {
         reed_blade(
@@ -1276,17 +1276,17 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
         albedo_srgb: [0.29, 0.25, 0.17],
     });
     for (base, phase) in terminals {
-        for i in 0..56 {
-            let reach = 1.05 + 0.40 * (i as f64 * 1.71).sin().powi(2);
+        for i in 0..24 {
+            let reach = 1.35 + 0.50 * (i as f64 * 1.71).sin().powi(2);
             // Three short internodes carry differently aged leaf cohorts; the
-            // narrow blades remain individual geometry, never opaque cards.
+            // broad leaves retain real gaps and enter raster/shadows/RT alike.
             let base = offset(base, [0.0, (i % 3) as f64 * 0.075, 0.0]);
             crown_frond(mesh, phase + i as f64 * GOLDEN_ANGLE, base, reach);
         }
     }
 }
 
-/// One arching rachis with nine opposed pairs of separate tapered pinnae.
+/// One arching rachis with seven opposed pairs of separate tapered pinnae.
 /// Gaps are geometry shared by primary raster, shadows and optional RT.
 fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, base_y_m: f64) {
     let (radial, lateral) = azimuth_frame(angle);
@@ -1303,9 +1303,9 @@ fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, ba
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));
     let widths = std::array::from_fn::<_, 13, _>(|i| 0.006 * (1.0 - 0.85 * i as f64 / 12.0));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
-    for pair in 0..9 {
-        let t = 0.13 + pair as f64 * 0.095;
-        let length = length_m * 0.19 * (std::f64::consts::PI * t).sin().powf(0.65);
+    for pair in 0..7 {
+        let t = 0.14 + pair as f64 * 0.12;
+        let length = length_m * 0.23 * (std::f64::consts::PI * t).sin().powf(0.65);
         for side in [-1.0, 1.0] {
             let attachment = at(t);
             let nodes: [[f64; 3]; 4] = std::array::from_fn(|i| {
@@ -1324,7 +1324,7 @@ fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, ba
             ribbon(
                 mesh,
                 &nodes,
-                &[0.003, length * 0.14, length * 0.09, 0.0008],
+                &[0.003, length * 0.24, length * 0.16, 0.0008],
                 radial,
                 [0.0, 1.0, 0.0],
             );
@@ -1342,8 +1342,8 @@ fn reed_blade(
     width_m: f64,
 ) {
     const T: [f64; 7] = [0.0, 0.17, 0.34, 0.51, 0.68, 0.84, 1.0];
-    const HEIGHT_T: [f64; 7] = [0.0, 0.20, 0.40, 0.60, 0.79, 0.92, 0.86];
-    const LEAN_T: [f64; 7] = [0.0, 0.05, 0.11, 0.18, 0.27, 0.38, 1.0];
+    const HEIGHT_T: [f64; 7] = [0.0, 0.20, 0.40, 0.60, 0.75, 0.82, 0.60];
+    const LEAN_T: [f64; 7] = [0.0, 0.05, 0.15, 0.35, 0.65, 0.95, 1.8];
     let (radial, lateral) = azimuth_frame(angle);
     let nodes: [[f64; 3]; 7] = std::array::from_fn(|i| {
         offset(
@@ -1352,8 +1352,8 @@ fn reed_blade(
         )
     });
     let widths = T.map(|t| width_m * (1.0 - 0.85 * t));
-    // Blades around a tussock present their outer face, wound consistently.
-    ribbon(mesh, &nodes, &widths, lateral, radial);
+    // Follow the upper side continuously across the arch and drooping tip.
+    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
 }
 
 /// One arching crown frond: rises from the trunk, then droops outward. Broad
@@ -1361,7 +1361,7 @@ fn reed_blade(
 fn crown_frond(mesh: &mut PlantMesh, angle: f64, base: [f64; 3], reach_m: f64) {
     const RADIAL: [f64; 5] = [0.0, 0.20, 0.45, 0.74, 1.0];
     const ARC: [f64; 5] = [0.0, 0.26, 0.30, 0.10, -0.38];
-    const WIDTH: [f64; 5] = [0.006, 0.032, 0.040, 0.025, 0.001];
+    const WIDTH: [f64; 5] = [0.006, 0.075, 0.105, 0.065, 0.001];
     let (radial, lateral) = azimuth_frame(angle);
     let nodes: [[f64; 3]; 5] = std::array::from_fn(|i| {
         offset(
@@ -1926,6 +1926,33 @@ mod tests {
         crate::lod::normalize(radial)
     }
 
+    // Independent orthographic ray/triangle coverage in the ground plane.
+    fn covered_from_above(mesh: &PlantMesh, x: f64, z: f64) -> bool {
+        mesh.indices.as_chunks::<3>().0.iter().any(|indices| {
+            let p = indices.map(|i| mesh.positions[i as usize].map(f64::from));
+            let edge =
+                |a: [f64; 3], b: [f64; 3]| (b[0] - a[0]) * (z - a[2]) - (b[2] - a[2]) * (x - a[0]);
+            let sides = [edge(p[0], p[1]), edge(p[1], p[2]), edge(p[2], p[0])];
+            sides.iter().all(|v| *v >= -1e-10) || sides.iter().all(|v| *v <= 1e-10)
+        })
+    }
+
+    #[test]
+    fn broad_crown_leaf_has_a_readable_lamina_and_a_tapered_tip() {
+        let mut mesh = plant_prototypes().remove(2);
+        mesh.positions.clear();
+        mesh.normals.clear();
+        mesh.indices.clear();
+        mesh.stem = None;
+        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0);
+        // A 2 m leaf has a 42 cm lamina here: real surface, not a thin wire.
+        assert!(covered_from_above(&mesh, 0.9, 0.18));
+        assert!(covered_from_above(&mesh, 0.9, -0.18));
+        assert!(!covered_from_above(&mesh, 0.9, 0.24));
+        assert!(covered_from_above(&mesh, 1.95, 0.0));
+        assert!(!covered_from_above(&mesh, 1.95, 0.04));
+    }
+
     #[test]
     fn pinnate_fern_has_geometric_gaps_instead_of_a_serrated_solid_sheet() {
         let mut mesh = plant_prototypes().remove(0);
@@ -1934,17 +1961,8 @@ mod tests {
         mesh.indices.clear();
         fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0);
         // Independent vertical ray/triangle test in XZ. Paired pinnae attach
-        // every 0.095 m along this one-metre rachis, with true air between them.
-        let covered = |x: f64, z: f64| {
-            mesh.indices.as_chunks::<3>().0.iter().any(|indices| {
-                let p = indices.map(|i| mesh.positions[i as usize].map(f64::from));
-                let edge = |a: [f64; 3], b: [f64; 3]| {
-                    (b[0] - a[0]) * (z - a[2]) - (b[2] - a[2]) * (x - a[0])
-                };
-                let sides = [edge(p[0], p[1]), edge(p[1], p[2]), edge(p[2], p[0])];
-                sides.iter().all(|v| *v >= -1e-10) || sides.iter().all(|v| *v <= 1e-10)
-            })
-        };
+        // every 0.12 m along this one-metre rachis, with true air between them.
+        let covered = |x, z| covered_from_above(&mesh, x, z);
         assert!(covered(0.577, 0.095), "pinna must present real leaf area");
         assert!(
             !covered(0.625, 0.095),
@@ -2031,9 +2049,9 @@ mod tests {
             assert!(mesh.positions.len() <= MAX_PLANT_PROTOTYPE_VERTICES);
             let triangles = mesh.indices.len() / 3;
             let (minimum, ceiling) = match mesh.kind {
-                ScatterKind::FernClump => (1700, 1800),
+                ScatterKind::FernClump => (1400, 1450),
                 ScatterKind::ReedClump => (120, 170),
-                ScatterKind::LycopsidTree => (2400, 2500),
+                ScatterKind::LycopsidTree => (1400, 1450),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(
@@ -2051,7 +2069,7 @@ mod tests {
                 .sum();
             if mesh.kind == ScatterKind::LycopsidTree {
                 assert!(
-                    (20.0..30.0).contains(&foliage_area),
+                    (35.0..50.0).contains(&foliage_area),
                     "authored crown area: {foliage_area} m²"
                 );
             }
@@ -2113,8 +2131,8 @@ mod tests {
                 .fold(0.0, f64::max);
             let (min_height, max_height, max_extent) = match mesh.kind {
                 ScatterKind::FernClump => (0.45, 0.75, 1.35),
-                ScatterKind::ReedClump => (1.20, 2.00, 0.70),
-                ScatterKind::LycopsidTree => (8.70, 10.20, 3.40),
+                ScatterKind::ReedClump => (1.20, 2.00, 1.00),
+                ScatterKind::LycopsidTree => (8.70, 10.20, 3.90),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             // No ground offset is invented: every prototype base meets local Y=0.

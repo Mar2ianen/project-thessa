@@ -105,7 +105,8 @@ is the spherical integral of local density, including local masks. This avoids
 treating `TileKey::span_m().powi(2)` as spherical tile area: corner/centre cell
 areas differ by up to `3^(3/2)`. Counts are stratified Bernoulli samples, **not
 rounded targets, Poisson-disc placement or exact density quotas**. Under the
-independent-uniform hash model, count variance is at most the expected count;
+independent-uniform acceptance-hash model with habitat/colony fields fixed,
+count variance is at most the expected count;
 a useful conservative count scale is `sqrt(expected_count)`. This is a model of
 pseudo-random sampling, not a proof of cryptographic/statistical independence.
 
@@ -113,7 +114,7 @@ At R = 3,200,000 m, the maximum cell Jacobian is 37.252903 m² and the supported
 global level-20 density ceiling is **26,843.5456 instances/km²**. The
 conservative population envelopes are `640 * density_scale` for rocks,
 `3000 * density_scale` for plants and, at the reference spacing, up to
-`1e6 / understory_spacing_m² * density_scale` for understory. The level-24
+`1.85 * 1e6 / understory_spacing_m² * density_scale` for understory. The level-24
 understory lattice has a much larger cell capacity; its requested density is
 still checked against that lattice rather than assumed safe. Requests above
 capacity return `DensityCapacityExceeded`, even if the eventual local mask would be empty;
@@ -121,6 +122,20 @@ there is no clipped probability or silent density saturation. In particular,
 full-cover plants support scale up to approximately 8.94785 on this body. Larger
 bodies have a lower ceiling; this finite address population is an explicit
 foundation limit, not unbounded density support.
+
+WORLD08's optional understory uses the existing three-dimensional value noise
+in body-fixed metres at an authored eight-metre wavelength (channel 437), then
+maps it smoothly into a [0.15, 1.85] local density multiplier. This produces
+colonies and gaps within the existing canonical ground/reed habitat; it is an
+occupancy prior, not simulated moisture or succession. Its symmetric mapping
+preserves the ensemble mean but does not preserve each window's exact count;
+unconditional variance across different colony fields need not obey the
+fixed-field count estimate above. All query windows and quality tiers use the
+same field. Candidate identity, position, kind/size/yaw and the original
+rock/large-plant populations are unchanged; understory membership can change.
+The capacity envelope includes the multiplier's maximum, and colony gaps reject
+before calling the canonical surface sampler. Disabled understory does no such
+work. See [doc 75](75_NATIVE_SURFACE_PLANTS.md) for geometry and acceptance limits.
 
 Relative to continuous within-cell jitter, quantization moves each cube-chart
 coordinate by at most `2^-44`. Normalized cube projection is 1-Lipschitz in

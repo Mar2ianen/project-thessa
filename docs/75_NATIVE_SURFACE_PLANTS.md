@@ -6,8 +6,9 @@ prototypes, per-kind albedo and a second matched capture/blind-review stage are
 recorded on `feat/native-plant-prototypes` (WORLD05). This is neither planet-wide
 vegetation streaming nor botanical realism, authoritative collision, or final
 close-up visual acceptance. The current prototypes remain deliberately authored
-meshes; the WORLD06f continuation below adds separate fern pinnae, forked crowns
-and smooth stem normals without turning them into botanical reconstructions.
+meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
+normals. WORLD08 below broadens the leaf surfaces while reducing triangle count;
+neither stage is a botanical reconstruction.
 
 The surface-showcase continuation in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
 adds explicit lycopsid stem reflectance through the existing mesh material,
@@ -21,6 +22,68 @@ completed batches reuse the existing prototype/material/shadow renderer and
 instance allocation when they fit; instance matrices still use its normal
 shared update path.
 Botanical realism and final surface composition remain incomplete.
+
+## WORLD08 — Broad leaves and spatial understory colonies
+
+The current shared `offline::plant_prototypes` producer replaces each terminal's
+56 narrow leaves with 24 broader, longer arching leaves. Its forked stems and
+per-organ reflectances are unchanged. Fern rachises carry seven pairs of broader
+pinnae with actual gaps. Reeds keep ten blades and the basal tussock, but their
+narrower blades arch farther outward and droop; winding follows the upper side
+continuously across the arch. Face normals are still derived from real triangles.
+These are authored optical dimensions, not screen-space dilation, alpha masks,
+new plant physics or taxonomic reconstructions.
+
+| Kind | Old → new triangles | Old → new one-sided foliage area |
+| --- | --- | --- |
+| Fern clump | 1,716 → 1,404 | 0.929 → 1.710 m² |
+| Reed clump | 144 → 144 | 1.890 → 1.175 m² |
+| Lycopsid tree | 2,424 → 1,400 | 23.892 → 41.829 m² |
+| Total | 4,284 → 2,948 | |
+
+Native prototype vertex/index payload falls from 462,672 to 318,384 B; the
+existing eight-byte organ palette, three grouped draws and 64-byte instance
+ABI remain. Maximum horizontal reaches are bounded at 1.35/1.00/3.90 m for
+fern/reed/tree, and the existing 8,192-vertex validation ceiling still admits
+historical frozen prototypes. Historical bakes retain their stored geometry.
+Larger leaf area can increase raster/shadow/RT coverage despite fewer triangles;
+this is not a whole-renderer speedup claim.
+
+Only the optional `Understory` population gains an eight-metre, world-addressed
+colony-occupancy prior. It reuses `rng::value_noise3` over body-fixed metres,
+smoothly modulating local reference density by [0.15, 1.85] before applying the
+existing canonical ground/reed coverage and water/height/slope gates. This is
+an authored spatial occupancy model, not a new humidity/hydrology field.
+Symmetry preserves the ensemble mean, not an exact plant count in each window.
+The capacity check includes the 1.85 maximum; gaps reject before the expensive
+surface callback. Existing budgets still fail whole queries rather than clipping.
+Candidate IDs, jitter, kind/scale/yaw, large plants and rocks retain their
+contracts; understory membership may change. Every window and quality tier
+samples the same field, preserving exact window unions and nested density.
+
+The existing resolved plant/understory settings and disabled/Low/Medium/High
+fallbacks own these changes; no additional pass, setting, shader or per-frame
+work is added. Disabled plants and disabled understory do not evaluate the new
+field. The current opaque double-sided leaves have no alpha-mask path; their
+remaining subpixel aliasing is not addressed by alpha-to-coverage. TAA still
+rejects plant history. Lighting, terrain material transport, streamed root
+agreement, canopy transmission, near/far continuity and final acceptance remain
+open (docs 76/77/78).
+
+WORLD08's 11 local command checks passed on 645 unchanged compiled/configuration
+inputs: formatting, architecture, workspace Clippy with warnings denied,
+2,082 workspace lib/bin tests, 117 integration tests, the actual-producer GPU
+visibility oracle, coarse and understory GPU lifecycle/round-trip fixtures,
+native feature-off, WORLD00 numeric regression and native-only release build.
+The three hardware fixtures ran on Radeon 880M/Vulkan/RADV. They do not replace
+the full renderer/native hardware suites or establish remote CI/platform parity.
+The visibility fixture now samples 556 interiors per bias: GPU errors and false
+blockers are zero; finite receiver exclusion still skips five genuine blockers
+at 0.01 m bias and one at 0.0001 m. The previous producer's [13, 1] calibration
+was updated to [5, 1] after its geometry changed, without weakening the per-pixel
+colour/visibility oracle. Coverage, winding, physical extents, projected leaf
+lamina/gaps, colony continuity/seams, exact query unions and nested density
+remain tested separately from aesthetic preference.
 
 ## Requested and resolved contract
 
@@ -141,11 +204,12 @@ memory and terrain admission checks; preflight alone is not a claim of active RT
 ### Representation limits
 
 The survey prototypes are authored meshes, not botanical reconstructions or
-photogrammetry. WORLD05 grounded the arching foliage; WORLD06f adds nine paired
-pinnae along each fern rachis and replaces the tree's stub forks/whorls with two
-ascending forks, four leafy terminals and smooth cone normals. Fern fronds still
+photogrammetry. WORLD05 grounded the arching foliage; WORLD06f replaced the
+tree's stub forks/whorls with two ascending forks, four leafy terminals and
+smooth cone normals. WORLD08 uses seven broad paired pinnae per fern rachis and
+24 broad arching leaves per tree terminal. Fern fronds still
 begin at local Y = 0; the adapter applies no vertical offset and does **not** lower
-roots to hide geometry. Reeds retain ten vertical tapered blades plus a six-blade
+roots to hide geometry. Reeds retain ten arching tapered blades plus a six-blade
 basal tussock. All three remain split-vertex indexed triangle lists using the
 existing double-sided material; there is no foliage transmission, mesh LOD, wind,
 growth, per-kind shader or collision ownership. Thin blades can alias or disappear

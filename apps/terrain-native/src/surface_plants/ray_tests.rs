@@ -324,7 +324,7 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
     );
     assert_eq!(
         bias_disagreements,
-        [13, 1],
+        [5, 1],
         "finite receiver exclusion still skips genuine nearby blockers; not complete visibility equality"
     );
 }

@@ -144,7 +144,7 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
+                "WORLD08 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
             } else {"WORLD04 fixed L14 window / fixed64 v1; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }

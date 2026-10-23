@@ -2,7 +2,8 @@
 
 **Status:** in progress, not visual acceptance. Baseline is WORLD05 commit
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
-Work is isolated on `feat/native-surface-showcase`; `main` is not changed.
+The foundation through `f73eea4` is integrated into main (doc 78); subsequent
+visual development continues on `feat/native-surface-showcase`.
 
 ## Target and constraints
 
@@ -33,8 +34,9 @@ Neither is planet-wide coverage.
    tiers. Retain world identities across transitions; never instantiate a whole
    planet's high-detail mesh/plant population at once.
 
-The unfinished temporal scene integration remains in its separate temporal
-worktree. It is not exposed as a working showcase feature here.
+Default-off native temporal history is integrated as a partial T4c capability
+(doc 76). It excludes all rigid meshes, including plants; it does not establish
+foliage antialiasing or complete temporal/visual acceptance.
 
 ## Verification boundary
 
@@ -49,6 +51,43 @@ neither increased detail nor a different cloud/RT setting is a speedup result.
 Starting evidence was WORLD05's
 [`native-plant-prototypes-2026-10-21.json`](artifacts/native-plant-prototypes-2026-10-21.json).
 Its frames demonstrate prototype geometry, not the requested final visual quality.
+
+## WORLD08 — Readable leaf surfaces and understory colonies
+
+This continuation targets two visible defects in the retained `f73eea4` frame:
+narrow wire-like crowns and uniformly scattered ground clumps. It changes the
+existing shared plant producer and optional understory density, leaving the
+canonical terrain, material transport and stellar/sky lighting intact.
+
+Tree terminals now carry 24 broader leaves rather than 56 narrow ones, and fern
+fronds carry seven pairs of broader pinnae with real gaps. Reed blades bend and
+droop farther instead of reading as upright slabs. One-sided tree foliage area
+increases 23.892 → 41.829 m²; fern area increases 0.929 → 1.710 m². All three
+prototypes together fall from 4,284 to 2,948 triangles (462,672 → 318,384 native
+vertex/index bytes). This is authored optical geometry, not screen-space alpha
+dilation, a botanical reconstruction or a guaranteed frame-time improvement.
+
+Understory samples the shared 3D value-noise kernel in body-fixed metres at an
+authored eight-metre wavelength, mapping colony occupancy to [0.15, 1.85] times
+the existing local ground/reed density. Canonical ecology/water/height/slope still
+decide eligibility. The same field is used by every query window and quality
+tier; the capacity envelope includes its maximum and gaps reject before the
+expensive surface sample. It is a spatial occupancy prior, not new hydrology or
+plant growth. Rock/large-plant IDs and transforms remain unchanged; understory
+membership can change. Full representation and numerical boundaries are in
+[doc 75](75_NATIVE_SURFACE_PLANTS.md) and [doc 70](70_WORLD_SCATTER_IDENTITY.md).
+
+An ImageGen concept informed leaf masses and the alternation of colonies and
+open soil under muted overcast light. It is a visual direction reference, not
+an engine capture, ground-truth lighting oracle or a shipped asset. The renderer
+continues to use actual opaque double-sided leaf triangles and the existing
+shared raster/shadow/optional RT paths. No lighting coefficient, extra pass,
+alpha-to-coverage, mesh temporal eligibility or launch-default change is added.
+
+The remaining material-normal ground bands, diffuse canopy transport/contact,
+subpixel foliage aliasing, streamed roots, near/far continuity and planetary
+coverage are still open. Broader silhouettes do not prove temporal stability,
+physical transport convergence or subjective preference.
 
 ## WORLD06a — Saturated material admission
 

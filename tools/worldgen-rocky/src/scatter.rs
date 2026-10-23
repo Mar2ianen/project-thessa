@@ -17,6 +17,9 @@ pub const CANDIDATE_LEVEL: u8 = 20;
 /// Separate identity lattice for near-ground fern/reed clumps. Its CBT depth
 /// keeps these IDs disjoint from the unchanged level-20 rocks/large plants.
 pub const UNDERSTORY_CANDIDATE_LEVEL: u8 = 24;
+/// Authored colony occupancy prior, not simulated moisture or plant growth.
+pub const UNDERSTORY_PATCH_WAVELENGTH_M: f64 = 8.0;
+const UNDERSTORY_PATCH_MAX: f64 = 1.85;
 const JITTER_BITS: u8 = 24;
 const MAX_ROCK_DENSITY_PER_KM2: f64 = 640.0;
 pub const PLANT_DENSITY_PER_KM2: f64 = 3000.0;
@@ -281,7 +284,13 @@ pub fn scatter_region(
         ScatterPopulation::Plants => PLANT_DENSITY_PER_KM2,
         ScatterPopulation::Understory => 1e6 / policy.understory_spacing_m.powi(2),
     };
-    let ceiling = reference_density * policy.density_scale;
+    let ceiling = reference_density
+        * policy.density_scale
+        * if population == ScatterPopulation::Understory {
+            UNDERSTORY_PATCH_MAX
+        } else {
+            1.0
+        };
     // Largest cell Jacobian is at the face centre. Refuse saturation even if
     // local cover later rejects everything: density must never silently clip.
     let max_cell_area_km2 = (2.0 * radius_m / (1_u64 << candidate_level) as f64).powi(2) / 1e6;
@@ -353,6 +362,16 @@ pub fn scatter_region(
                 continue;
             }
             let direction = cell.direction(jx, jy);
+            let patch_density = if population == ScatterPopulation::Understory {
+                let density = understory_patch_density(planet_seed, radius_m, direction);
+                // Reject colony gaps before the expensive canonical surface query.
+                if keep >= reference_density * policy.density_scale * density * area_km2 {
+                    continue;
+                }
+                density
+            } else {
+                1.0
+            };
             batch.surface_samples += 1;
             let mut surface = surface_at(direction);
             validate_surface(surface, id, population)?;
@@ -380,7 +399,8 @@ pub fn scatter_region(
                     }
                     reference_density
                         * if population == ScatterPopulation::Understory {
-                            surface.vegetation.ground01 + surface.vegetation.reeds01
+                            (surface.vegetation.ground01 + surface.vegetation.reeds01)
+                                * patch_density
                         } else {
                             surface.vegetation.total()
                         }
@@ -439,6 +459,15 @@ pub fn scatter_region(
     }
     batch.items.sort_unstable_by_key(|item| item.id);
     Ok(batch)
+}
+
+/// Shared by every query window and quality tier; no cube-face seed or camera.
+/// The symmetric [0.15, 1.85] modulation preserves the ensemble mean density.
+fn understory_patch_density(seed: u64, radius_m: f64, direction: [f64; 3]) -> f64 {
+    let p = direction.map(|v| v * (radius_m / UNDERSTORY_PATCH_WAVELENGTH_M));
+    let noise = rng::value_noise3(seed, 437, p[0], p[1], p[2]);
+    let occupancy = crate::appearance::smooth(-0.5, 0.5, noise);
+    0.15 + (UNDERSTORY_PATCH_MAX - 0.15) * occupancy
 }
 
 /// Fallible growth for the large descriptor/instance buffers, not a guarantee

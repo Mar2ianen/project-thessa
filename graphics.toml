@@ -53,14 +53,17 @@ fleet_meshes = true # native retained body meshes; false adds no fleet GPU resou
 fleet_quality = "high" # low/medium/high: cull meshes below 8/2/0.5 projected pixels
 
 [temporal]
-# Diagnostic precursor to TAA, not a visible antialiasing mode. Requires HDR;
+taa = false # native opaque history resolve; implies motion/jitter, requires HDR
+quality = "medium" # low: 2x2/4-frame age; medium: 3x3/8; high: 3x3/32
+# Independent motion diagnostic; TAA implies it automatically. Requires HDR;
 # stores scene depth and produces RGBA16F camera motion before plume/clouds.
 # Ocean and all rigid meshes are invalid until object motion is implemented.
-# Disabled is allocation/dispatch-free. A GPU resolve pass exists and is tested
-# offscreen, but no scene history or visible TAA is wired yet.
+# Disabled motion and TAA are allocation/dispatch-free. History resolve is
+# opt-in; composition/ghosting acceptance remains open (docs/76).
 motion_vectors = false
-# Diagnostic only: requires motion_vectors, visibly jitters primary terrain and
-# meshes without resolving them. Shadows/LOD/RT/sky/HUD remain unjittered.
+# Without TAA: requires motion_vectors and visibly jitters primary terrain and
+# meshes without resolving them. TAA implies jitter automatically.
+# Shadows/LOD/RT/sky/HUD remain unjittered.
 jitter = false
 
 [terrain_topology]

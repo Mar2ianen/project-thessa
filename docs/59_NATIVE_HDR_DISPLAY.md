@@ -42,10 +42,14 @@ ResolvedGraphicsSettings -> renderer`:
 ## Rendering and lifecycle
 
 `render-wgpu::display::DisplayTransform` selects the existing scene format, owns
-only the optional float color view/pipeline/binding, and borrows the caller's
+the optional float color texture/view/pipeline/binding, and borrows the caller's
 SDR output. It shares the existing device/queue and existing scene depth target.
 The pass order is **shadow depth -> AS preparation -> classification/shared
-terrain+opaque-mesh+sky raster -> display transform -> egui/FastNavball**.
+terrain+opaque-mesh+clear-background raster -> optional motion -> optional
+opaque temporal resolve -> plume/stars/cloud/aurora -> display transform ->
+egui/FastNavball**. Default-off temporal history is owned separately (doc 76);
+its result is copied back into the retained HDR target before overlays. The
+display transform does not retain the composited scene as temporal history.
 No shader applies exposure twice. Mesh reflections, ocean and sky still consume
 the same semantic lighting/environment state and quality settings.
 

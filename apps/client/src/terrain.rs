@@ -360,6 +360,7 @@ fn resolve_terrain_capabilities(
         is_discrete_gpu: is_discrete,
         // The legacy host owns its HDR negotiation; native probing is separate.
         hdr_render_target_supported: None,
+        temporal_supported: None,
     };
     let resolved = ResolvedGraphicsSettings::from_requested(&requested.0, &caps);
     graphics.0.terrain = resolved.terrain;

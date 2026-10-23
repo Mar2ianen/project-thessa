@@ -33,7 +33,7 @@ impl HeadlessPerf {
     pub fn new(backend: &Backend) -> Self {
         Self {
             collector: PerfCollector::with_default_capacity(),
-            gpu: GpuIntervals::new(backend, 8),
+            gpu: GpuIntervals::new(backend, 9),
         }
     }
 
@@ -71,6 +71,7 @@ impl HeadlessPerf {
                     "render.rt_as_build",
                     "render.scene_classify_and_raster",
                     "render.motion_vectors",
+                    "render.temporal_resolve",
                     "render.scene_overlays",
                     "render.display_transform",
                     "render.ui",
@@ -107,18 +108,19 @@ impl HeadlessPerf {
         display: &thessa_render_wgpu::display::DisplayTransform,
         sky_layers: &crate::sky_layers::SkyLayers,
         motion: Option<&thessa_render_wgpu::motion::SceneMotion>,
+        temporal: Option<&thessa_render_wgpu::scene_temporal::SceneTemporal>,
         width: u32,
         height: u32,
         scenario: String,
     ) -> std::io::Result<()> {
-        let mut meta = base_capture_metadata(backend, scene, display, sky_layers, motion);
+        let mut meta = base_capture_metadata(backend, scene, display, sky_layers, motion, temporal);
         meta.display.width = width;
         meta.display.height = height;
         meta.display.vsync = false;
         meta.graphics
             .resolved
             .extend(scene.survey_capture_metadata(width, height));
-        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Sum opaque raster and scene_overlays to compare the old v5/v6 scene scope. Scene raster uses RGBA16Float when native_hdr=true; compare quality/format as well as scope names with older captures. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
+        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);
@@ -143,6 +145,7 @@ pub(crate) fn base_capture_metadata(
     display: &thessa_render_wgpu::display::DisplayTransform,
     sky_layers: &crate::sky_layers::SkyLayers,
     motion: Option<&thessa_render_wgpu::motion::SceneMotion>,
+    temporal: Option<&thessa_render_wgpu::scene_temporal::SceneTemporal>,
 ) -> CaptureMetadata {
     let mut meta = default_capture_metadata();
     let info = backend.adapter.get_info();
@@ -161,7 +164,7 @@ pub(crate) fn base_capture_metadata(
     );
     meta.graphics.resolved.insert(
         "gpu_scope_layout".into(),
-        "native-topology-v7-motion".into(),
+        "native-topology-v8-temporal".into(),
     );
     meta.graphics.resolved.extend(sky_layers.metadata());
     meta.graphics
@@ -181,11 +184,18 @@ pub(crate) fn base_capture_metadata(
         ("native_night_lights_source", "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission".into()),
         ("native_hdr", display.enabled().to_string()),
         ("native_motion_vectors", motion.is_some().to_string()),
+        ("native_taa", temporal.is_some().to_string()),
+        ("native_taa_target_bytes", temporal.map_or(0, |t| t.target_bytes()).to_string()),
+        ("native_taa_submitted_frames", temporal.map_or(0, |t| t.submitted_frames()).to_string()),
+        ("native_taa_global_reset_frames", temporal.map_or(0, |t| t.reset_frames()).to_string()),
+        ("native_taa_history_age_limit", temporal.map_or(0, |t| t.history_age_limit()).to_string()),
+        ("native_taa_neighborhood_width", temporal.map_or(0, |t| t.neighborhood_width()).to_string()),
         ("native_motion_target_bytes", motion.map_or(0, |m| m.target_bytes()).to_string()),
         ("native_primary_jitter", motion.is_some_and(|m| m.jitter_enabled()).to_string()),
         ("native_jitter_submitted_frames", motion.map_or(0, |m| m.submitted_frames()).to_string()),
-        ("native_jitter_scope", "Halton primary terrain/meshes only; motion excludes sampling jitter; no resolve/TAA; secondary view unchanged".into()),
-        ("native_motion_scope", "render.motion_vectors; stored opaque depth + alpha mask, before translucent overlays; no TAA/history".into()),
+        ("native_jitter_scope", "Halton primary terrain/meshes only; motion excludes sampling jitter; resolved only when native_taa=true; secondary view unchanged".into()),
+        ("native_motion_scope", "render.motion_vectors; stored opaque depth + alpha mask, before temporal resolve and translucent overlays".into()),
+        ("native_taa_scope", "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames".into()),
         (
             "native_hdr_target_bytes",
             display.target_bytes().to_string(),

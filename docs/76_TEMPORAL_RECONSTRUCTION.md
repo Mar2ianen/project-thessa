@@ -1,6 +1,7 @@
 # 76 — Temporal reconstruction foundation
 
-**Status:** audit plus four signal-foundation stages and a CPU resolve contract.
+**Status:** signal/resolve foundations plus opt-in native history lifecycle
+(T4c partial), not production temporal acceptance.
 T2a implements deterministic Halton jitter, static-surface reprojection and
 depth reconstruction in `render-core`, with a view-block constructor that
 preserves the unjittered history projection. T3a adds a standalone GPU
@@ -10,8 +11,9 @@ depth and masks ocean/all rigid meshes. T2b adds opt-in primary terrain/mesh
 jitter with matching depth reconstruction and jitter-free motion. T4a adds the
 backend-neutral history-lookup, disocclusion, neighbourhood-clipping and
 accumulation-age contract in `render-core`; T4b adds a tested GPU pass that
-implements that contract. The pass is not yet wired into scene history,
-overlays or presentation. Default rendering remains the non-temporal reference;
+implements that contract. T4c now wires it into scene-owned ping-pong colour and
+previous depth in both native loops, before overlays and display. Default
+rendering remains the non-temporal reference;
 the explicit jitter diagnostic visibly shifts samples without antialiasing them.
 
 Temporal reconstruction is not one post-process. It is a contract between the
@@ -235,11 +237,12 @@ presenter contract before an FG adapter is attempted. Required properties:
 | --- | --- | --- |
 | T1 | This audit/contract | Reviewed, no code claims. |
 | T2a | Jitter/reprojection math + preserved unjittered view block | Implemented; deterministic CPU tests; zero jitter byte-identical. |
-| T2b | Renderer jitter wiring + required depth storage | Implemented: opt-in primary terrain/mesh jitter, matching depth inverse, jitter-free motion, unjittered secondary policy and submitted-frame sequence. No resolve yet. |
+| T2b | Renderer jitter wiring + required depth storage | Implemented: opt-in primary terrain/mesh jitter, matching depth inverse, jitter-free motion, unjittered secondary policy and submitted-frame sequence; standalone diagnostic still does not resolve. |
 | T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
 | T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/all-mesh invalid masks, submitted-camera tracking and GPU scene oracle. |
 | T4a | Backend-neutral resolve contract | Implemented: jitter-aware history lookup, explicit depth-disocclusion test, YCoCg neighbourhood clipping, age/weight policy and fallbacks; CPU tests only. |
 | T4b | GPU resolve pass against T4a | Implemented as a stateless `RGBA16Float` compute pass; hardware fixture matches CPU colour/age for valid history, disocclusion and invalid motion. No scene history/presentation. |
+| T4c | Native opaque history lifecycle | Partial: default-off scene resolve, submitted-only history, publication/view-mode resets, quality/fallback and separate GPU scope. Composed depth and real-scene ghosting/visual acceptance remain open. |
 | T4 | Native-resolution TAA with history validation | Static and panning survey captures; no history reuse after cancel/resize; ghosting bounded against a no-TAA reference. |
 | T5 | Dynamic mesh and ocean motion (or explicit invalid masks) | Ships/ocean do not ghost; invalid pixels fall back. |
 | T6 | TAAU upscale and two-history quality tiers | Matched native/upscaled captures; memory budget recorded. |
@@ -333,7 +336,7 @@ invalidation. A native TAA reference is required before comparing adapters.
   4,096 water pixels were invalid. On/off runs preserve HDR RGB bits exactly
   across all six frames, including live CBT/ocean updates and projection/exposure
   changes. No subjective preference or visible improvement is claimed.
-- Capture layout is `native-topology-v7-motion`: `render.motion_vectors` is
+- At this checkpoint capture layout was `native-topology-v7-motion`: `render.motion_vectors` is
   separate from opaque raster and `render.scene_overlays`. Actual mode and
   texture bytes are recorded, not inferred from the requested switch.
 
@@ -428,8 +431,10 @@ pass. It deliberately owns no texture, render graph or presentation state.
   previous raster image and adds previous jitter to both colour and depth.
 - Both jitters are validated through the existing ±0.5-pixel bound before any
   lookup. A half-open image domain rejects UV `1.0` rather than clamping and
-  reading the opposite edge. Out-of-bounds, non-finite, zero-age, invalid-motion
-  and invalid-epoch candidates fall back to the current colour and reset age.
+  reading the opposite edge. Out-of-bounds, non-finite, zero-age and
+  invalid-epoch candidates fall back to the current colour and reset age.
+  Invalid-motion current pixels also show the current colour but store age
+  zero, so an unsupported surface cannot seed neighbour history (see T4c).
 - `depth_matches` compares the previous depth sample with the depth obtained by
   projecting the current reconstructed surface point through the previous
   camera. The tolerance is an explicit caller policy derived from the depth
@@ -440,8 +445,9 @@ pass. It deliberately owns no texture, render graph or presentation state.
   current 3×3 neighbourhood. `clip_history` clamps history to that box before
   blending. A zero-variance neighbourhood therefore rejects a differing history
   sample instead of hiding a ghost behind a long age.
-- `history_weight` uses `1 / (age + 1)` with an explicit responsiveness floor
-  (default 0.05) and a capped age. Rejected history starts again at age one.
+- `history_weight` uses `age / (age + 1)` with an explicit minimum current
+  weight (default 0.05) and a capped age. Rejected history starts again at age
+  one, except motion-invalid current pixels, which store age zero (see T4c).
   The policy is deterministic and frame-count based; it never derives from wall
   time, presented frames or simulation ticks.
 - The CPU tests cover both history-grid conventions, stationary cameras with
@@ -468,8 +474,9 @@ below.
 - The shader mirrors the CPU contract: jitter-aware history and previous-depth
   addresses, the half-open image-domain check, projection of the current depth
   sample through the previous camera for disocclusion, YCoCg neighbourhood
-  clipping, `1 / (age + 1)` blending with a floor, and fallback to current with
-  age one. `previous_valid == false` disables history entirely.
+  clipping, `age / (age + 1)` blending with a current-weight floor, and fallback
+  to current with age one. `previous_valid == false` disables history entirely.
+  Motion-invalid current pixels store age zero so they cannot seed history (T4c).
 - The pass allocates no textures and keeps no state. The caller owns
   ping-pong/resolved history, previous-depth preservation, epoch resets and the
   decision to copy the result back to the composition target. Those are
@@ -510,7 +517,7 @@ An additional muted sweep and eight-frame native HUD/no-HUD windows all exited
 successfully with jitter enabled. These are runtime smoke captures, not TAA or
 independent subjective visual acceptance.
 
-#### T4 integration findings (not implemented)
+#### T4 integration findings at the T4b checkpoint
 
 - `DisplayTransform` retains a bind group for its own HDR view. A resolve cannot
   merely allocate a different texture: either the display must explicitly accept
@@ -527,6 +534,76 @@ independent subjective visual acceptance.
   second terrain observer. Add the missing cut/map/body/light/exposure epochs
   at the existing scene boundary; per-frame CBT identity alone is not history
   validity and must not force unrelated simulation work.
+
+### T4c: opt-in native history lifecycle (partial)
+
+Committed temporal foundations through `f931a8f` were merged into the surface
+branch as `c1ecf0e`, without editing the separate worktree's uncommitted drafts.
+The behavior below is current; T4a/T4b retain their dated verification records.
+Their original `1/(age+1)` history-weight formula was corrected during T4c.
+
+- `[temporal].taa = false` is the reference. Enabled TAA implies motion and
+  jitter, requires HDR and portable compute/filterable RGBA16Float storage plus
+  copyable Depth32Float. Unsupported modes resolve off before allocating the
+  implied prerequisites. Explicit standalone diagnostics remain independent.
+- `[temporal].quality = "low" | "medium" | "high"` selects clipping
+  neighborhoods/history-age caps of 2×2/4, 3×3/8 and 3×3/32. It changes only
+  reconstruction cost/inertia, not simulation, source detail or illumination.
+- `SceneTemporal` reuses `TemporalResolvePass`; no second resolve algorithm or
+  authority clock exists. Two RGBA16Float targets ping-pong, and one Depth32Float
+  stores the previous **raster** depth. Resolved opaque RGB is copied back to
+  `DisplayTransform`'s retained HDR composition target before plume, stars,
+  clouds/aurora and UI. History never includes those later overlays.
+- History and motion commit only after submitting a real frame. Encoding,
+  abandoning an encoder, repeated queries and an empty commit do not advance
+  their submitted-frame counters. Resize preserves resources on invalid input,
+  resets history on valid reconfiguration, and does not rebuild world geometry.
+- Terrain height/material membership/content, conforming configuration and
+  applied plant publication tokens invalidate history. The scene also supplies
+  published lighting/environment changes and bookmark/map/chase/preview mode
+  tokens. Projection/exposure changes reject history; pixel reprojection and
+  depth tests reject out-of-view/disoccluded history. Arbitrary same-mode camera
+  teleports do not yet have an explicit scene cut token.
+- Motion-invalid current pixels (ocean, rigid meshes/plants, invalid sky) are
+  displayed but store history **age zero**, not age one. The history texture's
+  age channel therefore also acts as a reusable-source validity mask. The GPU
+  conservatively rejects a bilinear history footprint if any of its four taps
+  has age zero; checking only the nearest tap would still leak masked colour.
+  Current scene alpha supplies surface eligibility even on the first frame,
+  when no previous camera exists and motion lookup is invalid. The first sweep
+  capture exposed
+  exactly that leak (duplicated tree-trunk/canopy silhouettes); CPU and GPU
+  lifecycle tests now pin the zero-age rule, bilinear source rejection and
+  recovery to age one.
+- The old formula `1/(age+1)` multiplied **history**, so older history received
+  less weight. Both CPU and GPU now use `age/(age+1)`, capped at
+  `1-min_current_weight` (default 0.95). Unclipped samples form the arithmetic
+  running mean until the age/responsiveness caps apply. CPU regression tests
+  pin that mean and the responsiveness cap, rather than just matching the GPU
+  against the same mistaken formula.
+- Incremental persistent targets cost **20 bytes/pixel** (17.58 MiB at
+  1280×720), in addition to existing HDR and motion targets (8 bytes/pixel each).
+  Disabled TAA constructs no resolve pipeline/history/depth targets and encodes
+  no resolve or copies. Resize temporarily retains old and new TAA targets
+  (up to 20×old pixels + 20×new pixels before GPU retirement); adapter-internal
+  allocations and queued-frame retention are not included in that logical bound.
+- `native-topology-v8-temporal` separates `render.temporal_resolve` from motion
+  and overlays, including colour copy-back/depth snapshot. Both capture adapters
+  report actual TAA targets, submitted frames, global reset frames, history-age
+  cap and neighborhood width. Global reset counts do not count pixel reuse.
+
+**Remaining acceptance boundaries:** the depth test currently uses an explicit
+16×f32-epsilon normalized-depth tolerance, not a measured universal metric
+envelope. Transparent overlay shaders still interpret sampled jittered opaque
+depth through their unjittered camera; a composed sampled/resolved-depth policy
+and edge oracle remain necessary. All rigid meshes, including static plants,
+and water retain conservative invalid masks; no foliage antialiasing benefit is
+claimed. The age-zero source rule prevents those pixels from seeding neighbour
+history, but it does not give them object motion. A measured moving-scene
+ghosting envelope (including streaming-reset behaviour), arbitrary cuts,
+astronomical-coordinate error, platform parity and independent visual preference
+are not closed by the history lifecycle fixture. No upscaling, SDK, generated
+frame or new simulation tick is introduced.
 
 ## 10. Regression and benchmark protocol
 

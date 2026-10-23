@@ -299,6 +299,22 @@ impl SceneMotion {
         &self.output
     }
 
+    pub fn texture_view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    pub fn previous_view(&self) -> Option<&crate::view::ViewParams> {
+        self.previous.as_ref()
+    }
+
+    pub fn previous_jitter(&self) -> JitterOffset {
+        if self.jitter_enabled {
+            JitterOffset::halton(self.submitted_frames.saturating_sub(1))
+        } else {
+            JitterOffset::ZERO
+        }
+    }
+
     pub fn reset(&mut self) {
         self.previous = None;
         self.submitted_frames = 0;

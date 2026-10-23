@@ -114,6 +114,7 @@ struct ShadowCacheKey {
 /// Persistent GPU terrain working set. Regular-patch geometry is generated at
 /// page publication; opt-in conforming geometry is emitted at encode_surface.
 pub struct TerrainRenderer {
+    temporal_epoch: u64,
     motion_vectors: bool,
     topology: Option<crate::terrain_topology::TerrainTopology>,
     topology_reason: Option<String>,
@@ -967,6 +968,7 @@ impl TerrainRenderer {
             sky: None,
             plume: None,
             motion_vectors: settings.is_some_and(|s| s.temporal_motion_vectors),
+            temporal_epoch: 1,
             sky_visible: settings.is_none_or(|s| s.sky_dome),
             format,
             shadow_receiver: shadows
@@ -1059,6 +1061,9 @@ impl TerrainRenderer {
             .materials
             .prepare(backend, &self.node_ids, demand, pages)?;
         self.ocean_dirty |= upload.changed;
+        if upload.changed {
+            self.temporal_epoch = self.temporal_epoch.wrapping_add(1);
+        }
         if upload.changed
             && let Some(topology) = &self.topology
         {
@@ -1149,6 +1154,14 @@ impl TerrainRenderer {
     }
     pub fn topology_storage_bytes(&self) -> u64 {
         self.topology.as_ref().map_or(0, |t| t.storage_bytes())
+    }
+    /// Height/material content, not camera-relative re-emission of the same field.
+    pub fn temporal_epoch(&self) -> [u64; 2] {
+        [
+            self.temporal_epoch,
+            self.conforming_surface()
+                .map_or(0, |s| s.publication().configuration_revision),
+        ]
     }
     pub fn topology_reason(&self) -> Option<&str> {
         self.topology_reason.as_deref()
@@ -1384,6 +1397,7 @@ impl TerrainRenderer {
         // From here all fallible validation has completed. Queue ordering keeps
         // the previous submitted draw intact and the next draw wholly new.
         if ids != self.node_ids || !dirty.is_empty() {
+            self.temporal_epoch = self.temporal_epoch.wrapping_add(1);
             self.invalidate_shadows();
             self.ocean_dirty = true;
             if let Some(topology) = &self.topology {
@@ -1481,6 +1495,9 @@ impl TerrainRenderer {
     }
 
     fn upload_pages(&mut self, backend: &Backend, updates: &[(u32, &HeightPage)]) {
+        if !updates.is_empty() {
+            self.temporal_epoch = self.temporal_epoch.wrapping_add(1);
+        }
         self.ocean_dirty |= !updates.is_empty();
         for (i, page) in updates {
             let idx = *i as usize;
@@ -2306,6 +2323,7 @@ pub(crate) fn map_buffer(
 /// Persistent color/depth targets; reuse across frames. Screenshot readback is
 /// explicit and is not part of the steady-state rendering benchmark.
 pub struct OffscreenTarget {
+    pub depth_texture: wgpu::Texture,
     pub color: wgpu::TextureView,
     pub depth: wgpu::TextureView,
     texture: wgpu::Texture,
@@ -2360,15 +2378,18 @@ impl OffscreenTarget {
             format,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
-        let depth = make(
+        let depth_texture = make(
             wgpu::TextureFormat::Depth32Float,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        )
-        .create_view(&Default::default());
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth = depth_texture.create_view(&Default::default());
         let color = texture.create_view(&Default::default());
         Ok(Self {
             color,
             depth,
+            depth_texture,
             texture,
             width,
             height,

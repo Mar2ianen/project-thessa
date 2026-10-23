@@ -46,6 +46,7 @@ pub mod motion;
 pub mod ocean;
 pub mod plume;
 pub mod ray_scene;
+pub mod scene_temporal;
 pub mod shadows;
 mod sky;
 pub mod temporal_resolve;
@@ -450,6 +451,33 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        temporal_supported: Some(
+            adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+                && adapter
+                    .get_texture_format_features(wgpu::TextureFormat::Rgba16Float)
+                    .allowed_usages
+                    .contains(
+                        wgpu::TextureUsages::STORAGE_BINDING
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_SRC
+                            | wgpu::TextureUsages::COPY_DST,
+                    )
+                && adapter
+                    .get_texture_format_features(wgpu::TextureFormat::Rgba16Float)
+                    .flags
+                    .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
+                && adapter
+                    .get_texture_format_features(wgpu::TextureFormat::Depth32Float)
+                    .allowed_usages
+                    .contains(
+                        wgpu::TextureUsages::COPY_SRC
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                    ),
+        ),
         terrain_anisotropy_supported: Some(
             adapter
                 .get_downlevel_capabilities()

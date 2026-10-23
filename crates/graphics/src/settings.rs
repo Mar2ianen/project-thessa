@@ -151,9 +151,15 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
-/// Native temporal signal diagnostics. No history or resolve is enabled yet.
+/// Native temporal reconstruction and independent signal diagnostics.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TemporalSettings {
+    /// Opaque-scene history resolve. Requires HDR; implies motion and jitter.
+    #[serde(default)]
+    pub taa: bool,
+    /// History/sample budget; never changes authoritative state.
+    #[serde(default)]
+    pub quality: Quality,
     /// Produce native-resolution camera motion with explicit invalid masks.
     /// Requires HDR; disabled allocates no motion target or pipeline.
     #[serde(default)]

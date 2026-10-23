@@ -76,6 +76,7 @@ pub struct SceneMeshes {
     plants: Option<crate::surface_plants::Prepared>,
     plant_jobs: crate::surface_plants::PreparationQueue,
     plant_capacity: usize,
+    plant_epoch: u64,
     terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
     terrain_reason: Option<String>,
     shadows: Option<thessa_render_wgpu::shadows::ShadowAtlas>,
@@ -356,6 +357,7 @@ impl SceneMeshes {
             plants,
             plant_jobs: Default::default(),
             plant_capacity: capacity,
+            plant_epoch: 1,
         };
         diagnostics.publication_ms = started.elapsed().as_secs_f64() * 1000.0;
         *scene.surface_plants_diagnostics.borrow_mut() = diagnostics;
@@ -375,6 +377,9 @@ impl SceneMeshes {
     }
     pub fn opaque(&self) -> Option<&MeshRenderer> {
         self.inner.as_ref()
+    }
+    pub fn temporal_epoch(&self) -> u64 {
+        self.plant_epoch
     }
     pub fn sync_rt_terrain(
         &mut self,
@@ -460,6 +465,7 @@ impl SceneMeshes {
                     ))
                 };
                 if let Some(ready) = ready {
+                    let epoch = self.plant_epoch.wrapping_add(1);
                     let (plants, mut diagnostics) = ready.map_err(BackendError::Device)?;
                     let reuse = self.inner.is_some()
                         && self.plants.as_ref().zip(plants.as_ref()).is_some_and(
@@ -495,6 +501,7 @@ impl SceneMeshes {
                         replacement.plant_jobs = std::mem::take(&mut self.plant_jobs);
                         *self = replacement;
                     }
+                    self.plant_epoch = epoch;
                 }
             }
             let mut diagnostics = scene.surface_plants_diagnostics.borrow_mut();

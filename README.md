@@ -117,9 +117,12 @@ The checked-in vertical slice currently contains:
   depth with explicit ocean/mesh invalid masks and submitted-camera tracking
   ([doc 76](docs/76_TEMPORAL_RECONSTRUCTION.md)). Separate `[temporal].jitter`
   diagnostics sample primary terrain/meshes while preserving secondary views
-  and jitter-free velocity. A GPU resolve pass now matches the backend-neutral
-  history-validation oracle offscreen, but no scene-integrated TAA, colour
-  history, upscaling or frame generation is enabled.
+   and jitter-free velocity. Default-off `[temporal].taa` now connects the shared
+   resolve to native scene history before overlays, with explicit quality and
+    HDR/capability fallback. All rigid meshes (including static plants) and ocean
+    reject history and cannot seed filtered history; composition, a measured
+    ghosting envelope and visual acceptance remain open. No upscaling or
+   frame generation is implemented.
 - `apps/terrain-native`: Bevy-free window/headless migration viewer using the
   same frozen canonical field, HIGHLANDS bookmark, height/material builders and
   stellar ephemerides as the game. Run `cargo run --release -p thessa-terrain-native`

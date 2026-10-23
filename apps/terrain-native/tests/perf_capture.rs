@@ -145,9 +145,9 @@ fn headless_flight_time_requests_preserve_fixed_steps_and_truthful_capture_count
         .join(format!("native-clock-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
     let graphics = scratch.join("graphics.toml");
-    std::fs::write(&graphics,"version=1\npreset=\"custom\"\n[renderer]\nray_tracing=\"off\"\nhdr=false\n[atmosphere]\nenabled=false\nsky_dome=false\nstars=false\n[upper_atmosphere]\naurora=false\nairglow=false\n[clouds]\nenabled=false\n[ocean]\nenabled=false\n[shadows]\nenabled=false\n").unwrap();
-    for paused in [false, true] {
-        let json = scratch.join(format!("clock-{paused}.json"));
+    for (paused, taa) in [(false, false), (true, false), (false, true), (true, true)] {
+        std::fs::write(&graphics, format!("version=1\npreset=\"custom\"\n[renderer]\nray_tracing=\"off\"\nhdr={taa}\n[temporal]\ntaa={taa}\n[atmosphere]\nenabled=false\nsky_dome=false\nstars=false\n[upper_atmosphere]\naurora=false\nairglow=false\n[clouds]\nenabled=false\n[ocean]\nenabled=false\n[shadows]\nenabled=false\n")).unwrap();
+        let json = scratch.join(format!("clock-{paused}-{taa}.json"));
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"));
         command
             .current_dir(root.join("../.."))
@@ -187,6 +187,10 @@ fn headless_flight_time_requests_preserve_fixed_steps_and_truthful_capture_count
         let capture =
             thessa_perf::PerfCapture::from_json(&std::fs::read_to_string(json).unwrap()).unwrap();
         assert_eq!(capture.frames.len(), 2);
+        assert_eq!(
+            capture.metadata.graphics.resolved["native_taa"],
+            taa.to_string()
+        );
         for frame in &capture.frames {
             assert_eq!(frame.sim.fixed_dt_s, 1.0 / 120.0);
             assert_eq!(frame.sim.steps_this_frame, if paused { 0 } else { 6 });
@@ -240,7 +244,7 @@ fn native_headless_capture_exports_measured_frames_and_capability_truth() {
         (true, false, true),
         (true, true, true),
     ] {
-        check_capture(hdr, topology, motion, false);
+        check_capture(hdr, topology, motion, false, false);
     }
     for (hdr, topology, motion) in [
         (true, false, true),
@@ -248,19 +252,22 @@ fn native_headless_capture_exports_measured_frames_and_capability_truth() {
         (false, false, true),
         (true, false, false),
     ] {
-        check_capture(hdr, topology, motion, true);
+        check_capture(hdr, topology, motion, true, false);
+    }
+    for (hdr, topology) in [(false, false), (true, false), (true, true)] {
+        check_capture(hdr, topology, false, false, true);
     }
 }
 
-fn check_capture(hdr: bool, topology: bool, motion: bool, jitter: bool) {
+fn check_capture(hdr: bool, topology: bool, motion: bool, jitter: bool, taa: bool) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = root.join("target/test-tmp").join(format!(
-        "native-perf-{}-{hdr}-{topology}-{motion}-{jitter}",
+        "native-perf-{}-{hdr}-{topology}-{motion}-{jitter}-{taa}",
         std::process::id()
     ));
     std::fs::create_dir_all(&scratch).unwrap();
     let graphics = scratch.join("graphics.toml");
-    std::fs::write(&graphics,format!("version=1\n[renderer]\nhdr={hdr}\nray_tracing=\"off\"\nauto_exposure=true\nbloom=true\n[terrain_topology]\nenabled={topology}\nquality=\"low\"\n[temporal]\nmotion_vectors={motion}\njitter={jitter}\n")).unwrap();
+    std::fs::write(&graphics,format!("version=1\n[renderer]\nhdr={hdr}\nray_tracing=\"off\"\nauto_exposure=true\nbloom=true\n[terrain_topology]\nenabled={topology}\nquality=\"low\"\n[temporal]\nmotion_vectors={motion}\njitter={jitter}\ntaa={taa}\n")).unwrap();
     let json = scratch.join("capture.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
         .current_dir(root.join("../.."))
@@ -300,6 +307,7 @@ fn check_capture(hdr: bool, topology: bool, motion: bool, jitter: bool) {
         "render.rt_as_build",
         "render.scene_classify_and_raster",
         "render.motion_vectors",
+        "render.temporal_resolve",
         "render.scene_overlays",
         "render.display_transform",
         "render.ui",
@@ -337,7 +345,7 @@ fn check_capture(hdr: bool, topology: bool, motion: bool, jitter: bool) {
             .resolved
             .get("gpu_scope_layout")
             .map(String::as_str),
-        Some("native-topology-v7-motion")
+        Some("native-topology-v8-temporal")
     );
     if topology
         && thessa_render_wgpu::probe_capabilities(&backend.adapter).terrain_conforming_supported
@@ -354,22 +362,40 @@ fn check_capture(hdr: bool, topology: bool, motion: bool, jitter: bool) {
         && thessa_render_wgpu::probe_capabilities(&backend.adapter).hdr_render_target_supported
             == Some(true);
     let meta = &capture.metadata.graphics.resolved;
+    let taa = taa && backend.caps.temporal_supported == Some(true);
+    assert_eq!(meta["native_taa"], (enabled && taa).to_string());
+    assert_eq!(
+        meta["native_taa_target_bytes"],
+        if enabled && taa {
+            (1280u64 * 720 * 20).to_string()
+        } else {
+            "0".into()
+        }
+    );
+    assert_eq!(
+        meta["native_taa_submitted_frames"],
+        if enabled && taa { "33" } else { "0" }
+    );
     assert_eq!(
         meta["native_primary_jitter"],
-        (enabled && motion && jitter).to_string()
+        (enabled && (motion || taa) && (jitter || taa)).to_string()
     );
     assert_eq!(
         meta["native_jitter_submitted_frames"],
-        if enabled && motion { "33" } else { "0" }
+        if enabled && (motion || taa) {
+            "33"
+        } else {
+            "0"
+        }
     );
     assert_eq!(meta["native_hdr"], enabled.to_string());
     assert_eq!(
         meta["native_motion_vectors"],
-        (enabled && motion).to_string()
+        (enabled && (motion || taa)).to_string()
     );
     assert_eq!(
         meta["native_motion_target_bytes"],
-        if enabled && motion {
+        if enabled && (motion || taa) {
             (1280u64 * 720 * 8).to_string()
         } else {
             "0".into()

@@ -27,9 +27,9 @@ pub const MAX_HISTORY_AGE: u32 = 64;
 /// Default neighbourhood standard-deviation multiplier for colour clipping.
 pub const DEFAULT_COLOR_SIGMA: f32 = 1.0;
 
-/// Minimum accepted history weight. This is a responsiveness policy, not a
+/// Minimum current-sample weight. This is a responsiveness policy, not a
 /// physical quantity: even a long valid history must yield to a changing image.
-pub const DEFAULT_MIN_HISTORY_WEIGHT: f32 = 0.05;
+pub const DEFAULT_MIN_CURRENT_WEIGHT: f32 = 0.05;
 
 /// Coordinate convention of the previous colour history texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,9 +222,10 @@ pub fn history_weight(age: u32, minimum: f32) -> f32 {
     let minimum = if minimum.is_finite() {
         minimum.clamp(0.0, 1.0)
     } else {
-        DEFAULT_MIN_HISTORY_WEIGHT
+        DEFAULT_MIN_CURRENT_WEIGHT
     };
-    (1.0 / (f64::from(age.min(MAX_HISTORY_AGE)) + 1.0) as f32).max(minimum)
+    let samples = age.min(MAX_HISTORY_AGE) as f32;
+    (samples / (samples + 1.0)).min(1.0 - minimum)
 }
 
 /// Reason a history candidate was not accepted.
@@ -255,14 +256,14 @@ pub struct HistoryCandidate {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvePolicy {
     pub color_sigma: f32,
-    pub min_history_weight: f32,
+    pub min_current_weight: f32,
 }
 
 impl Default for ResolvePolicy {
     fn default() -> Self {
         Self {
             color_sigma: DEFAULT_COLOR_SIGMA,
-            min_history_weight: DEFAULT_MIN_HISTORY_WEIGHT,
+            min_current_weight: DEFAULT_MIN_CURRENT_WEIGHT,
         }
     }
 }
@@ -273,6 +274,8 @@ pub struct ResolveInput {
     pub current: [f32; 3],
     /// Current 3x3 neighbourhood, centre at index 4.
     pub neighbors: [[f32; 3]; 9],
+    /// The current pixel is a static surface whose reprojection is meaningful.
+    /// False for ocean, rigid meshes/plants and other explicit invalid masks.
     pub motion_valid: bool,
     /// False after cut/resize/projection/material/lighting invalidations.
     pub epoch_valid: bool,
@@ -283,7 +286,9 @@ pub struct ResolveInput {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolveOutput {
     pub color: [f32; 3],
-    /// Count of accumulated frames represented by the stored colour.
+    /// Count of accumulated frames represented by the stored colour. Zero means
+    /// the current colour may be displayed but is not a reusable history source
+    /// (for example a plant, ocean or invalid-motion pixel).
     pub age: u32,
     /// History weight actually used for this output.
     pub history_weight: f32,
@@ -292,9 +297,12 @@ pub struct ResolveOutput {
 
 /// Resolve one pixel through the shared validation and clipping contract.
 ///
-/// Rejection always falls back to the current colour with age one. A valid
-/// candidate is clipped against the current neighbourhood before blending and
-/// advances the age to `min(age + 1, MAX_HISTORY_AGE)`.
+/// A valid candidate is clipped against the current neighbourhood before
+/// blending and advances the age to `min(age + 1, MAX_HISTORY_AGE)`. The
+/// current surface colour is reused with age one after a global reset,
+/// out-of-bounds/depth/disocclusion rejection, or missing history. A
+/// motion-invalid current pixel stores age **zero**: it is shown, but it must
+/// not seed a neighbouring pixel's history when the camera later moves.
 pub fn resolve(input: ResolveInput, policy: ResolvePolicy) -> ResolveOutput {
     if !input.current.iter().all(|channel| channel.is_finite()) {
         return ResolveOutput {
@@ -311,11 +319,16 @@ pub fn resolve(input: ResolveInput, policy: ResolvePolicy) -> ResolveOutput {
         history_weight: 0.0,
         rejection: Some(rejection),
     };
+    if !input.motion_valid {
+        return ResolveOutput {
+            color: current,
+            age: 0,
+            history_weight: 0.0,
+            rejection: Some(HistoryRejection::InvalidMotion),
+        };
+    }
     if !input.epoch_valid {
         return fallback(HistoryRejection::EpochReset);
-    }
-    if !input.motion_valid {
-        return fallback(HistoryRejection::InvalidMotion);
     }
     let Some(history) = input.history else {
         return fallback(HistoryRejection::NoHistory);
@@ -342,7 +355,7 @@ pub fn resolve(input: ResolveInput, policy: ResolvePolicy) -> ResolveOutput {
     let Some(clipped) = clip_history(history.color, bounds) else {
         return fallback(HistoryRejection::NonFiniteHistory);
     };
-    let weight = history_weight(history.age, policy.min_history_weight);
+    let weight = history_weight(history.age, policy.min_current_weight);
     if weight <= 0.0 {
         return fallback(HistoryRejection::NoHistory);
     }
@@ -531,7 +544,7 @@ mod tests {
         neighbors[4] = current;
         let policy = ResolvePolicy::default();
         let mut age = 1;
-        for expected_weight in [0.5, 1.0 / 3.0, 0.25] {
+        for expected_weight in [0.5, 2.0 / 3.0, 0.75] {
             history.age = age;
             let output = resolve(
                 ResolveInput {
@@ -550,9 +563,23 @@ mod tests {
             assert!((output.color[0] - expected).abs() < 1e-6);
             age = output.age;
         }
-        assert!(history_weight(MAX_HISTORY_AGE, 0.0) >= 1.0 / 65.0);
+        assert!((history_weight(MAX_HISTORY_AGE, 0.0) - 64.0 / 65.0).abs() < 1e-6);
         assert_eq!(history_weight(0, 0.9), 0.0);
-        assert_eq!(history_weight(1, 0.9), 0.9);
+        assert!((history_weight(1, 0.9) - 0.1).abs() < 1e-6);
+        assert!((history_weight(MAX_HISTORY_AGE, 0.05) - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn history_is_the_running_mean_not_a_fading_previous_sample() {
+        let samples = [0.25, 0.75, 0.5, 1.0, 0.0, 0.5];
+        let mut mean = samples[0];
+        let mut sum = mean;
+        for (i, current) in samples.into_iter().enumerate().skip(1) {
+            sum += current;
+            let weight = history_weight(i as u32, 0.0);
+            mean = current * (1.0 - weight) + mean * weight;
+            assert!((mean - sum / (i + 1) as f32).abs() < 1e-6);
+        }
     }
 
     #[test]
@@ -595,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn every_rejection_uses_current_and_resets_age() {
+    fn every_rejection_uses_current_and_sets_a_reusable_age() {
         let current = [0.2, 0.4, 0.6];
         let base = candidate([0.1, 0.2, 0.3], 3);
         let policy = ResolvePolicy::default();
@@ -673,10 +700,42 @@ mod tests {
         for (input, rejection) in cases {
             let output = resolve(input, policy);
             assert_eq!(output.color, current);
-            assert_eq!(output.age, 1);
+            assert_eq!(
+                output.age,
+                u32::from(rejection != HistoryRejection::InvalidMotion)
+            );
             assert_eq!(output.history_weight, 0.0);
             assert_eq!(output.rejection, Some(rejection));
         }
+        // A motion-invalid pixel is displayed but must not become a reusable
+        // history source for a neighbouring surface pixel after camera motion.
+        let masked = resolve(
+            ResolveInput {
+                current,
+                neighbors: flat(current),
+                motion_valid: false,
+                epoch_valid: true,
+                history: Some(base),
+            },
+            policy,
+        );
+        assert_eq!(masked.age, 0);
+        let reused = resolve(
+            ResolveInput {
+                current,
+                neighbors: flat(current),
+                motion_valid: true,
+                epoch_valid: true,
+                history: Some(HistoryCandidate {
+                    age: masked.age,
+                    color: masked.color,
+                    ..base
+                }),
+            },
+            policy,
+        );
+        assert_eq!(reused.rejection, Some(HistoryRejection::NoHistory));
+        assert_eq!(reused.age, 1);
         let invalid = resolve(
             ResolveInput {
                 current: [f32::NAN, 0.0, 0.0],

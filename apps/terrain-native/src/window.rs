@@ -20,8 +20,10 @@ struct State {
     sky_layers: crate::sky_layers::SkyLayers,
     display: thessa_render_wgpu::display::DisplayTransform,
     motion: Option<thessa_render_wgpu::motion::SceneMotion>,
+    temporal: Option<thessa_render_wgpu::scene_temporal::SceneTemporal>,
     mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
+    depth_texture: wgpu::Texture,
     drawable: bool,
     exposure: f32,
     perf: crate::perf::WindowPerf,
@@ -101,19 +103,25 @@ impl State {
             display.enabled(),
             display.target_bytes()
         );
-        let depth = depth(&backend, config.width, config.height);
+        let depth_texture = depth(&backend, config.width, config.height);
+        let depth = depth_texture.create_view(&Default::default());
         let motion = thessa_render_wgpu::motion::SceneMotion::new(
             &backend,
             &resolved,
             [config.width, config.height],
         )?;
         eprintln!(
-            "native motion diagnostics: enabled={} target_bytes={} jitter={}; opaque-only, no TAA",
+            "native motion diagnostics: enabled={} target_bytes={} jitter={}; opaque-only",
             motion.is_some(),
             motion.as_ref().map_or(0, |m| m.target_bytes()),
             motion.as_ref().is_some_and(|m| m.jitter_enabled()),
         );
-        if resolved.temporal_jitter {
+        let temporal = thessa_render_wgpu::scene_temporal::SceneTemporal::new(
+            &backend,
+            &resolved,
+            [config.width, config.height],
+        )?;
+        if resolved.temporal_jitter && !resolved.temporal_taa {
             eprintln!(
                 "primary jitter diagnostics are enabled without a temporal resolve; visible subpixel trembling is expected, not antialiasing"
             );
@@ -141,8 +149,10 @@ impl State {
             sky_layers,
             display,
             motion,
+            temporal,
             mesh_renderer,
             depth,
+            depth_texture,
             drawable: size.width > 0 && size.height > 0,
             exposure,
             perf: crate::perf::WindowPerf::new(),
@@ -163,6 +173,7 @@ impl State {
             &self.display,
             &self.sky_layers,
             self.motion.as_ref(),
+            self.temporal.as_ref(),
         );
         metadata.display.vsync = scene.requested.renderer.vsync;
         // Empty base preserves the legacy relative "stem.json" cwd contract.
@@ -182,7 +193,15 @@ impl State {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.backend.device, &self.config);
-        self.depth = depth(&self.backend, width, height);
+        self.depth_texture = depth(&self.backend, width, height);
+        self.depth = self.depth_texture.create_view(&Default::default());
+        if let Some(temporal) = &mut self.temporal
+            && let Err(error) = temporal.resize(&self.backend, [width, height])
+        {
+            self.drawable = false;
+            eprintln!("temporal resize rejected: {error}");
+            return;
+        }
         if let Some(motion) = &mut self.motion
             && let Err(error) = motion.resize(&self.backend, [width, height])
         {
@@ -393,6 +412,21 @@ impl State {
                 &view,
             )?;
         }
+        if let (Some(temporal), Some(motion), Some(color)) = (
+            &mut self.temporal,
+            &self.motion,
+            self.display.scene_texture(),
+        ) {
+            temporal.encode(
+                &self.backend,
+                &mut encoder,
+                color,
+                &self.depth_texture,
+                motion,
+                &view,
+                scene.temporal_epoch(&self.renderer, self.mesh_renderer.as_ref()),
+            )?;
+        }
         self.renderer
             .encode_plume(&mut encoder, self.display.scene_color(&color), &self.depth);
         self.sky_layers.encode(
@@ -435,6 +469,9 @@ impl State {
         if let Some(motion) = &mut self.motion {
             motion.commit(view);
         }
+        if let Some(temporal) = &mut self.temporal {
+            temporal.commit();
+        }
         self.backend.queue.present(frame);
         self.submitted_frames += 1;
         // Overlay wall includes present/vsync wait (same definition as the
@@ -453,24 +490,23 @@ impl State {
     }
 }
 
-fn depth(backend: &Backend, width: u32, height: u32) -> wgpu::TextureView {
-    backend
-        .device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("native-terrain-depth"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
-        .create_view(&Default::default())
+fn depth(backend: &Backend, width: u32, height: u32) -> wgpu::Texture {
+    backend.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("native-terrain-depth"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 struct App {

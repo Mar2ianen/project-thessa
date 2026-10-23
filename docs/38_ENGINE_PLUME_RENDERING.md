@@ -513,9 +513,10 @@ impostor and unit-cone vertices. Counters report submitted draws, march budget
 and frame/profile/texture upload bytes, not visible-pixel counts or GPU times.
 The headless diagnostic prints them as `native_plume`.
 The initial checkpoint used `native-topology-v6-plume`, with plume inside
-`render.scene_classify_and_raster`. Current `native-topology-v7-motion`
+`render.scene_classify_and_raster`. Current `native-topology-v8-temporal`
 captures isolate plume plus translucent sky in `render.scene_overlays`, after
-the optional opaque-only motion diagnostic (doc 76). Sum opaque raster and
+the optional opaque-only motion and history resolve (doc 76). The v8 resolve
+has its own interval and never retains plume pixels. Sum opaque raster and
 scene overlays before comparing the old combined scope.
 Both capture adapters explicitly record native nozzle lighting as unapplied /
 unavailable, independently of the shared requested/resolved light toggle.

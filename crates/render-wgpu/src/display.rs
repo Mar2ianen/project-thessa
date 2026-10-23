@@ -11,6 +11,7 @@ pub struct DisplayTransform {
     extent: [u32; 2],
 }
 struct Hdr {
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     pipeline: wgpu::RenderPipeline,
     bind: wgpu::BindGroup,
@@ -89,9 +90,11 @@ impl DisplayTransform {
                     multiview_mask: None,
                     cache: None,
                 });
-            let view = target(backend, width, height);
+            let texture = target(backend, width, height);
+            let view = texture.create_view(&Default::default());
             let bind = bind(backend, &pipeline, &view);
             Some(Hdr {
+                texture,
                 view,
                 pipeline,
                 bind,
@@ -117,6 +120,9 @@ impl DisplayTransform {
     pub fn scene_color<'a>(&'a self, output: &'a wgpu::TextureView) -> &'a wgpu::TextureView {
         self.hdr.as_ref().map_or(output, |hdr| &hdr.view)
     }
+    pub fn scene_texture(&self) -> Option<&wgpu::Texture> {
+        self.hdr.as_ref().map(|hdr| &hdr.texture)
+    }
     pub fn target_bytes(&self) -> u64 {
         if self.hdr.is_some() {
             u64::from(self.extent[0]) * u64::from(self.extent[1]) * 8
@@ -140,7 +146,9 @@ impl DisplayTransform {
             return Ok(());
         }
         if let Some(hdr) = &mut self.hdr {
-            let view = target(backend, width, height);
+            let texture = target(backend, width, height);
+            let view = texture.create_view(&Default::default());
+            hdr.texture = texture;
             hdr.bind = bind(backend, &hdr.pipeline, &view);
             hdr.view = view;
         }
@@ -180,24 +188,23 @@ fn validate_extent(backend: &Backend, width: u32, height: u32) -> Result<(), Bac
         Ok(())
     }
 }
-fn target(backend: &Backend, width: u32, height: u32) -> wgpu::TextureView {
-    backend
-        .device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("native-pre-exposed-hdr"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: HDR_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
-        .create_view(&Default::default())
+fn target(backend: &Backend, width: u32, height: u32) -> wgpu::Texture {
+    backend.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("native-pre-exposed-hdr"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: HDR_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
 }
 fn bind(
     backend: &Backend,

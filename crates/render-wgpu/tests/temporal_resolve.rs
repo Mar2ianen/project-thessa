@@ -7,7 +7,7 @@
 use glam::{DMat4, DVec3, Vec3};
 use thessa_render_core::temporal::JitterOffset;
 use thessa_render_core::temporal_resolve::{
-    DEFAULT_COLOR_SIGMA, DEFAULT_MIN_HISTORY_WEIGHT, HistoryCandidate, HistoryGrid, ResolveInput,
+    DEFAULT_COLOR_SIGMA, DEFAULT_MIN_CURRENT_WEIGHT, HistoryCandidate, HistoryGrid, ResolveInput,
     ResolvePolicy, resolve,
 };
 use thessa_render_wgpu::{
@@ -58,8 +58,10 @@ fn params() -> ResolveParams {
         previous_jitter: JitterOffset::ZERO,
         depth_tolerance: 1e-4,
         color_sigma: DEFAULT_COLOR_SIGMA,
-        min_history_weight: DEFAULT_MIN_HISTORY_WEIGHT,
+        min_current_weight: DEFAULT_MIN_CURRENT_WEIGHT,
         history_grid: HistoryGrid::ResolvedUnjittered,
+        max_history_age: 64,
+        neighborhood_width: 3,
     }
 }
 
@@ -322,12 +324,20 @@ fn expected_pixel(x: u32, y: u32, previous_depth: f64, motion_valid: bool) -> ([
     (output.color, output.age)
 }
 
-fn run(backend: &Backend, previous_depth_value: f32, motion_valid: bool) -> Vec<([f32; 3], u32)> {
+fn run(
+    backend: &Backend,
+    previous_depth_value: f32,
+    motion_valid: bool,
+    min_current_weight: f32,
+    invalid_history_pixel: Option<[u32; 2]>,
+) -> Vec<([f32; 3], u32)> {
     let current = rgba16_texture(backend, "temporal-current", {
         let mut values = Vec::with_capacity((SIZE * SIZE) as usize);
         for y in 0..SIZE {
             for x in 0..SIZE {
-                values.push(checker(x, y));
+                let mut value = checker(x, y);
+                value[3] = f32::from(motion_valid);
+                values.push(value);
             }
         }
         values.into_iter()
@@ -335,7 +345,18 @@ fn run(backend: &Backend, previous_depth_value: f32, motion_valid: bool) -> Vec<
     let history = rgba16_texture(
         backend,
         "temporal-history",
-        std::iter::repeat_n(flat(0.625, 2.0), (SIZE * SIZE) as usize),
+        (0..SIZE).flat_map(|y| {
+            (0..SIZE).map(move |x| {
+                flat(
+                    0.625,
+                    if invalid_history_pixel == Some([x, y]) {
+                        0.0
+                    } else {
+                        2.0
+                    },
+                )
+            })
+        }),
     );
     let motion = rgba16_texture(
         backend,
@@ -378,7 +399,10 @@ fn run(backend: &Backend, previous_depth_value: f32, motion_valid: bool) -> Vec<
         &history_view,
         &previous_depth_view,
         &output_view,
-        params(),
+        ResolveParams {
+            min_current_weight,
+            ..params()
+        },
     )
     .unwrap();
     backend.queue.submit([encoder.finish()]);
@@ -403,7 +427,7 @@ fn valid_history_matches_the_cpu_contract_and_clips_before_blending() {
     let Some(backend) = backend() else {
         return;
     };
-    let actual = run(&backend, 0.5, true);
+    let actual = run(&backend, 0.5, true, DEFAULT_MIN_CURRENT_WEIGHT, None);
     for y in 0..SIZE {
         for x in 0..SIZE {
             let (expected, age) = expected_pixel(x, y, 0.5, true);
@@ -425,7 +449,13 @@ fn depth_disocclusion_and_invalid_motion_fall_back_to_current() {
         return;
     };
     for (previous_depth, motion_valid) in [(0.6, true), (0.5, false)] {
-        let actual = run(&backend, previous_depth, motion_valid);
+        let actual = run(
+            &backend,
+            previous_depth,
+            motion_valid,
+            DEFAULT_MIN_CURRENT_WEIGHT,
+            None,
+        );
         for y in 0..SIZE {
             for x in 0..SIZE {
                 let (expected, age) = expected_pixel(x, y, f64::from(previous_depth), motion_valid);
@@ -440,4 +470,42 @@ fn depth_disocclusion_and_invalid_motion_fall_back_to_current() {
             }
         }
     }
+}
+
+#[test]
+fn fully_responsive_policy_matches_cpu_current_and_reset_age() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    let actual = run(&backend, 0.5, true, 1.0, None);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let expected = checker(x, y)[0];
+            let (color, age) = actual[(y * SIZE + x) as usize];
+            assert_eq!(age, 1);
+            assert!(color.into_iter().all(|v| (v - expected).abs() < 2e-3));
+        }
+    }
+}
+
+#[test]
+fn masked_history_taps_cannot_bleed_through_bilinear_sampling() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    let actual = run(
+        &backend,
+        0.5,
+        true,
+        DEFAULT_MIN_CURRENT_WEIGHT,
+        Some([8, 8]),
+    );
+    // Jitter [-0.25,+0.25] in history texel coordinates makes these four
+    // footprints touch the masked source, even when the nearest tap is valid.
+    for (x, y) in [(8, 7), (9, 7), (8, 8), (9, 8)] {
+        let (color, age) = actual[(y * SIZE + x) as usize];
+        assert_eq!(age, 1, "masked history footprint at ({x},{y})");
+        assert_eq!(color, [checker(x, y)[0]; 3]);
+    }
+    assert_eq!(actual[(4 * SIZE + 4) as usize].1, 3);
 }

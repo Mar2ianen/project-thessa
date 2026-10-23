@@ -25,17 +25,18 @@ conflict-free Git merge is not sufficient evidence for changing launch defaults.
 | Foliage, ground contact, near/far composition | docs 70/75/77; WORLD07b fixes sideways-biased stellar rays with analytic and actual-producer visibility oracles; still inspect streamed-root agreement, then compare matched standing/close/overview and moving views | authored prototypes, sparse cover, finite boundary, subpixel coverage and finite-bias visibility gaps; no final botanical or blind preference acceptance |
 | Water, shore, sky and shadows | docs 56/60/65/74; preserve shared surface/epoch, caster/receiver and finite-ray transport contracts through a composed camera path | remaining finite aerial perspective, water/sky transport and wider convergence stay open; no fake optical compensation |
 | Movement and surface-to-orbit | existing survey/headless capture and bounded terrain streamer; frozen simulation camera sweep, repeated window crossings, mode changes, coarse fallback and return to exact identities | static frames alone do not close this gate; no whole-planet high-detail instantiation |
-| Temporal reconstruction | separate `feat/native-temporal-foundation` worktree; history/reset/disocclusion and simulation-ownership tests on the integrated tree | not merged or presented as finished here; generated frames must never advance physics/history |
+| Temporal reconstruction | temporal commits through `f931a8f` merged as `c1ecf0e`; opt-in scene history now uses the shared resolve in both native loops, with submitted-only advancement and publication resets | T4c lifecycle integration is partial; composed depth, full cut/reset coverage and real-scene ghosting/visual acceptance remain open; no SDK/FG or foliage-history claim |
 | Host replacement | doc 66 source-to-consumer ledger and doc 39; account for launchers, controls, maps, server, audio, fixtures, settings and supported fallbacks | do not remove Bevy, old assets/tests or entry points before the ledger closes; do not label unavailable settings as applied |
 | Main promotion | latest-main ancestry, scope review, full gates on exact integration candidate, immutable capture hashes, honest README/status/launch defaults | main unchanged by this preparation; no force push or destructive branch replacement |
 
-Temporal checkpoint: the separate worktree is at `f931a8f` (stateless validated
-GPU resolve), not completed native scene/history integration. It also has
-uncommitted changes in graphics settings/metadata/resolution, `motion.rs` and
-`graphics.toml`. These drafts were inspected only for inventory; they are not
-silently imported, overwritten or discarded by the surface work. Reconcile
-their ownership and verify T4c before claiming temporal completion or using it
-to certify foliage stability.
+Temporal reconciliation: committed history through `f931a8f` is now merged,
+preserving both terrain anisotropy and temporal alpha-mask shader generation.
+The separate temporal worktree still has its five uncommitted drafts in
+graphics settings/metadata/resolution, `motion.rs` and `graphics.toml`; none was
+overwritten, discarded or silently staged. The surface integration independently
+extends the committed contract. T4c is not complete temporal acceptance and
+cannot certify foliage stability: all rigid meshes, including plants, currently
+reject history. The current implementation and remaining gates are in doc 76.
 
 ## Promotion evidence
 
@@ -92,3 +93,23 @@ The remaining major diagonal branch marks, sparse/subpixel foliage, ground
 normal transport and temporal/host obligations remain in the sequential ledger.
 Evidence:
 [`artifacts/native-stellar-ray-line-2026-10-23.json`](artifacts/native-stellar-ray-line-2026-10-23.json).
+
+## Executed T4c integration checks
+
+The default-off native history lifecycle and masked-source correction pass all
+13 local gates on 645 unchanged compiled/configuration inputs: formatting,
+architecture, whole-workspace all-target/all-feature Clippy, 2,080 lib/bin tests,
+117 integration tests, 47 native hardware/CLI checks, 87 renderer hardware checks,
+native feature-off, WORLD00 regression and debug/release server plus release
+viewer builds. The legacy Bevy ignored command selects zero tests; this is not
+additional GPU coverage or remote CI.
+
+The exact release recipe is `cargo build --release -p thessa-terrain-native`,
+with SHA256
+`86c0ba6cff670e4e56f10135ce4479d185d925c76f2d0d0bc3161f2b29880fcb`.
+GPU regressions pin age-zero masked history, conservative four-tap source
+validation, first-frame static eligibility, recovery to age one, submitted-only
+history, overlay exclusion and lifecycle resets. The initial orbit frame exposed
+duplicated tree silhouettes; the corrected diagnostic frame no longer shows
+those silhouettes. That inspection is not independent visual preference or a
+general moving-scene ghosting bound.

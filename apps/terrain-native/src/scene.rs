@@ -83,6 +83,7 @@ pub struct Scene {
     gpu_environment: Option<thessa_render_wgpu::environment::EnvironmentBinding>,
     gpu_environment_revision: Option<u64>,
     lighting_dirty: bool,
+    presentation_revision: u64,
 }
 
 /// Native stdio host state, not a second simulation or interpolation inbox.
@@ -518,6 +519,7 @@ impl Scene {
             gpu_environment_revision: None,
             sample,
             lighting_dirty: false,
+            presentation_revision: 1,
             clock: FlightClock::default(),
             flyby: Default::default(),
         };
@@ -1714,9 +1716,26 @@ impl Scene {
         }
         if self.lighting_dirty {
             renderer.update_lighting(backend, &self.lighting())?;
+            self.presentation_revision = self.presentation_revision.wrapping_add(1);
             self.lighting_dirty = false;
         }
         Ok(())
+    }
+
+    pub fn temporal_epoch(
+        &self,
+        renderer: &TerrainRenderer,
+        meshes: Option<&SceneMeshes>,
+    ) -> thessa_render_wgpu::scene_temporal::SceneHistoryEpoch {
+        thessa_render_wgpu::scene_temporal::SceneHistoryEpoch {
+            terrain: renderer.temporal_epoch(),
+            plants: meshes.map_or(0, SceneMeshes::temporal_epoch),
+            presentation: self.presentation_revision,
+            view: (self.site as u64) << 3
+                | u64::from(self.map_active())
+                | (u64::from(self.camera.chase()) << 1)
+                | (u64::from(self.vehicle_preview()) << 2),
+        }
     }
 
     pub fn renderer(

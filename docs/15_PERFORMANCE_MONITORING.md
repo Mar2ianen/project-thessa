@@ -17,12 +17,14 @@ and sibling CSV after rendering, and negotiates stable timestamp-query plus
 encoder-timestamp features only for this diagnostic. If either feature is
 unsupported, CPU capture still works and GPU timings are explicitly unavailable.
 Ordinary native devices create no timestamp query/readback buffers or collector.
-GPU intervals (`gpu_scope_layout=native-topology-v7-motion`) are `render.surface_and_shadows`
+GPU intervals (`gpu_scope_layout=native-topology-v8-temporal`) are `render.surface_and_shadows`
 (persistent topology classification/transactions/emission and shadow depth),
 `render.rt_as_build` (dirty mesh/terrain AS builds),
 `render.scene_classify_and_raster` (classification plus the shared terrain,
 opaque-mesh and clear sky-background pass), `render.motion_vectors` (optional
-opaque-depth camera reprojection, empty when disabled), `render.scene_overlays`
+opaque-depth camera reprojection, empty when disabled), `render.temporal_resolve`
+(optional opaque history compute, colour copy-back and previous-depth snapshot,
+empty when disabled), `render.scene_overlays`
 (depth-clipped plume, stars, cloud/aurora composition),
 `render.display_transform` (HDR to SDR, empty on the
 direct LDR fallback), and `render.ui` (after display transform); their sum
@@ -42,6 +44,12 @@ The separate default-off `[temporal].jitter` diagnostic deliberately changes
 primary visibility without resolving it. `native_primary_jitter` records the
 applied mode, and `native_jitter_submitted_frames` counts real submitted frames
 since reset (including capture warmup), not physics ticks or generated frames.
+Default-off `[temporal].taa` implies motion and jitter when supported, retains
+history before overlays and adds the independent v8 resolve interval.
+`native_taa_target_bytes`, `native_taa_submitted_frames`,
+`native_taa_global_reset_frames`, history-age limit and neighbourhood width
+report actual resources/policy. Global reset counts are not per-pixel history
+acceptance statistics. See doc 76 for the remaining composition/quality limits.
 The v3 scene target is RGBA16Float when native HDR resolves on, otherwise the
 original RGBA8 sRGB target. Compare formats/quality, not only matching scope
 names, with historical v2 captures. Native capture metadata records actual

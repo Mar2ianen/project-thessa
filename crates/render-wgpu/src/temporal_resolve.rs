@@ -3,14 +3,15 @@
 //! The pass is deliberately stateless. It does not allocate colour history,
 //! copy previous depth or alter presentation; those are scene/presentation
 //! owners. Inputs must be the opaque pre-overlay scene, current stored depth,
-//! motion vectors and a previous resolved colour/depth pair. Output alpha is the
-//! accumulated frame age, not the scene's static-surface mask.
+//! motion vectors and a previous resolved colour/depth pair. Current colour alpha
+//! must be one for reusable static surfaces and zero for explicitly masked
+//! surfaces. Output alpha is accumulated frame age, zero for masked surfaces.
 
 use crate::{Backend, BackendError};
 use glam::{Mat4, Vec3};
 use thessa_render_core::temporal::JitterOffset;
 use thessa_render_core::temporal_resolve::{
-    DEFAULT_COLOR_SIGMA, DEFAULT_MIN_HISTORY_WEIGHT, HistoryGrid,
+    DEFAULT_COLOR_SIGMA, DEFAULT_MIN_CURRENT_WEIGHT, HistoryGrid,
 };
 
 pub const HISTORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -32,8 +33,10 @@ pub struct ResolveParams {
     /// Explicit normalized-depth tolerance derived by the caller.
     pub depth_tolerance: f32,
     pub color_sigma: f32,
-    pub min_history_weight: f32,
+    pub min_current_weight: f32,
     pub history_grid: HistoryGrid,
+    pub max_history_age: u32,
+    pub neighborhood_width: u32,
 }
 
 impl ResolveParams {
@@ -61,11 +64,13 @@ impl ResolveParams {
             self.previous_jitter.pixels[1] as f32,
             self.depth_tolerance,
             self.color_sigma,
-            self.min_history_weight,
+            self.min_current_weight,
             match self.history_grid {
                 HistoryGrid::ResolvedUnjittered => 0.0,
                 HistoryGrid::JitteredScene => 1.0,
             },
+            self.max_history_age as f32,
+            self.neighborhood_width as f32,
         ] {
             out[at..at + 4].copy_from_slice(&word.to_le_bytes());
             at += 4;
@@ -85,8 +90,10 @@ impl ResolveParams {
             || self.depth_tolerance < 0.0
             || !self.color_sigma.is_finite()
             || self.color_sigma < 0.0
-            || !self.min_history_weight.is_finite()
-            || !(0.0..=1.0).contains(&self.min_history_weight)
+            || !self.min_current_weight.is_finite()
+            || !(0.0..=1.0).contains(&self.min_current_weight)
+            || !(1..=64).contains(&self.max_history_age)
+            || !matches!(self.neighborhood_width, 2 | 3)
         {
             return Err(BackendError::Device(
                 "invalid temporal-resolve parameters".into(),
@@ -108,8 +115,10 @@ impl Default for ResolveParams {
             previous_jitter: JitterOffset::ZERO,
             depth_tolerance: 1e-4,
             color_sigma: DEFAULT_COLOR_SIGMA,
-            min_history_weight: DEFAULT_MIN_HISTORY_WEIGHT,
+            min_current_weight: DEFAULT_MIN_CURRENT_WEIGHT,
             history_grid: HistoryGrid::ResolvedUnjittered,
+            max_history_age: 64,
+            neighborhood_width: 3,
         }
     }
 }
@@ -359,6 +368,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shader_uses_only_portable_capabilities() {
+        let source = include_str!("temporal_resolve.wgsl");
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
+
+    #[test]
     fn uniform_layout_is_stable_and_validation_is_explicit() {
         let bytes = ResolveParams::default().to_bytes();
         assert_eq!(bytes.len(), ResolveParams::BYTE_LEN);
@@ -370,8 +392,10 @@ mod tests {
         assert_eq!(word(148), 1.0);
         assert_eq!(word(152), 0.0);
         assert_eq!(word(168), 1e-4);
-        assert_eq!(word(176), DEFAULT_MIN_HISTORY_WEIGHT);
+        assert_eq!(word(176), DEFAULT_MIN_CURRENT_WEIGHT);
         assert_eq!(word(180), 0.0);
+        assert_eq!(word(184), 64.0);
+        assert_eq!(word(188), 3.0);
         assert!(ResolveParams::default().validate().is_ok());
 
         let mut invalid = ResolveParams::default();
@@ -387,10 +411,16 @@ mod tests {
         invalid.color_sigma = -1.0;
         assert!(invalid.validate().is_err());
         invalid = ResolveParams::default();
-        invalid.min_history_weight = 1.01;
+        invalid.min_current_weight = 1.01;
         assert!(invalid.validate().is_err());
         invalid = ResolveParams::default();
         invalid.camera_offset.x = f32::INFINITY;
+        assert!(invalid.validate().is_err());
+        invalid = ResolveParams::default();
+        invalid.neighborhood_width = 4;
+        assert!(invalid.validate().is_err());
+        invalid = ResolveParams::default();
+        invalid.max_history_age = 0;
         assert!(invalid.validate().is_err());
     }
 }

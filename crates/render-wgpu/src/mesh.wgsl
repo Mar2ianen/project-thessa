@@ -58,8 +58,16 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     if (material.quality==2u && material.pad!=0u) {
         normal=surface_map_normal(normal,map_normal,material.factors.z,dx,dy,du,dv);
     }
-    let albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
-    let transmission=material.optical.x;
+    var albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
+    var transmission=material.optical.x;
+    if (transmission > 0.0 && in.local_y > 2.0 && in.local_y < 7.45) {
+        let skirt_t = clamp((7.45 - in.local_y) / 0.50, 0.0, 1.0);
+        let dead_albedo = vec3(0.18, 0.11, 0.035) * textureSample(color_texture, color_sampler, in.uv).g * 2.5;
+        albedo = mix(albedo, min(dead_albedo, vec3(0.35)), skirt_t * 0.92);
+        transmission = mix(transmission, 0.05, skirt_t * 0.85);
+    } else if (transmission == 0.0 && in.local_y > 0.0) {
+        albedo = min(albedo * vec3(1.35, 1.20, 0.95), vec3(0.35));
+    }
     var direct_reflect=vec3(0.0);
     var direct_transmit=vec3(0.0);
     var visibility:array<f32,3>;
@@ -104,7 +112,11 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
-    let roughness=material.factors.y*mr.g;
+    var roughness=material.factors.y*mr.g;
+    if (material.optical.x > 0.0 && in.local_y > 2.0 && in.local_y < 7.45) {
+        let skirt_t = clamp((7.45 - in.local_y) / 0.50, 0.0, 1.0);
+        roughness = mix(roughness, 0.88, skirt_t);
+    }
     let f0=mix(vec3(0.04),albedo,metallic);
     var fresnel=f0;
     if (material.quality!=0u) { fresnel=f0+(vec3(1.0)-f0)*pow(1.0-max(dot(normal,eye),0.0),5.0); }

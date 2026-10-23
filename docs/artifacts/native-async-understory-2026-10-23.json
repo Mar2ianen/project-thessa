@@ -1,0 +1,625 @@
+{
+  "stage": "WORLD07a",
+  "baseline_commit": "3b15110317fc2ac63b17a94e6c249cc941040cdd",
+  "main_integrated_through": "d2bb846",
+  "branch": "feat/native-surface-showcase",
+  "status": "Implemented and captured; full local gates pass; not visual or client-replacement acceptance",
+  "contract": {
+    "executor": "existing thessa_terrain_stream::JobHandle on shared Rayon executor",
+    "max_pending_jobs": 1,
+    "request_policy": "same-canopy near-eye window changes retain applied world-fixed plants; newer requests coalesce without a queued list; stale output/errors are discarded",
+    "mode_changes": "map/unsupported views release applied plants immediately; unfinished bounded worker may complete but cannot restore them",
+    "error_policy": "current result errors and disconnected workers propagate; no truncated representation",
+    "gpu_reuse": "fixed producer prototype kinds match, next actual instance count fits retained capacity, and RT preflight admission is unchanged; otherwise rebuild existing renderer at actual count",
+    "initial_and_site_preparation": "still synchronous",
+    "simulation": "no new clock, physics stepping, history or state ownership",
+    "settings": "existing surface_plants.enabled/understory and parent Low/Medium/High policy unchanged; defaults remain off"
+  },
+  "capture_contract": {
+    "resolution": [
+      1280,
+      720
+    ],
+    "site_lat_lon_deg": [
+      23.565679258039204,
+      165.13881581863882
+    ],
+    "survey_distance_m": 80,
+    "eye_agl_m": 2,
+    "sweep_rad_per_frame": 0.006,
+    "sim_time_s": 0,
+    "sim_step_s": 0,
+    "prestream_s": 60,
+    "warmup_frames": 30,
+    "measured_frames": 96,
+    "mute": true,
+    "hud": false,
+    "platform": {
+      "os": "linux",
+      "cpu": "x86_64",
+      "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+      "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+    },
+    "settings_path": "target/surface-showcase/understory/understory.toml",
+    "settings_sha256": "9c949421a75a4e32f14608a48775c09b5acf0f71aef3953534c208c7ab7e06b6",
+    "final_scene_source_camera_metadata_equal": true,
+    "scene_source_camera_keys_compared": 16
+  },
+  "binaries": {
+    "baseline_sha256": "3dc8490b7297ce9619374413a20cbcf55ab277dbf9d150858297f90f3031e969",
+    "final_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+    "worker_only_prototype_sha256": "ce7519b1e287e9cab11dd6c7418a63f898a290d2b2a4e13fd3be67309e24e8e3"
+  },
+  "capture_commands": {
+    "path": "target/surface-showcase/async-plants/commands-final.json",
+    "sha256": "479b4d372f83e7575cdbbc4aa0441ec6004c128affab2b1c87bede67ce9f2e9e",
+    "rows": [
+      {
+        "side": "final-async",
+        "command": [
+          "target/release/thessa-terrain-native",
+          "--graphics",
+          "target/surface-showcase/understory/understory.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "60",
+          "--sweep",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/async-plants/final-async-sweep.png",
+          "--perf-capture",
+          "target/surface-showcase/async-plants/final-async-sweep.json"
+        ],
+        "exit": 0,
+        "binary_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+        "settings_sha256": "9c949421a75a4e32f14608a48775c09b5acf0f71aef3953534c208c7ab7e06b6"
+      },
+      {
+        "side": "repeat-baseline",
+        "command": [
+          "target/surface-showcase/async-plants/baseline-native",
+          "--graphics",
+          "target/surface-showcase/understory/understory.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "60",
+          "--sweep",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "target/surface-showcase/async-plants/repeat-baseline-sweep.png",
+          "--perf-capture",
+          "target/surface-showcase/async-plants/repeat-baseline-sweep.json"
+        ],
+        "exit": 0,
+        "binary_sha256": "3dc8490b7297ce9619374413a20cbcf55ab277dbf9d150858297f90f3031e969",
+        "settings_sha256": "9c949421a75a4e32f14608a48775c09b5acf0f71aef3953534c208c7ab7e06b6"
+      }
+    ]
+  },
+  "results": {
+    "baseline": {
+      "cpu_median_ms": 4.1315124999999995,
+      "cpu_p95_ms": 11.715563999999999,
+      "cpu_max_ms": 158.038023,
+      "cpu_over_50ms": 3,
+      "gpu_median_ms": 197.5126965694256,
+      "sim_steps": 0,
+      "sim_times": [
+        0.0
+      ],
+      "plant_meta": {
+        "native_surface_plants_accepted": "1997",
+        "native_surface_plants_candidate_visits": "40960",
+        "native_surface_plants_contract": "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "3",
+        "native_surface_plants_frame_upload_bytes": "128192",
+        "native_surface_plants_instance_buffer_bytes": "127616",
+        "native_surface_plants_preparation_cpu_ms": "115.391379",
+        "native_surface_plants_prototype_payload_bytes": "462672",
+        "native_surface_plants_prototype_texture_bytes": "8",
+        "native_surface_plants_retained": "1994",
+        "native_surface_plants_rt_policy": "shared_policy_with_preflighted_instance_budget",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "1994",
+        "native_surface_plants_surface_samples": "5984",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "1775",
+        "native_surface_understory_candidate_visits": "36864",
+        "native_surface_understory_replaced_coarse_clumps": "3",
+        "native_surface_understory_surface_samples": "5686",
+        "native_surface_understory_window": "1,18,96294,190217",
+        "native_surface_understory_windows": "9"
+      },
+      "png_sha256": "f1ff792c7e3eb2046362668165335105f02899daeed5115c1b45dee6c204cb29",
+      "perf_sha256": "2e14b4a1dbf846b5c1a6d56f5d968dd47ce5b5fddf8eba22a19b43a0be392126"
+    },
+    "final-async": {
+      "cpu_median_ms": 5.1433915,
+      "cpu_p95_ms": 12.225092,
+      "cpu_max_ms": 27.684816,
+      "cpu_over_50ms": 0,
+      "gpu_median_ms": 204.08344106533815,
+      "sim_steps": 0,
+      "sim_times": [
+        0.0
+      ],
+      "plant_meta": {
+        "native_surface_plants_accepted": "1997",
+        "native_surface_plants_candidate_visits": "40960",
+        "native_surface_plants_contract": "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "3",
+        "native_surface_plants_frame_upload_bytes": "128192",
+        "native_surface_plants_instance_buffer_bytes": "127616",
+        "native_surface_plants_preparation_cpu_ms": "204.244536",
+        "native_surface_plants_preparation_job_pending": "false",
+        "native_surface_plants_preparation_jobs_discarded": "0",
+        "native_surface_plants_preparation_jobs_started": "4",
+        "native_surface_plants_prototype_payload_bytes": "462672",
+        "native_surface_plants_prototype_texture_bytes": "8",
+        "native_surface_plants_publication_cpu_ms": "0.008175",
+        "native_surface_plants_renderer_reused": "true",
+        "native_surface_plants_retained": "1994",
+        "native_surface_plants_rt_policy": "shared_policy_with_preflighted_instance_budget",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "1994",
+        "native_surface_plants_surface_samples": "5984",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "1775",
+        "native_surface_understory_candidate_visits": "36864",
+        "native_surface_understory_replaced_coarse_clumps": "3",
+        "native_surface_understory_surface_samples": "5686",
+        "native_surface_understory_window": "1,18,96294,190217",
+        "native_surface_understory_windows": "9"
+      },
+      "png_sha256": "ff3c27698251feab123de72f42deebbe01dc1c5e4a772097e347d7d7e4c47000",
+      "perf_sha256": "55321a2884b3a6b3c7ab6c68e9d473fcc8c2b14aa82213ba61f2c08f17b209c9"
+    },
+    "repeat-baseline": {
+      "cpu_median_ms": 5.316013,
+      "cpu_p95_ms": 15.599816,
+      "cpu_max_ms": 236.733057,
+      "cpu_over_50ms": 3,
+      "gpu_median_ms": 207.3524321889553,
+      "sim_steps": 0,
+      "sim_times": [
+        0.0
+      ],
+      "plant_meta": {
+        "native_surface_plants_accepted": "1997",
+        "native_surface_plants_candidate_visits": "40960",
+        "native_surface_plants_contract": "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "3",
+        "native_surface_plants_frame_upload_bytes": "128192",
+        "native_surface_plants_instance_buffer_bytes": "127616",
+        "native_surface_plants_preparation_cpu_ms": "224.868877",
+        "native_surface_plants_prototype_payload_bytes": "462672",
+        "native_surface_plants_prototype_texture_bytes": "8",
+        "native_surface_plants_retained": "1994",
+        "native_surface_plants_rt_policy": "shared_policy_with_preflighted_instance_budget",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "1994",
+        "native_surface_plants_surface_samples": "5984",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "1775",
+        "native_surface_understory_candidate_visits": "36864",
+        "native_surface_understory_replaced_coarse_clumps": "3",
+        "native_surface_understory_surface_samples": "5686",
+        "native_surface_understory_window": "1,18,96294,190217",
+        "native_surface_understory_windows": "9"
+      },
+      "png_sha256": "8c9b70eeb34acc41b3351a65a78800935b15e0e7d5198a5d3a446f0d6f994039",
+      "perf_sha256": "d200bcdc32a4af79044db47a7e6d45d553a87e7a4209ba9b3a31e07d64067a7d"
+    }
+  },
+  "worker_only_intermediate": {
+    "scope": "diagnostic before GPU-source reuse, not final shipped binary",
+    "result": {
+      "cpu_median_ms": 5.205361999999999,
+      "cpu_p95_ms": 13.460612000000001,
+      "cpu_max_ms": 21.316188999999998,
+      "cpu_over_50ms": 0,
+      "gpu_median_ms": 198.75441585143852,
+      "sim_steps": 0,
+      "sim_times": [
+        0.0
+      ],
+      "plant_meta": {
+        "native_surface_plants_accepted": "1997",
+        "native_surface_plants_candidate_visits": "40960",
+        "native_surface_plants_contract": "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "3",
+        "native_surface_plants_frame_upload_bytes": "128192",
+        "native_surface_plants_instance_buffer_bytes": "127616",
+        "native_surface_plants_preparation_cpu_ms": "118.575007",
+        "native_surface_plants_preparation_job_pending": "false",
+        "native_surface_plants_preparation_jobs_discarded": "0",
+        "native_surface_plants_preparation_jobs_started": "4",
+        "native_surface_plants_prototype_payload_bytes": "462672",
+        "native_surface_plants_prototype_texture_bytes": "8",
+        "native_surface_plants_publication_cpu_ms": "15.50585",
+        "native_surface_plants_retained": "1994",
+        "native_surface_plants_rt_policy": "shared_policy_with_preflighted_instance_budget",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "1994",
+        "native_surface_plants_surface_samples": "5984",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "1775",
+        "native_surface_understory_candidate_visits": "36864",
+        "native_surface_understory_replaced_coarse_clumps": "3",
+        "native_surface_understory_surface_samples": "5686",
+        "native_surface_understory_window": "1,18,96294,190217",
+        "native_surface_understory_windows": "9"
+      },
+      "png_sha256": "3fd552f2d8807cee40b0a3893fb4a0053d17517ea68711ab5e595e3cfe2d34aa",
+      "perf_sha256": "e1452c213e8e41934de27514c615ff592f732a45a0b8ed6a6f8877618669e442"
+    },
+    "command": {
+      "side": "async",
+      "command": [
+        "target/release/thessa-terrain-native",
+        "--graphics",
+        "target/surface-showcase/understory/understory.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "80",
+        "--survey-eye-agl",
+        "2",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "60",
+        "--sweep",
+        "--frames",
+        "96",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "target/surface-showcase/async-plants/async-sweep.png",
+        "--perf-capture",
+        "target/surface-showcase/async-plants/async-sweep.json"
+      ],
+      "exit": 0,
+      "binary_sha256": "ce7519b1e287e9cab11dd6c7418a63f898a290d2b2a4e13fd3be67309e24e8e3",
+      "settings_sha256": "9c949421a75a4e32f14608a48775c09b5acf0f71aef3953534c208c7ab7e06b6"
+    }
+  },
+  "final_still_difference_vs_repeat_baseline": {
+    "mean_absolute_rgb_codes": [
+      0.0032975260416666665,
+      0.003219401041666667,
+      0.0038096788194444445
+    ],
+    "max_rgb_codes": [
+      17,
+      16,
+      15
+    ]
+  },
+  "oracles": {
+    "queue": "injected capacity-one mailbox proves nonblocking empty poll, no duplicate request, stale success/error/lost-worker rejection and current errors",
+    "hardware": "same shared shadow pass and exact descriptor/instance round trip, applied-vs-requested metadata, direct synchronous-preparation equivalence, successful GPU-source reuse and no stale reappearance after map entry",
+    "prototype_reuse": "fixed producer kind layout stays compatible across selected counts; missing/reordered kinds require rebuild",
+    "numerical_boundary": "descriptor direction/height/scale/yaw and instance transforms compared exactly; no physical law or normal transport changed"
+  },
+  "performance_boundary": {
+    "cpu_spike_evidence": "96-frame moving captures: three CPU submissions over 50 ms in each baseline (max 158.038 / 236.733 ms), zero in final candidate (max 27.685 ms). Last compatible source adoption 0.008175 ms, excluding normal shared instance upload. Not a universal frame-time bound.",
+    "gpu": "GPU medians remain around 198\u2013207 ms; no GPU speedup or acceptable total FPS claim",
+    "limits": [
+      "shared-pool queue latency is not bounded by the foreground request cost",
+      "setup/site changes remain synchronous",
+      "instance-capacity growth, changed kind layout or changed RT admission still reconstruct the GPU source synchronously",
+      "submitted instance payload does not measure retained allocation capacity",
+      "one final moving candidate run and two baseline runs are diagnostic, not a stable statistical performance acceptance",
+      "applied near cover can lag the desired eye until a matching worker result; no visual continuity guarantee for arbitrary movement"
+    ]
+  },
+  "verification": {
+    "state": "All 12 command gates passed on 756 unchanged compiled/configuration inputs; native-only release recipe reproduces the final capture binary exactly",
+    "commands": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 1.6025982899591327,
+        "log": "target/surface-showcase/async-plants/fmt-gate.log"
+      },
+      {
+        "name": "architecture",
+        "command": [
+          "python3",
+          "tools/agent-qa/check_architecture.py"
+        ],
+        "exit": 0,
+        "seconds": 0.03983686299761757,
+        "log": "target/surface-showcase/async-plants/architecture-gate.log"
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 2.212201078014914,
+        "log": "target/surface-showcase/async-plants/clippy-gate.log"
+      },
+      {
+        "name": "workspace-lib-bins",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--lib",
+          "--bins"
+        ],
+        "exit": 0,
+        "seconds": 43.85933424899122,
+        "log": "target/surface-showcase/async-plants/workspace-lib-bins-gate.log"
+      },
+      {
+        "name": "workspace-integration",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--test",
+          "*"
+        ],
+        "exit": 0,
+        "seconds": 13.993242431024555,
+        "log": "target/surface-showcase/async-plants/workspace-integration-gate.log"
+      },
+      {
+        "name": "server",
+        "command": [
+          "cargo",
+          "build",
+          "-p",
+          "thessa-server"
+        ],
+        "exit": 0,
+        "seconds": 50.239687916997354,
+        "log": "target/surface-showcase/async-plants/server-gate.log"
+      },
+      {
+        "name": "native-hardware-cli",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-terrain-native",
+          "--",
+          "--ignored",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 229.37934612302342,
+        "log": "target/surface-showcase/async-plants/native-hardware-cli-gate.log"
+      },
+      {
+        "name": "renderer-hardware",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-render-wgpu",
+          "--",
+          "--ignored",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 306.52449889702257,
+        "log": "target/surface-showcase/async-plants/renderer-hardware-gate.log"
+      },
+      {
+        "name": "legacy-bevy-command",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "thessa-bevy-rcbt",
+          "--features",
+          "render",
+          "--lib",
+          "--",
+          "--ignored"
+        ],
+        "exit": 0,
+        "seconds": 9.527051709010266,
+        "log": "target/surface-showcase/async-plants/legacy-bevy-command-gate.log"
+      },
+      {
+        "name": "feature-off",
+        "command": [
+          "cargo",
+          "check",
+          "-p",
+          "thessa-terrain-native",
+          "--no-default-features"
+        ],
+        "exit": 0,
+        "seconds": 0.8199521900387481,
+        "log": "target/surface-showcase/async-plants/feature-off-gate.log"
+      },
+      {
+        "name": "world00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "surface_patch_audit"
+        ],
+        "exit": 0,
+        "seconds": 25.10020111000631,
+        "log": "target/surface-showcase/async-plants/world00-gate.log"
+      },
+      {
+        "name": "release",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "thessa-terrain-native",
+          "-p",
+          "thessa-server"
+        ],
+        "exit": 0,
+        "seconds": 103.52030606300104,
+        "log": "target/surface-showcase/async-plants/release-gate.log"
+      }
+    ],
+    "counts": {
+      "workspace-lib-bins": {
+        "passed": 2050,
+        "failed": 0,
+        "ignored": 48
+      },
+      "workspace-integration": {
+        "passed": 108,
+        "failed": 0,
+        "ignored": 90
+      },
+      "native-hardware-cli": {
+        "passed": 46,
+        "failed": 0,
+        "ignored": 0
+      },
+      "renderer-hardware": {
+        "passed": 86,
+        "failed": 0,
+        "ignored": 0
+      },
+      "legacy-bevy-command": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "world00": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "postcheck": {
+      "unchanged_inputs": 756,
+      "input_manifest_sha256": "9069ed305f592a0f13466d3166960b619907992b9dd28f3f48c15c71598056a6",
+      "capture_recipe_reproduced": true,
+      "native_only_sha256": "7945e0cd259b5ac3b2ce113aa92f9e3ada3472e71cb4938fa55287f531aa5385",
+      "joint_native_server_sha256": "016a1a31593ca9a21c970a59a609a6fac48286aba94d20a166ff6924f7de9ac5",
+      "explanation": "All command gates passed; the initial post-check incorrectly expected the native-only capture hash from a joint native/server build. A native-only rebuild reproduces the captured binary exactly. Cargo tree confirms different unified syn/hashbrown features for the two package selections.",
+      "feature_difference": {
+        "syn v3.0.5": {
+          "native": [
+            "clone-impls,default,derive,parsing,printing,proc-macro"
+          ],
+          "native_and_server": [
+            "clone-impls,default,derive,full,parsing,printing,proc-macro"
+          ]
+        },
+        "hashbrown v0.17.1": {
+          "native": [
+            "default-hasher,inline-more"
+          ],
+          "native_and_server": [
+            "allocator-api2,default,default-hasher,equivalent,inline-more,raw-entry"
+          ]
+        }
+      },
+      "counts": {
+        "workspace-lib-bins": {
+          "passed": 2050,
+          "failed": 0,
+          "ignored": 48
+        },
+        "workspace-integration": {
+          "passed": 108,
+          "failed": 0,
+          "ignored": 90
+        },
+        "native-hardware-cli": {
+          "passed": 46,
+          "failed": 0,
+          "ignored": 0
+        },
+        "renderer-hardware": {
+          "passed": 86,
+          "failed": 0,
+          "ignored": 0
+        },
+        "legacy-bevy-command": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        "world00": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    "cargo_environment": {
+      "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"
+    }
+  },
+  "acceptance": {
+    "visual": false,
+    "independent_votes": 0,
+    "stable_performance": false,
+    "planetary_streaming": false,
+    "temporal": false,
+    "host_replacement": false,
+    "main_promoted": false
+  }
+}

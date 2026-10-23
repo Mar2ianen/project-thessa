@@ -32,6 +32,60 @@ pub enum Context {
     },
 }
 
+pub type Preparation = Result<(Option<Prepared>, Diagnostics), String>;
+
+/// One shared-executor job; camera changes coalesce to the next desired window.
+#[derive(Default)]
+pub struct PreparationQueue {
+    pending: Option<(Context, thessa_terrain_stream::JobHandle<Preparation>)>,
+    pub started: u64,
+    pub discarded: u64,
+}
+
+impl PreparationQueue {
+    pub fn pending(&self) -> Option<Context> {
+        self.pending.as_ref().map(|(context, _)| *context)
+    }
+
+    pub fn request(
+        &mut self,
+        context: Context,
+        settings: &ResolvedGraphicsSettings,
+        field: &std::sync::Arc<PlanetField>,
+    ) {
+        if self.pending.is_none() {
+            let settings = settings.clone();
+            let field = field.clone();
+            self.pending = Some((
+                context,
+                thessa_terrain_stream::JobHandle::spawn(move || {
+                    prepare(context, &settings, &field)
+                }),
+            ));
+            self.started += 1;
+        }
+    }
+
+    pub fn poll(&mut self, desired: Context) -> Option<Preparation> {
+        let (context, job) = self.pending.as_ref()?;
+        let result = match job.try_take() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("surface plant worker disconnected".into())
+            }
+        };
+        let matches = *context == desired;
+        self.pending = None;
+        if matches {
+            Some(result)
+        } else {
+            self.discarded += 1;
+            None
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Diagnostics {
     pub reason: &'static str,
@@ -54,6 +108,11 @@ pub struct Diagnostics {
     pub understory_samples: u64,
     pub understory_accepted: usize,
     pub replaced_coarse_clumps: usize,
+    pub preparation_job_pending: bool,
+    pub preparation_jobs_started: u64,
+    pub preparation_jobs_discarded: u64,
+    pub publication_ms: f64,
+    pub renderer_reused: bool,
 }
 
 impl Diagnostics {
@@ -79,6 +138,11 @@ impl Diagnostics {
             ("native_surface_understory_surface_samples", self.understory_samples.to_string()),
             ("native_surface_understory_accepted", self.understory_accepted.to_string()),
             ("native_surface_understory_replaced_coarse_clumps", self.replaced_coarse_clumps.to_string()),
+            ("native_surface_plants_preparation_job_pending", self.preparation_job_pending.to_string()),
+            ("native_surface_plants_preparation_jobs_started", self.preparation_jobs_started.to_string()),
+            ("native_surface_plants_preparation_jobs_discarded", self.preparation_jobs_discarded.to_string()),
+            ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
+            ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
                 "WORLD07 L14 large plants plus <=9 same-face L18 near-eye windows / disjoint L24 ground-clump IDs; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
             } else {"WORLD04 fixed L14 window / fixed64 v1; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
@@ -95,6 +159,20 @@ pub struct Prepared {
 }
 
 impl Prepared {
+    /// The producer is fixed for this executable; represented kinds identify
+    /// its exact immutable geometry/material layout, independent of instances.
+    pub fn same_prototypes(&self, other: &Self) -> bool {
+        self.ranges.len() == other.ranges.len()
+            && self.ranges.iter().zip(&other.ranges).all(|(a, b)| {
+                self.descriptors.get(a.start as usize).is_some_and(|item| {
+                    other
+                        .descriptors
+                        .get(b.start as usize)
+                        .is_some_and(|other| item.kind == other.kind)
+                })
+            })
+    }
+
     pub fn rt_admitted(&self, settings: &ResolvedGraphicsSettings) -> bool {
         !settings.ray_tracing.is_active()
             || !settings.rt_vehicles
@@ -166,7 +244,7 @@ pub fn prepare(
     context: Context,
     settings: &ResolvedGraphicsSettings,
     field: &PlanetField,
-) -> Result<(Option<Prepared>, Diagnostics), String> {
+) -> Preparation {
     let (window, near_window) = match context {
         Context::Disabled => {
             return Ok((
@@ -466,6 +544,52 @@ mod tests {
             &requested,
             &thessa_graphics::Capabilities::unknown(),
         )
+    }
+
+    #[test]
+    fn preparation_queue_coalesces_without_waiting_and_rejects_stale_results() {
+        let scene = crate::scene::Scene::load(Default::default()).unwrap();
+        let a = Context::Survey(survey_window(DVec3::X));
+        let b = Context::Survey(survey_window(DVec3::Y));
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut queue = PreparationQueue {
+            pending: Some((a, thessa_terrain_stream::JobHandle::new(rx))),
+            started: 1,
+            discarded: 0,
+        };
+        // An unfinished worker never waits or queues extra camera requests.
+        for desired in [b, a, b, Context::Disabled] {
+            assert!(queue.poll(desired).is_none());
+            queue.request(
+                desired,
+                &settings(thessa_graphics::Quality::High),
+                scene.stream.field(),
+            );
+            assert_eq!(queue.pending(), Some(a));
+            assert_eq!(queue.started, 1);
+        }
+        assert!(tx.send(Ok((None, Diagnostics::default()))).is_ok());
+        assert!(queue.poll(b).is_none());
+        assert!(queue.pending().is_none());
+        assert_eq!(queue.discarded, 1);
+        // Current errors propagate; stale errors (including lost workers) do not.
+        for (context, desired, disconnected) in
+            [(a, a, false), (a, b, false), (a, b, true), (a, a, true)]
+        {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            queue.pending = Some((context, thessa_terrain_stream::JobHandle::new(rx)));
+            if !disconnected {
+                assert!(tx.send(Err("explicit budget error".into())).is_ok());
+            }
+            drop(tx);
+            let result = queue.poll(desired);
+            assert!(queue.pending().is_none());
+            if context == desired {
+                assert!(result.unwrap().is_err());
+            } else {
+                assert!(result.is_none());
+            }
+        }
     }
 
     #[test]
@@ -898,7 +1022,20 @@ mod tests {
                 yaw_rad: 0.0,
             })
             .collect();
+        let smaller = convert(items[..40].to_vec(), 3_200_000.0).unwrap();
+        let fern_only = convert(
+            items
+                .iter()
+                .copied()
+                .filter(|item| item.kind == ScatterKind::FernClump)
+                .collect(),
+            3_200_000.0,
+        )
+        .unwrap();
         let prepared = convert(items, 3_200_000.0).unwrap();
+        assert!(prepared.same_prototypes(&smaller));
+        assert!(!prepared.same_prototypes(&fern_only));
+        assert!(!fern_only.same_prototypes(&prepared));
         assert!(!prepared.rt_budget_fits(0));
         assert!(!prepared.rt_budget_fits(256));
         assert!(!prepared.rt_budget_fits(299));

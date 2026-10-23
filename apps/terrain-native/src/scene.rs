@@ -1456,6 +1456,21 @@ impl Scene {
                 };
                 if diagnostics.window == Some(window) && diagnostics.understory_window == near {
                     diagnostics.metadata()
+                } else if diagnostics.window == Some(window) && diagnostics.preparation_job_pending
+                {
+                    let mut metadata = diagnostics.metadata();
+                    metadata.insert(
+                        "native_surface_plants_status".into(),
+                        "pending_understory_preparation_retaining_applied_window".into(),
+                    );
+                    metadata.insert(
+                        "native_surface_understory_requested_window".into(),
+                        near.map_or_else(
+                            || "none".into(),
+                            |w| format!("{},{},{},{}", w.face, w.level, w.x, w.y),
+                        ),
+                    );
+                    metadata
                 } else {
                     Diagnostics {
                         reason: "pending_survey_preparation",

@@ -92,14 +92,15 @@ do not update in place).
 | `65_NATIVE_SKY_AUDIT.md` | 🟡 audited native sky consumers | shared aurora altitude/axis and incremental optical transport; native Low/High emission field with simulation-time refresh; flux-normalized background stars/source discs; depth-clipped clouds with shared weather/geometry/phase and terrain/mesh/ocean shadows plus reflected-ray transport; primary aurora with finite-depth clipping and ordered cloud extinction; separate clear primary/total indirect publications; independent disable and numerical GPU oracles; actual-ephemeris far-visible B and A-hidden/B-visible regular/conforming terrain regressions | secondary-origin clear-sky/auroral parallax, partial stellar discs/eclipses, magnetic/weather data, richer curtains, cloud diffuse coupling/multiple scattering, RT-light proxies and temporal/performance/visual/platform acceptance |
 | `67_NATIVE_SYSTEM_MAP.md` | 🟡 native map/navigation slice | six baked scopes, f64 framing/orbit/pan/zoom, body/PRIMARY selection/follow, cached Kepler curves, physics-JIT coast-cache consumer sharing execution guards and bounded interval, dominant-body Ap/Pe/escape/local-wake readouts, exclusive input ownership, shared-device egui and headless capture | powered/live executable JIT futures (never substituted with conditional coasts), remote JIT/next-wake transport, richer celestial appearance and independent usability/platform acceptance |
 | `68_NATIVE_NIGHT_LIGHTS.md` | 🟡 native primary-terrain optical slice | direct retained inhabited-land mask producer, resolved Low/Medium/High budgets, cached startup-only bake/upload, regular/conforming shared primary emission and zero-work disable; CPU parity and hardware numerical/source tests | calibrated radiance/activity, multi-source illumination/eclipses, secondary-ray emission and whole-frame visual/temporal acceptance |
-| `69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md` | 🟡 primary terrain normal/sky-reflection slice | optional RG8 material normals through shared native residency, metric-correct cube-sphere gradients and slope blending, bounded substrate/exposure/cover response and small geology-linked roughness priors, resolved disable/+2/+1/+0 mip tiers and raster Lambert oracle; shared sky/cloud rough GGX with resolved 4/8/16 clear directions or 1/2/4 cloud columns; regular/conforming reflection oracles and scoped GPU diagnostic | calibrated natural substrate relief/strata, vegetation, general HDR/cloud quadrature error/convergence, primary scene-object reflections and close-up/visual/platform acceptance |
+| `69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md` | 🟡 primary terrain normal/sky-reflection slice | optional zero-exact RG8_SNORM material normals through shared native residency, metric-correct cube-sphere gradients and slope blending, bounded substrate/exposure/cover response and small geology-linked roughness priors, resolved disable/+2/+1/+0 mip tiers and raster Lambert oracle; shared sky/cloud rough GGX with resolved 4/8/16 clear directions or 1/2/4 cloud columns; regular/conforming reflection oracles and scoped GPU diagnostic | calibrated natural substrate relief/strata, vegetation, general HDR/cloud quadrature error/convergence, primary scene-object reflections and close-up/visual/platform acceptance |
 | `70_WORLD_SCATTER_IDENTITY.md` | 🟡 world scatter and canonical CPU sampling | fixed world-local IDs, cross-LOD/query unions, density subsets and explicit budgets; existing offline plant consumer plus a borrowed attached-field plant callback; bounded native survey plant consumer in doc 75 | resident-mesh root agreement, local water geometry, instance streaming, production foliage/rocks and collision ownership |
 | `71_NATIVE_SURFACE_ACCEPTANCE.md` | 🟡 reproducible surface camera | fixed numeric targets, exact radial 50 m/2 m eye clearance, source/camera metadata and unchanged default survey/launch ownership | resident-mesh clearance/convergence, complete 2 km visual coverage and blind visual acceptance |
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
-| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in requested/resolved density tiers, one retained L14 canonical plant window, grouped sources in the existing opaque/shadow path, RT-budget preflight/raster fallback, zero-work disable, geometric fern pinnae, forked crowns and smooth cone-side stem normals | actual resident-mesh root agreement, botanical realism, stable performance acceptance, instance streaming and collision ownership |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in density tiers, L14 canonical plant window plus optional nine-window L18/L24 understory, one shared background job for same-site near changes with stale-result rejection and compatible GPU-source reuse, shared opaque/shadow path, RT preflight/fallback, zero-work disable and authored fern/reed/forked-crown geometry | actual resident-mesh root agreement, botanical realism, GPU cost and wider stable performance acceptance, planetary instance streaming and collision ownership |
 | `77_NATIVE_SURFACE_SHOWCASE.md` | 🟡 surface-first work in progress | actual GPU material-level telemetry; protected coarse support plus caller-priority refinement replaces detail-starving global level admission; separate stem/foliage reflectance; regular-patch split-coordinate material sampling and local derivative footprint; default-off CC0 ground-swatch experiment with L20/L21/L22 caps and same-material coarse means; rejected colour-noise prototype recorded, not shipped | canopy/floor representation hierarchy, convincing ground/foliage/water composition, moving-camera and blind acceptance, bounded planet-wide vegetation streaming |
+| `78_NATIVE_MAIN_INTEGRATION.md` | 🟡 integration preparation | latest-main workflow incorporated into the topic branch; sequential layer/host-replacement and exact-candidate promotion checklist | unresolved visual/transport/streaming/temporal/host obligations, full replacement and main promotion |
 
 The [WORLD00 coastal baseline](72_WORLD_SURFACE_BASELINE.md) now identifies an
 actual canonical zero crossing and a 2×2 km sampled land/water neighborhood,
@@ -268,6 +269,27 @@ gates pass (2,044 lib/bin, 108 integration and 86 renderer hardware tests, Clipp
 architecture, feature-off and release identity); no normal-transport correction
 or visual acceptance is claimed. See docs 69/77 and
 [`artifacts/native-normal-geometry-reference-2026-10-23.json`](artifacts/native-normal-geometry-reference-2026-10-23.json).
+
+WORLD07 adds a default-off, parent-gated near-eye fern/reed layer to the bounded
+survey plant consumer: nine L18 windows sampled on a disjoint L24 lattice,
+canonical habitat/ground and the shared prototype/mesh/shadow/environment paths.
+Inside the 73 m cover it replaces coarse ground clumps while retaining trees and
+the far fallback; `understory=false` preserves WORLD04 exactly. The matched
+standing pair retained 222 → 2,020 plants and measured 105.470 → 147.359 ms
+median GPU time and 113 ms synchronous preparation. The frame remains sparse bare-ground savanna, not closed forest; no
+performance, streaming or aesthetic acceptance is claimed. See docs 70/75/77 and
+[`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).
+
+WORLD07a moves same-site understory preparation to one shared worker, coalesces
+camera demand, rejects stale results and reuses compatible GPU plant sources.
+The 96-frame orbit diagnostic removes the three >50 ms CPU submissions seen in
+each baseline (158/237 ms maxima); candidate maximum is 27.7 ms. GPU medians
+remain about 198–207 ms, and startup/site or capacity/layout-changing publication
+can still stall. Exact descriptor/shadow/map lifecycle tests accompany the
+capture; no visual, stable-FPS or planetary-streaming acceptance follows. Latest
+main is incorporated into the topic branch, not promoted; remaining sequential
+replacement gates are in doc 78. Evidence:
+[`artifacts/native-async-understory-2026-10-23.json`](artifacts/native-async-understory-2026-10-23.json).
 
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
@@ -593,13 +615,3 @@ fleet observations (but is rebuilt for v10).
 | `details/01_DOCKING_PORTS.md` | 🟡 D1 contact-scene slice | persisted protocol, fixed-joint install/removal, pressure gate, corrected latest-substep joint-load readback, authored ports, server fleet ownership and snapshots; native solved two-craft replay, D1 rest surfaces, inspector and structural cue | calibrated capture/class ratings, petal actuation, jointed-stack control, interactive ownership/commands, live-flight patch/normal overlays and complete structural integration |
 | `REFERENCES.md` | 📚 reference | UX-only refs; Nyx/ANISE isolation; no copied code |
 | `adr/0007–0011` | ✅ accepted | licensing, render boundary, autopilot graphs, aero boundary, RCBT boundary |
-
-WORLD07 adds a default-off, parent-gated near-eye fern/reed layer to the bounded
-survey plant consumer: nine L18 windows sampled on a disjoint L24 lattice,
-canonical habitat/ground and the shared prototype/mesh/shadow/environment paths.
-Inside the 73 m cover it replaces coarse ground clumps while retaining trees and
-the far fallback; `understory=false` preserves WORLD04 exactly. The matched
-standing pair retained 222 → 2,020 plants and measured 105.470 → 147.359 ms
-median GPU time and 113 ms synchronous preparation. The frame remains sparse bare-ground savanna, not closed forest; no
-performance, streaming or aesthetic acceptance is claimed. See docs 70/75/77 and
-[`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).

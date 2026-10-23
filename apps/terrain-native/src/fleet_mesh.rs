@@ -74,6 +74,8 @@ impl Track {
 pub struct SceneMeshes {
     plant_context: Option<crate::surface_plants::Context>,
     plants: Option<crate::surface_plants::Prepared>,
+    plant_jobs: crate::surface_plants::PreparationQueue,
+    plant_capacity: usize,
     terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
     terrain_reason: Option<String>,
     shadows: Option<thessa_render_wgpu::shadows::ShadowAtlas>,
@@ -265,7 +267,34 @@ impl SceneMeshes {
         let (plants, diagnostics) =
             crate::surface_plants::prepare(context, &resolved, scene.stream.field())
                 .map_err(BackendError::Device)?;
-        *scene.surface_plants_diagnostics.borrow_mut() = diagnostics;
+        Self::with_prepared_plants(
+            scene,
+            backend,
+            source,
+            format,
+            shadows,
+            terrain,
+            resolved,
+            context,
+            plants,
+            diagnostics,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_prepared_plants(
+        scene: &Scene,
+        backend: &Backend,
+        source: &MeshAsset,
+        format: wgpu::TextureFormat,
+        shadows: Option<&thessa_render_wgpu::shadows::ShadowAtlas>,
+        terrain: Option<thessa_render_wgpu::terrain_ray::TerrainRaySource>,
+        resolved: thessa_graphics::ResolvedGraphicsSettings,
+        context: crate::surface_plants::Context,
+        plants: Option<crate::surface_plants::Prepared>,
+        mut diagnostics: crate::surface_plants::Diagnostics,
+    ) -> Result<Self, BackendError> {
+        let started = std::time::Instant::now();
         // A whole raster batch survives an undersized optional TLAS budget.
         // Withhold RT only for this consumer, before any GPU publication; never
         // truncate instances or mutate the scene/global resolved policy.
@@ -282,7 +311,7 @@ impl SceneMeshes {
             resolved.fleet_meshes,
             resolved.fleet_min_pixels,
         );
-        Ok(Self {
+        let meshes = Self {
             plant_context: scene.vehicle.is_none().then_some(context),
             shadows: shadows.cloned(),
             environment_revision: None,
@@ -325,7 +354,12 @@ impl SceneMeshes {
             epoch_withheld: 0,
             size_culled: 0,
             plants,
-        })
+            plant_jobs: Default::default(),
+            plant_capacity: capacity,
+        };
+        diagnostics.publication_ms = started.elapsed().as_secs_f64() * 1000.0;
+        *scene.surface_plants_diagnostics.borrow_mut() = diagnostics;
+        Ok(meshes)
     }
 
     pub fn draw_stats(&self) -> MeshDrawStats {
@@ -389,20 +423,69 @@ impl SceneMeshes {
     ) -> Result<(), BackendError> {
         if let Some(context) = self.plant_context {
             let next = scene.surface_plants_context(&self.resolved);
+            let completed = self.plant_jobs.poll(next);
             if next != context {
-                // At most one retained selected window. Reuse source selection,
-                // shared shadow atlas and environment; no cache or scheduler.
-                let empty = empty_asset();
-                let source = scene.vehicle.as_ref().map_or(&empty, |(source, _)| source);
-                *self = Self::with_shadows(
-                    scene,
-                    backend,
-                    source,
-                    self.format,
-                    self.shadows.as_ref(),
-                    self.terrain.clone(),
-                )?;
+                use crate::surface_plants::Context;
+                let near_move = matches!(
+                    (context, next),
+                    (Context::SurveyWithUnderstory { canopy: a, .. }, Context::SurveyWithUnderstory { canopy: b, .. }) if a == b
+                );
+                let ready = if near_move {
+                    if completed.is_none() {
+                        self.plant_jobs
+                            .request(next, &self.resolved, scene.stream.field());
+                    }
+                    completed
+                } else {
+                    // Mode/site changes release incompatible plants immediately.
+                    Some(crate::surface_plants::prepare(
+                        next,
+                        &self.resolved,
+                        scene.stream.field(),
+                    ))
+                };
+                if let Some(ready) = ready {
+                    let (plants, mut diagnostics) = ready.map_err(BackendError::Device)?;
+                    let reuse = self.inner.is_some()
+                        && self.plants.as_ref().zip(plants.as_ref()).is_some_and(
+                            |(before, after)| {
+                                after.instances.len() <= self.plant_capacity
+                                    && before.same_prototypes(after)
+                                    && before.rt_admitted(&self.resolved)
+                                        == after.rt_admitted(&self.resolved)
+                            },
+                        );
+                    if reuse {
+                        let started = std::time::Instant::now();
+                        self.plants = plants;
+                        self.plant_context = Some(next);
+                        diagnostics.renderer_reused = true;
+                        diagnostics.publication_ms = started.elapsed().as_secs_f64() * 1000.0;
+                        *scene.surface_plants_diagnostics.borrow_mut() = diagnostics;
+                    } else {
+                        let empty = empty_asset();
+                        let source = scene.vehicle.as_ref().map_or(&empty, |(source, _)| source);
+                        let mut replacement = Self::with_prepared_plants(
+                            scene,
+                            backend,
+                            source,
+                            self.format,
+                            self.shadows.as_ref(),
+                            self.terrain.clone(),
+                            self.resolved.clone(),
+                            next,
+                            plants,
+                            diagnostics,
+                        )?;
+                        replacement.plant_jobs = std::mem::take(&mut self.plant_jobs);
+                        *self = replacement;
+                    }
+                }
             }
+            let mut diagnostics = scene.surface_plants_diagnostics.borrow_mut();
+            diagnostics.preparation_job_pending = self.plant_jobs.pending().is_some();
+            diagnostics.preparation_jobs_started = self.plant_jobs.started;
+            diagnostics.preparation_jobs_discarded = self.plant_jobs.discarded;
         }
         let view = scene.view(width, height, exposure);
         self.update_environment(scene, backend);
@@ -808,18 +891,92 @@ mod tests {
         if understory {
             let near = scene.surface_plants_diagnostics.borrow().understory_window;
             scene.survey.set_distance_m(160.0);
+            let request_started = std::time::Instant::now();
             assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
+            let request_ms = request_started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+            assert!(meshes.plant_jobs.pending().is_some());
+            assert_eq!(meshes.plant_jobs.started, 1);
+            let metadata = scene.surface_plants_metadata();
+            assert_eq!(
+                metadata["native_surface_plants_status"],
+                "pending_understory_preparation_retaining_applied_window"
+            );
+            assert_eq!(
+                metadata["native_surface_plants_preparation_job_pending"],
+                "true"
+            );
+            assert!(metadata.contains_key("native_surface_understory_requested_window"));
+            let wait_for_preparation = |scene: &Scene, meshes: &mut SceneMeshes| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                while meshes.plant_jobs.pending().is_some() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "plant worker timed out"
+                    );
+                    scene.update_mesh(&backend, meshes, 320, 240, 1.0).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            };
+            wait_for_preparation(&scene, &mut meshes);
+            assert_eq!(meshes.plant_jobs.started, 1);
             assert_ne!(
                 scene.surface_plants_diagnostics.borrow().understory_window,
                 near
             );
             assert_ne!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+            let (oracle, _) = crate::surface_plants::prepare(
+                scene.surface_plants_context(&settings),
+                &settings,
+                scene.stream.field(),
+            )
+            .unwrap();
+            let oracle = oracle.unwrap();
+            assert_eq!(
+                meshes.plants.as_ref().unwrap().descriptors,
+                oracle.descriptors
+            );
+            assert_eq!(meshes.plants.as_ref().unwrap().instances, oracle.instances);
+            {
+                let diagnostics = scene.surface_plants_diagnostics.borrow();
+                eprintln!(
+                    "understory_async request_and_shadow_submit_ms={request_ms:.3} worker_preparation_ms={:.3} publication_ms={:.3}",
+                    diagnostics.preparation_ms, diagnostics.publication_ms
+                );
+            }
+            assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
             assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
             scene.survey.set_distance_m(80.0);
             assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
+            assert!(meshes.plant_jobs.pending().is_some());
+            wait_for_preparation(&scene, &mut meshes);
             assert_eq!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
             assert_eq!(meshes.plants.as_ref().unwrap().instances, instances);
+            assert!(scene.surface_plants_diagnostics.borrow().renderer_reused);
+            assert!(draw_shadows(&scene, &mut meshes, &mut terrain) > 0);
             assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);
+            #[cfg(feature = "hud")]
+            {
+                scene.survey.set_distance_m(160.0);
+                scene
+                    .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+                    .unwrap();
+                assert!(meshes.plant_jobs.pending().is_some());
+                scene.set_map_open(true);
+                scene
+                    .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+                    .unwrap();
+                assert!(meshes.plants.is_none() && meshes.inner.is_none());
+                wait_for_preparation(&scene, &mut meshes);
+                assert!(meshes.plants.is_none() && meshes.inner.is_none());
+                assert_eq!(meshes.plant_jobs.discarded, 1);
+                scene.survey.set_distance_m(80.0);
+                scene.set_map_open(false);
+                scene
+                    .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
+                    .unwrap();
+                assert_eq!(meshes.plants.as_ref().unwrap().descriptors, descriptors);
+            }
         }
         // A new selected window replaces the retained source once, not per frame.
         scene.select_site(1);

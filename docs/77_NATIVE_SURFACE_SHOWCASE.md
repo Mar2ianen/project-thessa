@@ -14,8 +14,9 @@ fake atmosphere or camera-specific geometry is introduced.
 
 The standing (2 m eye AGL), close (50 m) and overview (800 m) views share the
 numeric target. A moving camera and a surface-to-orbit sequence are additional
-acceptance cases, not established by a still image. Plant geometry currently
-covers one L14 query window only; this must not be called planet-wide coverage.
+acceptance cases, not established by a still image. Large-plant geometry covers
+one L14 query window; the optional near layer adds at most nine L18 query windows.
+Neither is planet-wide coverage.
 
 ## Work order
 
@@ -819,3 +820,59 @@ ecological succession or plant RT model. Pre-existing dark diagonal foliage
 artifacts appear identically in both sides of the pair and are not attributed to
 this change. No blind votes or final surface acceptance exist. Evidence:
 [`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).
+
+## WORLD07a — Nonblocking same-site preparation and reusable GPU sources
+
+The WORLD07 synchronous preparation measurement above remains a historical
+baseline. Same-site L18 eye-window transitions now run `surface_plants::prepare`
+through the existing `terrain_stream::JobHandle`/Rayon executor. At most one
+worker/result is retained; camera requests coalesce and stale output (including
+errors) cannot publish against a newer desired window. A lost/current worker or
+current preparation error still fails explicitly. No plant-specific scheduler,
+independent world sampler, new graphics switch or simulation clock is added.
+
+Frames continue drawing the applied world-fixed descriptors until a matching
+result arrives. Pending capture metadata distinguishes applied and requested
+windows. Mode/site changes immediately select the compatible coarse/empty
+representation; an existing worker may finish bounded work but cannot restore
+plants in a map/unsupported view. Matching represented prototype kinds, retained
+capacity and RT admission let publication reuse the shared renderer, materials,
+buffers and shadow source; changed capacity/layout/admission still reconstructs
+it. Instance matrices and shadow/RT invalidation stay in the shared updater.
+
+Initial setup and selected-site changes still sample synchronously. This is a
+bounded update-lifetime correction, not a general vegetation streamer, mesh LOD,
+GPU-cost fix, ground-band correction or visual acceptance. The wider sequential
+replacement and main-promotion obligations are recorded in
+[doc 78](78_NATIVE_MAIN_INTEGRATION.md).
+
+The 96-frame frozen-time standing orbit sweep (same site/settings, 60 s
+prestream, 30 warmups, 1280×720) has three CPU submissions above 50 ms in each
+baseline run, with maxima 158.038 / 236.733 ms. The final candidate has zero,
+with maximum 27.685 ms. CPU medians are 4.132 / 5.316 ms baseline and 5.143 ms
+candidate: this is removal of a scoped resampling stall, not a normal-frame
+throughput gain. GPU medians are 197.513 / 207.352 ms baseline and 204.083 ms
+candidate; GPU cost is not fixed. Four background requests were issued over the
+whole candidate replay (including warmup), with no pending/stale job at the end.
+The last source publication reused the renderer and took 0.008175 ms; this does
+not include the normal shared per-frame instance matrix/upload work.
+
+All runs end with the same applied L18 window and 1,994 submitted descriptors;
+the hardware round-trip oracle compares descriptors/instances exactly against
+synchronous preparation. Final-still RGB mean difference versus the repeated
+baseline is below 0.004 displayed codes per channel (maximum 17), not bitwise
+frame identity or independent aesthetic acceptance. All measured samples have
+epoch zero and zero physics steps. The single final-candidate replay and two
+baseline replays are diagnostics, not a universal latency bound. Capacity growth,
+layout/admission changes, startup and selected-site preparation can still stall;
+the source representation and GPU workload remain prototype quality. Evidence:
+[`artifacts/native-async-understory-2026-10-23.json`](artifacts/native-async-understory-2026-10-23.json).
+
+All 12 local command gates pass: formatting, architecture, all-feature Clippy,
+2,050 lib/bin tests, 108 integration tests, 46 native ignored hardware/CLI
+checks, 86 renderer hardware tests, feature-off, WORLD00 regression and
+server/native builds. The mandated retired Bevy command selects zero tests.
+All 756 compiled/configuration inputs stayed unchanged. The native-only release
+recipe reproduces captured SHA256 `7945e0cd…` exactly. A joint native/server
+release build also passes but unifies additional `syn`/`hashbrown` features and
+produces a different viewer hash; it is not mislabeled as the capture binary.

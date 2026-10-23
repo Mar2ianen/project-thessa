@@ -84,7 +84,8 @@ The checked-in vertical slice currently contains:
   captures and a blind preference review. An optional default-off near-eye
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
   lattice inside nine L18 windows, reusing the same quality tiers, prototypes,
-  opaque mesh and shadow paths; it is not a vegetation streamer. Production
+  opaque mesh and shadow paths. Same-site near-window changes use one shared
+  worker with stale-result rejection; this is not a vegetation streamer. Production
   vegetation streaming, fully modeled botanical assets and physical obstacle
   ownership remain unimplemented.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical

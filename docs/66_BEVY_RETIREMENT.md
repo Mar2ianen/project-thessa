@@ -1,5 +1,10 @@
 # 66 — Bevy retirement: source inventory and acceptance ledger
 
+The surface branch's sequential preparation for main integration is tracked in
+[doc 78](78_NATIVE_MAIN_INTEGRATION.md). Incorporating latest main and reducing
+surface-update stalls do not close this source-to-consumer retirement ledger or
+authorize deleting the legacy host's remaining functions.
+
 **Status: active, incomplete. Updated: 2026-10-20.**
 
 The requested outcome is removal of Bevy and reintegration or replacement of

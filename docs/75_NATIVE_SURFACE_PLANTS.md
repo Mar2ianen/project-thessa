@@ -14,7 +14,12 @@ adds explicit lycopsid stem reflectance through the existing mesh material,
 without changing placement. Its later WORLD06f stage changes silhouettes through
 the same prototype producer and material path. Its WORLD07 continuation adds an
 opt-in bounded near-eye fern/reed layer; it remains experimental, default-off,
-synchronously prepared and visibly a prototype rather than closed forest.
+and visibly a prototype rather than closed forest. WORLD07a moves same-site
+near-window sampling to the existing shared worker executor; setup/site changes
+and growth/layout-changing GPU publication remain synchronous. Compatible
+completed batches reuse the existing prototype/material/shadow renderer and
+instance allocation when they fit; instance matrices still use its normal
+shared update path.
 Botanical realism and final surface composition remain incomplete.
 
 ## Requested and resolved contract
@@ -78,9 +83,22 @@ It does not reload a frozen artifact, introduce a cache/provider, or derive
 habitat from resident renderer LOD. The dominant-axis cube chart selects the
 single L14 window containing the selected canonical bookmark/numeric target;
 moving/zooming the camera within that selection does not regenerate it.
-Selecting a different window synchronously replaces the retained batch once.
-Preparation is deliberately bounded synchronous CPU work, measured explicitly;
-there are no plant jobs, background scheduler, or per-frame field samples.
+Selecting a different large-plant window synchronously replaces the batch once.
+Within the same large-plant window, moving the enabled understory eye window
+starts at most one `terrain_stream::JobHandle` on the existing Rayon executor.
+Frames retain the applied world-fixed descriptors while it runs. Requests
+coalesce to the latest camera window, with no growing queue; stale success/error
+results are discarded. Map/unsupported/high-AGL transitions immediately release
+or select the coarse representation, and an older worker cannot restore plants.
+An already-running worker finishes bounded work even after a mode change; it
+does not spawn replacement tasks while the view is withheld. This is not a
+second scheduler, a plant residency cache, or planet-wide vegetation streaming.
+Initial preparation and selected-site changes remain synchronous. Result
+publication reuses the renderer only when represented prototype kinds match,
+instances fit the retained capacity and RT-preflight admission is unchanged.
+Otherwise it reconstructs the shared renderer with the new actual count; there
+is no speculative maximum-budget allocation. Source publication is measured
+separately from sampling and normal per-frame instance/camera uploads.
 
 Survey-only `SceneMeshes` selects the plant source instead of a vehicle source.
 It uses the same `MeshRenderer`, `update_selected` per-primitive ranges, opaque
@@ -157,14 +175,24 @@ ABI/topology, arithmetic checks, per-kind results and source/log hashes:
 Existing headless output and headless/window performance capture metadata expose
 `native_surface_plants_*`: applied/disabled/withheld reason; face/level/x/y window;
 candidate visits, actual surface callbacks, accepted and retained counts;
-synchronous preparation CPU milliseconds; prototype vertex/index payload bytes;
-the existing 64-byte ABI instance-buffer bytes; submitted instances, draw calls
+setup/worker preparation CPU milliseconds; prototype vertex/index payload bytes;
+the selected count × existing 64-byte ABI instance payload bytes; submitted instances, draw calls
 and frame upload bytes from the shared renderer. These are submitted workload,
 not visibility counts. Preparation timing includes scatter/field sampling,
 sorting and prototype/instance conversion, but excludes GPU renderer creation.
 Payload/instance bytes are not total GPU allocation: shared uniforms, material,
 environment, shadow and optional RT resources remain the existing renderer's
 responsibility. The off/withheld counters and preparation time are exactly zero.
+`preparation_job_pending`, `preparation_jobs_started` and
+`preparation_jobs_discarded` report the bounded job lifecycle;
+`publication_cpu_ms` measures the last source adoption/construction separately
+from sampling and normal per-frame instance uploads. `renderer_reused` indicates
+whether that publication kept the GPU source. The instance payload is not a
+retained-capacity measurement: after reuse the buffer can be larger than the
+selected count, but never grows without bounded source reconstruction.
+Pending same-site metadata retains the actual applied counts/window
+and reports `pending_understory_preparation_retaining_applied_window` plus the
+requested window, rather than presenting the old descriptors as the new cover.
 Diagnostics do not serialize per-instance IDs every frame; exact descriptors are
 retained for CPU tests. Draw cost uses the existing render/shadow GPU intervals,
 not a new isolated plant timing path.
@@ -605,3 +633,17 @@ retained; the standing captures remain the only visual A/B evidence. The
 pre-existing dark diagonal foliage/occlusion artifacts visible in both sides of
 the matched pair are not introduced by this layer. Evidence:
 [`artifacts/native-near-understory-2026-10-23.json`](artifacts/native-near-understory-2026-10-23.json).
+
+### WORLD07a follow-up
+
+Same-site resampling is no longer a foreground wait: the current integration
+contract above uses one shared worker, stale-result rejection and compatible GPU
+source reuse. The matched 96-frame orbit diagnostic has no CPU submission above
+50 ms (maximum 27.685 ms), versus three in each baseline (158.038 / 236.733 ms
+maxima). Last compatible source adoption was 0.008175 ms, excluding the normal
+shared instance upload; total GPU median remains about 204 ms. The queue oracle,
+direct synchronous-descriptor comparison, exact round trip, shadow invalidation,
+map release/stale rejection and successful source reuse run on the real adapter.
+This closes the tested foreground sampling wait, not all stutter, GPU cost,
+near/far transitions or visual acceptance. Full scope and immutable inputs:
+[`artifacts/native-async-understory-2026-10-23.json`](artifacts/native-async-understory-2026-10-23.json).

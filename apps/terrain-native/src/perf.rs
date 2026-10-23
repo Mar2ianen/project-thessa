@@ -33,7 +33,7 @@ impl HeadlessPerf {
     pub fn new(backend: &Backend) -> Self {
         Self {
             collector: PerfCollector::with_default_capacity(),
-            gpu: GpuIntervals::new(backend, 6),
+            gpu: GpuIntervals::new(backend, 8),
         }
     }
 
@@ -70,6 +70,8 @@ impl HeadlessPerf {
                     "render.surface_and_shadows",
                     "render.rt_as_build",
                     "render.scene_classify_and_raster",
+                    "render.motion_vectors",
+                    "render.scene_overlays",
                     "render.display_transform",
                     "render.ui",
                 ];
@@ -104,18 +106,19 @@ impl HeadlessPerf {
         scene: &Scene,
         display: &thessa_render_wgpu::display::DisplayTransform,
         sky_layers: &crate::sky_layers::SkyLayers,
+        motion: Option<&thessa_render_wgpu::motion::SceneMotion>,
         width: u32,
         height: u32,
         scenario: String,
     ) -> std::io::Result<()> {
-        let mut meta = base_capture_metadata(backend, scene, display, sky_layers);
+        let mut meta = base_capture_metadata(backend, scene, display, sky_layers, motion);
         meta.display.width = width;
         meta.display.height = height;
         meta.display.vsync = false;
         meta.graphics
             .resolved
             .extend(scene.survey_capture_metadata(width, height));
-        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster; display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Scene raster uses RGBA16Float when native_hdr=true; compare quality/format as well as scope names with older captures. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
+        meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Sum opaque raster and scene_overlays to compare the old v5/v6 scene scope. Scene raster uses RGBA16Float when native_hdr=true; compare quality/format as well as scope names with older captures. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);
@@ -139,6 +142,7 @@ pub(crate) fn base_capture_metadata(
     scene: &Scene,
     display: &thessa_render_wgpu::display::DisplayTransform,
     sky_layers: &crate::sky_layers::SkyLayers,
+    motion: Option<&thessa_render_wgpu::motion::SceneMotion>,
 ) -> CaptureMetadata {
     let mut meta = default_capture_metadata();
     let info = backend.adapter.get_info();
@@ -155,9 +159,10 @@ pub(crate) fn base_capture_metadata(
         "requested_toml".into(),
         toml::to_string(&scene.requested).unwrap_or_default(),
     );
-    meta.graphics
-        .resolved
-        .insert("gpu_scope_layout".into(), "native-topology-v6-plume".into());
+    meta.graphics.resolved.insert(
+        "gpu_scope_layout".into(),
+        "native-topology-v7-motion".into(),
+    );
     meta.graphics.resolved.extend(sky_layers.metadata());
     meta.graphics
         .resolved
@@ -175,6 +180,12 @@ pub(crate) fn base_capture_metadata(
         ("native_night_lights_extent", format!("{:?}", resolved.night_light_mask_size())),
         ("native_night_lights_source", "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission".into()),
         ("native_hdr", display.enabled().to_string()),
+        ("native_motion_vectors", motion.is_some().to_string()),
+        ("native_motion_target_bytes", motion.map_or(0, |m| m.target_bytes()).to_string()),
+        ("native_primary_jitter", motion.is_some_and(|m| m.jitter_enabled()).to_string()),
+        ("native_jitter_submitted_frames", motion.map_or(0, |m| m.submitted_frames()).to_string()),
+        ("native_jitter_scope", "Halton primary terrain/meshes only; motion excludes sampling jitter; no resolve/TAA; secondary view unchanged".into()),
+        ("native_motion_scope", "render.motion_vectors; stored opaque depth + alpha mask, before translucent overlays; no TAA/history".into()),
         (
             "native_hdr_target_bytes",
             display.target_bytes().to_string(),
@@ -198,7 +209,7 @@ pub(crate) fn base_capture_metadata(
         ("native_plume_light_status", "unavailable".into()),
         ("native_plume_enabled", resolved.plume_enabled.to_string()),
         ("native_plume_quality", format!("{:?}", resolved.plume_quality)),
-        ("native_plume_scope", "render.scene_classify_and_raster (includes depth-clipped plume color-load pass when active)".into()),
+        ("native_plume_scope", "render.scene_overlays (includes depth-clipped plume color-load pass when active)".into()),
     ] {
         meta.graphics.resolved.insert(key.into(), value);
     }

@@ -17,11 +17,14 @@ and sibling CSV after rendering, and negotiates stable timestamp-query plus
 encoder-timestamp features only for this diagnostic. If either feature is
 unsupported, CPU capture still works and GPU timings are explicitly unavailable.
 Ordinary native devices create no timestamp query/readback buffers or collector.
-GPU intervals (`gpu_scope_layout=native-topology-v5-sky`) are `render.surface_and_shadows`
+GPU intervals (`gpu_scope_layout=native-topology-v7-motion`) are `render.surface_and_shadows`
 (persistent topology classification/transactions/emission and shadow depth),
 `render.rt_as_build` (dirty mesh/terrain AS builds),
 `render.scene_classify_and_raster` (classification plus the shared terrain,
-opaque-mesh and sky pass), `render.display_transform` (HDR to SDR, empty on the
+opaque-mesh and clear sky-background pass), `render.motion_vectors` (optional
+opaque-depth camera reprojection, empty when disabled), `render.scene_overlays`
+(depth-clipped plume, stars, cloud/aurora composition),
+`render.display_transform` (HDR to SDR, empty on the
 direct LDR fallback), and `render.ui` (after display transform); their sum
 is the measured GPU command span. They include barriers/scheduling and exclude
 queue-write uploads before the first mark and separate egui command buffers.
@@ -30,6 +33,15 @@ empty AS interval still includes timestamp/scheduling overhead. Historical
 `render.terrain_and_sky` /`render.mesh_and_rt` scopes had different boundaries
 and must not be compared directly to the new scopes. See
 [doc 58](58_NATIVE_PIPELINE_REVIEW.md) for the unified-pass review and evidence.
+The v5/v6 scene scope included translucent sky/plume work that v7 separates;
+sum `scene_classify_and_raster + scene_overlays` for that historical boundary.
+Motion diagnostics report actual `native_motion_vectors` and
+`native_motion_target_bytes`; off allocates no motion target/pipeline. They
+do not enable TAA/history or change visible scene RGB (doc 76).
+The separate default-off `[temporal].jitter` diagnostic deliberately changes
+primary visibility without resolving it. `native_primary_jitter` records the
+applied mode, and `native_jitter_submitted_frames` counts real submitted frames
+since reset (including capture warmup), not physics ticks or generated frames.
 The v3 scene target is RGBA16Float when native HDR resolves on, otherwise the
 original RGBA8 sRGB target. Compare formats/quality, not only matching scope
 names, with historical v2 captures. Native capture metadata records actual

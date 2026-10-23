@@ -114,6 +114,7 @@ struct ShadowCacheKey {
 /// Persistent GPU terrain working set. Regular-patch geometry is generated at
 /// page publication; opt-in conforming geometry is emitted at encode_surface.
 pub struct TerrainRenderer {
+    motion_vectors: bool,
     topology: Option<crate::terrain_topology::TerrainTopology>,
     topology_reason: Option<String>,
     ocean: Option<crate::ocean::OceanField>,
@@ -158,6 +159,9 @@ pub struct TerrainRenderer {
     frames: wgpu::Buffer,
     frame_staging: Vec<u8>,
     view: wgpu::Buffer,
+    /// Separate primary projection only in the opt-in jitter diagnostic. The
+    /// classifier, topology policy and clear sky retain `view` without jitter.
+    primary_view: Option<wgpu::Buffer>,
     vertices: wgpu::Buffer,
     draw: wgpu::Buffer,
     geometry: wgpu::ComputePipeline,
@@ -610,6 +614,14 @@ impl TerrainRenderer {
             &[0; ViewUniformBlock::BYTE_LEN],
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
+        let primary_view = settings.filter(|s| s.temporal_jitter).map(|_| {
+            upload(
+                device,
+                "cbt-primary-view",
+                &[0; ViewUniformBlock::BYTE_LEN],
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            )
+        });
         let transform = upload(
             device,
             "cbt-body-rotation",
@@ -707,6 +719,21 @@ impl TerrainRenderer {
         } else {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
         }
+        // Displacement samples material at vertices, independently of this
+        // fragment's filtered material. Conservatively mask the whole height
+        // admission band, including rough/dry fallback fragments at its edges.
+        let temporal_alpha = if settings.is_some_and(|s| s.temporal_motion_vectors) {
+            format!(
+                "return vec4(radiance * view.exposure, select(1.0, 0.0, max(water_material, spectral_ocean.a) > 0.0{}));",
+                if ocean.is_some() && ocean_settings.geometry_patches > 0 {
+                    " || input.height_m < 1.0"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            "return vec4(radiance * view.exposure, 1.0);".into()
+        };
         let raster_source = shaders::CBT_RASTER_WGSL
             .replace(
                 "const MATERIAL_ANISOTROPY: f32 = 1.0;",
@@ -714,6 +741,12 @@ impl TerrainRenderer {
                     "const MATERIAL_ANISOTROPY: f32 = {}.0;",
                     settings.map_or(1, |s| s.terrain_material_anisotropy)
                 ),
+            )
+            // Only the opt-in native diagnostic repurposes scene alpha. The
+            // shared/legacy shader and disabled native output remain intact.
+            .replace(
+                "return vec4(radiance * view.exposure, 1.0);",
+                &temporal_alpha,
             )
             .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
             .replace(
@@ -832,7 +865,10 @@ impl TerrainRenderer {
         );
         let raster_layout = raster.get_bind_group_layout(0);
         let entries = [
-            (0, view.as_entire_binding()),
+            (
+                0,
+                primary_view.as_ref().unwrap_or(&view).as_entire_binding(),
+            ),
             (1, transform.as_entire_binding()),
             (
                 2,
@@ -930,6 +966,7 @@ impl TerrainRenderer {
             last_shadow_draws: Default::default(),
             sky: None,
             plume: None,
+            motion_vectors: settings.is_some_and(|s| s.temporal_motion_vectors),
             sky_visible: settings.is_none_or(|s| s.sky_dome),
             format,
             shadow_receiver: shadows
@@ -988,6 +1025,7 @@ impl TerrainRenderer {
             frames,
             frame_staging: frames_data,
             view,
+            primary_view,
             vertices,
             draw,
             geometry,
@@ -1531,6 +1569,39 @@ impl TerrainRenderer {
         params: &ViewParams,
         extent: [u32; 2],
     ) -> Result<(), BackendError> {
+        self.update_view_jittered(
+            backend,
+            params,
+            extent,
+            thessa_render_core::temporal::JitterOffset::ZERO,
+        )
+    }
+
+    /// Primary raster jitter only. LOD/classification, sky and secondary passes
+    /// keep the unjittered view. Nonzero jitter requires resolved jitter settings
+    /// at construction; rejection occurs before any camera-buffer write.
+    pub fn update_view_jittered(
+        &mut self,
+        backend: &Backend,
+        params: &ViewParams,
+        extent: [u32; 2],
+        jitter: thessa_render_core::temporal::JitterOffset,
+    ) -> Result<(), BackendError> {
+        if !jitter.is_zero() && self.primary_view.is_none() {
+            return Err(BackendError::Device(
+                "primary jitter is not resolved for this terrain renderer".into(),
+            ));
+        }
+        let primary = if self.primary_view.is_some() {
+            Some(
+                ViewUniformBlock::new_jittered(params, params.world_position_m, jitter, extent)
+                    .ok_or_else(|| {
+                        BackendError::Device("invalid primary camera uniforms".into())
+                    })?,
+            )
+        } else {
+            None
+        };
         let camera = params.world_position_m.to_array();
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
@@ -1562,6 +1633,9 @@ impl TerrainRenderer {
             }
         }
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
+        if let (Some(buffer), Some(primary)) = (&self.primary_view, primary) {
+            backend.queue.write_buffer(buffer, 0, &primary.to_bytes());
+        }
         self.camera = camera;
         Ok(())
     }
@@ -1952,9 +2026,24 @@ impl TerrainRenderer {
     }
 
     /// Unified scene pass with explicit control over depth buffer store.
-    /// Passing `store_depth: false` configures `StoreOp::Discard` to save memory
-    /// bus bandwidth when the depth buffer is not consumed by downstream passes.
+    /// Passing `store_depth: false` permits `StoreOp::Discard` when neither
+    /// resolved motion diagnostics nor an active plume consumes scene depth.
     pub fn encode_scene_ops(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        mesh: Option<&crate::mesh::MeshRenderer>,
+        store_depth: bool,
+    ) {
+        self.encode_opaque_scene_ops(encoder, color, depth, mesh, store_depth);
+        self.encode_plume(encoder, color, depth);
+    }
+
+    /// Opaque scene plus far-depth sky background, without translucent plume.
+    /// Motion diagnostics must run after this pass with `store_depth = true`,
+    /// before plume or cloud overlays can contaminate the static-surface mask.
+    pub fn encode_opaque_scene_ops(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
@@ -1996,7 +2085,10 @@ impl TerrainRenderer {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: if store_depth || self.plume.as_ref().is_some_and(|p| p.active()) {
+                    store: if store_depth
+                        || self.motion_vectors
+                        || self.plume.as_ref().is_some_and(|p| p.active())
+                    {
                         wgpu::StoreOp::Store
                     } else {
                         wgpu::StoreOp::Discard
@@ -2032,6 +2124,15 @@ impl TerrainRenderer {
             sky.draw(&mut pass);
         }
         drop(pass);
+    }
+
+    /// Translucent, depth-clipped plume, after opaque motion diagnostics.
+    pub fn encode_plume(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) {
         if let Some(plume) = &self.plume {
             plume.encode(encoder, color, depth);
         }

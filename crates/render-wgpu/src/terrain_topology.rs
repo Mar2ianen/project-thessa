@@ -155,7 +155,7 @@ impl TerrainTopology {
             ));
         }
         let view = ViewPolicy {
-            clip: block.clip_from_world.to_cols_array(),
+            clip: block.unjittered_clip_from_world.to_cols_array(),
             camera,
             extent,
             extra_height_m: height_bound_m,
@@ -166,7 +166,7 @@ impl TerrainTopology {
         self.surface.update_camera(backend, camera)?;
         self.mark_dirty();
         let data = block
-            .clip_from_world
+            .unjittered_clip_from_world
             .to_cols_array()
             .into_iter()
             .chain([
@@ -464,6 +464,26 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let areas = classify(0.0);
+        let generation = topology.generation.get();
+        let policy = topology.view.get();
+        for index in 0..8 {
+            let jittered = ViewUniformBlock::new_jittered(
+                &view,
+                eye,
+                thessa_render_core::temporal::JitterOffset::halton(index),
+                [257, 257],
+            )
+            .unwrap();
+            topology
+                .update_view(&backend, &jittered, eye.to_array(), [257, 257], 0.0)
+                .unwrap();
+            assert_eq!(
+                topology.generation.get(),
+                generation,
+                "primary jitter must not wake LOD/RT geometry publication"
+            );
+            assert!(topology.view.get() == policy);
+        }
         let vertices = read(&topology.surface.vertices);
         let mut max_error = 0.0f64;
         let mut live = 0;

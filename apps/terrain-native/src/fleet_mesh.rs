@@ -413,6 +413,21 @@ impl SceneMeshes {
         }
     }
 
+    /// Applied after the ordinary mesh update so all source replacements and
+    /// early local/server branches share the same primary sampling contract.
+    pub fn update_primary_jitter(
+        &mut self,
+        backend: &Backend,
+        view: &thessa_render_core::ViewParams,
+        extent: [u32; 2],
+        jitter: thessa_render_core::temporal::JitterOffset,
+    ) -> Result<(), BackendError> {
+        if let Some(inner) = &mut self.inner {
+            inner.update_primary_jitter(backend, view, extent, jitter)?;
+        }
+        Ok(())
+    }
+
     pub fn update(
         &mut self,
         scene: &Scene,

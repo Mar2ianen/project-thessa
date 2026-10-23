@@ -19,7 +19,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 13.0
+exposure_ev100 = 13.20
 fleet_meshes = true
 fleet_quality = "high"
 

@@ -65,8 +65,6 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
         let dead_albedo = vec3(0.18, 0.11, 0.035) * textureSample(color_texture, color_sampler, in.uv).g * 2.5;
         albedo = mix(albedo, min(dead_albedo, vec3(0.35)), skirt_t * 0.92);
         transmission = mix(transmission, 0.05, skirt_t * 0.85);
-    } else if (transmission == 0.0 && in.local_y > 0.0) {
-        albedo = min(albedo * vec3(1.35, 1.20, 0.95), vec3(0.35));
     }
     var direct_reflect=vec3(0.0);
     var direct_transmit=vec3(0.0);

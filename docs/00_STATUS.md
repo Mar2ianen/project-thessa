@@ -330,6 +330,14 @@ terrain/material lighting, settings/defaults and shared render paths are retaine
 The ImageGen reference is a concept, not an engine or acceptance result.
 Remaining transport, subpixel aliasing, root/near-far, streaming and visual
 acceptance obligations are recorded in docs 70/75/77.
+Eleven local checks pass on 645 unchanged compiled inputs (2,082 lib/bin,
+117 integration and three focused native GPU fixtures). Nine final captures
+exit zero, including two separately validated controls for the opt-in
+`data/graphics/surface-showcase.toml` profile's existing 25 m near-shadow cover.
+Three blind pairs are prepared without votes. Standing population changes;
+the moving endpoint still has four material jobs. Stable performance, full
+hardware-suite/platform and visual acceptance remain open. Evidence:
+[`artifacts/native-leaf-colonies-2026-10-23.json`](artifacts/native-leaf-colonies-2026-10-23.json).
 
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace

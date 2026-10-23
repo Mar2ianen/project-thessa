@@ -89,6 +89,75 @@ subpixel foliage aliasing, streamed roots, near/far continuity and planetary
 coverage are still open. Broader silhouettes do not prove temporal stability,
 physical transport convergence or subjective preference.
 
+### Opt-in surface review profile
+
+`data/graphics/surface-showcase.toml` retains the existing High surface-review
+settings, experimental ground detail and understory, with TAA off. It requests
+`shadows.first_cascade_distance_m = 25.0` through the shared resolver instead
+of the legacy approximately 754 m first cover. Four effective 1024 px maps,
+the three-star atlas budget and 1.5 m normal bias are unchanged. This reuses the
+WORLD06h control; it does not add a shadow algorithm or change launch defaults.
+The smaller cover redistributes spatial precision between cascades and cannot
+establish a globally optimal partition or fix diffuse canopy transport.
+
+From the repository root, use the native-only release executable:
+
+```sh
+target/release/thessa-terrain-native --graphics data/graphics/surface-showcase.toml \
+  --survey-lat 23.565679258039204 --survey-lon 165.13881581863882 \
+  --survey-distance 80 --survey-eye-agl 2 --sim-time 0 --sim-step 0 --mute
+```
+
+The profile is for inspecting this experimental bounded location. Its High RT
+and plant workload is not an accepted frame budget on the 880M. Geometry,
+occupancy and near-cover controls have separate captures so their causes and
+costs are not conflated.
+
+### WORLD08 final local evidence
+
+Source `1d6a759` passed 11 local command checks on 645 unchanged compiled inputs:
+2,082 workspace lib/bin tests, 117 integration tests, Clippy, fmt, architecture,
+three directly relevant native GPU fixtures, feature-off, WORLD00 and release
+build. The release SHA256 is
+`7539c22d83807b3659d868d1e3738e82794028bac04f48bfdc5e9bb70090dc09`.
+The separate runtime review profile was added afterward and validated through
+its two native captures; their settings hashes match the tracked profile bytes.
+Full native/renderer GPU suites and remote CI were not repeated for this stage.
+
+All nine final captures exit zero on Radeon 880M/Vulkan/RADV,
+Mesa 26.2.5-arch1.1, with simulation time/step zero, 1280×720 and 30 warmup
+frames. Static cases measure 48 frames; the moving case measures 96.
+
+| Static view | Retained baseline GPU median | WORLD08, legacy cover | WORLD08, 25 m near cover |
+| --- | --- | --- | --- |
+| Standing, 2 m | 151.625 ms | 146.660 ms | 148.936 ms |
+| Close, 50 m | 109.695 ms | 112.366 ms | 115.802 ms |
+| Overview, 800 m | 67.439 ms | 65.901 ms | not captured |
+
+These are serial single-order observations, not stable FPS or isolated foliage/
+shadow costs. Standing changes population from 2,020 to 2,111 plants while
+retaining three draws and the same admitted RT policy. Close/overview keep 222
+plants. All static pairs match the compared camera/source/material-residency
+metadata; the standing composition changes are recorded separately. Static
+streams drain; the moving endpoint still has four material jobs. Its GPU median
+is 228.294 ms and maximum CPU frame interval 17.653 ms; no stable streaming,
+stutter or temporal acceptance follows from one sweep.
+
+Close/overview geometry and a same-population standing near-cover control form
+three blinded cases, with a separate unread private key and no reviewer votes.
+Original-before versus WORLD08 standing is descriptive composition evidence,
+not a matched-population preference pair. Implementer inspection sees broader
+crown/fern surfaces, grouped near cover and more legible near tree shadows;
+remaining ground bands, foliage noise and coarse shadow sampling are visible.
+The numerical gates do not certify subjective preference.
+
+Reproduction, benchmark workload, all hashes, separate intended/mismatched scene
+keys and known gaps:
+[`native-leaf-colonies-2026-10-23.json`](artifacts/native-leaf-colonies-2026-10-23.json).
+Raw evidence and review files remain in
+`target/surface-showcase/canopy-quality/`; the ImageGen concept is explicitly
+separate from these actual engine captures.
+
 ## WORLD06a — Saturated material admission
 
 The first matched native captures confirm that the previous global level sort

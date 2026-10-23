@@ -85,13 +85,18 @@ The checked-in vertical slice currently contains:
   acceptance remains open. An optional default-off near-eye
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
   lattice inside nine L18 windows, with world-addressed eight-metre colony
-  occupancy and canonical ecological eligibility, reusing the same quality tiers, prototypes,
+  occupancy and canonical ecological eligibility, reusing the same quality
+  tiers, prototypes,
   opaque mesh and shadow paths. Same-site near-window changes use one shared
   worker with stale-result rejection; this is not a vegetation streamer. Shared
   stellar shadow rays now preserve their physical line instead of offsetting
   sideways into narrow leaves; finite receiver-bias and subpixel-coverage gaps
   remain. Production vegetation streaming, fully modeled botanical assets and
   physical obstacle ownership remain unimplemented.
+  An opt-in [surface review profile](data/graphics/surface-showcase.toml) enables
+  the experimental location and uses the existing 25 m near-shadow cover;
+  [doc 77](docs/77_NATIVE_SURFACE_SHOWCASE.md) gives the fixed-site launch command
+  and remaining quality/performance limits.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

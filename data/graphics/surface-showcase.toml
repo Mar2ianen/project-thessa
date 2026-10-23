@@ -1,0 +1,130 @@
+# Experimental WORLD00 review profile; use explicit survey coordinates from doc 77.
+# Uses the shared resolver and atlas budget; no launch defaults are changed.
+version = 1
+preset = "high"
+
+[renderer]
+terrain_ground_detail = true
+surface_quality = "high"
+terrain_normal_maps = true
+specular_reflections = true
+shadow_memory_mib = 64
+backend = "auto"
+ray_tracing = "auto"
+terrain = "gpu_auto"
+terrain_mesh_cells = 24
+material_storage = "rgba_array"
+resolution_scale = 1.0
+vsync = false
+hdr = true
+bloom = false
+auto_exposure = false
+exposure_ev100 = 13.0
+fleet_meshes = true
+fleet_quality = "high"
+
+[terrain_topology]
+enabled = false
+quality = "high"
+
+[atmosphere]
+enabled = true
+quality = "high"
+aerial_perspective = true
+density_scale = 0.3
+multiple_scattering = false
+eclipses = true
+multi_star = true
+limb_scattering = true
+sky_dome = true
+stars = true
+stars_quality = "high"
+ray_steps = 24
+
+[clouds]
+enabled = true
+quality = "high"
+volumetric = true
+integrator = "march"
+ray_steps = 24
+cast_shadows = true
+layers = 2
+coverage = 0.55
+opacity = 0.95
+animate = true
+
+[night_lights]
+enabled = true
+quality = "medium"
+intensity = 1.0
+
+[upper_atmosphere]
+airglow = true
+aurora = true
+aurora_quality = "low"
+aurora_lighting = false
+aurora_intensity = 1.0
+aurora_animate = true
+
+[gas_giant]
+enabled = true
+quality = "medium"
+animate_bands = true
+limb_darkening = true
+
+[engine_plume]
+enabled = true
+quality = "medium"
+mach_diamonds = true
+flicker = true
+light = true
+
+[instruments]
+enabled = true
+quality = "high"
+layout = "aircraft"
+navball_renderer = "auto"
+
+[ocean]
+enabled = false
+quality = "high"
+wind_speed_m_s = 10.0
+wind_direction_rad = 0.0
+significant_height_m = 2.0
+depth_m = 100.0
+seed = 17
+geometry_patches = 16
+geometry_distance_m = 300.0
+
+[raytracing]
+terrain = true
+vehicles = true
+landmarks = false
+atmosphere = true
+clouds = false
+max_distance_m = 500000.0
+scene_memory_mib = 32
+max_instances = 4096
+reflection_bounces = 2
+ray_bias_m = 0.01
+
+[shadows]
+first_cascade_distance_m = 25.0
+enabled = true
+quality = "high"
+cascades = 4
+max_distance_m = 12000.0
+map_size = 4096
+normal_bias_m = 1.5
+
+[debug]
+show_atmosphere_bounds = false
+show_rt_proxies = false
+
+[surface_plants]
+enabled = true
+quality = "high"
+understory = true
+
+[temporal]
+taa=false

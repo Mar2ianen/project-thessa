@@ -63,8 +63,8 @@ samples the same field, preserving exact window unions and nested density.
 
 The existing resolved plant/understory settings and disabled/Low/Medium/High
 fallbacks own these changes; no additional pass, setting, shader or per-frame
-work is added. Disabled plants and disabled understory do not evaluate the new
-field. The current opaque double-sided leaves have no alpha-mask path; their
+colony evaluation is added. Disabled plants and disabled understory do not
+evaluate the new field. The current opaque double-sided leaves have no alpha-mask path; their
 remaining subpixel aliasing is not addressed by alpha-to-coverage. TAA still
 rejects plant history. Lighting, terrain material transport, streamed root
 agreement, canopy transmission, near/far continuity and final acceptance remain
@@ -84,6 +84,19 @@ was updated to [5, 1] after its geometry changed, without weakening the per-pixe
 colour/visibility oracle. Coverage, winding, physical extents, projected leaf
 lamina/gaps, colony continuity/seams, exact query unions and nested density
 remain tested separately from aesthetic preference.
+
+Final evidence for source `1d6a759`: nine successful frozen-time captures
+(three baseline, three geometry/colony, one moving and two same-binary near-cover
+controls). Standing retains 2,111 plants, including 1,891 understory clumps,
+versus 2,020/1,800 before; canonical large plants remain unchanged. Close and
+overview retain 222 plants. All static captures end with zero pending jobs;
+the orbit ends with four material jobs, so it is a runtime smoke test, not
+streaming-convergence acceptance. Three eligible blind cases are prepared and
+unreviewed; original-before versus WORLD08 standing is excluded because the
+understory population intentionally changes. The additional explicit near-cover
+standing control compares the same WORLD08 population. Exact commands, release,
+settings, frame/log hashes, scope costs and limitations:
+[`native-leaf-colonies-2026-10-23.json`](artifacts/native-leaf-colonies-2026-10-23.json).
 
 ## Requested and resolved contract
 

@@ -760,6 +760,27 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             radiance += vec3(1.0, 0.72, 0.42) * (mask * night * lighting.city_params.x * 500.0);
         }
     }
+    // Atmospheric aerial perspective / distance haze:
+    let haze_coeff = lighting.ambient_lux.w;
+    if (haze_coeff > 0.0) {
+        let view_dist = length(input.render_position);
+        let haze_dist = max(view_dist - 25.0, 0.0);
+        if (haze_dist > 0.0) {
+            var total_sky = lighting.ambient_lux.rgb;
+            for (var i = 0u; i < 3u; i = i + 1u) {
+                total_sky += lighting.colors_lux[i].rgb * max(dot(surface_up, lighting.directions[i].xyz), 0.0) * 0.22;
+            }
+            let sky_rad = total_sky / OCEAN_PI;
+            let elevation = max(dot(-eye, surface_up), 0.0);
+            let sky_horizon_color = mix(
+                sky_rad * vec3(0.55, 0.62, 0.70),
+                sky_rad * vec3(0.35, 0.42, 0.50),
+                smoothstep(0.0, 0.7, elevation)
+            );
+            let haze_trans = exp(-haze_coeff * haze_dist);
+            radiance = mix(sky_horizon_color, radiance, haze_trans);
+        }
+    }
     // Same pre-exposed linear HDR convention as Bevy PBR.
     return vec4(radiance * view.exposure, 1.0);
 }

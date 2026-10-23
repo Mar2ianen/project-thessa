@@ -411,8 +411,12 @@ fn material_normal_gpu_and_upload_cost() {
     let normal = (0..128 * 128)
         .flat_map(|i| {
             [
-                (128.0 + 60.0 * (i as f64 * 0.071).sin()) as u8,
-                (128.0 + 60.0 * (i as f64 * 0.043).cos()) as u8,
+                thessa_rcbt_core::material_page::encode_material_normal_component(
+                    60.0 / 127.0 * (i as f64 * 0.071).sin(),
+                ),
+                thessa_rcbt_core::material_page::encode_material_normal_component(
+                    60.0 / 127.0 * (i as f64 * 0.043).cos(),
+                ),
             ]
         })
         .collect();
@@ -565,7 +569,12 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
         }
         Err(e) => panic!("{e}"),
     };
-    for (normal_maps, water) in [(true, false), (false, false), (true, true)] {
+    for (normal_maps, water, sign) in [
+        (true, false, 1.0),
+        (true, false, -1.0),
+        (false, false, 1.0),
+        (true, true, 1.0),
+    ] {
         let anchor = TileAnchor::new(TileKey::new(4, 10, 512, 512).unwrap(), 6_371_000.0).unwrap();
         let page = HeightPage::bake(&[if water { 0.0 } else { 120.0 }; 4], 2, 0.01).unwrap();
         let settings = thessa_graphics::ResolvedGraphicsSettings {
@@ -589,14 +598,14 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
             Some(&settings),
         )
         .unwrap();
-        // A hard +X sun makes the flat +Z terrain dark; a normal tilted toward +X
-        // can only brighten it through the production fragment path.
+        // A hard +/-X sun makes the flat +Z terrain dark; a normal tilted
+        // toward the sun can only brighten it through the production path.
         renderer
             .update_lighting(
                 &backend,
                 &SurfaceLighting {
                     ambient_lux: [0.05, 0.05, 0.05, 0.0],
-                    directions: [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4]],
+                    directions: [[sign, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4]],
                     colors_lux: [[1.5, 1.5, 1.5, 0.0], [0.0; 4], [0.0; 4]],
                 },
             )
@@ -626,9 +635,13 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
         };
         let rgba = [255, 0, 0, if water { 40 } else { 255 }].repeat(128 * 128);
         let flat = CbtMaterialPage::from_rgba8(rgba.clone()).unwrap();
-        // 230/255 decodes to +0.804 in x; 128/255 stays a flat y slope.
+        // Signed +/-102/127 exercises both directions through the real sampler;
+        // zero is an exact flat y slope.
+        let encoded = thessa_rcbt_core::material_page::encode_material_normal_component(
+            102.0 / 127.0 * f64::from(sign),
+        );
         let tilted =
-            CbtMaterialPage::from_rgba8_with_normals(rgba, Some([230, 128].repeat(128 * 128)))
+            CbtMaterialPage::from_rgba8_with_normals(rgba, Some([encoded, 0].repeat(128 * 128)))
                 .unwrap();
         let mut source = MaterialPageStore::default();
         source.set_page(12, flat.clone());
@@ -655,7 +668,7 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
         if normal_maps && !water {
             assert!(
                 tilted_frame[mid] > flat_frame[mid] + 20,
-                "normal page must brighten the +X-lit slope: flat={} tilted={}",
+                "normal page must brighten the sun-facing slope: flat={} tilted={}",
                 flat_frame[mid],
                 tilted_frame[mid]
             );
@@ -664,11 +677,12 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
             let n = DVec3::from(anchor.normal).normalize();
             let t = (DVec3::X - n * n.x).normalize();
             let b = n.cross(t);
-            let x = 230.0 / 255.0 * 2.0 - 1.0;
-            let y = 128.0 / 255.0 * 2.0 - 1.0;
+            let x = 102.0 / 127.0 * f64::from(sign);
+            let y = 0.0;
             let z = (1.0_f64 - x * x - y * y).sqrt();
             let normal = (n + t * (x / z) + b * (y / z)).normalize();
-            let linear = (0.05 + 1.5 * normal.x.max(0.0)) / std::f64::consts::PI;
+            let linear =
+                (0.05 + 1.5 * (normal.x * f64::from(sign)).max(0.0)) / std::f64::consts::PI;
             let reference = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
             assert!(
                 tilted_frame[mid].abs_diff(reference) <= 2,

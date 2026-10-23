@@ -94,9 +94,24 @@ fn write_normal_png(path: &std::path::Path, rg: &[u8]) {
         .as_chunks::<2>()
         .0
         .iter()
-        .flat_map(|p| [p[0], p[1], 128, 255])
+        .flat_map(|&p| normal_preview(p))
         .collect();
     write_png(path, &rgba);
+}
+
+// PNG previews use conventional unsigned RGB, not the runtime SNORM bytes.
+fn normal_preview(rg: [u8; 2]) -> [u8; 4] {
+    let [x, y] = rg.map(thessa_rcbt_core::material_page::decode_material_normal_component);
+    let z = (1.0 - x * x - y * y).max(0.0001).sqrt();
+    let [r, g, b] = [x, y, z].map(|v| ((v * 0.5 + 0.5) * 255.0).round() as u8);
+    [r, g, b, 255]
+}
+
+#[test]
+fn signed_normal_preview_uses_unsigned_display_components() {
+    assert_eq!(normal_preview([0, 0]), [128, 128, 255, 255]);
+    assert_eq!(normal_preview([102, 0]), [230, 128, 203, 255]);
+    assert_eq!(normal_preview([154, 0]), [25, 128, 203, 255]);
 }
 
 fn main() {

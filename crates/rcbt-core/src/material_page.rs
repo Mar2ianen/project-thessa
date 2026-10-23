@@ -1,5 +1,5 @@
 //! Immutable 128² material pages: RGB sRGB albedo, alpha linear roughness.
-//! An optional second plane carries tangent-space normal XY as linear RG8.
+//! An optional second plane carries tangent-space normal XY as RG8_SNORM.
 use std::sync::Arc;
 
 /// Immutable page payloads keyed by canonical CBT cube-tile ID, with source
@@ -9,6 +9,17 @@ use std::sync::Arc;
 pub type MaterialPages = std::collections::BTreeMap<u64, (u64, CbtMaterialPage)>;
 
 pub const MATERIAL_PAGE_SIZE: u32 = 128;
+
+/// Encode a finite unit-normal component as an i8 byte for RG8_SNORM.
+/// Zero is exact; symmetric rounding has error at most 0.5 / 127.
+pub fn encode_material_normal_component(component: f64) -> u8 {
+    (component.clamp(-1.0, 1.0) * 127.0).round() as i8 as u8
+}
+
+/// Match GPU SNORM decoding, including the non-canonical -128 byte alias.
+pub fn decode_material_normal_component(encoded: u8) -> f32 {
+    ((encoded as i8) as f32 / 127.0).max(-1.0)
+}
 
 #[derive(Debug, Clone)]
 pub struct CbtMaterialPage {
@@ -24,7 +35,8 @@ impl CbtMaterialPage {
     }
 
     /// Build an albedo/roughness page plus an optional tangent-space normal
-    /// plane. Normal bytes are linear RG8: `x * 0.5 + 0.5`, `y * 0.5 + 0.5`;
+    /// plane. Normal bytes are RG8_SNORM, encoded with
+    /// [`encode_material_normal_component`];
     /// the sampler reconstructs positive z. Normal mips average the decoded
     /// height gradients (`normal.xy / normal.z`) before reconstructing a unit
     /// normal. This is linear in bump influence, not in unit-normal XY.
@@ -54,7 +66,7 @@ impl CbtMaterialPage {
         &self.mips
     }
 
-    /// Optional linear RG8 normal chain with the same halving shape.
+    /// Optional RG8_SNORM normal chain with the same halving shape.
     pub fn normal_mips(&self) -> Option<&[Vec<u8>]> {
         self.normal_mips.as_deref()
     }
@@ -63,6 +75,8 @@ impl CbtMaterialPage {
         Self::from_decoded_mips_with_normals(mips, None)
     }
 
+    /// Adopt decoded planes. Normal bytes use the same RG8_SNORM contract as
+    /// [`Self::from_rgba8_with_normals`], with no unsigned-format auto-detection.
     pub fn from_decoded_mips_with_normals(
         mips: Vec<Vec<u8>>,
         normal_mips: Option<Vec<Vec<u8>>>,
@@ -153,8 +167,8 @@ fn normal_mips_from_rg8(rg8: Vec<u8>) -> Option<Vec<Vec<u8>>> {
                 for dy in 0..2 {
                     for dx in 0..2 {
                         let i = ((y * 2 + dy) * size + x * 2 + dx) * 2;
-                        let x = source[i] as f32 / 255.0 * 2.0 - 1.0;
-                        let y = source[i + 1] as f32 / 255.0 * 2.0 - 1.0;
+                        let x = decode_material_normal_component(source[i]);
+                        let y = decode_material_normal_component(source[i + 1]);
                         let z = (1.0 - x * x - y * y).max(0.0001).sqrt();
                         sx += x / z;
                         sy += y / z;
@@ -165,10 +179,8 @@ fn normal_mips_from_rg8(rg8: Vec<u8>) -> Option<Vec<Vec<u8>>> {
                 let length = (1.0 + sx * sx + sy * sy).sqrt();
                 sx /= length;
                 sy /= length;
-                next[(y * next_size + x) * 2] =
-                    ((sx * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
-                next[(y * next_size + x) * 2 + 1] =
-                    ((sy * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+                next[(y * next_size + x) * 2] = encode_material_normal_component(f64::from(sx));
+                next[(y * next_size + x) * 2 + 1] = encode_material_normal_component(f64::from(sy));
             }
         }
         mips.push(next);
@@ -219,7 +231,7 @@ mod tests {
 
     #[test]
     fn normal_mips_halve_from_rg8_and_share_clone_payload() {
-        let normal = [128, 128].repeat(128 * 128);
+        let normal = [0, 0].repeat(128 * 128);
         let page = CbtMaterialPage::from_rgba8_with_normals(
             vec![128; 128 * 128 * 4],
             Some(normal.clone()),
@@ -232,7 +244,7 @@ mod tests {
         assert_eq!(mips[7].len(), 2);
         assert!(
             mips.iter()
-                .all(|mip| mip.as_chunks::<2>().0.iter().all(|p| p == &[128, 128]))
+                .all(|mip| mip.as_chunks::<2>().0.iter().all(|p| p == &[0, 0]))
         );
         assert_eq!(page.byte_len(), 87_380 + 43_690);
         assert!(std::ptr::eq(
@@ -266,22 +278,38 @@ mod tests {
         // Alternating opposite gradients cancel at the first mip.
         let mut normal = Vec::with_capacity(128 * 128 * 2);
         for i in 0..128 * 128 {
-            normal.extend(if i % 2 == 0 { [204, 128] } else { [51, 128] });
+            normal.extend(if i % 2 == 0 { [76, 0] } else { [180, 0] });
         }
         let page =
             CbtMaterialPage::from_rgba8_with_normals(vec![0; 128 * 128 * 4], Some(normal)).unwrap();
         let mips = page.normal_mips().unwrap();
-        assert_eq!(&mips[1][..2], &[128, 128]);
-        assert_eq!(&mips[7][..2], &[128, 128]);
+        assert_eq!(&mips[1][..2], &[0, 0]);
+        assert_eq!(&mips[7][..2], &[0, 0]);
     }
 
     #[test]
     fn normal_mips_mix_bump_influence_not_unit_normal_xy() {
-        let normal = [230, 128, 128, 128].repeat(128 * 128 / 2);
+        let normal = [102, 0, 0, 0].repeat(128 * 128 / 2);
         let page =
             CbtMaterialPage::from_rgba8_with_normals(vec![0; 128 * 128 * 4], Some(normal)).unwrap();
-        // Average slopes (1.35 + 0)/2 -> normal.x ~0.56 -> byte 199.
-        // Averaging unit-normal XY would instead produce byte 179.
-        assert!(page.normal_mips().unwrap()[1][0].abs_diff(199) <= 1);
+        // Average slopes (1.35 + 0)/2 -> normal.x ~0.56 -> signed byte 71.
+        // Averaging unit-normal XY would instead produce byte 51.
+        assert!(page.normal_mips().unwrap()[1][0].abs_diff(71) <= 1);
+    }
+    #[test]
+    fn signed_normal_encoding_is_zero_exact_symmetric_and_bounded() {
+        assert_eq!(encode_material_normal_component(0.0), 0);
+        assert_eq!(decode_material_normal_component(0), 0.0);
+        assert_eq!(decode_material_normal_component(128), -1.0);
+        for step in -100_000..=100_000 {
+            let value = f64::from(step) / 100_000.0;
+            let encoded = encode_material_normal_component(value);
+            let decoded = f64::from(decode_material_normal_component(encoded));
+            assert!((decoded - value).abs() <= 0.5 / 127.0 + f64::from(f32::EPSILON));
+            assert_eq!(
+                encode_material_normal_component(-value),
+                (encoded as i8).wrapping_neg() as u8
+            );
+        }
     }
 }

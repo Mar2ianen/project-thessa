@@ -240,6 +240,23 @@ remains byte-identical to WORLD06i. No new visual or performance acceptance is
 claimed. Evidence:
 [`artifacts/native-direct-lobe-diagnosis-2026-10-23.json`](artifacts/native-direct-lobe-diagnosis-2026-10-23.json).
 
+WORLD06k is a candidate zero-exact material-normal representation correction:
+the shared runtime producer, CPU slope mips, GPU texture and raster sampler now
+use RG8_SNORM rather than unsigned RG8. A neutral plane matches no plane exactly
+in all 24 regular/conforming, quality and view fixtures; the former encoding
+failed every case, with up to 32 linear output codes of error. Source component
+quantization is bounded by 0.5/127 plus f32 decode roundoff. Memory, settings,
+quality budgets, canonical geometry and material colour/roughness are unchanged.
+Matched standing/close/overview captures are complete; the characteristic bands
+remain, with mean displayed-code changes below 0.05 per RGB channel. Full local
+gates pass: 2,044 lib/bin, 105 integration, 86 renderer hardware tests, the signed
+diagnostic-PNG preview test, formatting, Clippy, architecture, feature-off and
+release rebuild matching the final captured executable. No ground-band,
+performance or aesthetic acceptance follows from this numerical regression
+(see docs 69/77).
+Evidence:
+[`artifacts/native-signed-material-normals-2026-10-23.json`](artifacts/native-signed-material-normals-2026-10-23.json).
+
 The 2026-10-21 WORLD05 prototype-geometry stage passed the same 14 local command
 gates on committed `HEAD 132b709` with 755 unchanged inputs: 2,027 workspace
 lib/bin and 102 integration tests, the focused plant hardware oracles, 79

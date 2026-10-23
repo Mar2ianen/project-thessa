@@ -4,7 +4,7 @@
 // residency hierarchy, feathering and page transform stay identical, but the
 // normal plane is sampled in the same pass instead of forcing every secondary
 // consumer (ray-traced terrain, ocean geometry) to declare unused bindings.
-// Normal pages are body-space cube pages; xy is linear RG8 and z is
+// Normal pages are body-space cube pages; xy is RG8_SNORM and z is
 // reconstructed positive in the page's face tangent frame.
 @group(0) @binding(19) var material_normal_texture: texture_2d_array<f32>;
 @group(0) @binding(20) var<storage, read> material_normal_directory: array<vec4<u32>>;
@@ -52,7 +52,7 @@ fn material_at_level_raster(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f3
               if (normal_layer != 0xffffffffu) {
                 let normal_footprint = footprint * exp2(MATERIAL_NORMAL_MIP_BIAS);
                 let xy = textureSampleGrad(material_normal_texture, material_sampler, uv,
-                    i32(normal_layer), dx * normal_footprint, dy * normal_footprint).rg * 2.0 - 1.0;
+                    i32(normal_layer), dx * normal_footprint, dy * normal_footprint).rg;
                 // Blend height gradients, not unit-normal XY; absent pages
                 // contribute zero rather than amplifying sparse coverage.
                 let z = sqrt(max(0.0001, 1.0 - dot(xy, xy)));

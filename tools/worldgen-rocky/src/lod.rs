@@ -8,7 +8,9 @@ use crate::{
     field::PlanetField,
 };
 use serde::{Deserialize, Serialize};
-use thessa_rcbt_core::{HeightPage, HeightPageError, Node};
+use thessa_rcbt_core::{
+    HeightPage, HeightPageError, Node, material_page::encode_material_normal_component,
+};
 
 /// The CBT domain adapter reserves three binary path bits for a cube face.
 /// Six of the eight depth-three leaves are used by faces 0..=5; the two
@@ -681,8 +683,8 @@ pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) ->
 ///
 /// The RGB channels are the canonical surface albedo in sRGB bytes. Alpha is
 /// the canonical perceptual roughness encoded from its linear 0..1 value.
-/// `normal` is an optional linear RG8 tangent-space normal plane: `x` and `y`
-/// slopes encoded as `component * 0.5 + 0.5`, positive z reconstructed in the
+/// `normal` is an optional RG8_SNORM tangent-space normal plane: `x` and `y`
+/// components encoded as signed i8 bytes with exact zero, positive z reconstructed in the
 /// shader. It carries physical, filtered material-only grain, independent
 /// of mesh resolution and continuous across
 /// tile edges. Pages are always 128x128: texels 1..=126 cover the 125-cell
@@ -875,16 +877,8 @@ pub fn build_gpu_material_page_with_ground_detail(
             }
             let [dx, dy] = gradient;
             let length = (dx * dx + dy * dy + 1.0).sqrt();
-            normal.push(
-                (((-dx / length) * 0.5 + 0.5) * 255.0)
-                    .round()
-                    .clamp(0.0, 255.0) as u8,
-            );
-            normal.push(
-                (((-dy / length) * 0.5 + 0.5) * 255.0)
-                    .round()
-                    .clamp(0.0, 255.0) as u8,
-            );
+            normal.push(encode_material_normal_component(-dx / length));
+            normal.push(encode_material_normal_component(-dy / length));
         }
     }
     GpuMaterialPage {
@@ -1356,7 +1350,7 @@ mod surface_regressions {
             },
         );
         assert!(
-            a.normal.as_chunks::<2>().0.iter().any(|n| *n != [128, 128]),
+            a.normal.as_chunks::<2>().0.iter().any(|n| *n != [0, 0]),
             "seam fixture must exercise resolved relief, not an all-flat distant page"
         );
         assert_eq!(a.size, GPU_MATERIAL_PAGE_SIZE);
@@ -1415,7 +1409,7 @@ mod surface_regressions {
         // flat here; the ocean assertion pins the land-only grain gate.
         assert_eq!(
             &page.normal[(y * size + x) * 2..][..2],
-            &[128, 128],
+            &[0, 0],
             "ocean normals stay flat"
         );
     }
@@ -1473,7 +1467,7 @@ mod surface_regressions {
                     )
                 })
             })
-            .filter(|(x, y)| *x != 128 || *y != 128)
+            .filter(|(x, y)| *x != 0 || *y != 0)
             .count();
         assert!(
             varied > 128 * 128 / 4,

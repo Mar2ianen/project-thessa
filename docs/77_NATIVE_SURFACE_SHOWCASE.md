@@ -657,3 +657,82 @@ sampling, split-source, false-colour or two-facet changes remains. Existing READ
 prototype/visual-acceptance statements remain accurate. Exact commands, hashes,
 negative evidence and limitations:
 [`native-direct-lobe-diagnosis-2026-10-23.json`](artifacts/native-direct-lobe-diagnosis-2026-10-23.json).
+
+## WORLD06k — Zero-exact signed material normals (candidate)
+
+Following the direct-lobe diagnosis, inspection identified a representation
+defect independent of the proposed microvisibility model: the old unsigned RG8
+contract cannot store zero under `2*byte/255-1`. Its nominal flat `[128,128]`
+normal has XY = `[1/255,1/255]`, approximately 0.318 degrees of artificial tilt.
+Even arbitrarily small slopes round to nonzero positive/negative normals. At a
+grazing view this can change the one-sided BRDF's outgoing support; it is not
+evidence that the source terrain contains this tilt.
+
+The shared page producer and CPU slope mip builder now encode signed normal
+components with `round(component*127)`; `Rg8Snorm` hardware filtering decodes
+them before interpolation, and the raster sampler no longer applies `*2-1`.
+Zero is exactly zero at every mip, and opposite slopes round symmetrically.
+The existing RG two-byte payload, directory, residency, eight mips, sampler
+anisotropy, +2/+1/+0 normal mip tiers and disabled allocation/work contracts are
+unchanged. No new graphics toggle, pass, radiance multiplier, normal rotation,
+roughness change, mesh, physical height or simulation change is introduced.
+
+This changes the runtime material-normal byte contract. Normal-bearing decoded
+pages must use signed bytes; old unsigned payloads must be regenerated or
+re-encoded, not silently mixed. Normal-less pages, bundled albedo/roughness,
+legacy RGBA normal exports and Bevy's albedo-only path remain compatible.
+The core exposes the shared encoder/decoder so producers and external decoded
+page callers do not duplicate a format formula.
+
+The zero-slope GPU oracle compares an absent normal plane against a present
+neutral plane with actual regular/conforming terrain, all three surface tiers
+and four view cosines (0.001/0.01/0.1/0.7). Conforming geometry settles before
+each A/B/A sequence, and exact A/A equality guards against geometry drift. The
+old encoding fails all 24 cases, with maximum error 32 linear output codes;
+signed encoding passes the same exact full-frame equality requirement. An
+initial six-warmup fixture was unstable in the most grazing conforming case;
+its 50-code result is invalid, superseded by the stable v2 before/v3 after logs.
+These logs are retained under `target/surface-showcase/normal-neutral/`.
+
+A 200,001-point CPU sweep pins zero, odd symmetry and maximum component error
+0.5/127 plus f32 decoding roundoff, including the GPU's noncanonical -128 alias.
+Existing slope-average, page-border, land-grain/ocean-flat and raster Lambert
+tests use the signed contract, with the Lambert fixture additionally exercising
+both positive and negative slopes. No component error bound is promoted to a
+global grazing BRDF/image error bound. Microvisibility and nonlinear footprint
+filtering remain separate unresolved contracts.
+
+Matched standing/close/overview captures are complete against WORLD06j's
+byte-identical WORLD06i executable, with unchanged canonical settings, frozen
+epoch zero, 1280x720, 60 s prestream, 30 warmups and 32 measured frames. Camera,
+resolved settings and plant counts agree; only the recorded one-time plant
+preparation duration differs. Material-level histograms and drained streams
+agree, but do not establish identical resident page IDs/content.
+
+| Camera | Mean absolute displayed RGB code difference | GPU median before/after, ms |
+| --- | --- | --- |
+| Standing 2 m | 0.0262 / 0.0255 / 0.0251 | 103.327 / 106.614 |
+| Close 50 m | 0.0490 / 0.0465 / 0.0418 | 110.958 / 109.264 |
+| Overview 800 m | 0.0398 / 0.0398 / 0.0342 | 65.586 / 65.109 |
+
+Implementer inspection confirms that the characteristic ground bands remain.
+The canonical image deltas are small overall, not a bound on local grazing
+response (the standing maximum is 17 displayed codes). Coarse/grid-like shadows,
+trunk stripes, sparse cover and leaf aliasing remain. These single-order
+whole-frame timings on Radeon 880M/RADV are observations, not a stable performance
+comparison. The existing normal-map raster/upload diagnostic is rerun in the
+hardware suite; its signed input fixture is not bit-identical to the earlier
+unsigned one and must not be used to claim a format-conversion speedup.
+
+Full local gates pass: 2,044 lib/bin tests, 105 integration tests, 86 renderer
+hardware tests, one signed diagnostic-PNG preview test, formatting, architecture,
+all-feature Clippy, native feature-off and release build. The mandated retired
+Bevy command selects zero tests and is not hardware coverage. The final release
+matches the `normal-native-v2` capture executable byte-for-byte; v1 captures
+predate the last Rust API-documentation edits and are superseded. Final gates
+include the diagnostic PNG consumer; the other 754 source/config/asset inputs
+are unchanged from the initial snapshot. Existing README claims remain accurate.
+No blind votes or final visual, temporal, stable-performance or planetary-streaming
+acceptance is claimed.
+Commands, hashes, numerical envelopes and capture evidence:
+[`native-signed-material-normals-2026-10-23.json`](artifacts/native-signed-material-normals-2026-10-23.json).

@@ -118,6 +118,81 @@ fn center(pixels: &[u8]) -> [u8; 3] {
     pixels[(32 * 65 + 32) * 4..][..3].try_into().unwrap()
 }
 
+#[test]
+#[ignore = "hardware: a zero-slope material normal page is exactly inert at every mip/quality and grazing angle, regular/conforming"]
+fn neutral_material_normals_are_exactly_inert_at_grazing_angles() {
+    use thessa_rcbt_core::material_page::encode_material_normal_component;
+    let backend = Backend::bring_up().unwrap();
+    let neutral = encode_material_normal_component(0.0);
+    let mut failures = Vec::new();
+    for conforming in [false, true] {
+        for quality in [Quality::Low, Quality::Medium, Quality::High] {
+            let mut terrain = scene(&backend, quality, true, conforming);
+            terrain
+                .update_lighting(
+                    &backend,
+                    &SurfaceLighting {
+                        directions: [[-0.464, 0.0, 0.8858307, 0.0], [0.0; 4], [0.0; 4]],
+                        colors_lux: [[200.0, 200.0, 200.0, 0.0], [0.0; 4], [0.0; 4]],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let rgba = [0, 0, 0, 217].repeat(128 * 128);
+            let flat = CbtMaterialPage::from_rgba8(rgba.clone()).unwrap();
+            let neutral_page = CbtMaterialPage::from_rgba8_with_normals(
+                rgba,
+                Some([neutral; 2].repeat(128 * 128)),
+            )
+            .unwrap();
+            for nv in [0.001_f64, 0.01, 0.1, 0.7] {
+                let look = DVec3::Z * 1010.0;
+                let eye = look + DVec3::new((1.0 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
+                // Let conforming geometry settle before comparing materials;
+                // subsequent A/B/A equality also guards the scene itself.
+                if conforming {
+                    for _ in 0..12 {
+                        let _ = draw_from(&backend, &mut terrain, [65, 65], eye, look);
+                    }
+                }
+                let mut frames = Vec::new();
+                for (generation, page) in [flat.clone(), neutral_page.clone(), flat.clone()]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let pages = MaterialPages::from_iter(
+                        (8..14).map(|id| (id, (generation as u64 + 1, page.clone()))),
+                    );
+                    terrain
+                        .update_materials(&backend, &(8..14).collect::<Vec<_>>(), &pages)
+                        .unwrap();
+                    frames.push(draw_from(&backend, &mut terrain, [65, 65], eye, look));
+                }
+                assert_eq!(
+                    frames[0], frames[2],
+                    "A/A control must be stable: conforming={conforming} quality={quality:?} nv={nv}"
+                );
+                let max_error = frames[0]
+                    .iter()
+                    .zip(&frames[1])
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                eprintln!(
+                    "neutral_normal conforming={conforming} quality={quality:?} nv={nv} encoded={neutral} max_error_u8={max_error}"
+                );
+                if max_error != 0 {
+                    failures.push((conforming, quality, nv, max_error));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "zero slope must be exactly inert; failures={failures:?}"
+    );
+}
+
 // Independent one-dimensional Simpson integral of the literal GGX BRDF at
 // normal incidence in a uniform radiance field. No importance-sampling mirror.
 fn uniform_reference(roughness: f64) -> f64 {

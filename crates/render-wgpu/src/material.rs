@@ -15,7 +15,7 @@ pub use thessa_rcbt_core::material_page::MaterialPages;
 #[derive(Debug, Clone)]
 pub struct MaterialBinding {
     pub texture: wgpu::TextureView,
-    /// Optional linear RG8 tangent-space normal plane. Pages without a normal
+    /// Optional RG8_SNORM tangent-space normal plane. Pages without a normal
     /// layer are absent from `normal_directory` and resolve to a flat normal.
     pub normal_texture: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
@@ -119,7 +119,7 @@ impl MaterialArray {
             mip_level_count: if normal_maps { 8 } else { 1 },
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg8Unorm,
+            format: wgpu::TextureFormat::Rg8Snorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });

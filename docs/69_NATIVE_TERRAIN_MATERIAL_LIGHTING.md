@@ -150,11 +150,40 @@ convergence or surface visual acceptance. Production quality budgets remain
 
 ## Tangent-space material normals
 
-The native material page now carries an optional 128×128 linear RG8 normal
-plane with the same eight mip levels as albedo/roughness. The bytes are
-`x * 0.5 + 0.5`, `y * 0.5 + 0.5`; positive z is reconstructed in the shader.
-Pages built without a normal plane resolve to the flat geometric normal, so
-older decoded pages and the Bevy albedo-only path remain valid.
+The native material page carries an optional 128×128 `RG8_SNORM` normal plane
+with the same eight mip levels as albedo/roughness. Each component is
+`round(clamp(component,-1,1)*127)` stored as an i8 byte; positive z is
+reconstructed in the shader. Producer and CPU mip generation share
+`encode_material_normal_component` / `decode_material_normal_component`.
+The GPU texture performs signed decoding before bilinear/trilinear/anisotropic
+filtering; shader sampling must **not** apply an additional `*2-1` transform.
+
+WORLD06k replaces the earlier unsigned representation: RG8_UNORM cannot encode
+zero under `2*byte/255-1`. Its nearest pair of codes yields +/-1/255 per component;
+the old supposedly flat `[128,128]` plane tilted the normal by approximately
+0.318 degrees. Tiny positive/negative slopes were forced onto opposite nonzero
+quantization levels. SNORM preserves zero exactly and rounds symmetrically, with
+component error <=0.5/127 (+f32 decoding roundoff). The -128 byte is a valid GPU
+alias of -1; the canonical encoder emits -127 instead. The component bound is
+not a global normal-angle, slope or grazing radiance error bound.
+
+This is a material-normal byte-contract change, not a different terrain/source
+height law. `GpuMaterialPage.normal`, `CbtMaterialPage` normal constructors and
+decoded normal chains now all require signed bytes. Old unsigned normal payloads
+must be regenerated/re-encoded; there is no reliable byte-level auto-detection.
+Normal-less decoded pages, existing albedo/roughness bakes, legacy RGBA normal
+exports and the Bevy albedo-only path remain unchanged. Native normal pages are
+runtime-produced; no checked-in unsigned normal-plane asset is migrated.
+The `dump_material_pages` example decodes signed bytes into conventional
+unsigned RGB normal-preview PNGs; the preview format is not the runtime format.
+
+The 24-case neutral-plane GPU oracle compares actual regular/conforming raster
+frames with an A/B/A geometry-stability control and requires exact equality.
+The old representation failed every case, up to 32 linear codes; signed normals
+pass. Canonical standing/close/overview frames still retain the ground bands.
+This is an encoding correction, not a microvisibility/filtering solution or
+visual acceptance. Reproduction and measurements:
+[`native-signed-material-normals-2026-10-23.json`](artifacts/native-signed-material-normals-2026-10-23.json).
 
 Generation and residency:
 
@@ -196,12 +225,13 @@ Generation and residency:
   unit-normal XY is not slope averaging (the initial prototype did that).
   A `z >= 0.01` numerical floor bounds extreme/invalid input in both CPU and
   shader decoding; it is not a guarantee for arbitrary grazing normal fields.
-  Within a mip, hardware bilinear/trilinear filtering still interpolates RG8
-  unit-normal XY before decoding, not exact gradients. Quantization, this
-  approximation and conservative nominal texel-width band filtering remain
-  representation errors; the analytic plane test is not their general bound.
+  Within a mip, hardware bilinear/trilinear filtering interpolates decoded
+  signed unit-normal XY before z/slope reconstruction, not exact gradients.
+  Quantization, this approximation and conservative nominal texel-width band
+  filtering remain representation errors; the analytic plane test is not their
+  general bound.
 - `render-wgpu::material::MaterialArray` uploads normals to a separate
-  `Rg8Unorm` texture array and publishes a second sparse directory containing
+  `Rg8Snorm` texture array and publishes a second sparse directory containing
   only pages with a normal plane. `MaterialUpload.normal_pages` and `.bytes`
   account for the extra writes. Pages without normals are absent rather than
   sharing a stale slot.

@@ -1,0 +1,123 @@
+{
+  "stage": "WORLD06k",
+  "baseline": "62855a7",
+  "branch": "feat/native-surface-showcase",
+  "status": "Zero-exact material-normal representation correction; not a ground-band fix or final visual acceptance",
+  "hardware": "AMD Radeon 880M / Vulkan / RADV / Mesa 26.2.5-arch1.1",
+  "retained_change": {
+    "producer": "tools/worldgen-rocky/src/lod.rs",
+    "shared_encoding_and_mips": "crates/rcbt-core/src/material_page.rs",
+    "gpu_texture": "crates/render-wgpu/src/material.rs",
+    "sampler": "crates/rcbt-core/src/shaders/material_normal.wgsl",
+    "diagnostic_preview": "tools/worldgen-rocky/examples/dump_material_pages.rs decodes SNORM to conventional RGB normal PNGs, with a three-case byte oracle",
+    "old_format": "RG8_UNORM; nominal flat [128,128] decodes to [1/255,1/255], approximately 0.318 degrees of artificial tilt",
+    "new_format": "RG8_SNORM; round(clamp(component,-1,1)*127) as i8 bytes; GPU signed decoding before filtering; no shader *2-1",
+    "compatibility": "Normal-bearing decoded/runtime pages now require signed bytes. Regenerate/re-encode old unsigned payloads; no format auto-detection. Normal-less pages, albedo/roughness, legacy RGBA normal exports and Bevy albedo-only path unchanged",
+    "unchanged": ["two bytes per normal texel", "eight mips", "residency and directories", "quality mip bias +2/+1/+0", "capability-resolved anisotropy", "disabled resource/work policy", "canonical height/geometry", "material colour/roughness", "simulation", "graphics settings"]
+  },
+  "oracles": {
+    "neutral_gpu": {
+      "test": "neutral_material_normals_are_exactly_inert_at_grazing_angles",
+      "cases": 24,
+      "topologies": ["regular", "conforming"],
+      "quality": ["Low", "Medium", "High"],
+      "view_cosines": [0.001, 0.01, 0.1, 0.7],
+      "contract": "Absent versus neutral normal plane, actual production terrain fragment path, full 65x65 RGBA8 linear target. Conforming geometry settles first; exact A/B/A control rejects drift",
+      "tolerance_codes": 0,
+      "old_failed_cases": 24,
+      "old_max_absolute_codes": 32,
+      "new_failed_cases": 0,
+      "new_max_absolute_codes": 0,
+      "old_log": "neutral-before-v2.log",
+      "old_log_sha256": "b97b5e796e3d9d06232649a756460434e5323ebeee9a4e8162b4aeb617a780e7",
+      "new_log": "neutral-after-v3.log",
+      "new_log_sha256": "da132b69216db3b795bf8b5407a6835af2069cd0676417c8fbaa4c2746b76f8a",
+      "excluded_initial_fixture": "Initial unstabilized conforming fixture reported up to 50 codes; invalid because geometry evolved, superseded by stable A/B/A logs"
+    },
+    "encoding_cpu": {
+      "test": "signed_normal_encoding_is_zero_exact_symmetric_and_bounded",
+      "samples": 200001,
+      "domain": [-1, 1],
+      "absolute_component_bound": "0.5/127 + f32::EPSILON",
+      "properties": ["exact zero", "odd symmetry", "-128 GPU alias decodes to -1; canonical encoder uses -127"],
+      "not_claimed": "A bound on reconstructed normal angle, surface slope, arbitrary grazing BRDF response or displayed image error"
+    },
+    "existing_regressions": "Slope mip cancellation and influence, page borders, land grain, exact-flat ocean, disabled and removal lifecycle. Raster Lambert oracle additionally covers positive and negative signed slopes with unchanged <=2 sRGB-code tolerance"
+  },
+  "local_evidence_root": "target/surface-showcase/normal-neutral",
+  "capture_commands": "capture-commands-v2.json",
+  "capture_commands_sha256": "8980f8a8b67c7803e0c90a045d5dfa50280fe1e8acad2dade62c4d8cac638160",
+  "capture_analysis": "capture-analysis-k-v2.json",
+  "baseline_binary": "target/surface-showcase/normal-grazing/hemisphere-native-v1",
+  "baseline_binary_sha256": "8f5bd037384a335356857ef3412edd46c4ee1b6258efe78ecc5017f4e295b2c7",
+  "baseline_provenance": "WORLD06j release is byte-identical to WORLD06i; use the preserved WORLD06i binary rather than the live workspace source hash",
+  "candidate_binary": "normal-native-v2",
+  "candidate_binary_sha256": "c557703f94eb0da95dd6aa5932f1bd89c0e5891d012165ace23d31463d705a5d",
+  "superseded_capture": "v1 frames and 9c31adfe... executable predate the last Rust API documentation edits; retained locally, superseded by v2 built from the final verified source",
+  "settings": "target/surface-showcase/ground-detail/v3-on-standing2.toml",
+  "settings_sha256": "3bf00eb313cffa130867c6291b4bdefb3480825b7bdde6f59c89a3b8b41d9cc5",
+  "capture_contract": "1280x720, fixed 23.565679258039204 N / 165.13881581863882 E, sim-time=0, sim-step=0, 60 s prestream, 30 warmups, 32 measured frames, no HUD, muted. Standing/close survey distance 80 m; overview distance 1800 m",
+  "controls": "Camera/resolved metadata agree except one-time plant preparation duration. Level histograms agree; all six captures have 222 submitted plants, three draws, 14784 frame upload bytes and drained streams. Histograms do not prove identical resident page IDs/content. No measured simulation steps",
+  "captures": [
+    {
+      "scene": "standing2",
+      "before": "v2-before-standing2",
+      "after": "v2-after-standing2",
+      "before_png_sha256": "9db52bcf39c4645bd2dc45896e8447f6ed1c4fadac53037065b10fead0ccc4eb",
+      "after_png_sha256": "4fc5cd53581093497e7dca95954c9b84f2fff85a9a782b8d5c169875ab83ec2e",
+      "mean_absolute_displayed_rgb_codes": [0.026194661458333334, 0.02546332465277778, 0.025094401041666665],
+      "max_absolute_displayed_rgb_codes": [17, 16, 17],
+      "gpu_median_ms_before_after": [103.32723302231884, 106.61432854451752]
+    },
+    {
+      "scene": "close50",
+      "before": "v2-before-close50",
+      "after": "v2-after-close50",
+      "before_png_sha256": "11df21aa909dec871fd8d9d689d06950bca20051a9f216090522fa68161679f4",
+      "after_png_sha256": "65a96625f183378b30b93f279376db906b4c164f2bf47a1a38419a6a10b71e8f",
+      "mean_absolute_displayed_rgb_codes": [0.049019097222222224, 0.04645399305555555, 0.04180447048611111],
+      "max_absolute_displayed_rgb_codes": [16, 18, 14],
+      "gpu_median_ms_before_after": [110.95827209105016, 109.26400295871736]
+    },
+    {
+      "scene": "overview800",
+      "before": "v2-before-overview800",
+      "after": "v2-after-overview800",
+      "before_png_sha256": "9cb1b5a23787a9165d8ad443e62ebd089dadf85745f9675cb83b39b8a7d3f80b",
+      "after_png_sha256": "e238c30d957bc3d2d43188e48e60762b5498abca63bc63cb57ceb8fc937b8830",
+      "mean_absolute_displayed_rgb_codes": [0.03979817708333333, 0.039778645833333334, 0.03421875],
+      "max_absolute_displayed_rgb_codes": [28, 42, 45],
+      "gpu_median_ms_before_after": [65.5855283159938, 65.1087875025444]
+    }
+  ],
+  "visual_result": "Implementer inspection: characteristic ground bands remain. Sparse ground/canopy, coarse grid-like shadows, trunk stripes and leaf aliasing remain. Canonical changes are small on average, not a proof of small local grazing error or a visual win",
+  "performance_limitations": "Single-order serial whole-frame observations, not stable improvement or regression evidence. Hardware suite reruns the normal-map raster/upload diagnostic with signed inputs; its fixture is not bit-identical to the old unsigned one and is not a format speedup comparison",
+  "verification": {
+    "state": "Final full local gates passed; final release matches v2 capture executable byte-for-byte",
+    "command_manifest": "checks-k-final.json",
+    "cargo_environment": {"TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"},
+    "commands": [
+      {"command": ["cargo", "fmt", "--all", "--", "--check"], "exit": 0},
+      {"command": ["python3", "tools/agent-qa/check_architecture.py"], "exit": 0},
+      {"command": ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"], "exit": 0},
+      {"command": ["cargo", "test", "-p", "thessa-worldgen-rocky", "--example", "dump_material_pages"], "exit": 0, "passed": 1},
+      {"command": ["cargo", "test", "--workspace", "--lib", "--bins"], "exit": 0, "passed": 2044},
+      {"command": ["cargo", "test", "--workspace", "--test", "*"], "exit": 0, "passed": 105},
+      {"command": ["cargo", "test", "-p", "thessa-bevy-rcbt", "--features", "render", "--lib", "--", "--ignored"], "exit": 0, "passed": 0, "note": "Retired command, not hardware coverage"},
+      {"command": ["cargo", "test", "-p", "thessa-render-wgpu", "--", "--ignored", "--nocapture"], "exit": 0, "passed": 86},
+      {"command": ["cargo", "check", "-p", "thessa-terrain-native", "--no-default-features"], "exit": 0},
+      {"command": ["cargo", "build", "--release", "-p", "thessa-terrain-native"], "exit": 0}
+    ],
+    "renderer_hardware_log_sha256": "51355e05b09fbb6cd8d39a1131bd3615328421cdf224fb8225ea32991c920e1b",
+    "release_sha256": "c557703f94eb0da95dd6aa5932f1bd89c0e5891d012165ace23d31463d705a5d",
+    "release_matches_final_capture": true,
+    "input_hash_manifest": "input-hashes-k-final.json",
+    "input_hash_count": 755,
+    "input_hash_manifest_sha256": "b6dc928a447158ce997defb4182fa283ddf5d3576c2bd37093c2d068d5ec0bcf",
+    "source_stability": "Final rerun includes the signed PNG-preview consumer omitted from the initial pass. Other 754 source/asset/config inputs are unchanged from the earlier snapshot",
+    "performance_overlap": "A short independent CPU projected-geometry diagnostic ran during final gates; raster/upload timings from that gate run are not isolated performance evidence",
+    "readme": "Existing optional normals, shared residency, quality tiers and incomplete visual-acceptance statements remain accurate"
+  },
+  "acceptance": {"visual": false, "independent_votes": 0, "stable_performance": false, "temporal": false, "planetary_streaming": false},
+  "next_boundary": "Measure canonical legacy-grain versus imported ground-height contributions and footprint filtering; validate projected geometry/reciprocity/energy before changing normal transport consistently across direct, sky and substrate. No direct-only masking multiplier"
+}

@@ -93,7 +93,7 @@ wind_direction_rad = 0.0
 significant_height_m = 2.0
 depth_m = 100.0
 seed = 17
-geometry_patches = 16
+geometry_patches = 32
 geometry_distance_m = 300.0
 
 [raytracing]

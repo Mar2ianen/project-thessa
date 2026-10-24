@@ -104,7 +104,11 @@ The checked-in vertical slice currently contains:
   the experimental location, PBR Neutral display and 25 m near-shadow cover (TAA off);
   the review profile now selects 4× MSAA at substantial GPU cost;
   [doc 77](docs/77_NATIVE_SURFACE_SHOWCASE.md) gives the fixed-site launch command
-  and remaining quality/performance limits.
+  and remaining quality/performance limits. WORLD12 reviews the latest soil
+  experiment: continuous mineral/humus processing before mip averaging, shared
+  moisture/pigment roughness response, one explicit 60 mm optical height range,
+  and view-cone-aware material admission within the existing cache budgets.
+  These are authored material priors, not terrain displacement or hydrology.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;

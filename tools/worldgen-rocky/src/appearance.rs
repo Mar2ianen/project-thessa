@@ -492,100 +492,25 @@ pub(crate) fn surface_appearance_with_ground_detail(
     color = mix(color, wet_ground, wetland);
     // Resolved soil/gravel beneath canopy is a material swatch, not another
     // macro cover-noise field. Existing later covers retain their ownership.
+    let floor = ground.map(|ground| {
+        crate::ground_detail::forest_floor(
+            ground,
+            dir.map(|v| v * field.params.radius_m),
+            field.params.seed,
+            texel_m,
+            damp,
+            ecological_cover.canopy01,
+        )
+    });
     let mut ground_weight = 0.0;
-    if let Some(ground) = ground {
-        ground_weight = (1.0 - exposed).clamp(0.0, 1.0);
-        let h_diff =
-            f64::from(ground.height_m) - f64::from(crate::ground_detail::mean_sample().height_m);
-        let h_norm = (h_diff / 0.0016).clamp(-1.0, 1.0);
-        let q = dir.map(|v| v * field.params.radius_m);
-        let w_meso = band_weight(3.2, texel_m);
-        let w_micro = band_weight(1.2, texel_m);
-        let w_patch = band_weight(0.80, texel_m);
-
-        let mean_swatch = crate::ground_detail::mean_sample().albedo_linear;
-        let r_ratio = f64::from(ground.albedo_linear[0]) / f64::from(mean_swatch[0]);
-        let g_ratio = f64::from(ground.albedo_linear[1]) / f64::from(mean_swatch[1]);
-        let b_ratio = f64::from(ground.albedo_linear[2]) / f64::from(mean_swatch[2]);
-        let ratio = (r_ratio + g_ratio + b_ratio) / 3.0;
-
-        // Drainage wash channels and gravel beds:
-        let n_gravel = rng::perlin3(field.params.seed, 6146, q[0] / 3.2, q[1] / 3.2, q[2] / 3.2);
-        let gravel_wash = smooth(0.05, 0.45, n_gravel) * w_meso;
-
-        // Base humus / organic matrix with crevice micro-occlusion:
-        let humus_mid = [0.042, 0.028, 0.021];
-        let crevice_ao = (1.0 + h_norm.min(0.0) * 0.70).clamp(0.28, 1.0);
-        let humus_base: [f64; 3] = std::array::from_fn(|i| {
-            humus_mid[i] * (ratio.clamp(0.1, 1.0)).powf(1.3) * crevice_ao
-        });
-
-        // Mineral diversity for pebbles (quartz, sandstone, basalt):
-        let mineral_tint = ((r_ratio - b_ratio) * 1.2).clamp(-1.0, 1.0);
-        let stone_boost: [f64; 3] = if mineral_tint > 0.15 {
-            [0.18, 0.14, 0.09] // Warm sandstone / feldspar
-        } else if mineral_tint < -0.15 {
-            [0.08, 0.08, 0.09] // Dark slate / basalt
-        } else {
-            [0.18, 0.18, 0.21] // Cool quartz / granite
-        };
-        let pebble_excess = (ratio - 1.0).max(0.0).min(2.2) * (1.0 + gravel_wash * 0.35);
-
-        let swatch_linear: [f64; 3] = std::array::from_fn(|i| {
-            if ratio < 1.0 {
-                humus_base[i]
-            } else {
-                humus_mid[i] + stone_boost[i] * pebble_excess
-            }
-        });
-
-        // Fine bryophyte (moss) cushions on moist hummocks:
-        let n_moss_macro = rng::perlin3(
-            field.params.seed,
-            6143,
-            q[0] / 0.85,
-            q[1] / 0.85,
-            q[2] / 0.85,
-        );
-        let n_moss_micro = rng::value_noise3(
-            field.params.seed,
-            6148,
-            q[0] / 0.25,
-            q[1] / 0.25,
-            q[2] / 0.25,
-        );
-        let n_moss_blend = n_moss_macro * 0.65 + n_moss_micro * 0.35;
-        let moss_eligible = smooth(0.0, 0.35, h_norm)
-            * smooth(0.30, 0.60, damp)
-            * smooth(0.04, 0.20, ecological_cover.canopy01);
-        let moss_cover = moss_eligible * smooth(0.45, 0.72, n_moss_blend) * w_micro * 0.85;
-        let moss_linear = [0.036, 0.076, 0.024];
-
-        // Senescent orange-brown frond fragments and needles:
-        let n_litter = rng::perlin3(field.params.seed, 6142, q[0] / 1.6, q[1] / 1.6, q[2] / 1.6);
-        let litter_cover = smooth(0.52, 0.78, n_litter)
-            * smooth(0.06, 0.25, ecological_cover.canopy01)
-            * w_meso
-            * 0.40;
-        let litter_linear = [0.082, 0.045, 0.024];
-
-        // Saturated wet mud and standing water puddles in hollows:
-        let wet_mud = smooth(-0.12, -0.35, h_norm) * smooth(0.35, 0.60, damp) * w_patch;
-        let wet_mud_darken = 1.0 - wet_mud * 0.40;
-        let puddle_mask = smooth(-0.30, -0.55, h_norm) * smooth(0.35, 0.60, damp) * w_patch;
-        let pebble_elevation = (ratio - 1.0).max(0.0) * 0.5;
-        let effective_puddle = (puddle_mask - pebble_elevation).max(0.0);
-        let puddle_bottom_linear = [0.018, 0.018, 0.020];
-
+    if let Some(floor) = floor {
+        ground_weight = (ecological_cover.canopy01 * 1.30 + ecological_cover.ground01 * 0.60)
+            .clamp(0.0, 1.0)
+            * (1.0 - exposed);
         color = std::array::from_fn(|i| {
-            let floor_swatch = swatch_linear[i];
-            let floor_moss = floor_swatch * (1.0 - moss_cover) + moss_linear[i] * moss_cover;
-            let floor_litter = floor_moss * (1.0 - litter_cover) + litter_linear[i] * litter_cover;
-            let floor_mud = floor_litter * wet_mud_darken;
-            let floor_puddle = floor_mud * (1.0 - effective_puddle) + puddle_bottom_linear[i] * effective_puddle;
             crate::ground_detail::encode_srgb(
                 crate::ground_detail::decode_srgb(color[i]) * (1.0 - ground_weight)
-                    + floor_puddle * ground_weight,
+                    + f64::from(floor.albedo_linear[i]) * ground_weight,
             )
         });
     }
@@ -598,7 +523,7 @@ pub(crate) fn surface_appearance_with_ground_detail(
     // Gentle concave/depositional ground carries loose weathered material;
     // steep convex outcrops retain the underlying rock. No slope-independent
     // white salt overlay is introduced.
-    let loose_mix = loose_cover * (1.0 - vegetation) * 0.55 * (1.0 - ground_weight);
+    let loose_mix = loose_cover * (1.0 - vegetation) * 0.55;
     color = mix(color, soil, loose_mix);
     ground_weight *= 1.0 - loose_mix;
     // Salt fringe: the outer playa ring (above the 50 m core depth) keeps
@@ -631,7 +556,11 @@ pub(crate) fn surface_appearance_with_ground_detail(
     }
     let macro_attenuation = 1.0 - ground_weight * 0.80;
     let micro_retention = 1.0 - ground_weight * 0.25;
-    color = color.map(|c| c * (1.0 + (variation * 0.14 + regional * 0.08) * macro_attenuation + grain * 0.24 * micro_retention));
+    color = color.map(|c| {
+        c * (1.0
+            + (variation * 0.14 + regional * 0.08) * macro_attenuation
+            + grain * 0.24 * micro_retention)
+    });
     // Bare ground (little vegetation to carry the cover texture) gets its
     // own large-scale tonal structure so deserts and dry plains are not a
     // single flat fill at survey resolution.
@@ -670,7 +599,8 @@ pub(crate) fn surface_appearance_with_ground_detail(
     // rock) would otherwise mute the pre-mix grain to invisibility. Uses the
     // independent micro signal, so it adds instead of fighting the patches.
     // ±8% stays clear of the sRGB ceiling on bright snow.
-    color = color.map(|c| (c * (1.0 + micro * 0.09 * (1.0 - ground_weight * 0.15))).clamp(0.0, 1.0));
+    color =
+        color.map(|c| (c * (1.0 + micro * 0.09 * (1.0 - ground_weight * 0.15))).clamp(0.0, 1.0));
     // Existing world-addressed detail follows the selected material state.
     // These are bounded rendering priors, not measured lithology properties;
     // vegetation and snow reduce the exposed substrate response rather than
@@ -698,32 +628,8 @@ pub(crate) fn surface_appearance_with_ground_detail(
     let mut roughness = (land_roughness(vegetation, exposed, damp, outcrop_texture, frost) as f64
         + substrate_roughness_delta(substrate, rock) * visible_substrate)
         .clamp(0.45, 0.98) as f32;
-    if let Some(ground) = ground {
-        let h_diff =
-            f64::from(ground.height_m) - f64::from(crate::ground_detail::mean_sample().height_m);
-        let h_norm = (h_diff / 0.0016).clamp(-1.0, 1.0);
-        let w_patch = band_weight(0.80, texel_m);
-
-        // Multi-specular forest floor roughness hierarchy:
-        // 1. Water-washed smooth pebbles: soft satin gleam on raised stone relief
-        let pebble_mask = smooth(0.15, 0.45, h_norm);
-        let dry_roughness = ground.roughness * 0.90;
-        let pebble_roughness = 0.38_f32;
-        let floor_base = dry_roughness * (1.0 - pebble_mask as f32) + pebble_roughness * pebble_mask as f32;
-
-        // 2. Glossy saturated mud margin around hollows
-        let wet_mud = smooth(-0.12, -0.35, h_norm) * smooth(0.35, 0.60, damp) * w_patch;
-        let wet_mud_roughness = 0.28_f32;
-        let floor_mud = floor_base * (1.0 - wet_mud as f32) + wet_mud_roughness * wet_mud as f32;
-
-        // 3. Mirror flat standing water in depressions
-        let puddle_mask = smooth(-0.30, -0.55, h_norm) * smooth(0.35, 0.60, damp) * w_patch;
-        let pebble_elevation = smooth(0.15, 0.45, h_norm) * 0.45;
-        let effective_puddle = (puddle_mask - pebble_elevation).max(0.0);
-        let puddle_roughness = 0.06_f32;
-        let floor_roughness = floor_mud * (1.0 - effective_puddle as f32) + puddle_roughness * effective_puddle as f32;
-
-        roughness += (floor_roughness - roughness) * ground_weight as f32;
+    if let Some(floor) = floor {
+        roughness += (floor.roughness - roughness) * ground_weight as f32;
     }
     (
         SurfaceAppearance {
@@ -838,7 +744,7 @@ mod frost_tests {
     use super::*;
 
     #[test]
-    fn resolved_ground_does_not_override_water_rock_or_opaque_snow() {
+    fn resolved_ground_does_not_override_water_rock_snow_or_bare_habitat() {
         let mut field = field();
         field.params.surface_climate.precipitation_m_yr = 1000.0;
         let dir = crate::sphere::dir_from_latlon(38.0, -171.0);
@@ -847,13 +753,18 @@ mod frost_tests {
             roughness: 0.7,
             height_m: 0.003,
         };
-        for scenario in 0..3 {
+        for scenario in 0..4 {
             let mut s = sample(285.0, 0.9);
             match scenario {
                 0 => s.height_m = -100.0,
                 1 => s.slope_hint = 10.0,
-                _ => {
+                2 => {
                     s.temperature_k = 250.0;
+                    s.slope_hint = 0.0;
+                }
+                _ => {
+                    s.moisture01 = 0.0;
+                    s.wetland_potential01 = 0.0;
                     s.slope_hint = 0.0;
                 }
             }
@@ -1594,7 +1505,7 @@ mod lod_fade_tests {
     }
 
     #[test]
-    fn survey_coastal_soil_has_warm_brown_reflectance_and_full_ground_weight() {
+    fn survey_coastal_soil_keeps_scan_detail_in_its_ecological_cover() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let path = manifest_dir.join("../../data/worldgen/thessa-erosion-v3.surface.json.gz");
         let loaded = crate::offline::FrozenSurface::load(&path).unwrap();
@@ -1605,11 +1516,23 @@ mod lod_fade_tests {
         let (slope, curvature) = field.surface_geometry_from_prefix(dir, prefix, macro_h, 32.0);
         sample.slope_hint = slope;
         sample.curvature_per_m = curvature;
-        let ground = crate::ground_detail::sample(dir, field.params.radius_m, field.params.seed, 0.01);
-        let (mat, gw) = surface_appearance_with_ground_detail(&field, &sample, dir, 0.01, true, Some(ground));
-        assert!((gw - 1.0).abs() < 1e-4, "coastal understory floor must own full ground weight: {gw}");
-        assert!(mat.albedo_srgb[0] > mat.albedo_srgb[1], "red must exceed green for warm humus");
-        assert!(mat.albedo_srgb[1] > mat.albedo_srgb[2], "green must exceed blue");
-        assert!(mat.roughness < 0.85, "understory floor must maintain moisture/pebble sheen: {}", mat.roughness);
+        let ground =
+            crate::ground_detail::sample(dir, field.params.radius_m, field.params.seed, 0.01);
+        let (mat, gw) =
+            surface_appearance_with_ground_detail(&field, &sample, dir, 0.01, true, Some(ground));
+        assert!(gw > 0.0 && gw <= 1.0, "coastal floor weight: {gw}");
+        assert!(
+            mat.albedo_srgb[0] > mat.albedo_srgb[1],
+            "red must exceed green for warm humus"
+        );
+        assert!(
+            mat.albedo_srgb[1] > mat.albedo_srgb[2],
+            "green must exceed blue"
+        );
+        assert!(
+            mat.roughness < 0.85,
+            "wet soil must retain its optical roughness response: {}",
+            mat.roughness
+        );
     }
 }

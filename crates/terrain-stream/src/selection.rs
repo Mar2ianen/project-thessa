@@ -200,7 +200,7 @@ pub fn material_view_selection(
     material_view_selection_with_limit(base, view, pixel_angle, 17)
 }
 
-/// Same 512-leaf refinement budget; only material resolution changes.
+/// Bounded optical refinement; persistent CPU/GPU cache budgets are unchanged.
 pub fn material_view_selection_with_limit(
     base: &[TileKey],
     view: SelectionView,
@@ -208,6 +208,30 @@ pub fn material_view_selection_with_limit(
     max_level: u8,
 ) -> Vec<TileKey> {
     material_view_selection_at_height(base, view, pixel_angle, max_level, 0.0)
+}
+
+// A conservative tile sphere intersects the view cone. Use the same test for
+// refinement and residency priority, so underfoot/offscreen pages cannot win
+// every cache slot over the ground actually visible to a standing camera.
+fn material_page_in_view(key: TileKey, view: SelectionView, surface_radius: f64) -> bool {
+    let Some(frustum) = view.frustum else {
+        return true;
+    };
+    let delta = DVec3::from(key.direction(0.5, 0.5)) * surface_radius - view.eye;
+    let distance = delta.length();
+    let bound = key.span_m(view.radius) * 0.75;
+    if distance <= bound {
+        return true;
+    }
+    let sine = (bound / distance).clamp(0.0, 1.0);
+    let cosine = (1.0 - sine * sine).sqrt();
+    let limit = frustum.cos_limit.clamp(-1.0, 1.0);
+    let threshold = if limit <= -cosine {
+        -1.0
+    } else {
+        limit * cosine - (1.0 - limit * limit).sqrt() * sine
+    };
+    delta.dot(DVec3::from(frustum.forward)) / distance >= threshold
 }
 
 /// Optical-detail distance reference only. The caller obtains the local
@@ -228,23 +252,15 @@ pub(crate) fn material_view_selection_at_height(
         let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
         key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
     };
-    let split_candidate = |key: &TileKey| {
-        if key.level >= max_level {
-            return false;
-        }
-        let Some(frustum) = &view.frustum else {
-            return true;
-        };
-        let delta = DVec3::from(key.direction(0.5, 0.5)) * surface_radius - view.eye;
-        let distance = delta.length();
-        if distance <= 0.0 {
-            return true;
-        }
-        let cos = (delta / distance).dot(DVec3::from(frustum.forward));
-        let margin = (key.span_m(view.radius) / distance).clamp(0.0, 0.5);
-        cos >= frustum.cos_limit - margin
+    let split_candidate =
+        |key: &TileKey| key.level < max_level && material_page_in_view(*key, view, surface_radius);
+    // More temporary leaves prevent the broad geometry cover from consuming
+    // the entire near-floor refinement budget. Admission still retains 512.
+    let leaf_budget = match max_level {
+        17..=20 => 512,
+        21 => 1024,
+        _ => 2048,
     };
-    let leaf_budget = if max_level > 17 { 2048 } else { 512 };
     while cover.len() + 3 <= leaf_budget {
         let candidate = cover
             .iter()
@@ -284,7 +300,11 @@ pub(crate) fn material_demand_at_height(
         let delta =
             DVec3::from(key.direction(0.5, 0.5)) * (view.radius + reference_height_m) - view.eye;
         (
-            delta.normalize_or_zero().dot(view.forward) < -0.15,
+            if view.frustum.is_some() {
+                !material_page_in_view(*key, view, view.radius + reference_height_m)
+            } else {
+                delta.normalize_or_zero().dot(view.forward) < -0.15
+            },
             delta.length_squared().to_bits(),
             std::cmp::Reverse(key.level),
             *key,

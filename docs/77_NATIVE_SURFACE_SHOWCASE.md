@@ -4,7 +4,90 @@
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
 The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
-WORLD11a continuation below refines the reviewed WORLD11 source.
+WORLD12 continuation below reviews the subsequent soil experiment.
+
+## WORLD12 — Ground-detail review (2026-10-24)
+
+This continuation reviews `dda58de` and `09c5d66` after WORLD11a. The latter
+combined a 22x imported-height multiplier, a second 1.6x slope gain and unrelated
+puddle masks in reflectance, roughness and normals. It also made the forest
+swatch opaque outside its ecological cover and selected mineral colours with
+hard RGB thresholds. Those defects are corrected rather than accepted as
+photogrammetric relief, hydrology or measured mineral classification.
+
+The useful humus/mineral, moss and litter separation is retained as an authored
+optical prior. Continuous humus/mineral pigment and roughness processing now
+runs **before** building the source mip pyramid. Transforming an already
+averaged sample with a nonlinear threshold changes the material mean and loses
+small bright stones. The ten mip levels and coarse constants therefore describe
+the same processed material. Tests pin linear means, wrap/cube-edge continuity,
+continuous mineral transitions and a counterexample to filtering before the
+transfer. Source filtering still resolves wavelengths against two destination
+texels, followed by existing GPU anisotropic/mip filtering; it is not disabled.
+The filtering rationale is consistent with the footprint-driven mip hierarchy
+in [PBRT's image-texture chapter](https://www.pbr-book.org/4ed/Textures_and_Materials/Image_Texture).
+
+The swatch repeat remains 3.15 m. Its **single authored relative-height range is
+now 60 mm**, superseding the historical 18 mm setting below. Normals derive from
+that height in physical chart metres, without a second slope multiplier,
+height-dependent AO paint, invented water plane or vegetation-boundary cliff.
+This is bump shading: it adds neither displaced terrain/pebble silhouettes nor
+collision or real self-shadowing. The scan's dimensions remain uncalibrated
+rendering priors, recorded with the source licence. The embedded compressed
+asset and decoded allocation sizes are unchanged.
+
+One forest-floor evaluation supplies colour and roughness. Canonical moisture
+controls wet absorption/roughness; it is not standing water. Moss uses separately
+filtered 0.85 m and 0.25 m bands, litter 1.6 m and broad mineral variation 3.2 m.
+Each band uses its own cutoff. Canopy/ground cover gates the swatch again, and
+later loose sediment, rock, salt, snow and frost retain ownership. The scan's
+continuous mineral colours replace categorical sandstone/basalt/quartz guesses.
+
+Resolved `surface_quality` Low/Medium/High retains L20/L21/L22 ceilings and
+1/4/16x anisotropic tiers. Temporary area-preserving refinement covers are now
+bounded at **512/1,024/2,048 leaves**, respectively; disabled detail retains the
+legacy L17/512 bound. `dda58de` had used 2,048 for every detail tier. The final
+**admitted demand remains 512 pages**, the CPU source cache 1,024 and GPU atlas
+256 layers, with the existing bounded worker jobs. Refinement and admission
+priority now use the same conservative tile-sphere/view-cone intersection,
+instead of allowing offscreen underfoot pages to outrank the visible floor.
+The existing no-frustum ordering remains. Tests cover standing views at negative,
+zero and positive elevations, area preservation and all tier bounds.
+
+TAA remains off in the review profile. Plant geometry, ecological placement,
+exposure, shadows and cloud settings are unchanged from the preceding checkpoint.
+The source/binary-pinned capture pair uses the same fixed standing camera and
+includes a separate no-plants diagnostic pair. It is an engineering comparison,
+not independent blind preference or reference acceptance. Actual pebble/debris
+geometry, convincing cloud/aerial depth, crown diversity and frame cost remain
+open.
+
+Final-source local validation: 258 worldgen lib/bin tests, 26 terrain-stream
+tests, 122 native unit tests, six material GPU fixtures (including the diagnostic
+cost case), two actual-producer plant GPU fixtures, strict workspace
+all-target/all-feature Clippy, architecture, formatting, feature-off and release
+build. The previous full workspace suite was not repeated. The final gates,
+release and captures share source manifest SHA-256
+`b80d7791210db331aea8df2e911b001fea830761f13d0bdd060b2d5e833080bd`.
+
+Actual Radeon 880M / Vulkan RADV / Mesa 26.2.5 results at 1280×720, 4× MSAA,
+PBR Neutral, EV100 12.8, epoch/step zero and the fixed 2 m AGL camera:
+
+| View | GPU median | Unique plants |
+| --- | ---: | ---: |
+| Fresh `09c5d66` standing control | 336.152 ms | 11,752 |
+| Reviewed soil standing | 354.660 ms | 11,752 |
+| `09c5d66` without plants | 222.083 ms | 0 |
+| Reviewed soil without plants | 253.381 ms | 0 |
+| Reviewed soil moving | 493.906 ms | 11,173 |
+
+These single runs do not demonstrate a speedup. The standing camera, canonical
+source signature and plant counts match; GPU material-level histograms differ
+because selection changed. The floor remains visibly planar despite clearer
+material structure, so this checkpoint does not meet the geometric ground-detail
+reference. Native PNGs, commands, source/binary hashes and gate logs are pinned
+in [the WORLD12 evidence](artifacts/native-surface-ground-review-2026-10-24.json)
+and `target/surface-showcase/ground-review-2026-10-24/`.
 
 ## WORLD11a — Slender fern pinnae and edge-fixture review (2026-10-24)
 

@@ -3,7 +3,7 @@
 use std::{io::Read, sync::OnceLock};
 
 pub const SWATCH_WIDTH_M: f64 = 3.15;
-pub const HEIGHT_RANGE_M: f32 = 0.018;
+pub const HEIGHT_RANGE_M: f32 = 0.060;
 const SIDE: usize = 512;
 const RAW_BYTES: usize = 8 + SIDE * SIDE * 6;
 
@@ -39,13 +39,13 @@ pub(crate) fn encode_srgb(v: f64) -> f64 {
     }
 }
 
-/// Last mip of the imported swatch. Coarse pages use the *same* material mean,
-/// not the legacy canopy colour. Pinned against the decoded asset below.
+/// Last mip after intrinsic forest-substrate processing. Coarse pages use the
+/// same material mean, not legacy canopy colour. Pinned against the asset below.
 pub(crate) fn mean_sample() -> GroundSample {
     GroundSample {
-        albedo_linear: [0.15293027, 0.10844741, 0.06403417],
-        roughness: 0.90125257,
-        height_m: -0.0020566124,
+        albedo_linear: [0.089_765_41, 0.062_935_11, 0.039_580_63],
+        roughness: 0.807_225_05,
+        height_m: -0.0068553747,
     }
 }
 
@@ -65,11 +65,13 @@ impl Texture {
             .0
             .iter()
             .map(|p| {
+                let rgb = std::array::from_fn(|i| decode_srgb(f64::from(p[i]) / 255.0) as f32);
+                let (rgb, roughness) = forest_substrate(rgb, f32::from(p[3]) / 255.0);
                 [
-                    decode_srgb(f64::from(p[0]) / 255.0) as f32,
-                    decode_srgb(f64::from(p[1]) / 255.0) as f32,
-                    decode_srgb(f64::from(p[2]) / 255.0) as f32,
-                    f32::from(p[3]) / 255.0,
+                    rgb[0],
+                    rgb[1],
+                    rgb[2],
+                    roughness,
                     (f32::from(u16::from_le_bytes([p[4], p[5]])) / 65535.0 - 0.5) * HEIGHT_RANGE_M,
                 ]
             })
@@ -153,9 +155,155 @@ pub(crate) fn sample(dir: [f64; 3], radius_m: f64, seed: u64, texel_m: f64) -> G
     }
 }
 
+// Transform intrinsic pigment/mineral response before filtering: applying a
+// nonlinear brightness mask to an already averaged texel changes its mean.
+fn forest_substrate(rgb: [f32; 3], roughness: f32) -> ([f32; 3], f32) {
+    let luminance = |v: [f32; 3]| {
+        0.2126 * f64::from(v[0]) + 0.7152 * f64::from(v[1]) + 0.0722 * f64::from(v[2])
+    };
+    let mineral = crate::appearance::smooth(
+        0.90,
+        1.35,
+        luminance(rgb) / luminance([0.15293027, 0.10844741, 0.06403417]),
+    );
+    let color = std::array::from_fn(|i| {
+        let absorption = [0.28, 0.24, 0.25][i];
+        (f64::from(rgb[i]) * (absorption + (1.0 - absorption) * mineral)) as f32
+    });
+    (
+        color,
+        (f64::from(roughness) * (1.0 - mineral * 0.35)) as f32,
+    )
+}
+
+/// Authored forest-floor optical layers. Wetness is a material response to the
+/// canonical moisture field, not a standing-water or drainage simulation.
+pub(crate) fn forest_floor(
+    ground: GroundSample,
+    q: [f64; 3],
+    seed: u64,
+    texel_m: f64,
+    damp: f64,
+    canopy: f64,
+) -> GroundSample {
+    use crate::appearance::{band_weight, smooth};
+    let noise = |channel, wavelength, perlin| {
+        let p = q.map(|v| v / wavelength);
+        let value = if perlin {
+            crate::rng::perlin3(seed, channel, p[0], p[1], p[2])
+        } else {
+            crate::rng::value_noise3(seed, channel, p[0], p[1], p[2])
+        };
+        value * band_weight(wavelength, texel_m)
+    };
+    let mineral_patch = smooth(0.05, 0.45, noise(6146, 3.2, true));
+    let wet = damp;
+    let moss_noise = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
+    let moss = smooth(0.30, 0.60, damp)
+        * smooth(0.04, 0.20, canopy)
+        * smooth(0.45, 0.72, moss_noise)
+        * 0.85;
+    let litter = smooth(0.52, 0.78, noise(6142, 1.6, true)) * smooth(0.06, 0.25, canopy) * 0.40;
+    let albedo_linear = std::array::from_fn(|i| {
+        let substrate =
+            f64::from(ground.albedo_linear[i]) * (1.0 + mineral_patch * 0.15) * (1.0 - wet * 0.40);
+        let covered = substrate * (1.0 - moss) + [0.036, 0.076, 0.024][i] * moss;
+        (covered * (1.0 - litter) + [0.082, 0.045, 0.024][i] * litter).clamp(0.0, 1.0) as f32
+    });
+    let dry = f64::from(ground.roughness);
+    let wet_roughness = dry * (1.0 - wet) + 0.28 * wet;
+    let moss_roughness = wet_roughness * (1.0 - moss) + 0.95 * moss;
+    GroundSample {
+        albedo_linear,
+        roughness: (moss_roughness * (1.0 - litter) + 0.90 * litter).clamp(0.22, 0.98) as f32,
+        // Optical pigments/wetness do not amplify the scan's physical slope.
+        height_m: ground.height_m,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mineral_transfer_is_continuous_before_mip_averaging() {
+        let raw_mean = [0.15293027, 0.10844741, 0.06403417];
+        let mut previous: Option<([f32; 3], f32)> = None;
+        for step in 0..=2000 {
+            let rgb = raw_mean.map(|v| v * (0.5 + step as f32 / 2000.0));
+            let current = forest_substrate(rgb, 0.9);
+            if let Some(previous) = previous {
+                for (a, b) in current.0.into_iter().zip(previous.0) {
+                    assert!((a - b).abs() < 0.001);
+                }
+                assert!((current.1 - previous.1).abs() < 0.001);
+            }
+            previous = Some(current);
+        }
+        let dark = forest_substrate(raw_mean.map(|v| v * 0.5), 0.9);
+        let bright = forest_substrate(raw_mean.map(|v| v * 1.5), 0.9);
+        let wrong = forest_substrate(raw_mean, 0.9);
+        assert!(
+            ((dark.0[0] + bright.0[0]) * 0.5 - wrong.0[0]).abs() > 0.03,
+            "filtering before the nonlinear transfer loses the stone fraction"
+        );
+    }
+
+    #[test]
+    fn optical_layers_are_continuous_and_preserve_source_height() {
+        let mean = mean_sample();
+        let q = [137.0, 29.0, -18.0];
+        for damp in [0.0, 0.5, 1.0] {
+            for canopy in [0.0, 0.5, 1.0] {
+                for height_m in [-HEIGHT_RANGE_M * 0.5, 0.0, HEIGHT_RANGE_M * 0.5] {
+                    let mut previous: Option<GroundSample> = None;
+                    for step in 0..=600 {
+                        let ground = GroundSample {
+                            albedo_linear: mean
+                                .albedo_linear
+                                .map(|v| v * (0.5 + step as f32 / 600.0)),
+                            roughness: 0.9,
+                            height_m,
+                        };
+                        let floor = forest_floor(ground, q, 77, 0.012, damp, canopy);
+                        assert_eq!(floor.height_m, height_m);
+                        assert!((0.22..=0.98).contains(&floor.roughness));
+                        assert!(
+                            floor
+                                .albedo_linear
+                                .iter()
+                                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                        );
+                        if let Some(previous) = previous {
+                            for (a, b) in
+                                floor.albedo_linear.into_iter().zip(previous.albedo_linear)
+                            {
+                                assert!(
+                                    (a - b).abs() < 0.002,
+                                    "mineral boundary must be continuous"
+                                );
+                            }
+                        }
+                        previous = Some(floor);
+                    }
+                }
+            }
+        }
+        let dry = forest_floor(mean, q, 77, 0.012, 0.0, 0.0);
+        let wet = forest_floor(mean, q, 77, 0.012, 1.0, 0.0);
+        assert!(wet.roughness < dry.roughness);
+        assert!(
+            wet.albedo_linear
+                .into_iter()
+                .zip(dry.albedo_linear)
+                .all(|(w, d)| w < d)
+        );
+        // At coarse resolution every procedural pigment band is filtered out.
+        let a = forest_floor(mean, q, 77, 2.0, 0.5, 0.5);
+        let b = forest_floor(mean, [0.0, 1000.0, 8.0], 77, 2.0, 0.5, 0.5);
+        assert_eq!(a.albedo_linear, b.albedo_linear);
+        assert_eq!(a.roughness, b.roughness);
+    }
 
     #[test]
     fn swatch_mips_preserve_linear_means_and_wrap_continuously() {

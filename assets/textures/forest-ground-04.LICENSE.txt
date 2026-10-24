@@ -16,5 +16,9 @@ and hashes are recorded in the surface-showcase evidence.
 
 This is an authored optical proxy for soil/gravel/organic debris, not measured
 Thessa geology, botanical taxonomy, collision geometry or sediment inventory.
-The renderer uses an explicit 3.15 m swatch width and 0.018 m relative height
+The renderer uses an explicit 3.15 m swatch width and 0.060 m relative height
 range as rendering priors, not a claim about the scan's calibrated dimensions.
+
+Opt-in runtime material processing applies a continuous authored humus/mineral
+reflectance and roughness transfer before linear-light mip averaging. This
+leaves the packed CC0 source unchanged; it is not measured mineral taxonomy.

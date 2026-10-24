@@ -204,7 +204,11 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
     };
     for limit in [17, 20, 21, 22, 255] {
         let pages = material_view_selection_with_limit(&[key], view, 1e-5, limit);
-        let budget = if limit > 17 { 2048 } else { 512 };
+        let budget = match limit.min(22) {
+            17..=20 => 512,
+            21 => 1024,
+            _ => 2048,
+        };
         assert!(pages.len() <= budget);
         assert_eq!(pages.iter().map(|k| k.level).max().unwrap(), limit.min(22));
         let relative_area: f64 = pages
@@ -265,5 +269,45 @@ fn elevated_material_reference_measures_distance_to_ground_not_the_body_datum() 
                 "datum-distance bug must be exposed by the fixture"
             );
         }
+    }
+}
+
+#[test]
+fn standing_material_priority_admits_visible_floor_before_underfoot_pages() {
+    let underfoot = TileKey {
+        face: 4,
+        level: 22,
+        x: 1 << 21,
+        y: 1 << 21,
+    };
+    let visible = TileKey {
+        x: underfoot.x + 8,
+        ..underfoot
+    };
+    let up = DVec3::from(underfoot.direction(0.5, 0.5));
+    let forward = (DVec3::X - up * 0.025).normalize();
+    for elevation in [-1000.0, 0.0, 1000.0] {
+        let view = SelectionView {
+            eye: up * (3_200_000.0 + elevation + 2.0),
+            stream_origin: up * (3_200_000.0 + elevation),
+            forward,
+            radius: 3_200_000.0,
+            frustum: Some(lod::SelectionFrustum {
+                forward: forward.to_array(),
+                cos_limit: 0.7,
+            }),
+        };
+        assert_eq!(
+            material_demand_at_height([underfoot, visible], view, elevation)[0],
+            visible
+        );
+        let legacy = SelectionView {
+            frustum: None,
+            ..view
+        };
+        assert_eq!(
+            material_demand_at_height([underfoot, visible], legacy, elevation)[0],
+            underfoot
+        );
     }
 }

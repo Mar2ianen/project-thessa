@@ -23,9 +23,24 @@ The detail stream uses one cached canonical 32 m-wavelength ground elevation at
 the eye direction per material selection epoch/pixel-scale invalidation, for
 both refinement distance/frustum and admission priority. This is a local optical
 reference, not exact per-tile relief, geometry displacement or collision state.
-Default-off selection retains the legacy datum. The existing 512-leaf demand,
-worker/source budgets and GPU layers are unchanged. Captures expose
+Default-off selection retains the legacy datum. WORLD12 in doc 77 uses
+512/1,024/2,048 temporary refinement leaves for Low/Medium/High detail, then admits
+at most 512 pages using the same view-cone test as refinement. The 1,024-page
+CPU source, bounded worker jobs and 256 GPU layers are unchanged. Captures expose
 `native_material_reference_height_m` and its source/limitation string.
+
+## Current ground optical material (WORLD12)
+
+The optional scan is processed into continuous humus/mineral reflectance and
+roughness before mip averaging, preserving the same processed-material mean
+across levels. One shared forest-floor evaluation adds moisture, moss and litter
+optics. Canonical ecological cover and later substrate/cover layers retain
+ownership. The source height is a single authored 60 mm relative range at a
+3.15 m repeat; physical chart differences produce the normal without secondary
+slope gain. These are uncalibrated optical priors, not pebble geometry, ambient
+visibility, water simulation or authoritative displacement. This supersedes the
+18 mm and colour-layer descriptions in dated checkpoints below. See doc 77 for
+review findings, scoped validation and source-pinned actual captures.
 
 ## Near shadow precision
 

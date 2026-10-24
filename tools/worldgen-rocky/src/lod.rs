@@ -830,6 +830,55 @@ pub fn build_gpu_material_page_with_ground_detail(
         };
     }
     let grain = material_normal_grain_samples(field, &dirs, &samples, size, texel_m);
+    let floor_heights = if !ground.is_empty() {
+        let w_micro = crate::appearance::band_weight(1.2, texel_m);
+        let w_patch = crate::appearance::band_weight(0.8, texel_m);
+        let mean_h = f64::from(crate::ground_detail::mean_sample().height_m);
+        (0..size * size)
+            .map(|idx| {
+                let base_h = f64::from(ground[idx].height_m);
+                let h_norm = ((base_h - mean_h) / 0.0016).clamp(-1.0, 1.0);
+                let q = dirs[idx].map(|v| v * field.params.radius_m);
+
+                // Drainage wash channels and gravel beds:
+                let n_gravel = crate::rng::perlin3(field.params.seed, 6146, q[0] / 3.2, q[1] / 3.2, q[2] / 3.2);
+                let gravel_wash = crate::appearance::smooth(0.05, 0.45, n_gravel) * w_patch;
+                let gravel_boost = 1.0 + gravel_wash * 0.35;
+                // Amplified photogrammetric micro-relief (22.0x brings stones to 2.5-4.5 cm):
+                let h_swatch = (base_h - mean_h) * 22.0 * gravel_boost * w_patch;
+
+                // Moss cushion swelling on hummocks:
+                let n_moss_macro = crate::rng::perlin3(
+                    field.params.seed,
+                    6143,
+                    q[0] / 0.85,
+                    q[1] / 0.85,
+                    q[2] / 0.85,
+                );
+                let n_moss_micro = crate::rng::value_noise3(
+                    field.params.seed,
+                    6148,
+                    q[0] / 0.25,
+                    q[1] / 0.25,
+                    q[2] / 0.25,
+                );
+                let n_moss = n_moss_macro * 0.65 + n_moss_micro * 0.35;
+                let moss_h = crate::appearance::smooth(0.45, 0.72, n_moss)
+                    * crate::appearance::smooth(0.0, 0.35, h_norm)
+                    * 0.0160
+                    * w_micro;
+
+                // Flatten standing water puddles in deep depressions:
+                let puddle_mask = crate::appearance::smooth(-0.30, -0.55, h_norm) * w_patch;
+                let dry_h = h_swatch + moss_h;
+                let water_level = -0.0018 * 22.0 * w_patch;
+                let surface_h = dry_h.max(water_level);
+                surface_h * puddle_mask + dry_h * (1.0 - puddle_mask)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
     let mut normal = Vec::with_capacity(size * size * 2);
     for y in 0..size {
         for x in 0..size {
@@ -857,10 +906,12 @@ pub fn build_gpu_material_page_with_ground_detail(
             let detail_scale = normal_detail_scales[y * size + x];
             gradient[0] *= detail_scale;
             gradient[1] *= detail_scale;
-            if !ground.is_empty() && ground_weights[y * size + x] > 0.0 {
+            if !floor_heights.is_empty() && ground_weights[y * size + x] > 0.0 {
+                let mean_h = f64::from(crate::ground_detail::mean_sample().height_m);
+                let h_norm = ((f64::from(ground[y * size + x].height_m) - mean_h) / 0.0016).clamp(-1.0, 1.0);
+                let puddle_mask = crate::appearance::smooth(-0.30, -0.55, h_norm);
                 // Differentiate the unmasked source, then weight the gradient:
                 // a habitat/snow/coast boundary must not become a height cliff.
-                let height = |x: usize, y: usize| f64::from(ground[y * size + x].height_m);
                 let floor_gradient = material_chart_gradient(
                     key.face,
                     dirs[y * size + x],
@@ -868,11 +919,12 @@ pub fn build_gpu_material_page_with_ground_detail(
                         .map(|v| v * field.params.radius_m),
                     sub(dirs[y1 * size + x], dirs[y0 * size + x])
                         .map(|v| v * field.params.radius_m),
-                    height(x1, y) - height(x0, y),
-                    height(x, y1) - height(x, y0),
+                    floor_heights[y * size + x1] - floor_heights[y * size + x0],
+                    floor_heights[y1 * size + x] - floor_heights[y0 * size + x],
                 );
+                let slope_scale = (1.0 - puddle_mask * 0.98) * 1.6;
                 for i in 0..2 {
-                    gradient[i] += floor_gradient[i] * ground_weights[y * size + x];
+                    gradient[i] += floor_gradient[i] * ground_weights[y * size + x] * slope_scale;
                 }
             }
             let [dx, dy] = gradient;

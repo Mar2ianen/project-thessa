@@ -795,7 +795,14 @@ mod tests {
                     .stem
                     .as_ref()
                     .is_some_and(|s| offset < s.vertex_count as usize);
-                assert_eq!(material.diffuse_transmission, if stem { 0.0 } else { 0.45 });
+                let expected_transmission = if stem {
+                    0.0
+                } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
+                    0.32
+                } else {
+                    0.45
+                };
+                assert_eq!(material.diffuse_transmission, expected_transmission);
                 assert_eq!(material.metallic, 0.0);
                 assert!(material.base_texture.is_some());
                 assert!(material.normal_texture.is_some());

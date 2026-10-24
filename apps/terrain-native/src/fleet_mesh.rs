@@ -1021,7 +1021,7 @@ mod tests {
             Some(window)
         );
         let stats = scene.surface_plants_diagnostics.borrow();
-        assert_eq!(stats.candidates, 4096 + stats.understory_candidates);
+        assert_eq!(stats.candidates, 9 * 4096 + stats.understory_candidates);
         drop(stats);
         let preparation_ms = scene.surface_plants_diagnostics.borrow().preparation_ms;
         assert_eq!(draw_shadows(&scene, &mut meshes, &mut terrain), 0);

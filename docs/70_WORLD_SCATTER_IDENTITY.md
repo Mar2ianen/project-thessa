@@ -5,6 +5,9 @@ renderer-neutral descriptors and the existing offline plant consumer. WORLD04
 adds a bounded native survey prototype consumer with shared graphics quality
 policy ([doc 75](75_NATIVE_SURFACE_PLANTS.md)). No production foliage/rock
 streaming, instance cache, collision ownership or visual acceptance is claimed.
+WORLD11 extends this bounded adapter to nine same-face L14 canopy windows and
+49 L18 near windows, retaining the same population and height callback; leaf
+LOD and senescent material boundaries change optical representation only.
 The historical snapshots in docs 49–52 remain historical.
 
 ## Contract and consumer boundary

@@ -78,7 +78,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: true,
             restart_required: true,
-            description: "Nested density subsets 0.25/0.5/1.0; fixed 4096-candidate/4096-item ceiling at every tier. Identity, habitat and ground height are independent of quality.",
+            description: "Nested density subsets 0.25/0.5/1.0; up to nine L14 windows (36864 candidates/items). Full leaf detail within 24/36/48 metres per instance scale, with a conservative near-eye cell margin; cheaper distant geometry retains every frond. Identity, habitat and ground height are independent of quality.",
         },
         SettingMeta {
             path: "surface_plants.understory",
@@ -89,7 +89,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: true,
             restart_required: true,
-            description: "Additional bounded near-eye canonical fern/reed clumps on a separate fixed L24 identity lattice. Uses the parent plant density tier and shared mesh/shadow paths; requires plants enabled. Disabled skips all near-layer sampling and resources. Not calibrated ecological coverage or planet-wide streaming.",
+            description: "Additional bounded near-eye canonical fern/reed clumps in up to 49 L18 windows on a separate fixed L24 identity lattice. Uses the parent plant density tier and shared mesh/shadow paths; requires plants enabled. Disabled skips all near-layer sampling and resources. Not calibrated ecological coverage or planet-wide streaming.",
         },
         SettingMeta {
             path: "terrain_topology.enabled",

@@ -4,7 +4,74 @@
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
 The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
-WORLD10 review below supersedes intermediate Gemini experiments.
+WORLD11 continuation below extends the reviewed WORLD10 source.
+
+## WORLD11 — Wider coverage, reduced pinnae and fern age (2026-10-24)
+
+The continuation after `6c8d9fd` addresses the visible planting-window boundary.
+Canopy queries now cover up to nine neighboring L14 windows; the optional
+near-eye L24 understory covers 49 L18 windows rather than 25. All use the same
+immutable identities, canonical 32 m ground and habitat/water/slope eligibility.
+There is no density tint, fog mask or new scene-specific placement source.
+
+Full/reduced pinnae share frond and leaf counts. The reduced fern/tree use
+1,040/4,992 triangles rather than 3,224/15,360, with calibrated top-view area and
+sampled-vertex error bounds ([doc 75](75_NATIVE_SURFACE_PLANTS.md)). The resolver
+sets a scale-aware full-detail distance of 24/36/48 m for Low/Medium/High, plus
+the conservative near-eye cell margin. Reeds and wood retain their source
+geometry. The three long, low outer ground-fern fronds now have explicit dry
+optics; ten inner fronds remain green. Their attachment geometry and total
+triangle count are unchanged. Geometry, organ materials, shadows and optional
+RT use the existing grouped mesh path. Source reuse compares detail layout too.
+
+The combined full/reduced vertex/index/AO payload is 1,690,896 B; material images
+remain 3,219,456 B. The final standing view uploads 752,128 B of instance matrices
+and uses eleven grouped draws. Repeated organ ranges are included in RT
+preflight: a 300-descriptor fern/reed fixture needs 450 primitive instances.
+The same configured RT ceiling and whole-partition raster fallback remain.
+All features are still opt-in, and TAA remains off.
+
+Final local Radeon 880M / Vulkan RADV / Mesa 26.2.5 captures use 1280×720,
+4× MSAA, frozen epoch/step 0, 20 s prestream and 30 warmup frames. Static views
+measure 48 frames; the sweep measures 96. No builds/tests run concurrently with
+these captures. The baseline binary SHA matches the preceding WORLD10 evidence.
+
+| View | GPU median | Unique plants | Reduced plants |
+| --- | ---: | ---: | ---: |
+| Fresh `6c8d9fd` standing control | 318.347 ms | 4,931 | — |
+| Standing, 80 m range / 2 m eye | 347.919 ms | 11,752 | 5,568 |
+| Approach, 300 m range / 2 m eye | 342.124 ms | 11,790 | 4,993 |
+| Overview, 800 m range / 138.11 m eye | 622.522 ms | 2,066 | 1,855 |
+| Moving, 80 m range / 2 m eye | 478.995 ms | 11,173 | 4,910 |
+
+The standing control/candidate share camera/source metadata and material-level
+residency histograms; exact GPU atlas page identities are not exported. This
+is a wider-population feature comparison, not an isolated LOD speedup. A single
+run per view does not establish stable production performance, and these
+frame times remain unsuitable for normal gameplay. The intermediate coverage
+capture before dry-frond grouping is retained separately rather than presented
+as final-source evidence.
+
+An additional composition moves the numeric target 15 m east within the same
+coastal audit region (longitude 165.13910882897008°). It is an alternate actual
+camera view, not a matched baseline comparison or a reference-parity score.
+The unchanged audit cameras remain the diagnostic evidence above.
+
+Executed local checks: 2,094 workspace lib/bin tests, 121 integration tests,
+36 native hardware tests, strict all-target/all-feature Clippy, architecture,
+formatting, feature-off and native release builds. The broad test runs preceded
+only a test-only `iter().copied().collect()` to `to_vec()` lint cleanup; the
+affected geometry test and strict Clippy/formatting were repeated. The source
+sequence, binary hashes, full commands and capture telemetry are recorded in
+[`artifacts/native-surface-coverage-2026-10-24.json`](artifacts/native-surface-coverage-2026-10-24.json).
+No CI or independent blind preference result is claimed.
+
+Coverage is still bounded and same-face, with an outer boundary; the dense
+layer still requires an explicit eye AGL no greater than 4 m. LOD transitions
+remain discrete and are not a complete temporal-stability proof. Repeated
+archetypes, unresolved ground debris, incomplete aerial transport, flat sky
+structure and actual resident-triangle/root agreement remain open. This is a
+location-quality continuation, not final reference acceptance.
 
 ## WORLD10 — Review of iterations through d13364b (2026-10-24)
 
@@ -111,7 +178,8 @@ The current standing (80 m range, 2 m eye AGL), approach (300 m range,
 numeric target. Earlier close/overview captures used different explicit eye
 heights; their dated records remain below. A moving camera and a surface-to-orbit sequence are additional
 acceptance cases, not established by a still image. Large-plant geometry covers
-one L14 query window; the optional near layer adds at most 25 L18 query windows.
+up to nine neighboring L14 query windows; the optional near layer adds at most
+49 L18 query windows, with scale-aware full/reduced pinnae (WORLD11).
 Neither is planet-wide coverage.
 
 ## Work order

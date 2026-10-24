@@ -86,10 +86,13 @@ The checked-in vertical slice currently contains:
   participate in opt-in TAA; moving meshes and water remain masked. Geometry
   and GPU cost increase; reference matching and visual acceptance remain open. An optional default-off near-eye
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
-  lattice inside 25 L18 windows, with world-addressed eight-metre colony
+  lattice inside 49 L18 windows, with world-addressed eight-metre colony
   occupancy and canonical ecological eligibility, reusing the same quality
   tiers, prototypes,
-  opaque mesh and shadow paths. Same-site near-window changes use one shared
+  opaque mesh and shadow paths. WORLD11 extends large plants to nine neighboring
+  L14 windows and selects scale-aware reduced pinnae beyond the full-detail
+  range, plus separate dry outer ground-fern fronds without more triangles;
+  plant identities and ecological eligibility remain unchanged. Same-site near-window changes use one shared
   worker with stale-result rejection; this is not a vegetation streamer. Shared
   stellar shadow rays now preserve their physical line instead of offsetting
   sideways into narrow leaves; finite receiver-bias and subpixel-coverage gaps

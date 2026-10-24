@@ -1136,10 +1136,22 @@ fn frozen_water_height(world: &FrozenSurface, dir: [f64; 3]) -> Option<f64> {
 
 pub fn plant_prototypes() -> Vec<PlantMesh> {
     static PROTOTYPES: std::sync::OnceLock<Vec<PlantMesh>> = std::sync::OnceLock::new();
-    PROTOTYPES.get_or_init(build_plant_prototypes).clone()
+    PROTOTYPES
+        .get_or_init(|| build_plant_prototypes(false))
+        .clone()
 }
 
-fn build_plant_prototypes() -> Vec<PlantMesh> {
+/// Distant representation retains every frond and pinna. A two-triangle
+/// lamina preserves the full polygon's projected area; no alpha cards or
+/// population thinning. Native consumers select it by scale-aware distance.
+pub fn reduced_plant_prototypes() -> Vec<PlantMesh> {
+    static PROTOTYPES: std::sync::OnceLock<Vec<PlantMesh>> = std::sync::OnceLock::new();
+    PROTOTYPES
+        .get_or_init(|| build_plant_prototypes(true))
+        .clone()
+}
+
+fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
     use crate::scatter::ScatterKind;
     [
         ScatterKind::FernClump,
@@ -1162,7 +1174,7 @@ fn build_plant_prototypes() -> Vec<PlantMesh> {
         match kind {
             ScatterKind::FernClump => {
                 mesh.albedo_srgb = [0.20, 0.28, 0.10];
-                fern_clump(&mut mesh);
+                fern_clump(&mut mesh, reduced);
             }
             ScatterKind::ReedClump => {
                 mesh.albedo_srgb = [0.25, 0.30, 0.11];
@@ -1170,7 +1182,7 @@ fn build_plant_prototypes() -> Vec<PlantMesh> {
             }
             ScatterKind::LycopsidTree => {
                 mesh.albedo_srgb = [0.22, 0.30, 0.12];
-                lycopsid_tree(&mut mesh);
+                lycopsid_tree(&mut mesh, reduced);
             }
             _ => unreachable!(),
         }
@@ -1183,7 +1195,7 @@ fn build_plant_prototypes() -> Vec<PlantMesh> {
 const GOLDEN_ANGLE: f64 = 2.399_963_229_728_653;
 
 /// Grounded fern rosette with paired pinnae along thirteen arching rachises.
-fn fern_clump(mesh: &mut PlantMesh) {
+fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
     const FRONDS: usize = 13;
     // Explicit non-random per-frond variation (length, arch height, base height).
     const LENGTH_M: [f64; FRONDS] = [
@@ -1195,13 +1207,26 @@ fn fern_clump(mesh: &mut PlantMesh) {
     const BASE_Y_M: [f64; FRONDS] = [
         0.0, 0.02, 0.01, 0.03, 0.015, 0.005, 0.025, 0.0, 0.018, 0.008, 0.022, 0.012, 0.006,
     ];
-    for i in 0..FRONDS {
+    // Keep the same thirteen fronds and attachment angles; publish the three
+    // long, low outer fronds last so age owns a real material boundary.
+    for (order, i) in [0, 1, 3, 4, 6, 7, 8, 10, 11, 12, 2, 5, 9]
+        .into_iter()
+        .enumerate()
+    {
+        if order == 10 {
+            mesh.senescent = Some(PlantSenescence {
+                first_vertex: mesh.positions.len() as u32,
+                albedo_srgb: [0.34, 0.25, 0.13],
+                diffuse_transmission: 0.05,
+            });
+        }
         fern_frond(
             mesh,
             0.37 + i as f64 * GOLDEN_ANGLE,
             LENGTH_M[i],
             HEIGHT_M[i],
             BASE_Y_M[i],
+            reduced,
         );
     }
 }
@@ -1245,7 +1270,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
 
 /// Authored forked arborescent silhouette with tiered radial crowns; optical
 /// reference geometry, not a taxonomic reconstruction of Cyathea / Dicksonia.
-fn lycopsid_tree(mesh: &mut PlantMesh) {
+fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
     const TRUNK_RINGS: [(f64, f64); 21] = [
         (0.00, 0.48),
         (0.18, 0.40),
@@ -1320,7 +1345,7 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],
                 );
-                crown_frond(mesh, angle, base, reach, rise, drop);
+                crown_frond(mesh, angle, base, reach, rise, drop, reduced);
             }
         }
     }
@@ -1328,7 +1353,14 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
 
 /// One arching rachis with fourteen opposed pairs of separate tapered pinnae.
 /// Gaps are geometry shared by primary raster, shadows and optional RT.
-fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, base_y_m: f64) {
+fn fern_frond(
+    mesh: &mut PlantMesh,
+    angle: f64,
+    length_m: f64,
+    height_m: f64,
+    base_y_m: f64,
+    reduced: bool,
+) {
     let (radial, lateral) = azimuth_frame(angle);
     let at = |t: f64| {
         offset(
@@ -1362,7 +1394,14 @@ fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, ba
                 )
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna(mesh, nodes, tangent, length * 0.145, length * 0.035);
+            pinna(
+                mesh,
+                nodes,
+                tangent,
+                length * 0.145,
+                length * 0.035,
+                reduced,
+            );
         }
     }
 }
@@ -1400,6 +1439,7 @@ fn crown_frond(
     reach_m: f64,
     rise_m: f64,
     drop_m: f64,
+    reduced: bool,
 ) {
     let (radial, lateral) = azimuth_frame(angle);
     let at = |t: f64| {
@@ -1436,7 +1476,14 @@ fn crown_frond(
                 )
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna(mesh, nodes, tangent, length * 0.125, length * 0.035);
+            pinna(
+                mesh,
+                nodes,
+                tangent,
+                length * 0.125,
+                length * 0.035,
+                reduced,
+            );
         }
     }
 }
@@ -1463,6 +1510,7 @@ fn pinna(
     lateral: [f64; 3],
     half_width: f64,
     fold_m: f64,
+    reduced: bool,
 ) {
     let mut normal = crate::lod::normalize(crate::lod::cross(
         lateral,
@@ -1504,6 +1552,33 @@ fn pinna(
             ),
         )
     });
+    if reduced {
+        // Integral of the full eight-edge outline / diamond area =
+        // (1 + sqrt(2)) / 2. Keep the curved midpoint, flatten only its fold.
+        let width = half_width * (1.0 + 2.0_f64.sqrt()) * 0.5;
+        let corners = [
+            nodes[0],
+            offset(nodes[1], scaled(lateral, width)),
+            nodes[2],
+            offset(nodes[1], scaled(lateral, -width)),
+        ];
+        let first = mesh.positions.len() as u32;
+        mesh.positions.extend(corners.map(|p| p.map(|v| v as f32)));
+        mesh.normals.extend([normal.map(|v| v as f32); 4]);
+        mesh.uvs
+            .extend([[0.0, 0.5], [0.5, 0.0], [1.0, 0.5], [0.5, 1.0]]);
+        for mut tri in [[0, 1, 3], [1, 2, 3]] {
+            let cross = crate::lod::cross(
+                crate::lod::sub(corners[tri[1]], corners[tri[0]]),
+                crate::lod::sub(corners[tri[2]], corners[tri[0]]),
+            );
+            if crate::lod::dot(cross, normal) < 0.0 {
+                tri.swap(1, 2);
+            }
+            mesh.indices.extend(tri.map(|i| first + i as u32));
+        }
+        return;
+    }
     let first = mesh.positions.len() as u32;
     let mut normals = [[0.0; 3]; 9];
     for edge in 0..8 {
@@ -2109,6 +2184,33 @@ mod tests {
     }
 
     #[test]
+    fn ground_fern_senescence_owns_the_three_long_low_outer_fronds() {
+        for mesh in [
+            plant_prototypes().remove(0),
+            reduced_plant_prototypes().remove(0),
+        ] {
+            validate_mesh(&mesh).unwrap();
+            let dry = mesh.senescent.as_ref().unwrap();
+            let split = dry.first_vertex as usize;
+            let max_height =
+                |points: &[[f32; 3]]| points.iter().map(|p| p[1]).fold(0.0_f32, f32::max);
+            assert!(max_height(&mesh.positions[split..]) < 1.0);
+            assert!(max_height(&mesh.positions[..split]) > 1.40);
+            let green_triangles = mesh
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter(|t| t[0] < dry.first_vertex)
+                .count();
+            assert_eq!(
+                green_triangles * 3,
+                (mesh.indices.len() / 3 - green_triangles) * 10
+            );
+        }
+    }
+
+    #[test]
     fn pinna_uv_long_axis_follows_the_leaf_length() {
         let mut mesh = plant_prototypes().remove(0);
         mesh.positions.clear();
@@ -2161,8 +2263,55 @@ mod tests {
         assert!(w.validate().is_err());
     }
 
-    /// Proto-type triangles as f64 world-local points plus the normal derived
-    /// from their winding; independent of the stored f32 normals.
+    #[test]
+    fn reduced_plants_preserve_lamina_area_and_bound_vertex_error() {
+        use parry3d_f64::{math::Vector, query::PointQuery, shape::TriMesh};
+        let full = plant_prototypes();
+        let reduced = reduced_plant_prototypes();
+        for (a, b) in full.iter().zip(&reduced) {
+            validate_mesh(b).unwrap();
+            let triangles: Vec<_> = b.indices.as_chunks::<3>().0.to_vec();
+            let mesh = TriMesh::new(
+                b.positions
+                    .iter()
+                    .map(|p| Vector::from_array(p.map(f64::from)))
+                    .collect(),
+                triangles,
+            )
+            .unwrap();
+            let error = a
+                .positions
+                .iter()
+                .map(|p| mesh.distance_to_local_point(Vector::from_array(p.map(f64::from)), false))
+                .fold(0.0_f64, f64::max);
+            // Sampled full-vertex displacement, per unit scale: < 1.8 px at
+            // 24 m / 720p / 0.9 rad FOV. Not a continuous Hausdorff bound.
+            assert!(error < 0.057, "{:?} error {error}", a.kind);
+            let projected_area = |m: &PlantMesh| -> f64 {
+                prototype_triangles(m)
+                    .iter()
+                    .map(|(_, p, _)| face_normal(*p)[1].abs() * 0.5)
+                    .sum()
+            };
+            let ratio = projected_area(b) / projected_area(a);
+            assert!(
+                (ratio - 1.0).abs() < 0.025,
+                "{:?} projected area ratio {ratio}",
+                a.kind
+            );
+            if a.kind != crate::scatter::ScatterKind::ReedClump {
+                assert!(b.indices.len() * 3 < a.indices.len());
+            }
+            eprintln!(
+                "plant_lod {:?}: full_tri={} reduced_tri={} max_error_m={error:.7} projected_area_ratio={ratio:.7}",
+                a.kind,
+                a.indices.len() / 3,
+                b.indices.len() / 3
+            );
+        }
+    }
+
+    /// f64 triangle geometry independent of the stored shading normals.
     fn prototype_triangles(mesh: &PlantMesh) -> Vec<(u32, [[f64; 3]; 3], [f64; 3])> {
         mesh.indices
             .chunks(3)
@@ -2205,7 +2354,7 @@ mod tests {
         mesh.normals.clear();
         mesh.indices.clear();
         mesh.stem = None;
-        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0, 0.68, 0.70);
+        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0, 0.68, 0.70, false);
         // A 2 m pinnate frond has pinnae spreading to > 35 cm half-width in the mid-section:
         assert!(covered_from_above(&mesh, 0.9, 0.18));
         assert!(covered_from_above(&mesh, 0.9, -0.18));
@@ -2220,7 +2369,7 @@ mod tests {
         mesh.positions.clear();
         mesh.normals.clear();
         mesh.indices.clear();
-        fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0);
+        fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0, false);
         // Independent vertical ray/triangle test in XZ. Paired pinnae attach
         // along this one-metre rachis, with true air between them.
         let covered = |x, z| covered_from_above(&mesh, x, z);

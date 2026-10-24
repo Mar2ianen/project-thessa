@@ -14,8 +14,8 @@ use thessa_worldgen_rocky::{
 
 pub const WINDOW_LEVEL: u8 = 14;
 pub const UNDERSTORY_WINDOW_LEVEL: u8 = 18;
-/// 5x5 L18 windows cover a ~190 m square around the near-eye cell.
-pub const UNDERSTORY_WINDOW_RADIUS: i64 = 2;
+/// 7x7 L18 windows cover a ~270 m square around the near-eye cell.
+pub const UNDERSTORY_WINDOW_RADIUS: i64 = 3;
 /// Near-ground clumps are only meaningful with the eye close to the surface.
 pub const UNDERSTORY_MAX_EYE_AGL_M: f64 = 4.0;
 
@@ -92,6 +92,7 @@ pub struct Diagnostics {
     pub samples: u64,
     pub accepted: usize,
     pub retained: usize,
+    pub reduced_instances: usize,
     pub preparation_ms: f64,
     pub prototype_bytes: usize,
     pub prototype_texture_bytes: usize,
@@ -122,6 +123,7 @@ impl Diagnostics {
             ("native_surface_plants_surface_samples", self.samples.to_string()),
             ("native_surface_plants_accepted", self.accepted.to_string()),
             ("native_surface_plants_retained", self.retained.to_string()),
+            ("native_surface_plants_reduced_instances", self.reduced_instances.to_string()),
             ("native_surface_plants_preparation_cpu_ms", self.preparation_ms.to_string()),
             ("native_surface_plants_prototype_payload_bytes", self.prototype_bytes.to_string()),
             ("native_surface_plants_prototype_texture_bytes", self.prototype_texture_bytes.to_string()),
@@ -142,8 +144,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD08 L14 large plants plus <=25 same-face L18 near-eye windows / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
-            } else {"WORLD04 fixed L14 window / fixed64 v1; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
+                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
+            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; scale-aware full/reduced leaf geometry; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }
@@ -154,13 +156,15 @@ pub struct Prepared {
     pub descriptors: Vec<ScatterItem>,
     pub instances: Vec<MeshInstance>,
     pub ranges: Vec<Range<u32>>,
+    reduced_primitives: Vec<bool>,
 }
 
 impl Prepared {
     /// The producer is fixed for this executable; represented kinds identify
     /// its exact immutable geometry/material layout, independent of instances.
     pub fn same_prototypes(&self, other: &Self) -> bool {
-        self.ranges.len() == other.ranges.len()
+        self.reduced_primitives == other.reduced_primitives
+            && self.ranges.len() == other.ranges.len()
             && self.ranges.iter().zip(&other.ranges).all(|(a, b)| {
                 self.descriptors.get(a.start as usize).is_some_and(|item| {
                     other
@@ -273,20 +277,47 @@ pub fn prepare(
     let started = std::time::Instant::now();
     let max_items = usize::try_from(settings.surface_plants_max_items)
         .map_err(|_| "surface plant item budget does not fit usize")?;
-    let mut batch = scatter_region(
-        field.params.seed,
-        field.params.radius_m,
-        window,
-        ScatterPopulation::Plants,
-        ScatterPolicy {
-            density_scale: settings.surface_plants_density_scale,
-            max_candidates: settings.surface_plants_max_candidates,
-            max_items,
-            ..Default::default()
-        },
-        |dir| canonical_plant_surface(field, dir),
-    )
-    .map_err(|e| e.to_string())?;
+    if window.level != WINDOW_LEVEL
+        || window.face >= 6
+        || window.x >= 1 << window.level
+        || window.y >= 1 << window.level
+    {
+        return Err("invalid canopy window".into());
+    }
+    let mut batch = thessa_worldgen_rocky::scatter::ScatterBatch {
+        items: Vec::new(),
+        candidates_visited: 0,
+        surface_samples: 0,
+    };
+    for region in neighboring_windows(window, 1) {
+        let part = scatter_region(
+            field.params.seed,
+            field.params.radius_m,
+            region,
+            ScatterPopulation::Plants,
+            ScatterPolicy {
+                density_scale: settings.surface_plants_density_scale,
+                max_candidates: settings
+                    .surface_plants_max_candidates
+                    .checked_sub(batch.candidates_visited)
+                    .ok_or("canopy candidate budget exhausted")?,
+                max_items: max_items
+                    .checked_sub(batch.items.len())
+                    .ok_or("canopy item budget exhausted")?,
+                ..Default::default()
+            },
+            |dir| canonical_plant_surface(field, dir),
+        )
+        .map_err(|e| e.to_string())?;
+        batch.candidates_visited += part.candidates_visited;
+        batch.surface_samples += part.surface_samples;
+        batch
+            .items
+            .try_reserve(part.items.len())
+            .map_err(|_| "canopy descriptor allocation failed")?;
+        batch.items.extend(part.items);
+    }
+    batch.items.sort_unstable_by_key(|item| item.id);
     let mut diagnostics = Diagnostics {
         reason: if batch.items.is_empty() {
             "no_eligible_plants"
@@ -309,18 +340,7 @@ pub fn prepare(
             return Err("invalid near-understory window".into());
         }
         diagnostics.understory_window = Some(near);
-        let edge = (1_u32 << near.level) - 1;
-        let windows: std::collections::BTreeSet<_> = (-UNDERSTORY_WINDOW_RADIUS
-            ..=UNDERSTORY_WINDOW_RADIUS)
-            .flat_map(|dy| {
-                (-UNDERSTORY_WINDOW_RADIUS..=UNDERSTORY_WINDOW_RADIUS).map(move |dx| TileKey {
-                    face: near.face,
-                    level: near.level,
-                    x: (i64::from(near.x) + dx).clamp(0, i64::from(edge)) as u32,
-                    y: (i64::from(near.y) + dy).clamp(0, i64::from(edge)) as u32,
-                })
-            })
-            .collect();
+        let windows = neighboring_windows(near, UNDERSTORY_WINDOW_RADIUS);
         // Replace coarse clumps only inside the fine cover; keep all trees and
         // the coarse far fallback. Default-off preserves every original ID.
         let coarse_count = batch.items.len();
@@ -386,7 +406,34 @@ pub fn prepare(
         diagnostics.preparation_ms = started.elapsed().as_secs_f64() * 1000.0;
         return Ok((None, diagnostics));
     }
-    let prepared = convert(batch.items, field.params.radius_m)?;
+    let anchor = near_window.unwrap_or(window);
+    let anchor_position = DVec3::from(anchor.direction(0.5, 0.5)) * field.params.radius_m;
+    // The context updates at L18 cell boundaries. Expand full-detail coverage
+    // by a conservative half-diagonal, so the actual eye never gets coarse leaves.
+    let uncertainty_m = if near_window.is_some() {
+        2.0_f64.sqrt() * field.params.radius_m / (1_u64 << anchor.level) as f64
+    } else {
+        0.0
+    };
+    let prepared = convert_with_detail(
+        batch.items,
+        field.params.radius_m,
+        Some((
+            anchor_position,
+            settings.surface_plants_detail_distance_m,
+            uncertainty_m,
+        )),
+    )?;
+    diagnostics.reduced_instances = prepared
+        .ranges
+        .iter()
+        .zip(&prepared.reduced_primitives)
+        .filter(|(_, reduced)| **reduced)
+        .map(|(r, _)| (r.start, r.end))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|(start, end)| (end - start) as usize)
+        .sum();
     diagnostics.prototype_bytes = prepared
         .asset
         .primitives
@@ -419,7 +466,29 @@ pub fn prepare(
     Ok((Some(prepared), diagnostics))
 }
 
+fn neighboring_windows(center: TileKey, radius: i64) -> std::collections::BTreeSet<TileKey> {
+    let edge = (1_i64 << center.level) - 1;
+    (-radius..=radius)
+        .flat_map(|dy| {
+            (-radius..=radius).map(move |dx| TileKey {
+                x: (i64::from(center.x) + dx).clamp(0, edge) as u32,
+                y: (i64::from(center.y) + dy).clamp(0, edge) as u32,
+                ..center
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
+    convert_with_detail(items, radius_m, None)
+}
+
+fn convert_with_detail(
+    items: Vec<ScatterItem>,
+    radius_m: f64,
+    detail: Option<(DVec3, f64, f64)>,
+) -> Result<Prepared, String> {
     let mut prepared = Prepared {
         asset: MeshAsset {
             primitives: vec![],
@@ -430,10 +499,29 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
         descriptors: Vec::with_capacity(items.len()),
         instances: Vec::with_capacity(items.len()),
         ranges: vec![],
+        reduced_primitives: vec![],
     };
-    for prototype in thessa_worldgen_rocky::offline::plant_prototypes() {
+    let reduced = |item: &ScatterItem| {
+        item.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump
+            && detail.is_some_and(|(anchor, distance, uncertainty)| {
+                (DVec3::from(item.direction) * radius_m - anchor).length()
+                    > distance * item.scale + uncertainty
+            })
+    };
+    let full = thessa_worldgen_rocky::offline::plant_prototypes()
+        .into_iter()
+        .map(|p| (p, false));
+    let coarse = detail
+        .into_iter()
+        .flat_map(|_| thessa_worldgen_rocky::offline::reduced_plant_prototypes())
+        .filter(|p| p.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump)
+        .map(|p| (p, true));
+    for (prototype, is_reduced) in full.chain(coarse) {
         let start = u32::try_from(prepared.instances.len()).map_err(|_| "plant range overflow")?;
-        for item in items.iter().filter(|i| i.kind == prototype.kind) {
+        for item in items
+            .iter()
+            .filter(|i| i.kind == prototype.kind && reduced(i) == is_reduced)
+        {
             prepared.instances.push(instance(item, radius_m));
             prepared.descriptors.push(*item);
         }
@@ -535,6 +623,7 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
                 material,
             });
             prepared.ranges.push(start..end);
+            prepared.reduced_primitives.push(is_reduced);
         }
     }
     if prepared.descriptors.len() != items.len() {
@@ -668,9 +757,9 @@ mod tests {
             );
             let (prepared, stats) = prepare(context, &resolved, field).unwrap();
             let prepared = prepared.unwrap();
-            assert_eq!(stats.understory_windows, 25);
-            assert_eq!(stats.understory_candidates, 102_400);
-            assert_eq!(stats.candidates, 106_496);
+            assert_eq!(stats.understory_windows, 49);
+            assert_eq!(stats.understory_candidates, 200_704);
+            assert_eq!(stats.candidates, 237_568);
             assert!(stats.understory_accepted > 0);
             assert_eq!(stats.retained, prepared.instances.len());
             assert_eq!(
@@ -712,8 +801,8 @@ mod tests {
                 assert!(prepared.descriptors.contains(&tree));
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
-            assert!(prepared.ranges.len() <= 5);
-            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 1_400_000);
+            assert!(prepared.ranges.len() <= 11);
+            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 1_800_000);
             let (_, disabled) = prepare(Context::Disabled, &resolved, field).unwrap();
             assert_eq!(
                 (
@@ -773,7 +862,7 @@ mod tests {
             let (prepared, stats) =
                 prepare(Context::Survey(window), &settings(quality), field).unwrap();
             let prepared = prepared.unwrap();
-            assert_eq!(stats.candidates, 4096);
+            assert_eq!(stats.candidates, 9 * 4096);
             assert!(stats.samples > 0 && !prepared.descriptors.is_empty());
             assert_eq!(prepared.descriptors.len(), stats.accepted);
             assert!(
@@ -797,16 +886,27 @@ mod tests {
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
             let mut prototype_payload = 0;
             let mut seen = std::collections::BTreeMap::new();
-            for (range, primitive) in prepared.ranges.iter().zip(&prepared.asset.primitives) {
+            for ((range, primitive), reduced) in prepared
+                .ranges
+                .iter()
+                .zip(&prepared.asset.primitives)
+                .zip(&prepared.reduced_primitives)
+            {
                 assert!(range.end > range.start);
                 let group = &prepared.descriptors[range.start as usize..range.end as usize];
                 assert!(group.iter().all(|d| d.kind == group[0].kind));
                 assert!(group.windows(2).all(|w| w[0].id < w[1].id));
-                let prototype = thessa_worldgen_rocky::offline::plant_prototypes()
-                    .into_iter()
-                    .find(|p| p.kind == group[0].kind)
-                    .unwrap();
-                let offset = *seen.entry(group[0].kind as u8).or_insert(0usize);
+                let prototype = if *reduced {
+                    thessa_worldgen_rocky::offline::reduced_plant_prototypes()
+                } else {
+                    thessa_worldgen_rocky::offline::plant_prototypes()
+                }
+                .into_iter()
+                .find(|p| p.kind == group[0].kind)
+                .unwrap();
+                let offset = *seen
+                    .entry((group[0].kind as u8, *reduced))
+                    .or_insert(0usize);
                 let end = offset + primitive.vertices.len();
                 let material = &prepared.asset.materials[primitive.material];
                 let stem = prototype
@@ -873,13 +973,19 @@ mod tests {
                     primitive.ambient_visibility,
                     prototype.ambient_visibility[offset..end]
                 );
-                seen.insert(group[0].kind as u8, end);
+                seen.insert((group[0].kind as u8, *reduced), end);
                 prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
                     + primitive.indices.len() * std::mem::size_of::<u32>()
                     + primitive.ambient_visibility.len() * std::mem::size_of::<f32>();
             }
-            for prototype in thessa_worldgen_rocky::offline::plant_prototypes() {
-                assert_eq!(seen[&(prototype.kind as u8)], prototype.positions.len());
+            for ((kind, reduced), end) in seen {
+                let prototypes = if reduced {
+                    thessa_worldgen_rocky::offline::reduced_plant_prototypes()
+                } else {
+                    thessa_worldgen_rocky::offline::plant_prototypes()
+                };
+                let prototype = prototypes.iter().find(|p| p.kind as u8 == kind).unwrap();
+                assert_eq!(end, prototype.positions.len());
             }
             assert_eq!(stats.prototype_bytes, prototype_payload);
             assert_eq!(stats.prototype_texture_bytes, 3_219_456);
@@ -970,6 +1076,54 @@ mod tests {
     }
 
     #[test]
+    fn leaf_lod_keeps_identity_scale_and_ground_and_prevents_wrong_source_reuse() {
+        let make = |metres: f64, scale| ScatterItem {
+            id: thessa_worldgen_rocky::scatter::ScatterId(metres as u64),
+            kind: ScatterKind::FernClump,
+            direction: DVec3::new(
+                (metres / 3_200_000.0).sin(),
+                (metres / 3_200_000.0).cos(),
+                0.0,
+            )
+            .to_array(),
+            ground_height_m: 10.0,
+            scale,
+            yaw_rad: 0.4,
+        };
+        let items = vec![make(20.0, 1.0), make(80.0, 1.0), make(80.0, 2.0)];
+        let mixed = convert_with_detail(
+            items.clone(),
+            3_200_000.0,
+            Some((DVec3::Y * 3_200_000.0, 48.0, 0.0)),
+        )
+        .unwrap();
+        assert_eq!(mixed.reduced_primitives, [false, false, true, true]);
+        assert_eq!(mixed.descriptors, [items[0], items[2], items[1]]);
+        for (d, transform) in mixed.descriptors.iter().zip(&mixed.instances) {
+            assert_eq!(*transform, instance(d, 3_200_000.0));
+        }
+        let full = convert(items, 3_200_000.0).unwrap();
+        assert!(!full.same_prototypes(&mixed));
+        let only_full = convert(vec![make(80.0, 1.0)], 3_200_000.0).unwrap();
+        let only_reduced = convert_with_detail(
+            vec![make(80.0, 1.0)],
+            3_200_000.0,
+            Some((DVec3::Y * 3_200_000.0, 48.0, 0.0)),
+        )
+        .unwrap();
+        assert_eq!(only_full.ranges.len(), only_reduced.ranges.len());
+        assert!(!only_full.same_prototypes(&only_reduced));
+        assert!(mixed.same_prototypes(&mixed));
+        let edge = TileKey {
+            face: 0,
+            level: WINDOW_LEVEL,
+            x: 0,
+            y: 0,
+        };
+        assert_eq!(neighboring_windows(edge, 1).len(), 4);
+    }
+
+    #[test]
     fn planetary_roots_are_subtracted_in_f64_before_renderer_narrowing() {
         for lat_lon in [LAND, [90.0, 0.0], [-90.0, 180.0], [0.0, -180.0]] {
             let direction = thessa_worldgen_rocky::sphere::dir_from_latlon(lat_lon[0], lat_lon[1]);
@@ -1049,15 +1203,15 @@ mod tests {
         assert!(!fern_only.same_prototypes(&prepared));
         assert!(!prepared.rt_budget_fits(0));
         assert!(!prepared.rt_budget_fits(256));
-        assert!(!prepared.rt_budget_fits(299));
-        assert!(prepared.rt_budget_fits(300));
+        assert!(!prepared.rt_budget_fits(449));
+        assert!(prepared.rt_budget_fits(450));
         assert!(prepared.rt_budget_fits(4096));
         let mut settings = settings(thessa_graphics::Quality::High);
         settings.ray_tracing = thessa_graphics::ResolvedRayTracing::Local;
         settings.rt_vehicles = true;
         settings.rt_max_instances = 256;
         assert!(!prepared.rt_admitted(&settings));
-        settings.rt_max_instances = 300;
+        settings.rt_max_instances = 450;
         assert!(prepared.rt_admitted(&settings));
         settings.rt_max_instances = 0;
         settings.rt_vehicles = false;
@@ -1070,7 +1224,7 @@ mod tests {
         assert!(prepared.rt_admitted(&settings));
         assert_eq!(prepared.descriptors.len(), 300);
         assert_eq!(prepared.instances.len(), 300);
-        assert_eq!(prepared.ranges, vec![0..150, 150..300]);
+        assert_eq!(prepared.ranges, vec![0..150, 0..150, 150..300]);
         assert!(
             prepared
                 .asset
@@ -1093,7 +1247,7 @@ mod tests {
                 .unwrap()
                 .contains("CandidateBudgetExceeded")
         );
-        settings.surface_plants_max_candidates = 4096;
+        settings.surface_plants_max_candidates = 9 * 4096;
         settings.surface_plants_max_items = 0;
         assert!(
             prepare(context, &settings, scene.stream.field())
@@ -1101,7 +1255,7 @@ mod tests {
                 .unwrap()
                 .contains("ItemBudgetExceeded")
         );
-        settings.surface_plants_max_items = 4096;
+        settings.surface_plants_max_items = 9 * 4096;
         let ocean = thessa_worldgen_rocky::sphere::dir_from_latlon(0.0, 0.0);
         let (prepared, stats) = prepare(
             Context::Survey(survey_window(ocean.into())),

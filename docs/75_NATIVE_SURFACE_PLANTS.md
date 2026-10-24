@@ -23,7 +23,67 @@ instance allocation when they fit; instance matrices still use its normal
 shared update path.
 Botanical realism and final surface composition remain incomplete.
 
+## WORLD11 — Bounded distant coverage and leaf representation (2026-10-24)
+
+The current consumer queries a deduplicated 3×3 neighborhood of L14 windows
+for large plants and, with near-eye understory enabled, 7×7 L18 windows for
+canonical L24 clumps. Windows clamp/deduplicate at face edges; cross-face
+continuation remains unimplemented. The same immutable scatter population,
+32 m canonical ground, ecological/water/slope eligibility and nested density
+subsets are retained. Coarse clumps are replaced only inside the near union;
+all trees and coarse clumps outside it remain. Every request returns a complete
+bounded batch or an error, never a truncated partially filled forest.
+
+Full pinnae retain their eight triangles. The distant alternative uses a
+four-corner two-triangle lamina with the same frond/leaf counts, curved midpoint
+and projected outline area. Its width factor `(1 + sqrt(2))/2` integrates the
+original polygon rather than compensating by a density multiplier. Reeds and
+wood remain unchanged. Full/reduced foliage, stems and dry fronds are separate
+primitive groups sharing the existing material images and opaque/shadow/RT
+paths. Ground ferns now give the three longest, lowest outer fronds an explicit
+dry material (authored sRGB 0.34/0.25/0.13, diffuse transmission 0.05),
+while ten inner fronds retain green optics. Frond count, attachment geometry,
+leaf area and triangle count are unchanged; emission order changes to keep the
+material boundary contiguous. At most eleven primitives represent three kinds
+and two leaf detail levels. Compatible GPU reuse also compares the representation layout.
+
+The shared resolver maps Low/Medium/High to 24/36/48 m full-detail distance
+per unit instance scale. Near-eye contexts add the conservative L18 cell
+half-diagonal, accounting for movement inside the current anchor cell; this
+avoids coarse leaves at the eye without rebuilding every frame. The anchor
+otherwise follows the survey window center. No new scheduler, pass, shader,
+alpha card or color/fog concealment is added. Disabled remains zero work.
+
+| Prototype | Full triangles | Reduced triangles | Sampled vertex displacement | Top-view area ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Fern | 3,224 | 1,040 | 0.016040 m | 0.9999122 |
+| Reed | 144 | 144 | 0 m | 1 |
+| Tree | 15,360 | 4,992 | 0.039537 m | 1 |
+
+The regression measures every full vertex against the reduced triangle BVH
+and pins <0.057 m per unit scale and <2.5% top-view area difference. It does
+not certify continuous Hausdorff distance, arbitrary projected silhouettes,
+normal-map/specular error or transition preference. Representation changes
+remain discrete at preparation boundaries. Canonical identity, transforms,
+quality nesting, source ownership and disabled/budget/edge behavior have
+separate tests. Actual-producer GPU ray fixtures exercise both representations
+against independent f64 triangle visibility and retain the two-RGB8-code
+interior-shading tolerance. Full/reduced fixtures inspect 7,780/2,716 samples;
+finite exclusion leaks are 43/1 and 8/0 at 0.01/0.0001 m, with zero invented
+blockers. The full fixture's change from WORLD10's 45/1 reflects sampling every
+seventh triangle after the frond emission reorder, not improved geometric
+visibility. These are separate sample sets, not a full/reduced visibility
+accuracy ranking. Capture/performance evidence is recorded in doc 77.
+
+Layered, deterministic world-grid management and batched rendering are also
+described by [Whatley, GPU Gems 2 chapter 1](https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-1-toward-photorealism-virtual-botany).
+This implementation extends Thessa's existing identity sampler and instancing;
+it does not copy the chapter's billboard or dissolve implementation.
+
 ## WORLD10 — Review of the latest reference iterations (2026-10-24)
+
+This dated checkpoint is superseded by WORLD11 above for coverage, material
+grouping, source-sample calibration and final measurements.
 
 This supersedes the dated WORLD09 dimensions and timings below. Gemini's
 iterations through `d13364b` include concurrent renderer/geometry work; commit
@@ -313,11 +373,12 @@ restart-required and does not add a new capability or renderer mode.
 | --- | --- | --- | --- | --- | --- |
 | `surface_plants_enabled` | `bool` | false | true | true | true |
 | `surface_plants_density_scale` | `f64` | 0 | 0.25 | 0.5 | 1 |
-| `surface_plants_max_candidates` | `u64` | 0 | 4096 | 4096 | 4096 |
-| `surface_plants_max_items` | `u32` | 0 | 4096 | 4096 | 4096 |
+| `surface_plants_max_candidates` | `u64` | 0 | 36,864 | 36,864 | 36,864 |
+| `surface_plants_max_items` | `u32` | 0 | 36,864 | 36,864 | 36,864 |
+| `surface_plants_detail_distance_m` | `f64` | 0 | 24 | 36 | 48 |
 | `surface_understory_enabled` | `bool` | false | opt-in | opt-in | opt-in |
-| `surface_understory_max_candidates` | `u64` | 0 | 102,400 | 102,400 | 102,400 |
-| `surface_understory_max_items` | `u32` | 0 | 102,400 | 102,400 | 102,400 |
+| `surface_understory_max_candidates` | `u64` | 0 | 200,704 | 200,704 | 200,704 |
+| `surface_understory_max_items` | `u32` | 0 | 200,704 | 200,704 | 200,704 |
 
 Counts follow existing resolved count conventions. The consumer must perform a
 checked conversion of `max_items` if its scatter API accepts `usize`. Density
@@ -333,10 +394,11 @@ require restart for the retained survey representation.
 
 ## Bounded consumer boundary
 
-The agreed initial native consumer is **survey-only**: one fixed level-14 query
-window around the numeric survey target. The level-20 identity lattice visits
-`4^(20-14) = 4096` candidate cells; the worst-case output fits the 4096-item
-ceiling. All tiers traverse the same window, not successively larger regions.
+The current native consumer is **survey-only**: at most nine neighboring
+level-14 query windows around the numeric survey target. The level-20 identity
+lattice visits at most `9 * 4^(20-14) = 36,864` candidate cells; the worst-case
+output fits the matching item ceiling. All tiers traverse the same windows,
+not successively larger regions.
 Lower density is a nested rendering subset, not a promise of proportional CPU
 sampling cost. IDs, habitat, final ground height, kind and scale must not be
 derived from quality; reuse the existing scatter identity/eligibility contract
@@ -344,7 +406,7 @@ derived from quality; reuse the existing scatter identity/eligibility contract
 
 The disabled consumer must return before any surface sampling, jobs, instance
 buffers or mesh preparation. Resolved budgets are ceilings, not allocations;
-enabling policy alone must not reserve 4096 items or create GPU resources.
+enabling policy alone must not reserve the full item ceiling or create GPU resources.
 No new device capability is required by the settings policy. It neither requests
 RT nor changes shadow/global render architecture, terrain topology or physics.
 The prototype's disabled/Low states are its explicit cheaper fallbacks.
@@ -416,19 +478,17 @@ memory and terrain admission checks; preflight alone is not a claim of active RT
 ### Representation limits
 
 The survey prototypes are authored meshes, not botanical reconstructions or
-photogrammetry. WORLD05 grounded the arching foliage; WORLD06f replaced the
-tree's stub forks/whorls with two ascending forks, four leafy terminals and
-smooth cone normals. WORLD08 uses seven broad paired pinnae per fern rachis and
-24 broad arching leaves per tree terminal. Fern fronds still
-begin at local Y = 0; the adapter applies no vertical offset and does **not** lower
-roots to hide geometry. Reeds retain ten arching tapered blades plus a six-blade
-basal tussock. All three remain split-vertex indexed triangle lists using the
-existing double-sided material; there is no foliage transmission, mesh LOD, wind,
-growth, per-kind shader or collision ownership. Thin blades can alias or disappear
-at a distance, undersides have no transmitted light, and smooth normals do not
-remove the stem's polygonal silhouette. Stems have no terrain-conforming footprint. Canonical 32 m
-root height need not equal the current interpolated resident triangle (which may
-use a different wavelength/representation).
+photogrammetry. The current tree has two asymmetric forks and tiered pinnate
+crowns; ground ferns have thirteen arching rachises, including three dry outer
+fronds. Reeds retain ten arching tapered blades and a six-blade basal tussock.
+Full/reduced geometry, explicit organ materials, baked self visibility and thin
+diffuse scattering share the existing double-sided opaque mesh path (WORLD11
+above). There is no wind, growth, botanical simulation or collision ownership.
+Thin blades can still alias or disappear at a distance, and reduced geometry
+does not preserve every view-dependent silhouette or normal-map highlight.
+Stems have no terrain-conforming footprint. Canonical 32 m root height need
+not equal the interpolated resident triangle, which may use another wavelength
+or representation. The consumer applies no root-lowering offset to conceal it.
 
 **Actual root-to-resident-triangle residual is unmeasured in this change.**
 Page-height comparisons would not establish that residual; neither a clearance
@@ -472,6 +532,8 @@ requested window, rather than presenting the old descriptors as the new cover.
 Diagnostics do not serialize per-instance IDs every frame; exact descriptors are
 retained for CPU tests. Draw cost uses the existing render/shadow GPU intervals,
 not a new isolated plant timing path.
+`native_surface_plants_reduced_instances` counts unique descriptors represented
+by reduced geometry, deduplicating repeated organ ranges.
 `native_surface_plants_rt_policy` records the preflight/fallback decision; the
 existing mesh RT statistics/reason remain the actual shared-backend evidence.
 
@@ -488,8 +550,9 @@ Low/Medium/High exact survivor descriptors, direct canonical height, prototype
 validation and range ownership, yaw/poles/seam orientation, bounded error of
 planetary f64 roots narrowed only after camera subtraction, explicit budget
 errors, empty water representation, and selected-target versus camera/quality
-ownership. A 300-instance mixed-kind fixture pins Low-RT-sized 256 capacity
-fallback and exact boundary acceptance without dropping raster instances.
+ownership. A 300-instance mixed-kind fixture requires 450 primitive instances
+(the fern has separate green/dry groups); it pins the 256-capacity fallback and
+exact 450 boundary acceptance without dropping raster descriptors.
 The additional ignored hardware test
 `scene::fleet_mesh::tests::survey_plants_retain_body_fixed_descriptors_and_submit_grouped_ranges`
 checks native mesh construction, submitted range/triangle counts, retention over

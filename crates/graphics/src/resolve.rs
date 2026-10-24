@@ -264,13 +264,16 @@ pub struct ResolvedGraphicsSettings {
     /// Nested visual density subset, never a change to habitat, height or IDs.
     #[serde(default)]
     pub surface_plants_density_scale: f64,
-    /// One fixed L14 window contains 4096 canonical candidate cells.
+    /// Up to nine same-face L14 windows, each with 4096 canonical cells.
     #[serde(default)]
     pub surface_plants_max_candidates: u64,
     /// Output ceiling, not a reservation or a target population count.
     #[serde(default)]
     pub surface_plants_max_items: u32,
-    /// Optional near-eye layer in nine L18 windows on a separate L24 lattice.
+    /// Full leaf geometry within this many metres per unit instance scale.
+    #[serde(default)]
+    pub surface_plants_detail_distance_m: f64,
+    /// Optional near-eye layer in 49 L18 windows on a separate L24 lattice.
     #[serde(default)]
     pub surface_understory_enabled: bool,
     #[serde(default)]
@@ -801,28 +804,37 @@ impl ResolvedGraphicsSettings {
                 }
             },
             surface_plants_max_candidates: if requested.surface_plants.enabled {
-                4096
+                9 * 4096
             } else {
                 0
             },
             surface_plants_max_items: if requested.surface_plants.enabled {
-                4096
+                9 * 4096
             } else {
                 0
+            },
+            surface_plants_detail_distance_m: if requested.surface_plants.enabled {
+                match requested.surface_plants.quality {
+                    Quality::Low => 24.0,
+                    Quality::Medium => 36.0,
+                    Quality::High => 48.0,
+                }
+            } else {
+                0.0
             },
             surface_understory_enabled: requested.surface_plants.enabled
                 && requested.surface_plants.understory,
             surface_understory_max_candidates: if requested.surface_plants.enabled
                 && requested.surface_plants.understory
             {
-                25 * 4096
+                49 * 4096
             } else {
                 0
             },
             surface_understory_max_items: if requested.surface_plants.enabled
                 && requested.surface_plants.understory
             {
-                25 * 4096
+                49 * 4096
             } else {
                 0
             },
@@ -1096,6 +1108,10 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "surface_plants_max_items".into(),
             self.surface_plants_max_items.to_string(),
+        );
+        map.insert(
+            "surface_plants_detail_distance_m".into(),
+            self.surface_plants_detail_distance_m.to_string(),
         );
         map.insert(
             "surface_understory_enabled".into(),
@@ -1383,7 +1399,7 @@ mod tests {
                     request.surface_plants.enabled = enabled;
                     let resolved = ResolvedGraphicsSettings::from_requested(&request, &caps);
                     let expected_density = if enabled { density } else { 0.0 };
-                    let expected_budget = if enabled { 4096 } else { 0 };
+                    let expected_budget = if enabled { 9 * 4096 } else { 0 };
                     assert_eq!(resolved.surface_plants_enabled, enabled);
                     assert_eq!(resolved.surface_plants_density_scale, expected_density);
                     assert_eq!(resolved.surface_plants_max_candidates, expected_budget);
@@ -1414,6 +1430,7 @@ mod tests {
                     unrelated.surface_plants_density_scale = 0.0;
                     unrelated.surface_plants_max_candidates = 0;
                     unrelated.surface_plants_max_items = 0;
+                    unrelated.surface_plants_detail_distance_m = 0.0;
                     assert_eq!(unrelated, baseline);
                 }
             }
@@ -1429,6 +1446,7 @@ mod tests {
             "surface_plants_density_scale",
             "surface_plants_max_candidates",
             "surface_plants_max_items",
+            "surface_plants_detail_distance_m",
             "surface_understory_enabled",
             "surface_understory_max_candidates",
             "surface_understory_max_items",
@@ -1456,11 +1474,11 @@ mod tests {
                 assert_eq!(resolved.surface_understory_enabled, enabled);
                 assert_eq!(
                     resolved.surface_understory_max_candidates,
-                    if enabled { 102_400 } else { 0 }
+                    if enabled { 200_704 } else { 0 }
                 );
                 assert_eq!(
                     resolved.surface_understory_max_items,
-                    if enabled { 102_400 } else { 0 }
+                    if enabled { 200_704 } else { 0 }
                 );
                 assert_eq!(
                     resolved.surface_plants_density_scale,

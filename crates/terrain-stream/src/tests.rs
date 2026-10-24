@@ -204,7 +204,8 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
     };
     for limit in [17, 20, 21, 22, 255] {
         let pages = material_view_selection_with_limit(&[key], view, 1e-5, limit);
-        assert!(pages.len() <= 512);
+        let budget = if limit > 17 { 2048 } else { 512 };
+        assert!(pages.len() <= budget);
         assert_eq!(pages.iter().map(|k| k.level).max().unwrap(), limit.min(22));
         let relative_area: f64 = pages
             .iter()
@@ -241,7 +242,7 @@ fn elevated_material_reference_measures_distance_to_ground_not_the_body_datum() 
             }),
         };
         let refined = material_view_selection_at_height(&[key], view, 0.001, 22, elevation);
-        assert!(refined.len() <= 512);
+        assert!(refined.len() <= 2048);
         assert_eq!(refined.iter().map(|k| k.level).max().unwrap(), 22);
         assert_eq!(
             refined

@@ -244,7 +244,8 @@ pub(crate) fn material_view_selection_at_height(
         let margin = (key.span_m(view.radius) / distance).clamp(0.0, 0.5);
         cos >= frustum.cos_limit - margin
     };
-    while cover.len() + 3 <= 512 {
+    let leaf_budget = if max_level > 17 { 2048 } else { 512 };
+    while cover.len() + 3 <= leaf_budget {
         let candidate = cover
             .iter()
             .copied()

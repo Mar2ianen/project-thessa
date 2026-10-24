@@ -4,7 +4,99 @@
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
 The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
-2026-10-24 follow-up below supersedes intermediate Gemini experiments.
+WORLD10 review below supersedes intermediate Gemini experiments.
+
+## WORLD10 — Review of iterations through d13364b (2026-10-24)
+
+The latest Gemini commits contained concurrent renderer/geometry work as well as
+its floor/cloud tuning. This review evaluates the aggregate source and real
+captures. Its report's pixel L1 and colour percentile matches against a concept
+with different geometry/camera are not evidence of visual parity; its 450 ms
+ceiling is not a project performance requirement. The flat sky, repeated crowns,
+abrupt far-understory cutoff and unresolved ground composition remain visible.
+
+Retained: authored organic humus/litter/moss/mineral floor mixtures, larger
+ascending fronds, explicit senescence, pinned CC0 material maps and the shared
+canonical scene. Corrected: twig/pebble/root wavelength filtering, continuous
+material eligibility and the 13.5x uncalibrated ground-normal gain. The latter
+again differentiates the actual authored 18 mm source height. Wetland context
+now lies below the resolved litter rather than painting over it.
+
+Curved indexed pinnae use 18,728 triangles but only 24,804 vertices / 1,117,680 B
+across three prototypes. Ground fronds have varied arches; tree forks start
+lower and have asymmetric, wider terminals. Smooth/normal-mapped foliage can
+no longer receive direct reflection from the wrong geometric hemisphere.
+Thin transmission, raster shadows and reflected-hit shading share this side
+contract. The actual-producer ray fixture pins the finite-exclusion leaks at
+45/1 for 0.01/0.0001 m, with zero invented blockers and a two-RGB8-code interior
+shading tolerance. See [doc 75](75_NATIVE_SURFACE_PLANTS.md).
+
+Mesh environment fallback reuses existing GGX integration, with explicit
+quality budgets; an all-double-sided specialization eliminates an unnecessary
+fragment discard. A preceding isolated 48-frame diagnostic measured GPU median
+385.991 -> 226.271 ms on the 880M. Three horizon pixels differ (maximum RGB8
+code difference 20), so this is not a bit-exact image result or a speedup claim
+for the later scene with different geometry, cloud work, MSAA and RT admission.
+
+Clouds now share a mean-normalized, eroded 3D density field, a retained physical
+liquid-water extinction prior and a self-occluded diffuse boundary approximation
+across primary/shadow/reflection consumers. The full 128-cubed canonical source
+is shaped before mip selection: bake medians for retained 32/64/128 sides are
+265.829/265.711/265.036 ms (five samples each). Quality reduces texture/sample
+cost, not this startup bake. Full chains cost 37,449/299,593/2,396,745 R8 texel
+bytes. See [doc 65](65_NATIVE_SKY_AUDIT.md) for the source, quadrature and limits.
+No second-order scattering experiment is retained.
+
+The experimental profile keeps Gemini's EV100 12.8, atmosphere density scale
+1.25, cloud coverage/opacity 0.48/0.72 and High plant density. It selects
+four-sample MSAA and PBR Neutral; TAA remains off. These are opt-in review
+settings, not new application defaults or a proof of physical calibration.
+
+Selecting Medium had also admitted the plant RT partition, whereas High's
+larger population exceeds the same 4,096-instance limit and uses the established
+whole-partition raster/shadow/environment fallback. The final profile restores
+High for the denser near composition. Standing population increases from 2,447
+to 4,931 instances (4,718 near clumps). The measured Medium frame is retained
+separately; changing density and RT admission is not an isolated optimization
+benchmark. No memory/instance limit was raised or hidden RT toggle introduced.
+
+Executed checks: 2,091 workspace lib/bin tests, 121 workspace integration
+tests, 35 native ignored hardware tests, 12 renderer cloud/terrain-environment
+hardware tests, the 25-test ray-scene suite and mesh winding/specialization
+fixture. Strict all-target/all-feature Clippy, feature-off build, architecture,
+formatting and native release builds pass. The 35-test hardware run preceded
+only test-fixture/lint cleanup and the final runtime-profile selection;
+production shader/renderer code remained unchanged. Affected suites and native
+normal tests were repeated as recorded in the evidence's source sequence.
+
+All final High captures use the same certified executable, frozen epoch/step 0,
+20 s prestream, 30 warmup frames and 48 measured frames at 1280×720; the sweep
+uses 96 measured frames. The recorded 856 input files remain stable throughout
+capture. Local Radeon 880M / Vulkan RADV / Mesa 26.2.5 GPU medians:
+
+| View | Range / eye AGL | Single sample | 4× MSAA |
+| --- | --- | ---: | ---: |
+| Standing | 80 m / 2 m | 219.905 ms | 329.119 ms |
+| Approach | 300 m / 2 m | 231.827 ms | 343.151 ms |
+| Overview | 800 m / 138.110 m | 271.433 ms | 514.122 ms |
+| Sweep | changing / 2 m | — | 426.500 ms |
+
+These are per-scenario diagnostics, not a production performance acceptance.
+High approach differs in material residency histograms and is excluded from
+paired visual inference. Three candidate blind pairs were prepared: High
+standing/overview and the recorded Medium approach from the same executable.
+Their camera, profiles except MSAA, recorded histograms, plant counts and
+drained-job counters match within each pair. Exact atlas directory/page IDs
+are not exported; histogram equality is not full residency certification.
+The key remains separate and there are no reviewer votes. The sweep supplies a
+final still and counters, not a video or temporal-stability error envelope.
+
+Reference parity is **not achieved**. Needed work still includes coherent
+near/far vegetation representation, less repetitive botanical assets, resolved
+floor debris/roots, finite-distance aerial transport and richer sky transport.
+No independent blind preference or cross-platform acceptance is claimed.
+Final executed checks, source/binary/capture hashes and measurement boundaries
+are recorded in `docs/artifacts/native-surface-cycle-review-2026-10-24.json`.
 
 ## Target and constraints
 
@@ -14,8 +106,10 @@ to the planet. Use WORLD00's surveyed land target at
 field and real stellar lighting. No separate showcase terrain, painted shore,
 fake atmosphere or camera-specific geometry is introduced.
 
-The standing (2 m eye AGL), close (50 m) and overview (800 m) views share the
-numeric target. A moving camera and a surface-to-orbit sequence are additional
+The current standing (80 m range, 2 m eye AGL), approach (300 m range,
+2 m eye AGL) and overview (800 m range, distance-based eye) views share the
+numeric target. Earlier close/overview captures used different explicit eye
+heights; their dated records remain below. A moving camera and a surface-to-orbit sequence are additional
 acceptance cases, not established by a still image. Large-plant geometry covers
 one L14 query window; the optional near layer adds at most 25 L18 query windows.
 Neither is planet-wide coverage.

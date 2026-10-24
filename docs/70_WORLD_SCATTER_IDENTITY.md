@@ -123,12 +123,13 @@ full-cover plants support scale up to approximately 8.94785 on this body. Larger
 bodies have a lower ceiling; this finite address population is an explicit
 foundation limit, not unbounded density support.
 
-WORLD08's optional understory uses the existing three-dimensional value noise
+The optional understory introduced in WORLD08 now uses the existing three-dimensional value noise
 in body-fixed metres at an authored eight-metre wavelength (channel 437), then
-maps it smoothly into a [0.15, 1.85] local density multiplier. This produces
+maps it smoothly into a [0, 1.85] local density multiplier. This produces
 colonies and gaps within the existing canonical ground/reed habitat; it is an
-occupancy prior, not simulated moisture or succession. Its symmetric mapping
-preserves the ensemble mean but does not preserve each window's exact count;
+occupancy prior, not simulated moisture or succession. Its symmetric smooth
+mapping over noise [-0.2, 0.2] has ensemble mean multiplier 0.925 and does not
+preserve each window's exact count;
 unconditional variance across different colony fields need not obey the
 fixed-field count estimate above. All query windows and quality tiers use the
 same field. Candidate identity, position, kind/size/yaw and the original
@@ -165,7 +166,7 @@ canonical cells and no blue-noise claim.
 
 `ScatterPolicy` defaults to 16,777,216 candidate visits, 1,024,000 output items,
 density scale 1, minimum plant elevation 2 m, maximum plant slope 0.25 and
-`understory_spacing_m = 0.8` and understory clump scales 0.35–0.9. Candidate
+`understory_spacing_m = 0.8` and understory clump scales 0.55–1.10. Candidate
 work is exactly preflighted as
 `4^(candidate_level-query_level)` for coarser/equal windows, or one overlapping
 cell for finer windows; the latter may own no candidate.

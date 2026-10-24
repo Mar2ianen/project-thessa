@@ -98,7 +98,7 @@ do not update in place).
 | `72_WORLD_SURFACE_BASELINE.md` | ✅ scoped numeric audit site | actual canonical zero crossing, reproducible 2×2 km ENU patch, frozen-source identity, land target and numeric regression | universal terrain accuracy or visual/vegetation acceptance not claimed |
 | `73_COASTAL_SURFACE_MATERIALS.md` | 🟡 coastal optical eligibility correction | existing coarse maritime context, slope/exposure/cover/salinity gate the low-altitude sediment and wet rim; weathered local geology replaces universal yellow sand; failing-before inland/cliff regressions | precise shoreline/sediment availability, fine relief, actual close-surface and independent visual acceptance |
 | `74_COASTAL_CLOUD_RECEIVERS.md` | 🟡 primary terrain receiver correction | datum-support planet predicate avoids false interior rejection on chord-meshed/reconstructed water; existing cloud integration/disabled policy and generic strict volume/mesh helpers retained | secondary terrain receivers, near-limb/reconstruction/convergence bounds, wave self-occlusion and wider surface acceptance |
-| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in density tiers, L14 canonical plant window plus optional 25-window L18/L24 understory, one shared background job for same-site near changes with stale-result rejection and compatible GPU-source reuse, WORLD09 folded pinnate crowns, CC0 bark/leaf maps, explicit dry-frond materials, geometry-baked AO and thin diffuse scattering, world-addressed understory colonies, shared opaque/shadow path with physical stellar ray-line preservation and bounded actual-producer visibility oracles, RT preflight/fallback, zero-work disable and authored fern/reed/forked-crown geometry | actual resident-mesh root agreement, finite-bias/edge visibility, botanical realism, GPU cost and wider stable performance acceptance, planetary instance streaming and collision ownership |
+| `75_NATIVE_SURFACE_PLANTS.md` | 🟡 bounded native survey prototype | opt-in density tiers, L14 canonical plant window plus optional 25-window L18/L24 understory, one shared background job for same-site near changes with stale-result rejection and compatible GPU-source reuse, WORLD10 curved indexed pinnae, lower asymmetric forks, roughness-filtered mesh environment, CC0 bark/leaf maps, explicit dry-frond materials, geometry-baked AO and thin diffuse scattering, world-addressed understory colonies, shared opaque/shadow path with physical stellar ray-line preservation and bounded actual-producer visibility oracles, RT preflight/fallback, zero-work disable and authored fern/reed/forked-crown geometry | actual resident-mesh root agreement, finite-bias/edge visibility, botanical realism, GPU cost and wider stable performance acceptance, planetary instance streaming and collision ownership |
 | `77_NATIVE_SURFACE_SHOWCASE.md` | 🟡 surface-first work in progress | actual GPU material-level telemetry; protected coarse support plus caller-priority refinement replaces detail-starving global level admission; separate stem/foliage reflectance; regular-patch split-coordinate material sampling and local derivative footprint; default-off CC0 ground-swatch experiment with L20/L21/L22 caps and same-material coarse means; rejected colour-noise prototype recorded, not shipped | canopy/floor representation hierarchy, convincing ground/foliage/water composition, moving-camera and blind acceptance, bounded planet-wide vegetation streaming |
 | `78_NATIVE_MAIN_INTEGRATION.md` | 🟡 default-off native capability integrated into main | fast-forward promotion of tested implementation plus evidence as `99a1462`; 13 local gates, nine hashed captures and three unreviewed blind pairs; defaults and old host retained | unresolved visual/transport/streaming/temporal/host obligations and full replacement |
 | `76_TEMPORAL_RECONSTRUCTION.md` | 🟡 temporal foundation + opt-in native history lifecycle (T4c partial) | default-off TAA in headless/window loops, shared CPU/GPU running-mean correction, pre-overlay ping-pong colour and previous depth, submitted-only commits, publication/view-mode/exposure/projection/resize resets, explicit quality and capability fallback; separate motion/resolve GPU scopes | composed sampled/resolved-depth policy, complete arbitrary-cut epochs, metric disocclusion envelope, object/deformation motion and broader static eligibility, moving-scene ghosting/visual acceptance, TAAU and SDK/FG adapters; not production TAA acceptance |
@@ -320,7 +320,26 @@ object/ocean motion, streaming accumulation and independent visual acceptance
 remain open. See docs 76/78 and
 [`artifacts/native-temporal-history-2026-10-23.json`](artifacts/native-temporal-history-2026-10-23.json).
 
-WORLD09 now follows up the Gemini visual branch through `2b0ae6e`. It retains
+WORLD10 reviews Gemini iterations through `d13364b`, retaining its organic floor
+and young-frond architecture while removing 13.5x ground-normal exaggeration
+and correcting per-band material filtering. Curved indexed pinnae, a visible
+lower asymmetric fork, geometric-hemisphere lighting and roughness-filtered
+mesh environment response share primary/shadow/secondary consumers. Native
+clouds share a filtered, mean-normalized 3D field and self-occluded diffuse
+boundary; this remains a single-scattering approximation. The experimental
+profile uses High plant density, PBR Neutral, four-sample MSAA and TAA off.
+Renderer defaults are unchanged. Pixel L1 against the concept is not visual
+acceptance. Current tests, captures, timings and remaining gaps are recorded in
+[doc 77](77_NATIVE_SURFACE_SHOWCASE.md); neither reference parity nor production
+performance is established. Local checks pass (2,091 workspace lib/bin,
+121 integration, 35 native hardware and 12 cloud/environment hardware tests,
+plus scoped renderer/lint/feature-off gates). Final High standing retains
+4,931 instances and measures 219.905/329.119 ms single-sample/4× MSAA on the
+880M; this is still unsuitable for production frame rates. Exact provenance,
+three candidate blind pairs and rejected residency comparisons are in
+[`artifacts/native-surface-cycle-review-2026-10-24.json`](artifacts/native-surface-cycle-review-2026-10-24.json).
+
+The historical WORLD09 checkpoint followed up the Gemini visual branch through `2b0ae6e`. It retains
 the larger 25-window cover and tiered crowns while correcting leaf UV orientation,
 adding physical midrib folds without more leaf triangles, and separating dry
 fronds in source-owned materials. Forked trunks restore the reference silhouette.

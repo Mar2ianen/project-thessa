@@ -579,7 +579,8 @@ fn cloud_with_extinction(
     let mut records = [[0.0_f32; 4]; 11];
     records[0] = [0.0, 0.0, 2500.0, 1000.0];
     records[1] = [3000.0, 3000.0, extinction, 24.0];
-    records[2] = [0.0, 1.0, 4.0, 1.0];
+    // Constant external hemispherical source, without self-occlusion quadrature.
+    records[2] = [0.0, 1.0, 0.0, 1.0];
     records[10] = [0.0, 0.0, 100.0 * std::f32::consts::PI, 0.0];
     let bytes = records
         .into_iter()
@@ -676,7 +677,7 @@ fn empty_clouds_do_not_change_direct_material_without_a_sky_field() {
 
 // Independently integrate the spherical deck's smooth vertical density and
 // Beer-Lambert transport, then the literal BRDF in solid angle. An isotropic
-// blue source and red incident sky separate scattering from transmission.
+// blue hemispherical boundary and red incident sky separate scattering from transmission.
 fn cloud_reference() -> [u8; 3] {
     let r = 153.0_f64 / 255.0;
     let a2 = r.powi(4);
@@ -706,7 +707,7 @@ fn cloud_reference() -> [u8; 3] {
         let fresnel = 0.04 + 0.96 * (1.0 - nh).powi(5);
         let weight = 0.5 * std::f64::consts::PI * d * gl * fresnel / bins as f64;
         result[0] += weight * transmission;
-        result[2] += weight * (1.0 - transmission);
+        result[2] += weight * 0.5 * (1.0 - transmission);
     }
     result.map(|v| (v * 2550.0).round() as u8)
 }

@@ -44,6 +44,12 @@ The game must not have a raster atmosphere and an unrelated ray-traced atmospher
 
 ---
 
+The 2026-10-24 native WORLD10 density-field and diffuse-source continuation is
+recorded in [doc 65](65_NATIVE_SKY_AUDIT.md). It adds a shared filtered 3D cloud
+field and self-occluded diffuse boundary; it does not establish complete native
+multiple scattering, aerial perspective or reference-quality acceptance.
+
+
 ## 1. Goals
 
 The visual atmosphere should provide, at minimum:

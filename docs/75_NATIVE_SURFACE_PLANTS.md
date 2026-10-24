@@ -23,7 +23,76 @@ instance allocation when they fit; instance matrices still use its normal
 shared update path.
 Botanical realism and final surface composition remain incomplete.
 
-## WORLD09 — Textured, folded foliage and reference follow-up (2026-10-24)
+## WORLD10 — Review of the latest reference iterations (2026-10-24)
+
+This supersedes the dated WORLD09 dimensions and timings below. Gemini's
+iterations through `d13364b` include concurrent renderer/geometry work; commit
+subjects alone do not describe their complete diffs. The review retains its
+organic ground material, explicit senescent tier and larger young-frond arch.
+Pixel L1 and channel percentiles against an unmatched concept image are not
+visual acceptance, and 450 ms is not an established project frame budget.
+
+The fork now starts at 4.55 m, with asymmetric terminals separated by 3.7 m.
+Its lower trunk ends at 4.77 m, so the branch split remains visible beneath the
+crowns rather than disappearing inside them. The four frond tiers retain
+ascending young, spreading mature, descending outer and hanging dry geometry.
+Ground ferns have shorter, differently arched rachises. Pinna width follows the
+local rachis tangent; its raised fold follows the actual lamina normal.
+Each pinna uses an eight-edge curved outline, eight fan triangles and nine
+shared vertices with area-weighted normals. Primary raster, shadows, prototype
+visibility and optional RT consume the same indices; there is no alpha mask.
+
+| Current prototype | Triangles | Vertices | One-sided foliage area |
+| --- | ---: | ---: | ---: |
+| Fern | 3,224 | 4,212 | 5.408 m² |
+| Reed | 144 | 432 | 1.175 m² |
+| Forked tree | 15,360 | 20,160 | 165.377 m² |
+| Total | 18,728 | 24,804 | |
+
+The indexed vertex/index/AO payload is 1,117,680 B, with the existing 32-byte
+vertex, four-byte AO and 64-byte instance ABIs. A local cold prototype/bake
+measurement was 607.569 ms; the asset and workload differ from WORLD09.
+The actual-producer visibility calibration now pins 45/1 finite-exclusion
+leaks at 0.01/0.0001 m, with zero invented blockers in the tested samples.
+GPU interior shading remains within two RGB8 codes of the independent oracle;
+this does not bound every plant, ray, normal-map terminator or shadow edge.
+
+Understory occupancy is now [0, 1.85], with a narrower smooth transition over
+noise [-0.2, 0.2]. True gaps alternate with colonies. Its symmetric ensemble
+multiplier is 0.925, not 1; exact local counts are not preserved. Existing
+water, slope, height and ecological eligibility remain authoritative. The
+review profile selects High density, four-sample coverage and
+PBR Neutral; TAA remains off. Defaults remain single-sample and default-off
+plants/TAA. Five grouped primitives still share three prototype kinds.
+
+The mesh environment fallback now uses the existing GGX response with
+roughness-dependent sampling: material Low/Medium/High use 4/8/16 environment
+samples and 1/2/4 cloud directions. Without a bound environment, the fallback
+uses the existing ambient irradiance. Primary RT misses use that same response. Later-bounce
+reflection footprints remain approximate. An all-double-sided pipeline
+specialization removes an otherwise unnecessary fragment discard; mixed
+materials retain the original backface rejection. On the isolated standing
+baseline, this specialization reduced
+measured GPU median 385.991 to 226.271 ms; three of 921,600 pixels differ
+(maximum RGB8 difference 20), so pixel-exact equivalence is not established on the Radeon 880M/RADV. This is an isolated implementation diagnostic, not a speedup claim for the later, different scene.
+
+Direct diffuse reflection and specular reflection now respect the actual
+triangle hemisphere; a smoothed or normal-mapped normal cannot admit incident
+light through the back of an opaque sheet. Thin diffuse transmission uses the
+opposite geometric hemisphere. Shadow queries orient the exclusion plane
+into the incident hemisphere for both primary and secondary hits. The actual
+producer fixture exercises these previously leaking smooth-normal samples,
+with independent f64 geometry and unchanged two-code RGB tolerance.
+The same/opposite-side distinction follows the reflection/transmission
+conventions in [PBRT](https://www.pbr-book.org/4ed/Reflection_Models/BSDF_Representation);
+no PBRT implementation is copied.
+
+Current measurements, executed checks, capture identities and limitations are
+recorded in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md). Sparse distant coverage,
+identical archetypes, unresolved thin geometry and incomplete atmospheric
+transport still prevent a reference-parity claim.
+
+## WORLD09 — Textured, folded foliage (historical checkpoint, 2026-10-24)
 
 This continues the uncommitted reference work and the Gemini commits through
 `2b0ae6e` on `feat/surface-visual-engineering`. It keeps Gemini's tiered crown,

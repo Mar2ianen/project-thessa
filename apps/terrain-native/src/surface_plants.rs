@@ -835,7 +835,7 @@ mod tests {
                     let texture = &prepared.asset.textures[material.base_texture.unwrap()];
                     let image = &prepared.asset.images[texture.image];
                     let mut reflectance = [0.0_f64; 3];
-                    for pixel in image.rgba8.chunks_exact(4) {
+                    for pixel in image.rgba8.as_chunks::<4>().0 {
                         for channel in 0..3 {
                             let encoded = f64::from(pixel[channel]) / 255.0;
                             let linear = if encoded <= 0.04045 {

@@ -125,7 +125,7 @@ show_rt_proxies = false
 
 [surface_plants]
 enabled = true
-quality = "medium"
+quality = "high"
 understory = true
 
 [temporal]

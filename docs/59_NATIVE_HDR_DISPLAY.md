@@ -163,7 +163,7 @@ and capture metadata records `raster_msaa_samples`. There is no per-frame readba
 or quality-controller budget. The hardware half-pixel mesh oracle pins linear
 coverage averaging, nearest depth, disabled allocation and atomic resize.
 
-The surface review profile selects PBR Neutral, single-sample raster and TAA off.
+The surface review profile selects PBR Neutral, four-sample raster and TAA off.
 Four-sample coverage is an explicit optional request.
 This increases GPU time and still leaves subpixel distant foliage unresolved;
 set `msaa_samples = 1` for the cheaper fallback. Combining averaged colour with

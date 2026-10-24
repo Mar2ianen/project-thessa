@@ -637,7 +637,9 @@ pub fn bake_density_detail(seed: u64, side: u32) -> Result<DensityDetail, &'stat
                 + 0.30 * noise(p, 8, 101)
                 + 0.15 * noise(p, 16, 202)
                 + 0.10 * noise(p, 32, 303);
-            (value.powi(3) * 255.0).round() as u8
+            // Erode low-density cells before filtering to form cloud boundaries.
+            // Mean normalization retains the authored liquid-water budget.
+            (((value - 0.40).max(0.0) / 0.60).powi(2) * 255.0).round() as u8
         })
         .collect();
     let mean = pixels.iter().map(|&v| f64::from(v)).sum::<f64>() / (pixels.len() as f64 * 255.0);
@@ -761,6 +763,7 @@ mod tests {
         assert!(a.mean > 0.01 && a.mean < 0.5);
         assert!(a.levels[0].iter().max().unwrap() - a.levels[0].iter().min().unwrap() > 32);
         assert!(a.levels[0].iter().any(|&v| v > 64));
+        assert!(a.levels[0].contains(&0));
         let mut side = 32usize;
         for (level, pixels) in a.levels.iter().enumerate() {
             assert_eq!(pixels.len(), side.pow(3));

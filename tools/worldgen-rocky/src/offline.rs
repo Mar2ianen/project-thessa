@@ -1269,11 +1269,11 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
         (7.94, 0.22),
         (7.95, 0.16),
     ];
-    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * 0.78, radius));
+    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * 0.60, radius));
     tapered_limb(mesh, [0.0; 3], [0.0, 1.0, 0.0], 16, &trunk_rings);
-    let terminals = [[-1.30, 7.95, -0.20], [1.30, 7.95, 0.20]];
+    let terminals = [[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]];
     for terminal in terminals {
-        let base = [0.0, 5.90, 0.0];
+        let base = [0.0, 4.55, 0.0];
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
         tapered_limb(
@@ -2091,7 +2091,9 @@ mod tests {
         assert!(dry.first_vertex > mesh.stem.as_ref().unwrap().vertex_count);
         assert_eq!(
             mesh.indices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .filter(|triangle| triangle[0] >= dry.first_vertex)
                 .count(),
             6 * (16 + 18 * 2 * 8)
@@ -2393,7 +2395,7 @@ mod tests {
             let (min_height, max_height, max_extent) = match mesh.kind {
                 ScatterKind::FernClump => (1.40, 1.60, 1.90),
                 ScatterKind::ReedClump => (1.20, 2.00, 1.00),
-                ScatterKind::LycopsidTree => (8.70, 11.50, 6.20),
+                ScatterKind::LycopsidTree => (8.70, 11.50, 6.80),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             // No ground offset is invented: every prototype base meets local Y=0.

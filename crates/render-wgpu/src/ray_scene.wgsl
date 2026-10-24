@@ -153,12 +153,12 @@ fn rt_reflection(
         var visibility:array<f32,3>;
         for (var i = 0u; i < 3u; i++) {
             if any(light.colors[i].rgb > vec3(0.0)) {
-                let shadow_normal=select(surface.geometry,-surface.geometry,surface.transmission>0.0 && dot(surface.geometry,light.directions[i].xyz)<0.0);
+                let shadow_normal=select(surface.geometry,-surface.geometry,dot(surface.geometry,light.directions[i].xyz)<0.0);
                 visibility[i]=surface_visibility(surface.position,shadow_normal,i);
+                let cosines=mesh_diffuse_cosines(surface.normal,surface.geometry,light.directions[i].xyz);
                 illuminance +=
                     light.colors[i].rgb
-                    * ((1.0-surface.transmission)*max(dot(surface.normal,light.directions[i].xyz),0.0)
-                        +surface.transmission*max(-dot(surface.normal,light.directions[i].xyz),0.0))
+                    * ((1.0-surface.transmission)*cosines.x+surface.transmission*cosines.y)
                     * visibility[i];
             }
         }
@@ -171,7 +171,7 @@ fn rt_reflection(
             throughput * (vec3(1.0) - hit_fresnel) * (1.0 - surface.metallic) * surface.albedo
             * (illuminance-light.ambient.rgb*(1.0-surface.occlusion)) / OCEAN_PI;
         for (var i=0u;i<3u;i++) {
-            if (any(light.colors[i].rgb>vec3(0.0))) {
+            if (any(light.colors[i].rgb>vec3(0.0)) && dot(surface.geometry,light.directions[i].xyz)>0.0) {
                 radiance += throughput*surface_sun_reflection(surface.normal,-direction,light.directions[i].xyz,
                     light.colors[i].rgb,surface.roughness,hit_f0)*visibility[i];
             }

@@ -96,6 +96,7 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
     let mut checked = 0;
     let mut occluded = 0;
     let mut bias_disagreements = [0; 2];
+    let mut wrong_hemisphere_samples = 0;
     for (kind, height, distance) in [
         (ScatterKind::FernClump, 0.6, 2.5),
         (ScatterKind::ReedClump, 0.75, 3.0),
@@ -265,7 +266,7 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
                     }
                     let position = direction * t;
                     let bias = f64::from(settings.rt_ray_bias_m);
-                    let cosine = geometry.dot(sun);
+                    let cosine = geometry.dot(sun).abs();
                     let hit = (cosine > 0.0)
                         .then(|| closest(&triangles, position, sun, bias / cosine))
                         .flatten();
@@ -277,12 +278,30 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
                         closest(&triangles, position + geometry * 1e-8, sun, 1e-8).is_none(),
                         "physical-reference offset convergence"
                     );
-                    physical_disagreement +=
-                        usize::from(visible != physical_visible && normal.dot(sun) > 0.0);
-                    leaked += usize::from(visible && !physical_visible && normal.dot(sun) > 0.0);
-                    extra_blocked +=
-                        usize::from(!visible && physical_visible && normal.dot(sun) > 0.0);
-                    let ndotl = normal.dot(sun).max(0.0);
+                    physical_disagreement += usize::from(
+                        visible != physical_visible
+                            && normal.dot(sun) > 0.0
+                            && geometry.dot(sun) > 0.0,
+                    );
+                    leaked += usize::from(
+                        visible
+                            && !physical_visible
+                            && normal.dot(sun) > 0.0
+                            && geometry.dot(sun) > 0.0,
+                    );
+                    extra_blocked += usize::from(
+                        !visible
+                            && physical_visible
+                            && normal.dot(sun) > 0.0
+                            && geometry.dot(sun) > 0.0,
+                    );
+                    wrong_hemisphere_samples +=
+                        usize::from(normal.dot(sun) > 0.0 && geometry.dot(sun) < 0.0);
+                    let ndotl = if geometry.dot(sun) > 0.0 {
+                        normal.dot(sun).max(0.0)
+                    } else {
+                        0.0
+                    };
                     let fresnel = 0.04 + 0.96 * (1.0 - normal.dot(-direction).max(0.0)).powi(5);
                     let expected = srgb(
                         (1.0 - fresnel)
@@ -328,9 +347,13 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
         checked >= 200 && occluded >= 10,
         "must exercise both lit and blocked surfaces: {checked}/{occluded}"
     );
+    assert!(
+        wrong_hemisphere_samples > 10,
+        "must exercise smooth normals admitting light behind an opaque triangle"
+    );
     assert_eq!(
         bias_disagreements,
-        [56, 5],
+        [45, 1],
         "finite receiver exclusion still skips genuine nearby blockers; not complete visibility equality"
     );
 }

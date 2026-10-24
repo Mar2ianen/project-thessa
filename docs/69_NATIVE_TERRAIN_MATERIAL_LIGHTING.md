@@ -691,3 +691,23 @@ kernel now cancels its vanishing N.V factors algebraically and preserves the
 finite grazing limit, without the intermediate artistic `smoothstep` damping.
 This does not establish a complete multilayer/multiple-scattering BRDF or a
 universal ground-band fix.
+
+
+### WORLD10 organic floor review (2026-10-24)
+
+Optional ground detail retains Gemini's authored humus, litter, moss, twig,
+mineral and root colour/roughness priors. These are optical material mixtures,
+not instantiated debris or measured peat spectra. The 0.08 humus multiplier is
+a relative gain on the source reflectance; it does not imply 8% reflectance.
+Wetland potential is applied beneath the resolved floor rather than covering
+its texture again. Rock, saline, snow, frost and water ownership remain.
+
+The review removes the uncalibrated 13.5x normal-gradient amplification:
+normal derivatives again follow the source's documented 18 mm relative-height
+range in physical metres. Source mips conservatively filter wavelengths shorter
+than two destination texels. Twig (0.45 m), pebble (0.18 m) and root (0.22 m)
+fields now use their own wavelength cutoff, including the pebble roughness
+term; the former 1.1/0.35 m substitutes allowed undersampled detail. Eligibility
+transitions are continuous rather than hard comparisons of filtered height.
+These changes address physical scale and aliasing; they do not create resolved
+rocks, roots, puddles, erosion or a dynamic wetness solver.

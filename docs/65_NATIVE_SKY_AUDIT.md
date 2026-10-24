@@ -4,6 +4,68 @@
 Scope: sky, background stars, clouds and aurora. The Bevy client remains runnable;
 its implementation is evidence of existing mechanisms, not a visual oracle.
 
+
+## WORLD10 shared cloud-density review (2026-10-24)
+
+Native volumetric clouds now upload a body-fixed, periodic 16.384 km R8 density
+field through the existing resolved cloud policy. Four continuous periodic
+noise octaves are threshold-eroded and squared before filtering; all quality levels retain mips of
+one canonical 128-cubed source. The common volume mean normalizes density;
+weather alpha modulates column amount and the sine vertical profile remains.
+Mean normalization is volumetric before mip quantization; it does not preserve
+every individual local column.
+This is an authored optical field, not a simulated weather state. Animation
+uses simulation-time rotation, shared with the weather phase.
+
+Resolved volumetric Low/Medium/High retain 32/64/128-cubed texture chains
+(37,449 / 299,593 / 2,396,745 bytes). Native Low normally resolves to the cheaper
+non-volume path; disabled/non-volume modes do not bake or allocate this field.
+A one-byte placeholder keeps the bind interface valid. The 176-byte cloud frame
+ABI is unchanged; its spare viewport component carries inverse density mean.
+Existing weather allocations are separate. Three-dimensional density is sampled
+by primary, surface-shadow, terrain-shadow and reflected consumers, with
+explicit mip selection from their actual integration-step footprint.
+
+The retained extinction is 0.0006 per metre at unit density. It is derived from
+authored liquid mass 0.004 g/m³, 10 µm effective radius, water density 1000 kg/m³
+and the geometric-optics relation beta = 3 LWC / (2 rho r). This is a thin-liquid
+prior, not a measurement of this planet. The helper rejects non-finite and
+invalid inputs. Increasing extinction tenfold was visually rejected; it is
+not retained. See the liquid-water optical-depth relation in the
+[ECMWF IFS documentation, section 3.7.4](https://www.ecmwf.int/sites/default/files/elibrary/2021/81269-ifs-documentation-cy47r3-part-ii-data-assimilation_1.pdf).
+
+The cloud's diffuse source now integrates extinction along an outward
+hemisphere quadrature. Isotropic scattering of uniform external sky over a
+2*pi hemisphere contributes one half of that radiance before self-occlusion;
+the old unattenuated full-sphere ambient overlit interiors. Existing resolved
+sun budgets bound this work (0/2/4 directions and taps). Zero taps retains the
+unoccluded half-hemisphere closure. Direct stars retain the existing phase and
+Beer-Lambert transport. This is single scattering with an isotropic diffuse
+boundary approximation, not a multiple-scattering solution or a complete
+angular sky convolution. No ad hoc RGB cloud tint is added.
+
+Constant-density primary/reflected transport and four depth-dependent diffuse
+visibility probes have independent numerical oracles. A native ignored GPU
+fixture additionally reads the uploaded nonconstant density field and compares
+16 rays across four consumers against a fine f64 column integral. See doc 77
+for the actual executed results and tolerances. The tested 16 vertical columns
+across four consumers have maximum absolute transmittance error 0.001449
+against 8,192-step f64 Simpson integration (24 GPU midpoints, limit 0.003);
+this is not an all-ray error envelope. Density-field baking has a
+separate benchmark; it is startup work, not frame time.
+
+The visual approach follows field/transport separation described in Guerrilla's
+[Nubis](https://www.guerrilla-games.com/read/nubis-realtime-volumetric-cloudscapes-in-a-nutshell)
+and [Nubis Evolved](https://www.guerrilla-games.com/read/nubis-evolved), with an
+independent implementation. Their production-cloud quality is not claimed.
+A tested second-order experiment was rejected for quadrature artefacts and
+cost; no second-order source or enlarged frame ABI is retained. Flat sky,
+finite-distance aerial transport, coupling diffuse surface light to cloud
+occlusion, full atmospheric/cloud multiple scattering and cross-platform
+visual acceptance remain open. `multiple_scattering` in the review profile is
+an existing atmosphere request, not evidence those native features are complete.
+
+
 ## Inventory and reuse decisions
 
 | Effect | Existing source | Native state before this follow-up | Reuse boundary |

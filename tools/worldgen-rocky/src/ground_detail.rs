@@ -132,8 +132,8 @@ pub(crate) fn sample(dir: [f64; 3], radius_m: f64, seed: u64, texel_m: f64) -> G
     });
     let weights = dir.map(|v| v.abs().powi(8));
     let sum: f64 = weights.iter().sum();
-    // Exact Nyquist limit: one destination texel per source footprint before page mips.
-    let lod = (texel_m * SIDE as f64 / SWATCH_WIDTH_M)
+    // Filter source wavelengths shorter than two destination texels.
+    let lod = (2.0 * texel_m * SIDE as f64 / SWATCH_WIDTH_M)
         .max(1.0)
         .log2();
     let projections = [[p[2], p[1]], [p[0], p[2]], [p[0], p[1]]];

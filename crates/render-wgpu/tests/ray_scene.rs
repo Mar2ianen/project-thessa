@@ -2142,7 +2142,7 @@ fn raster_environment_broadens_with_material_roughness() {
     let backend = backend(RayTracingRequest::Off).unwrap();
     let settings = backend.resolve_graphics(&requested(RayTracingRequest::Off));
     let grid = environment(64, 32, |column, _| {
-        if column < 4 || column >= 60 {
+        if !(4..60).contains(&column) {
             [1.0, 0.0, 0.0]
         } else {
             [0.0, 0.0, 1.0]

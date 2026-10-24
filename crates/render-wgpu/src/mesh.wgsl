@@ -48,6 +48,11 @@ fn mesh_environment(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f3
     if(!env_enabled()){return ambient/OCEAN_PI*response.reflectance*occlusion;}
     return response.radiance*occlusion;
 }
+// A smooth/normal-mapped normal cannot move light across the actual sheet.
+fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3<f32>)->vec2<f32> {
+    let shading=dot(normal,light_direction);let side=dot(geometry,light_direction);
+    return vec2(select(0.0,max(shading,0.0),side>0.0),select(0.0,max(-shading,0.0),side<0.0));
+}
 @fragment fn fragment(in:Output,@builtin(front_facing) front:bool)->@location(0) vec4<f32> {
     if (!MESH_ALL_DOUBLE_SIDED && !front && material.double_sided==0u) { discard; }
     var normal=normalize(in.normal)*select(-1.0,1.0,front);
@@ -73,11 +78,11 @@ fn mesh_environment(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f3
     var visibility:array<f32,3>;
     for (var i=0u;i<3u;i++) {
         if (any(light.colors[i].rgb>vec3(0.0))) {
-            let cosine=dot(normal,light.directions[i].xyz);
-            let shadow_normal=select(receiver_normal,-receiver_normal,transmission>0.0 && dot(receiver_normal,light.directions[i].xyz)<0.0);
+            let cosines=mesh_diffuse_cosines(normal,receiver_normal,light.directions[i].xyz);
+            let shadow_normal=select(receiver_normal,-receiver_normal,dot(receiver_normal,light.directions[i].xyz)<0.0);
             visibility[i]=surface_visibility(in.position,shadow_normal,i);
-            let fwd=(1.0-transmission)*max(cosine,0.0);
-            let bwd=transmission*max(-cosine,0.0);
+            let fwd=(1.0-transmission)*cosines.x;
+            let bwd=transmission*cosines.y;
             direct_reflect+=light.colors[i].rgb*fwd*visibility[i];
             direct_transmit+=light.colors[i].rgb*bwd*visibility[i];
         }
@@ -100,7 +105,7 @@ fn mesh_environment(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f3
     if (material.reflections!=0u) {
         radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
         for (var i=0u;i<3u;i++) {
-            if (any(light.colors[i].rgb>vec3(0.0))) {
+            if (any(light.colors[i].rgb>vec3(0.0)) && dot(receiver_normal,light.directions[i].xyz)>0.0) {
                 radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,light.colors[i].rgb,roughness,f0)*visibility[i];
             }
         }

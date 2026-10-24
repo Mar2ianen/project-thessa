@@ -81,7 +81,8 @@ The checked-in vertical slice currently contains:
   survey-only prototype consumer through the existing opaque mesh/shadow path
   ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); the prototypes now use grounded
   folded pinnate fronds, CC0 bark/leaf material maps, geometry-baked ambient
-  visibility and thin diffuse leaf scattering (WORLD09). Immutable plants can
+  visibility and thin diffuse leaf scattering. WORLD10 adds curved indexed pinnae,
+  a lower asymmetric fork and roughness-filtered mesh environment response. Immutable plants can
   participate in opt-in TAA; moving meshes and water remain masked. Geometry
   and GPU cost increase; reference matching and visual acceptance remain open. An optional default-off near-eye
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
@@ -96,7 +97,7 @@ The checked-in vertical slice currently contains:
   physical obstacle ownership remain unimplemented.
   An opt-in [surface review profile](data/graphics/surface-showcase.toml) enables
   the experimental location, PBR Neutral display and 25 m near-shadow cover (TAA off);
-  optional 4× MSAA is available at substantial GPU cost;
+  the review profile now selects 4× MSAA at substantial GPU cost;
   [doc 77](docs/77_NATIVE_SURFACE_SHOWCASE.md) gives the fixed-site launch command
   and remaining quality/performance limits.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical

@@ -1271,7 +1271,7 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
     ];
     let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * 0.78, radius));
     tapered_limb(mesh, [0.0; 3], [0.0, 1.0, 0.0], 16, &trunk_rings);
-    let terminals = [[-1.15, 7.95, -0.20], [1.15, 7.95, 0.20]];
+    let terminals = [[-1.30, 7.95, -0.20], [1.30, 7.95, 0.20]];
     for terminal in terminals {
         let base = [0.0, 5.90, 0.0];
         let axis = crate::lod::sub(terminal, base);

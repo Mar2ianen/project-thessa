@@ -39,8 +39,17 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     }
     return normal;
 }
+override MESH_ALL_DOUBLE_SIDED:bool=false;
+override MESH_ENV_SAMPLES:u32=16u;
+override MESH_CLOUD_DIRECTIONS:u32=4u;
+fn mesh_environment(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32> {
+    let budget=vec3<u32>(MESH_CLOUD_DIRECTIONS,min(MESH_CLOUD_DIRECTIONS,max(1u,u32(cloud_frame.deck.w))),1u);
+    let response=env_specular_response(position,normal,eye,roughness,f0,ambient,MESH_ENV_SAMPLES,budget);
+    if(!env_enabled()){return ambient/OCEAN_PI*response.reflectance*occlusion;}
+    return response.radiance*occlusion;
+}
 @fragment fn fragment(in:Output,@builtin(front_facing) front:bool)->@location(0) vec4<f32> {
-    if (!front && material.double_sided==0u) { discard; }
+    if (!MESH_ALL_DOUBLE_SIDED && !front && material.double_sided==0u) { discard; }
     var normal=normalize(in.normal)*select(-1.0,1.0,front);
     let dx=dpdx(in.position); let dy=dpdy(in.position);
     // Match terrain receivers: PCF depth gradients and normal offsets follow

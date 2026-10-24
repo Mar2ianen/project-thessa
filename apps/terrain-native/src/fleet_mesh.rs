@@ -1595,7 +1595,8 @@ mod tests {
         };
         let image = render(&scene, &mut meshes, 320, 240);
         assert_eq!(meshes.draw_stats().instances, 3);
-        assert_eq!(meshes.draw_stats().draw_calls, 5);
+        // One primary primitive and one primitive for each of the two fleet shapes.
+        assert_eq!(meshes.draw_stats().draw_calls, 3);
         assert_eq!(meshes.source_publications, 1);
         assert_eq!(meshes.epoch_withheld, 0);
         let colored = |bytes: &[u8], left: bool| {

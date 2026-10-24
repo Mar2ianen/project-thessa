@@ -616,6 +616,7 @@ fn cloud_with_extinction(
         frame,
         weather: texture.create_view(&Default::default()),
         sampler: backend.device.create_sampler(&Default::default()),
+        ..thessa_render_wgpu::clouds::CloudBinding::disabled(&backend.device)
     }
 }
 

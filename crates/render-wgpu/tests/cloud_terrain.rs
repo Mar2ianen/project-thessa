@@ -166,6 +166,7 @@ fn scene(
         frame,
         weather: weather.create_view(&Default::default()),
         sampler: backend.device.create_sampler(&Default::default()),
+        ..CloudBinding::disabled(&backend.device)
     };
     let mut environment = EnvironmentBinding::new(&backend.device);
     environment.set_clouds(clouds.clone());

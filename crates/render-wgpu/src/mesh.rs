@@ -493,7 +493,16 @@ impl MeshRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fragment"),
-                compilation_options: Default::default(),
+                // Opaque two-sided populations need no discard. Specialization
+                // lets the driver reject hidden foliage before expensive shading.
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("MESH_ALL_DOUBLE_SIDED", f64::from(source.materials.iter().all(|m| m.double_sided))),
+                        ("MESH_ENV_SAMPLES", match quality { thessa_graphics::Quality::Low => 4.0, thessa_graphics::Quality::Medium => 8.0, thessa_graphics::Quality::High => 16.0 }),
+                        ("MESH_CLOUD_DIRECTIONS", match quality { thessa_graphics::Quality::Low => 1.0, thessa_graphics::Quality::Medium => 2.0, thessa_graphics::Quality::High => 4.0 }),
+                    ],
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,

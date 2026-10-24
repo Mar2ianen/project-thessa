@@ -98,8 +98,19 @@ fn understory_colonies_are_bounded_continuous_and_world_addressed() {
             let near = crate::lod::normalize([1.0, 0.2, (i + 1) as f64 * 1e-8]);
             let density = understory_patch_density(seed, RADIUS_M, direction);
             assert_eq!(density, understory_patch_density(seed, RADIUS_M, direction));
-            assert!((0.15..=1.85).contains(&density));
-            assert!((density - understory_patch_density(seed, RADIUS_M, near)).abs() < 0.02);
+            assert!((0.0..=1.85).contains(&density));
+            // Cubic lattice derivative <= 3, coverage smoothstep <= 1.5/0.4.
+            let distance_cells = direction
+                .into_iter()
+                .zip(near)
+                .map(|(a, b)| (a - b).abs())
+                .sum::<f64>()
+                * RADIUS_M
+                / UNDERSTORY_PATCH_WAVELENGTH_M;
+            let bound = UNDERSTORY_PATCH_MAX * (1.5 / 0.4) * 3.0 * distance_cells;
+            assert!(
+                (density - understory_patch_density(seed, RADIUS_M, near)).abs() <= bound + 1e-12
+            );
             min = min.min(density);
             max = max.max(density);
         }

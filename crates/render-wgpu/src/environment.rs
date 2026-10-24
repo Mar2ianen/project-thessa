@@ -205,7 +205,7 @@ impl EnvironmentBinding {
         self.clouds = binding;
     }
 
-    pub fn cloud_entries(&self) -> [wgpu::BindGroupEntry<'_>; 3] {
+    pub fn cloud_entries(&self) -> [wgpu::BindGroupEntry<'_>; 5] {
         self.clouds.entries()
     }
 

@@ -3,17 +3,30 @@ struct CloudFrame { camera_radius:vec4<f32>, deck:vec4<f32>, wind:vec4<f32>, vie
 @group(0) @binding(5) var<uniform> cloud_frame:CloudFrame;
 @group(0) @binding(6) var cloud_weather:texture_2d<f32>;
 @group(0) @binding(7) var cloud_sampler:sampler;
+@group(0) @binding(10) var cloud_detail:texture_3d<f32>;
+@group(0) @binding(11) var cloud_detail_sampler:sampler;
 const CLOUD_PI:f32=3.141592653589793;
 struct CloudSegment { range:vec2<f32>, bottom:f32, thickness:f32, layer:u32 }
 fn cloud_sphere(o:vec3<f32>,d:vec3<f32>,r:f32)->vec2<f32> {
     let b=dot(o,d);let h=length(o);let discriminant=b*b-(h-r)*(h+r);
     if(discriminant<0.0){return vec2(1.0,-1.0);}let root=sqrt(discriminant);return vec2(-b-root,-b+root);
 }
-fn cloud_density(p:vec3<f32>,piece:CloudSegment)->f32 {
+fn cloud_density(p:vec3<f32>,piece:CloudSegment,footprint_m:f32)->f32 {
     let radius=length(p);let h=(radius-piece.bottom)/piece.thickness;if(h<=0.0 || h>=1.0){return 0.0;}
     let direction=p/radius;let phase=select(cloud_frame.wind.x,cloud_frame.viewport.z,piece.layer!=0u);
     let uv=vec2(atan2(direction.z,direction.x)/(2.0*CLOUD_PI)+phase,0.5-asin(clamp(direction.y,-1.0,1.0))/CLOUD_PI);
-    return textureSampleLevel(cloud_weather,cloud_sampler,uv,0.0).a*pow(max(0.0,sin(CLOUD_PI*h)),0.75);
+    var detail=1.0;
+    if(cloud_frame.viewport.w>0.0){
+        // Shared authored 16.384 km periodic field. Mips integrate its density,
+        // rather than aliasing sub-step cloud cells on long orbital chords.
+        let period_m=16384.0;
+        let angle=phase*2.0*CLOUD_PI;let c=cos(angle);let s=sin(angle);
+        let advected=vec3(c*p.x-s*p.z,p.y,s*p.x+c*p.z);
+        let voxel_m=period_m/f32(textureDimensions(cloud_detail).x);
+        let lod=log2(max(1.0,footprint_m/voxel_m));
+        detail=textureSampleLevel(cloud_detail,cloud_detail_sampler,advected/period_m,lod).r*cloud_frame.viewport.w;
+    }
+    return textureSampleLevel(cloud_weather,cloud_sampler,uv,0.0).a*pow(max(0.0,sin(CLOUD_PI*h)),0.75)*detail;
 }
 fn cloud_segments(origin:vec3<f32>,direction:vec3<f32>)->array<CloudSegment,4> {
     var pieces:array<CloudSegment,4>;
@@ -42,7 +55,7 @@ fn cloud_column_tau(origin:vec3<f32>,direction:vec3<f32>,distance:f32,taps:u32)-
     for(var segment=0u;segment<4u;segment++) {
         let piece=pieces[segment];let a=piece.range.x;let b=min(distance,piece.range.y);if(b<=a){continue;}
         let step=(b-a)/f32(taps);let extinction=cloud_frame.deck.z/select(1.0,3.0,piece.layer!=0u);
-        for(var j=0u;j<taps;j++) {tau+=cloud_density(origin+direction*(a+(f32(j)+0.5)*step),piece)*extinction*step;}
+        for(var j=0u;j<taps;j++) {tau+=cloud_density(origin+direction*(a+(f32(j)+0.5)*step),piece,step)*extinction*step;}
     }return tau;
 }
 fn cloud_transmittance_to(position:vec3<f32>,direction:vec3<f32>,distance:f32)->f32 {
@@ -71,8 +84,26 @@ fn cloud_terrain_sun_visibility(position:vec3<f32>,sun:u32)->f32 {
     return exp(-cloud_column_tau(origin,direction,1e30,max(8u,u32(cloud_frame.deck.w))));
 }
 fn cloud_hg(g:f32,c:f32)->f32 {return (1.0-g*g)/(4.0*CLOUD_PI*pow(max(0.0001,1.0+g*g-2.0*g*c),1.5));}
+// External diffuse sky is isotropic over the outward hemisphere. Its
+// isotropic scattering source is L/(4*pi) integrated over that 2*pi domain.
+// Integrate actual cloud extinction, rather than illuminating interiors with
+// the same unattenuated ambient as their exposed boundary.
+fn cloud_diffuse_visibility(point:vec3<f32>,taps:u32)->f32 {
+    if(taps==0u){return 0.5;}
+    let up=normalize(point);
+    let helper=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(up.y)>0.9);
+    let tangent=normalize(cross(up,helper));let bitangent=cross(up,tangent);
+    var transmission=0.0;
+    for(var i=0u;i<taps;i++) {
+        let mu=(f32(i)+0.5)/f32(taps);let phi=f32(i)*2.399963229728653;
+        let direction=up*mu+(tangent*cos(phi)+bitangent*sin(phi))*sqrt(1.0-mu*mu);
+        transmission+=exp(-cloud_optical_depth(point,direction,taps));
+    }
+    return 0.5*transmission/f32(taps);
+}
 fn cloud_source(point:vec3<f32>,direction:vec3<f32>,sun_steps:u32)->vec3<f32> {
-    var source=cloud_frame.ambient.rgb/CLOUD_PI;
+    let diffuse_taps=min(sun_steps,u32(cloud_frame.wind.z));
+    var source=cloud_frame.ambient.rgb/CLOUD_PI*cloud_diffuse_visibility(point,diffuse_taps);
     for(var sun=0u;sun<3u;sun++) {
         if(all(cloud_frame.colors[sun].rgb==vec3(0.0))){continue;}
         let light=normalize(cloud_frame.directions[sun].xyz);
@@ -94,7 +125,7 @@ fn cloud_transport_column(position:vec3<f32>,direction:vec3<f32>,view_steps:u32,
         let piece=pieces[segment];let a=piece.range.x;let b=min(stop,piece.range.y);if(b<=a){continue;}
         let count=max(1u,min(view_steps,u32(cloud_frame.deck.w)));let dt=(b-a)/f32(count);
         var density=0.0;
-        for(var i=0u;i<count;i++){density+=cloud_density(origin+direction*(a+(f32(i)+0.5)*dt),piece);}
+        for(var i=0u;i<count;i++){density+=cloud_density(origin+direction*(a+(f32(i)+0.5)*dt),piece,dt);}
         let absorb=exp(-cloud_frame.deck.z/select(1.0,3.0,piece.layer!=0u)*density*dt);
         let source=cloud_source(origin+direction*((a+b)*0.5),direction,sun_steps);
         radiance+=transmission*(1.0-absorb)*source;transmission*=absorb;
@@ -112,7 +143,7 @@ fn cloud_transport(position:vec3<f32>,direction:vec3<f32>,distance:f32)->vec4<f3
         let piece=pieces[segment];let a=piece.range.x;let b=min(stop,piece.range.y);if(b<=a){continue;}
         let count=u32(cloud_frame.deck.w);let dt=(b-a)/f32(count);let extinction=cloud_frame.deck.z/select(1.0,3.0,piece.layer!=0u);
         for(var i=0u;i<count;i++) {
-            let point=origin+direction*(a+(f32(i)+0.5)*dt);let d=cloud_density(point,piece);
+            let point=origin+direction*(a+(f32(i)+0.5)*dt);let d=cloud_density(point,piece,dt);
             if(d<=0.0){continue;}let absorb=exp(-extinction*d*dt);let source=cloud_source(point,direction,u32(cloud_frame.wind.z));
             radiance+=transmission*(1.0-absorb)*source;transmission*=absorb;if(transmission<0.0001){break;}
         }

@@ -485,25 +485,61 @@ pub(crate) fn surface_appearance_with_ground_detail(
     });
     let plant = plant.map(|c| c * (1.0 + cover_texture * 0.22));
     let mut color = mix(dry, plant, vegetation);
+    // Wetland potential is saturation/cover context, not an opaque material
+    // above resolved litter. Keep it beneath the optional measured floor.
+    let wetland = sample.wetland_potential01 * (1.0 - smooth(0.02, 0.1, sample.slope_hint));
+    let wet_ground = mix([0.20, 0.23, 0.16], [0.10, 0.26, 0.16], vegetation);
+    color = mix(color, wet_ground, wetland);
     // Resolved soil/gravel beneath canopy is a material swatch, not another
     // macro cover-noise field. Existing later covers retain their ownership.
     let mut ground_weight = 0.0;
     if let Some(ground) = ground {
         ground_weight =
-            (ecological_cover.canopy01 + ecological_cover.ground01 * 0.5) * (1.0 - exposed);
+            (ecological_cover.canopy01 * 1.30 + ecological_cover.ground01 * 0.60).clamp(0.0, 1.0)
+                * (1.0 - exposed);
+        let h_norm = (f64::from(ground.height_m)
+            / (crate::ground_detail::HEIGHT_RANGE_M as f64 * 0.5))
+            .clamp(-1.0, 1.0);
+        let q = dir.map(|v| v * field.params.radius_m);
+        let w_meso = band_weight(3.2, texel_m);
+        let w_micro = band_weight(1.1, texel_m);
+        let n_macro = rng::perlin3(field.params.seed, 6141, q[0] / 8.4, q[1] / 8.4, q[2] / 8.4);
+        let n_litter = rng::perlin3(field.params.seed, 6142, q[0] / 3.2, q[1] / 3.2, q[2] / 3.2);
+        let n_moss = rng::value_noise3(field.params.seed, 6143, q[0] / 1.1, q[1] / 1.1, q[2] / 1.1);
+
+        // Accumulated dry senescent frond / needle litter around plant colonies:
+        let litter_signal = ((n_macro * 0.40 + n_litter * 0.60) * w_meso).clamp(-1.0, 1.0);
+        let litter_warmth = [1.28, 0.96, 0.62];
+
+        // Peat and organic humus darkening in moist forest environments:
+        // Damp coastal forest soils have rich organic matter, absorbing light down to 6-10% reflectance.
+        let humus_base = 1.0 - damp * 0.38;
+        let hollow_darkening = 1.0 + (h_norm.min(0.0) * 0.35 + litter_signal.min(0.0) * 0.25);
+        let humus_factor = (humus_base * hollow_darkening).clamp(0.35, 1.0);
+
+        // Fine bryophyte (moss) colonies on moist elevated hummocks:
+        let moss_eligible = h_norm > -0.15 && damp > 0.45 && ecological_cover.canopy01 > 0.25;
+        let moss_cover = if moss_eligible {
+            smooth(0.25, 0.65, n_moss) * (h_norm + 0.15).clamp(0.0, 1.0) * w_micro * 0.45
+        } else {
+            0.0
+        };
+        let moss_linear = [0.09, 0.17, 0.04];
+
         color = std::array::from_fn(|i| {
+            let base = f64::from(ground.albedo_linear[i]);
+            let litter_gain = 1.0
+                + (h_norm.max(0.0) * 0.38 + litter_signal.max(0.0) * 0.35)
+                    * (litter_warmth[i] - 1.0);
+            let floor_raw = base * humus_factor * litter_gain;
+            let moss_term = moss_linear[i] * (base / 0.15);
+            let floor_linear = floor_raw * (1.0 - moss_cover) + moss_term * moss_cover;
             crate::ground_detail::encode_srgb(
                 crate::ground_detail::decode_srgb(color[i]) * (1.0 - ground_weight)
-                    + f64::from(ground.albedo_linear[i]) * (1.0 - damp * 0.25) * ground_weight,
+                    + floor_linear * ground_weight,
             )
         });
     }
-    // Saturated lowland soil / vegetation, not invented pond geometry. The
-    // regional drainage source is continuous; local slopes reject cliff faces.
-    let wetland = sample.wetland_potential01 * (1.0 - smooth(0.02, 0.1, sample.slope_hint));
-    let wet_ground = mix([0.20, 0.23, 0.16], [0.10, 0.26, 0.16], vegetation);
-    color = mix(color, wet_ground, wetland);
-    ground_weight *= 1.0 - wetland;
     // Elevation alone cannot replace every highland substrate with the same
     // grey rock. Actual exposure and retained ecological cover choose the mix.
     let rock = exposed.max(smooth(1900.0, 4400.0, h) * (1.0 - vegetation) * (1.0 - loose_cover));
@@ -611,7 +647,16 @@ pub(crate) fn surface_appearance_with_ground_detail(
         + substrate_roughness_delta(substrate, rock) * visible_substrate)
         .clamp(0.45, 0.98) as f32;
     if let Some(ground) = ground {
-        let floor_roughness = (ground.roughness - damp as f32 * 0.15).clamp(0.45, 0.98);
+        let h_norm = (f64::from(ground.height_m)
+            / (crate::ground_detail::HEIGHT_RANGE_M as f64 * 0.5))
+            .clamp(-1.0, 1.0);
+        let q = dir.map(|v| v * field.params.radius_m);
+        let w_meso = band_weight(3.2, texel_m);
+        let n_macro = rng::perlin3(field.params.seed, 6141, q[0] / 8.4, q[1] / 8.4, q[2] / 8.4);
+        let n_litter = rng::perlin3(field.params.seed, 6142, q[0] / 3.2, q[1] / 3.2, q[2] / 3.2);
+        let litter_signal = ((n_macro * 0.40 + n_litter * 0.60) * w_meso).clamp(-1.0, 1.0);
+        let water_film = (damp * 0.45 - h_norm * 0.32 - litter_signal * 0.18).clamp(0.0, 1.0);
+        let floor_roughness = (ground.roughness - water_film as f32 * 0.60).clamp(0.26, 0.98);
         roughness += (floor_roughness - roughness) * ground_weight as f32;
     }
     (
@@ -727,7 +772,7 @@ mod frost_tests {
     use super::*;
 
     #[test]
-    fn resolved_ground_does_not_override_water_wetland_rock_or_opaque_snow() {
+    fn resolved_ground_does_not_override_water_rock_or_opaque_snow() {
         let mut field = field();
         field.params.surface_climate.precipitation_m_yr = 1000.0;
         let dir = crate::sphere::dir_from_latlon(38.0, -171.0);
@@ -736,15 +781,11 @@ mod frost_tests {
             roughness: 0.7,
             height_m: 0.003,
         };
-        for scenario in 0..4 {
+        for scenario in 0..3 {
             let mut s = sample(285.0, 0.9);
             match scenario {
                 0 => s.height_m = -100.0,
-                1 => {
-                    s.wetland_potential01 = 1.0;
-                    s.slope_hint = 0.0;
-                }
-                2 => s.slope_hint = 10.0,
+                1 => s.slope_hint = 10.0,
                 _ => {
                     s.temperature_k = 250.0;
                     s.slope_hint = 0.0;
@@ -760,6 +801,36 @@ mod frost_tests {
             assert_eq!(legacy.vegetation, new.vegetation);
             assert_eq!(legacy.snow_cover, new.snow_cover);
         }
+    }
+
+    #[test]
+    fn saturated_litter_keeps_its_source_detail_and_normal_weight() {
+        let field = field();
+        let dir = crate::sphere::dir_from_latlon(38.0, -171.0);
+        let mut s = sample(285.0, 0.9);
+        s.wetland_potential01 = 1.0;
+        s.slope_hint = 0.0;
+        let mut ground = crate::ground_detail::GroundSample {
+            albedo_linear: [0.2, 0.1, 0.05],
+            roughness: 0.9,
+            height_m: 0.003,
+        };
+        let (a, wa) =
+            surface_appearance_with_ground_detail(&field, &s, dir, 0.024, true, Some(ground));
+        ground.albedo_linear = [0.02, 0.01, 0.005];
+        let (b, wb) =
+            surface_appearance_with_ground_detail(&field, &s, dir, 0.024, true, Some(ground));
+        assert!(
+            wa > 0.0 && wa == wb,
+            "saturation must retain resolved litter: {wa} {wb}"
+        );
+        assert!(
+            a.albedo_srgb
+                .into_iter()
+                .zip(b.albedo_srgb)
+                .all(|(a, b)| a > b)
+        );
+        assert_eq!(a.roughness, b.roughness);
     }
 
     #[test]

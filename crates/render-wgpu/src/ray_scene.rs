@@ -491,12 +491,9 @@ pub fn shader(plan: &Plan) -> String {
     )
 }
 
-/// Raster substitute for the same hook: exactly the environment term the RT
-/// miss path reproduces, in the same operand order, so toggling RT cannot
-/// change unreflected shading. `env_radiance` is the shared environment field
-/// (a real sky radiance grid when one is bound, the isotropic `ambient_lux /
-/// PI` otherwise).
-const REFLECTION_FALLBACK: &str = "fn rt_reflection(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,fresnel:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32>{return env_radiance_from(position,reflect(-eye,normal),ambient)*fresnel*occlusion;}\n";
+/// The same roughness-aware environment hook is used by raster fallback and
+/// primary RT misses. Querying geometry must not change an unobstructed sky.
+const REFLECTION_FALLBACK: &str = "fn rt_reflection(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,fresnel:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32>{return mesh_environment(position,normal,eye,f0,roughness,ambient,occlusion);}\n";
 
 pub fn fallback_shader() -> String {
     format!(

@@ -462,12 +462,12 @@ pub fn scatter_region(
 }
 
 /// Shared by every query window and quality tier; no cube-face seed or camera.
-/// The symmetric [0.15, 1.85] modulation preserves the ensemble mean density.
+/// [0, 1.85] occupancy has true gaps and dense colonies at the same fixed scale.
 fn understory_patch_density(seed: u64, radius_m: f64, direction: [f64; 3]) -> f64 {
     let p = direction.map(|v| v * (radius_m / UNDERSTORY_PATCH_WAVELENGTH_M));
     let noise = rng::value_noise3(seed, 437, p[0], p[1], p[2]);
-    let occupancy = crate::appearance::smooth(-0.5, 0.5, noise);
-    0.15 + (UNDERSTORY_PATCH_MAX - 0.15) * occupancy
+    let occupancy = crate::appearance::smooth(-0.2, 0.2, noise);
+    UNDERSTORY_PATCH_MAX * occupancy
 }
 
 /// Fallible growth for the large descriptor/instance buffers, not a guarantee

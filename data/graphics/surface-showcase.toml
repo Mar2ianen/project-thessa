@@ -4,7 +4,7 @@ version = 1
 preset = "high"
 
 [renderer]
-msaa_samples = 1
+msaa_samples = 4
 tone_mapping = "pbr_neutral"
 terrain_ground_detail = true
 surface_quality = "high"
@@ -21,7 +21,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 13.25
+exposure_ev100 = 13.0
 fleet_meshes = true
 fleet_quality = "high"
 
@@ -34,7 +34,7 @@ enabled = true
 quality = "high"
 aerial_perspective = true
 density_scale = 2.0
-multiple_scattering = false
+multiple_scattering = true
 eclipses = true
 multi_star = true
 limb_scattering = true

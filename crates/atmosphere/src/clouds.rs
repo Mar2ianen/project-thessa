@@ -567,6 +567,112 @@ fn fbm_bake(seed: u64, u: f64, v: f64, base_freq: f64) -> f64 {
     sum
 }
 
+/// Periodic, authored mesoscale density field, in body-fixed metres. Weather
+/// still owns the column amount; dividing by `mean` preserves its volume mean.
+/// This is a procedural optical prior, not a prognostic weather simulation.
+pub const DENSITY_DETAIL_PERIOD_M: f32 = 16_384.0;
+
+/// Visible-light geometric-optics limit Q_ext ≈ 2 for liquid droplets.
+/// Water density is 1000 kg/m³; arguments are kg/m³ and metres respectively.
+pub const fn liquid_water_extinction_per_m(
+    water_kg_m3: f64,
+    effective_radius_m: f64,
+) -> Option<f64> {
+    if !water_kg_m3.is_finite()
+        || water_kg_m3 < 0.0
+        || !effective_radius_m.is_finite()
+        || effective_radius_m <= 0.0
+    {
+        return None;
+    }
+    let extinction = 1.5 * water_kg_m3 / (1000.0 * effective_radius_m);
+    if extinction.is_finite() {
+        Some(extinction)
+    } else {
+        None
+    }
+}
+
+pub struct DensityDetail {
+    /// R8 linear density mips, largest first, each with half the side length.
+    pub levels: Vec<Vec<u8>>,
+    pub mean: f32,
+}
+
+pub fn bake_density_detail(seed: u64, side: u32) -> Result<DensityDetail, &'static str> {
+    if !(16..=128).contains(&side) || !side.is_power_of_two() {
+        return Err("cloud density detail requires a power-of-two side in 16..128");
+    }
+    let noise = |p: [f64; 3], cells: i32, octave: u64| {
+        let p = p.map(|v| v * f64::from(cells));
+        let i = p.map(|v| v.floor() as i32);
+        let f = p.map(|v| smootherstep_bake(v - v.floor()));
+        let mut sum = 0.0;
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let iz = (i[2] + z).rem_euclid(cells) as u64;
+                    let value = hash2_bake(
+                        seed ^ octave ^ iz.wrapping_mul(0x94D0_49BB_1331_11EB),
+                        (i[0] + x).rem_euclid(cells),
+                        (i[1] + y).rem_euclid(cells),
+                    );
+                    let weight = [x, y, z]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(axis, corner)| if corner == 0 { 1.0 - f[axis] } else { f[axis] })
+                        .product::<f64>();
+                    sum += value * weight;
+                }
+            }
+        }
+        sum
+    };
+    // Shape before filtering: every quality retains mips of the same field.
+    let n = 128usize;
+    let pixels: Vec<u8> = (0..n * n * n)
+        .map(|i| {
+            let p = [i % n, i / n % n, i / (n * n)].map(|v| (v as f64 + 0.5) / n as f64);
+            let value = 0.45 * noise(p, 4, 0)
+                + 0.30 * noise(p, 8, 101)
+                + 0.15 * noise(p, 16, 202)
+                + 0.10 * noise(p, 32, 303);
+            (value.powi(3) * 255.0).round() as u8
+        })
+        .collect();
+    let mean = pixels.iter().map(|&v| f64::from(v)).sum::<f64>() / (pixels.len() as f64 * 255.0);
+    if !mean.is_finite() || mean <= 0.0 {
+        return Err("cloud density detail has no finite mass");
+    }
+    let mut levels = vec![pixels];
+    let mut n = n;
+    while n > 1 {
+        let half = n / 2;
+        let previous = levels.last().unwrap();
+        let pixels = (0..half * half * half)
+            .map(|i| {
+                let [x, y, z] = [i % half, i / half % half, i / (half * half)].map(|v| v * 2);
+                let mut sum = 0u32;
+                for dz in 0..2 {
+                    for dy in 0..2 {
+                        for dx in 0..2 {
+                            sum += u32::from(previous[((z + dz) * n + y + dy) * n + x + dx]);
+                        }
+                    }
+                }
+                ((sum + 4) / 8) as u8
+            })
+            .collect();
+        levels.push(pixels);
+        n = half;
+    }
+    levels.drain(..(128 / side).ilog2() as usize);
+    Ok(DensityDetail {
+        levels,
+        mean: mean as f32,
+    })
+}
+
 /// Single deck bake. Alpha = coverage-shaped domain-warped fBm (EVE-style weather map);
 /// RGB near-white with slight density shading.
 /// Canonical production implementation shared across client beauty rendering and testing harnesses.
@@ -621,6 +727,49 @@ pub fn bake_clouds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn liquid_water_extinction_has_the_expected_mass_and_radius_scaling() {
+        let extinction = liquid_water_extinction_per_m(0.00004, 0.00001).unwrap();
+        assert!((extinction - 0.006).abs() < 1e-12);
+        assert_eq!(liquid_water_extinction_per_m(0.0, 0.00001), Some(0.0));
+        assert_eq!(
+            liquid_water_extinction_per_m(0.00008, 0.00002),
+            Some(extinction)
+        );
+        for (mass, radius) in [
+            (-1.0, 1.0),
+            (f64::NAN, 1.0),
+            (1.0, 0.0),
+            (1.0, f64::INFINITY),
+        ] {
+            assert!(liquid_water_extinction_per_m(mass, radius).is_none());
+        }
+    }
+
+    #[test]
+    fn density_detail_is_bounded_reproducible_and_preserves_its_column_mean() {
+        for n in [0, 15, 17, 256] {
+            assert!(bake_density_detail(1, n).is_err());
+        }
+        let a = bake_density_detail(0x5eed2026, 32).unwrap();
+        assert_eq!(
+            a.levels,
+            bake_density_detail(0x5eed2026, 32).unwrap().levels
+        );
+        assert_ne!(a.levels[0], bake_density_detail(2, 32).unwrap().levels[0]);
+        assert!(a.mean > 0.01 && a.mean < 0.5);
+        assert!(a.levels[0].iter().max().unwrap() - a.levels[0].iter().min().unwrap() > 32);
+        assert!(a.levels[0].iter().any(|&v| v > 64));
+        let mut side = 32usize;
+        for (level, pixels) in a.levels.iter().enumerate() {
+            assert_eq!(pixels.len(), side.pow(3));
+            let mean =
+                pixels.iter().map(|&v| f64::from(v) / 255.0).sum::<f64>() / pixels.len() as f64;
+            assert!((mean - f64::from(a.mean)).abs() <= (level as f64 + 1.0) / 510.0);
+            side /= 2;
+        }
+    }
 
     fn thessa_slab() -> CloudSlab {
         // Thessa R = 3200 km, low deck ~1.008..1.014 (visual placement,

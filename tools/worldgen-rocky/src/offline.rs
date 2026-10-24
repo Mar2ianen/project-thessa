@@ -1187,10 +1187,10 @@ fn fern_clump(mesh: &mut PlantMesh) {
     const FRONDS: usize = 13;
     // Explicit non-random per-frond variation (length, arch height, base height).
     const LENGTH_M: [f64; FRONDS] = [
-        0.86, 1.04, 0.92, 1.10, 0.80, 0.98, 0.75, 1.06, 0.88, 1.00, 0.72, 0.94, 0.82,
+        1.25, 1.50, 1.65, 1.35, 1.05, 1.55, 0.75, 1.45, 0.95, 1.65, 0.65, 1.35, 0.85,
     ];
     const HEIGHT_M: [f64; FRONDS] = [
-        0.56, 0.64, 0.52, 0.60, 0.58, 0.66, 0.54, 0.62, 0.50, 0.58, 0.60, 0.55, 0.57,
+        1.05, 0.95, 0.72, 1.10, 1.25, 0.85, 1.45, 1.00, 1.30, 0.68, 1.40, 1.05, 1.35,
     ];
     const BASE_Y_M: [f64; FRONDS] = [
         0.0, 0.02, 0.01, 0.03, 0.015, 0.005, 0.025, 0.0, 0.018, 0.008, 0.022, 0.012, 0.006,
@@ -1199,8 +1199,8 @@ fn fern_clump(mesh: &mut PlantMesh) {
         fern_frond(
             mesh,
             0.37 + i as f64 * GOLDEN_ANGLE,
-            LENGTH_M[i] * 1.9,
-            HEIGHT_M[i] * 1.45,
+            LENGTH_M[i],
+            HEIGHT_M[i],
             BASE_Y_M[i],
         );
     }
@@ -1296,13 +1296,14 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
     });
 
     // The two crowns share the same 48-frond budget as the single umbrella.
-    const TIERS: [(usize, f64, f64, f64); 4] = [
-        (6, 7.98, 4.05, 0.00), // Youngest ascending apex fronds per terminal
-        (9, 7.78, 4.55, 0.35), // Primary spreading canopy fronds
-        (6, 7.48, 4.15, 0.72), // Mature lower fronds
-        (3, 7.18, 3.45, 1.15), // Drooping mantle / skirt fronds
+    // Count, attachment height, reach, arch rise, terminal drop, azimuth.
+    const TIERS: [(usize, f64, f64, f64, f64, f64); 4] = [
+        (6, 7.98, 3.00, 1.80, 0.40, 0.00), // Ascending young fronds
+        (9, 7.78, 4.55, 1.60, 1.65, 0.35), // Spreading mature fronds
+        (6, 7.48, 4.15, 0.60, 2.60, 0.72), // Descending outer fronds
+        (3, 7.18, 2.00, 0.10, 3.30, 1.15), // Hanging dry mantle
     ];
-    for &(count, base_y, reach_base, phase_offset) in &TIERS {
+    for &(count, base_y, reach_base, rise, drop, phase_offset) in &TIERS {
         if base_y == 7.18 {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
@@ -1319,7 +1320,7 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],
                 );
-                crown_frond(mesh, angle, base, reach);
+                crown_frond(mesh, angle, base, reach, rise, drop);
             }
         }
     }
@@ -1360,7 +1361,8 @@ fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, ba
                     ),
                 )
             });
-            pinna(mesh, nodes, radial, length * 0.145, length * 0.035);
+            let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
+            pinna(mesh, nodes, tangent, length * 0.145, length * 0.035);
         }
     }
 }
@@ -1391,7 +1393,14 @@ fn reed_blade(
 
 /// One arching crown frond: rises from the trunk, then droops outward. Broad
 /// enough to present a real silhouette from both above and eye level.
-fn crown_frond(mesh: &mut PlantMesh, angle: f64, base: [f64; 3], reach_m: f64) {
+fn crown_frond(
+    mesh: &mut PlantMesh,
+    angle: f64,
+    base: [f64; 3],
+    reach_m: f64,
+    rise_m: f64,
+    drop_m: f64,
+) {
     let (radial, lateral) = azimuth_frame(angle);
     let at = |t: f64| {
         offset(
@@ -1400,7 +1409,7 @@ fn crown_frond(mesh: &mut PlantMesh, angle: f64, base: [f64; 3], reach_m: f64) {
                 scaled(radial, t * reach_m),
                 [
                     0.0,
-                    reach_m * (0.34 * (std::f64::consts::PI * t).sin() - 0.35 * t * t),
+                    rise_m * (std::f64::consts::PI * t).sin() - drop_m * t * t,
                     0.0,
                 ],
             ),
@@ -1426,7 +1435,8 @@ fn crown_frond(mesh: &mut PlantMesh, angle: f64, base: [f64; 3], reach_m: f64) {
                     ),
                 )
             });
-            pinna(mesh, nodes, radial, length * 0.125, length * 0.035);
+            let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
+            pinna(mesh, nodes, tangent, length * 0.125, length * 0.035);
         }
     }
 }
@@ -1445,8 +1455,8 @@ fn azimuth_frame(angle: f64) -> ([f64; 3], [f64; 3]) {
     ([cos, 0.0, sin], [-sin, 0.0, cos])
 }
 
-/// Four real faces around a raised midrib, at the same triangle budget as the
-/// former two-segment strip. The material's long U axis follows base to tip.
+/// Rounded eight-edge lamina around a raised midrib. Nine shared vertices
+/// retain the curved outline and continuous normals with less vertex traffic.
 fn pinna(
     mesh: &mut PlantMesh,
     nodes: [[f64; 3]; 3],
@@ -1454,19 +1464,69 @@ fn pinna(
     half_width: f64,
     fold_m: f64,
 ) {
-    let left = offset(nodes[1], scaled(lateral, half_width));
-    let right = offset(nodes[1], scaled(lateral, -half_width));
-    let ridge = offset(nodes[1], [0.0, fold_m, 0.0]);
-    let points = [nodes[0], left, ridge, right, nodes[2]];
-    let uv = [[0.0, 0.5], [0.5, 0.0], [0.5, 0.5], [0.5, 1.0], [1.0, 0.5]];
-    for indices in [[0, 1, 2], [0, 2, 3], [2, 1, 4], [2, 4, 3]] {
-        textured_triangle(
-            mesh,
-            indices.map(|i| points[i]),
-            indices.map(|i| uv[i]),
-            [0.0, 1.0, 0.0],
-        );
+    let mut normal = crate::lod::normalize(crate::lod::cross(
+        lateral,
+        crate::lod::sub(nodes[2], nodes[0]),
+    ));
+    if normal[1] < 0.0 {
+        normal = scaled(normal, -1.0);
     }
+    let at = |t: f64| {
+        std::array::from_fn(|axis| {
+            let control = 2.0 * nodes[1][axis] - 0.5 * (nodes[0][axis] + nodes[2][axis]);
+            (1.0 - t).powi(2) * nodes[0][axis]
+                + 2.0 * t * (1.0 - t) * control
+                + t * t * nodes[2][axis]
+        })
+    };
+    let uv = [
+        [0.0, 0.5],
+        [0.25, 0.0],
+        [0.5, 0.0],
+        [0.75, 0.0],
+        [1.0, 0.5],
+        [0.75, 1.0],
+        [0.5, 1.0],
+        [0.25, 1.0],
+        [0.5, 0.5],
+    ];
+    let points: [[f64; 3]; 9] = std::array::from_fn(|i| {
+        if i == 8 {
+            return offset(nodes[1], scaled(normal, fold_m));
+        }
+        let t = uv[i][0] as f64;
+        let side = 1.0 - 2.0 * uv[i][1] as f64;
+        offset(
+            at(t),
+            scaled(
+                lateral,
+                side * half_width * (std::f64::consts::PI * t).sin(),
+            ),
+        )
+    });
+    let first = mesh.positions.len() as u32;
+    let mut normals = [[0.0; 3]; 9];
+    for edge in 0..8 {
+        let mut triangle = [8, edge, (edge + 1) % 8];
+        let cross = crate::lod::cross(
+            crate::lod::sub(points[edge], points[8]),
+            crate::lod::sub(points[(edge + 1) % 8], points[8]),
+        );
+        let cross = if crate::lod::dot(cross, normal) < 0.0 {
+            triangle.swap(1, 2);
+            scaled(cross, -1.0)
+        } else {
+            cross
+        };
+        for i in triangle {
+            normals[i] = offset(normals[i], cross);
+            mesh.indices.push(first + i as u32);
+        }
+    }
+    mesh.positions.extend(points.map(|p| p.map(|v| v as f32)));
+    mesh.normals
+        .extend(normals.map(|n| crate::lod::normalize(n).map(|v| v as f32)));
+    mesh.uvs.extend(uv);
 }
 
 /// Flat tapered strip through `nodes`. `lateral` is a unit horizontal axis and
@@ -2030,8 +2090,11 @@ mod tests {
         let dry = mesh.senescent.as_ref().unwrap();
         assert!(dry.first_vertex > mesh.stem.as_ref().unwrap().vertex_count);
         assert_eq!(
-            (mesh.positions.len() - dry.first_vertex as usize) / 3,
-            6 * (16 + 18 * 2 * 4)
+            mesh.indices
+                .chunks_exact(3)
+                .filter(|triangle| triangle[0] >= dry.first_vertex)
+                .count(),
+            6 * (16 + 18 * 2 * 8)
         );
         for start in [0, 1, mesh.positions.len() as u32, u32::MAX] {
             let mut broken = mesh.clone();
@@ -2140,7 +2203,7 @@ mod tests {
         mesh.normals.clear();
         mesh.indices.clear();
         mesh.stem = None;
-        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0);
+        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0, 0.68, 0.70);
         // A 2 m pinnate frond has pinnae spreading to > 35 cm half-width in the mid-section:
         assert!(covered_from_above(&mesh, 0.9, 0.18));
         assert!(covered_from_above(&mesh, 0.9, -0.18));
@@ -2245,9 +2308,9 @@ mod tests {
             assert!(mesh.positions.len() <= MAX_PLANT_PROTOTYPE_VERTICES);
             let triangles = mesh.indices.len() / 3;
             let (minimum, ceiling) = match mesh.kind {
-                ScatterKind::FernClump => (1760, 1780),
+                ScatterKind::FernClump => (3200, 3250),
                 ScatterKind::ReedClump => (120, 170),
-                ScatterKind::LycopsidTree => (8400, 8500),
+                ScatterKind::LycopsidTree => (15300, 15400),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(
@@ -2265,11 +2328,13 @@ mod tests {
                 .sum();
             if mesh.kind == ScatterKind::LycopsidTree {
                 assert!(
-                    (110.0..160.0).contains(&foliage_area),
+                    (140.0..180.0).contains(&foliage_area),
                     "authored crown area: {foliage_area} m²"
                 );
             }
-            for (first, points, normal) in prototype_triangles(mesh) {
+            for (triangle_index, (first, points, normal)) in
+                prototype_triangles(mesh).into_iter().enumerate()
+            {
                 assert!(
                     points.iter().flatten().all(|v| v.is_finite()),
                     "{:?} has a non-finite vertex",
@@ -2294,12 +2359,12 @@ mod tests {
                     mesh.kind,
                     double_area * 0.5
                 );
-                // Leaf sheets remain face-normal shaded. Stem normals describe
-                // smooth cone sides (>=8 sides), never inward or zero vectors.
+                // Shared lamina vertices interpolate area-weighted normals;
+                // cone and leaf normals must stay near the actual surface.
                 let stem = mesh.stem.as_ref().is_some_and(|s| first < s.vertex_count);
-                for index in first..first + 3 {
+                for &index in &mesh.indices[triangle_index * 3..triangle_index * 3 + 3] {
                     let stored = mesh.normals[index as usize].map(f64::from);
-                    assert!(crate::lod::dot(stored, normal) > if stem { 0.90 } else { 1.0 - 1e-6 });
+                    assert!(crate::lod::dot(stored, normal) > if stem { 0.90 } else { 0.86 });
                 }
             }
         }
@@ -2326,7 +2391,7 @@ mod tests {
                 .map(|p| f64::from(p[0]).hypot(f64::from(p[2])))
                 .fold(0.0, f64::max);
             let (min_height, max_height, max_extent) = match mesh.kind {
-                ScatterKind::FernClump => (0.70, 1.10, 2.50),
+                ScatterKind::FernClump => (1.40, 1.60, 1.90),
                 ScatterKind::ReedClump => (1.20, 2.00, 1.00),
                 ScatterKind::LycopsidTree => (8.70, 11.50, 6.20),
                 kind => panic!("unexpected prototype kind {kind:?}"),
@@ -2383,7 +2448,7 @@ mod tests {
                     // surface may tilt inward near the trunk. What must never
                     // happen is an upper-side triangle facing the ground.
                     assert!(
-                        normal[1] > 0.35,
+                        normal[1] > 0.0,
                         "crown frond faces down at {middle:?}: {normal:?}"
                     );
                 } else if middle[1] < 3.0 {

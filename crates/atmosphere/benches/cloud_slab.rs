@@ -6,6 +6,20 @@ use std::{hint::black_box, time::Instant};
 use thessa_atmosphere::clouds::{CloudSlab, integrate_slab, intersect_shell, vertical_profile};
 
 fn main() {
+    for side in [32, 64, 128] {
+        let mut times = Vec::new();
+        for _ in 0..5 {
+            let start = Instant::now();
+            let detail = thessa_atmosphere::clouds::bake_density_detail(0x5eed2026, side).unwrap();
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+            black_box(detail);
+        }
+        times.sort_by(f64::total_cmp);
+        println!(
+            "cloud_density_bake side={side} samples=5 median_ms={:.3}",
+            times[2]
+        );
+    }
     let slab = CloudSlab::new(3_200_000.0, 3_200_000.0 * 1.008, 3_200_000.0 * 1.014).unwrap();
     let origin = glam::DVec3::new(0.0, 0.0, 4_000_000.0);
     let dir = glam::DVec3::new(0.0, 0.0, -1.0);

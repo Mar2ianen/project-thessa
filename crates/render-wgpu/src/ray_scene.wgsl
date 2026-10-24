@@ -123,9 +123,7 @@ fn rt_reflection(
     ambient: vec3<f32>,
     occlusion: f32,
 ) -> vec3<f32> {
-    // Same operand order as the raster environment term, so `mirror = 0`
-    // reproduces it exactly instead of approximately.
-    let env = env_radiance_from(position,reflect(-eye, normal), ambient) * fresnel * occlusion;
+    let env = mesh_environment(position,normal,eye,f0,roughness,ambient,occlusion);
     // A single mirror-direction sample cannot represent a wide specular lobe;
     // above the cutoff the estimate yields to the shared environment
     // exactly (mirror = 0 reproduces the raster term bit-for-bit).
@@ -140,6 +138,7 @@ fn rt_reflection(
     for (var bounce = 0u; bounce < RT_BOUNCES; bounce++) {
         let hit = rt_trace(origin, direction, RT_BIAS, RT_TMAX, 0u);
         if !hit.hit {
+            if (bounce==0u) { return env; }
             // The miss contributes the environment radiance of that direction
             // through the accumulated chain weight, matching the raster term's
             // operand order (`radiance * fresnel * occlusion`).

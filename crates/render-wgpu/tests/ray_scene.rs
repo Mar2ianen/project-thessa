@@ -2137,6 +2137,54 @@ fn mirror_reflects_the_field_radiance_of_its_reflected_direction() {
     assert_eq!(center(&none), [0, 0, 0]);
 }
 
+#[test]
+fn raster_environment_broadens_with_material_roughness() {
+    let backend = backend(RayTracingRequest::Off).unwrap();
+    let settings = backend.resolve_graphics(&requested(RayTracingRequest::Off));
+    let grid = environment(64, 32, |column, _| {
+        if column < 4 || column >= 60 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 0.0, 1.0]
+        }
+    });
+    let mut colours = Vec::new();
+    for roughness in [0.0, 1.0] {
+        let mut asset = source();
+        asset.materials[0].roughness = roughness;
+        let mut mesh = MeshRenderer::with_surface(
+            &backend,
+            &asset,
+            SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 2,
+                quality: settings.surface_quality,
+                reflections: true,
+                shadows: None,
+                ray_tracing: Some(&settings),
+            },
+        )
+        .unwrap();
+        mesh.update_environment(&backend, Some(&grid));
+        colours.push(center(&draw(
+            &backend,
+            &mut mesh,
+            &instances(),
+            &[0..1, 1..2],
+            &SurfaceLighting::default(),
+        )));
+    }
+    assert!(
+        colours[0][0] > colours[0][2] + 32,
+        "mirror: {:?}",
+        colours[0]
+    );
+    assert!(
+        colours[1][2] > colours[0][2] + 16,
+        "rough lobe must see the surrounding blue field: {colours:?}"
+    );
+}
+
 /// The RT miss path must land on the same directional field value as the
 /// raster term: with a directional field bound, RT on and RT off are still
 /// byte-identical when nothing is hit.

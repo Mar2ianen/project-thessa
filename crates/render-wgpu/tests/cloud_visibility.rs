@@ -97,6 +97,7 @@ fn probe(
         frame,
         weather: texture.create_view(&Default::default()),
         sampler: backend.device.create_sampler(&Default::default()),
+        ..CloudBinding::disabled(&backend.device)
     };
     let bytes = CASES
         .iter()
@@ -128,7 +129,7 @@ fn probe(
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let [frame, weather, sampler] = clouds.entries();
+    let [frame, weather, sampler, detail, detail_sampler] = clouds.entries();
     let bind = backend
         .device
         .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -138,6 +139,8 @@ fn probe(
                 frame,
                 weather,
                 sampler,
+                detail,
+                detail_sampler,
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: queries.as_entire_binding(),

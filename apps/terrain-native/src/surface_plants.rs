@@ -480,12 +480,12 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
-                        [0.65, 0.36, 0.65, 1.0]
+                        [0.65, 0.48, 0.65, 1.0]
                     }
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
-                        [1.0, 0.77, 1.0, 1.0]
+                        [0.85, 0.68, 0.85, 1.0]
                     }
-                    _ => [1.0; 4],
+                    _ => [0.75, 0.75, 0.75, 1.0],
                 }
             };
             let diffuse_transmission = if dry {
@@ -831,6 +831,27 @@ mod tests {
                 assert_eq!(material.base_texture.is_some(), dry.is_none());
                 assert!(material.normal_texture.is_some());
                 assert!(material.metallic_roughness_texture.is_some());
+                if !stem && dry.is_none() {
+                    let texture = &prepared.asset.textures[material.base_texture.unwrap()];
+                    let image = &prepared.asset.images[texture.image];
+                    let mut reflectance = [0.0_f64; 3];
+                    for pixel in image.rgba8.chunks_exact(4) {
+                        for channel in 0..3 {
+                            let encoded = f64::from(pixel[channel]) / 255.0;
+                            let linear = if encoded <= 0.04045 {
+                                encoded / 12.92
+                            } else {
+                                ((encoded + 0.055) / 1.055).powf(2.4)
+                            };
+                            reflectance[channel] +=
+                                linear * f64::from(material.base_color[channel]);
+                        }
+                    }
+                    assert!(
+                        reflectance[1] > reflectance[0] && reflectance[0] > reflectance[2],
+                        "green foliage must retain its source's spectral order: {reflectance:?}"
+                    );
+                }
                 for (i, v) in primitive.vertices.iter().enumerate() {
                     assert_eq!(v.position, prototype.positions[offset + i]);
                     assert_eq!(v.normal, prototype.normals[offset + i]);

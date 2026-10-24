@@ -128,6 +128,35 @@ fn textured_instances_move_rebase_keep_depth_and_reject_failed_updates_atomicall
         .unwrap();
     let center = (64 * 129 + 64) * 4;
     assert_eq!(&pixels[center..center + 4], &[128, 64, 32, 255]);
+    // Cover the all-two-sided specialization and mixed-material fallback with
+    // both triangle windings, including a two-sided primitive in a mixed asset.
+    for (double_sided, mixed) in [(false, false), (true, false), (true, true)] {
+        for reverse in [false, true] {
+            let mut asset = source();
+            asset.materials[0].double_sided = double_sided;
+            if mixed {
+                asset.materials.push(Material::default());
+            }
+            if reverse {
+                asset.primitives[0].indices.reverse();
+            }
+            let mut sided =
+                MeshRenderer::new(&backend, &asset, OffscreenTarget::FORMAT, 1).unwrap();
+            sided
+                .update(&backend, &view(DVec3::ZERO), &light, &[instance])
+                .unwrap();
+            let rgba = render(&mut sided, 1.0);
+            assert_eq!(
+                &rgba[center..center + 4],
+                if reverse && !double_sided {
+                    &[0, 0, 255, 255]
+                } else {
+                    &[128, 64, 32, 255]
+                },
+                "double_sided={double_sided} mixed={mixed} reverse={reverse}",
+            );
+        }
+    }
     // The native plant adapter reuses this exact base-texture path as an
     // organ palette: linear filtering at a constant texel-centre UV must not
     // bleed green foliage into the stem, or vice versa, even with minification.

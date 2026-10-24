@@ -12,7 +12,16 @@ const STAR_COUNT: u32 = 500;
 const STAR_CAPACITY: u32 = STAR_COUNT + 3;
 const CLOUD_BASE_M: f32 = 3000.0;
 const CLOUD_THICKNESS_M: f32 = 3000.0;
-const CLOUD_EXTINCTION_PER_M: f32 = 0.0006;
+// Authored thin liquid cloud: 0.004 g/m³, 10 µm effective droplets (Q_ext ≈ 2).
+const CLOUD_EXTINCTION_PER_M: f32 =
+    match thessa_atmosphere::clouds::liquid_water_extinction_per_m(0.000004, 0.00001) {
+        Some(value) => value as f32,
+        None => panic!("invalid authored liquid-cloud optics"),
+    };
+
+#[cfg(test)]
+#[path = "sky_layers/detail_tests.rs"]
+mod detail_tests;
 
 pub struct SkyLayers {
     active: Option<Active>,
@@ -46,6 +55,7 @@ struct Clouds {
     layers: u32,
     animate: bool,
     bytes: u64,
+    detail_inverse_mean: f32,
 }
 
 fn bytes(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
@@ -242,7 +252,34 @@ impl SkyLayers {
             backend.queue.write_texture(texture.as_image_copy(),&data,wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(width*4),rows_per_image:Some(height)},texture.size());
             let sampler=device.create_sampler(&wgpu::SamplerDescriptor {address_mode_u:wgpu::AddressMode::Repeat,address_mode_v:wgpu::AddressMode::ClampToEdge,mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,..Default::default()});
             if settings.clouds_volumetric && settings.cloud_integrator==thessa_graphics::CloudIntegratorRequest::Stochastic {eprintln!("native_clouds: stochastic integrator unsupported; using resolved deterministic march fallback");}
-            Clouds {binding:thessa_render_wgpu::clouds::CloudBinding {frame:frame.clone(),weather:texture.create_view(&Default::default()),sampler},cast_shadows:settings.clouds_cast_shadows,steps:if settings.clouds_volumetric {settings.clouds_steps.clamp(1,64)}else{1},sun_steps:match settings.clouds_quality {Quality::Low=>0,Quality::Medium=>2,Quality::High=>4},layers:settings.clouds_layers.clamp(1,2),animate:settings.clouds_animate,bytes:u64::from(width)*u64::from(height)*4}
+            let mut binding = thessa_render_wgpu::clouds::CloudBinding::disabled(device);
+            binding.frame = frame.clone();
+            binding.weather = texture.create_view(&Default::default());
+            binding.sampler = sampler;
+            let mut detail_bytes = 0;
+            let mut detail_inverse_mean = 0.0;
+            if settings.clouds_volumetric {
+                let side = match settings.clouds_quality { Quality::Low => 32, Quality::Medium => 64, Quality::High => 128 };
+                let detail = thessa_atmosphere::clouds::bake_density_detail(0x5eed2026,side).expect("bounded resolved cloud density resolution");
+                let volume = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("canonical-cloud-density-detail"),
+                    size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: side },
+                    mip_level_count: detail.levels.len() as u32, sample_count: 1,
+                    dimension: wgpu::TextureDimension::D3, format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                for (level,data) in detail.levels.iter().enumerate() {
+                    let n = side >> level;
+                    backend.queue.write_texture(wgpu::TexelCopyTextureInfo { mip_level: level as u32, ..volume.as_image_copy() },data,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n), rows_per_image: Some(n) },
+                        wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n });
+                    detail_bytes += data.len() as u64;
+                }
+                detail_inverse_mean = 1.0/detail.mean;
+                binding.detail = volume.create_view(&Default::default());
+            }
+            Clouds {binding,cast_shadows:settings.clouds_cast_shadows,steps:if settings.clouds_volumetric {settings.clouds_steps.clamp(1,64)}else{1},sun_steps:match settings.clouds_quality {Quality::Low=>0,Quality::Medium=>2,Quality::High=>4},layers:settings.clouds_layers.clamp(1,2),animate:settings.clouds_animate,bytes:u64::from(width)*u64::from(height)*4+detail_bytes,detail_inverse_mean}
         });
         let volume = (clouds.is_some() || aurora).then(|| {
             let mut placeholder = thessa_render_wgpu::clouds::CloudBinding::disabled(device);
@@ -314,7 +351,7 @@ impl SkyLayers {
                 extent[0] as f32,
                 extent[1] as f32,
                 phase[1],
-                0.0,
+                cloud.map_or(0.0, |c| c.detail_inverse_mean),
             ])
             .chain(lighting.directions.into_iter().flatten())
             .chain(lighting.colors_lux.into_iter().flatten())
@@ -455,7 +492,7 @@ impl SkyLayers {
                 .as_ref()
                 .map_or(0, |_| u64::from(STAR_CAPACITY) * 32)
                 + a.clouds.as_ref().map_or(0, |c| c.bytes)
-                + u64::from(a.volume.is_some()) * 196
+                + u64::from(a.volume.is_some()) * 197
         })
     }
     pub fn metadata(&self) -> std::collections::BTreeMap<String, String> {
@@ -506,6 +543,18 @@ impl SkyLayers {
             (
                 "native_cloud_ground_shadows",
                 cloud.is_some_and(|c| c.cast_shadows).to_string(),
+            ),
+            (
+                "native_cloud_extinction_per_m",
+                cloud.map_or(0.0, |_| CLOUD_EXTINCTION_PER_M).to_string(),
+            ),
+            (
+                "native_cloud_detail_inverse_mean",
+                cloud.map_or(0.0, |c| c.detail_inverse_mean).to_string(),
+            ),
+            (
+                "native_cloud_detail_period_m",
+                thessa_atmosphere::clouds::DENSITY_DETAIL_PERIOD_M.to_string(),
             ),
         ]
         .into_iter()
@@ -1155,6 +1204,15 @@ mod tests {
             wgpu::TextureFormat::Rgba16Float,
             radius,
         );
+        // Hold the source constant for the independent Beer-Lambert column oracle.
+        layers
+            .active
+            .as_mut()
+            .unwrap()
+            .clouds
+            .as_mut()
+            .unwrap()
+            .sun_steps = 0;
         let texture = backend.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -1179,6 +1237,15 @@ mod tests {
             },
             texture.size(),
         );
+        // Isolate the analytic constant-weather transport oracle from mesoscale shaping.
+        layers
+            .active
+            .as_mut()
+            .unwrap()
+            .clouds
+            .as_mut()
+            .unwrap()
+            .detail_inverse_mean = 0.0;
         layers
             .active
             .as_mut()
@@ -1224,6 +1291,11 @@ mod tests {
                 output[4]=cloud_transport(vec3(0.0),vec3(0.0,0.0,-1.0),1e30);
                 output[5]=cloud_transport(vec3(0.0),vec3(0.0,0.0,1.0),1500.0);
                 output[6]=vec4(cloud_sun_visibility(vec3(0.0),0u));
+                for(var i=0u;i<4u;i++) {
+                    let point=vec3(0.0,0.0,cloud_frame.camera_radius.w+3000.0+f32(i)*1000.0);
+                    output[7u+i]=vec4(cloud_diffuse_visibility(point,4u));
+                }
+
             }
         "#
         );
@@ -1245,13 +1317,13 @@ mod tests {
             });
         let buffer = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 7 * 16,
+            size: 11 * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 7 * 16,
+            size: 11 * 16,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1275,7 +1347,7 @@ mod tests {
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(&buffer, 0, &readback, 0, 7 * 16);
+        encoder.copy_buffer_to_buffer(&buffer, 0, &readback, 0, 11 * 16);
         backend.queue.submit([encoder.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
         readback
@@ -1362,7 +1434,7 @@ mod tests {
                 "query {index}: {actual} vs {expected}"
             );
             assert!(
-                (f64::from(values[index * 4]) - (1.0 - expected)).abs() < 0.003,
+                (f64::from(values[index * 4]) - 0.5 * (1.0 - expected)).abs() < 0.003,
                 "shared reflected in-scatter {index}"
             );
         }
@@ -1370,6 +1442,44 @@ mod tests {
             (values[24] - values[3]).abs() < 0.003,
             "ground shadow samples the same column as primary/reflected rays"
         );
+        // Independent f64 shell traversal and midpoint quadrature for external
+        // diffuse illumination at four depths. No shader root algebra is reused.
+        for sample in 0..4 {
+            let point = DVec3::Z * (radius + 3000.0 + sample as f64 * 1000.0);
+            let mut expected = 0.0;
+            for tap in 0..4 {
+                let mu = (tap as f64 + 0.5) / 4.0;
+                let ray = DVec3::new((1.0 - mu * mu).sqrt(), 0.0, mu);
+                let mut tau = 0.0;
+                for layer in 0..settings.clouds_layers {
+                    let thickness = 3000.0 / if layer == 0 { 1.0 } else { 3.0 };
+                    let bottom = radius + 3000.0 + layer as f64 * 6000.0;
+                    let slab =
+                        thessa_atmosphere::CloudSlab::new(radius, bottom, bottom + thickness)
+                            .unwrap();
+                    if let Some((a, b)) =
+                        thessa_atmosphere::intersect_shell(point, ray, DVec3::ZERO, slab)
+                    {
+                        let dt = (b - a) / 4.0;
+                        for step in 0..4 {
+                            let h = ((point + ray * (a + (step as f64 + 0.5) * dt)).length()
+                                - bottom)
+                                / thickness;
+                            tau += thessa_atmosphere::vertical_profile(h)
+                                * dt
+                                * f64::from(CLOUD_EXTINCTION_PER_M)
+                                / if layer == 0 { 1.0 } else { 3.0 };
+                        }
+                    }
+                }
+                expected += 0.5 * (-tau).exp() / 4.0;
+            }
+            assert!(
+                (f64::from(values[(7 + sample) * 4]) - expected).abs() < 0.0001,
+                "diffuse source depth={sample}: {} vs {expected}",
+                values[(7 + sample) * 4]
+            );
+        }
     }
 
     fn linear(value: u8) -> f64 {
@@ -1554,6 +1664,15 @@ mod tests {
             },
             texture.size(),
         );
+        // This oracle imposes a spatially uniform density, without mesoscale detail.
+        cloudy
+            .active
+            .as_mut()
+            .unwrap()
+            .clouds
+            .as_mut()
+            .unwrap()
+            .detail_inverse_mean = 0.0;
         cloudy
             .active
             .as_mut()
@@ -1719,6 +1838,15 @@ mod tests {
             },
             texture.size(),
         );
+        // This oracle imposes a spatially uniform density, without mesoscale detail.
+        clouds
+            .active
+            .as_mut()
+            .unwrap()
+            .clouds
+            .as_mut()
+            .unwrap()
+            .detail_inverse_mean = 0.0;
         clouds
             .active
             .as_mut()
@@ -1728,6 +1856,14 @@ mod tests {
             .unwrap()
             .binding
             .weather = texture.create_view(&Default::default());
+        clouds
+            .active
+            .as_mut()
+            .unwrap()
+            .clouds
+            .as_mut()
+            .unwrap()
+            .sun_steps = 0;
         let light = SurfaceLighting {
             ambient_lux: [std::f32::consts::PI; 4],
             colors_lux: [[0.0; 4]; 3],
@@ -1741,7 +1877,7 @@ mod tests {
             settings.clouds_steps,
             f64::from(CLOUD_EXTINCTION_PER_M),
         );
-        let expected = 0.5 * (1.0 - transmission);
+        let expected = 0.25 * (1.0 - transmission);
         let measured = linear(pixels[((33 * 16 + 16) * 4) as usize]);
         println!("cloud_column measured_linear={measured} expected_linear={expected}");
         assert!(

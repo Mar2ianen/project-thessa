@@ -382,12 +382,16 @@ pub struct PlantMesh {
     /// Optional separate stem reflectance. Historical bakes are single-material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stem: Option<PlantStem>,
+    /// Terminal foliage group with authored dry-leaf optics. Historical bakes
+    /// have no group; consumers must not infer leaf age from mesh height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub senescent: Option<PlantSenescence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ambient_visibility: Vec<f32>,
 }
 
 // Bounded optical source payload, not a planet-wide instance allocation.
-// The forked crown has 7,272 split vertices; no runtime tessellation is used.
+// The current forked crown has 25,344 split vertices; no runtime tessellation.
 const MAX_PLANT_PROTOTYPE_VERTICES: usize = 32768;
 
 /// The prototype emitter writes stems before foliage, with separate vertices.
@@ -396,6 +400,13 @@ const MAX_PLANT_PROTOTYPE_VERTICES: usize = 32768;
 pub struct PlantStem {
     pub vertex_count: u32,
     pub albedo_srgb: [f32; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlantSenescence {
+    pub first_vertex: u32,
+    pub albedo_srgb: [f32; 3],
+    pub diffuse_transmission: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1145,6 +1156,7 @@ fn build_plant_prototypes() -> Vec<PlantMesh> {
             indices: Vec::new(),
             albedo_srgb: [0.16, 0.30, 0.12],
             stem: None,
+            senescent: None,
             ambient_visibility: Vec::new(),
         };
         match kind {
@@ -1231,9 +1243,8 @@ fn reed_clump(mesh: &mut PlantMesh) {
     }
 }
 
-/// Authored arborescent tree fern (Cyathea / Dicksonia): single tall tapered
-/// fibrous trunk with a persistent stipe collar, crowned by a dense radial umbrella
-/// of bipinnate arching fronds and drooping under-canopy mantle fronds.
+/// Authored forked arborescent silhouette with tiered radial crowns; optical
+/// reference geometry, not a taxonomic reconstruction of Cyathea / Dicksonia.
 fn lycopsid_tree(mesh: &mut PlantMesh) {
     const TRUNK_RINGS: [(f64, f64); 21] = [
         (0.00, 0.48),
@@ -1258,28 +1269,58 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
         (7.94, 0.22),
         (7.95, 0.16),
     ];
-    tapered_limb(mesh, [0.0; 3], [0.0, 1.0, 0.0], 16, &TRUNK_RINGS);
+    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * 0.78, radius));
+    tapered_limb(mesh, [0.0; 3], [0.0, 1.0, 0.0], 16, &trunk_rings);
+    let terminals = [[-1.15, 7.95, -0.20], [1.15, 7.95, 0.20]];
+    for terminal in terminals {
+        let base = [0.0, 5.90, 0.0];
+        let axis = crate::lod::sub(terminal, base);
+        let length = crate::lod::dot(axis, axis).sqrt();
+        tapered_limb(
+            mesh,
+            base,
+            axis,
+            8,
+            &[
+                (0.0, 0.23),
+                (length * 0.35, 0.18),
+                (length * 0.7, 0.12),
+                (length, 0.06),
+            ],
+        );
+    }
     mesh.stem = Some(PlantStem {
         vertex_count: mesh.positions.len() as u32,
         // Authored weathered stem reflectance, not a measured fossil spectrum.
         albedo_srgb: [0.29, 0.25, 0.17],
     });
 
-    // Tiered radial fronds radiating in 360 degrees from the apical crown dome:
-    // 48 total fronds (12 apex arching, 18 primary canopy, 12 mature spreading, 6 drooping skirt).
+    // The two crowns share the same 48-frond budget as the single umbrella.
     const TIERS: [(usize, f64, f64, f64); 4] = [
-        (12, 7.98, 4.05, 0.00), // Youngest ascending apex fronds
-        (18, 7.78, 4.45, 0.35), // Primary spreading canopy fronds
-        (12, 7.48, 4.10, 0.72), // Mature lower fronds
-        (6, 7.18, 3.40, 1.15),  // Drooping mantle / skirt fronds
+        (6, 7.98, 4.05, 0.00), // Youngest ascending apex fronds per terminal
+        (9, 7.78, 4.45, 0.35), // Primary spreading canopy fronds
+        (6, 7.48, 4.10, 0.72), // Mature lower fronds
+        (3, 7.18, 3.40, 1.15), // Drooping mantle / skirt fronds
     ];
     for &(count, base_y, reach_base, phase_offset) in &TIERS {
-        for i in 0..count {
-            let angle = phase_offset + i as f64 * GOLDEN_ANGLE;
-            let reach = reach_base + 0.22 * (i as f64 * 1.71).sin().powi(2);
-            let (radial, _) = azimuth_frame(angle);
-            let base = offset(scaled(radial, 0.06), [0.0, base_y, 0.0]);
-            crown_frond(mesh, angle, base, reach);
+        if base_y == 7.18 {
+            mesh.senescent = Some(PlantSenescence {
+                first_vertex: mesh.positions.len() as u32,
+                albedo_srgb: [0.30, 0.22, 0.11],
+                diffuse_transmission: 0.05,
+            });
+        }
+        for terminal in terminals {
+            for i in 0..count {
+                let angle = phase_offset + i as f64 * GOLDEN_ANGLE;
+                let reach = reach_base + 0.22 * (i as f64 * 1.71).sin().powi(2);
+                let (radial, _) = azimuth_frame(angle);
+                let base = offset(
+                    offset(scaled(radial, 0.06), terminal),
+                    [0.0, base_y - 7.95, 0.0],
+                );
+                crown_frond(mesh, angle, base, reach);
+            }
         }
     }
 }
@@ -1319,13 +1360,7 @@ fn fern_frond(mesh: &mut PlantMesh, angle: f64, length_m: f64, height_m: f64, ba
                     ),
                 )
             });
-            ribbon(
-                mesh,
-                &nodes,
-                &[0.003, length * 0.12, 0.0008],
-                radial,
-                [0.0, 1.0, 0.0],
-            );
+            pinna(mesh, nodes, radial, length * 0.145, length * 0.035);
         }
     }
 }
@@ -1391,13 +1426,7 @@ fn crown_frond(mesh: &mut PlantMesh, angle: f64, base: [f64; 3], reach_m: f64) {
                     ),
                 )
             });
-            ribbon(
-                mesh,
-                &nodes,
-                &[0.007, length * 0.078, 0.0008],
-                radial,
-                [0.0, 1.0, 0.0],
-            );
+            pinna(mesh, nodes, radial, length * 0.12, length * 0.035);
         }
     }
 }
@@ -1414,6 +1443,30 @@ fn scaled(v: [f64; 3], s: f64) -> [f64; 3] {
 fn azimuth_frame(angle: f64) -> ([f64; 3], [f64; 3]) {
     let (sin, cos) = angle.sin_cos();
     ([cos, 0.0, sin], [-sin, 0.0, cos])
+}
+
+/// Four real faces around a raised midrib, at the same triangle budget as the
+/// former two-segment strip. The material's long U axis follows base to tip.
+fn pinna(
+    mesh: &mut PlantMesh,
+    nodes: [[f64; 3]; 3],
+    lateral: [f64; 3],
+    half_width: f64,
+    fold_m: f64,
+) {
+    let left = offset(nodes[1], scaled(lateral, half_width));
+    let right = offset(nodes[1], scaled(lateral, -half_width));
+    let ridge = offset(nodes[1], [0.0, fold_m, 0.0]);
+    let points = [nodes[0], left, ridge, right, nodes[2]];
+    let uv = [[0.0, 0.5], [0.5, 0.0], [0.5, 0.5], [0.5, 1.0], [1.0, 0.5]];
+    for indices in [[0, 1, 2], [0, 2, 3], [2, 1, 4], [2, 4, 3]] {
+        textured_triangle(
+            mesh,
+            indices.map(|i| points[i]),
+            indices.map(|i| uv[i]),
+            [0.0, 1.0, 0.0],
+        );
+    }
 }
 
 /// Flat tapered strip through `nodes`. `lateral` is a unit horizontal axis and
@@ -1436,13 +1489,13 @@ fn ribbon(
         textured_triangle(
             mesh,
             [left, right, next_right],
-            [[0.0, v0], [1.0, v0], [1.0, v1]],
+            [[v0, 0.0], [v0, 1.0], [v1, 1.0]],
             hint,
         );
         textured_triangle(
             mesh,
             [left, next_right, next_left],
-            [[0.0, v0], [1.0, v1], [0.0, v1]],
+            [[v0, 0.0], [v1, 1.0], [v1, 0.0]],
             hint,
         );
     }
@@ -1594,6 +1647,28 @@ fn validate_mesh(mesh: &PlantMesh) -> Result<(), String> {
             })
         {
             return Err("invalid plant stem material boundary".into());
+        }
+    }
+    if let Some(dry) = &mesh.senescent {
+        let start = dry.first_vertex as usize;
+        if start == 0
+            || start >= mesh.positions.len()
+            || mesh
+                .stem
+                .as_ref()
+                .is_some_and(|s| dry.first_vertex <= s.vertex_count)
+            || dry
+                .albedo_srgb
+                .iter()
+                .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || !dry.diffuse_transmission.is_finite()
+            || !(0.0..=1.0).contains(&dry.diffuse_transmission)
+            || mesh.indices.as_chunks::<3>().0.iter().any(|t| {
+                let corners = t.iter().filter(|&&i| i < dry.first_vertex).count();
+                corners != 0 && corners != 3
+            })
+        {
+            return Err("invalid senescent foliage material boundary".into());
         }
     }
     Ok(())
@@ -1937,13 +2012,55 @@ mod tests {
             assert_eq!(roundtrip, mesh);
             let mut legacy = value;
             legacy.as_object_mut().unwrap().remove("stem");
+            legacy.as_object_mut().unwrap().remove("senescent");
             let legacy: PlantMesh = serde_json::from_value(legacy).unwrap();
             assert_eq!(legacy.stem, None);
+            assert_eq!(legacy.senescent, None);
             assert_eq!(legacy.positions, mesh.positions);
             assert_eq!(legacy.normals, mesh.normals);
             assert_eq!(legacy.indices, mesh.indices);
             assert_eq!(legacy.albedo_srgb, mesh.albedo_srgb);
             validate_mesh(&legacy).unwrap();
+        }
+    }
+
+    #[test]
+    fn dry_fronds_have_an_explicit_validated_material_boundary() {
+        let mesh = plant_prototypes().remove(2);
+        let dry = mesh.senescent.as_ref().unwrap();
+        assert!(dry.first_vertex > mesh.stem.as_ref().unwrap().vertex_count);
+        assert_eq!(
+            (mesh.positions.len() - dry.first_vertex as usize) / 3,
+            6 * (16 + 18 * 2 * 4)
+        );
+        for start in [0, 1, mesh.positions.len() as u32, u32::MAX] {
+            let mut broken = mesh.clone();
+            broken.senescent.as_mut().unwrap().first_vertex = start;
+            assert!(validate_mesh(&broken).is_err());
+        }
+        let mut broken = mesh.clone();
+        broken.senescent.as_mut().unwrap().diffuse_transmission = f32::NAN;
+        assert!(validate_mesh(&broken).is_err());
+    }
+
+    #[test]
+    fn pinna_uv_long_axis_follows_the_leaf_length() {
+        let mut mesh = plant_prototypes().remove(0);
+        mesh.positions.clear();
+        mesh.normals.clear();
+        mesh.indices.clear();
+        mesh.uvs.clear();
+        mesh.ambient_visibility.clear();
+        ribbon(
+            &mut mesh,
+            &[[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[0.01, 0.1, 0.01],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+        );
+        for (p, uv) in mesh.positions.iter().zip(&mesh.uvs) {
+            assert_eq!(uv[0], p[0]);
+            assert!(uv[1] == 0.0 || uv[1] == 1.0);
         }
     }
 
@@ -2130,7 +2247,7 @@ mod tests {
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (1760, 1780),
                 ScatterKind::ReedClump => (120, 170),
-                ScatterKind::LycopsidTree => (8300, 8400),
+                ScatterKind::LycopsidTree => (8400, 8500),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(
@@ -2148,7 +2265,7 @@ mod tests {
                 .sum();
             if mesh.kind == ScatterKind::LycopsidTree {
                 assert!(
-                    (55.0..100.0).contains(&foliage_area),
+                    (110.0..160.0).contains(&foliage_area),
                     "authored crown area: {foliage_area} m²"
                 );
             }

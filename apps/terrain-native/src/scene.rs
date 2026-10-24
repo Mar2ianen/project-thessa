@@ -1610,12 +1610,7 @@ impl Scene {
             .environment_grid()
             .map(thessa_render_core::environment::EnvironmentRadiance::ambient_lux);
         if let Some(ambient) = ambient {
-            let extinction = if self.requested.atmosphere.enabled && self.requested.atmosphere.aerial_perspective {
-                0.00035_f32
-            } else {
-                0.0_f32
-            };
-            lighting.ambient_lux = [ambient[0], ambient[1], ambient[2], extinction];
+            lighting.ambient_lux = [ambient[0], ambient[1], ambient[2], 0.0];
         }
         lighting
     }

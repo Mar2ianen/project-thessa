@@ -141,6 +141,7 @@ pub struct TerrainRenderer {
     /// an active engine only skip the draws.
     plume: Option<crate::plume::PlumeRenderer>,
     format: wgpu::TextureFormat,
+    raster_samples: u32,
     shadows: Option<crate::shadows::ShadowAtlas>,
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
@@ -809,7 +810,10 @@ impl TerrainRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: settings.map_or(1, |s| s.raster_msaa_samples),
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fragment"),
@@ -949,6 +953,7 @@ impl TerrainRenderer {
             ocean_geometry,
             ocean_bind,
             ocean_environment,
+            raster_samples: settings.map_or(1, |s| s.raster_msaa_samples),
             land_environment_samples,
             ocean_settings,
             ocean_dirty: true,
@@ -1697,6 +1702,7 @@ impl TerrainRenderer {
                     self.format,
                     &self.view,
                     environment,
+                    self.raster_samples,
                 ));
             }
         } else {
@@ -2068,6 +2074,18 @@ impl TerrainRenderer {
         mesh: Option<&crate::mesh::MeshRenderer>,
         store_depth: bool,
     ) {
+        self.encode_opaque_scene_resolved_ops(encoder, color, depth, mesh, store_depth, None);
+    }
+
+    pub fn encode_opaque_scene_resolved_ops(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        mesh: Option<&crate::mesh::MeshRenderer>,
+        store_depth: bool,
+        resolve_target: Option<&wgpu::TextureView>,
+    ) {
         if self.topology.is_none() {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_bind_group(0, &self.classify_bind, &[]);
@@ -2087,7 +2105,7 @@ impl TerrainRenderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: color,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.015,

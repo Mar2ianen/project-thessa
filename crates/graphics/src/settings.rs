@@ -170,8 +170,30 @@ pub struct TemporalSettings {
     pub jitter: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToneMapping {
+    #[default]
+    Reinhard,
+    PbrNeutral,
+}
+
+impl ToneMapping {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reinhard => "reinhard",
+            Self::PbrNeutral => "pbr_neutral",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RendererSettings {
+    #[serde(default)]
+    pub tone_mapping: ToneMapping,
+    /// Native opaque raster coverage samples: 1 disables MSAA, 4 requests 4x.
+    #[serde(default = "default_msaa_samples")]
+    pub msaa_samples: u32,
     /// Native material quality: Low approximates diffuse/ambient Fresnel by F0.
     #[serde(default)]
     pub surface_quality: Quality,
@@ -230,6 +252,9 @@ fn default_shadow_memory() -> u32 {
     64
 }
 
+fn default_msaa_samples() -> u32 {
+    1
+}
 fn default_resolution_scale() -> f32 {
     1.0
 }
@@ -241,6 +266,8 @@ fn default_terrain_mesh_cells() -> u32 {
 impl Default for RendererSettings {
     fn default() -> Self {
         Self {
+            msaa_samples: 1,
+            tone_mapping: ToneMapping::Reinhard,
             surface_quality: Quality::High,
             terrain_normal_maps: true,
             terrain_ground_detail: false,
@@ -918,6 +945,12 @@ impl RequestedGraphics {
         }
         if self.version != 1 {
             return Err(ConfigError::UnsupportedVersion { got: self.version });
+        }
+        if !matches!(self.renderer.msaa_samples, 1 | 4) {
+            return Err(ConfigError::InvalidValue {
+                path: "renderer.msaa_samples",
+                detail: "must be 1 or 4".into(),
+            });
         }
         if !(0.25..=4.0).contains(&self.renderer.resolution_scale) {
             return Err(ConfigError::InvalidValue {

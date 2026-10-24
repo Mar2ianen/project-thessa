@@ -7,7 +7,7 @@ depth reconstruction in `render-core`, with a view-block constructor that
 preserves the unjittered history projection. T3a adds a standalone GPU
 depth-reprojection motion-vector pass with a hardware CPU-oracle test. T3b wires
 opt-in motion diagnostics into both native loops, enforces stored opaque scene
-depth and masks ocean/all rigid meshes. T2b adds opt-in primary terrain/mesh
+depth and masks ocean/unknown rigid meshes; WORLD09 explicitly admits immutable plants. T2b adds opt-in primary terrain/mesh
 jitter with matching depth reconstruction and jitter-free motion. T4a adds the
 backend-neutral history-lookup, disocclusion, neighbourhood-clipping and
 accumulation-age contract in `render-core`; T4b adds a tested GPU pass that
@@ -56,7 +56,7 @@ design was written.
    transform set and no previous displaced-surface state. Matching `TileKey` is
    not triangle identity across CBT split/merge. Since then, T3a added a
    standalone static-depth reprojection pass; T3b now calls it in the scene
-   loop with explicit ocean/all-mesh invalid masks, not object motion.
+   loop with explicit ocean/unknown-mesh invalid masks and opt-in static plant eligibility, not object motion.
 4. **Presentation belongs to the app.** `apps/terrain-native/src/window.rs`
    submits and presents directly. `crates/render-wgpu/src/display.rs` owns only
    the HDR-to-SDR transform. Frame generation needs an explicit presentation
@@ -239,7 +239,7 @@ presenter contract before an FG adapter is attempted. Required properties:
 | T2a | Jitter/reprojection math + preserved unjittered view block | Implemented; deterministic CPU tests; zero jitter byte-identical. |
 | T2b | Renderer jitter wiring + required depth storage | Implemented: opt-in primary terrain/mesh jitter, matching depth inverse, jitter-free motion, unjittered secondary policy and submitted-frame sequence; standalone diagnostic still does not resolve. |
 | T3a | Static terrain/CBT camera motion-vector pass | Implemented; GPU output matches the CPU reprojection oracle on a depth fixture. |
-| T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/all-mesh invalid masks, submitted-camera tracking and GPU scene oracle. |
+| T3b | Scene integration for T3a | Implemented: real stored opaque depth, conservative ocean/unknown-mesh invalid masks, explicit immutable-plant eligibility, submitted-camera tracking and GPU scene oracle. |
 | T4a | Backend-neutral resolve contract | Implemented: jitter-aware history lookup, explicit depth-disocclusion test, YCoCg neighbourhood clipping, age/weight policy and fallbacks; CPU tests only. |
 | T4b | GPU resolve pass against T4a | Implemented as a stateless `RGBA16Float` compute pass; hardware fixture matches CPU colour/age for valid history, disocclusion and invalid motion. No scene history/presentation. |
 | T4c | Native opaque history lifecycle | Partial: default-off scene resolve, submitted-only history, publication/view-mode resets, quality/fallback and separate GPU scope. Composed depth and real-scene ghosting/visual acceptance remain open. |
@@ -564,7 +564,7 @@ Their original `1/(age+1)` history-weight formula was corrected during T4c.
   tokens. Projection/exposure changes reject history; pixel reprojection and
   depth tests reject out-of-view/disoccluded history. Arbitrary same-mode camera
   teleports do not yet have an explicit scene cut token.
-- Ineligible current surfaces (ocean, rigid meshes/plants, invalid sky) are
+- Ineligible current surfaces (ocean and unknown/moving rigid meshes) are
   displayed but store history **age zero**, not age one. The history texture's
   age channel therefore also acts as a reusable-source validity mask. The GPU
   conservatively rejects a bilinear history footprint if any of its four taps
@@ -596,10 +596,16 @@ Their original `1/(age+1)` history-weight formula was corrected during T4c.
 16×f32-epsilon normalized-depth tolerance, not a measured universal metric
 envelope. Transparent overlay shaders still interpret sampled jittered opaque
 depth through their unjittered camera; a composed sampled/resolved-depth policy
-and edge oracle remain necessary. All rigid meshes, including static plants,
-and water retain conservative invalid masks; no foliage antialiasing benefit is
-claimed. The age-zero source rule prevents those pixels from seeding neighbour
-history, but it does not give them object motion. A measured moving-scene
+and edge oracle remain necessary. Unknown/moving rigid meshes and water retain
+conservative invalid masks. WORLD09 admits immutable body-fixed plants through
+`MeshRenderer::with_static_surface_and_terrain`; the caller must invalidate
+history on changed membership, geometry or poses. Native plant-publication
+epochs already supply that invalidation. The static far background writes a fresh
+age-one sample for bilinear leaf/sky edge footprints but never reads previous
+history, even if a stale finite-depth motion value is supplied. Masked dynamics
+still store age zero and invalidate the entire four-tap history footprint.
+These eligibility changes do not provide object/deformation motion or certify
+foliage antialiasing/ghosting quality. A measured moving-scene
 ghosting envelope (including streaming-reset behaviour), arbitrary cuts,
 astronomical-coordinate error, platform parity and independent visual preference
 are not closed by the history lifecycle fixture. No upscaling, SDK, generated
@@ -687,3 +693,12 @@ This document does not implement or claim:
 - a new render graph or presentation architecture;
 - replacement of the canonical terrain/CBT or plant systems;
 - stable performance or visual acceptance.
+
+### 2026-10-24 MSAA composition boundary
+
+The native scene can now request 4× opaque MSAA (doc 59), with hardware colour
+resolve and nearest covered forward-depth resolve before the existing motion
+and temporal consumers. Single-sample defaults and disabled temporal allocations
+remain. The review profile keeps TAA off. The isolated MSAA coverage/depth oracle
+is not a proof that mixed sky/leaf colour plus nearest surface depth meets a
+moving-camera temporal error envelope; that wider acceptance remains open.

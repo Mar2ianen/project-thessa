@@ -80,11 +80,12 @@ The checked-in vertical slice currently contains:
   rejection. Disabled-by-default `[surface_plants]` enables a bounded native
   survey-only prototype consumer through the existing opaque mesh/shadow path
   ([doc 75](docs/75_NATIVE_SURFACE_PLANTS.md)); the prototypes now use grounded
-  broad arching leaves, tapered trunks and per-kind albedo. WORLD08 reduces
-  prototype triangles while increasing real fern/crown leaf area; visual
-  acceptance remains open. An optional default-off near-eye
+  folded pinnate fronds, CC0 bark/leaf material maps, geometry-baked ambient
+  visibility and thin diffuse leaf scattering (WORLD09). Immutable plants can
+  participate in opt-in TAA; moving meshes and water remain masked. Geometry
+  and GPU cost increase; reference matching and visual acceptance remain open. An optional default-off near-eye
   understory adds canonical fern/reed clumps on a separate fixed L24 identity
-  lattice inside nine L18 windows, with world-addressed eight-metre colony
+  lattice inside 25 L18 windows, with world-addressed eight-metre colony
   occupancy and canonical ecological eligibility, reusing the same quality
   tiers, prototypes,
   opaque mesh and shadow paths. Same-site near-window changes use one shared
@@ -94,7 +95,8 @@ The checked-in vertical slice currently contains:
   remain. Production vegetation streaming, fully modeled botanical assets and
   physical obstacle ownership remain unimplemented.
   An opt-in [surface review profile](data/graphics/surface-showcase.toml) enables
-  the experimental location and uses the existing 25 m near-shadow cover;
+  the experimental location, PBR Neutral display and 25 m near-shadow cover (TAA off);
+  optional 4× MSAA is available at substantial GPU cost;
   [doc 77](docs/77_NATIVE_SURFACE_SHOWCASE.md) gives the fixed-site launch command
   and remaining quality/performance limits.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical

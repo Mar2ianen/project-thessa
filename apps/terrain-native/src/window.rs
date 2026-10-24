@@ -20,6 +20,7 @@ struct State {
     sky_layers: crate::sky_layers::SkyLayers,
     display: thessa_render_wgpu::display::DisplayTransform,
     motion: Option<thessa_render_wgpu::motion::SceneMotion>,
+    msaa: Option<thessa_render_wgpu::msaa::SceneMsaa>,
     temporal: Option<thessa_render_wgpu::scene_temporal::SceneTemporal>,
     mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
@@ -105,6 +106,12 @@ impl State {
         );
         let depth_texture = depth(&backend, config.width, config.height);
         let depth = depth_texture.create_view(&Default::default());
+        let msaa = thessa_render_wgpu::msaa::SceneMsaa::new(
+            &backend,
+            &resolved,
+            display.scene_format(),
+            [config.width, config.height],
+        )?;
         let motion = thessa_render_wgpu::motion::SceneMotion::new(
             &backend,
             &resolved,
@@ -149,6 +156,7 @@ impl State {
             sky_layers,
             display,
             motion,
+            msaa,
             temporal,
             mesh_renderer,
             depth,
@@ -188,6 +196,13 @@ impl State {
         if let Err(error) = self.display.resize(&self.backend, width, height) {
             self.drawable = false;
             eprintln!("display resize rejected: {error}");
+            return;
+        }
+        if let Some(msaa) = &mut self.msaa
+            && let Err(error) = msaa.resize(&self.backend, [width, height])
+        {
+            self.drawable = false;
+            eprintln!("MSAA resize rejected: {error}");
             return;
         }
         self.config.width = width;
@@ -394,15 +409,21 @@ impl State {
         if let Some(mesh) = &mut self.mesh_renderer {
             mesh.encode_rt(&mut encoder);
         }
-        self.renderer.encode_opaque_scene_ops(
+        self.renderer.encode_opaque_scene_resolved_ops(
             &mut encoder,
-            self.display.scene_color(&color),
-            &self.depth,
+            self.msaa
+                .as_ref()
+                .map_or(self.display.scene_color(&color), |s| &s.color),
+            self.msaa.as_ref().map_or(&self.depth, |s| s.depth()),
             self.mesh_renderer
                 .as_ref()
                 .and_then(crate::scene::SceneMeshes::opaque),
-            self.sky_layers.enabled() || self.motion.is_some(),
+            self.sky_layers.enabled() || self.motion.is_some() || self.msaa.is_some(),
+            self.msaa.as_ref().map(|_| self.display.scene_color(&color)),
         );
+        if let Some(msaa) = &self.msaa {
+            msaa.resolve_depth(&mut encoder, &self.depth);
+        }
         if let Some(motion) = &self.motion {
             motion.encode(
                 &self.backend,

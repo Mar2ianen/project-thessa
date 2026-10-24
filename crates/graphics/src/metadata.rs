@@ -37,6 +37,28 @@ pub struct SettingMeta {
 pub fn describe() -> Vec<SettingMeta> {
     let mut metadata = vec![
         SettingMeta {
+            path: "renderer.msaa_samples",
+            label: "Native raster coverage samples",
+            kind: SettingKind::Enum,
+            range: "1 | 4",
+            step: "-",
+            unit: "samples",
+            advanced: true,
+            restart_required: true,
+            description: "1 disables MSAA without extra attachments; 4 requests scene colour/depth coverage with single-sample depth resolve. Unsupported or unverified formats resolve to 1.",
+        },
+        SettingMeta {
+            path: "renderer.tone_mapping",
+            label: "Native HDR tone mapping",
+            kind: SettingKind::Enum,
+            range: "reinhard | pbr_neutral",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Display operator for native manual HDR. Reinhard preserves the default; PBR Neutral compresses highlights with the Khronos curve. HDR disabled bypasses both with no display target/pass.",
+        },
+        SettingMeta {
             path: "surface_plants.enabled",
             label: "Prototype surface plants",
             kind: SettingKind::Bool,

@@ -16,6 +16,7 @@ mod perf;
 mod plume;
 mod scene;
 mod sky_layers;
+mod surface_plant_materials;
 mod surface_plants;
 mod window;
 
@@ -543,6 +544,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             width,
             height,
         )?;
+        let msaa = thessa_render_wgpu::msaa::SceneMsaa::new(
+            &backend,
+            &resolved,
+            display.scene_format(),
+            [width, height],
+        )?;
+        println!(
+            "native_msaa_samples={} target_bytes={} depth_resolve=nearest-covered-sample",
+            resolved.raster_msaa_samples,
+            msaa.as_ref().map_or(0, |s| s.target_bytes())
+        );
         let mut renderer = scene.renderer(&backend, display.scene_format())?;
         let sky_layers = scene.sky_layers(&backend, display.scene_format(), &mut renderer);
         println!(
@@ -559,11 +571,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             display.enabled(),
             display.scene_format(),
             display.target_bytes(),
-            if display.enabled() {
-                "reinhard"
-            } else {
-                "none"
-            }
+            display.tone_mapping()
         );
         let exposure = manual_exposure(resolved.exposure_ev100);
         let mut motion =
@@ -703,13 +711,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 2);
             }
-            renderer.encode_opaque_scene_ops(
+            renderer.encode_opaque_scene_resolved_ops(
                 &mut encoder,
-                display.scene_color(&target.color),
-                &target.depth,
+                msaa.as_ref()
+                    .map_or(display.scene_color(&target.color), |s| &s.color),
+                msaa.as_ref().map_or(&target.depth, |s| s.depth()),
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
-                sky_layers.enabled() || motion.is_some(),
+                sky_layers.enabled() || motion.is_some() || msaa.is_some(),
+                msaa.as_ref().map(|_| display.scene_color(&target.color)),
             );
+            if let Some(msaa) = &msaa {
+                msaa.resolve_depth(&mut encoder, &target.depth);
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 3);
             }

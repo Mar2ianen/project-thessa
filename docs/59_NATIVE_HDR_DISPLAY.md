@@ -16,7 +16,8 @@ ResolvedGraphicsSettings -> renderer`:
 
 - `[renderer].hdr = true`: when RGBA16Float supports both render attachment and
   texture binding, draw the shared scene into that format and apply per-channel
-  **Reinhard `x / (1+x)`** to the SDR output. This is the implemented higher
+  the selected `[renderer].tone_mapping` to the SDR output (default
+  **Reinhard `x / (1+x)`**, or opt-in `pbr_neutral`). This is the implemented higher
   fidelity representation; the per-channel global curve is not a complete
   photographic/scene-referred color appearance model or an AgX/ACES match.
 - `hdr = false`: lower-cost direct LDR with the original output format and
@@ -128,3 +129,44 @@ Actual commands, checks and performance/capture results are recorded in
 [`artifacts/native-hdr-display-2026-10-18.json`](artifacts/native-hdr-display-2026-10-18.json).
 No blind subjective preference, legacy tonemapper match, cross-platform runtime
 acceptance, production renderer replacement, auto exposure or bloom is claimed.
+
+## 2026-10-24 reference-quality continuation
+
+`renderer.tone_mapping` is a restart-required requested/resolved enum with
+`reinhard` (default) and `pbr_neutral`. HDR-off bypasses either operator without
+allocations or a display pass. The PBR Neutral CPU/WGSL implementations follow
+[the Khronos reference](https://github.com/KhronosGroup/ToneMapping/blob/main/PBR_Neutral/pbrNeutral.glsl),
+including the dark-range offset before the early return. The intermediate
+Gemini version accidentally returned the unshifted input in that branch. A
+CPU continuity/toe test and the GPU pattern test for both operators constrain
+the fix; the latter retains the one-output-code bound, resize/paused identity,
+non-sRGB transfer and HDR-off exact bypass checks. Adapted functions retain the
+Apache-2.0 notice in `LICENSING.md`. This is not an AgX/ACES implementation.
+`native_tonemapping` now records the actual selected operator, or `none`.
+
+`renderer.msaa_samples` requests native opaque coverage: `1` (default, disabled)
+or `4`. Unknown/unsupported formats resolve to 1 with a note. The active adapter
+must support 4× render/colour resolve for native HDR/SDR formats and 4× Depth32.
+`SceneMsaa` owns four-sample colour/depth only when resolved to 4. Disabled means
+no extra textures, pipeline or pass. Hardware colour resolve averages in linear
+light; a fullscreen minimum forward-Z depth resolve preserves the nearest covered
+sample for existing single-sample depth consumers. The sky/terrain/mesh primary
+pipelines share sample count; shadow maps and later overlays keep their existing
+representations. Invalid/zero resizes leave the live resources intact.
+
+Additional target texels cost 48 B/pixel with RGBA16Float scene colour or 32
+B/pixel with RGBA8/BGRA8, excluding driver alignment and pipeline/bind overhead.
+At 1280×720 HDR this is 44,236,800 B in addition to the existing HDR target and
+single-sample output/depth. The depth resolve belongs to the existing scene-raster
+GPU timing scope; stdout reports `native_msaa_samples` and actual `target_bytes`,
+and capture metadata records `raster_msaa_samples`. There is no per-frame readback
+or quality-controller budget. The hardware half-pixel mesh oracle pins linear
+coverage averaging, nearest depth, disabled allocation and atomic resize.
+
+The surface review profile selects PBR Neutral, single-sample raster and TAA off.
+Four-sample coverage is an explicit optional request.
+This increases GPU time and still leaves subpixel distant foliage unresolved;
+set `msaa_samples = 1` for the cheaper fallback. Combining averaged colour with
+nearest depth does not prove general TAA edge/disocclusion correctness. No temporal
+visual acceptance or interactive frame-rate target is claimed. See doc 77 and
+its 2026-10-24 evidence for whole-scene diagnostic timings.

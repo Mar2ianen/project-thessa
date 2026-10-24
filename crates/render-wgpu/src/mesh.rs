@@ -9,6 +9,7 @@ use thessa_render_core::mesh::{MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
 struct Primitive {
+    ambient: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
@@ -117,6 +118,13 @@ pub(crate) fn material_texture(
                 let i = &source.images[i];
                 (i.width, i.height, i.rgba8.as_slice())
             });
+            let levels = thessa_render_core::mesh::Image {
+                width,
+                height,
+                rgba8: pixels.to_vec(),
+            }
+            .mip_chain(srgb)
+            .expect("validated mesh image");
             let texture = backend.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("mesh-material-texture"),
                 size: wgpu::Extent3d {
@@ -124,7 +132,7 @@ pub(crate) fn material_texture(
                     height,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count: levels.len() as u32,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: if srgb {
@@ -135,16 +143,25 @@ pub(crate) fn material_texture(
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            backend.queue.write_texture(
-                texture.as_image_copy(),
-                pixels,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width * 4),
-                    rows_per_image: Some(height),
-                },
-                texture.size(),
-            );
+            for (level, image) in levels.iter().enumerate() {
+                backend.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        mip_level: level as u32,
+                        ..texture.as_image_copy()
+                    },
+                    &image.rgba8,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(image.width * 4),
+                        rows_per_image: Some(image.height),
+                    },
+                    wgpu::Extent3d {
+                        width: image.width,
+                        height: image.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             texture.create_view(&Default::default())
         })
         .clone();
@@ -160,6 +177,11 @@ pub(crate) fn material_texture(
             wgpu::FilterMode::Linear
         } else {
             wgpu::FilterMode::Nearest
+        },
+        mipmap_filter: if t.is_none_or(|t| t.min_linear) {
+            wgpu::MipmapFilterMode::Linear
+        } else {
+            wgpu::MipmapFilterMode::Nearest
         },
         min_filter: if t.is_none_or(|t| t.min_linear) {
             wgpu::FilterMode::Linear
@@ -319,6 +341,28 @@ impl MeshRenderer {
         settings: SurfaceSettings<'_>,
         terrain: Option<&crate::terrain_ray::TerrainRaySource>,
     ) -> Result<Self, BackendError> {
+        Self::build_surface(backend, source, settings, terrain, false)
+    }
+
+    /// Camera-only reprojection for immutable body-fixed geometry. The caller
+    /// must reset scene history whenever membership, geometry or poses change.
+    /// Moving/deforming meshes must use `with_surface_and_terrain` instead.
+    pub fn with_static_surface_and_terrain(
+        backend: &Backend,
+        source: &MeshAsset,
+        settings: SurfaceSettings<'_>,
+        terrain: Option<&crate::terrain_ray::TerrainRaySource>,
+    ) -> Result<Self, BackendError> {
+        Self::build_surface(backend, source, settings, terrain, true)
+    }
+
+    fn build_surface(
+        backend: &Backend,
+        source: &MeshAsset,
+        settings: SurfaceSettings<'_>,
+        terrain: Option<&crate::terrain_ray::TerrainRaySource>,
+        static_geometry: bool,
+    ) -> Result<Self, BackendError> {
         let SurfaceSettings {
             format,
             capacity,
@@ -397,12 +441,13 @@ impl MeshRenderer {
                         || crate::shadows::NO_SHADOWS.into(),
                         |_| crate::shadows::receiver_shader(2)
                     ),
-                    // Every mesh is conservatively motion-invalid until its
-                    // previous pose is available. Replace both early and full
-                    // material returns; never change RGB or the disabled path.
+                    // Unknown/moving meshes remain motion-invalid. Immutable
+                    // geometry shares terrain's camera-only reconstruction.
                     include_str!("mesh.wgsl").replace(
                         "view.exposure,1.0)",
-                        if ray_tracing.is_some_and(|s| s.temporal_motion_vectors) {
+                        if !static_geometry
+                            && ray_tracing.is_some_and(|s| s.temporal_motion_vectors)
+                        {
                             "view.exposure,0.0)"
                         } else {
                             "view.exposure,1.0)"
@@ -412,6 +457,10 @@ impl MeshRenderer {
                 .into(),
             ),
         });
+        let has_vertex_ao = source
+            .primitives
+            .iter()
+            .any(|p| !p.ambient_visibility.is_empty());
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("owned-mesh"),
             layout: None,
@@ -423,6 +472,10 @@ impl MeshRenderer {
                     array_stride: 32,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2],
+                }), Some(wgpu::VertexBufferLayout {
+                    array_stride: if has_vertex_ao { 4 } else { 0 },
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![3=>Float32],
                 })],
             },
             primitive: wgpu::PrimitiveState {
@@ -436,7 +489,7 @@ impl MeshRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState { count: ray_tracing.map_or(1,|settings| settings.raster_msaa_samples), ..Default::default() },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fragment"),
@@ -515,6 +568,7 @@ impl MeshRenderer {
                 material.normal_scale,
                 material.occlusion_strength,
             ]));
+            data.extend(words([material.diffuse_transmission, 0.0, 0.0, 0.0]));
             let params = buffer(&data, wgpu::BufferUsages::UNIFORM);
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("mesh-material"),
@@ -563,6 +617,14 @@ impl MeshRenderer {
             .primitives
             .iter()
             .map(|p| Primitive {
+                ambient: buffer(
+                    &words(if p.ambient_visibility.is_empty() {
+                        vec![1.0; if has_vertex_ao { p.vertices.len() } else { 1 }]
+                    } else {
+                        p.ambient_visibility.clone()
+                    }),
+                    wgpu::BufferUsages::VERTEX,
+                ),
                 vertices: buffer(
                     &words(
                         p.vertices
@@ -841,6 +903,7 @@ impl MeshRenderer {
             }
             pass.set_bind_group(1, &self.materials[p.material], &[]);
             pass.set_vertex_buffer(0, p.vertices.slice(..));
+            pass.set_vertex_buffer(1, p.ambient.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..p.count, 0, range.clone());
         }

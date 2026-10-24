@@ -652,3 +652,42 @@ the former tile-seeded/density-dependent kernel with fixed world-local candidate
 addresses and hash-threshold density subsets. Its existing offline consumer
 uses the final frozen global DEM; full native runtime terrain placement and
 plant/rock rendering remain separate integration work.
+
+### WORLD09 shared thin-diffuse mesh material
+
+Opaque mesh materials now carry a [0,1] diffuse-transmission partition, default
+zero. Total scattering albedo is split as R=A(1-t), T=At; both primary raster
+and secondary RT hits use the corresponding front/back cosine. This property
+is a material law through the existing surface quality and shadow/RT resolver,
+not a plant-only lighting pass. Low retains the phenomenon with its established
+cheaper diffuse BRDF and omitted detail maps; Medium/High retain Fresnel energy
+partition. The raster material uniform is now 64 B; RT reuses its reserved
+factor word and retains 48 B per material. GLB loading retains t=0; importing
+external transmission extensions is not implemented. Occluders still cast
+opaque shadows, and ambient uses the existing isotropic/AO approximation.
+See doc 75 for the optical assets and explicit physical/visual limits.
+
+
+WORLD09 also separates optional per-vertex ambient visibility from material UVs,
+retaining the 32 B vertex ABI and interpolating the additional float stream in
+primary and secondary-hit shading. Six CC0 plant maps use shared colour-space
+correct mip uploads; absent visibility remains one. Full mip chains include
+NPOT edge area, but RT still uses LOD-zero samples without ray footprints and
+normal-map variance filtering remains incomplete. See doc 75 for provenance,
+source-owned dry-frond material boundaries and numerical limits. Procedural
+height-only puddle/darkening/normal paint from the intermediate Gemini branch is
+removed: substrate wetness must come from the existing optical material source,
+not a new hydrology claim in the general terrain fragment shader.
+
+
+The 2026-10-24 review also restores the documented first-substrate-bounce law:
+direct entry uses `1 - E_l`, aggregate ambient entry uses `1 - E_avg`, and
+outgoing transmission uses `1 - E_v`. The intervening uncommitted normalization
+`(1 - E_l)/(1 - E_avg)` with unit ambient entry silently changed this model and
+failed the existing white/grey furnace and direct-without-sky oracles. It is not
+retained as an undocumented internal-bounce compensation. All nine ignored
+terrain-environment GPU tests pass after restoration. The common direct GGX
+kernel now cancels its vanishing N.V factors algebraically and preserves the
+finite grazing limit, without the intermediate artistic `smoothstep` damping.
+This does not establish a complete multilayer/multiple-scattering BRDF or a
+universal ground-band fix.

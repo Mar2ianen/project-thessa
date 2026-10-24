@@ -71,6 +71,7 @@ fn conforming_planetary_receiver_matches_unoccluded_reference() {
         terrain.update_lighting(&backend, &lights).unwrap();
         let asset = thessa_render_core::mesh::MeshAsset {
             primitives: vec![thessa_render_core::mesh::Primitive {
+                ambient_visibility: vec![],
                 vertices: [
                     [-30.0, 0.0, -30.0],
                     [30.0, 0.0, -30.0],

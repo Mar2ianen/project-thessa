@@ -85,14 +85,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let current_rgb = max(current.rgb, vec3<f32>(0.0));
     let depth = textureLoad(current_depth, vec2<i32>(id.xy), 0);
     let motion_value = textureLoad(motion, vec2<i32>(id.xy), 0);
-    // The scene alpha is the explicit static-surface mask. Ocean, rigid
-    // meshes/plants and depth-invalid sky are displayed but store age zero, so
-    // they cannot seed a neighbour's history when the camera moves. The motion
-    // alpha only gates this frame's lookup: it is also zero when there is no
-    // previous camera, while the current surface colour is still reusable.
-    let static_surface = current.a >= 1.0 && depth < 1.0;
+    // Explicitly static far background seeds one fresh sample for bilinear
+    // leaf-edge footprints, but never reprojects through finite-depth motion.
+    // Moving meshes/ocean still write alpha zero and cannot seed any tap.
+    let static_surface = current.a >= 1.0 && depth >= 0.0 && depth <= 1.0;
     var resolved = vec4<f32>(current_rgb, select(0.0, 1.0, static_surface));
-    if (params.camera_offset.w > 0.5 && static_surface && motion_value.w > 0.5) {
+    if (params.camera_offset.w > 0.5 && static_surface && depth < 1.0 && motion_value.w > 0.5) {
         let current_ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
         let world_h = params.current_world_from_clip * vec4<f32>(current_ndc, 1.0);
         let world = world_h.xyz / world_h.w;

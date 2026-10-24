@@ -6621,6 +6621,7 @@ name = "thessa-worldgen-rocky"
 version = "0.0.1"
 dependencies = [
  "flate2",
+ "parry3d-f64",
  "png",
  "serde",
  "serde_json",

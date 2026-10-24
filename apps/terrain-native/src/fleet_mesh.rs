@@ -227,6 +227,7 @@ fn append_catalogue(
                 });
             }
             source.primitives.push(Primitive {
+                ambient_visibility: vec![],
                 vertices,
                 indices: part.mesh.indices.clone(),
                 material,
@@ -312,6 +313,10 @@ impl SceneMeshes {
             resolved.fleet_meshes,
             resolved.fleet_min_pixels,
         );
+        let mut mesh_settings = resolved.clone();
+        if !plant_rt_admitted {
+            mesh_settings.ray_tracing = thessa_graphics::ResolvedRayTracing::Off;
+        }
         let meshes = Self {
             plant_context: scene.vehicle.is_none().then_some(context),
             shadows: shadows.cloned(),
@@ -319,7 +324,11 @@ impl SceneMeshes {
             inner: if scene.server_flight() || source.primitives.is_empty() {
                 None
             } else {
-                Some(MeshRenderer::with_surface_and_terrain(
+                Some((if plants.is_some() {
+                    MeshRenderer::with_static_surface_and_terrain
+                } else {
+                    MeshRenderer::with_surface_and_terrain
+                })(
                     backend,
                     source,
                     thessa_render_wgpu::mesh::SurfaceSettings {
@@ -328,7 +337,7 @@ impl SceneMeshes {
                         quality,
                         reflections: resolved.specular_reflections,
                         shadows,
-                        ray_tracing: plant_rt_admitted.then_some(&resolved),
+                        ray_tracing: Some(&mesh_settings),
                     },
                     terrain.as_ref(),
                 )?)
@@ -1469,6 +1478,7 @@ mod tests {
         // shapes contribute. No production X-15/terrain/material comparison.
         scene.vehicle.as_mut().unwrap().0 = MeshAsset {
             primitives: vec![Primitive {
+                ambient_visibility: vec![],
                 vertices: triangle()
                     .positions
                     .iter()
@@ -1585,7 +1595,7 @@ mod tests {
         };
         let image = render(&scene, &mut meshes, 320, 240);
         assert_eq!(meshes.draw_stats().instances, 3);
-        assert_eq!(meshes.draw_stats().draw_calls, 3);
+        assert_eq!(meshes.draw_stats().draw_calls, 5);
         assert_eq!(meshes.source_publications, 1);
         assert_eq!(meshes.epoch_withheld, 0);
         let colored = |bytes: &[u8], left: bool| {

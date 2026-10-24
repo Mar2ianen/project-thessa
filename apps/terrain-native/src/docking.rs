@@ -369,6 +369,7 @@ fn cuboid(center: DVec3, half: DVec3, material: usize) -> Primitive {
         indices.extend([0, 1, 2, 0, 2, 3].map(|v| v + begin));
     }
     Primitive {
+        ambient_visibility: vec![],
         vertices,
         indices,
         material,

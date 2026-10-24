@@ -1,0 +1,81 @@
+{
+  "sources": [
+    {
+      "source": "bark_willow_diff_1k.png",
+      "sha256": "002a5c88826d34c96f32a5a8f72c372fb172cc1129bd7fa2b70c0e087cb2e4b7"
+    },
+    {
+      "source": "bark_willow_nor_gl_1k.png",
+      "sha256": "cfcba7785407ba0b3fa3cba115ad3dbc8c1c5f62ee0d4b0c63dbc0e550109fc1"
+    },
+    {
+      "source": "bark_willow_rough_1k.png",
+      "sha256": "14d001fc51e10f0ae37e5eafa71d39ff909d4fd8de476a65889757b767dbe3b0"
+    },
+    {
+      "source": "fern_02_diff_2k.png",
+      "sha256": "25168368e55d56e1d4eb97aaf72b1ea7c59b61aa75d64ebca86150a34762a583"
+    },
+    {
+      "source": "fern_02_nor_gl_2k.png",
+      "sha256": "0f66d392641b547bc4e5a2254f93177db2b28dadbe03c8eaac92ff8e8cb5def9"
+    },
+    {
+      "source": "fern_02_rough_2k.png",
+      "sha256": "ab0f177eb54647de5bd6b889b9be7a3e7d427b1a9bd5135412eb8a6c0e1a586f"
+    }
+  ],
+  "derived": [
+    {
+      "path": "bark-base.png",
+      "bytes": 467551,
+      "sha256": "ca0ac442a4e9e312a31201add81c2fe26ffda93ec8c00eb8088e2dd4a1cdcf24"
+    },
+    {
+      "path": "bark-mr.png",
+      "bytes": 127408,
+      "sha256": "406a36e359a477f35b890404467c74020abf4d56944c4c69b0d56165fd4c06a2"
+    },
+    {
+      "path": "bark-normal.png",
+      "bytes": 748967,
+      "sha256": "bc76a2c9aa684fe80ff784c8888b392cf7e74a910af938c37b9be90f5bc6e16e"
+    },
+    {
+      "path": "pinna-base.png",
+      "bytes": 7983,
+      "sha256": "1d4784ddd3f839a17035fb44161a8599b834e966b9204e678d0b65cd2a17fd53"
+    },
+    {
+      "path": "pinna-mr.png",
+      "bytes": 164,
+      "sha256": "b8a8eea54eeca10827ffa7242f1083f5f44e07abc94b80d5437a33886d0cacc1"
+    },
+    {
+      "path": "pinna-normal.png",
+      "bytes": 12959,
+      "sha256": "aa4fdd9f6bf7b8a7954c8de60dd545275fdad0ae53fb7990ce536efd2e48c6c8"
+    }
+  ],
+  "leaf_affine_2k_pixels": {
+    "origin": [
+      323,
+      1518
+    ],
+    "length_axis": [
+      -105,
+      30
+    ],
+    "width_axis": [
+      -10,
+      -35
+    ]
+  },
+  "bark_width_m": 1.0,
+  "leaf_is_authored_scaled_archetype": true,
+  "leaf_authored_linear_albedo_gain": [
+    2.6,
+    2.5,
+    1.8
+  ]
+}

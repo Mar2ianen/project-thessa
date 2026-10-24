@@ -331,12 +331,30 @@ fn run(
     min_current_weight: f32,
     invalid_history_pixel: Option<[u32; 2]>,
 ) -> Vec<([f32; 3], u32)> {
+    run_case(
+        backend,
+        previous_depth_value,
+        motion_valid,
+        min_current_weight,
+        invalid_history_pixel,
+        false,
+    )
+}
+
+fn run_case(
+    backend: &Backend,
+    previous_depth_value: f32,
+    motion_valid: bool,
+    min_current_weight: f32,
+    invalid_history_pixel: Option<[u32; 2]>,
+    far_background: bool,
+) -> Vec<([f32; 3], u32)> {
     let current = rgba16_texture(backend, "temporal-current", {
         let mut values = Vec::with_capacity((SIZE * SIZE) as usize);
         for y in 0..SIZE {
             for x in 0..SIZE {
                 let mut value = checker(x, y);
-                value[3] = f32::from(motion_valid);
+                value[3] = f32::from(motion_valid || far_background);
                 values.push(value);
             }
         }
@@ -366,7 +384,11 @@ fn run(
             (SIZE * SIZE) as usize,
         ),
     );
-    let current_depth = depth_texture(backend, "temporal-current-depth", 0.5);
+    let current_depth = depth_texture(
+        backend,
+        "temporal-current-depth",
+        if far_background { 1.0 } else { 0.5 },
+    );
     let previous_depth = depth_texture(backend, "temporal-previous-depth", previous_depth_value);
     let output = backend.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("temporal-resolve-output"),
@@ -508,4 +530,28 @@ fn masked_history_taps_cannot_bleed_through_bilinear_sampling() {
         assert_eq!(color, [checker(x, y)[0]; 3]);
     }
     assert_eq!(actual[(4 * SIZE + 4) as usize].1, 3);
+}
+
+#[test]
+fn far_static_background_seeds_once_without_reading_unrelated_history() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    for motion_valid in [false, true] {
+        let actual = run_case(
+            &backend,
+            1.0,
+            motion_valid,
+            DEFAULT_MIN_CURRENT_WEIGHT,
+            None,
+            true,
+        );
+        for (i, (color, age)) in actual.into_iter().enumerate() {
+            assert_eq!(color, checker(i as u32 % SIZE, i as u32 / SIZE)[..3]);
+            assert_eq!(
+                age, 1,
+                "background must seed a fresh, never accumulated sample"
+            );
+        }
+    }
 }

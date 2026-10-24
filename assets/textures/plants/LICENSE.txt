@@ -1,0 +1,25 @@
+Derived from Poly Haven CC0 assets. Powered by Poly Haven (offline API import).
+https://polyhaven.com/license
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Bark Willow: https://polyhaven.com/a/bark_willow
+Dimitrios Savva (photography), Dario Barresi (processing).
+Source 1k diffuse, OpenGL normal, roughness maps. Measured source width 1 m.
+Downsampled 2x; base colour filtered in linear light, normals renormalized.
+
+Fern 02: https://polyhaven.com/a/fern_02
+Rob Tuytel (scanning), Rico Cilliers (modeling).
+Source 2k diffuse, OpenGL normal, roughness maps. Affine extraction of one pinna;
+normal tangent components rotate with the extraction basis. RGB edge padding is
+retained. Runtime silhouettes are explicit geometry, without alpha masking.
+The authored plant archetype rescales the optical patch; this is not a measured
+reconstruction of extinct foliage. No lighting is baked into the imported PBR maps
+by this importer. Source capture/de-lighting accuracy remains the source's limit.
+
+Exact source and derived SHA256 identities and affine coordinates are recorded
+in provenance.json. Reproduction: tools/worldgen-rocky/import_plant_materials.py.
+
+Leaf base colour is an authored archetype: the importer applies linear RGB
+albedo gains [2.6, 2.5, 1.8] and clamps to [0,1]. The provenance manifest records
+this transformation and pins all source SHA256s. It is not calibrated source
+photometry or a measured fossil-leaf spectrum. Geometry UV U follows pinna length.

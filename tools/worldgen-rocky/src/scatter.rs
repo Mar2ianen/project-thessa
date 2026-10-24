@@ -180,8 +180,8 @@ impl Default for ScatterPolicy {
             min_plant_height_m: 2.0,
             max_plant_slope_rise_run: 0.25,
             understory_spacing_m: 0.8,
-            understory_min_scale: 0.35,
-            understory_max_scale: 0.9,
+            understory_min_scale: 0.55,
+            understory_max_scale: 1.10,
         }
     }
 }

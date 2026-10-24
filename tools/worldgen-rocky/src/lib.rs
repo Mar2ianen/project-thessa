@@ -25,6 +25,7 @@ pub mod lod;
 pub mod manifest;
 pub mod minerals;
 pub mod offline;
+mod plant_visibility;
 pub mod png_min;
 pub mod preview;
 pub mod rng;

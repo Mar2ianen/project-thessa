@@ -27,5 +27,5 @@ pub use settings::{
     InstrumentSettings, MaterialStorageRequest, NavballRenderer, OceanSettings, Preset, Quality,
     RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
     ShadowSettings, SurfacePlantsSettings, TerrainRenderRequest, TerrainTopologySettings,
-    UpperAtmosphereSettings,
+    ToneMapping, UpperAtmosphereSettings,
 };

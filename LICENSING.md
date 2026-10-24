@@ -111,3 +111,14 @@ workspace and is never linked by `thessa-sim-core` or the game applications.
 ## SPDX
 
 Each Cargo package declares its own license. Do not put a single `workspace.package.license` over the mixed repository.
+
+### Khronos PBR Neutral tone mapping
+
+The `pbr_neutral` function in `crates/render-core/src/display.rs` and
+`tonemap_pbr_neutral` in `crates/render-wgpu/src/display.wgsl` adapt
+[KhronosGroup/ToneMapping](https://github.com/KhronosGroup/ToneMapping/blob/main/PBR_Neutral/pbrNeutral.glsl),
+Copyright 2024 The Khronos Group, Inc., Apache-2.0. The Apache license is
+retained in `LICENSES/Apache-2.0.txt`. Modifications: Rust/WGSL translation,
+invalid-input containment, and integration with the existing manual HDR path.
+This notice applies to those adapted functions, not a relicensing of the
+surrounding MIT engine.

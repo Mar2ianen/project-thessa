@@ -386,6 +386,7 @@ impl Scene {
         terrain.share_environment(backend, Some(&environment));
         let source = MeshAsset {
             primitives: vec![Primitive {
+                ambient_visibility: vec![],
                 vertices: [
                     [-0.5, -0.5, -4.0],
                     [0.5, -0.5, -4.0],

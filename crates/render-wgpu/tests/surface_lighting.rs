@@ -25,6 +25,7 @@ fn backend() -> Option<Backend> {
 
 fn quad(x: f32, z: f32, r: f32) -> Primitive {
     Primitive {
+        ambient_visibility: vec![],
         vertices: [
             [-r + x, -r, z],
             [r + x, -r, z],

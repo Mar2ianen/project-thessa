@@ -4,6 +4,8 @@ version = 1
 preset = "high"
 
 [renderer]
+msaa_samples = 1
+tone_mapping = "pbr_neutral"
 terrain_ground_detail = true
 surface_quality = "high"
 terrain_normal_maps = true
@@ -127,7 +129,7 @@ quality = "high"
 understory = true
 
 [temporal]
-taa = true
+taa = false
 quality = "high"
-motion_vectors = true
-jitter = true
+motion_vectors = false
+jitter = false

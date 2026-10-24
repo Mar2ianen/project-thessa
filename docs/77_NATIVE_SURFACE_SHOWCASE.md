@@ -3,7 +3,8 @@
 **Status:** in progress, not visual acceptance. Baseline is WORLD05 commit
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
 The foundation through `f73eea4` is integrated into main (doc 78); subsequent
-visual development continues on `feat/native-surface-showcase`.
+visual development now continues on `feat/surface-visual-engineering`; the
+2026-10-24 follow-up below supersedes intermediate Gemini experiments.
 
 ## Target and constraints
 
@@ -16,7 +17,7 @@ fake atmosphere or camera-specific geometry is introduced.
 The standing (2 m eye AGL), close (50 m) and overview (800 m) views share the
 numeric target. A moving camera and a surface-to-orbit sequence are additional
 acceptance cases, not established by a still image. Large-plant geometry covers
-one L14 query window; the optional near layer adds at most nine L18 query windows.
+one L14 query window; the optional near layer adds at most 25 L18 query windows.
 Neither is planet-wide coverage.
 
 ## Work order
@@ -35,7 +36,8 @@ Neither is planet-wide coverage.
    planet's high-detail mesh/plant population at once.
 
 Default-off native temporal history is integrated as a partial T4c capability
-(doc 76). It excludes all rigid meshes, including plants; it does not establish
+(doc 76). It masks moving/unknown rigid meshes; explicitly immutable plants can now opt
+into camera-only reprojection (doc 75). It does not establish
 foliage antialiasing or complete temporal/visual acceptance.
 
 ## Verification boundary
@@ -1044,3 +1046,89 @@ zero tests. The plant oracle checks 1,392 RGB interiors after 48 shadow-edge
 exclusions among 1,440 selected samples. All 757 compiled/configuration inputs
 are unchanged; rebuilding the exact native-only recipe reproduces capture
 SHA256 `4c89c555a1f847c8cce0eb16f0050318cb382e577e4a4a130472aac9310cd422`.
+
+
+## WORLD09 — Review and continuation of Gemini work (2026-10-24)
+
+The continuation started at `2b0ae6e` on `feat/surface-visual-engineering`, with
+12 intervening commits and a mixed dirty tree containing the earlier material,
+AO and coverage work. The as-found release was retained before editing. Its
+source association is not certified, and its hard-coded `native_tonemapping`
+metadata did not identify the actual shader operator. That baseline is an
+observational screenshot, not a clean single-variable renderer comparison.
+
+Retained from the intervening visual work: the 5×5 near-understory cover, tiered
+48-frond crown budget, explicit atmosphere density 1.0 and EV100 13.35, 0.04 m
+near-shadow bias, and 32-patch ocean budget. The last admits 20 actual near-ocean
+patches at this site without partition fallback. This is not a universal shadow
+bias calibration or a claim that every former performance explanation was proven.
+In particular, the larger standing plant population withholds the entire mesh RT
+partition; a roughness-only explanation of earlier speedups is not re-certified.
+
+The current source adds actual pinna folds at the same leaf triangle budget,
+corrects texture orientation, and returns two fork branches to the silhouette.
+Five source/material groups distinguish stems, green foliage and dry hanging
+fronds. The prototype total is 10,360 triangles, only 112 more than the intervening
+single-trunk version. Geometry, R/T optics and visibility are shared by raster
+and optional secondary-hit consumers (doc 75). Six CC0 maps have pinned source
+hashes and reproducible imports. Their undocumented brightness edit is now an
+explicit authored albedo transformation. Shared material mips and the separate
+AO vertex stream keep actual UVs available for bark/leaf detail.
+
+Removed: mesh-height-based dry-leaf paint, fixed-coefficient/tinted distance fog,
+sinusoidal puddles and wet-ground normal flattening, and artistic grazing-lobe
+damping. The source atmosphere/material systems remain owners of those phenomena;
+finite-distance aerial transport and convincing source-owned wet litter are not
+implemented by this round. An undocumented diffuse normalization from the inherited
+drafts failed the established first-substrate-bounce GPU energy tests. Restoring
+the documented entry/outgoing factors passes the white/grey furnace and direct
+substrate oracles (doc 69); internal return bounces are not silently introduced.
+
+The review profile now selects PBR Neutral, **single-sample raster and TAA off**.
+Optional `renderer.msaa_samples = 4` has a real capability fallback, hardware linear
+colour resolve, nearest covered depth and zero-allocation disable (doc 59). It
+remains a costly quality option. The PBR Neutral dark-range early return is fixed,
+the default renderer still uses Reinhard, and capture metadata now reports the
+actual selected operator.
+
+### Local evidence and limits
+
+The fixed standing site uses the existing target coordinates, 80 m survey distance,
+2 m eye AGL, epoch/step zero, 20 s prestream, 30 warmups and 48 measured 1280×720
+frames, with HUD/audio off. Final native-only executable SHA256 is
+`c70ee8bff8cec8345ea0b08a317d8a011756929262c562ec81aa575ad175997c`.
+On Radeon 880M, Vulkan/RADV Mesa 26.2.5, the two final same-binary controls measure:
+
+| Raster samples | GPU median | Serial wall median | Extra MSAA texels |
+| --- | ---: | ---: | ---: |
+| 1 | 385.169 ms | 389.218 ms | 0 B |
+| 4 | 669.766 ms | 675.815 ms | 44,236,800 B |
+
+Both retain 5,245 unique instances, five draws and the same plant geometry;
+5,032 near clumps replace nine coarse clumps. Prototype vertex/index/AO bytes are
+1,243,200; source textures are 3,219,456 B before mip/driver overhead. The larger
+cover still withholds mesh RT by its existing 4,096-instance budget. Raster atlas
+shadows and the environment fallback remain. The as-found release measured
+325.605 ms GPU; the wider folded foliage does not establish a throughput win.
+These are local offscreen diagnostics, not acceptable game FPS. Final controls
+ran after test jobs; earlier contended/pre-fix previews are excluded from timing
+claims. Independent material residency can differ, so these are not certified
+whole-frame blind pairs. There are no independent votes or reference-quality
+acceptance claims.
+
+Executed: 2,088 workspace lib/bin and 120 integration tests; all-feature/all-target
+Clippy; formatting and architecture gates; native feature-off compilation; all
+nine terrain-environment GPU tests; display CPU/GPU/operator checks and three
+native plant visibility/lifecycle checks. All six bundled PNGs reproduce exactly
+from pinned source maps, and their manifest hashes agree. The independent plant
+ray fixture checks 4,400 selected samples, excluding 164 shadow edges from RGB
+certification. It retains 114/11 finite-bias versus near-zero-reference disagreements
+at 0.01/0.0001 m, all skipped nearby blockers and zero invented blockers. This
+remains a local bias limit, not complete visibility equality.
+
+No new window/compositor or moving-camera acceptance replay, full ignored suites,
+Metal/WebGPU hardware run, remote CI or main promotion is claimed. The current
+image remains substantially behind the concept in floor detail, distant coverage,
+canopy stability, atmospheric composition and performance. Complete commands,
+input/capture hashes, measured scopes, baseline caveats and omissions:
+[`native-gemini-surface-followup-2026-10-24.json`](artifacts/native-gemini-surface-followup-2026-10-24.json).

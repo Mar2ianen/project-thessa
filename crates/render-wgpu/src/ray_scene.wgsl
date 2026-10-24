@@ -17,7 +17,7 @@
 struct RtMaterial {
     // rgb = linear base color, w = metallic.
     color: vec4<f32>,
-    // x = roughness, y = normal scale, z = AO strength, w reserved.
+    // x = roughness, y = normal scale, z = AO strength, w = diffuse transmission.
     factors: vec4<f32>,
     // Base colour, metallic/roughness, normal, AO; UINT_MAX means absent.
     textures: vec4<u32>,
@@ -56,6 +56,7 @@ struct RtSurface {
     roughness: f32,
     occlusion: f32,
     dielectric:f32,
+    transmission:f32,
 }
 
 // Barycentrics land in the primitive's own asset-local space; the pair rows
@@ -106,8 +107,9 @@ fn rt_surface(hit: RtHit, ray_direction: vec3<f32>) -> RtSurface {
     surface.albedo = material.color.rgb * rt_sample(material.textures.x,uv).rgb;
     surface.metallic = material.color.w * mr.b;
     surface.roughness = material.factors.x * mr.g;
-    surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv).r,material.factors.z);
+    surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv).r,material.factors.z)*(v0.uv.z*bary.x+v1.uv.z*bary.y+v2.uv.z*bary.z);
     surface.dielectric=0.04;
+    surface.transmission=material.factors.w;
     return surface;
 }
 
@@ -152,10 +154,12 @@ fn rt_reflection(
         var visibility:array<f32,3>;
         for (var i = 0u; i < 3u; i++) {
             if any(light.colors[i].rgb > vec3(0.0)) {
-                visibility[i]=surface_visibility(surface.position,surface.geometry,i);
+                let shadow_normal=select(surface.geometry,-surface.geometry,surface.transmission>0.0 && dot(surface.geometry,light.directions[i].xyz)<0.0);
+                visibility[i]=surface_visibility(surface.position,shadow_normal,i);
                 illuminance +=
                     light.colors[i].rgb
-                    * max(dot(surface.normal, light.directions[i].xyz), 0.0)
+                    * ((1.0-surface.transmission)*max(dot(surface.normal,light.directions[i].xyz),0.0)
+                        +surface.transmission*max(-dot(surface.normal,light.directions[i].xyz),0.0))
                     * visibility[i];
             }
         }

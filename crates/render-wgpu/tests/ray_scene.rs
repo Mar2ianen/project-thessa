@@ -39,6 +39,7 @@ fn camera(origin: DVec3) -> ViewParams {
 
 fn quad(radius: f32, material: usize) -> Primitive {
     Primitive {
+        ambient_visibility: vec![],
         vertices: [
             [-radius, -radius, 0.0],
             [radius, -radius, 0.0],
@@ -2270,4 +2271,99 @@ fn disabling_a_previously_bound_environment_releases_the_grid() {
     let uploads = mesh.environment_stats().4;
     mesh.update_environment(&backend, None);
     assert_eq!(mesh.environment_stats().4, uploads);
+}
+
+#[test]
+fn thin_diffuse_partition_matches_front_back_and_secondary_hit_radiance() {
+    for mode in [RayTracingRequest::Off, RayTracingRequest::Local] {
+        let Some(backend) = backend(mode) else {
+            continue;
+        };
+        let settings = backend.resolve_graphics(&requested(mode));
+        for quality in [
+            thessa_graphics::Quality::Low,
+            thessa_graphics::Quality::Medium,
+            thessa_graphics::Quality::High,
+        ] {
+            for transmission in [0.0, 0.4, 1.0] {
+                let asset = MeshAsset {
+                    primitives: vec![quad(1.0, 0)],
+                    materials: vec![Material {
+                        base_color: [0.5, 0.5, 0.5, 1.0],
+                        metallic: 0.0,
+                        double_sided: true,
+                        diffuse_transmission: transmission,
+                        ..Default::default()
+                    }],
+                    textures: vec![],
+                    images: vec![],
+                };
+                let mut renderer = MeshRenderer::with_surface(
+                    &backend,
+                    &asset,
+                    SurfaceSettings {
+                        format: OffscreenTarget::FORMAT,
+                        capacity: 1,
+                        quality,
+                        reflections: false,
+                        shadows: None,
+                        ray_tracing: Some(&settings),
+                    },
+                )
+                .unwrap();
+                for side in [-1.0, 1.0] {
+                    let lights = SurfaceLighting {
+                        ambient_lux: [0.0; 4],
+                        directions: [[0.0, 0.0, side, 0.0], [0.0; 4], [0.0; 4]],
+                        colors_lux: [[std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+                    };
+                    let pixels = draw(
+                        &backend,
+                        &mut renderer,
+                        &[MeshInstance {
+                            position_m: DVec3::new(0.0, 0.0, -2.0),
+                            rotation: DQuat::IDENTITY,
+                            scale: 1.0,
+                        }],
+                        std::slice::from_ref(&(0..1)),
+                        &lights,
+                    );
+                    let fresnel = if quality == thessa_graphics::Quality::Low {
+                        1.0
+                    } else {
+                        0.96
+                    };
+                    let partition = if side > 0.0 {
+                        1.0 - transmission
+                    } else {
+                        transmission
+                    };
+                    assert_rgb_near(center(&pixels), [0.25 * fresnel * partition; 3]);
+                }
+            }
+        }
+        if mode == RayTracingRequest::Local {
+            let mut asset = textured_target();
+            asset.materials[1].diffuse_transmission = 0.4;
+            assert_rgb_near(
+                reflected_sample(
+                    &backend,
+                    &settings,
+                    &asset,
+                    &instances(),
+                    &lighting([0.0; 3]),
+                ),
+                [0.293; 3],
+            );
+            let mut backlight = lighting([0.0; 3]);
+            // Tilt off the mirror's own stellar specular direction: otherwise
+            // the primary highlight would saturate this secondary-hit oracle.
+            let direction = glam::Vec3::new(-1.0, 0.6, 0.0).normalize();
+            backlight.directions[0] = direction.extend(0.0).to_array();
+            assert_rgb_near(
+                reflected_sample(&backend, &settings, &asset, &instances(), &backlight),
+                [0.192 / 1.36f32.sqrt() + 0.005; 3],
+            );
+        }
+    }
 }

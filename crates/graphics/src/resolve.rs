@@ -308,6 +308,8 @@ pub struct ResolvedGraphicsSettings {
     pub ray_tracing: ResolvedRayTracing,
     pub resolution_scale: f32,
     pub raster_msaa_samples: u32,
+    #[serde(default)]
+    pub tone_mapping: crate::settings::ToneMapping,
     pub vsync: bool,
     pub hdr: bool,
     #[serde(default)]
@@ -891,6 +893,7 @@ impl ResolvedGraphicsSettings {
                 1
             },
             vsync: requested.renderer.vsync,
+            tone_mapping: requested.renderer.tone_mapping,
             hdr,
             temporal_motion_vectors,
             temporal_jitter,
@@ -1209,6 +1212,7 @@ impl ResolvedGraphicsSettings {
         );
         map.insert("vsync".to_string(), self.vsync.to_string());
         map.insert("hdr".to_string(), self.hdr.to_string());
+        map.insert("tone_mapping".into(), self.tone_mapping.as_str().into());
         map.insert(
             "raster_msaa_samples".into(),
             self.raster_msaa_samples.to_string(),

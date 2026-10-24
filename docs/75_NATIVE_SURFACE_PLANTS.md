@@ -7,7 +7,7 @@ recorded on `feat/native-plant-prototypes` (WORLD05). This is neither planet-wid
 vegetation streaming nor botanical realism, authoritative collision, or final
 close-up visual acceptance. The current prototypes remain deliberately authored
 meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
-normals. WORLD08 below broadens the leaf surfaces while reducing triangle count;
+normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
 The surface-showcase continuation in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
@@ -23,7 +23,137 @@ instance allocation when they fit; instance matrices still use its normal
 shared update path.
 Botanical realism and final surface composition remain incomplete.
 
-## WORLD08 — Broad leaves and spatial understory colonies
+## WORLD09 — Textured, folded foliage and reference follow-up (2026-10-24)
+
+This continues the uncommitted reference work and the Gemini commits through
+`2b0ae6e` on `feat/surface-visual-engineering`. It keeps Gemini's tiered crown,
+25-window understory, explicit daylight exposure, full atmosphere density,
+near-shadow bias and admitted spectral-ocean partition. The two fork terminals
+share 48 radial fronds: each has six ascending, nine spreading, six mature and
+three dry hanging fronds. Real four-face pinnae replace flat strips at the same
+leaf triangle budget. Width changes represent leaf surface area, not raster
+coverage dilation. Two short branches add 112 triangles to the Gemini tree.
+The ground fern has thirteen rachises with fourteen opposed pinna pairs.
+These are authored optical archetypes, not botanical growth or fossil spectra.
+
+| Kind | Triangles | One-sided foliage area |
+| --- | ---: | ---: |
+| Fern | 1,768 | 8.517 m² |
+| Reed | 144 | 1.175 m² |
+| Forked tree | 8,448 | 143.405 m² |
+| Total | 10,360 | |
+
+The 32,768-vertex validation ceiling bounds the largest prototype at 25,344
+vertices and admits historical frozen meshes. Understory scale is 0.55–1.10.
+The existing eight-metre world-addressed occupancy field and canonical ecological
+eligibility are retained. Gemini expanded the same-face L18 cover from 3×3 to
+5×5 windows, with 102,400 candidate/item ceilings. At the fixed standing site
+this retains 5,245 unique instances, including 5,032 near clumps, after nine
+coarse replacements. This larger cover exceeds the existing 4,096-instance RT
+budget, so the whole shared plant RT partition is withheld; raster/shadows and
+environment fallback remain. Increasing coverage is not a free performance win.
+
+### Material and geometry ownership
+
+`PlantMesh.uvs` and `.ambient_visibility` are optional serde-default arrays;
+empty historical arrays remain valid. Present arrays must match vertex count
+and contain finite values; visibility must be in [0,1]. A new optional
+`senescent` terminal vertex group supplies dry-leaf albedo and transmission.
+Triangles cannot cross its validated boundary. The lowest six fronds own this
+material explicitly. Generic mesh shading no longer guesses leaf age from local
+height or alters unrelated meshes. Historical bakes without this group remain
+single-foliage-material assets.
+
+Bark uses one-metre repeating cylindrical UVs. A cropped real pinna texture's
+long U axis now follows the leaf length, with a physical midrib fold rather than
+an artistic normal rotation. Six bundled CC0 maps provide base colour, OpenGL
+normals and packed roughness/metalness, sourced from Poly Haven `bark_willow` and
+`fern_02`. See `assets/textures/plants/LICENSE.txt` and `provenance.json` for
+creators, source/derived hashes, crop transform and scale. The offline importer
+checks pinned input SHA256s. Leaf RGB is explicitly authored in linear space
+(gains 2.6/2.5/1.8 before clamping), retaining Gemini's brighter archetype; it is
+not a measured optical spectrum. This replaces an undocumented edited PNG whose
+old provenance no longer matched. Runtime geometry owns the outline: there is
+no alpha masking or alpha-to-coverage.
+
+The producer bakes visibility against its own two-sided triangles with 32
+cosine-weighted hemisphere rays per unique position/normal, reusing the existing
+Parry 0.30.2 BVH dependency and a 20 µm numerical offset. The first-demand cache
+cost 802.535 ms in a local diagnostic; 1,024 cached clones after 32 warmups had
+median/p95 0.019186/0.020047 ms. This is asset work, not frame time. Visibility
+covers only the prototype, not neighbours/terrain, and is reused on both sides;
+there is no universal 32-sample convergence guarantee. Plane/cavity and an
+independent square-aperture solid-angle integral constrain the tested cases.
+
+Shared `Primitive.ambient_visibility` uses a separate float vertex stream, leaving
+32-byte `Vertex` and 64-byte instance ABIs intact and UVs free for textures.
+Absent arrays use one constant value. Raster ambient and secondary-hit ambient
+consume the same source; direct illumination is not darkened by this AO.
+Stem, green foliage and dry foliage use five grouped draws with shared tree
+instance ranges and no duplicated descriptors. Vertex/index/AO payload is
+1,243,200 B. Source RGBA textures occupy 3,219,456 B; full mip texels occupy
+4,292,592 B, before GPU alignment/driver overhead. RT preflight counts each
+primitive's repeated range.
+
+The shared opaque material's [0,1] `diffuse_transmission` partitions total diffuse
+scattering albedo A as R=A(1-t), T=At. Ferns use t=0.32, other green foliage 0.45,
+dry fronds 0.05 and wood/default materials zero. Raster and secondary RT shading
+share front/back cosine terms and physical stellar-ray direction. Occluders
+still cast opaque shadows; coloured transmitted shadows and subsurface multiple
+scattering are not implemented.
+
+### Filtering and temporal policy
+
+Shared material uploads now build complete mip chains. Base RGB is filtered in
+linear light, data/alpha linearly, including exact area weights for NPOT edges.
+The normal sampled by shading is normalized; normal-variance/roughness filtering
+is not implemented. RT texture fetches still use LOD zero without ray footprints.
+
+The review profile uses single-sample raster and Khronos PBR Neutral display,
+retaining TAA off. Four coverage samples remain an explicit optional setting. Renderer defaults remain single-sample and
+Reinhard; unsupported/unverified MSAA resolves to single-sample. MSAA uses
+hardware linear colour resolve and the nearest covered forward-depth sample
+before existing single-sample consumers. It adds 48 B/pixel in HDR and one depth
+resolve pass, 44,236,800 B at 1280×720. It is an expensive optional quality mode,
+not a performance improvement or complete foliage LOD solution. See doc 59.
+
+Immutable plants may explicitly opt into camera-only motion eligibility; moving
+fleet geometry remains masked. Publication epochs reset history. Far background
+seeds one fresh sample for bilinear footprints but never reprojects far-depth
+history. General sampled-colour/depth TAA composition and moving-camera visual
+acceptance remain open (doc 76).
+
+The independent actual-producer ray fixture isolates AO/maps and checks two
+stellar directions and 0.01/0.0001 m exclusion biases. Current geometry has
+114/11 finite-bias disagreements with the converged near-zero physical reference,
+all skipped nearby blockers and zero invented blockers. The GPU agrees within
+two RGB8 codes outside the explicit shadow-edge exclusions. Those counts are
+asset-specific calibration, not a universal bias guarantee or permission to
+hide the remaining visibility error by brightening foliage.
+
+Gemini's hard-coded 25 m fog-free zone, fixed extinction/sky tint, sinusoidal
+puddles and ground-normal flattening are removed. Native finite-distance aerial
+transport and source-owned wet litter remain work to implement through existing
+atmosphere/material systems, not painted substitutes in generic shaders.
+Ground bands, sparse distant coverage, aliasing, root/resident-mesh agreement and
+GPU cost remain visible issues. No reference match or blind acceptance is claimed.
+
+### Primary research used
+
+- [Tiago Sousa / Crytek, GPU Gems 3 chapter 16](https://developer.nvidia.com/gpugems/gpugems3/part-iii-rendering/chapter-16-vegetation-procedural-animation-and-shading-crysis):
+  foliage needs a combination of suitable shape, two-sided lighting and local
+  ambient occlusion. This implementation uses actual pinna geometry and a BVH
+  visibility bake; it does not copy the chapter's artistic lighting curves.
+- [PBRT 4, Diffuse Reflection](https://pbr-book.org/4ed/Reflection_Models/Diffuse_Reflection)
+  and [the official diffuse-transmission material contract](https://pbrt.org/fileformat-v4):
+  hemisphere cosine weighting and normalized diffuse reflection/transmission
+  motivate the passively bounded R/T partition; no PBRT source is copied.
+- [Etienne Carrier / Ubisoft, Far Cry 5 world generation](https://blog.playstation.com/?p=199418):
+  habitat and terrain should drive placement. Thessa retains its canonical
+  climate/slope/water eligibility and world-addressed colonies instead of
+  scattering another camera-local random population.
+
+## WORLD08 — Broad leaves and spatial understory colonies (historical stage)
 
 The current shared `offline::plant_prototypes` producer replaces each terminal's
 56 narrow leaves with 24 broader, longer arching leaves. Its forked stems and
@@ -117,8 +247,8 @@ restart-required and does not add a new capability or renderer mode.
 | `surface_plants_max_candidates` | `u64` | 0 | 4096 | 4096 | 4096 |
 | `surface_plants_max_items` | `u32` | 0 | 4096 | 4096 | 4096 |
 | `surface_understory_enabled` | `bool` | false | opt-in | opt-in | opt-in |
-| `surface_understory_max_candidates` | `u64` | 0 | 36,864 | 36,864 | 36,864 |
-| `surface_understory_max_items` | `u32` | 0 | 36,864 | 36,864 | 36,864 |
+| `surface_understory_max_candidates` | `u64` | 0 | 102,400 | 102,400 | 102,400 |
+| `surface_understory_max_items` | `u32` | 0 | 102,400 | 102,400 | 102,400 |
 
 Counts follow existing resolved count conventions. The consumer must perform a
 checked conversion of `max_items` if its scatter API accepts `usize`. Density

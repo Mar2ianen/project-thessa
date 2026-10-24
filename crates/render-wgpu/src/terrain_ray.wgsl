@@ -47,5 +47,5 @@ fn rt_terrain_surface(hit:RtHit,pair:RtPair,ray_direction:vec3<f32>)->RtSurface 
     let position=local+vec3(pair.row0.w,pair.row1.w,pair.row2.w);
     var dielectric=0.04;
     // OCEAN_HIT_HOOK
-    return RtSurface(position,normal,geometry,albedo,0.0,roughness,1.0,dielectric);
+    return RtSurface(position,normal,geometry,albedo,0.0,roughness,1.0,dielectric,0.0);
 }

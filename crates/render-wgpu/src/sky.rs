@@ -13,6 +13,7 @@ impl SkyBackground {
         format: wgpu::TextureFormat,
         view: &wgpu::Buffer,
         environment: &EnvironmentBinding,
+        samples: u32,
     ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shared-sky-background"),
@@ -43,7 +44,10 @@ impl SkyBackground {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("sky_fragment"),

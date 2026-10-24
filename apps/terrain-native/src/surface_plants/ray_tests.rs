@@ -114,13 +114,18 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
         )
         .unwrap();
         // Isolate visibility from organ reflectance/maps and environment transport.
-        prepared.asset.materials[0] = Material {
-            base_color: [0.5, 0.5, 0.5, 1.0],
-            metallic: 0.0,
-            roughness: 1.0,
-            double_sided: true,
-            ..Default::default()
-        };
+        for primitive in &mut prepared.asset.primitives {
+            primitive.ambient_visibility.clear();
+        }
+        for material in &mut prepared.asset.materials {
+            *material = Material {
+                base_color: [0.5, 0.5, 0.5, 1.0],
+                metallic: 0.0,
+                roughness: 1.0,
+                double_sided: true,
+                ..Default::default()
+            };
+        }
         let instance = MeshInstance {
             position_m: DVec3::new(0.0, -height, -distance),
             rotation: DQuat::IDENTITY,
@@ -132,22 +137,23 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
             clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.9, 1.0, 0.1, 100.0),
             exposure: 1.0,
         };
-        let primitive = &prepared.asset.primitives[0];
-        let triangles: Vec<_> = primitive
-            .indices
-            .as_chunks::<3>()
-            .0
+        let triangles: Vec<_> = prepared
+            .asset
+            .primitives
             .iter()
-            .map(|indices| {
-                let vertices = indices.map(|i| primitive.vertices[i as usize]);
-                let [a, b, c] = vertices
-                    .map(|v| DVec3::from_array(v.position.map(f64::from)) + instance.position_m);
-                Triangle {
-                    a,
-                    ab: b - a,
-                    ac: c - a,
-                    normals: vertices.map(|v| DVec3::from_array(v.normal.map(f64::from))),
-                }
+            .flat_map(|primitive| {
+                primitive.indices.as_chunks::<3>().0.iter().map(|indices| {
+                    let vertices = indices.map(|i| primitive.vertices[i as usize]);
+                    let [a, b, c] = vertices.map(|v| {
+                        DVec3::from_array(v.position.map(f64::from)) + instance.position_m
+                    });
+                    Triangle {
+                        a,
+                        ab: b - a,
+                        ac: c - a,
+                        normals: vertices.map(|v| DVec3::from_array(v.normal.map(f64::from))),
+                    }
+                })
             })
             .collect();
         let focal = f64::from(SIZE) / (2.0 * (0.9f64 / 2.0).tan());
@@ -324,7 +330,7 @@ fn plant_ray_visibility_matches_actual_triangle_geometry() {
     );
     assert_eq!(
         bias_disagreements,
-        [5, 1],
+        [114, 11],
         "finite receiver exclusion still skips genuine nearby blockers; not complete visibility equality"
     );
 }

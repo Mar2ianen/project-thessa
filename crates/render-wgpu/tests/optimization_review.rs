@@ -59,6 +59,7 @@ fn optimization_review_reproduces_lod_and_shadow_invalidations() {
     };
     let asset = MeshAsset {
         primitives: vec![Primitive {
+            ambient_visibility: vec![],
             vertices: [
                 [-20.0, -20.0, 0.0],
                 [20.0, -20.0, 0.0],

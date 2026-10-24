@@ -144,9 +144,9 @@ fn surface_sun_reflection(
     roughness: f32,
     f0: vec3<f32>,
 ) -> vec3<f32> {
-    let n_dot_v = max(dot(normal, view), 0.0);
-    let n_dot_l = max(dot(normal, sun), 0.0);
-    if (n_dot_v <= OCEAN_EPSILON || n_dot_l <= OCEAN_EPSILON) {
+    let n_dot_v = dot(normal, view);
+    let n_dot_l = dot(normal, sun);
+    if (n_dot_v < 0.0 || n_dot_l <= 0.0) {
         return vec3(0.0, 0.0, 0.0);
     }
 
@@ -159,13 +159,13 @@ fn surface_sun_reflection(
     let denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
     let distribution = alpha_squared / max(OCEAN_PI * denominator * denominator, OCEAN_EPSILON);
 
-    // Schlick's inexpensive Smith masking approximation.
+    // Schlick-Smith masking approximation with N.V cancelled analytically
+    // to preserve finite grazing limits without 0/0 floating-point instability.
     let k = (perceptual_roughness + 1.0) * (perceptual_roughness + 1.0) * 0.125;
-    let visibility_v = n_dot_v / max(n_dot_v * (1.0 - k) + k, OCEAN_EPSILON);
-    let visibility_l = n_dot_l / max(n_dot_l * (1.0 - k) + k, OCEAN_EPSILON);
+    let v_v = 1.0 / max(max(n_dot_v, 0.0) * (1.0 - k) + k, OCEAN_EPSILON);
+    let v_l = 1.0 / max(max(n_dot_l, 0.0) * (1.0 - k) + k, OCEAN_EPSILON);
     let fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - h_dot_v, 5.0);
-    let brdf_times_cosine = fresnel * distribution * visibility_v * visibility_l * n_dot_l
-        / max(4.0 * n_dot_v * n_dot_l, OCEAN_EPSILON);
+    let brdf_times_cosine = fresnel * distribution * (0.25 * v_v * v_l * n_dot_l);
     return sun_illuminance * brdf_times_cosine;
 }
 

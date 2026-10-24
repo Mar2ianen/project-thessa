@@ -275,7 +275,7 @@ pub struct ResolveInput {
     /// Current 3x3 neighbourhood, centre at index 4.
     pub neighbors: [[f32; 3]; 9],
     /// The current pixel is a static surface whose reprojection is meaningful.
-    /// False for ocean, rigid meshes/plants and other explicit invalid masks.
+    /// False for ocean, moving/unknown meshes and other explicit invalid masks.
     pub motion_valid: bool,
     /// False after cut/resize/projection/material/lighting invalidations.
     pub epoch_valid: bool,
@@ -288,7 +288,7 @@ pub struct ResolveOutput {
     pub color: [f32; 3],
     /// Count of accumulated frames represented by the stored colour. Zero means
     /// the current colour may be displayed but is not a reusable history source
-    /// (for example a plant, ocean or invalid-motion pixel).
+    /// (for example a moving mesh, ocean or explicit invalid-motion pixel).
     pub age: u32,
     /// History weight actually used for this output.
     pub history_weight: f32,

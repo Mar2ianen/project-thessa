@@ -203,6 +203,7 @@ fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, St
             occlusion_texture: m.occlusion_texture().map(|t| t.texture().index()),
             occlusion_strength: m.occlusion_texture().map_or(1.0, |t| t.strength()),
             double_sided: m.double_sided(),
+            diffuse_transmission: 0.0,
         });
     }
     materials.push(Material::default());
@@ -355,6 +356,7 @@ fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, St
                     }
                 }
                 primitives.push(Primitive {
+                    ambient_visibility: vec![],
                     vertices,
                     indices,
                     material: p.material().index().unwrap_or(materials.len() - 1),

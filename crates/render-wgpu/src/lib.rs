@@ -43,6 +43,7 @@ pub mod environment;
 pub mod material;
 pub mod mesh;
 pub mod motion;
+pub mod msaa;
 pub mod ocean;
 pub mod plume;
 pub mod ray_scene;
@@ -451,6 +452,25 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        raster_msaa4_supported: Some(
+            [
+                wgpu::TextureFormat::Rgba16Float,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureFormat::Bgra8Unorm,
+            ]
+            .into_iter()
+            .all(|format| {
+                adapter.get_texture_format_features(format).flags.contains(
+                    wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4
+                        | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE,
+                )
+            }) && adapter
+                .get_texture_format_features(wgpu::TextureFormat::Depth32Float)
+                .flags
+                .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4),
+        ),
         temporal_supported: Some(
             adapter
                 .get_downlevel_capabilities()

@@ -206,11 +206,7 @@ pub(crate) fn base_capture_metadata(
         ),
         (
             "native_tonemapping",
-            if display.enabled() {
-                "reinhard"
-            } else {
-                "none"
-            }
+            display.tone_mapping()
             .into(),
         ),
         ("native_auto_exposure_applied", "false".into()),

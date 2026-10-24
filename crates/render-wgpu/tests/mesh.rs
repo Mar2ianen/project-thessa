@@ -6,6 +6,7 @@ use thessa_render_wgpu::{Backend, mesh::MeshRenderer, terrain::OffscreenTarget, 
 fn source() -> MeshAsset {
     MeshAsset {
         primitives: vec![Primitive {
+            ambient_visibility: vec![],
             vertices: [[-0.3, -0.3, 0.5], [0.3, -0.3, 0.5], [0.0, 0.3, 0.5]]
                 .map(|position| Vertex {
                     position,

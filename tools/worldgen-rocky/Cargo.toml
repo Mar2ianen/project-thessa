@@ -13,6 +13,8 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 toml.workspace = true
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
+parry3d-f64 = { version = "=0.30.2", default-features = false, features = ["required-features", "std", "alloc"] }
+
 [dev-dependencies]
 thessa-perf = { path = "../../crates/perf" }
 png = "0.18"

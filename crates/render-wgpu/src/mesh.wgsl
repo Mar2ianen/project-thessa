@@ -14,7 +14,7 @@ struct Material { color:vec4<f32>, double_sided:u32, quality:u32, reflections:u3
 @group(1) @binding(6) var normal_sampler:sampler;
 @group(1) @binding(7) var ao_texture:texture_2d<f32>;
 @group(1) @binding(8) var ao_sampler:sampler;
-struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) uv:vec2<f32>, @location(2) position:vec3<f32>, @location(3) ambient:f32, @location(4) local_y:f32 }
+struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) uv:vec2<f32>, @location(2) position:vec3<f32>, @location(3) ambient:f32 }
 @vertex fn vertex(@location(0) position:vec3<f32>, @location(1) normal:vec3<f32>, @location(2) uv:vec2<f32>, @location(3) ambient:f32, @builtin(instance_index) i:u32)->Output {
     var out:Output;
     let matrix=instances[i];
@@ -23,7 +23,6 @@ struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>
     out.normal=(matrix*vec4(normal,0.0)).xyz;
     out.uv=uv;
     out.ambient=ambient;
-    out.local_y=position.y;
     return out;
 }
 // Raster supplies screen derivatives; a ray hit supplies triangle edges and
@@ -58,14 +57,8 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     if (material.quality==2u && material.pad!=0u) {
         normal=surface_map_normal(normal,map_normal,material.factors.z,dx,dy,du,dv);
     }
-    var albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
-    var transmission=material.optical.x;
-    if (transmission > 0.0 && in.local_y > 2.0 && in.local_y < 7.45) {
-        let skirt_t = clamp((7.45 - in.local_y) / 0.50, 0.0, 1.0);
-        let dead_albedo = vec3(0.18, 0.11, 0.035) * textureSample(color_texture, color_sampler, in.uv).g * 2.5;
-        albedo = mix(albedo, min(dead_albedo, vec3(0.35)), skirt_t * 0.92);
-        transmission = mix(transmission, 0.05, skirt_t * 0.85);
-    }
+    let albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
+    let transmission=material.optical.x;
     var direct_reflect=vec3(0.0);
     var direct_transmit=vec3(0.0);
     var visibility:array<f32,3>;
@@ -85,36 +78,12 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
     let diffuse_ambient=albedo*amb_up/OCEAN_PI;
     let diffuse_total=diffuse_ambient+diffuse_direct;
     if (material.quality==0u && material.reflections==0u) {
-        var low_rad = diffuse_total*(1.0-material.factors.x);
-        let haze_coeff = light.ambient.w;
-        if (haze_coeff > 0.0) {
-            let view_dist = length(in.position);
-            let haze_dist = max(view_dist - 25.0, 0.0);
-            if (haze_dist > 0.0) {
-                var total_sky = light.ambient.rgb;
-                for (var i = 0u; i < 3u; i = i + 1u) {
-                    total_sky += light.colors[i].rgb * max(dot(vec3(0.0, 1.0, 0.0), light.directions[i].xyz), 0.0) * 0.22;
-                }
-                let sky_rad = total_sky / OCEAN_PI;
-                let view_dir = ocean_safe_normalize(-in.position, normal);
-                let elevation = max(-view_dir.y, 0.0);
-                let sky_horizon = mix(
-                    sky_rad * vec3(0.55, 0.62, 0.70),
-                    sky_rad * vec3(0.35, 0.42, 0.50),
-                    smoothstep(0.0, 0.7, elevation)
-                );
-                low_rad = mix(sky_horizon, low_rad, exp(-haze_coeff * haze_dist));
-            }
-        }
+        let low_rad = diffuse_total*(1.0-material.factors.x);
         return vec4(low_rad*view.exposure,1.0);
     }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
-    var roughness=material.factors.y*mr.g;
-    if (material.optical.x > 0.0 && in.local_y > 2.0 && in.local_y < 7.45) {
-        let skirt_t = clamp((7.45 - in.local_y) / 0.50, 0.0, 1.0);
-        roughness = mix(roughness, 0.88, skirt_t);
-    }
+    let roughness=material.factors.y*mr.g;
     let f0=mix(vec3(0.04),albedo,metallic);
     var fresnel=f0;
     if (material.quality!=0u) { fresnel=f0+(vec3(1.0)-f0)*pow(1.0-max(dot(normal,eye),0.0),5.0); }
@@ -125,25 +94,6 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
             if (any(light.colors[i].rgb>vec3(0.0))) {
                 radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,light.colors[i].rgb,roughness,f0)*visibility[i];
             }
-        }
-    }
-    let haze_coeff = light.ambient.w;
-    if (haze_coeff > 0.0) {
-        let view_dist = length(in.position);
-        let haze_dist = max(view_dist - 25.0, 0.0);
-        if (haze_dist > 0.0) {
-            var total_sky = light.ambient.rgb;
-            for (var i = 0u; i < 3u; i = i + 1u) {
-                total_sky += light.colors[i].rgb * max(dot(vec3(0.0, 1.0, 0.0), light.directions[i].xyz), 0.0) * 0.22;
-            }
-            let sky_rad = total_sky / OCEAN_PI;
-            let elevation = max(-eye.y, 0.0);
-            let sky_horizon = mix(
-                sky_rad * vec3(0.55, 0.62, 0.70),
-                sky_rad * vec3(0.35, 0.42, 0.50),
-                smoothstep(0.0, 0.7, elevation)
-            );
-            radiance = mix(sky_horizon, radiance, exp(-haze_coeff * haze_dist));
         }
     }
     return vec4(radiance*view.exposure,1.0);

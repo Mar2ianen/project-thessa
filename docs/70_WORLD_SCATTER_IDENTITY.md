@@ -447,3 +447,12 @@ field/ecology sampling, runtime foliage rendering, frame budgets or an old/new
 speedup. Concurrent machine activity was not controlled. Parent/children equality
 is asserted outside each timed scenario. GPU/backend and visual gates are not
 applicable to this descriptor-only implementation.
+
+### WORLD09 optical size revision
+
+The optional understory's authored scale interval is now 0.55–1.10, with the
+same ID lattice, world-addressed colony field, canonical habitat and quality
+subset rules. Larger fern geometry and hierarchical tree fronds are shared
+prototype changes, not new candidates or random-placement fields. Original
+coarse plant/rock transforms remain unchanged; historical bakes retain their
+stored geometry. See doc 75 for dimensions, payloads and limitations.

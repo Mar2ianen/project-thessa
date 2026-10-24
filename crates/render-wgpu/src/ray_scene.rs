@@ -242,7 +242,7 @@ fn plan_inner(
             material.roughness,
             material.normal_scale,
             material.occlusion_strength,
-            0.0,
+            material.diffuse_transmission,
         ]));
         let maps = [
             material.base_texture,
@@ -553,7 +553,7 @@ impl RayScene {
             label: Some("rt-positions"),
             contents: &if plan.mesh_enabled {
                 f32_bytes(source.primitives.iter().flat_map(|p| {
-                    p.vertices.iter().flat_map(|v| {
+                    p.vertices.iter().enumerate().flat_map(|(i, v)| {
                         [
                             v.position[0],
                             v.position[1],
@@ -565,7 +565,7 @@ impl RayScene {
                             0.0,
                             v.uv[0],
                             v.uv[1],
-                            0.0,
+                            p.ambient_visibility.get(i).copied().unwrap_or(1.0),
                             0.0,
                         ]
                         .into_iter()
@@ -1042,6 +1042,7 @@ mod tests {
         let settings = backend.resolve_graphics(&request);
         let source = MeshAsset {
             primitives: vec![Primitive {
+                ambient_visibility: vec![],
                 vertices: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
                     .map(|position| Vertex {
                         position,

@@ -414,6 +414,7 @@ fn scene_oracle(jitter_enabled: bool) {
     request.ocean.geometry_distance_m = 20000.0;
     let source = MeshAsset {
         primitives: vec![Primitive {
+            ambient_visibility: vec![],
             vertices: [[-0.5, -0.5, -4.0], [0.5, -0.5, -4.0], [0.0, 0.5, -4.0]]
                 .map(|position| Vertex {
                     position,
@@ -437,12 +438,13 @@ fn scene_oracle(jitter_enabled: bool) {
     };
     for conforming in [false, true] {
         request.terrain_topology.enabled = conforming;
-        for (ocean, agl, mesh_quality, water_material_loaded) in [
-            (false, 2.0, Quality::Low, false),
-            (false, 50.0, Quality::High, false),
-            (false, 400_000.0, Quality::Low, false),
-            (true, 50.0, Quality::High, false),
-            (true, 50.0, Quality::Low, true),
+        for (ocean, agl, mesh_quality, water_material_loaded, static_mesh) in [
+            (false, 2.0, Quality::Low, false, false),
+            (false, 50.0, Quality::High, false, false),
+            (false, 400_000.0, Quality::Low, false, false),
+            (true, 50.0, Quality::High, false, false),
+            (true, 50.0, Quality::Low, true, false),
+            (false, 2.0, Quality::High, false, true),
         ] {
             request.ocean.enabled = ocean;
             let page = HeightPage::bake(&[if ocean { 0.0 } else { 100.0 }; 4], 2, 0.001).unwrap();
@@ -528,7 +530,12 @@ fn scene_oracle(jitter_enabled: bool) {
                         .collect();
                     terrain.update_materials(&backend, &ids, &pages).unwrap();
                 }
-                let mut mesh = MeshRenderer::with_surface(
+                let build = if static_mesh {
+                    MeshRenderer::with_static_surface_and_terrain
+                } else {
+                    MeshRenderer::with_surface_and_terrain
+                };
+                let mut mesh = build(
                     &backend,
                     &source,
                     SurfaceSettings {
@@ -539,6 +546,7 @@ fn scene_oracle(jitter_enabled: bool) {
                         shadows: None,
                         ray_tracing: Some(&settings),
                     },
+                    None,
                 )
                 .unwrap();
                 terrain.update_lighting(&backend, &lights).unwrap();
@@ -609,7 +617,11 @@ fn scene_oracle(jitter_enabled: bool) {
                         &view,
                         &lights,
                         &[MeshInstance {
-                            position_m: view.world_position_m,
+                            position_m: if static_mesh {
+                                previous.world_position_m
+                            } else {
+                                view.world_position_m
+                            },
                             rotation: glam::DQuat::IDENTITY,
                             scale: if agl < 3.0 { 0.1 } else { 1.0 },
                         }],
@@ -703,10 +715,14 @@ fn scene_oracle(jitter_enabled: bool) {
                                         .max((f64::from(gpu[c]) - expected[c]).abs() * SIZE as f64);
                                 }
                             }
-                            assert!(
-                                invalid_finite > 10,
-                                "mesh mask must cover real finite depth"
-                            );
+                            if static_mesh {
+                                assert_eq!(
+                                    invalid_finite, 0,
+                                    "static plants must admit camera reprojection"
+                                );
+                            } else {
+                                assert!(invalid_finite > 10, "moving mesh must remain masked");
+                            }
                             if ocean {
                                 assert_eq!(
                                     valid, 0,
@@ -720,7 +736,7 @@ fn scene_oracle(jitter_enabled: bool) {
                                 "planet-scale f64 oracle error {max_error_px} px"
                             );
                             println!(
-                                "scene_motion jitter={jitter_enabled} frame={frame} conforming={conforming} ocean={ocean} camera_altitude_above_page_m={agl} valid={valid} invalid_finite={invalid_finite} max_error_px={max_error_px:.6}"
+                                "scene_motion static_mesh={static_mesh} jitter={jitter_enabled} frame={frame} conforming={conforming} ocean={ocean} camera_altitude_above_page_m={agl} valid={valid} invalid_finite={invalid_finite} max_error_px={max_error_px:.6}"
                             );
                         }
                         // Frame 0 intentionally remains uncommitted until its

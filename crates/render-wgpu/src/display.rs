@@ -9,6 +9,7 @@ pub struct DisplayTransform {
     hdr: Option<Hdr>,
     output_format: wgpu::TextureFormat,
     extent: [u32; 2],
+    tone_mapping: thessa_graphics::ToneMapping,
 }
 struct Hdr {
     texture: wgpu::Texture,
@@ -77,7 +78,18 @@ impl DisplayTransform {
                     fragment: Some(wgpu::FragmentState {
                         module: &module,
                         entry_point: Some("fragment"),
-                        compilation_options: Default::default(),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &[(
+                                "TONEMAP_OPERATOR",
+                                if settings.tone_mapping == thessa_graphics::ToneMapping::PbrNeutral
+                                {
+                                    1.0
+                                } else {
+                                    0.0
+                                },
+                            )],
+                            ..Default::default()
+                        },
                         targets: &[Some(wgpu::ColorTargetState {
                             format: output_format,
                             blend: None,
@@ -106,6 +118,7 @@ impl DisplayTransform {
             hdr,
             output_format,
             extent: [width, height],
+            tone_mapping: settings.tone_mapping,
         })
     }
 
@@ -132,6 +145,14 @@ impl DisplayTransform {
     }
     pub fn enabled(&self) -> bool {
         self.hdr.is_some()
+    }
+
+    pub fn tone_mapping(&self) -> &'static str {
+        if self.enabled() {
+            self.tone_mapping.as_str()
+        } else {
+            "none"
+        }
     }
     /// Zero/minimized or inadmissible resize leaves all live resources intact.
     /// Only target and bind group change; pipelines/scene geometry stay retained.

@@ -26,7 +26,9 @@ fn site(dir: [f64; 3]) -> ScatterSurface {
 
 fn main() {
     if std::env::args().any(|arg| arg == "--prototypes") {
+        let cold = Instant::now();
         let prototypes = thessa_worldgen_rocky::offline::plant_prototypes();
+        let cold_build_ms = cold.elapsed().as_secs_f64() * 1000.0;
         let counts: Vec<_> = prototypes
             .iter()
             .map(|p| {
@@ -50,7 +52,7 @@ fn main() {
                 serde_json::json!({
                     "kind": format!("{:?}", p.kind), "vertices": p.positions.len(),
                     "triangles": p.indices.len() / 3,
-                    "producer_payload_bytes": p.positions.len() * 24 + p.indices.len() * 4,
+                    "producer_payload_bytes": p.positions.len() * 24 + p.indices.len() * 4 + p.ambient_visibility.len() * 4 + p.uvs.len() * 8,
                     "foliage_area_m2": foliage_area_m2,
                 })
             })
@@ -68,8 +70,8 @@ fn main() {
         println!(
             "{}",
             serde_json::json!({
-                "workload": "1024 serial complete three-kind prototype builds after 32 warmups",
-                "prototypes": counts, "p50_ms": times[512], "p95_ms": times[972],
+                "workload": "1024 cached three-kind prototype clones after 32 warmups",
+                "prototypes": counts, "cold_build_and_visibility_ms": cold_build_ms, "p50_ms": times[512], "p95_ms": times[972],
                 "max_ms": times[1023], "not_frame_time_or_placement": true,
             })
         );

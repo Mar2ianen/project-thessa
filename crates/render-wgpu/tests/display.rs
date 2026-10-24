@@ -88,93 +88,107 @@ fn srgb(v: f32) -> u8 {
 #[ignore = "hardware: native HDR transfer/quantization, highlight detail, resize and disabled identity"]
 fn display_matches_cpu_oracle_and_disabled_is_exact() {
     let backend = Backend::bring_up().unwrap();
-    for enabled in [false, true] {
-        let mut requested = thessa_graphics::RequestedGraphics::default();
-        requested.renderer.hdr = enabled;
-        let settings = backend.resolve_graphics(&requested);
-        let mut display =
-            DisplayTransform::new(&backend, &settings, OffscreenTarget::FORMAT, 257, 17).unwrap();
-        assert_eq!(display.enabled(), enabled);
-        let pipeline = pattern(&backend, display.scene_format());
-        for (width, height) in [(257, 17), (33, 65), (257, 17)] {
-            display.resize(&backend, width, height).unwrap();
-            assert_eq!(
-                display.target_bytes(),
-                if enabled {
-                    u64::from(width) * u64::from(height) * 8
-                } else {
-                    0
+    for mode in [
+        thessa_graphics::ToneMapping::Reinhard,
+        thessa_graphics::ToneMapping::PbrNeutral,
+    ] {
+        for enabled in [false, true] {
+            let mut requested = thessa_graphics::RequestedGraphics::default();
+            requested.renderer.hdr = enabled;
+            requested.renderer.tone_mapping = mode;
+            let settings = backend.resolve_graphics(&requested);
+            let mut display =
+                DisplayTransform::new(&backend, &settings, OffscreenTarget::FORMAT, 257, 17)
+                    .unwrap();
+            assert_eq!(display.enabled(), enabled);
+            let pipeline = pattern(&backend, display.scene_format());
+            for (width, height) in [(257, 17), (33, 65), (257, 17)] {
+                display.resize(&backend, width, height).unwrap();
+                assert_eq!(
+                    display.target_bytes(),
+                    if enabled {
+                        u64::from(width) * u64::from(height) * 8
+                    } else {
+                        0
+                    }
+                );
+                assert!(display.resize(&backend, 0, height).is_err());
+                assert!(
+                    display
+                        .resize(
+                            &backend,
+                            backend.device.limits().max_texture_dimension_2d + 1,
+                            height
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    display.target_bytes(),
+                    if enabled {
+                        u64::from(width) * u64::from(height) * 8
+                    } else {
+                        0
+                    }
+                );
+                let target = OffscreenTarget::new(&backend, width, height).unwrap();
+                let render = |post: bool| {
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    draw_pattern(&mut encoder, display.scene_color(&target.color), &pipeline);
+                    if post {
+                        display.encode(&mut encoder, &target.color);
+                    }
+                    backend.queue.submit([encoder.finish()]);
+                    target.read_rgba8(&backend).unwrap()
+                };
+                let pixels = render(true);
+                if !enabled {
+                    assert_eq!(
+                        pixels,
+                        render(false),
+                        "HDR disabled must be byte-identical direct rendering"
+                    );
                 }
-            );
-            assert!(display.resize(&backend, 0, height).is_err());
-            assert!(
-                display
-                    .resize(
-                        &backend,
-                        backend.device.limits().max_texture_dimension_2d + 1,
-                        height
-                    )
-                    .is_err()
-            );
-            assert_eq!(
-                display.target_bytes(),
-                if enabled {
-                    u64::from(width) * u64::from(height) * 8
-                } else {
-                    0
+                for y in 0..height {
+                    for x in 0..width {
+                        let rgb = COLORS[x as usize % 8];
+                        let rgb = if enabled {
+                            match mode {
+                                thessa_graphics::ToneMapping::Reinhard => {
+                                    thessa_render_core::display::reinhard(rgb)
+                                }
+                                thessa_graphics::ToneMapping::PbrNeutral => {
+                                    thessa_render_core::display::pbr_neutral(rgb)
+                                }
+                            }
+                        } else {
+                            rgb
+                        };
+                        let at = ((y * width + x) * 4) as usize;
+                        for c in 0..3 {
+                            assert!(
+                                pixels[at + c].abs_diff(srgb(rgb[c])) <= 1,
+                                "8-bit sRGB error >1 code: hdr={enabled} ({x},{y}) channel={c} got={} expected={}",
+                                pixels[at + c],
+                                srgb(rgb[c])
+                            );
+                        }
+                        assert_eq!(pixels[at + 3], 255);
+                    }
                 }
-            );
-            let target = OffscreenTarget::new(&backend, width, height).unwrap();
-            let render = |post: bool| {
-                let mut encoder = backend.device.create_command_encoder(&Default::default());
-                draw_pattern(&mut encoder, display.scene_color(&target.color), &pipeline);
-                if post {
-                    display.encode(&mut encoder, &target.color);
-                }
-                backend.queue.submit([encoder.finish()]);
-                target.read_rgba8(&backend).unwrap()
-            };
-            let pixels = render(true);
-            if !enabled {
                 assert_eq!(
                     pixels,
-                    render(false),
-                    "HDR disabled must be byte-identical direct rendering"
+                    render(true),
+                    "unchanged/paused presentation has no temporal drift"
                 );
-            }
-            for y in 0..height {
-                for x in 0..width {
-                    let rgb = COLORS[x as usize % 8];
-                    let rgb = if enabled {
-                        thessa_render_core::display::reinhard(rgb)
-                    } else {
-                        rgb
-                    };
-                    let at = ((y * width + x) * 4) as usize;
-                    for c in 0..3 {
-                        assert!(
-                            pixels[at + c].abs_diff(srgb(rgb[c])) <= 1,
-                            "8-bit sRGB error >1 code: hdr={enabled} ({x},{y}) channel={c} got={} expected={}",
-                            pixels[at + c],
-                            srgb(rgb[c])
-                        );
-                    }
-                    assert_eq!(pixels[at + 3], 255);
+                let gray = |column: usize| pixels[column * 4];
+                if enabled {
+                    assert!(
+                        gray(3) < gray(4) && gray(4) < gray(5),
+                        "1/4/16 highlights must remain distinct"
+                    );
+                } else {
+                    assert_eq!(gray(3), gray(5));
                 }
-            }
-            assert_eq!(
-                pixels,
-                render(true),
-                "unchanged/paused presentation has no temporal drift"
-            );
-            let gray = |column: usize| pixels[column * 4];
-            if enabled {
-                assert!(
-                    gray(3) < gray(4) && gray(4) < gray(5),
-                    "1/4/16 highlights must remain distinct"
-                );
-            } else {
-                assert_eq!(gray(3), gray(5));
             }
         }
     }

@@ -394,6 +394,7 @@ pub fn prepare(
         .map(|p| {
             p.vertices.len() * std::mem::size_of::<Vertex>()
                 + p.indices.len() * std::mem::size_of::<u32>()
+                + p.ambient_visibility.len() * std::mem::size_of::<f32>()
         })
         .sum();
     diagnostics.prototype_texture_bytes = prepared
@@ -444,18 +445,33 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
             .stem
             .as_ref()
             .map_or(0, |stem| stem.vertex_count as usize);
+        let dry_start = prototype
+            .senescent
+            .as_ref()
+            .map_or(prototype.positions.len(), |s| s.first_vertex as usize);
         let parts = [
-            (0..stem_end, true),
-            (stem_end..prototype.positions.len(), false),
+            (0..stem_end, true, false),
+            (stem_end..dry_start, false, false),
+            (dry_start..prototype.positions.len(), false, true),
         ];
-        for (vertices, stem) in parts {
+        for (vertices, stem, dry) in parts {
             if vertices.is_empty() {
                 continue;
             }
             let [base, normal, mr] =
                 crate::surface_plant_materials::append(&mut prepared.asset, stem);
             let material = prepared.asset.materials.len();
-            let base_color = if stem {
+            let base_color = if dry {
+                let color = prototype.senescent.as_ref().unwrap().albedo_srgb;
+                let [r, g, b] = color.map(|s| {
+                    if s <= 0.04045 {
+                        s / 12.92
+                    } else {
+                        ((s + 0.055) / 1.055).powf(2.4)
+                    }
+                });
+                [r, g, b, 1.0]
+            } else if stem {
                 if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree {
                     [1.0, 0.89, 0.70, 1.0]
                 } else {
@@ -472,7 +488,9 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
                     _ => [1.0; 4],
                 }
             };
-            let diffuse_transmission = if stem {
+            let diffuse_transmission = if dry {
+                prototype.senescent.as_ref().unwrap().diffuse_transmission
+            } else if stem {
                 0.0
             } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
                 0.32
@@ -481,11 +499,11 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
             };
             prepared.asset.materials.push(Material {
                 base_color,
-                base_texture: Some(base),
+                base_texture: (!dry).then_some(base),
                 normal_texture: Some(normal),
                 metallic_roughness_texture: Some(mr),
                 metallic: 0.0,
-                roughness: if stem { 0.85 } else { 0.65 },
+                roughness: if stem || dry { 0.85 } else { 0.65 },
                 double_sided: true,
                 // Authored total scattering and partition, not a measured
                 // fossil spectrum; R + T never exceeds the source albedo.
@@ -694,7 +712,7 @@ mod tests {
                 assert!(prepared.descriptors.contains(&tree));
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
-            assert!(prepared.ranges.len() <= 4);
+            assert!(prepared.ranges.len() <= 5);
             assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 1_400_000);
             let (_, disabled) = prepare(Context::Disabled, &resolved, field).unwrap();
             assert_eq!(
@@ -795,7 +813,13 @@ mod tests {
                     .stem
                     .as_ref()
                     .is_some_and(|s| offset < s.vertex_count as usize);
-                let expected_transmission = if stem {
+                let dry = prototype
+                    .senescent
+                    .as_ref()
+                    .filter(|s| offset >= s.first_vertex as usize);
+                let expected_transmission = if let Some(dry) = dry {
+                    dry.diffuse_transmission
+                } else if stem {
                     0.0
                 } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
                     0.32
@@ -804,7 +828,7 @@ mod tests {
                 };
                 assert_eq!(material.diffuse_transmission, expected_transmission);
                 assert_eq!(material.metallic, 0.0);
-                assert!(material.base_texture.is_some());
+                assert_eq!(material.base_texture.is_some(), dry.is_none());
                 assert!(material.normal_texture.is_some());
                 assert!(material.metallic_roughness_texture.is_some());
                 for (i, v) in primitive.vertices.iter().enumerate() {
@@ -824,9 +848,14 @@ mod tests {
                     .flat_map(|t| t.map(|i| i - offset as u32))
                     .collect();
                 assert_eq!(indices, primitive.indices);
+                assert_eq!(
+                    primitive.ambient_visibility,
+                    prototype.ambient_visibility[offset..end]
+                );
                 seen.insert(group[0].kind as u8, end);
                 prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
-                    + primitive.indices.len() * std::mem::size_of::<u32>();
+                    + primitive.indices.len() * std::mem::size_of::<u32>()
+                    + primitive.ambient_visibility.len() * std::mem::size_of::<f32>();
             }
             for prototype in thessa_worldgen_rocky::offline::plant_prototypes() {
                 assert_eq!(seen[&(prototype.kind as u8)], prototype.positions.len());

@@ -1298,9 +1298,9 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
     // The two crowns share the same 48-frond budget as the single umbrella.
     const TIERS: [(usize, f64, f64, f64); 4] = [
         (6, 7.98, 4.05, 0.00), // Youngest ascending apex fronds per terminal
-        (9, 7.78, 4.45, 0.35), // Primary spreading canopy fronds
-        (6, 7.48, 4.10, 0.72), // Mature lower fronds
-        (3, 7.18, 3.40, 1.15), // Drooping mantle / skirt fronds
+        (9, 7.78, 4.55, 0.35), // Primary spreading canopy fronds
+        (6, 7.48, 4.15, 0.72), // Mature lower fronds
+        (3, 7.18, 3.45, 1.15), // Drooping mantle / skirt fronds
     ];
     for &(count, base_y, reach_base, phase_offset) in &TIERS {
         if base_y == 7.18 {
@@ -1426,7 +1426,7 @@ fn crown_frond(mesh: &mut PlantMesh, angle: f64, base: [f64; 3], reach_m: f64) {
                     ),
                 )
             });
-            pinna(mesh, nodes, radial, length * 0.12, length * 0.035);
+            pinna(mesh, nodes, radial, length * 0.125, length * 0.035);
         }
     }
 }

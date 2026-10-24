@@ -21,7 +21,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 13.05
+exposure_ev100 = 13.10
 fleet_meshes = true
 fleet_quality = "high"
 
@@ -33,7 +33,7 @@ quality = "high"
 enabled = true
 quality = "high"
 aerial_perspective = true
-density_scale = 1.0
+density_scale = 1.8
 multiple_scattering = false
 eclipses = true
 multi_star = true

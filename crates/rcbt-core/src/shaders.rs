@@ -346,11 +346,15 @@ fn finalize_active(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// and reflection policy without rewriting shared shading expressions.
 pub const RASTER_SURFACE_HOOKS_WGSL: &str = include_str!("shaders/raster_surface_hooks.wgsl");
 
+/// Exact integer cube/chart helpers shared by raster and refinement probes.
+pub const CONFORMING_ADDRESS_WGSL: &str = include_str!("shaders/conforming_address.wgsl");
+
 /// Procedural direct raster consumer for the generated GPU geometry. It uses
 /// one indirect draw with a linear triangle vertex stream, matching the draw
 /// submission shape of large_cbt while retaining the current page format.
 pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/raster_surface_hooks.wgsl"),
+    include_str!("shaders/conforming_address.wgsl"),
     include_str!("shaders/precision.wgsl"),
     include_str!("shaders/tile_frame.wgsl"),
     include_str!("shaders/ocean.wgsl"),
@@ -359,6 +363,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/material_normal.wgsl"),
     r#"
 const MATERIAL_MAX_LEVEL: f32 = 17.0;
+const GROUND_RELIEF_GEOMETRY: bool = false;
 const MATERIAL_ANISOTROPY: f32 = 1.0;
 struct Params {
     leaf_count: u32,
@@ -417,6 +422,7 @@ struct VertexOutput {
     @location(6) material_chart: vec3<f32>,
     @location(7) @interpolate(flat) material_anchor: vec2<f32>,
     @location(8) @interpolate(flat) material_face: u32,
+    @location(9) @interpolate(flat) geometry_level: u32,
 };
 
 @group(0) @binding(6) var albedo_texture: texture_2d<f32>;
@@ -463,9 +469,12 @@ fn vertex(
     @builtin(vertex_index) vertex_index: u32,
 ) -> VertexOutput {
     if (CBT_CONFORMING) {
-        let position = generated_vertices[vertex_index * 3u];
-        let normal = generated_vertices[vertex_index * 3u + 1u];
-        let address = bitcast<vec4<u32>>(generated_vertices[vertex_index * 3u + 2u]);
+        // Existing binding 5 transports packed active u32 allocation indices.
+        let slot = active_triangles[vertex_index / 12u][(vertex_index / 3u) % 4u];
+        let source_index = slot * 3u + vertex_index % 3u;
+        let position = generated_vertices[source_index * 3u];
+        let normal = generated_vertices[source_index * 3u + 1u];
+        let address = bitcast<vec4<u32>>(generated_vertices[source_index * 3u + 2u]);
         var output: VertexOutput;
         output.clip_position = vec4(2.0,2.0,2.0,1.0);
         // Free/virtual slots have zero normal. Missing height pages instead
@@ -477,6 +486,27 @@ fn vertex(
         output.render_position = position.xyz;
         output.height_m = position.w;
         output.material_slot = 0xffffffffu;
+        let first = source_index - source_index % 3u;
+        let a0 = bitcast<vec4<u32>>(generated_vertices[first * 3u + 2u]);
+        let a1 = bitcast<vec4<u32>>(generated_vertices[(first + 1u) * 3u + 2u]);
+        let a2 = bitcast<vec4<u32>>(generated_vertices[(first + 2u) * 3u + 2u]);
+        let c0 = conforming_cube(a0.xy, u32(generated_vertices[first * 3u + 1u].w));
+        let c1 = conforming_cube(a1.xy, u32(generated_vertices[(first + 1u) * 3u + 1u].w));
+        let c2 = conforming_cube(a2.xy, u32(generated_vertices[(first + 2u) * 3u + 1u].w));
+        var face = select(5u, 4u, c0.z >= 0);
+        if (abs(c0.x) == 268435456 && c0.x == c1.x && c0.x == c2.x) {
+            face = select(1u, 0u, c0.x >= 0);
+        } else if (abs(c0.y) == 268435456 && c0.y == c1.y && c0.y == c2.y) {
+            face = select(3u, 2u, c0.y >= 0);
+        }
+        let origin = (conforming_face_uv(c0, face) / 4096) * 4096;
+        let cube = conforming_cube(address.xy, u32(normal.w));
+        let delta = vec2<f32>(conforming_face_uv(cube, face) - origin) / 536870912.0;
+        let major = max(abs(output.body_direction.x), max(abs(output.body_direction.y), abs(output.body_direction.z)));
+        output.material_anchor = vec2<f32>(origin) / 536870912.0;
+        output.material_chart = vec3(delta * major, major);
+        output.material_face = face;
+        output.geometry_level = min(a0.w, min(a1.w, a2.w));
         return output;
     }
     return cbt_vertex(vertex_index);
@@ -528,6 +558,7 @@ fn cbt_vertex(vertex_index: u32) -> VertexOutput {
     let chart = material_address(frame.geometry.raw_center.xyz);
     output.material_anchor = chart.uv;
     output.material_face = chart.face;
+    output.geometry_level = (leaves[ordinal].z - 3u) / 2u;
     // Rational interpolation reproduces projection of the interpolated body
     // direction, rather than linearly interpolating spherical chart UVs. The
     // anchor is identical for every vertex of this patch and exactly dyadic.
@@ -614,8 +645,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // Premultiplied surface gradients: uncovered weight is flat. Preserve
     // coverage and the same globe transition as albedo rather than magnifying
     // a tiny resident normal contribution to full strength.
-    let tangent = mix(coarse.normal, fine.normal, fract(material_lod))
+    var tangent = mix(coarse.normal, fine.normal, fract(material_lod))
         * (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m));
+    // Relief pages already generate their physical geometric normals. A second
+    // full-height bump perturbation would count the same source slope twice.
+    if (GROUND_RELIEF_GEOMETRY && input.geometry_level > 17u) { tangent = vec2(0.0); }
     let shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
     var direct = vec3(0.0);
     var land_direct = vec3(0.0);

@@ -401,3 +401,373 @@ fn native_topology_settings_select_shared_production_consumers() {
         terrain.topology_storage_bytes()
     );
 }
+
+#[test]
+#[ignore = "hardware: production conforming raster must preserve subtexel L22 motion in all cube charts"]
+fn conforming_material_coordinates_keep_centimetre_detail() {
+    use wgpu::util::DeviceExt;
+    let backend = Backend::bring_up().unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        terrain_topology: thessa_graphics::ResolvedTerrainTopology {
+            capacity: 4096,
+            waves: 1,
+            split_area_px: 256.0,
+            merge_area_px: 32.0,
+        },
+        terrain_ground_detail: true,
+        terrain_normal_maps: false,
+        specular_reflections: false,
+        shadow_enabled: false,
+        ..Default::default()
+    };
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let rgba = (0..128 * 128)
+        .flat_map(|i| [if i % 128 < 64 { 32 } else { 224 }, 0, 0, 255])
+        .collect();
+    let material = CbtMaterialPage::from_rgba8(rgba).unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    // Inject two exact CPU-projected triangles into the production stream. This
+    // isolates raster precision from convergence policy, with no alternate raster.
+    let module = backend.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var<storage,read> fixture:array<vec4<u32>>; @group(0) @binding(1) var<storage,read_write> vertices:array<vec4<u32>>; @group(0) @binding(2) var<storage,read> draw_indices:array<u32>; @compute @workgroup_size(64) fn fill(@builtin(global_invocation_id) id:vec3<u32>){ if(id.x<arrayLength(&vertices)){var v=vec4(0u);let first=draw_indices[0]*9u;let second=draw_indices[1]*9u;if(id.x>=first && id.x<first+9u){v=fixture[id.x-first];}if(id.x>=second && id.x<second+9u){v=fixture[id.x-second+9u];}vertices[id.x]=v;}}".into()),
+    });
+    let pipeline = backend
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &module,
+            entry_point: Some("fill"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+    for face in 0..6 {
+        let level = 22;
+        let key = TileKey::new(face, level, 113_491 * 32, 95_110 * 32).unwrap();
+        let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
+        let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor,
+                page: &height,
+            }],
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: 1,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        terrain
+            .update_lighting(
+                &backend,
+                &SurfaceLighting {
+                    ambient_lux: [std::f32::consts::PI; 4],
+                    directions: [[0.0; 4]; 3],
+                    colors_lux: [[0.0; 4]; 3],
+                },
+            )
+            .unwrap();
+        let id = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+        terrain
+            .update_materials(
+                &backend,
+                &[id],
+                &[(id, (1, material.clone()))].into_iter().collect(),
+            )
+            .unwrap();
+        let mut reds = Vec::new();
+        for step in -4..=4 {
+            let u = 0.5 + f64::from(step) / 4096.0;
+            let center = DVec3::from(anchor.project_body_m([u, 0.5], 0.0));
+            let eye = center + DVec3::from(anchor.normal) * 2.0;
+            let view = ViewParams {
+                world_from_view: glam::dcamera::rh::view::look_at_mat4(
+                    eye,
+                    center,
+                    DVec3::from(anchor.raw_axis_v),
+                )
+                .inverse(),
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                    0.01 / 32.0,
+                    1.0,
+                    0.01,
+                    1000.0,
+                ),
+                world_position_m: eye,
+                exposure: 1.0,
+            };
+            terrain
+                .update_view_for_extent(&backend, &view, [65, 65])
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            terrain.encode_surface(&mut encoder);
+            let mut words = Vec::new();
+            for uv in [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [1.0, 0.0],
+            ] {
+                let body = DVec3::from(anchor.project_body_m(uv, 0.0));
+                let position = (body - eye).as_vec3();
+                words.extend([
+                    position.x.to_bits(),
+                    position.y.to_bits(),
+                    position.z.to_bits(),
+                    0,
+                ]);
+                let normal = body.normalize().as_vec3();
+                words.extend([
+                    normal.x.to_bits(),
+                    normal.y.to_bits(),
+                    normal.z.to_bits(),
+                    (face as f32).to_bits(),
+                ]);
+                let span = 536870912u32 >> level;
+                words.extend([
+                    (key.x + uv[0] as u32) * span,
+                    (key.y + uv[1] as u32) * span,
+                    0,
+                    u32::from(level),
+                ]);
+            }
+            let fixture = backend
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: &words
+                        .into_iter()
+                        .flat_map(u32::to_le_bytes)
+                        .collect::<Vec<_>>(),
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+            let vertices = &terrain.conforming_surface().unwrap().vertices;
+            let bind = backend
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: fixture.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: vertices.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: terrain
+                                .conforming_surface()
+                                .unwrap()
+                                .active_indices
+                                .as_entire_binding(),
+                        },
+                    ],
+                });
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups((vertices.size() / 16).div_ceil(64) as u32, 1, 1);
+            }
+            terrain.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            let pixels = target.read_rgba8(&backend).unwrap();
+            let actual = pixels[(32 * 65 + 32) * 4];
+            let decode = |v: f64| ((v / 255.0 + 0.055) / 1.055).powf(2.4);
+            let t = 0.5 + (u - 0.5) * 125.0;
+            let linear = decode(32.0) * (1.0 - t) + decode(224.0) * t;
+            let expected = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "face={face} step={step} actual={actual} expected={expected}"
+            );
+            reds.push(actual);
+        }
+        assert!(reds.windows(2).all(|p| p[0] < p[1]), "face={face} {reds:?}");
+    }
+}
+
+#[test]
+#[ignore = "hardware: sparse overlapping height pages feed persistent geometry, never a patch partition"]
+fn persistent_height_publication_accepts_partial_children_with_root_fallback() {
+    use thessa_render_wgpu::terrain::ResidentTerrainPatch;
+    let backend = Backend::bring_up().unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        terrain_topology: thessa_graphics::ResolvedTerrainTopology {
+            capacity: 4096,
+            waves: 1,
+            split_area_px: 1024.0,
+            merge_area_px: 128.0,
+        },
+        shadow_enabled: false,
+        specular_reflections: false,
+        ..Default::default()
+    };
+    let radius = 3_200_000.0;
+    let root_page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let child_page = HeightPage::bake(&[20.0; 4], 2, 0.001).unwrap();
+    let roots: Vec<_> = (0..6)
+        .map(|face| TerrainPatch {
+            anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), radius).unwrap(),
+            page: &root_page,
+        })
+        .collect();
+    let capacity = TerrainCapacity {
+        patches: 7,
+        height_grid_size: 2,
+        material_layers: 1,
+    };
+    let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &roots,
+        OffscreenTarget::FORMAT,
+        capacity,
+        Some(&settings),
+    )
+    .unwrap();
+    let mut sparse: Vec<_> = roots
+        .iter()
+        .map(|p| ResidentTerrainPatch {
+            anchor: p.anchor,
+            page: p.page,
+            generation: 1,
+        })
+        .collect();
+    sparse.push(ResidentTerrainPatch {
+        anchor: TileAnchor::new(TileKey::new(4, 1, 0, 0).unwrap(), radius).unwrap(),
+        page: &child_page,
+        generation: 1,
+    });
+    assert_eq!(
+        terrain.publish_partition(&backend, &sparse).unwrap().active,
+        7
+    );
+    let camera = DVec3::new(0.0, 0.0, radius * 2.5);
+    let view = ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(camera, DVec3::ZERO, DVec3::Y)
+            .inverse(),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.9, 1.0, 1.0, 1e8),
+        world_position_m: camera,
+        exposure: 1.0,
+    };
+    terrain
+        .update_view_for_extent(&backend, &view, [65, 65])
+        .unwrap();
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    terrain.encode_surface(&mut encoder);
+    backend.queue.submit([encoder.finish()]);
+    let vertices = terrain.read_vertices(&backend).unwrap();
+    assert!(
+        vertices
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .any(|v| v[3] == 20.0 && v[7] == 4.0)
+    );
+    assert!(
+        vertices
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .any(|v| v[3] == 0.0 && v[4..7].iter().any(|x| *x != 0.0))
+    );
+    let mut legacy_settings = settings.clone();
+    legacy_settings.terrain_topology = Default::default();
+    let mut legacy = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &roots,
+        OffscreenTarget::FORMAT,
+        capacity,
+        Some(&legacy_settings),
+    )
+    .unwrap();
+    assert!(legacy.publish_partition(&backend, &sparse).is_err());
+}
+
+#[test]
+#[ignore = "hardware: close flat/elevated surfaces must settle without exhausting the persistent pool"]
+fn flat_surface_converges_at_zero_and_large_datum_elevations() {
+    let backend = Backend::bring_up().unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        terrain_topology: thessa_graphics::ResolvedTerrainTopology {
+            capacity: 16384,
+            waves: 4,
+            split_area_px: 64.0,
+            merge_area_px: 8.0,
+        },
+        shadow_enabled: false,
+        specular_reflections: false,
+        ..Default::default()
+    };
+    for elevation in [0.0, 500.0] {
+        let radius = 3_200_000.0;
+        let page = HeightPage::bake(&[elevation; 4], 2, 0.001).unwrap();
+        let roots: Vec<_> = (0..6)
+            .map(|face| TerrainPatch {
+                anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), radius).unwrap(),
+                page: &page,
+            })
+            .collect();
+        let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &roots,
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: 6,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        let target = DVec3::new(0.0, 0.0, radius + elevation);
+        let eye = target + DVec3::Z * 2.0;
+        let view = ViewParams {
+            world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, target, DVec3::Y).inverse(),
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.9, 1.0, 0.1, 1e8),
+            world_position_m: eye,
+            exposure: 1.0,
+        };
+        for _ in 0..128 {
+            terrain
+                .update_view_for_extent(&backend, &view, [129, 129])
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            terrain.encode_surface(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            backend
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+        }
+        let state = terrain.read_topology_state(&backend).unwrap().unwrap();
+        println!(
+            "flat_cbt elevation_m={elevation} live={} split={} merge={} rejected={} last_commit={} last_request={} epochs={}",
+            state[8] / 3,
+            state[5],
+            state[6],
+            state[7],
+            state[1],
+            state[2],
+            terrain.conforming_surface().unwrap().publication().revision
+        );
+        assert_eq!(
+            (state[1], state[2], state[7]),
+            (0, 0, 0),
+            "settlement requires completed zero/zero without exhaustion"
+        );
+        assert!(state[5] > 0 && state[8] / 3 < 16384);
+        assert_eq!(terrain.read_draw(&backend).unwrap(), state[8..12]);
+
+        assert!(terrain.conforming_surface().unwrap().publication().revision < 128);
+    }
+}

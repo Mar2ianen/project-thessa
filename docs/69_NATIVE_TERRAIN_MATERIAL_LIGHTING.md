@@ -3,21 +3,18 @@
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
 The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
-regular-patch material coordinates as a dyadic chart anchor plus local offset
-through raster interpolation and page lookup. This corrects close-view
-precision, not by itself the material spectrum. The default material limit is
-still L17; the opt-in WORLD06e experiment in that continuation permits bounded
-L20/L21/L22 refinement on regular patches only.
+material coordinates as a dyadic anchor plus small offsets through raster
+interpolation and page lookup. WORLD13 extends this precision contract to
+persistent conforming bisectors, reconstructing a common triangle face from
+exact integer addresses. The default material limit remains L17; optional
+ground detail permits bounded L20/L21/L22 refinement on both topology paths.
 
-With that experiment enabled, `surface_quality` Low/Medium/High also resolves
-1/4/16x material anisotropy against the adapter's filtering capability. Unknown
-or unsupported capabilities use 1x and report the fallback. Disabled ground
-detail and conforming topology retain 1x. `terrain_material_anisotropy` is resolved
-capture metadata, not an independent renderer toggle. Regular patches choose
-source page resolution from the smaller footprint axis, bounded by the sampler's
-actual anisotropic ratio; conservative coverage/globe transitions keep the large
-footprint. Fine pages are no longer discarded solely because grazing pixels
-have a long footprint along one axis. GPU gradients still perform mip filtering.
+With detail enabled, `surface_quality` Low/Medium/High resolves 1/4/16x material
+anisotropy against the adapter capability. Unknown/unsupported capabilities use
+1x with a note; disabled detail retains 1x. Both topology consumers choose source
+resolution from the minor footprint axis bounded by that ratio, retain the
+major axis for conservative coverage/globe transitions, and keep mip filtering.
+`terrain_material_anisotropy` is resolved capture metadata, not a hidden toggle.
 
 The detail stream uses one cached canonical 32 m-wavelength ground elevation at
 the eye direction per material selection epoch/pixel-scale invalidation, for
@@ -41,6 +38,11 @@ slope gain. These are uncalibrated optical priors, not pebble geometry, ambient
 visibility, water simulation or authoritative displacement. This supersedes the
 18 mm and colour-layer descriptions in dated checkpoints below. See doc 77 for
 review findings, scoped validation and source-pinned actual captures.
+WORLD13 adds continuous stochastic mapping, mean-centered source relief in
+fine CBT height pages and bounded native pebble meshes under the same resolved
+effect (docs 63/70/75/77). These are render geometry, not authoritative collision.
+Fine displaced-page normals own the source slope; coarse pages retain material
+normal perturbation. A sub-grid residual normal remains unimplemented.
 
 ## Near shadow precision
 

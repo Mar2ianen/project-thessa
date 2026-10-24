@@ -12,6 +12,8 @@ use thessa_worldgen_rocky::{
     sphere::enu_basis,
 };
 
+mod ground;
+
 pub const WINDOW_LEVEL: u8 = 14;
 pub const UNDERSTORY_WINDOW_LEVEL: u8 = 18;
 /// 7x7 L18 windows cover a ~270 m square around the near-eye cell.
@@ -101,6 +103,10 @@ pub struct Diagnostics {
     pub draw_calls: usize,
     pub frame_upload_bytes: usize,
     pub rt_policy: &'static str,
+    pub ground_window: Option<TileKey>,
+    pub ground_pebbles: usize,
+    pub ground_candidates: u64,
+    pub ground_samples: u64,
     pub understory_window: Option<TileKey>,
     pub understory_windows: usize,
     pub understory_candidates: u64,
@@ -117,6 +123,10 @@ pub struct Diagnostics {
 impl Diagnostics {
     pub fn metadata(&self) -> BTreeMap<String, String> {
         [
+            ("native_surface_ground_pebbles", self.ground_pebbles.to_string()),
+            ("native_surface_ground_samples", self.ground_samples.to_string()),
+            ("native_surface_ground_window", self.ground_window.map_or_else(|| "none".into(), |w| format!("{},{},{},{}",w.face,w.level,w.x,w.y))),
+            ("native_surface_ground_candidates", self.ground_candidates.to_string()),
             ("native_surface_plants_status", self.reason.to_string()),
             ("native_surface_plants_window", self.window.map_or_else(|| "none".into(), |w| format!("{},{},{},{}", w.face, w.level, w.x, w.y))),
             ("native_surface_plants_candidate_visits", self.candidates.to_string()),
@@ -170,7 +180,12 @@ impl Prepared {
                     other
                         .descriptors
                         .get(b.start as usize)
-                        .is_some_and(|other| item.kind == other.kind)
+                        .is_some_and(|other| {
+                            item.kind == other.kind
+                                && (item.kind
+                                    != thessa_worldgen_rocky::scatter::ScatterKind::Pebble
+                                    || ground::variant(item.id) == ground::variant(other.id))
+                        })
                 })
             })
     }
@@ -269,7 +284,8 @@ pub fn prepare(
         Context::Survey(window) => (window, None),
         Context::SurveyWithUnderstory { canopy, understory } => (
             canopy,
-            settings.surface_understory_enabled.then_some(understory),
+            (settings.surface_understory_enabled || settings.terrain_ground_pebbles_max_items > 0)
+                .then_some(understory),
         ),
     };
     // A high/unspecified eye AGL deliberately falls back to the coarse survey;
@@ -284,12 +300,23 @@ pub fn prepare(
     {
         return Err("invalid canopy window".into());
     }
+    if let Some(near) = near_window
+        && (near.level != UNDERSTORY_WINDOW_LEVEL
+            || near.face >= 6
+            || near.x >= 1 << near.level
+            || near.y >= 1 << near.level)
+    {
+        return Err("invalid near-ground window".into());
+    }
     let mut batch = thessa_worldgen_rocky::scatter::ScatterBatch {
         items: Vec::new(),
         candidates_visited: 0,
         surface_samples: 0,
     };
-    for region in neighboring_windows(window, 1) {
+    for region in neighboring_windows(window, 1)
+        .into_iter()
+        .filter(|_| settings.surface_plants_enabled)
+    {
         let part = scatter_region(
             field.params.seed,
             field.params.radius_m,
@@ -331,14 +358,7 @@ pub fn prepare(
         retained: batch.items.len(),
         ..Default::default()
     };
-    if let Some(near) = near_window {
-        if near.level != UNDERSTORY_WINDOW_LEVEL
-            || near.face >= 6
-            || near.x >= 1 << near.level
-            || near.y >= 1 << near.level
-        {
-            return Err("invalid near-understory window".into());
-        }
+    if let Some(near) = near_window.filter(|_| settings.surface_understory_enabled) {
         diagnostics.understory_window = Some(near);
         let windows = neighboring_windows(near, UNDERSTORY_WINDOW_RADIUS);
         // Replace coarse clumps only inside the fine cover; keep all trees and
@@ -401,6 +421,50 @@ pub fn prepare(
             "applied_survey_with_near_understory"
         };
         batch.items.sort_unstable_by_key(|item| item.id);
+    }
+    if let Some(near) = near_window.filter(|_| settings.terrain_ground_pebbles_max_items > 0) {
+        diagnostics.ground_window = Some(near);
+        for region in neighboring_windows(near, 1) {
+            let part = scatter_region(
+                field.params.seed,
+                field.params.radius_m,
+                region,
+                ScatterPopulation::GroundPebbles,
+                ScatterPolicy {
+                    density_scale: settings.terrain_ground_pebbles_density_scale,
+                    max_candidates: settings
+                        .terrain_ground_pebbles_max_candidates
+                        .checked_sub(diagnostics.ground_candidates)
+                        .ok_or("ground candidate budget exhausted")?,
+                    max_items: (settings.terrain_ground_pebbles_max_items as usize)
+                        .checked_sub(diagnostics.ground_pebbles)
+                        .ok_or("ground item budget exhausted")?,
+                    ..Default::default()
+                },
+                |dir| {
+                    let mut surface = canonical_plant_surface(field, dir);
+                    surface.ground_height_m = field.height_m(dir, 32.0).max(0.0)
+                        + if settings.terrain_ground_relief_max_level > 17 {
+                            thessa_worldgen_rocky::lod::ground_relief_height_m(field, dir, 0.012)
+                        } else {
+                            0.0
+                        };
+                    surface
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            diagnostics.ground_candidates += part.candidates_visited;
+            diagnostics.ground_samples += part.surface_samples;
+            diagnostics.ground_pebbles += part.items.len();
+            batch
+                .items
+                .try_reserve(part.items.len())
+                .map_err(|_| "ground descriptor allocation failed")?;
+            batch.items.extend(part.items);
+        }
+        if diagnostics.ground_pebbles > 0 && diagnostics.retained == 0 {
+            diagnostics.reason = "applied_ground_pebbles_only";
+        }
     }
     if batch.items.is_empty() {
         diagnostics.preparation_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -626,6 +690,7 @@ fn convert_with_detail(
             prepared.reduced_primitives.push(is_reduced);
         }
     }
+    ground::append(&mut prepared, &items, radius_m)?;
     if prepared.descriptors.len() != items.len() {
         return Err(
             "plant descriptor has no unique prototype; refusing partial representation".into(),

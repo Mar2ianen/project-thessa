@@ -26,7 +26,8 @@ fleet_meshes = true
 fleet_quality = "high"
 
 [terrain_topology]
-enabled = false
+# Sampled source/chord error by quality: 4/2/1 px; validate parents before merge.
+enabled = true
 quality = "high"
 
 [atmosphere]
@@ -117,7 +118,7 @@ quality = "high"
 cascades = 4
 max_distance_m = 12000.0
 map_size = 4096
-normal_bias_m = 0.04
+normal_bias_m = 0.001
 
 [debug]
 show_atmosphere_bounds = false

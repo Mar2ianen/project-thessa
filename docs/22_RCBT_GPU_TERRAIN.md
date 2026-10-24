@@ -3,8 +3,10 @@
 Status: architecture baseline (§§1–18) normative; current mesh/indexed consumer
 integration is tracked in `47_RCBT_RENDER_AUDIT_2026_10_01.md`; §19 baseline and §20
 follow-ups archival as of 2026-09-15 — indexed raster, page provider,
-extraction, and indirect draw shipped opt-in; production persistent GPU topology and
-neighbor propagation remain future. The mesh-shader GPU test pins production
+extraction, and indirect draw shipped opt-in. Docs 61–63 subsequently implement
+persistent GPU bisectors and conformity propagation. WORLD13 in doc 77 selects
+that path in checked-in native launch configurations and decouples sparse
+height residency from geometric topology; equal-error/temporal acceptance remains open. The mesh-shader GPU test pins production
 bindings 0–16 and the 256-wide fan-out (any renumber fails it); GPU tests are
 `#[ignore]`d without hardware runners, so the mesh path has no default-CI
 signal yet.
@@ -24,8 +26,9 @@ with exact serial/CPU oracles and a 128K-capacity fixture. The
 [canonical surface consumer, doc 63](63_CBT_CANONICAL_SURFACE.md), then emits
 planet-scale bisector vertices from the borrowed height/material residency
 through heap depth 58, with shared-vertex, residency-change and precision
-oracles. A conservative height-bound LOD input now charges relief for the
-screen area it adds, and a diagnostic caster publishes the surface into the
+oracles. WORLD13 replaces the early absolute-height area inflation with sampled
+source/chord pixel error, parent merge validation and primary visibility
+classification. A diagnostic caster publishes the surface into the
 shared shadow atlas (independent metric sphere oracle). A diagnostic ocean
 geometry adapter borrows the existing spectral field/material residency and
 resolved ocean policy with seam-safe filtering and optical-only fallback.

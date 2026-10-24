@@ -280,6 +280,16 @@ pub struct ResolvedGraphicsSettings {
     pub surface_understory_max_candidates: u64,
     #[serde(default)]
     pub surface_understory_max_items: u32,
+    /// Near-eye ground geometry under the existing ground-detail effect.
+    /// Low uses the optical swatch; Medium/High thin one immutable population.
+    #[serde(default)]
+    pub terrain_ground_pebbles_density_scale: f64,
+    #[serde(default)]
+    pub terrain_ground_relief_max_level: u8,
+    #[serde(default)]
+    pub terrain_ground_pebbles_max_candidates: u64,
+    #[serde(default)]
+    pub terrain_ground_pebbles_max_items: u32,
     #[serde(default)]
     pub terrain_topology: ResolvedTerrainTopology,
     pub instruments: ResolvedInstruments,
@@ -438,7 +448,7 @@ mod terrain_topology_tests {
                 ..Default::default()
             },
         );
-        assert_eq!(settings.terrain_material_anisotropy, 1);
+        assert_eq!(settings.terrain_material_anisotropy, 16);
         let serialized = toml::to_string(&ResolvedGraphicsSettings::default()).unwrap();
         let legacy = serialized
             .lines()
@@ -453,19 +463,14 @@ mod terrain_topology_tests {
         );
     }
     #[test]
-    fn ground_detail_falls_back_until_conforming_coordinates_are_precise() {
+    fn ground_detail_is_independent_of_geometry_topology() {
         let mut request = RequestedGraphics::default();
         request.renderer.terrain_ground_detail = true;
         request.terrain_topology.enabled = true;
         let settings = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
-        assert!(!settings.terrain_ground_detail);
-        assert_eq!(settings.terrain_material_max_level(), 17);
-        assert!(
-            settings
-                .notes
-                .iter()
-                .any(|note| note.contains("ground detail requires regular-patch"))
-        );
+        assert!(settings.terrain_ground_detail);
+        assert_eq!(settings.terrain_material_max_level(), 22);
+        assert_eq!(settings.terrain_ground_relief_max_level, 22);
         let fallback = ResolvedGraphicsSettings::from_requested(
             &request,
             &Capabilities {
@@ -755,11 +760,7 @@ impl ResolvedGraphicsSettings {
             caps.terrain_conforming_supported,
             &mut notes,
         );
-        let terrain_ground_detail =
-            requested.renderer.terrain_ground_detail && terrain_topology.capacity == 0;
-        if requested.renderer.terrain_ground_detail && !terrain_ground_detail {
-            notes.push("experimental ground detail requires regular-patch local coordinates; conforming terrain retains L17 materials".into());
-        }
+        let terrain_ground_detail = requested.renderer.terrain_ground_detail;
         let terrain_material_anisotropy =
             if terrain_ground_detail && caps.terrain_anisotropy_supported == Some(true) {
                 match requested.renderer.surface_quality {
@@ -792,7 +793,28 @@ impl ResolvedGraphicsSettings {
                         None
                     }
                 });
+        let pebble_density = if terrain_ground_detail {
+            match requested.renderer.surface_quality {
+                Quality::Low => 0.0,
+                Quality::Medium => 0.5,
+                Quality::High => 1.0,
+            }
+        } else {
+            0.0
+        };
         Self {
+            terrain_ground_pebbles_density_scale: pebble_density,
+            terrain_ground_relief_max_level: if terrain_ground_detail {
+                match requested.renderer.surface_quality {
+                    Quality::Low => 17,
+                    Quality::Medium => 21,
+                    Quality::High => 22,
+                }
+            } else {
+                17
+            },
+            terrain_ground_pebbles_max_candidates: if pebble_density > 0.0 { 9 * 4096 } else { 0 },
+            terrain_ground_pebbles_max_items: if pebble_density > 0.0 { 9 * 4096 } else { 0 },
             surface_plants_enabled: requested.surface_plants.enabled,
             surface_plants_density_scale: if !requested.surface_plants.enabled {
                 0.0
@@ -1124,6 +1146,22 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "surface_understory_max_items".into(),
             self.surface_understory_max_items.to_string(),
+        );
+        map.insert(
+            "terrain_ground_relief_max_level".into(),
+            self.terrain_ground_relief_max_level.to_string(),
+        );
+        map.insert(
+            "terrain_ground_pebbles_density_scale".into(),
+            self.terrain_ground_pebbles_density_scale.to_string(),
+        );
+        map.insert(
+            "terrain_ground_pebbles_max_candidates".into(),
+            self.terrain_ground_pebbles_max_candidates.to_string(),
+        );
+        map.insert(
+            "terrain_ground_pebbles_max_items".into(),
+            self.terrain_ground_pebbles_max_items.to_string(),
         );
         map.insert(
             "surface_quality".into(),
@@ -2157,5 +2195,60 @@ mod storage_tests {
             r.active_cloud_representation_with_override(Some("march")),
             ActiveCloudRepresentation::VolumeMarch
         );
+    }
+}
+
+#[cfg(test)]
+mod ground_pebble_tests {
+    use super::*;
+    #[test]
+    fn ground_pebbles_resolve_disabled_and_quality_without_requiring_plants() {
+        for enabled in [false, true] {
+            for (quality, density) in [
+                (Quality::Low, 0.0),
+                (Quality::Medium, 0.5),
+                (Quality::High, 1.0),
+            ] {
+                let mut requested = RequestedGraphics::default();
+                requested.renderer.terrain_ground_detail = enabled;
+                requested.renderer.surface_quality = quality;
+                requested.surface_plants.enabled = false;
+                let resolved =
+                    ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+                let expected = if enabled { density } else { 0.0 };
+                assert_eq!(
+                    resolved.terrain_ground_relief_max_level,
+                    if enabled {
+                        match quality {
+                            Quality::Low => 17,
+                            Quality::Medium => 21,
+                            Quality::High => 22,
+                        }
+                    } else {
+                        17
+                    }
+                );
+                assert_eq!(resolved.terrain_ground_pebbles_density_scale, expected);
+                assert_eq!(
+                    resolved.terrain_ground_pebbles_max_candidates,
+                    if expected > 0.0 { 9 * 4096 } else { 0 }
+                );
+                assert_eq!(
+                    resolved.terrain_ground_pebbles_max_items,
+                    if expected > 0.0 { 9 * 4096 } else { 0 }
+                );
+                assert!(!resolved.surface_plants_enabled);
+                assert_eq!(
+                    resolved.as_meta_map()["terrain_ground_pebbles_density_scale"],
+                    expected.to_string()
+                );
+            }
+        }
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.terrain_ground_detail = true;
+        requested.terrain_topology.enabled = true;
+        let fallback =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(fallback.terrain_ground_relief_max_level, 22);
     }
 }

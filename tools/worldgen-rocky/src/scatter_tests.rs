@@ -719,3 +719,81 @@ fn physical_density_corrects_cube_jacobian_without_equal_tile_area_assumption() 
         );
     }
 }
+
+#[test]
+fn ground_pebbles_are_nested_world_fixed_and_disjoint_from_understory() {
+    let tile = region(0, 18, 1 << 17, 1 << 17);
+    let full = query(tile, ScatterPopulation::GroundPebbles, 1.0);
+    let half = query(tile, ScatterPopulation::GroundPebbles, 0.5);
+    assert!(!half.items.is_empty() && half.items.len() < full.items.len());
+    for item in &half.items {
+        assert_eq!(
+            full.items.iter().find(|other| other.id == item.id),
+            Some(item)
+        );
+    }
+    assert!(
+        full.items
+            .iter()
+            .all(|item| item.kind == ScatterKind::Pebble
+                && item.id.0 & 1 == 0
+                && item.id.cell().unwrap().level == UNDERSTORY_CANDIDATE_LEVEL
+                && (0.04..=0.30).contains(&item.scale))
+    );
+    let mut children = tile
+        .children()
+        .into_iter()
+        .flat_map(|child| query(child, ScatterPopulation::GroundPebbles, 1.0).items)
+        .collect::<Vec<_>>();
+    children.sort_unstable_by_key(|item| item.id);
+    let mut parent = full.items.clone();
+    parent.sort_unstable_by_key(|item| item.id);
+    assert_eq!(parent, children);
+    let understory = query(tile, ScatterPopulation::Understory, 1.0);
+    assert!(
+        understory
+            .items
+            .iter()
+            .all(|item| parent.iter().all(|p| p.id != item.id))
+    );
+    for submerged in [false, true] {
+        let batch = scatter_region(
+            7,
+            RADIUS_M,
+            tile,
+            ScatterPopulation::GroundPebbles,
+            Default::default(),
+            |dir| {
+                let mut s = surface(dir);
+                if submerged {
+                    s.water_height_m = Some(s.ground_height_m);
+                } else {
+                    s.vegetation = VegetationCover {
+                        ground01: 0.0,
+                        canopy01: 0.0,
+                        reeds01: 0.0,
+                    };
+                }
+                s
+            },
+        )
+        .unwrap();
+        assert!(batch.items.is_empty());
+    }
+    let error = scatter_region(
+        7,
+        RADIUS_M,
+        tile,
+        ScatterPopulation::GroundPebbles,
+        ScatterPolicy {
+            max_items: 0,
+            ..Default::default()
+        },
+        surface,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ScatterError::ItemBudgetExceeded { limit: 0 }
+    ));
+}

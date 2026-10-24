@@ -1,6 +1,12 @@
 # 63 — Canonical height/material surface from persistent bisectors
 
-**Status (2026-10-18): opt-in native production-frame consumer; acceptance incomplete.**
+**Status (2026-10-24): selected by checked-in native launch configurations;
+acceptance incomplete.** WORLD13 in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
+promotes the existing consumer, separates sparse overlapping height residency
+from CPU patch partitions, and adds exact fine-material charts and soil-height
+pages. Explicit disabled/unsupported paths retain patches; the Rust settings
+constructor remains off for existing library/legacy callers. Earlier measured
+checkpoints below retain their original dates and scope.
 The original verified selection snapshot is `e386ef0`.
 [Review 64](64_NATIVE_OPTIMIZATION_REVIEW.md) preserves the rejected intermediate
 optimization proposal. The corrective follow-up removes retained terrain origins
@@ -14,10 +20,20 @@ ocean geometry sample wakes the work. Encoders must still be submitted in order;
 discarded encoders cannot certify quiescence. No geometric-error guarantee or
 unchanged-chunk RT optimization is implied.
 
-Page-local height envelopes include resident descendants and round outwards to
-f32. Mixed pages, seams and missing-page corners retain the global fallback;
-the optional wave envelope is added independently. The synthetic GPU classifier
-oracle checks local/global admission and updated hidden-descendant heights.
+WORLD13 retires absolute-height/wave-envelope area inflation from the native
+classifier. It caused pool exhaustion even on an elevated flat surface. Current
+classification combines actual projected area with three edge-midpoint datum
+probes through the **same canonical height sampler as emission**. Low/Medium/High
+area budgets imply 4/2/1 px sampled deviation targets. A candidate parent is
+re-evaluated before a low-error child may merge, preventing split/merge cycles
+around exactly represented peaks. Homogeneous frustum rejection precedes w-plane
+handling; outward back faces rejected by primary raster do not consume its
+viewport refinement budget. No universal error bound follows from three probes.
+Scratch emissions include the existing admitted, filtered ocean deformation;
+wave geometry contributes actual area without imposing its global amplitude
+on dry land. Datum probes do not certify a continuous-wave error bound.
+The unused per-page envelope GPU buffer/upload has been removed; canonical
+page data, CPU extent diagnostics and existing shadow bounds remain.
 The audit regression checks actual GPU quiescence, resize/rotation wakeup and
 cached/reference mesh-shadow equality after camera motion. Back-face culling is
 restricted to conforming primary geometry; callers may explicitly discard final
@@ -180,7 +196,12 @@ roots, with no dirty culling and no view-dependent early-out. It is a topology
 size cost, not a production frame cost, and not a game-FPS, Bevy or
 `large_cbt` comparison.
 
-## Height-aware classification (added after phase three)
+## Historical height-bound policy (reference API; superseded for native production)
+
+The APIs/tests in this dated subsection remain available to the isolated sphere
+reference experiment. WORLD13's native source/chord probes above replace this
+inflation policy in the production consumer; the original monotonicity fixture
+does not certify close-view efficiency or convergence.
 
 The classifier no longer measures unit-sphere chords alone.
 `rcbt-wgpu::SphereGpu::set_height_bound(height_chord)` publishes a conservative
@@ -520,12 +541,13 @@ remain shared with the native renderer, not a custom diagnostic raster shader.
 
 `update_view_for_extent()` takes the actual render-target extent and stages the
 f64 camera origin. The old extent-free `update_view()` rejects conforming mode
-rather than invent a resolution. Each bounded wave emits **datum scratch**,
-classifies those camera-relative positions, then uses the existing parallel
-CBT plan/reserve/commit/publish pipeline. The classifier charges the resident
-height bound (plus the shared spectral displacement bound when geometry is
-requested) through the existing `(1+2h/L)²` area inflation. It never projects
-absolute planetary f32 coordinates. Scratch emissions are not consumer epochs.
+rather than invent a resolution. Each bounded wave emits scratch using the
+shared canonical sampler and optional admitted spectral deformation, classifies
+camera-relative area/source-chord deviation with candidate-parent validation,
+then runs the existing parallel plan/reserve/commit/publish pipeline. Scratch
+emissions are not consumer epochs; the final emission publishes the geometry
+used by all consumers. No absolute planetary f32 projection, CPU grid generation
+or per-frame geometry readback is introduced.
 
 The external-area policy visits disjoint strided active-rank subsets per request,
 preferring the largest actionable split, else a mergeable diamond. It reuses
@@ -548,8 +570,15 @@ and shadow depth. Dirty-chunk/unchanged-frame optimization is not claimed.
 
 The primary raster uses the shared `CBT_CONFORMING` shader specialization
 (default false for existing indexed/mesh/Bevy paths) and the actual 48-byte ABI,
-without legacy skirts. Diagnostic draw counts include degenerate allocation
-holes, not only live leaves. `topology_storage_bytes`, publication revision and
+without legacy skirts. WORLD13 primary and shadow draws consume the existing
+GPU active indices and indirect arguments, excluding free allocation holes.
+`ConformingSurface::new` now borrows the complete `SphereGpu` source so these
+indices/arguments share its lifetime; no second compactor or draw cache exists.
+The seed publishes valid initial indirect arguments before any topology update.
+Diagnostic draw counts include the four reserved virtual roots. With
+`ShadowDrawStats.indirect=true`, submitted slots are a capacity upper bound,
+not an exact CPU-read count. RT still consumes bounded allocation chunks with
+zero-area holes; active-only AS compaction is not implemented. `topology_storage_bytes`, publication revision and
 fallback reason are available without per-frame GPU readback. The first native
 GPU timing interval is now `render.surface_and_shadows`, explicitly including
 classification/transactions/emission/deformation before shadow encoding.
@@ -581,9 +610,10 @@ agent-QA tests. No remote CI or independent subjective review is claimed.
 
 ## Known gaps (explicitly not claimed)
 
-1. **The consumed relief bound is body-wide.** It cannot yet express per-tile
-   relief; projected area is not a calibrated geometric error metric. Bounded
-   request waves do not guarantee immediate convergence at a new close camera.
+1. **Sampled error is not a universal geometric bound.** Three midpoint probes
+   can miss off-probe features and are not a proof about all silhouettes, source
+   LOD seams or continuous waves. Bounded request waves do not guarantee immediate
+   convergence at every new close camera; exhaustion is not convergence.
 2. **Dynamic geometry is conservatively rebuilt.** All chunks and shadow depth
    are invalidated by every final emission; optimized ocean intersections,
    spatially coherent RT chunks and unchanged-geometry reuse remain open.

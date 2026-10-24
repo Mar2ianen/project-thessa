@@ -104,6 +104,43 @@ impl Texture {
         let b = self.0[lod.ceil() as usize].sample(uv);
         std::array::from_fn(|c| a[c] + (b[c] - a[c]) * lod.fract() as f32)
     }
+    fn sample_stochastic(&self, uv: [f64; 2], lod: f64, seed: u64, projection: u32) -> [f32; 5] {
+        let cell = uv.map(|v| v.floor() as i64);
+        // A 30 cm transition keeps most of each patch unblurred. Adjacent
+        // cells share corner sources, so colour and physical height agree.
+        let half_blend = 0.15 / SWATCH_WIDTH_M;
+        let t = uv
+            .map(|v| crate::appearance::smooth(0.5 - half_blend, 0.5 + half_blend, v - v.floor()));
+        let mut result = [0.0; 5];
+        for y in 0..2 {
+            for x in 0..2 {
+                let weight = (if x == 0 { 1.0 - t[0] } else { t[0] })
+                    * (if y == 0 { 1.0 - t[1] } else { t[1] });
+                if weight == 0.0 {
+                    continue;
+                }
+                let hash = |channel| {
+                    crate::rng::hash01(
+                        seed,
+                        1780 + projection * 8 + channel,
+                        cell[0] + x,
+                        cell[1] + y,
+                    )
+                };
+                let rotated = match ((hash(0) * 4.0) as u32).min(3) {
+                    0 => uv,
+                    1 => [-uv[1], uv[0]],
+                    2 => [-uv[0], -uv[1]],
+                    _ => [uv[1], -uv[0]],
+                };
+                let value = self.sample([rotated[0] + hash(1), rotated[1] + hash(2)], lod);
+                for (out, value) in result.iter_mut().zip(value) {
+                    *out += value * weight as f32;
+                }
+            }
+        }
+        result
+    }
 }
 
 impl Mip {
@@ -140,11 +177,15 @@ pub(crate) fn sample(dir: [f64; 3], radius_m: f64, seed: u64, texel_m: f64) -> G
         .log2();
     let projections = [[p[2], p[1]], [p[0], p[2]], [p[0], p[1]]];
     let mut value = [0.0; 5];
-    for (uv, weight) in projections.into_iter().zip(weights) {
+    for (projection, (uv, weight)) in projections.into_iter().zip(weights).enumerate() {
         if weight / sum < 1e-8 {
             continue;
         }
-        for (out, sample) in value.iter_mut().zip(texture.sample(uv, lod)) {
+        for (out, sample) in
+            value
+                .iter_mut()
+                .zip(texture.sample_stochastic(uv, lod, seed, projection as u32))
+        {
             *out += sample * (weight / sum) as f32;
         }
     }
@@ -224,6 +265,38 @@ pub(crate) fn forest_floor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stochastic_patches_are_continuous_without_swatch_repetition() {
+        let texture = Texture::decode();
+        for axis in 0..2 {
+            for boundary in [-17.0, -0.5, 0.0, 0.5, 1.0, 39.0] {
+                let mut a = [0.137, 0.283];
+                a[axis] = boundary - 1e-9;
+                let mut b = a;
+                b[axis] = boundary + 1e-9;
+                for (a, b) in texture
+                    .sample_stochastic(a, 0.0, 42, 0)
+                    .into_iter()
+                    .zip(texture.sample_stochastic(b, 0.0, 42, 0))
+                {
+                    assert!((a - b).abs() < 1e-5, "patch seam at {boundary}");
+                }
+            }
+        }
+        let mut difference = 0.0;
+        for i in 0..64 {
+            let uv = [i as f64 * 0.137, -i as f64 * 0.283];
+            let a = texture.sample_stochastic(uv, 0.0, 42, 0);
+            let b = texture.sample_stochastic([uv[0] + 1.0, uv[1]], 0.0, 42, 0);
+            assert_eq!(a, texture.sample_stochastic(uv, 0.0, 42, 0));
+            difference += (a[0] - b[0]).abs();
+        }
+        assert!(
+            difference > 0.1,
+            "one-swatch translation must not reproduce the same stones"
+        );
+    }
 
     #[test]
     fn mineral_transfer_is_continuous_before_mip_averaging() {

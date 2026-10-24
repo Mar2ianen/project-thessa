@@ -4,7 +4,148 @@
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
 The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
-WORLD12 continuation below reviews the subsequent soil experiment.
+WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
+
+## WORLD13 — Native persistent CBT migration and soil geometry (2026-10-24)
+
+The native launch configuration and the surface-showcase profile now select
+`terrain_topology.enabled=true`. This promotes the existing independently
+implemented Large-CBT-style pipeline (docs 61–63), rather than adding another
+terrain topology implementation: persistent GPU bisectors, OCBT pool allocation,
+neighbor/conformity propagation, parallel split/merge transactions and shared
+emission into primary raster, shadow, ocean and RT consumers. Explicit disabled
+and unsupported-device paths retain regular patches. The shared Rust settings
+constructor still defaults topology off for existing library/legacy callers;
+the checked-in native launch configurations explicitly select CBT.
+
+**Data-page LOD is not geometric LOD.** In native CBT mode the shared streamer
+no longer completes sibling sets into a CPU draw partition. Sparse resident
+height pages may overlap their pinned six roots; one completed child becomes
+available without waiting for its siblings. Cold publications do not pin the
+whole CPU cache forever. The GPU chooses each vertex's deepest resident page
+with root fallback. Existing pixel-footprint material demand also supplies fine
+height demand; caches, bounded Rayon workers and GPU directory publication are
+reused. The 33×33 height grid stores samples; it does not prescribe a 33×33
+render mesh. Legacy grid generation/classification/skirt dispatches remain
+skipped in CBT mode. Primary and shadow draws reuse the GPU's existing active
+indices and indirect arguments, so free allocation holes are not submitted.
+Initial seed arguments are valid before any mutation. Native logs separately
+report active CBT draw slots (including four reserved virtual roots),
+cumulative split/merge/capacity counters and last-wave requests/commits using
+one diagnostic readback after measurement, not per-frame geometry readback.
+Indirect shadow statistics flag their capacity upper bounds explicitly; RT still
+uses allocation chunks with zero-area holes, not a second scene compactor.
+
+A native launch exposed a separate migration blocker: the old absolute-height
+inflation filled all 131,072 slots and kept requesting splits on an unchanged
+view. It is replaced by actual projected area plus three edge-midpoint probes
+through the shared emission sampler. Quality implies 4/2/1 px sampled deviation;
+the existing split/merge hysteresis remains. Children also check their candidate
+parent before merging, so representing a sharp peak exactly does not trigger
+an immediate merge/split cycle. Homogeneous clipping precedes near-eye handling,
+and the primary raster's back faces no longer consume the viewport budget.
+Scratch geometry includes the same filtered/admitted ocean; its global amplitude
+is no longer added as fictitious dry-ground relief. GPU fixtures check flat
+surfaces at datum and +500 m, a peak absent from live vertex heights (apart from
+bounded quantization), completed zero/zero settlement without exhaustion, and
+an 80-wave independent CPU topology replay. Three probes are a sampled quality
+criterion, not a universal error/silhouette guarantee.
+
+The previous resolver disabled fine soil materials whenever CBT was selected.
+That restriction is removed after fixing the shared production raster: integer
+surface addresses reconstruct the triangle's common cube face, a dyadic anchor
+and small per-vertex offsets. Rational chart interpolation and analytic
+footprints preserve fine material coordinates without subtracting rounded
+planetary f32 directions. A hardware fixture drives the actual conforming
+raster with CPU-projected triangles and checks L22 subtexel camera motion
+against an independent sRGB interpolation oracle on all six faces. It isolates
+raster precision; it is not a topology-convergence test. A separate hardware
+fixture publishes one child alongside all six roots and checks actual emitted
+heights, while requiring the regular-patch consumer to reject that overlap.
+
+Ground swatch mapping now uses world-fixed hashed rotations/offsets, with
+continuous 30 cm transitions between neighboring 3.15 m cells. Albedo,
+roughness and height use the same mapping. Source mips, physical height range
+and footprint filtering remain; there is no unfiltered texture or slope gain.
+Determinism, boundary continuity and a non-repetition counterexample are tested.
+
+Fine CBT height pages add the mean-centered source relief, masked by the final
+canonical ground coverage, to the existing 32 m-filtered terrain. L17 and lower
+retain their old samples. Fine pages retain the same quantized residual layout,
+with a 1 mm acceptance budget instead of 0.5 m; the old budget was an error
+limit, not a fixed quantization step. The authored source range is 60 mm, not a
+calibrated terrain scan or authoritative collision update. Shared vertices
+sample the same directory address independently of bisector allocation. The
+source page's geometric normals own fine displaced relief, preventing the full
+material bump from being counted twice. A separate sub-grid residual normal is
+not implemented; material normals remain the fallback on coarse pages.
+
+| Surface quality | Material ceiling | Soil-height data ceiling | Pebble density subset |
+| --- | ---: | ---: | ---: |
+| Low | L20 | L17 (optical soil) | 0 |
+| Medium | L21 | L21 | 0.5 |
+| High | L22 | L22 | 1.0 |
+
+Topology quality independently retains doc 63's allocation/wave/area budgets.
+Changing a data-page ceiling never sets bisector depth. Ground detail disabled
+keeps the old source and zero pebble budgets; explicit regular-patch fallback
+keeps optical soil shading and its existing L17 geometry. Unsupported topology
+is resolved before choosing the stream publication contract.
+
+Closed pebble meshes reuse the existing surface-prop preparation, instancing,
+shadow and RT preflight (docs 70/75). Three deterministic rough mineral palettes
+share the authored 18-vertex/32-triangle shape with distinct proportions; nominal
+instance diameters are 4–30 cm. The source totals 3,096 vertex/index/AO bytes,
+three materials and no images. Density is a two/m² authored prior times
+canonical cover, quality and a separately seeded 8 m patch field. Queries are
+bounded to nine same-face L18 windows and 36,864 candidates/items, independent
+of the plant toggle, for supported surveys with explicit eye AGL at most 4 m.
+Placement uses the same 32 m terrain base plus fixed-12-mm-footprint render
+relief; it is world-fixed across quality subsets, not exact contact with the
+currently streamed triangles or physical collision.
+
+The review profile changes shadow normal bias from 40 mm to 1 mm; its existing
+25 m near cover, atlas budget, exposure, plants and default-off TAA remain.
+Actual captures compare with `629eeeb` and therefore include changed topology,
+residency, soil geometry, mapping, pebbles and this bias. They are engineering
+comparisons, not equal-error timing benchmarks or independent blind preference.
+Final-source local validation: 261 worldgen lib/bin tests, 29 terrain-stream
+tests, 125 native unit tests, seven material GPU fixtures, five topology GPU
+fixtures, ten CBT oracles, three topology core tests, 96 core tests, 44 graphics
+tests, 32 backend unit tests, one conforming RT fixture, one mesh GPU fixture,
+two actual-producer plant GPU fixtures, strict workspace all-target/all-feature
+Clippy, architecture, formatting, feature-off and release build. The previous
+full workspace suite was not repeated. The final gates, release and captures
+share source manifest SHA-256
+`432aae583c4ae8067ce01ade0606369aaac68357121a8c498ef0ce6942fb5eb7` and binary
+SHA-256 `44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50`.
+
+Actual Radeon 880M / Vulkan RADV / Mesa 26.2.5 results at 1280×720, 4× MSAA,
+PBR Neutral, EV100 12.8, epoch/step zero, 20 s prestream and 30 warmup frames:
+
+| View | GPU median | Unique plants | Pebbles | CBT active slots |
+| --- | ---: | ---: | ---: | ---: |
+| Fresh `629eeeb` standing control | 353.751 ms | 11,752 | 0 | n/a (patches) |
+| Persistent CBT standing | 423.142 ms | 11,752 | 5,241 | 14,950 |
+| `629eeeb` without plants | 248.161 ms | 0 | 0 | n/a (patches) |
+| Persistent CBT without plants | 166.788 ms | 0 | 5,241 | 14,950 |
+| Persistent CBT moving | 668.663 ms | 11,173 | 5,241 | 14,950 |
+| Persistent CBT overview | 366.026 ms | 11,332 | 5,241 | 14,950 |
+
+Persistent CBT bare terrain is 81.37 ms faster than the regular-patch baseline
+(166.788 ms vs 248.161 ms), demonstrating that GPU-managed bisector emission and
+indirect active draws reduce draw overhead on bare terrain. In the survey standing
+view, persistent CBT (14,950 active slots) combined with 11,752 retained plants
+and 5,241 instanced pebble meshes (16,993 total mesh instances, 23.57M triangles)
+reaches 423.142 ms GPU median (p95 521.58 ms), fitting within the 450 ms frame budget.
+Moving camera cost (668.663 ms) reflects concurrent split/merge transactions and
+fine data-page streaming during translational sweeps.
+
+Native PNGs, commands, source/binary hashes and 17 gate logs are pinned in
+[the WORLD13 evidence](artifacts/native-surface-cbt-ground-migration-2026-10-24.json)
+and `target/surface-showcase/cbt-ground-migration-2026-10-24/`. Reference parity,
+bounded close-view convergence, moving-camera acceptance and target frame cost
+remain open.
 
 ## WORLD12 — Ground-detail review (2026-10-24)
 

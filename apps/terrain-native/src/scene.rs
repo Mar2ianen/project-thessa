@@ -473,9 +473,15 @@ impl Scene {
         let stream = TerrainStream::new(
             field,
             StreamingPolicy {
+                persistent_topology: stream_settings.terrain_topology.capacity > 0,
                 normal_maps: stream_settings.terrain_normal_maps,
                 ground_detail: stream_settings.terrain_ground_detail,
+                ground_relief_max_level: stream_settings.terrain_ground_relief_max_level,
                 material_max_level: stream_settings.terrain_material_max_level(),
+                selection: thessa_terrain_stream::selection::SelectionPolicy {
+                    fine_level: 17,
+                    ..Default::default()
+                },
                 ..StreamingPolicy::default()
             },
         )?;
@@ -1361,12 +1367,10 @@ impl Scene {
         backend: &Backend,
         format: wgpu::TextureFormat,
     ) -> Result<Option<SceneMeshes>, BackendError> {
+        let settings = backend.resolve_graphics(&self.requested);
         if let Some((source, _)) = &self.vehicle {
             SceneMeshes::new(self, backend, source, format).map(Some)
-        } else if backend
-            .resolve_graphics(&self.requested)
-            .surface_plants_enabled
-        {
+        } else if settings.surface_plants_enabled || settings.terrain_ground_pebbles_max_items > 0 {
             SceneMeshes::new(self, backend, &fleet_mesh::empty_asset(), format).map(Some)
         } else {
             Ok(None)
@@ -1378,10 +1382,10 @@ impl Scene {
         format: wgpu::TextureFormat,
         terrain: &TerrainRenderer,
     ) -> Result<Option<SceneMeshes>, BackendError> {
+        let settings = backend.resolve_graphics(&self.requested);
         if self.vehicle.is_none()
-            && !backend
-                .resolve_graphics(&self.requested)
-                .surface_plants_enabled
+            && !settings.surface_plants_enabled
+            && settings.terrain_ground_pebbles_max_items == 0
         {
             return Ok(None);
         }
@@ -1403,13 +1407,14 @@ impl Scene {
         settings: &thessa_graphics::ResolvedGraphicsSettings,
     ) -> crate::surface_plants::Context {
         use crate::surface_plants::Context;
-        if !settings.surface_plants_enabled {
+        if !settings.surface_plants_enabled && settings.terrain_ground_pebbles_max_items == 0 {
             Context::Disabled
         } else if self.vehicle.is_some() || self.flight.is_some() || self.docking.is_some() {
             Context::Withheld("unsupported_vehicle_flight_or_docking_view")
         } else if self.map_active() {
             Context::Withheld("unsupported_map_view")
-        } else if settings.surface_understory_enabled
+        } else if (settings.surface_understory_enabled
+            || settings.terrain_ground_pebbles_max_items > 0)
             && self
                 .survey_eye_agl_m
                 .is_some_and(|agl| agl <= crate::surface_plants::UNDERSTORY_MAX_EYE_AGL_M)
@@ -1456,7 +1461,9 @@ impl Scene {
                     Context::SurveyWithUnderstory { understory, .. } => Some(understory),
                     _ => None,
                 };
-                if diagnostics.window == Some(window) && diagnostics.understory_window == near {
+                if diagnostics.window == Some(window)
+                    && diagnostics.understory_window.or(diagnostics.ground_window) == near
+                {
                     diagnostics.metadata()
                 } else if diagnostics.window == Some(window) && diagnostics.preparation_job_pending
                 {
@@ -1744,6 +1751,9 @@ impl Scene {
         format: wgpu::TextureFormat,
     ) -> Result<TerrainRenderer, BackendError> {
         let resolved = backend.resolve_graphics(&self.requested);
+        self.stream
+            .configure_topology(resolved.terrain_topology.capacity > 0)
+            .map_err(BackendError::Device)?;
         if let Some(field) = &mut self.environment {
             field.set_budget(crate::environment::EnvironmentBudget::resolve(&resolved));
         }
@@ -2020,7 +2030,12 @@ impl Scene {
             .max(0.0);
         let forward = view.world_from_view.transform_vector3(DVec3::NEG_Z);
         let lat_lon = thessa_worldgen_rocky::sphere::latlon_from_dir(self.up.to_array());
+        let mut levels = [0usize; 32];
+        for key in self.stream.visible() {
+            levels[key.level as usize] += 1;
+        }
         [
+            ("native_terrain_resident_height_levels",format!("{levels:?}")),
             ("native_survey_site", self.fixed_survey_site.map_or_else(|| format!("bookmark:{}:{}", self.site, self.sites[self.site].1), |p| format!("fixed:{},{}", p[0], p[1]))),
             ("native_survey_target_lat_lon_deg", format!("{},{}", lat_lon.0, lat_lon.1)),
             ("native_survey_eye_body_m", format!("{:?}", eye.to_array())),

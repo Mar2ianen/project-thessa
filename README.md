@@ -109,6 +109,14 @@ The checked-in vertical slice currently contains:
   moisture/pigment roughness response, one explicit 60 mm optical height range,
   and view-cone-aware material admission within the existing cache budgets.
   These are authored material priors, not terrain displacement or hydrology.
+  WORLD13 promotes persistent GPU CBT in both native launch configurations,
+  separates sparse height-page residency from geometric split/merge, fixes
+  elevation-driven exhaustion with source/chord probes and parent merge validation,
+  and uses existing GPU active indices/indirect draws for primary terrain and shadows;
+  preserves exact fine material coordinates on bisectors, and adds stochastic soil mapping,
+  render-only height relief and bounded near-eye pebble meshes. Low keeps optical
+  soil; Medium/High refine the same source and thin one world-addressed population.
+  Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
   [doc 72](docs/72_WORLD_SURFACE_BASELINE.md), not visual acceptance;
@@ -124,7 +132,9 @@ The checked-in vertical slice currently contains:
   selectable. Both GPU draws share LOD, skirts, scene lighting and
   world-addressed material sampling independent of geometry LOD. Docs 47–53
   track historical failures and current work; visual acceptance is incomplete.
-  Persistent conforming GPU bisector topology remains future work;
+  Native launch configurations now select the persistent conforming GPU bisector
+  pool and shared raster/shadow/ocean/RT consumers (docs 63/77); regular patches
+  remain the explicit/unsupported fallback, with legacy Bevy integration retained;
 - `thessa-render-wgpu`: owned headless/surface-compatible backend and CBT compute → indirect raster
   passes, camera-relative uniforms, dirty quantized-page updates and bounded
   material-page residency and bounded reusable geometry slots without
@@ -335,9 +345,9 @@ The checked-in vertical slice currently contains:
     The [canonical surface consumer](docs/63_CBT_CANONICAL_SURFACE.md) then
     emits planet-scale bisector vertices through heap depth 58 using the existing
     height/material residency (no second streamer), with shared-vertex and
-    depth-precision oracles plus a shared-material indirect draw, and takes a
-    conservative height-bound LOD input so relief near the camera is charged for
-     the screen area it adds. Native `[terrain_topology] enabled=true` now selects
+    depth-precision oracles plus a shared-material indirect draw. Current native
+     refinement uses actual projected area, shared-source midpoint deviation and
+     candidate-parent checks, rather than absolute elevation as relief. Native `[terrain_topology] enabled=true` now selects
      it for the real window/headless frame, with Low/Medium/High budgets and a
      resource-free disabled/regular-patch fallback. The shared shadow atlas uses
      those same vertices and their emitted revision; the ocean consumer borrows

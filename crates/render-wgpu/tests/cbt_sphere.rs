@@ -1143,7 +1143,7 @@ fn conforming_surface_borrows_canonical_pages_and_preserves_deep_precision() {
     )
     .unwrap();
     let source = owner.height_surface_source(&backend).unwrap();
-    let surface = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    let surface = ConformingSurface::new(&backend, &gpu, &source).unwrap();
     let (tile, uv) = address.tile(22).unwrap();
     let camera = TileAnchor::new(tile, radius)
         .unwrap()
@@ -1393,7 +1393,7 @@ fn canonical_surface_target_cost_and_shared_material_indirect_raster() {
     .unwrap();
     let surface = ConformingSurface::new(
         &backend,
-        &gpu.pool,
+        &gpu,
         &owner.height_surface_source(&backend).unwrap(),
     )
     .unwrap();
@@ -1623,7 +1623,7 @@ fn conforming_surface_casts_shared_shadow_depth() {
     // 28..31 and free slots are zeroed. Page level is not bisector depth.
     let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 12, 8).unwrap();
     let source = owner.height_surface_source(&backend).unwrap();
-    let surface = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    let surface = ConformingSurface::new(&backend, &gpu, &source).unwrap();
     surface.update_camera(&backend, camera).unwrap();
 
     assert!(owner.shadows().is_some());
@@ -1943,8 +1943,8 @@ fn conforming_ocean_borrows_field_without_cracks_or_accumulation() {
     let binding = owner.material_binding();
     let source = owner.height_surface_source(&backend).unwrap();
     let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 20, 8).unwrap();
-    let datum = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
-    let mut water = ConformingSurface::new(&backend, &gpu.pool, &source).unwrap();
+    let datum = ConformingSurface::new(&backend, &gpu, &source).unwrap();
+    let mut water = ConformingSurface::new(&backend, &gpu, &source).unwrap();
     for s in [&datum, &water] {
         s.update_camera(&backend, camera).unwrap();
     }
@@ -2201,7 +2201,7 @@ fn conforming_ocean_borrows_field_without_cracks_or_accumulation() {
         .unwrap();
     // Coarsest real roots are valid geometry but cannot carry resolved waves.
     let coarse = SphereGpu::new(&backend.device, &backend.queue, 16, 20).unwrap();
-    let mut coarse_surface = ConformingSurface::new(&backend, &coarse.pool, &source).unwrap();
+    let mut coarse_surface = ConformingSurface::new(&backend, &coarse, &source).unwrap();
     coarse_surface.update_camera(&backend, camera).unwrap();
     let coarse_base = capture(&coarse_surface);
     assert_eq!(
@@ -2242,14 +2242,14 @@ fn conforming_ocean_borrows_field_without_cracks_or_accumulation() {
     // claim about production frames, shadow/RT costs or equal-error renderers.
     let large =
         SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 20, 13).unwrap();
-    let mut target = ConformingSurface::new(&backend, &large.pool, &source).unwrap();
+    let mut target = ConformingSurface::new(&backend, &large, &source).unwrap();
     target.update_camera(&backend, camera).unwrap();
     let mut large_settings = settings.clone();
     large_settings.ocean.geometry_patches = 64;
     target
         .set_ocean(&backend, &large_settings, Some(&field), &binding)
         .unwrap();
-    let target_datum = ConformingSurface::new(&backend, &large.pool, &source).unwrap();
+    let target_datum = ConformingSurface::new(&backend, &large, &source).unwrap();
     target_datum.update_camera(&backend, camera).unwrap();
     let timer = GpuIntervals::new(&backend, 2).unwrap();
     let mut samples = Vec::new();
@@ -2300,4 +2300,29 @@ fn conforming_ocean_borrows_field_without_cracks_or_accumulation() {
         baseline_samples[20],
         baseline_samples[38]
     );
+}
+
+#[test]
+#[ignore = "hardware: the initialized persistent seed is drawable before its first topology mutation"]
+fn initial_seed_publishes_active_indirect_draw() {
+    let backend = Backend::bring_up().unwrap();
+    for depth in [0, 8] {
+        let gpu = thessa_rcbt_wgpu::sphere::SphereGpu::with_uniform_depth(
+            &backend.device,
+            &backend.queue,
+            4096,
+            58,
+            depth,
+        )
+        .unwrap();
+        let state = words(&read(&backend, &gpu.state));
+        let active = 12 * (1u32 << depth) + 4;
+        assert_eq!(&state[8..12], &[active * 3, 1, 0, 0]);
+        let indices = words(&read(&backend, &gpu.indices));
+        let records = words(&read(&backend, &gpu.pool));
+        let unique: std::collections::BTreeSet<_> =
+            indices[..active as usize].iter().copied().collect();
+        assert_eq!(unique.len(), active as usize);
+        assert!(unique.iter().all(|slot| records[*slot as usize * 8] != 0));
+    }
 }

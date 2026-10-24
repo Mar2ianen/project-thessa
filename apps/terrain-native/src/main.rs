@@ -203,7 +203,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--docking-demo runs the retained isolated vacuum two-craft Rapier/DockingSession fixture with actual solved poses and D1 CAD rest surfaces. Not flight/fleet authority. Headless --docking-time 0..30 seeks a deterministic fixed-step replay before warmup; --docking-step 0..0.05 advances per frame (default 1/60, zero freezes). Window uses elapsed admission capped at 0.05s. Incompatible with flight/map/site/preview/time controls. Cabin impact is a diagnostic structural cue; vacuum exterior stays silent."
                 );
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -428,7 +428,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     eprintln!(
-        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, opt-in conforming topology and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
+        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
     );
     let mut scene = scene::Scene::load(requested)?;
     #[cfg(feature = "hud")]
@@ -841,11 +841,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         png.set_color(png::ColorType::Rgba);
         png.set_depth(png::BitDepth::Eight);
         png.write_header()?.write_image_data(&pixels)?;
+        let topology_state = renderer.read_topology_state(&backend)?;
+        let drawn_triangles = if let Some(state) = topology_state {
+            state[8] / 3
+        } else {
+            renderer.read_draw(&backend)?[0] / 3
+        };
         println!(
             "adapter={} canonical_tiles={} drawn_triangles={} frames={count} median_ms={median:.3} p95_ms={p95:.3} p99_ms={:.3} max_ms={:.3} reciprocal_median_fps={:.1} screenshot={path}",
             backend.adapter_name,
             scene.stream.visible().len(),
-            renderer.read_draw(&backend)?[0] / 3,
+            drawn_triangles,
             timings[timings.len() * 99 / 100],
             timings.last().unwrap(),
             1000.0 / median
@@ -854,7 +860,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "Live canonical stream, {width}x{height} offscreen: selection/poll/publication + camera upload + classify + raster + optional HUD + GPU completion; excludes setup/{prestream_seconds}s pre-stream/30 warmup frames/readback; NOT game FPS. sweep={sweep} hud={hud_enabled}"
         );
         println!(
-            "terrain_topology={} topology_bytes={} topology_revision={} fallback={}; conforming drawn_triangles includes zero-area free/virtual allocation slots, not live-leaf count",
+            "terrain_topology={} topology_bytes={} topology_revision={} fallback={}; conforming drawn_triangles counts GPU-active slots including reserved virtual roots, excluding free allocation holes",
             if renderer.conforming_surface().is_some() {
                 "conforming"
             } else {
@@ -866,8 +872,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .map_or(0, |s| s.publication().revision),
             renderer.topology_reason().unwrap_or("none")
         );
+        if let Some(state) = topology_state {
+            println!(
+                "cbt_active_slots={} cbt_split_requests={} cbt_merges={} cbt_capacity_rejections={} cbt_last_requests={} cbt_last_commits={}; one-shot readback excluded from timings",
+                state[8] / 3,
+                state[5],
+                state[6],
+                state[7],
+                state[2],
+                state[1]
+            );
+        }
         println!(
-            "geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} wanted={}",
+            "geometry_publications={} regenerated_patches={} cache_entries={:?} pending_jobs={:?} wanted={}; conforming mode counts height-page data here, without patch meshes",
             scene.publications,
             scene.regenerated,
             scene.stream.cache_entries(),

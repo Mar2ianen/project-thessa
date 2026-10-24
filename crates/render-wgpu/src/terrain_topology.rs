@@ -16,7 +16,6 @@ struct ViewPolicy {
     clip: [f32; 16],
     camera: [f64; 3],
     extent: [u32; 2],
-    extra_height_m: f32,
 }
 #[derive(Default)]
 struct Completion {
@@ -31,9 +30,9 @@ pub(crate) struct TerrainTopology {
     classify: wgpu::ComputePipeline,
     bind: wgpu::BindGroup,
     policy: wgpu::Buffer,
-    height_bounds: wgpu::Buffer,
     waves: u32,
     split: f32,
+    merge: f32,
     view: Cell<Option<ViewPolicy>>,
     generation: Cell<u64>,
     completion: Arc<Mutex<Completion>>,
@@ -62,7 +61,7 @@ impl TerrainTopology {
                 .map_err(|e| BackendError::Device(e.into()))?;
         gpu.set_area_policy(&backend.queue, config.split_area_px, config.merge_area_px)
             .map_err(|e| BackendError::Device(e.into()))?;
-        let mut surface = ConformingSurface::new(backend, &gpu.pool, height)?;
+        let mut surface = ConformingSurface::new(backend, &gpu, height)?;
         surface.set_ocean(backend, settings, ocean, materials)?;
         let policy = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("canonical-topology-view"),
@@ -74,7 +73,9 @@ impl TerrainTopology {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("canonical-topology-classification"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("terrain_topology.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    crate::conforming_surface::classification_shader().into(),
+                ),
             });
         let classify = backend
             .device
@@ -86,30 +87,30 @@ impl TerrainTopology {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        let bind = backend
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("canonical-topology-classification"),
-                layout: &classify.get_bind_group_layout(0),
-                entries: &[&surface.vertices, &gpu.areas, &policy, &height.bounds]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(binding, b)| wgpu::BindGroupEntry {
-                        binding: binding as u32,
-                        resource: b.as_entire_binding(),
-                    })
-                    .collect::<Vec<_>>(),
-            });
+        let bind = surface.classification_bind(
+            &backend.device,
+            &classify,
+            height,
+            &gpu.areas,
+            &policy,
+            &gpu.pool,
+        );
         let shadow = atlas.map(|atlas| {
             backend
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("canonical-topology-shadow"),
                     layout: &atlas.conforming_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: surface.vertices.as_entire_binding(),
-                    }],
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: surface.vertices.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: surface.active_indices.as_entire_binding(),
+                        },
+                    ],
                 })
         });
         Ok(Self {
@@ -119,9 +120,9 @@ impl TerrainTopology {
             classify,
             bind,
             policy,
-            height_bounds: height.bounds.clone(),
             waves: config.waves,
             split: config.split_area_px,
+            merge: config.merge_area_px,
             view: Cell::new(None),
             generation: Cell::new(1),
             completion: Arc::default(),
@@ -147,18 +148,14 @@ impl TerrainTopology {
         block: &ViewUniformBlock,
         camera: [f64; 3],
         extent: [u32; 2],
-        height_bound_m: f32,
     ) -> Result<(), BackendError> {
-        if extent.contains(&0) || !height_bound_m.is_finite() || height_bound_m < 0.0 {
-            return Err(BackendError::Device(
-                "invalid conforming viewport/height bound".into(),
-            ));
+        if extent.contains(&0) {
+            return Err(BackendError::Device("invalid conforming viewport".into()));
         }
         let view = ViewPolicy {
             clip: block.unjittered_clip_from_world.to_cols_array(),
             camera,
             extent,
-            extra_height_m: height_bound_m,
         };
         if self.view.get() == Some(view) {
             return Ok(());
@@ -169,12 +166,7 @@ impl TerrainTopology {
             .unjittered_clip_from_world
             .to_cols_array()
             .into_iter()
-            .chain([
-                extent[0] as f32,
-                extent[1] as f32,
-                height_bound_m,
-                self.split,
-            ])
+            .chain([extent[0] as f32, extent[1] as f32, self.merge, self.split])
             .flat_map(f32::to_le_bytes)
             .collect::<Vec<_>>();
         backend.queue.write_buffer(&self.policy, 0, &data);
@@ -190,7 +182,7 @@ impl TerrainTopology {
             return;
         }
         for _ in 0..self.waves {
-            self.surface.encode_datum(encoder);
+            self.surface.encode_scratch(encoder);
             self.encode_classification(encoder);
             self.gpu.encode_batch_plan_from_areas(encoder);
             self.gpu.encode_batch_commit(encoder, true);
@@ -229,7 +221,6 @@ impl TerrainTopology {
         self.gpu.storage_bytes()
             + self.surface.storage_bytes()
             + self.policy.size()
-            + self.height_bounds.size()
             + self.readback.size()
     }
 }
@@ -238,137 +229,9 @@ impl TerrainTopology {
 mod tests {
     use super::*;
     #[test]
-    #[ignore = "hardware: page-local envelope admission, hidden descendants and conservative fallback"]
-    fn classifier_selects_conservative_page_envelopes() {
-        use wgpu::util::DeviceExt;
-        let backend = Backend::bring_up().unwrap();
-        let device = &backend.device;
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(include_str!("terrain_topology.wgsl").into()),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None,
-            layout: None,
-            module: &module,
-            entry_point: Some("classify"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        // Parent slot 0 has flat corner samples but a hidden tall child in slot
-        // 1. Slot 2 is an unrelated face. Seam/mixed/missing corners stay global.
-        let cases = [
-            ([0, 0, 0], [0, 0, 0]),
-            ([2, 2, 2], [1, 1, 1]),
-            ([0, 2, 0], [0, 0, 0]),
-            ([2, 2, 2], [1, 0, 1]),
-            ([u32::MAX; 3], [1, 1, 1]),
-            ([1, 1, 1], [0, 0, 0]),
-        ];
-        let mut vertices = Vec::new();
-        for (slots, faces) in cases {
-            for (index, position) in [
-                [0.0f32, 0.0, 0.0, 0.0],
-                [0.5, 0.0, 0.0, 0.0],
-                [0.0, 0.5, 0.0, 0.0],
-            ]
-            .iter()
-            .enumerate()
-            {
-                vertices.extend(
-                    position
-                        .iter()
-                        .chain([0.0, 0.0, 1.0, faces[index] as f32].iter())
-                        .flat_map(|v| v.to_le_bytes()),
-                );
-                vertices.extend(
-                    [0, 0, slots[index], 0]
-                        .into_iter()
-                        .flat_map(u32::to_le_bytes),
-                );
-            }
-        }
-        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
-        let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: &vertices,
-            usage: storage,
-        });
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 24,
-            usage: storage | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let policy = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: &glam::Mat4::IDENTITY
-                .to_cols_array()
-                .into_iter()
-                .chain([100.0, 100.0, 2.0, 256.0])
-                .flat_map(f32::to_le_bytes)
-                .collect::<Vec<_>>(),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let bounds = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: storage,
-            mapped_at_creation: false,
-        });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[&input, &output, &policy, &bounds]
-                .into_iter()
-                .enumerate()
-                .map(|(binding, b)| wgpu::BindGroupEntry {
-                    binding: binding as u32,
-                    resource: b.as_entire_binding(),
-                })
-                .collect::<Vec<_>>(),
-        });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 24,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        for peak in [100.0000001, 20.0, 200.0] {
-            let h = thessa_rcbt_core::conforming_surface::resident_height_bounds(
-                &[8, 32, 9],
-                &[Some((0.0, 0.0)), Some((0.0, peak)), Some((-5.0, 4.0))],
-            )
-            .unwrap();
-            backend.queue.write_buffer(
-                &bounds,
-                0,
-                &h.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
-            );
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &bind, &[]);
-                pass.dispatch_workgroups(1, 1, 1);
-            }
-            encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 24);
-            backend.queue.submit([encoder.finish()]);
-            let data = crate::terrain::map_buffer(&backend, &readback).unwrap();
-            for (index, bytes) in data.as_chunks::<4>().0.iter().enumerate() {
-                let height = if index == 1 { 5.0 } else { f64::from(h[0]) };
-                let expected = 312.5 * (1.0 + 2.0 * (height + 2.0) / 0.5f64.hypot(0.5)).powi(2);
-                let measured = f64::from(f32::from_le_bytes(*bytes));
-                assert!(
-                    (measured - expected).abs() < expected * 1e-6,
-                    "case {index}: {measured} vs {expected}"
-                );
-            }
-        }
-    }
-    #[test]
     fn classifier_is_portable() {
-        let s = include_str!("terrain_topology.wgsl");
+        let source = crate::conforming_surface::classification_shader();
+        let s = source.as_str();
         let m =
             naga::front::wgsl::parse_str(s).unwrap_or_else(|e| panic!("{}", e.emit_to_string(s)));
         naga::valid::Validator::new(
@@ -381,7 +244,7 @@ mod tests {
 
     #[test]
     #[ignore = "hardware: actual emitted Earth-scale triangle areas vs independent f64 projection"]
-    fn emitted_area_classifier_matches_f64_projection_and_relief_is_monotone() {
+    fn emitted_area_classifier_matches_projection_and_backface_culling() {
         use crate::terrain::{OffscreenTarget, TerrainCapacity, TerrainPatch, TerrainRenderer};
         use glam::{DVec3, DVec4};
         use thessa_rcbt_core::{
@@ -448,9 +311,9 @@ mod tests {
             backend.queue.submit([encoder.finish()]);
             crate::terrain::map_buffer(&backend, &staging).unwrap()
         };
-        let classify = |bound| {
+        let classify = || {
             topology
-                .update_view(&backend, &block, eye.to_array(), [257, 257], bound)
+                .update_view(&backend, &block, eye.to_array(), [257, 257])
                 .unwrap();
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             topology.surface.encode_datum(&mut encoder);
@@ -463,7 +326,7 @@ mod tests {
                 .map(|p| f32::from_le_bytes(*p))
                 .collect::<Vec<_>>()
         };
-        let areas = classify(0.0);
+        let areas = classify();
         let generation = topology.generation.get();
         let policy = topology.view.get();
         for index in 0..8 {
@@ -475,7 +338,7 @@ mod tests {
             )
             .unwrap();
             topology
-                .update_view(&backend, &jittered, eye.to_array(), [257, 257], 0.0)
+                .update_view(&backend, &jittered, eye.to_array(), [257, 257])
                 .unwrap();
             assert_eq!(
                 topology.generation.get(),
@@ -509,11 +372,25 @@ mod tests {
                 let q = block.clip_from_world.as_dmat4() * p;
                 q.truncate().truncate() / q.w * 128.5
             });
-            let expected = (projected[1] - projected[0])
-                .perp_dot(projected[2] - projected[0])
-                .abs()
-                * 0.5;
-            max_error = max_error.max((expected - f64::from(gpu)).abs());
+            let facing = (positions[1] - positions[0])
+                .truncate()
+                .cross((positions[2] - positions[0]).truncate())
+                .dot(-positions[0].truncate());
+            let expected = if facing > 0.0 {
+                (projected[1] - projected[0])
+                    .perp_dot(projected[2] - projected[0])
+                    .abs()
+                    * 0.5
+            } else {
+                0.0
+            };
+            assert!(
+                f64::from(gpu) + 0.063 >= expected,
+                "probe score must retain projected area"
+            );
+            if f64::from(gpu) <= expected + 0.063 {
+                max_error = max_error.max((expected - f64::from(gpu)).abs());
+            }
         }
         let envelope = 8.0 * f64::from(f32::EPSILON) * 257.0 * 257.0;
         assert_eq!(live, 3072);
@@ -521,9 +398,11 @@ mod tests {
             max_error <= envelope,
             "area error {max_error} > {envelope} px^2"
         );
-        let relief = classify(1000000.0);
-        assert!(areas.iter().zip(&relief).all(|(a, b)| a <= b));
-        assert!(areas.iter().zip(&relief).any(|(a, b)| a < b));
+        assert_eq!(
+            areas,
+            classify(),
+            "unchanged source/view must preserve scores"
+        );
         assert_eq!(
             topology.surface.publication().revision,
             0,
@@ -581,7 +460,6 @@ mod tests {
                     &ViewUniformBlock::new(&view).unwrap(),
                     eye.to_array(),
                     [257, 257],
-                    0.0,
                 )
                 .unwrap();
             let mut encoder = backend.device.create_command_encoder(&Default::default());
@@ -640,6 +518,157 @@ mod tests {
         );
         println!(
             "canonical_area_request_replay frames=80 splits={split} merges={merged} capacity=4096; independent CPU topology/neighbor oracle after every wave, far-to-close Earth-scale camera rebase"
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_probe_tests {
+    use super::*;
+    #[test]
+    #[ignore = "hardware: an edge-midpoint peak invisible at current vertices must affect refinement"]
+    fn midpoint_source_probe_detects_relief_before_peak_reaches_vertices() {
+        use crate::terrain::{OffscreenTarget, TerrainCapacity, TerrainPatch, TerrainRenderer};
+        use glam::DVec3;
+        use thessa_rcbt_core::{
+            HeightPage,
+            tile_anchor::{TileAnchor, TileKey},
+        };
+        let backend = Backend::bring_up().unwrap();
+        let radius = 1000.0;
+        let flat = HeightPage::bake(&vec![0.0; 33 * 33], 33, 0.001).unwrap();
+        let roots: Vec<_> = (0..6)
+            .map(|face| TerrainPatch {
+                anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), radius).unwrap(),
+                page: &flat,
+            })
+            .collect();
+        let mut owner = TerrainRenderer::with_capacity(
+            &backend,
+            &roots,
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: 6,
+                height_grid_size: 33,
+                material_layers: 1,
+            },
+        )
+        .unwrap();
+        let source = owner.height_surface_source(&backend).unwrap();
+        let settings = thessa_graphics::ResolvedGraphicsSettings {
+            terrain_topology: thessa_graphics::ResolvedTerrainTopology {
+                capacity: 4096,
+                waves: 1,
+                split_area_px: 64.0,
+                merge_area_px: 8.0,
+            },
+            ..Default::default()
+        };
+        let topology = TerrainTopology::new(
+            &backend,
+            &settings,
+            &source,
+            &owner.material_binding(),
+            None,
+            None,
+        )
+        .unwrap();
+        let eye = DVec3::new(0.0, 0.0, 2500.0);
+        let view = crate::view::ViewParams {
+            world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, DVec3::ZERO, DVec3::Y)
+                .inverse(),
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(1.4, 1.0, 1.0, 1e8),
+            world_position_m: eye,
+            exposure: 1.0,
+        };
+        topology
+            .update_view(
+                &backend,
+                &ViewUniformBlock::new(&view).unwrap(),
+                eye.to_array(),
+                [257, 257],
+            )
+            .unwrap();
+        let read = |buffer: &wgpu::Buffer| {
+            let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: buffer.size(),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, buffer.size());
+            backend.queue.submit([encoder.finish()]);
+            crate::terrain::map_buffer(&backend, &staging).unwrap()
+        };
+        let classify = || {
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            topology.surface.encode_scratch(&mut encoder);
+            topology.encode_classification(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            (read(&topology.surface.vertices), read(&topology.gpu.areas))
+        };
+        let (positions_before, scores_before) = classify();
+        // Uniform depth 8 vertices land on even indices of a 33x33 face page.
+        // This odd/even sample is reached by an edge probe, never a live vertex.
+        let mut samples = vec![0.0; 33 * 33];
+        samples[16 * 33 + 15] = 600.0;
+        let peak = HeightPage::bake(&samples, 33, 0.02).unwrap();
+        owner.update_pages(&backend, &[(4, &peak)]).unwrap();
+        let (positions_after, scores_after) = classify();
+        for (a, b) in positions_before
+            .as_chunks::<48>()
+            .0
+            .iter()
+            .zip(positions_after.as_chunks::<48>().0)
+        {
+            let height = f32::from_le_bytes(b[12..16].try_into().unwrap());
+            assert!(
+                height.abs() <= peak.max_residual_error_m() + 0.001,
+                "live vertices may contain only quantization error, not the 600 m peak"
+            );
+            let delta = (0..3)
+                .map(|i| {
+                    let offset = i * 4;
+                    let x = f32::from_le_bytes(a[offset..offset + 4].try_into().unwrap());
+                    let y = f32::from_le_bytes(b[offset..offset + 4].try_into().unwrap());
+                    (x - y).powi(2)
+                })
+                .sum::<f32>()
+                .sqrt();
+            assert!(delta <= peak.max_residual_error_m() + 0.001);
+        }
+        let changed = scores_before
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(scores_after.as_chunks::<4>().0)
+            .filter(|(a, b)| f32::from_le_bytes(**b) > f32::from_le_bytes(**a) + 64.0)
+            .count();
+        println!("midpoint_probe new_actionable_scores={changed} peak_not_in_vertices=true");
+        assert!(changed > 0);
+        for _ in 0..128 {
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            topology.encode(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            backend
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+        }
+        let state = read(&topology.gpu.state);
+        let word = |i: usize| u32::from_le_bytes(state[i * 4..i * 4 + 4].try_into().unwrap());
+        println!(
+            "midpoint_peak_settled commits={} requests={} rejections={} live={}",
+            word(1),
+            word(2),
+            word(7),
+            word(8) / 3
+        );
+        assert_eq!(
+            (word(1), word(2), word(7)),
+            (0, 0, 0),
+            "children must not merge into a parent that immediately needs to split"
         );
     }
 }

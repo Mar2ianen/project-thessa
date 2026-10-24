@@ -6,6 +6,7 @@ use thessa_rcbt_core::HeightPage;
 
 fn policy() -> StreamingPolicy {
     StreamingPolicy {
+        persistent_topology: false,
         selection: SelectionPolicy {
             coarse_level: 0,
             coarse_budget: 6,
@@ -17,6 +18,7 @@ fn policy() -> StreamingPolicy {
         draw_capacity: 6,
         normal_maps: true,
         ground_detail: false,
+        ground_relief_max_level: 17,
         material_max_level: 17,
     }
 }
@@ -225,4 +227,80 @@ fn visible_height_edit_republishes_unchanged_cover_and_failed_workers_are_retrya
             .page_version(lod::cbt_node_for_tile(key).unwrap().id())
             .unwrap()
     );
+}
+
+#[test]
+fn fine_geometry_above_l17_requires_explicit_ground_detail_and_stays_bounded() {
+    let mut policy = policy();
+    policy.selection.fine_level = 22;
+    assert!(TerrainStream::new(field(), policy).is_err());
+    policy.ground_detail = true;
+    assert!(TerrainStream::new(field(), policy).is_ok());
+    policy.selection.fine_level = 23;
+    assert!(TerrainStream::new(field(), policy).is_err());
+}
+
+#[test]
+fn persistent_residency_admits_one_child_without_siblings_and_releases_cold_pages() {
+    let mut policy = policy();
+    policy.persistent_topology = true;
+    policy.height_cache = 14;
+    policy.draw_capacity = 14;
+    let mut stream = TerrainStream::new(field(), policy).unwrap();
+    stream.tick(view(), 1.0, 0.0).unwrap();
+    let roots = stream.visible.clone();
+    let child = TileKey::root(4).children()[2];
+    stream.wanted.push(child);
+    let (tx, rx) = sync_channel(1);
+    tx.send(Ok(HeightBuild {
+        page: HeightPage::bake(&[100.0; 4], 2, 0.01).unwrap(),
+        payload: (),
+    }))
+    .unwrap();
+    stream.heights.jobs.insert(child, JobHandle::new(rx));
+    let update = stream.tick(view(), 1.0, 0.01).unwrap();
+    assert!(update.geometry_changed);
+    assert_eq!(stream.visible.len(), 7);
+    assert!(roots.iter().all(|key| stream.visible.contains(key)));
+    assert!(stream.visible.contains(&child));
+    assert!(
+        stream.visible.contains(&TileKey::root(4)),
+        "overlapping data, not a draw partition"
+    );
+    stream.wanted = roots.clone();
+    let (tx, rx) = sync_channel(1);
+    tx.send(Ok(HeightBuild {
+        page: HeightPage::bake(&[1.0; 4], 2, 0.01).unwrap(),
+        payload: (),
+    }))
+    .unwrap();
+    stream
+        .heights
+        .jobs
+        .insert(TileKey::root(4), JobHandle::new(rx));
+    assert!(stream.tick(view(), 1.0, 0.02).unwrap().geometry_changed);
+    assert_eq!(stream.visible, roots);
+    assert!(
+        !stream.heights.contains_key(&child),
+        "GPU publication must not pin cold data forever"
+    );
+    stream.configure_topology(false).unwrap();
+    assert_eq!(stream.visible.len(), 6);
+    assert!(!stream.policy.persistent_topology);
+    assert_eq!(stream.pending_jobs(), (0, 0));
+}
+
+#[test]
+fn persistent_page_publication_budget_and_relief_tiers_are_validated() {
+    let mut p = policy();
+    p.persistent_topology = true;
+    assert!(TerrainStream::new(field(), p).is_err());
+    p.draw_capacity = p.height_cache;
+    assert!(TerrainStream::new(field(), p).is_ok());
+    p.ground_relief_max_level = 22;
+    assert!(TerrainStream::new(field(), p).is_err());
+    p.ground_detail = true;
+    assert!(TerrainStream::new(field(), p).is_ok());
+    p.ground_relief_max_level = 23;
+    assert!(TerrainStream::new(field(), p).is_err());
 }

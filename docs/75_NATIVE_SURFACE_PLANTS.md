@@ -10,6 +10,14 @@ meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
 normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
+WORLD13 extends this existing adapter with a bounded native ground-pebble
+consumer, independently of the plant toggle. It reuses the same preparation
+queue, source reuse, instancing, RT admission and shared shadow pass. The
+pebbles are optical scenery without collision ownership; their existing
+`terrain_ground_detail` quality policy and L24 identity extension are described
+in docs 70/77. Plant telemetry still counts only plants; shared asset payload,
+instance and draw counters include both kinds of surface props.
+
 The surface-showcase continuation in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md)
 adds explicit lycopsid stem reflectance through the existing mesh material,
 without changing placement. Its later WORLD06f stage changes silhouettes through
@@ -1056,3 +1064,36 @@ receiver exclusion, versus one at 0.0001 m. The default is **not** silently
 lowered: neither fixture establishes a universal far-coordinate bias bound.
 This fixes a causal shadow defect, not foliage coverage/AA, all close-contact
 visibility, ground bands, canopy closure or final visual acceptance.
+
+## WORLD13 near-ground pebbles (2026-10-24)
+
+With resolved ground detail, Medium/High surface quality admits three variants
+of a 32-triangle/18-vertex closed pebble through this adapter, including CBT.
+The source adds 3,096 vertex/index/AO bytes, three opaque rough mineral materials,
+different proportions and no images. Nominal instance diameters range from 4 to 30 cm; the base extends
+below its canonical ground anchor. Area-weighted geometric normals and the
+shared shadow atlas supply shape/lighting; no painted contact AO is added.
+The existing all-primitive RT preflight includes pebble instances and retains
+whole-partition raster fallback on exhaustion. Plant identity/geometry is
+unchanged; at most three additional primitive ranges are published (14 total
+with all previous full/reduced plant organs). Variant identity participates in
+compatible-source reuse. Placement uses the terrain's 32 m-filtered base plus
+world-fixed, 12 mm-footprint render relief (doc 77); exact resident-triangle
+contact is not claimed. An independently seeded 8 m patch field breaks uniform
+pebble density without copying understory colonies.
+
+The actual eye's L18 window plus eight same-face neighbours bounds the query.
+It is prepared only for explicit eye AGL at most 4 m in supported survey views.
+Higher/unspecified eyes use the existing optical ground fallback. Medium keeps
+half of the High immutable population; Low has no pebble jobs/meshes. Both
+candidate and item limits are 36,864 per prepared union, not allocation targets.
+The existing shared job coalesces moving windows and discards stale results.
+This is not planetary streaming; boundary transitions remain discrete and
+same-face. Default-off skips sampling/publication/resources. Ground-only views
+can create the shared mesh consumer without enabling plants.
+
+`native_surface_ground_pebbles`, `native_surface_ground_candidates`,
+`native_surface_ground_samples` and `native_surface_ground_window` identify the
+prepared ground representation. Resolved density/candidate/item limits are
+exported alongside them. The legacy `native_surface_plants_retained` remains a
+plant-only count; shared mesh bytes/submitted instances/draws include pebbles.

@@ -91,6 +91,9 @@ impl<R, B> HeightStream<R, B> {
     pub fn get(&self, key: &TileKey) -> Option<&R> {
         self.resident.get(key).map(|r| &r.payload)
     }
+    pub fn keys(&self) -> impl Iterator<Item = TileKey> + '_ {
+        self.resident.keys().copied()
+    }
     pub fn values(&self) -> impl Iterator<Item = &R> {
         self.resident.values().map(|r| &r.payload)
     }
@@ -252,11 +255,36 @@ pub fn spawn_height_job(
     field: Arc<PlanetField>,
     key: TileKey,
 ) -> JobHandle<Result<HeightBuild<()>, String>> {
-    JobHandle::spawn(move || bake_page(&field, key).map(|page| HeightBuild { page, payload: () }))
+    spawn_height_job_with_ground_detail(field, key, false)
+}
+
+pub fn spawn_height_job_with_ground_detail(
+    field: Arc<PlanetField>,
+    key: TileKey,
+    ground_detail: bool,
+) -> JobHandle<Result<HeightBuild<()>, String>> {
+    JobHandle::spawn(move || {
+        bake_page_with_ground_detail(&field, key, ground_detail)
+            .map(|page| HeightBuild { page, payload: () })
+    })
 }
 
 /// The existing GPU-page contract: 33x33 canonical samples and 0.5 m absolute
 /// quantization budget. CPU fallback meshes retain their existing builder.
 pub fn bake_page(field: &PlanetField, key: TileKey) -> Result<HeightPage, String> {
-    lod::bake_height_page(field, key, 33, 0.5).map_err(|error| error.to_string())
+    bake_page_with_ground_detail(field, key, false)
+}
+
+pub fn bake_page_with_ground_detail(
+    field: &PlanetField,
+    key: TileKey,
+    ground_detail: bool,
+) -> Result<HeightPage, String> {
+    let error = if ground_detail && key.level > 17 {
+        0.001
+    } else {
+        0.5
+    };
+    lod::bake_height_page_with_ground_detail(field, key, 33, error, ground_detail)
+        .map_err(|error| error.to_string())
 }

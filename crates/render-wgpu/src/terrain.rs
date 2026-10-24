@@ -680,12 +680,7 @@ impl TerrainRenderer {
         resident_height_extent.resize(capacity, None);
         let surface_source = if topology_requested && topology_supported {
             Some(crate::conforming_surface::HeightSurfaceSource::new(
-                backend,
-                &metadata,
-                &residuals,
-                radius,
-                &node_ids,
-                &resident_height_extent,
+                backend, &metadata, &residuals, radius, &node_ids,
             )?)
         } else {
             None
@@ -737,6 +732,13 @@ impl TerrainRenderer {
             "return vec4(radiance * view.exposure, 1.0);".into()
         };
         let raster_source = shaders::CBT_RASTER_WGSL
+            .replace(
+                "const GROUND_RELIEF_GEOMETRY: bool = false;",
+                &format!(
+                    "const GROUND_RELIEF_GEOMETRY: bool = {};",
+                    settings.is_some_and(|s| s.terrain_ground_relief_max_level > 17)
+                ),
+            )
             .replace(
                 "const MATERIAL_ANISOTROPY: f32 = 1.0;",
                 &format!(
@@ -884,7 +886,13 @@ impl TerrainRenderer {
             ),
             (3, metadata.as_entire_binding()),
             (4, params.as_entire_binding()),
-            (5, triangles.as_entire_binding()),
+            (
+                5,
+                topology
+                    .as_ref()
+                    .map_or(&triangles, |t| &t.surface.active_indices)
+                    .as_entire_binding(),
+            ),
             (6, wgpu::BindingResource::TextureView(&globe)),
             (7, wgpu::BindingResource::Sampler(&sampler)),
             (8, leaves.as_entire_binding()),
@@ -1259,11 +1267,12 @@ impl TerrainRenderer {
             if let Some(bind) = &topology.shadow {
                 pass.set_pipeline(&atlas.conforming_pipeline);
                 pass.set_bind_group(1, bind, &[]);
-                pass.draw(0..topology.surface.slot_count() * 3, 0..1);
+                pass.draw_indirect(&topology.surface.indirect, 32);
                 return crate::shadows::ShadowDrawStats {
                     candidate_slots: u64::from(topology.surface.slot_count()),
                     submitted_slots: u64::from(topology.surface.slot_count()),
                     draw_calls: 1,
+                    indirect: true,
                 };
             }
             return Default::default();
@@ -1344,7 +1353,7 @@ impl TerrainRenderer {
         for &(id, _) in &requested {
             let mut parent = id >> 2;
             while parent >= 8 {
-                if sources.contains_key(&parent) {
+                if self.topology.is_none() && sources.contains_key(&parent) {
                     return Err(fail());
                 }
                 parent >>= 2;
@@ -1529,9 +1538,6 @@ impl TerrainRenderer {
                 ]),
             );
         }
-        if let Some(source) = &self.surface_source {
-            source.publish_bounds(backend, &self.node_ids, &self.resident_height_extent);
-        }
         if !updates.is_empty() {
             backend
                 .queue
@@ -1628,14 +1634,7 @@ impl TerrainRenderer {
         let block = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid camera uniforms".into()))?;
         if let Some(topology) = &self.topology {
-            let ocean_bound = if self.ocean_settings.geometry_patches > 0 {
-                self.ocean
-                    .as_ref()
-                    .map_or(0.0, |f| f.stats().height_bound_m as f32)
-            } else {
-                0.0
-            };
-            topology.update_view(backend, &block, camera, extent, ocean_bound)?;
+            topology.update_view(backend, &block, camera, extent)?;
         }
         if camera != self.camera {
             // Projection/rotation/exposure changes do not change tile-relative
@@ -1966,7 +1965,6 @@ impl TerrainRenderer {
                 &self.residuals,
                 self.body_radius_m,
                 &self.node_ids,
-                &self.resident_height_extent,
             )?);
         }
         Ok(self.surface_source.as_ref().unwrap().clone())
@@ -2145,7 +2143,7 @@ impl TerrainRenderer {
         }
         if let Some(topology) = &self.topology {
             if topology.surface.publication().revision != 0 {
-                pass.draw(0..topology.surface.slot_count() * 3, 0..1);
+                pass.draw_indirect(&topology.surface.indirect, 32);
             }
         } else {
             pass.draw_indirect(&self.draw, 0);
@@ -2201,12 +2199,34 @@ impl TerrainRenderer {
         .collect())
     }
 
+    /// One-shot diagnostic: request, cumulative mutation counters, live draw.
+    /// Ordinary frame submission never maps the topology pool/state.
+    pub fn read_topology_state(
+        &self,
+        backend: &Backend,
+    ) -> Result<Option<[u32; 12]>, BackendError> {
+        self.topology
+            .as_ref()
+            .map(|topology| {
+                let data = read_buffer(backend, &topology.gpu.state)?;
+                Ok(std::array::from_fn(|i| {
+                    u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap())
+                }))
+            })
+            .transpose()
+    }
+
     /// Diagnostic only; never needed to submit an ordinary frame.
     pub fn read_draw(&self, backend: &Backend) -> Result<Vec<u32>, BackendError> {
         if let Some(topology) = &self.topology {
-            // Submitted allocation triangles include zero-area free slots;
-            // callers must not describe this count as the live-leaf count.
-            return Ok(vec![topology.surface.slot_count() * 3, 1, 0, 0]);
+            // GPU active slots include the four reserved virtual roots, but
+            // never free allocation holes. Readback is diagnostic only.
+            return Ok(read_buffer(backend, &topology.surface.indirect)?
+                .as_chunks::<4>()
+                .0[8..12]
+                .iter()
+                .map(|b| u32::from_le_bytes(*b))
+                .collect());
         }
         Ok(read_buffer(backend, &self.draw)?
             .as_chunks::<4>()

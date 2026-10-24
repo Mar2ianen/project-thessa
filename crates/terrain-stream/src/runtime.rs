@@ -21,23 +21,28 @@ use thessa_worldgen_rocky::{
 
 #[derive(Clone, Copy)]
 pub struct StreamingPolicy {
+    /// Persistent GPU bisectors own geometry; publish sparse data with root fallback.
+    pub persistent_topology: bool,
     pub selection: SelectionPolicy,
     pub height_cache: usize,
     pub material_cache: usize,
     pub draw_capacity: usize,
     pub normal_maps: bool,
     pub ground_detail: bool,
+    pub ground_relief_max_level: u8,
     pub material_max_level: u8,
 }
 impl Default for StreamingPolicy {
     fn default() -> Self {
         Self {
+            persistent_topology: false,
             selection: SelectionPolicy::default(),
             height_cache: 1024,
             material_cache: 1024,
             draw_capacity: 1024,
             normal_maps: true,
             ground_detail: false,
+            ground_relief_max_level: 17,
             material_max_level: 17,
         }
     }
@@ -77,12 +82,15 @@ impl TerrainStream {
     /// first frame. All later fine pages are built asynchronously without meshes.
     pub fn new(field: Arc<PlanetField>, policy: StreamingPolicy) -> Result<Self, String> {
         if policy.draw_capacity < 6
+            || (policy.persistent_topology && policy.height_cache > policy.draw_capacity)
+            || !(17..=22).contains(&policy.ground_relief_max_level)
+            || (!policy.ground_detail && policy.ground_relief_max_level > 17)
             || policy.height_cache < 6
             || policy.material_cache < 6
             || policy.selection.coarse_budget < 6
             || policy.selection.fine_budget < 6
             || policy.selection.coarse_level > 17
-            || policy.selection.fine_level > 17
+            || policy.selection.fine_level > if policy.ground_detail { 22 } else { 17 }
         {
             return Err("invalid terrain streaming budgets".into());
         }
@@ -136,6 +144,16 @@ impl TerrainStream {
             },
             epoch: 0,
         })
+    }
+
+    /// Restart page publication when capability resolution changes its contract.
+    pub fn configure_topology(&mut self, persistent: bool) -> Result<(), String> {
+        if self.policy.persistent_topology != persistent {
+            let mut policy = self.policy;
+            policy.persistent_topology = persistent;
+            *self = Self::new(self.field.clone(), policy)?;
+        }
+        Ok(())
     }
 
     pub fn visible(&self) -> &[TileKey] {
@@ -198,7 +216,7 @@ impl TerrainStream {
             now_s,
             &self.fine,
             self.wanted.is_empty(),
-            true,
+            !self.policy.persistent_topology,
             self.policy.selection,
         ) {
             self.fine = demand.fine;
@@ -224,7 +242,8 @@ impl TerrainStream {
         {
             return Ok(update);
         }
-        if (update.selected || update.height_ready > 0)
+        if !self.policy.persistent_topology
+            && (update.selected || update.height_ready > 0)
             && let Some(cover) = resident_cover(&self.wanted, &self.visible, |key| {
                 self.heights.contains_key(&key)
             })
@@ -240,21 +259,6 @@ impl TerrainStream {
             .changed
             .iter()
             .any(|key| self.visible.contains(key));
-        let admission = self.heights.reconcile(
-            &self.field,
-            view,
-            &self.wanted,
-            self.visible.iter().copied(),
-            self.epoch,
-            HeightPolicy {
-                capacity: self.policy.height_cache,
-                max_jobs: 8,
-                ancestors: true,
-                pin_roots: true,
-            },
-            |key| height::spawn_height_job(self.field.clone(), key),
-        );
-        update.capacity_rejected |= admission.capacity_rejected;
         self.materials.reconcile(
             &self.field,
             MaterialDemand {
@@ -271,6 +275,60 @@ impl TerrainStream {
                     .filter(|key| self.heights.contains_key(key)),
             ),
         );
+        let height_wanted =
+            if self.policy.persistent_topology && self.policy.ground_relief_max_level > 17 {
+                let mut pages = crate::selection::material_demand_at_height(
+                    self.materials.refined().iter().copied().map(|mut key| {
+                        while key.level > self.policy.ground_relief_max_level {
+                            key = key.parent().unwrap();
+                        }
+                        key
+                    }),
+                    view,
+                    self.materials.reference_height_m(),
+                );
+                pages.extend(self.wanted.iter().copied());
+                pages.sort();
+                pages.dedup();
+                pages
+            } else {
+                self.wanted.clone()
+            };
+        let admission = self.heights.reconcile(
+            &self.field,
+            view,
+            &height_wanted,
+            self.visible
+                .iter()
+                .copied()
+                .filter(|_| !self.policy.persistent_topology),
+            self.epoch,
+            HeightPolicy {
+                capacity: self.policy.height_cache,
+                max_jobs: 8,
+                ancestors: !self.policy.persistent_topology,
+                pin_roots: true,
+            },
+            |key| {
+                height::spawn_height_job_with_ground_detail(
+                    self.field.clone(),
+                    key,
+                    self.policy.ground_detail
+                        && self.policy.persistent_topology
+                        && self.policy.ground_relief_max_level > 17,
+                )
+            },
+        );
+        update.capacity_rejected |= admission.capacity_rejected;
+        if self.policy.persistent_topology {
+            let pages: Vec<_> = self.heights.keys().collect();
+            if pages.len() > self.policy.draw_capacity {
+                update.capacity_rejected = true;
+            } else if pages != self.visible {
+                self.visible = pages;
+                update.geometry_changed = true;
+            }
+        }
         update.materials_changed = self.materials.source().generation() != material_revision;
         Ok(update)
     }

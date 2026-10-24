@@ -71,6 +71,18 @@ pub fn bake_height_page(
     grid_size: u32,
     max_error_m: f64,
 ) -> Result<HeightPage, HeightPageError> {
+    bake_height_page_with_ground_detail(field, key, grid_size, max_error_m, false)
+}
+
+/// Render-only soil relief from the same world-fixed source as material pages.
+/// Authoritative PlanetField heights and the default bake remain unchanged.
+pub fn bake_height_page_with_ground_detail(
+    field: &PlanetField,
+    key: TileKey,
+    grid_size: u32,
+    max_error_m: f64,
+    ground_detail: bool,
+) -> Result<HeightPage, HeightPageError> {
     let cells = grid_size.saturating_sub(1).max(1) as usize;
     let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(32.0);
     let grid = grid_size as usize;
@@ -79,11 +91,52 @@ pub fn bake_height_page(
             (0..grid).map(move |x| {
                 let u = x as f64 / cells as f64;
                 let v = y as f64 / cells as f64;
-                field.height_m(key.direction(u, v), wavelength).max(0.0)
+                let dir = key.direction(u, v);
+                let base = field.height_m(dir, wavelength).max(0.0);
+                let relief = if ground_detail && key.level > 17 && base > 0.0 {
+                    ground_relief_height_m(
+                        field,
+                        dir,
+                        key.span_m(field.params.radius_m) / cells as f64,
+                    )
+                } else {
+                    0.0
+                };
+                (base + relief).max(0.0)
             })
         })
         .collect::<Vec<_>>();
     HeightPage::bake(&samples, grid_size, max_error_m)
+}
+
+/// Optical relief delta, not an authoritative terrain/collision query. The
+/// material producer supplies coverage, including later rock/snow/salt layers.
+/// Direction must be finite/unit and footprint finite/nonnegative, as in the
+/// existing canonical field/material sampling APIs.
+pub fn ground_relief_height_m(field: &PlanetField, dir: [f64; 3], texel_m: f64) -> f64 {
+    if texel_m * 2.0 >= crate::ground_detail::SWATCH_WIDTH_M {
+        return 0.0;
+    }
+    let (prefix, macro_h) = field.height_prefix_m(dir);
+    let mut sample = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+    if sample.height_m <= 0.0 {
+        return 0.0;
+    }
+    let (slope, curvature) =
+        field.surface_geometry_from_prefix(dir, prefix, macro_h, MATERIAL_SLOPE_WAVELENGTH_M);
+    sample.slope_hint = slope;
+    sample.curvature_per_m = curvature;
+    let ground =
+        crate::ground_detail::sample(dir, field.params.radius_m, field.params.seed, texel_m);
+    let (_, coverage) = crate::appearance::surface_appearance_with_ground_detail(
+        field,
+        &sample,
+        dir,
+        texel_m,
+        false,
+        Some(ground),
+    );
+    f64::from(ground.height_m - crate::ground_detail::mean_sample().height_m) * coverage
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -334,7 +387,7 @@ pub fn select_tiles_with_history(
         let candidate = leaves
             .iter()
             .enumerate()
-            .filter(|(_, key)| key.level < max_level.min(20))
+            .filter(|(_, key)| key.level < max_level.min(22))
             .max_by(|(_, a), (_, b)| {
                 let a_threshold = if previously_split.contains(a) {
                     0.8
@@ -1149,6 +1202,63 @@ pub fn build_surface_texture_for_mesh(
 #[cfg(test)]
 mod surface_regressions {
     use super::*;
+    #[test]
+    fn optical_relief_pages_preserve_legacy_and_bound_metric_displacement() {
+        let frozen = crate::offline::FrozenSurface::read_gzip(
+            &include_bytes!("../../../data/worldgen/thessa-erosion-v3.surface.json.gz")[..],
+        )
+        .unwrap();
+        let field = field().with_frozen_erosion(&frozen).unwrap();
+        let dir = crate::sphere::dir_from_latlon(23.565679258039204, 165.13881581863882);
+        let abs = dir.map(f64::abs);
+        let face = if abs[0] >= abs[1] && abs[0] >= abs[2] {
+            if dir[0] > 0.0 { 0 } else { 1 }
+        } else {
+            panic!("fixture face")
+        };
+        let level = 22;
+        let extent = (1u32 << level) as f64;
+        let key = TileKey {
+            face,
+            level,
+            x: (((dir[2] / abs[0]) + 1.0) * 0.5 * extent) as u32,
+            y: (((dir[1] / abs[0]) + 1.0) * 0.5 * extent) as u32,
+        };
+        let old = bake_height_page(&field, key, 33, 0.5).unwrap();
+        let disabled = bake_height_page_with_ground_detail(&field, key, 33, 0.5, false).unwrap();
+        assert_eq!(old.residual_bytes(), disabled.residual_bytes());
+        assert_eq!(old.base_height_m(), disabled.base_height_m());
+        let new = bake_height_page_with_ground_detail(&field, key, 33, 0.001, true).unwrap();
+        assert!(new.max_residual_error_m() <= 0.001);
+        let mut max_delta = 0.0_f64;
+        for y in 0..33 {
+            for x in 0..33 {
+                let dir = key.direction(x as f64 / 32.0, y as f64 / 32.0);
+                let delta = f64::from(new.decoded_sample(x, y).unwrap())
+                    - field.height_m(dir, 32.0).max(0.0);
+                assert!(
+                    delta.abs() < 0.061,
+                    "metre-space displacement exceeds source range: {delta}"
+                );
+                max_delta = max_delta.max(delta.abs());
+            }
+        }
+        assert!(
+            max_delta > 0.0001,
+            "coastal geometry must receive actual relief"
+        );
+        let coarse = TileKey {
+            level: 17,
+            x: key.x >> 5,
+            y: key.y >> 5,
+            ..key
+        };
+        let old = bake_height_page(&field, coarse, 33, 0.5).unwrap();
+        let same = bake_height_page_with_ground_detail(&field, coarse, 33, 0.5, true).unwrap();
+        assert_eq!(old.residual_bytes(), same.residual_bytes());
+        assert_eq!(old.base_height_m(), same.base_height_m());
+    }
+
     #[test]
     fn optional_ground_pages_preserve_disabled_and_filter_same_material_at_coarse_levels() {
         let field = field();

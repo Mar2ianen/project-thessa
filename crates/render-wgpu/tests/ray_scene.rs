@@ -459,7 +459,7 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
     let binding = owner.material_binding();
     let height = owner.height_surface_source(&backend).unwrap();
     let gpu = SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 4096, 16, 8).unwrap();
-    let mut surface = ConformingSurface::new(&backend, &gpu.pool, &height).unwrap();
+    let mut surface = ConformingSurface::new(&backend, &gpu, &height).unwrap();
     let origin = DVec3::new(1003.0, 0.0, 2.0);
     surface.update_camera(&backend, origin.to_array()).unwrap();
     assert_eq!(surface.publication().revision, 0);
@@ -712,7 +712,7 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
     // holes as degenerate triangles; no readback/compaction of live leaves.
     let large =
         SphereGpu::with_uniform_depth(&backend.device, &backend.queue, 131072, 20, 13).unwrap();
-    let target_surface = ConformingSurface::new(&backend, &large.pool, &height).unwrap();
+    let target_surface = ConformingSurface::new(&backend, &large, &height).unwrap();
     target_surface
         .update_camera(&backend, next.to_array())
         .unwrap();

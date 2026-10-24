@@ -12,6 +12,8 @@ pub struct ShadowDrawStats {
     pub candidate_slots: u64,
     pub submitted_slots: u64,
     pub draw_calls: u64,
+    /// Submitted slots are a capacity upper bound for indirect draws; no CPU wait.
+    pub indirect: bool,
 }
 
 #[derive(Clone)]
@@ -131,7 +133,7 @@ impl ShadowAtlas {
         let terrain_layout = storage_layout(4);
         // The CBT caster reads one storage binding: the canonical surface
         // vertex stream. binding 0 is storage here (only binding 3 is uniform).
-        let conforming_layout = storage_layout(1);
+        let conforming_layout = storage_layout(2);
         let pipeline = |code: String, layout: &wgpu::BindGroupLayout, mesh: bool, bias| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("shadow-caster"),
@@ -450,6 +452,7 @@ impl ShadowAtlas {
             total.candidate_slots += stats.candidate_slots;
             total.submitted_slots += stats.submitted_slots;
             total.draw_calls += stats.draw_calls;
+            total.indirect |= stats.indirect;
             if let Some(meshes) = meshes {
                 meshes.cast_shadow(&mut pass, self);
             }
@@ -478,10 +481,16 @@ impl ShadowAtlas {
                 .create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("cbt-shadow-caster"),
                     layout: &self.conforming_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: surface.vertices.as_entire_binding(),
-                    }],
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: surface.vertices.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: surface.active_indices.as_entire_binding(),
+                        },
+                    ],
                 });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("cbt-shadow-layer"),
@@ -499,7 +508,8 @@ impl ShadowAtlas {
             pass.set_bind_group(0, matrix_bind, &[]);
             pass.set_pipeline(&self.conforming_pipeline);
             pass.set_bind_group(1, &caster, &[]);
-            pass.draw(0..surface.slot_count() * 3, 0..1);
+            pass.draw_indirect(&surface.indirect, 32);
+            total.indirect = true;
             total.candidate_slots += u64::from(surface.slot_count());
             total.submitted_slots += u64::from(surface.slot_count());
             total.draw_calls += 1;

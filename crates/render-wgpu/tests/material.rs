@@ -725,3 +725,99 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
         }
     }
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
+fn fine_relief_geometry_owns_normals_without_double_bump() {
+    let backend = Backend::bring_up().expect("requires a local hardware adapter");
+    let anchor =
+        TileAnchor::new(TileKey::new(4, 22, 1 << 21, 1 << 21).unwrap(), 3_200_000.0).unwrap();
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    for relief_level in [17, 22] {
+        let settings = thessa_graphics::ResolvedGraphicsSettings {
+            terrain_ground_detail: true,
+            terrain_ground_relief_max_level: relief_level,
+            terrain_normal_maps: true,
+            specular_reflections: false,
+            shadow_enabled: false,
+            ..Default::default()
+        };
+        let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor,
+                page: &height,
+            }],
+            OffscreenTarget::FORMAT,
+            thessa_render_wgpu::terrain::TerrainCapacity {
+                patches: 1,
+                material_layers: 2,
+                height_grid_size: 2,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        renderer
+            .update_lighting(
+                &backend,
+                &SurfaceLighting {
+                    ambient_lux: [0.05, 0.05, 0.05, 0.0],
+                    directions: [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4]],
+                    colors_lux: [[1.5, 1.5, 1.5, 0.0], [0.0; 4], [0.0; 4]],
+                },
+            )
+            .unwrap();
+        let center = DVec3::from(anchor.anchor_body_m);
+        let eye = center + DVec3::from(anchor.normal) * 2.0;
+        renderer
+            .update_view(
+                &backend,
+                &ViewParams {
+                    world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, DVec3::Y)
+                        .inverse(),
+                    clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                        0.6, 1.0, 0.1, 10000.0,
+                    ),
+                    world_position_m: eye,
+                    exposure: 1.0,
+                },
+            )
+            .unwrap();
+        let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+        let render = |renderer: &TerrainRenderer| {
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            renderer.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()
+        };
+        let mut source = MaterialPageStore::default();
+        source.set_priority(vec![12]);
+        let mut frames = Vec::new();
+        for normal in [0, 102] {
+            source.set_page(
+                12,
+                CbtMaterialPage::from_rgba8_with_normals(
+                    [255, 0, 0, 255].repeat(128 * 128),
+                    Some([normal, 0].repeat(128 * 128)),
+                )
+                .unwrap(),
+            );
+            renderer
+                .update_materials(&backend, source.priority(), source.source_pages())
+                .unwrap();
+            frames.push(render(&renderer));
+        }
+        if relief_level > 17 {
+            assert_eq!(
+                frames[0], frames[1],
+                "geometric relief must not receive its full bump slope twice"
+            );
+        } else {
+            let mid = (32 * 65 + 32) * 4;
+            assert!(
+                frames[1][mid] > frames[0][mid] + 20,
+                "optical fallback must retain material normals"
+            );
+        }
+    }
+}

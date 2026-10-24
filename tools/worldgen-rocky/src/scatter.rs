@@ -1,7 +1,8 @@
 //! World-addressed rock and plant descriptors, without a renderer dependency.
 //!
 //! A tile is a query window, never a random seed. Version 1 candidates occupy
-//! fixed level-20 cube cells; density only thins that immutable population.
+//! fixed L20 cube cells; near understory and pebbles use disjoint L24 tags.
+//! Density only thins these immutable populations.
 //! Positions are body-fixed unit directions plus final ground height in metres.
 //! See `docs/70_WORLD_SCATTER_IDENTITY.md` for limits and numerical contracts.
 
@@ -15,7 +16,8 @@ use crate::{
 /// Part of the version-1 address/placement contract, not a render LOD setting.
 pub const CANDIDATE_LEVEL: u8 = 20;
 /// Separate identity lattice for near-ground fern/reed clumps. Its CBT depth
-/// keeps these IDs disjoint from the unchanged level-20 rocks/large plants.
+/// keeps these IDs disjoint from unchanged L20 rocks/plants. Its even tag
+/// also addresses the separate near-ground pebble population.
 pub const UNDERSTORY_CANDIDATE_LEVEL: u8 = 24;
 /// Authored colony occupancy prior, not simulated moisture or plant growth.
 pub const UNDERSTORY_PATCH_WAVELENGTH_M: f64 = 8.0;
@@ -66,6 +68,7 @@ pub enum ScatterKind {
     FernClump,
     ReedClump,
     LycopsidTree,
+    Pebble,
 }
 
 /// Collision-free fixed64 address *within a world*. Persist the world identity
@@ -82,8 +85,7 @@ impl ScatterId {
         let id = self.0 >> 1;
         let depth = u8::try_from(63_u32.checked_sub(id.leading_zeros())?).ok()?;
         if depth != crate::lod::CBT_FACE_DEPTH + 2 * CANDIDATE_LEVEL
-            && (depth != crate::lod::CBT_FACE_DEPTH + 2 * UNDERSTORY_CANDIDATE_LEVEL
-                || self.0 & 1 == 0)
+            && depth != crate::lod::CBT_FACE_DEPTH + 2 * UNDERSTORY_CANDIDATE_LEVEL
         {
             return None;
         }
@@ -97,6 +99,7 @@ pub enum ScatterPopulation {
     Rocks = 0,
     Plants = 1,
     Understory = 2,
+    GroundPebbles = 3,
 }
 
 /// One world-space instance. Yaw is about radial up, relative to the canonical
@@ -274,7 +277,10 @@ pub fn scatter_region(
     if policy.density_scale == 0.0 {
         return Ok(batch);
     }
-    let candidate_level = if population == ScatterPopulation::Understory {
+    let candidate_level = if matches!(
+        population,
+        ScatterPopulation::Understory | ScatterPopulation::GroundPebbles
+    ) {
         UNDERSTORY_CANDIDATE_LEVEL
     } else {
         CANDIDATE_LEVEL
@@ -282,11 +288,15 @@ pub fn scatter_region(
     let reference_density = match population {
         ScatterPopulation::Rocks => MAX_ROCK_DENSITY_PER_KM2,
         ScatterPopulation::Plants => PLANT_DENSITY_PER_KM2,
+        ScatterPopulation::GroundPebbles => 2_000_000.0,
         ScatterPopulation::Understory => 1e6 / policy.understory_spacing_m.powi(2),
     };
     let ceiling = reference_density
         * policy.density_scale
-        * if population == ScatterPopulation::Understory {
+        * if matches!(
+            population,
+            ScatterPopulation::Understory | ScatterPopulation::GroundPebbles
+        ) {
             UNDERSTORY_PATCH_MAX
         } else {
             1.0
@@ -333,7 +343,10 @@ pub fn scatter_region(
                 x,
                 y,
             };
-            let tag = u64::from(population != ScatterPopulation::Rocks);
+            let tag = u64::from(matches!(
+                population,
+                ScatterPopulation::Plants | ScatterPopulation::Understory
+            ));
             let id = ScatterId((cbt_node_for_tile(cell).unwrap().id() << 1) | tag);
             let random = |channel| rng::hash01(planet_seed, channel, id.0 as i64, 0);
             // Midpoints of a 24-bit subcell grid: strictly interior, even when
@@ -362,8 +375,16 @@ pub fn scatter_region(
                 continue;
             }
             let direction = cell.direction(jx, jy);
-            let patch_density = if population == ScatterPopulation::Understory {
-                let density = understory_patch_density(planet_seed, radius_m, direction);
+            let patch_density = if matches!(
+                population,
+                ScatterPopulation::Understory | ScatterPopulation::GroundPebbles
+            ) {
+                let patch_seed = if population == ScatterPopulation::GroundPebbles {
+                    planet_seed ^ 0x7065_6262_6c65
+                } else {
+                    planet_seed
+                };
+                let density = understory_patch_density(patch_seed, radius_m, direction);
                 // Reject colony gaps before the expensive canonical surface query.
                 if keep >= reference_density * policy.density_scale * density * area_km2 {
                     continue;
@@ -391,6 +412,14 @@ pub fn scatter_region(
                 ScatterPopulation::Rocks => {
                     base_density_per_km2(surface.biome) * (1.0 + 3.0 * surface.rocky01)
                 }
+                ScatterPopulation::GroundPebbles => {
+                    if surface.ground_height_m < 0.0
+                        || surface.slope_rise_run > policy.max_plant_slope_rise_run
+                    {
+                        continue;
+                    }
+                    reference_density * surface.vegetation.total() * patch_density
+                }
                 ScatterPopulation::Plants | ScatterPopulation::Understory => {
                     if surface.ground_height_m < policy.min_plant_height_m
                         || surface.slope_rise_run > policy.max_plant_slope_rise_run
@@ -411,6 +440,7 @@ pub fn scatter_region(
             }
             let kind = match population {
                 ScatterPopulation::Rocks => pick_rock_kind(planet_seed, id, surface),
+                ScatterPopulation::GroundPebbles => ScatterKind::Pebble,
                 ScatterPopulation::Plants => {
                     let choice = random(431) * surface.vegetation.total();
                     if choice < surface.vegetation.reeds01 {
@@ -441,7 +471,10 @@ pub fn scatter_region(
                     (policy.max_items - batch.items.len()).min(batch.items.capacity().max(1024));
                 try_reserve_items(&mut batch.items, additional)?;
             }
-            let scale = if population == ScatterPopulation::Understory {
+            let scale = if population == ScatterPopulation::GroundPebbles {
+                // Unit-diameter visual pebble: many small grains, rare cobbles.
+                0.04 + random(404).powi(3) * 0.26
+            } else if population == ScatterPopulation::Understory {
                 policy.understory_min_scale
                     + random(404) * (policy.understory_max_scale - policy.understory_min_scale)
             } else {

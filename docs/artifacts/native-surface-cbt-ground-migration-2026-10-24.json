@@ -1,0 +1,918 @@
+{
+  "date": "2026-10-24",
+  "scope": "WORLD13: promote native persistent CBT terrain topology, sparse height residency independent of patch partitions, exact bisector rational material coordinates, stochastic ground swatch mapping, 60 mm CBT height relief and bounded near-eye pebble meshes.",
+  "reviewed_commits": [
+    "629eeebd26bec65ade9106a65e29acb79bb0be90"
+  ],
+  "baseline_commit": "629eeebd26bec65ade9106a65e29acb79bb0be90",
+  "source_manifest": {
+    "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/inputs.json",
+    "sha256": "432aae583c4ae8067ce01ade0606369aaac68357121a8c498ef0ce6942fb5eb7",
+    "bytes": 93640
+  },
+  "source_id_sha256": "432aae583c4ae8067ce01ade0606369aaac68357121a8c498ef0ce6942fb5eb7",
+  "baseline_source_manifest": {
+    "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-inputs.json",
+    "sha256": "0228e9fc7a9b8280ee2d765064e871264fc687e23db1cf3731668264faab6fb3",
+    "bytes": 93273
+  },
+  "binary": {
+    "path": "target/release/thessa-terrain-native",
+    "sha256": "44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50",
+    "bytes": 65643200
+  },
+  "baseline_binary": {
+    "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-native",
+    "sha256": "58fa8dbccaefdc118e5aad8ced3e82d38bb4243a2da978df9447bdaeee14c80d",
+    "bytes": 65405928
+  },
+  "profile": {
+    "path": "data/graphics/surface-showcase.toml",
+    "sha256": "f216ce538baf3c57f13eaa3516561051a2f0f5a1bf709caa49e9fa0e6b5a5c0c",
+    "bytes": 2443
+  },
+  "bare_profile": {
+    "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/bare-ground.toml",
+    "sha256": "b2f16d2fdabecb0d4efa4bb2b6b681127177ea21318cf23644ffd1b755a952de",
+    "bytes": 2444
+  },
+  "cargo_environment": {
+    "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"
+  },
+  "gates": [
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 0.2590597969247028,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-architecture.log",
+      "log_sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "backend-unit",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 32,
+      "seconds": 0.7522025859216228,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-backend-unit.log",
+      "log_sha256": "155bae27d975bf4e652d1af58e0a3123e05e39b73ccb55ed2d57095886f5cc4c",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "cbt-oracles",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "cbt_sphere",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 10,
+      "seconds": 17.318274302990176,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-cbt-oracles.log",
+      "log_sha256": "52436145071631fa99af48e349ffef3249d53560536ed5a51e7ddc53c0a10d04",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 0.6119330360088497,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-clippy.log",
+      "log_sha256": "ad61d3478eaf599502dfa9062474907aa845b9d6e4fe7b0e1370e7ce4221548d",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "conforming-rt",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "ray_scene",
+        "conforming_publications_feed_existing_ray_scene_without_stale_blas",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 1,
+      "seconds": 2.885662834974937,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-conforming-rt.log",
+      "log_sha256": "b3498ed5eda644ece8cc87897af27bbf72787b7cfc42b73f05cc3dde60ff3f9b",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "core",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-rcbt-core",
+        "-p",
+        "thessa-rcbt-wgpu",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 96,
+      "seconds": 2.378802104969509,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-core.log",
+      "log_sha256": "1508c23660031736a55cf9f2cbcb1c6908ebbb6f318f1c080b4ace0153d343e7",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 0.38902153505478054,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-feature-off.log",
+      "log_sha256": "4f27ac380b22e1d975eee20ce727fa8cbc09061177f6253af0777fd4de7b7506",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 1.8046003399649635,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "graphics",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 44,
+      "seconds": 0.43927738699130714,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-graphics.log",
+      "log_sha256": "422cd6521d359f5b4f6147faccf795111286bb89dcacbed6ef39e98478fe2a15",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "material-gpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "material",
+        "--",
+        "--include-ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 7,
+      "seconds": 2.345436010044068,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-material-gpu.log",
+      "log_sha256": "2e466813c7acbedb1fce4799132cb562989ab81b5656109487e193a176dd330e",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "mesh-gpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "mesh",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 1,
+      "seconds": 0.45998782699462026,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-mesh-gpu.log",
+      "log_sha256": "ce2622d36bfbb4e52b3dc4755a9bc321aaa50c47898bd84bc8ba3e4d38e04549",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "native-unit",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 125,
+      "seconds": 9.053404387901537,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-native-unit.log",
+      "log_sha256": "1bddadd327c3b8f8bfd3ee59c86995668c8cf7826876330da579cad4923e48ea",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "stream",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-stream"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 29,
+      "seconds": 1.6144320840248838,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-stream.log",
+      "log_sha256": "2bdf173b0f3fed15e024d70e8c9f5427142ed0e3a034343b3caa83ae38f0b55e",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "topology-core",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "terrain_topology",
+        "--",
+        "--include-ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 3,
+      "seconds": 1.6441557760117576,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-topology-core.log",
+      "log_sha256": "4ea89769a41b9bff622da05119365e8ac1dadc1cd83cc452a1c775e965be2748",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "topology-gpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "terrain_topology",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 5,
+      "seconds": 2.8896544369636104,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-topology-gpu.log",
+      "log_sha256": "6de0ec39eb9d86edeba0d4032b3650bd4a8b5e58c55e918b95a841a43251c4d4",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "visibility",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "plant_ray_visibility",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 2,
+      "seconds": 27.464947975007817,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-visibility.log",
+      "log_sha256": "31fddfa6e764d63c708f708583f313b0f2b527e1b5eb6efe60ace85da4caa60a",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    },
+    {
+      "name": "worldgen",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 261,
+      "seconds": 4.111725489026867,
+      "log": "target/surface-showcase/cbt-ground-migration-2026-10-24/verified-worldgen.log",
+      "log_sha256": "742ea4cca6d86e370e35273d10c4318d3224efe151779308c3fc3541cd54c34d",
+      "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452"
+    }
+  ],
+  "release_build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "thessa-terrain-native",
+      "--release"
+    ],
+    "exit_code": 0,
+    "seconds": 61.77499556494877,
+    "inputs_stable": true,
+    "input_manifest_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452",
+    "binary_sha256": "44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50"
+  },
+  "cbt_topology": {
+    "enabled": true,
+    "heap_depth": 58,
+    "max_active_slots": 131072,
+    "split_merge_policy": "projected area plus 3 edge-midpoint probes with parent merge validation",
+    "primary_cbt_active_slots": 14950,
+    "primary_cbt_splits": 5191,
+    "primary_cbt_merges": 1481,
+    "capacity_rejections": 0,
+    "indirect_draws": true,
+    "indirect_shadows": true
+  },
+  "pebbles": {
+    "mesh_shape": "18-vertex, 32-triangle closed mesh",
+    "palettes": 3,
+    "size_range_cm": [
+      4,
+      30
+    ],
+    "density_per_m2": 2.0,
+    "survey_submitted_instances": 5241,
+    "query_window_radius_m": 120.0,
+    "memory_bytes": 3096
+  },
+  "soil_relief": {
+    "authored_physical_range_m": 0.06,
+    "cbt_height_page_levels": [
+      18,
+      22
+    ],
+    "acceptance_budget_m": 0.001,
+    "stochastic_cell_size_m": 3.15,
+    "blend_transition_m": 0.3
+  },
+  "captures": [
+    {
+      "name": "baseline-standing",
+      "png": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-standing.png",
+        "sha256": "4e799647a511e05855cdc6b9c47276e9c4e46849331e56a7a846e98de48e7c29",
+        "bytes": 1755158
+      },
+      "capture": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-standing.json",
+        "sha256": "af23cd33d86fa62259c525ddf9ba3695e716fa5c0641b06392be56ebc1493bef",
+        "bytes": 151825
+      },
+      "log": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-standing.log",
+        "sha256": "f89fa516c8f04c4baafbf94b1430753a85bf597b3c3221189eca8f21e3787c07",
+        "bytes": 6028
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-graphics.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-standing.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-standing.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "58fa8dbccaefdc118e5aad8ced3e82d38bb4243a2da978df9447bdaeee14c80d",
+        "inputs_sha256": null,
+        "baseline_commit": "629eeeb",
+        "seconds": 55.454184639966115
+      },
+      "gpu_median_ms": 353.75134193042857,
+      "frames": 48,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999998080256",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+        "native_survey_eye_ground_datum_m": "5.007671312155324",
+        "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "retained_plants": "11752",
+      "pebbles": "0",
+      "material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 4, 6, 4, 50, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "standing",
+      "png": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/standing.png",
+        "sha256": "d01df53df22d99e954335209c211762ffd3815cfa51ad2e4f1f65a6c0a9efa59",
+        "bytes": 1755994
+      },
+      "capture": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/standing.json",
+        "sha256": "f77c30c726d86c847a2799c30d7b13b6c3ec3ce3c6e67b7fd299a62f084e2ff5",
+        "bytes": 278473
+      },
+      "log": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/standing.log",
+        "sha256": "eac5f7bb57adc6001c9df8d0501130e3819950ee7404c33ca5e33baee07b55f8",
+        "bytes": 6502
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/standing.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/standing.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50",
+        "inputs_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452",
+        "baseline_commit": null,
+        "seconds": 84.23968251503538
+      },
+      "gpu_median_ms": 423.1420751829243,
+      "frames": 96,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999998080256",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+        "native_survey_eye_ground_datum_m": "5.007671312155324",
+        "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "retained_plants": "11752",
+      "pebbles": "5241",
+      "material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 4, 6, 4, 50, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "baseline-bare",
+      "png": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-bare.png",
+        "sha256": "43f8b8e138803b2ed06707012b65d598be3a957994ad102ae9dccbb9cb194895",
+        "bytes": 800156
+      },
+      "capture": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-bare.json",
+        "sha256": "dc4db576cf664cc1e9c22e9d4f97ea0ea6237d9be63e8fdc4935312526f92570",
+        "bytes": 151633
+      },
+      "log": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-bare.log",
+        "sha256": "2304395047a82ce50fb83b7cc274c5abc7a1449ebc405a372de1cafb11591329",
+        "bytes": 5273
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-bare.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-bare.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/baseline-bare.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "58fa8dbccaefdc118e5aad8ced3e82d38bb4243a2da978df9447bdaeee14c80d",
+        "inputs_sha256": null,
+        "baseline_commit": "629eeeb",
+        "seconds": 44.086413720971905
+      },
+      "gpu_median_ms": 248.16106910445788,
+      "frames": 48,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999998080256",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+        "native_survey_eye_ground_datum_m": "5.007671312155324",
+        "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "retained_plants": "0",
+      "pebbles": "0",
+      "material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 4, 6, 5, 48, 79, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "bare",
+      "png": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/bare.png",
+        "sha256": "b40bcb54ea0d780f27b8d05dde6098dafeb337bc7a17476033918e4628acbd85",
+        "bytes": 812357
+      },
+      "capture": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/bare.json",
+        "sha256": "906f7d95c5f445c93fd93089dbf9b811a314cb0edefc1de6b52b87925ab1ee95",
+        "bytes": 278497
+      },
+      "log": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/bare.log",
+        "sha256": "0666ab65621a77d30fc276fe6aa49845906de1a441aa424a012934379eca7df8",
+        "bytes": 6323
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/bare-ground.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/bare.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/bare.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50",
+        "inputs_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452",
+        "baseline_commit": null,
+        "seconds": 46.98233678995166
+      },
+      "gpu_median_ms": 166.78845012069226,
+      "frames": 96,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999998080256",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+        "native_survey_eye_ground_datum_m": "5.007671312155324",
+        "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "retained_plants": "0",
+      "pebbles": "5241",
+      "material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 4, 6, 4, 50, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "moving",
+      "png": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/moving.png",
+        "sha256": "0f23ae9d4f2a15f6d45253fed312076269990fbd01e036d1408426ff85493446",
+        "bytes": 1821309
+      },
+      "capture": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/moving.json",
+        "sha256": "9ea0a755fcdcea61e40190fba25b3485075c432f26e5d58b87665c6c0adadaf3",
+        "bytes": 278663
+      },
+      "log": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/moving.log",
+        "sha256": "d5a1be75e66029eea5876b78e44120ff5b5ffcaf5c9765e120ea16a7c6fd65c0",
+        "bytes": 6513
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/moving.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/moving.json",
+          "--sweep"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50",
+        "inputs_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452",
+        "baseline_commit": null,
+        "seconds": 105.93062922800891
+      },
+      "gpu_median_ms": 668.6633286048948,
+      "frames": 96,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "2.0000000001693046",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835057.3819225994, 1279309.2703944019, -752237.7676371629]",
+        "native_survey_eye_ground_datum_m": "4.910487947816225",
+        "native_survey_forward_body": "[0.4834095843553879, 0.6586279426298303, -0.5766492928466552]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "retained_plants": "11173",
+      "pebbles": "5639",
+      "material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 4, 5, 14, 14, 58, 152, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "overview",
+      "png": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/overview.png",
+        "sha256": "bd8da8cb3afa257721ce1c6f29f248e7992954c07d6b9a2db73149e057202075",
+        "bytes": 1176855
+      },
+      "capture": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/overview.json",
+        "sha256": "c0b05312a9cbe02c29852f984a229fe9cc45009c5a1818be62af3ef77452f82e",
+        "bytes": 152534
+      },
+      "log": {
+        "path": "target/surface-showcase/cbt-ground-migration-2026-10-24/overview.log",
+        "sha256": "feeb8f66628959be0b3e12f74b7a85de0067382162e5aaedbb8464f721c05575",
+        "bytes": 6322
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "800",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/overview.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/cbt-ground-migration-2026-10-24/overview.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "44900bb0d145be41ef9954ba00d62067a2cfe76596288092b98a4824c3096d50",
+        "inputs_sha256": "fee52752b5fb9574f9f9744461e34e3e4c6aec66850dd0eeab82919cd7bf4452",
+        "baseline_commit": null,
+        "seconds": 54.32176600396633
+      },
+      "gpu_median_ms": 366.0262544161606,
+      "frames": 48,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "138.10964268518302",
+        "native_survey_distance_m": "800",
+        "native_survey_eye_body_m": "[-2835455.4096323615, 1278686.2725049874, -752399.8040141184]",
+        "native_survey_eye_ground_datum_m": "10.547621005888388",
+        "native_survey_forward_body": "[0.5372620474200563, 0.8312790124553323, 0.14256470760078208]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "32",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "1",
+        "native_survey_requested_eye_agl_m": "distance-based",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "retained_plants": "2066",
+      "pebbles": "0",
+      "material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 6, 6, 46, 115, 76, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    }
+  ],
+  "limits": [
+    "Sampled error from three probes is not a universal geometric guarantee or exhaustive silhouette test.",
+    "Authored 60 mm physical relief and 4\u201330 cm pebbles are procedural prior distributions, not photogrammetric terrain scans or authoritative collision geometry.",
+    "Pebble contact uses the 32 m filtered terrain base plus fixed-12-mm-footprint relief, not exact triangle contact or dynamic physical simulation.",
+    "Different topology and material residency are intentional; standing pairs are engineering comparisons, not blind preference evidence.",
+    "Moving camera exhibits higher split/merge activity and streaming load during rapid camera translation.",
+    "Target frame cost at 60 FPS, planetary streaming across diverse biomes, crown diversity and full atmospheric transport remain open."
+  ],
+  "standing_matching": {
+    "camera": true,
+    "canonical_source_signature": true,
+    "plant_count": true,
+    "topology_differs": true
+  }
+}

@@ -116,7 +116,20 @@ impl SphereGpu {
         );
         let state = make(
             "sphere-counters-and-indirect",
-            &[0; 48],
+            &words(&[
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                allocator.bit_count() as u32 * 3,
+                1,
+                0,
+                0,
+            ]),
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
         );
         let params = make("sphere-policy", &[0; 144], wgpu::BufferUsages::UNIFORM);

@@ -6,8 +6,9 @@ The new wave path changes multiple disjoint compatibility chains/diamonds in
 parallel, with exact serial/CPU oracles and a 128K-capacity resident-pool fixture.
 It is still a pure sphere: this phase measures topology only. The
 [canonical surface phase](63_CBT_CANONICAL_SURFACE.md) subsequently attaches
-borrowed height/material residency, and shadow/ocean/RT production consumers
-remain absent.
+borrowed height/material residency and production shadow/ocean/RT consumers;
+WORLD13 selects that integration in the checked-in native configurations. The
+measurements below remain the original isolated phase-two checkpoint.
 
 ## Acceptance boundary
 
@@ -107,7 +108,8 @@ the paper's complete implementation. The experiment constructor retains both
 controls; the earlier 2K fixture now allocates 314,812 buffer bytes rather than
 phase one's 101,804 because it includes plans and claims.
 
-No production caller constructs this experimental pipeline. No new environment
+At this phase-two checkpoint no production caller constructed this pipeline;
+doc 63 subsequently adds that integration. No new environment
 switch, implicit plugin activation or production graphics mode is introduced;
 ordinary client costs/settings remain unchanged.
 

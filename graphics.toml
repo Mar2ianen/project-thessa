@@ -23,7 +23,7 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 [renderer]
 surface_quality = "high" # native: low F0 approximation; medium GGX; high normal/MR/AO maps
 terrain_normal_maps = true # native primary terrain; false skips normal generation/upload/sampling
-terrain_ground_detail = false # experimental CC0 soil/gravel proxy; regular-patch quality bounds pages at L20/L21/L22
+terrain_ground_detail = false # CC0 soil/gravel proxy; quality bounds data pages at L20/L21/L22
 # Enabled detail also resolves 1/4/16x anisotropy by surface quality when supported;
 # unsupported/unknown adapters fall back to isotropic filtering. No physics change.
 # surface_quality low/medium/high filters normal detail with +2/+1/+0 extra mip levels.
@@ -67,11 +67,12 @@ motion_vectors = false
 jitter = false
 
 [terrain_topology]
+# Sampled source/chord error by quality: 4/2/1 px; validate parents before merge.
 # Native persistent conforming CBT; false retains regular patches at zero extra cost.
 # Low/medium/high: 32768/65536/131072 allocation slots, 1/2/4 update waves,
 # projected split area 1024/256/64 px^2, merge at one eighth (hysteresis).
 # Shared canonical height/material residency is NOT the geometric LOD.
-enabled = false
+enabled = true
 quality = "high"
 
 [surface_plants]

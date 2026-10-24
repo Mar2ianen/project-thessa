@@ -14,7 +14,6 @@ use wgpu::util::DeviceExt;
 /// clones retain resources but do not pin old page contents or revisions.
 #[derive(Debug, Clone)]
 pub struct HeightSurfaceSource {
-    pub(crate) bounds: wgpu::Buffer,
     directory: wgpu::Buffer,
     info: wgpu::Buffer,
     metadata: wgpu::Buffer,
@@ -28,18 +27,9 @@ impl HeightSurfaceSource {
         residuals: &wgpu::Buffer,
         radius_m: f64,
         ids: &[u64],
-        extents: &[Option<(f64, f64)>],
     ) -> Result<Self, BackendError> {
         let data = directory(ids)?;
-        let bounds = height_bounds(ids, extents)?;
         Ok(Self {
-            bounds: backend
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("canonical-height-envelopes"),
-                    contents: &bounds,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                }),
             info: backend
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -68,20 +58,6 @@ impl HeightSurfaceSource {
             .write_buffer(&self.info, 0, &directory_extent(ids).to_le_bytes());
         Ok(())
     }
-    pub(crate) fn publish_bounds(
-        &self,
-        backend: &Backend,
-        ids: &[u64],
-        extents: &[Option<(f64, f64)>],
-    ) {
-        let data = height_bounds(ids, extents).expect("validated canonical height publication");
-        backend.queue.write_buffer(&self.bounds, 0, &data);
-    }
-}
-fn height_bounds(ids: &[u64], extents: &[Option<(f64, f64)>]) -> Result<Vec<u8>, BackendError> {
-    thessa_rcbt_core::conforming_surface::resident_height_bounds(ids, extents)
-        .map(|bounds| bounds.into_iter().flat_map(f32::to_le_bytes).collect())
-        .ok_or_else(|| BackendError::Device("invalid canonical height envelopes".into()))
 }
 fn directory_extent(ids: &[u64]) -> u32 {
     ids.iter()
@@ -138,6 +114,9 @@ pub(crate) struct SurfacePublicationState {
 /// exact UV numerators+source slot+level). No culled or regular-grid geometry.
 pub struct ConformingSurface {
     pub vertices: wgpu::Buffer,
+    /// GPU-published active allocation indices for primary/shadow indirect draws.
+    pub active_indices: wgpu::Buffer,
+    pub(crate) indirect: wgpu::Buffer,
     charts: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
     bind: wgpu::BindGroup,
@@ -150,9 +129,10 @@ pub struct ConformingSurface {
 impl ConformingSurface {
     pub fn new(
         backend: &Backend,
-        pool: &wgpu::Buffer,
+        gpu: &thessa_rcbt_wgpu::sphere::SphereGpu,
         source: &HeightSurfaceSource,
     ) -> Result<Self, BackendError> {
+        let pool = &gpu.pool;
         if !pool.size().is_multiple_of(32) || pool.size() == 0 {
             return Err(BackendError::Device("invalid bisector pool stride".into()));
         }
@@ -225,6 +205,8 @@ impl ConformingSurface {
                 .collect::<Vec<_>>(),
             });
         let surface = Self {
+            active_indices: gpu.indices.clone(),
+            indirect: gpu.state.clone(),
             vertices,
             charts,
             pipeline,
@@ -264,10 +246,7 @@ impl ConformingSurface {
     /// Must follow topology publication. Page uploads and camera updates must
     /// precede submission; readbacks are diagnostic only.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.encode_datum(encoder);
-        if let Some(ocean) = &self.ocean {
-            ocean.encode(encoder, self.capacity);
-        }
+        self.encode_scratch(encoder);
         let mut state = self.publication.lock().unwrap();
         state.published = SurfacePublication {
             revision: state
@@ -286,6 +265,45 @@ impl ConformingSurface {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
             pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
+        }
+    }
+    pub(crate) fn classification_bind(
+        &self,
+        device: &wgpu::Device,
+        pipeline: &wgpu::ComputePipeline,
+        source: &HeightSurfaceSource,
+        areas: &wgpu::Buffer,
+        policy: &wgpu::Buffer,
+        pool: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("canonical-surface-probes"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                &self.vertices,
+                areas,
+                policy,
+                &source.directory,
+                &source.metadata,
+                &source.residuals,
+                &self.charts,
+                &source.info,
+                pool,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(binding, b)| wgpu::BindGroupEntry {
+                binding: binding as u32,
+                resource: b.as_entire_binding(),
+            })
+            .collect::<Vec<_>>(),
+        })
+    }
+    /// Classification scratch includes the same admitted, filtered ocean geometry.
+    pub(crate) fn encode_scratch(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.encode_datum(encoder);
+        if let Some(ocean) = &self.ocean {
+            ocean.encode(encoder, self.capacity);
         }
     }
     pub fn publication(&self) -> SurfacePublication {
@@ -373,15 +391,30 @@ impl ConformingSurface {
         self.capacity
     }
 }
-fn shader_source() -> String {
+fn surface_kernel() -> String {
     format!(
-        "{}\nvar<private> p:Params;\n{}\n{}\n{}\n{}\n{}",
+        "{}\nvar<private> p:Params;\n{}\n{}\n{}\n{}\n{}\n{}",
         thessa_rcbt_wgpu::sphere::GEOMETRY_WGSL,
         shaders::PRECISION_WGSL,
         shaders::TILE_FRAME_WGSL,
         shaders::SURFACE_SAMPLE_WGSL,
         shaders::PAGE_DIRECTORY_WGSL,
+        shaders::CONFORMING_ADDRESS_WGSL,
+        include_str!("conforming_sample.wgsl")
+    )
+}
+fn shader_source() -> String {
+    format!(
+        "{}\n{}",
+        surface_kernel(),
         include_str!("conforming_surface.wgsl")
+    )
+}
+pub(crate) fn classification_shader() -> String {
+    format!(
+        "{}\n{}",
+        surface_kernel(),
+        include_str!("terrain_topology.wgsl")
     )
 }
 

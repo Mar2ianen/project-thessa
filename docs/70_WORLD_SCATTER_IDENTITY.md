@@ -8,6 +8,8 @@ streaming, instance cache, collision ownership or visual acceptance is claimed.
 WORLD11 extends this bounded adapter to nine same-face L14 canopy windows and
 49 L18 near windows, retaining the same population and height callback; leaf
 LOD and senescent material boundaries change optical representation only.
+WORLD13 additionally represents an opt-in L24 ground-pebble population in the
+same bounded native consumer; the original L20 rock survey remains unchanged.
 The historical snapshots in docs 49–52 remain historical.
 
 ## Contract and consumer boundary
@@ -17,7 +19,10 @@ placement kernel; there is no retained parallel legacy placement API. Repository
 consumer inspection initially found only `offline.rs::bake_plants`, now using
 this API. WORLD04 additionally uses the canonical callback from the bounded
 native survey adapter in `apps/terrain-native/src/surface_plants.rs`.
-Rock descriptors share that kernel but have no production rendering consumer.
+The original L20 rock descriptors share that kernel but have no production
+rendering consumer. WORLD13's separate `GroundPebbles` population uses L24 cells
+and the previously reserved even tag. It has a bounded near-eye native mesh
+consumer, not a production rock streamer or collision owner.
 Authoritative native terrain/appearance sources are unchanged. The WORLD-03 adapter
 below supplies the existing kernel from an attached `PlanetField`; it does not
 add a production instance-streaming consumer or replace the offline callback.
@@ -48,19 +53,22 @@ talus rules; the misleading old `slope01` name is removed.
 
 Rocks and plants have one candidate per **fixed level-20 cube cell**. The
 optional near-eye understory is a separate, explicitly versioned population with
-one candidate per **fixed level-24 cube cell**. Both levels are world placement
+one candidate per **fixed level-24 cube cell**. WORLD13 ground pebbles use the
+same L24 lattice with the opposite population tag. Both levels are world placement
 contracts, never derived from requested density or render LOD. A candidate's
 `ScatterId(u64)` packs
 
 ```text
 (lod::cbt_node_for_tile(canonical_cell).id() << 1) | population_bit
-population_bit: 0 = rocks, 1 = plants or understory
+population_bit: L20: 0 = rocks, 1 = plants; L24: 0 = ground pebbles, 1 = understory
 ```
 
 The shared tag is disambiguated by the validated node depth: level 20 is
-plants, level 24 is understory. Their node-ID ranges cannot alias, so existing
-rock/plant identities are unchanged. `ScatterId::cell` accepts exactly those two
-depth/tag combinations and decodes the same existing address mechanism. This
+large plants/rocks, while level 24 is understory/ground pebbles. Their node-ID
+ranges/tags cannot alias, so existing rock/plant/understory identities are
+unchanged. `ScatterId::cell` accepts both tags at these two depths and decodes
+the same existing address mechanism. The new opt-in population requires the
+updated decoder; no existing persisted ID is reassigned. This
 extension is part of the placement contract; it is not a renderer LOD. IDs are
 **world-local**: persist the owning world/body identity and placement-contract
 version with them;
@@ -116,7 +124,8 @@ pseudo-random sampling, not a proof of cryptographic/statistical independence.
 At R = 3,200,000 m, the maximum cell Jacobian is 37.252903 m² and the supported
 global level-20 density ceiling is **26,843.5456 instances/km²**. The
 conservative population envelopes are `640 * density_scale` for rocks,
-`3000 * density_scale` for plants and, at the reference spacing, up to
+`3000 * density_scale` for plants, `1.85 * 2e6 * density_scale` for ground
+pebbles and, at the reference spacing, up to
 `1.85 * 1e6 / understory_spacing_m² * density_scale` for understory. The level-24
 understory lattice has a much larger cell capacity; its requested density is
 still checked against that lattice rather than assumed safe. Requests above
@@ -460,3 +469,30 @@ subset rules. Larger fern geometry and hierarchical tree fronds are shared
 prototype changes, not new candidates or random-placement fields. Original
 coarse plant/rock transforms remain unchanged; historical bakes retain their
 stored geometry. See doc 75 for dimensions, payloads and limitations.
+
+## WORLD13 ground-pebble representation (2026-10-24)
+
+`ScatterPopulation::GroundPebbles` reuses the same bounded `scatter_region`
+kernel, area metric, conservative rejection, fixed-cell jitter and budget errors.
+Its authored full-density prior is two pebbles per datum-square metre, multiplied
+by the existing ecological cover and requested density scale. Ground below water
+or datum and slopes above the policy limit are rejected. No sediment mass,
+transport, mineral inventory or physical obstacle ownership is inferred.
+
+Survivors have `ScatterKind::Pebble` and dimensionless scale `0.04 + 0.26*u^3`
+for a nominal metre-diameter native prototype, favouring small grains with rare
+cobbles. Scale/yaw/positions do not change when density thins. Tests pin parent
+versus child query identity, nested density, disjoint understory IDs, valid
+scale bounds, bare/submerged rejection and all-or-error item budgets.
+
+The native callback borrows the same canonical plant-surface ecology/slope/water
+context. The 3×3 same-face L18 view window and unsupported views are documented
+in docs 75/77; the rendering-height approximation is specified below.
+
+WORLD13 pebble patchiness reuses the same 8 m colony function with the world
+seed XOR `0x706562626c65`, so it is independent of plant-colony occupancy.
+The same [0, 1.85] density envelope is charged before local sampling. Native
+render placement uses the 32 m-filtered canonical terrain base plus the
+mean-centered, fixed-12-mm-footprint optical soil relief. This callback is
+independent of query window, camera and quality; it is not collision ownership
+or exact contact against the current streamed triangulation.

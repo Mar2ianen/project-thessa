@@ -92,6 +92,9 @@ impl MaterialStream {
     pub fn source(&self) -> &MaterialPageStore {
         &self.source
     }
+    pub(crate) fn refined(&self) -> &[TileKey] {
+        &self.refined
+    }
     pub fn pending_count(&self) -> usize {
         self.jobs.len()
     }

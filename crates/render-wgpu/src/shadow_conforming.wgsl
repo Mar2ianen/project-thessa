@@ -10,8 +10,9 @@
 @group(0) @binding(0) var<uniform> shadow_clip: mat4x4<f32>;
 struct SurfaceVertex { position_height:vec4<f32>, normal_face:vec4<f32>, address:vec4<u32> }
 @group(1) @binding(0) var<storage,read> surface_vertices: array<SurfaceVertex>;
+@group(1) @binding(1) var<storage,read> active_indices:array<u32>;
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let v = surface_vertices[index];
+    let v = surface_vertices[active_indices[index/3u]*3u+index%3u];
     // Only the FULL zero record is reserved. A real vertex can sit exactly
     // at the camera with zero UV and source slot; its normal is still nonzero.
     if (all(v.position_height == vec4(0.0)) && all(v.normal_face == vec4(0.0)) && all(v.address == vec4(0u))) {

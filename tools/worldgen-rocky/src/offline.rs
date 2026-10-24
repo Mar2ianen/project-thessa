@@ -1388,7 +1388,7 @@ fn fern_frond(
                         scaled(lateral, side * length * s),
                         offset(
                             scaled(radial, length * s * 0.28),
-                            [0.0, length * (std::f64::consts::PI * s).sin() * 0.12, 0.0],
+                            [0.0, length * (std::f64::consts::PI * s).sin() * 0.07, 0.0],
                         ),
                     ),
                 )
@@ -1398,8 +1398,8 @@ fn fern_frond(
                 mesh,
                 nodes,
                 tangent,
-                length * 0.145,
-                length * 0.035,
+                length * 0.085,
+                length * 0.015,
                 reduced,
             );
         }
@@ -2184,6 +2184,28 @@ mod tests {
     }
 
     #[test]
+    fn fern_pinnae_keep_a_slender_geometric_outline() {
+        let mesh = plant_prototypes().remove(0);
+        // Each frond starts with twelve rachis quads (72 split vertices),
+        // followed by fourteen pairs of nine-vertex laminae.
+        let (fronds, remainder) = mesh.positions.as_chunks::<324>();
+        assert_eq!(fronds.len(), 13);
+        assert!(remainder.is_empty());
+        for frond in fronds {
+            for leaf in frond[72..].as_chunks::<9>().0 {
+                let length = crate::lod::sub(leaf[4].map(f64::from), leaf[0].map(f64::from));
+                let width = crate::lod::sub(leaf[2].map(f64::from), leaf[6].map(f64::from));
+                let aspect =
+                    (crate::lod::dot(length, length) / crate::lod::dot(width, width)).sqrt();
+                assert!(
+                    (5.5..6.5).contains(&aspect),
+                    "ground fern lamina aspect {aspect}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn ground_fern_senescence_owns_the_three_long_low_outer_fronds() {
         for mesh in [
             plant_prototypes().remove(0),
@@ -2293,6 +2315,26 @@ mod tests {
                     .map(|(_, p, _)| face_normal(*p)[1].abs() * 0.5)
                     .sum()
             };
+            let foliage_area = |m: &PlantMesh| -> f64 {
+                prototype_triangles(m)
+                    .iter()
+                    .filter(|(first, _, _)| {
+                        m.stem
+                            .as_ref()
+                            .is_none_or(|stem| *first >= stem.vertex_count)
+                    })
+                    .map(|(_, points, _)| {
+                        let cross = face_normal(*points);
+                        crate::lod::dot(cross, cross).sqrt() * 0.5
+                    })
+                    .sum()
+            };
+            eprintln!(
+                "plant_lod_area {:?} full_m2={} reduced_m2={}",
+                a.kind,
+                foliage_area(a),
+                foliage_area(b)
+            );
             let ratio = projected_area(b) / projected_area(a);
             assert!(
                 (ratio - 1.0).abs() < 0.025,
@@ -2515,7 +2557,12 @@ mod tests {
                 let stem = mesh.stem.as_ref().is_some_and(|s| first < s.vertex_count);
                 for &index in &mesh.indices[triangle_index * 3..triangle_index * 3 + 3] {
                     let stored = mesh.normals[index as usize].map(f64::from);
-                    assert!(crate::lod::dot(stored, normal) > if stem { 0.90 } else { 0.86 });
+                    assert!(
+                        crate::lod::dot(stored, normal) > if stem { 0.90 } else { 0.86 },
+                        "{:?} triangle={triangle_index} vertex={index} normal_dot={}",
+                        mesh.kind,
+                        crate::lod::dot(stored, normal)
+                    );
                 }
             }
         }

@@ -23,6 +23,45 @@ instance allocation when they fit; instance matrices still use its normal
 shared update path.
 Botanical realism and final surface composition remain incomplete.
 
+## WORLD11a — Slender ground-fern laminae (2026-10-24)
+
+After `230d450`, ground pinnae use half-width `0.085 * pinna_span`, longitudinal
+camber `0.07 * span` and midrib fold `0.015 * span`. The resulting geometric
+length/width is about 6.1:1, rather than 3.6:1. These are authored optical asset
+dimensions for the concept's slender fern silhouette, not measured fossil
+anatomy. Frond/leaf counts, green/dry boundaries, identities, placement and
+material maps remain those of WORLD11. No density, exposure or RGB compensation
+is applied to restore the previous larger leaf area.
+
+Full/reduced fern geometry still uses 3,224/1,040 triangles with the same vertex
+payload. One-sided foliage area is now 3.196165/3.162293 m²; the full source was
+5.408265 m² at WORLD11. The calibrated top-view area ratio prints 1.0000000 and
+maximum sampled full-vertex distance to reduced triangles is 0.0098796 m.
+Reed/tree geometry is unchanged. The first narrow-leaf experiment retained the
+old larger camber and failed the existing face-normal envelope; it was rejected.
+The final camber passes the unchanged >0.86 foliage-normal/face alignment bound.
+
+The actual-producer ray fixture now marks near shadow-edge misses on the lit
+side as well as hits on the dark side, using the existing 3% barycentric edge
+band. Previously a clear f64 ray just outside a blocker could round onto the
+edge in f32 and be incorrectly labeled an interior shading failure. Analytic
+triangle tests pin that rounding case and reject distant misses, interior hits
+and intersections before the exclusion distance. This changes test
+classification, not production ray queries or shading, and does not fix or
+certify the shadow edges themselves.
+
+The two-RGB8-code interior tolerance is unchanged. Full/reduced fixtures inspect
+7,736/2,680 samples, retaining 7,003/2,396 interior samples for the colour check;
+a regression requires at least half the samples to remain interior. CPU
+finite-exclusion leak counts are 42/0 and 3/0 at 0.01/0.0001 m, with zero
+invented blockers. Different geometry and sample sets prevent treating those
+counts as a visibility-accuracy improvement. Continuous Hausdorff distance,
+all silhouettes, normal-map highlights and temporal stability remain unproven.
+
+The latest scoped checks and actual-camera captures are in doc 77 and
+[`artifacts/native-surface-fern-lamina-2026-10-24.json`](artifacts/native-surface-fern-lamina-2026-10-24.json).
+WORLD11 below remains the preceding coverage checkpoint.
+
 ## WORLD11 — Bounded distant coverage and leaf representation (2026-10-24)
 
 The current consumer queries a deduplicated 3×3 neighborhood of L14 windows

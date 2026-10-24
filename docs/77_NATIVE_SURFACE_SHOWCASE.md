@@ -4,7 +4,61 @@
 `54cdfa6`, with the existing canonical WORLD00 shore and prototype plants.
 The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
-WORLD11 continuation below extends the reviewed WORLD10 source.
+WORLD11a continuation below refines the reviewed WORLD11 source.
+
+## WORLD11a — Slender fern pinnae and edge-fixture review (2026-10-24)
+
+After `230d450`, the ground fern's broad laminae are narrowed from about 3.6:1
+to 6.1:1 length/width, with gentler longitudinal camber and midrib fold. The
+same thirteen fronds, green/dry boundaries, 3,224/1,040 full/reduced triangles,
+instance identities and ecological placement are retained. The smaller source
+area (3.196165 m² rather than 5.408265 m²) exposes real gaps; no RGB, density,
+exposure or fog compensation is added. Full/reduced top-view area agrees to
+the recorded seven decimal places; sampled full-vertex displacement is
+0.0098796 m. See [doc 75](75_NATIVE_SURFACE_PLANTS.md) for source dimensions and
+bounds. This remains an authored optical asset, not calibrated botany.
+
+A first narrow-leaf experiment with excessive camber failed the existing
+normal/face-alignment regression and was rejected. The gentler final source
+passes it. The actual-producer fixture also exposed a previously unclassified
+lit-side shadow-edge near miss. Its existing 3% barycentric edge band now covers
+both sides; analytic tests pin a clear f64 ray becoming an edge hit after f32
+narrowing. Production shading/ray queries are unchanged. The two-RGB8-code
+interior tolerance remains: 7,003 of 7,736 full-source samples and 2,396 of 2,680
+reduced-source samples are retained as interior. Tests enforce at least 50%
+interior coverage. Edge pixels themselves are not certified.
+
+Latest local checks passed: 255 worldgen lib/bin tests, 122 native unit tests,
+two actual-producer hardware fixtures, strict workspace all-target/all-feature
+Clippy, architecture, formatting, feature-off and release build. These scoped
+runs cover the lamina-only change. The preceding WORLD11 checkpoint's
+2,094/121/36 workspace/integration/native-hardware runs remain dated evidence;
+they were not repeated wholesale for this source-data revision.
+
+Actual Radeon 880M / Vulkan RADV / Mesa 26.2.5 captures retain 1280×720,
+4× MSAA, PBR Neutral, EV100 12.8, epoch/step zero, 20 s prestream and 30 warmup
+frames. Static captures measure 48 frames; the sweep measures 96. Builds/tests
+are separate from timing runs.
+
+| View | GPU median | Unique plants |
+| --- | ---: | ---: |
+| Fresh `230d450` standing control | 354.811 ms | 11,752 |
+| Slender-fern standing | 341.810 ms | 11,752 |
+| Slender-fern moving | 482.576 ms | 11,173 |
+| Alternate composition, 15 m east | 342.075 ms | 11,332 |
+
+The standing pair matches camera/source metadata, plant-count telemetry and
+material-level residency histograms. Exact GPU atlas IDs and per-instance IDs
+are not exported by captures. These are single runs with a changed leaf shape,
+not proof of a stable optimization or visual preference. The extended forest,
+reduced geometry, dry outer fronds and default-off/TAA-off policy from WORLD11
+remain. GPU cost, repeated crowns, sky/aerial transport, ground debris and
+root-to-resident-mesh agreement still prevent reference acceptance.
+
+Exact input/binary hashes, commands, logs, rejected experiments and frames are in
+[`artifacts/native-surface-fern-lamina-2026-10-24.json`](artifacts/native-surface-fern-lamina-2026-10-24.json).
+No CI or independent blind acceptance is claimed. The preceding coverage-only
+and overview records below are kept with their original source identity.
 
 ## WORLD11 — Wider coverage, reduced pinnae and fern age (2026-10-24)
 

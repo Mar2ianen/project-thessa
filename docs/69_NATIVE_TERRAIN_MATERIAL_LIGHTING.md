@@ -711,3 +711,14 @@ term; the former 1.1/0.35 m substitutes allowed undersampled detail. Eligibility
 transitions are continuous rather than hard comparisons of filtered height.
 These changes address physical scale and aliasing; they do not create resolved
 rocks, roots, puddles, erosion or a dynamic wetness solver.
+
+### WORLD11a foliage edge calibration (2026-10-24)
+
+The narrower ground-fern source in [doc 75](75_NATIVE_SURFACE_PLANTS.md) exposed
+a lit-side near-miss that the actual-producer fixture had incorrectly counted
+as interior. Its existing 3% barycentric shadow-edge band now covers misses
+outside the blocker as well as hits inside it. Analytic tests demonstrate a
+clear f64 ray becoming an edge hit after f32 narrowing. Interior colour tolerance
+remains two RGB8 codes, with explicit retained-interior counts and a minimum
+half-sample coverage requirement. Production shading and ray exclusion are
+unchanged; finite-precision shadow edges remain outside that interior bound.

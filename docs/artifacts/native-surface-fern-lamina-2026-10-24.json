@@ -1,0 +1,701 @@
+{
+  "date": "2026-10-24",
+  "cargo_environment": {
+    "TMPDIR": "/home/chechulin/Projects/project-thessa/target/tmp"
+  },
+  "scope": "WORLD11a: slender ground-fern laminae and symmetric lit/dark shadow-edge classification in the existing GPU fixture; no production shading or placement changes.",
+  "baseline_commit": "230d450c33689755b60d1ecc9dcdcd2a3154c45c",
+  "baseline_binary": {
+    "path": "target/surface-showcase/fern-lamina/baseline-native",
+    "sha256": "32bf0c2194765b221826e5a2b3e50d89156463df83f5a76ee1640ebda2890397",
+    "bytes": 65409904
+  },
+  "binary": {
+    "path": "target/release/thessa-terrain-native",
+    "sha256": "b1961fbb2d6b19cdea0258be7288cecb6f7709f18392c80aac77a83784e7e88a",
+    "bytes": 65409960
+  },
+  "source_manifest": {
+    "path": "target/surface-showcase/fern-lamina/inputs.json",
+    "sha256": "987a58b774eae23ba3fd6f3767edc5e095cb201154b9bc96bacbe1d16d056680",
+    "bytes": 93273
+  },
+  "source_id_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df",
+  "gates": [
+    {
+      "name": "worldgen",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 255,
+      "seconds": 10.614248085010331,
+      "log": "target/surface-showcase/fern-lamina/verified-worldgen.log",
+      "log_sha256": "2e7d43a44697bcdfbb9f1b562e55578117a577b12577f549f82b13dbb1809af9",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    },
+    {
+      "name": "native-unit",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 122,
+      "seconds": 12.296636496961582,
+      "log": "target/surface-showcase/fern-lamina/verified-native-unit.log",
+      "log_sha256": "22930420c860060fe721f3665cd82b8cdee62061fba9a665a31b0e8dcb4e9b99",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    },
+    {
+      "name": "visibility",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "plant_ray_visibility",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 2,
+      "seconds": 31.246518492989708,
+      "log": "target/surface-showcase/fern-lamina/verified-visibility.log",
+      "log_sha256": "c7317322e2fe71ca50d55ae972ebbe7daf87f69e61814f029450f7c63147dc28",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 1.7275902739493176,
+      "log": "target/surface-showcase/fern-lamina/verified-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 3.6625519250519574,
+      "log": "target/surface-showcase/fern-lamina/verified-clippy.log",
+      "log_sha256": "caecbe729ee4877c93dfe53a213f1de4f562bd2d94465586286376a941b938bd",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 0.21768003096804023,
+      "log": "target/surface-showcase/fern-lamina/verified-architecture.log",
+      "log_sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "inputs_stable": true,
+      "passed": 0,
+      "seconds": 1.7324672950198874,
+      "log": "target/surface-showcase/fern-lamina/verified-feature-off.log",
+      "log_sha256": "2571925b82fa1a486a2f8aea75741cb6e8bc8a77acf631767cad54045c04fbbc",
+      "input_manifest_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df"
+    }
+  ],
+  "prior_broad_checks": {
+    "report": "docs/artifacts/native-surface-coverage-2026-10-24.json",
+    "workspace_lib_bin": 2094,
+    "integration": 121,
+    "native_hardware": 36,
+    "note": "Prior source 230d450 checkpoint, not rerun wholesale after the lamina-only revision. New worldgen/native unit and actual-producer GPU checks are recorded above."
+  },
+  "geometry": {
+    "pinna_half_width_per_span": 0.085,
+    "pinna_camber_per_span": 0.07,
+    "pinna_fold_per_span": 0.015,
+    "aspect_test_range": [
+      5.5,
+      6.5
+    ],
+    "fern_triangles_full_reduced": [
+      3224,
+      1040
+    ],
+    "fern_area_full_reduced_m2": [
+      3.1961650171882607,
+      3.162292618834257
+    ],
+    "previous_full_fern_area_m2": 5.4082647,
+    "max_sampled_full_vertex_error_m": 0.0098796,
+    "top_view_area_ratio_rounded": 1.0,
+    "full_visibility_samples_interior": [
+      7736,
+      7003
+    ],
+    "reduced_visibility_samples_interior": [
+      2680,
+      2396
+    ],
+    "full_exclusion_leaks_1cm_01mm": [
+      42,
+      0
+    ],
+    "reduced_exclusion_leaks_1cm_01mm": [
+      3,
+      0
+    ],
+    "invented_blockers": 0,
+    "interior_rgb8_tolerance": 2,
+    "shadow_edge_barycentric_band": 0.03,
+    "note": "One-sided source geometry area; not measured botany. Vertex samples are not a continuous surface-error certificate. Edge classification now covers clear near misses as well as blocked hits; no edge-pixel accuracy claim."
+  },
+  "captures": [
+    {
+      "name": "baseline-standing",
+      "png": {
+        "path": "target/surface-showcase/fern-lamina/baseline-standing.png",
+        "sha256": "fdccb3939e85a7192d00d5242e0a926aa5a9c3b484e5b4865556274c254fe1dd",
+        "bytes": 1724046
+      },
+      "capture": {
+        "path": "target/surface-showcase/fern-lamina/baseline-standing.json",
+        "sha256": "029e8762eb549d15f14f582a001f92b70259ed8408bd83407ab8540cca296c3a",
+        "bytes": 151985
+      },
+      "log": {
+        "path": "target/surface-showcase/fern-lamina/baseline-standing.log",
+        "sha256": "0f300568e99eb316fe5f72968e9f5746ccf7d1c1276350f5f2d60ed268f675fa",
+        "bytes": 5990
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/baseline-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/baseline-standing.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/baseline-standing.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "32bf0c2194765b221826e5a2b3e50d89156463df83f5a76ee1640ebda2890397",
+        "inputs_sha256": null,
+        "baseline_commit": "230d450",
+        "seconds": 52.463647567958105
+      },
+      "gpu_median_ms": 354.8108850755252,
+      "frames": 48,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999998080256",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+        "native_survey_eye_ground_datum_m": "5.007671312155324",
+        "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "plants": {
+        "native_surface_plants_accepted": "11775",
+        "native_surface_plants_candidate_visits": "237568",
+        "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "11",
+        "native_surface_plants_frame_upload_bytes": "752704",
+        "native_surface_plants_instance_buffer_bytes": "752128",
+        "native_surface_plants_preparation_cpu_ms": "1505.734688",
+        "native_surface_plants_preparation_job_pending": "false",
+        "native_surface_plants_preparation_jobs_discarded": "0",
+        "native_surface_plants_preparation_jobs_started": "0",
+        "native_surface_plants_prototype_payload_bytes": "1690896",
+        "native_surface_plants_prototype_texture_bytes": "3219456",
+        "native_surface_plants_publication_cpu_ms": "27.567929000000003",
+        "native_surface_plants_reduced_instances": "5568",
+        "native_surface_plants_renderer_reused": "false",
+        "native_surface_plants_retained": "11752",
+        "native_surface_plants_rt_policy": "withheld_instance_budget_raster_fallback",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "11752",
+        "native_surface_plants_surface_samples": "34337",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "9709",
+        "native_surface_understory_candidate_visits": "200704",
+        "native_surface_understory_replaced_coarse_clumps": "23",
+        "native_surface_understory_surface_samples": "31452",
+        "native_surface_understory_window": "1,18,96291,190216",
+        "native_surface_understory_windows": "49",
+        "surface_plants_density_scale": "1",
+        "surface_plants_detail_distance_m": "48",
+        "surface_plants_enabled": "true",
+        "surface_plants_max_candidates": "36864",
+        "surface_plants_max_items": "36864",
+        "surface_understory_enabled": "true",
+        "surface_understory_max_candidates": "200704",
+        "surface_understory_max_items": "200704"
+      },
+      "material_resident_levels": "[4, 0, 1, 0, 1, 0, 1, 0, 2, 0, 2, 0, 12, 23, 32, 23, 32, 36, 19, 14, 24, 22, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "standing",
+      "png": {
+        "path": "target/surface-showcase/fern-lamina/standing.png",
+        "sha256": "d3a12367b7d4e06979ef79a7251e379cc0351efc311dcc463660b9e72bbe74db",
+        "bytes": 1720818
+      },
+      "capture": {
+        "path": "target/surface-showcase/fern-lamina/standing.json",
+        "sha256": "b065e7e787dbf8b61b83e535b2cd8bb3a0534d3daa5f248159b0a3a0998b26d3",
+        "bytes": 151917
+      },
+      "log": {
+        "path": "target/surface-showcase/fern-lamina/standing.log",
+        "sha256": "e67ba9e10f5bac8f943c4a9a337e47fb64ea2020743ad2a2cdb8af24cb4f1025",
+        "bytes": 5964
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/standing.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/standing.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "b1961fbb2d6b19cdea0258be7288cecb6f7709f18392c80aac77a83784e7e88a",
+        "inputs_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df",
+        "baseline_commit": null,
+        "seconds": 51.7486407670076
+      },
+      "gpu_median_ms": 341.80974274409294,
+      "frames": 48,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999998080256",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+        "native_survey_eye_ground_datum_m": "5.007671312155324",
+        "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "plants": {
+        "native_surface_plants_accepted": "11775",
+        "native_surface_plants_candidate_visits": "237568",
+        "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "11",
+        "native_surface_plants_frame_upload_bytes": "752704",
+        "native_surface_plants_instance_buffer_bytes": "752128",
+        "native_surface_plants_preparation_cpu_ms": "1477.254581",
+        "native_surface_plants_preparation_job_pending": "false",
+        "native_surface_plants_preparation_jobs_discarded": "0",
+        "native_surface_plants_preparation_jobs_started": "0",
+        "native_surface_plants_prototype_payload_bytes": "1690896",
+        "native_surface_plants_prototype_texture_bytes": "3219456",
+        "native_surface_plants_publication_cpu_ms": "27.175138",
+        "native_surface_plants_reduced_instances": "5568",
+        "native_surface_plants_renderer_reused": "false",
+        "native_surface_plants_retained": "11752",
+        "native_surface_plants_rt_policy": "withheld_instance_budget_raster_fallback",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "11752",
+        "native_surface_plants_surface_samples": "34337",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "9709",
+        "native_surface_understory_candidate_visits": "200704",
+        "native_surface_understory_replaced_coarse_clumps": "23",
+        "native_surface_understory_surface_samples": "31452",
+        "native_surface_understory_window": "1,18,96291,190216",
+        "native_surface_understory_windows": "49",
+        "surface_plants_density_scale": "1",
+        "surface_plants_detail_distance_m": "48",
+        "surface_plants_enabled": "true",
+        "surface_plants_max_candidates": "36864",
+        "surface_plants_max_items": "36864",
+        "surface_understory_enabled": "true",
+        "surface_understory_max_candidates": "200704",
+        "surface_understory_max_items": "200704"
+      },
+      "material_resident_levels": "[4, 0, 1, 0, 1, 0, 1, 0, 2, 0, 2, 0, 12, 23, 32, 23, 32, 36, 19, 14, 24, 22, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "moving",
+      "png": {
+        "path": "target/surface-showcase/fern-lamina/moving.png",
+        "sha256": "e8f6a0581551328ca601b76522f198da09cbeca8b881ec096d3556cab73a7273",
+        "bytes": 1817447
+      },
+      "capture": {
+        "path": "target/surface-showcase/fern-lamina/moving.json",
+        "sha256": "2df4968b90455fc178b7763c9f171009f8c4b5a67087acc5f20ba653edf1ab1d",
+        "bytes": 277648
+      },
+      "log": {
+        "path": "target/surface-showcase/fern-lamina/moving.log",
+        "sha256": "5e1029dcc369a2d6c36a097cbad5b2970bb9a68c575d64a4061991800ce67b6c",
+        "bytes": 5978
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "96",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/moving.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/moving.json",
+          "--sweep"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "b1961fbb2d6b19cdea0258be7288cecb6f7709f18392c80aac77a83784e7e88a",
+        "inputs_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df",
+        "baseline_commit": null,
+        "seconds": 84.7489308110089
+      },
+      "gpu_median_ms": 482.5759001864434,
+      "frames": 96,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "2.0000000001693046",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835057.3819225994, 1279309.2703944019, -752237.7676371629]",
+        "native_survey_eye_ground_datum_m": "4.910487947816225",
+        "native_survey_forward_body": "[0.4834095843553879, 0.6586279426298303, -0.5766492928466552]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+        "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+        "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "plants": {
+        "native_surface_plants_accepted": "11190",
+        "native_surface_plants_candidate_visits": "237568",
+        "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "11",
+        "native_surface_plants_frame_upload_bytes": "715648",
+        "native_surface_plants_instance_buffer_bytes": "715072",
+        "native_surface_plants_preparation_cpu_ms": "692.284684",
+        "native_surface_plants_preparation_job_pending": "false",
+        "native_surface_plants_preparation_jobs_discarded": "0",
+        "native_surface_plants_preparation_jobs_started": "4",
+        "native_surface_plants_prototype_payload_bytes": "1690896",
+        "native_surface_plants_prototype_texture_bytes": "3219456",
+        "native_surface_plants_publication_cpu_ms": "0.0077540000000000005",
+        "native_surface_plants_reduced_instances": "4910",
+        "native_surface_plants_renderer_reused": "true",
+        "native_surface_plants_retained": "11173",
+        "native_surface_plants_rt_policy": "withheld_instance_budget_raster_fallback",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "11173",
+        "native_surface_plants_surface_samples": "33848",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "9124",
+        "native_surface_understory_candidate_visits": "200704",
+        "native_surface_understory_replaced_coarse_clumps": "17",
+        "native_surface_understory_surface_samples": "30963",
+        "native_surface_understory_window": "1,18,96294,190217",
+        "native_surface_understory_windows": "49",
+        "surface_plants_density_scale": "1",
+        "surface_plants_detail_distance_m": "48",
+        "surface_plants_enabled": "true",
+        "surface_plants_max_candidates": "36864",
+        "surface_plants_max_items": "36864",
+        "surface_understory_enabled": "true",
+        "surface_understory_max_candidates": "200704",
+        "surface_understory_max_items": "200704"
+      },
+      "material_resident_levels": "[3, 0, 1, 0, 1, 0, 1, 0, 2, 0, 4, 0, 8, 18, 30, 25, 30, 34, 27, 28, 20, 16, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    },
+    {
+      "name": "composed",
+      "png": {
+        "path": "target/surface-showcase/fern-lamina/composed.png",
+        "sha256": "aa2914e622706533c6af4e86a12da1cc23f16d33f925bc93fe04f238f203aeff",
+        "bytes": 1635071
+      },
+      "capture": {
+        "path": "target/surface-showcase/fern-lamina/composed.json",
+        "sha256": "c47af2e2cf2436b349a7a4b3a7c9fe628d06458d898748f5cf763e6646c8e51e",
+        "bytes": 151962
+      },
+      "log": {
+        "path": "target/surface-showcase/fern-lamina/composed.log",
+        "sha256": "1bf2aad51e75583345a218af914299215b7ccc709f96eedc798ee46480fd6135",
+        "bytes": 5979
+      },
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/data/graphics/surface-showcase.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13910882897008",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/composed.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/fern-lamina/composed.json"
+        ],
+        "exit_code": 0,
+        "binary_sha256": "b1961fbb2d6b19cdea0258be7288cecb6f7709f18392c80aac77a83784e7e88a",
+        "inputs_sha256": "c8130b88bbf66114e3933648c57650d7abd2ba7c627bb8b0974e40d6fe6961df",
+        "baseline_commit": null,
+        "seconds": 51.774746603972744
+      },
+      "gpu_median_ms": 342.07478633018883,
+      "frames": 48,
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "camera": {
+        "native_survey_actual_eye_agl_m": "1.9999999996113296",
+        "native_survey_distance_m": "80",
+        "native_survey_eye_body_m": "[-2835055.6140055014, 1279289.6301208397, -752278.1972735455]",
+        "native_survey_eye_ground_datum_m": "4.996606720068801",
+        "native_survey_forward_body": "[0.4132814704284192, 0.9039758303212652, 0.10966368767966435]",
+        "native_survey_fov_y_rad": "0.9",
+        "native_survey_frozen_erosion_attached": "true",
+        "native_survey_ground_min_wavelength_m": "1",
+        "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+        "native_survey_look_target_body_m": "[-2835022.536208138, 1279361.981608812, -752269.4201240754]",
+        "native_survey_near_m": "0.1",
+        "native_survey_requested_eye_agl_m": "2",
+        "native_survey_site": "fixed:23.565679258039204,165.13910882897008",
+        "native_survey_target_body_m": "[-2835022.536208138, 1279361.981608812, -752269.4201240754]",
+        "native_survey_target_lat_lon_deg": "23.565679258039204,165.13910882897005"
+      },
+      "source_signature_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8",
+      "plants": {
+        "native_surface_plants_accepted": "11353",
+        "native_surface_plants_candidate_visits": "237568",
+        "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path",
+        "native_surface_plants_draw_calls": "11",
+        "native_surface_plants_frame_upload_bytes": "725824",
+        "native_surface_plants_instance_buffer_bytes": "725248",
+        "native_surface_plants_preparation_cpu_ms": "1468.7115740000002",
+        "native_surface_plants_preparation_job_pending": "false",
+        "native_surface_plants_preparation_jobs_discarded": "0",
+        "native_surface_plants_preparation_jobs_started": "0",
+        "native_surface_plants_prototype_payload_bytes": "1690896",
+        "native_surface_plants_prototype_texture_bytes": "3219456",
+        "native_surface_plants_publication_cpu_ms": "27.791324999999997",
+        "native_surface_plants_reduced_instances": "4967",
+        "native_surface_plants_renderer_reused": "false",
+        "native_surface_plants_retained": "11332",
+        "native_surface_plants_rt_policy": "withheld_instance_budget_raster_fallback",
+        "native_surface_plants_status": "applied_survey_with_near_understory",
+        "native_surface_plants_submitted_instances": "11332",
+        "native_surface_plants_surface_samples": "33170",
+        "native_surface_plants_window": "1,14,6018,11888",
+        "native_surface_understory_accepted": "9287",
+        "native_surface_understory_candidate_visits": "200704",
+        "native_surface_understory_replaced_coarse_clumps": "21",
+        "native_surface_understory_surface_samples": "30285",
+        "native_surface_understory_window": "1,18,96292,190216",
+        "native_surface_understory_windows": "49",
+        "surface_plants_density_scale": "1",
+        "surface_plants_detail_distance_m": "48",
+        "surface_plants_enabled": "true",
+        "surface_plants_max_candidates": "36864",
+        "surface_plants_max_items": "36864",
+        "surface_understory_enabled": "true",
+        "surface_understory_max_candidates": "200704",
+        "surface_understory_max_items": "200704"
+      },
+      "material_resident_levels": "[4, 0, 1, 0, 1, 0, 1, 0, 2, 0, 2, 1, 21, 25, 36, 25, 32, 32, 17, 22, 16, 10, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0]"
+    }
+  ],
+  "limits": [
+    "Bounded same-face plant coverage and discrete LOD remain.",
+    "No authoritative ecology, population density, exposure or RGB compensation for smaller leaves.",
+    "Different geometry/sample sets prevent comparing bias-leak counts as an accuracy win.",
+    "Single-run timings do not establish a performance win; no independent blind preference or CI result.",
+    "Reference parity remains open: repeated crowns, ground debris, cloud structure/aerial transport, root-to-resident-mesh agreement and frame cost."
+  ],
+  "rejected_experiment": {
+    "note": "Narrower leaf with the previous large camber failed the unchanged normal envelope. The final gentler camber passes. The remaining lit-side shadow-edge sample is separately classified by the symmetric analytic edge test, with the same two-code interior tolerance.",
+    "first_geometry_log": {
+      "path": "target/surface-showcase/fern-lamina/worldgen.log",
+      "sha256": "50f1a5a9aaac423908e0e33b3cd951a3616b668ff83787db859b97f7b62b7e89",
+      "bytes": 22428
+    },
+    "first_visibility_log": {
+      "path": "target/surface-showcase/fern-lamina/visibility-calibration.log",
+      "sha256": "394118de44c4dd9378439437dffbc50fb9f652a78d39c2410437d4cdc1f304a2",
+      "bytes": 4254
+    },
+    "refined_geometry_log": {
+      "path": "target/surface-showcase/fern-lamina/geometry-refined.log",
+      "sha256": "177db67958ccf119330788499f99ef68eabececc7ab671f34b4529b9d88c3696",
+      "bytes": 2893
+    },
+    "refined_visibility_log": {
+      "path": "target/surface-showcase/fern-lamina/visibility-refined.log",
+      "sha256": "6f22112331748f0f43b9fc6bcfaed016a148c500e37b10af90351b8362f015ed",
+      "bytes": 5359
+    }
+  },
+  "standing_matching": {
+    "camera_source": true,
+    "material_level_histogram": true,
+    "plant_counts": true,
+    "note": "Exact GPU atlas page identities and per-instance IDs are not exported by captures. Placement inputs/source are unchanged; these are matching telemetry checks, not an independent visual preference result."
+  }
+}

@@ -92,7 +92,9 @@ The checked-in vertical slice currently contains:
   opaque mesh and shadow paths. WORLD11 extends large plants to nine neighboring
   L14 windows and selects scale-aware reduced pinnae beyond the full-detail
   range, plus separate dry outer ground-fern fronds without more triangles;
-  plant identities and ecological eligibility remain unchanged. Same-site near-window changes use one shared
+  plant identities and ecological eligibility remain unchanged. WORLD11a narrows
+  ground pinnae to a roughly 6:1 lamina aspect with gentler camber, using the same
+  triangle budget. Same-site near-window changes use one shared
   worker with stale-result rejection; this is not a vegetation streamer. Shared
   stellar shadow rays now preserve their physical line instead of offsetting
   sideways into narrow leaves; finite receiver-bias and subpixel-coverage gaps

@@ -497,57 +497,77 @@ pub(crate) fn surface_appearance_with_ground_detail(
         ground_weight =
             (ecological_cover.canopy01 * 1.30 + ecological_cover.ground01 * 0.60).clamp(0.0, 1.0)
                 * (1.0 - exposed);
-        let h_norm = (f64::from(ground.height_m)
-            / (crate::ground_detail::HEIGHT_RANGE_M as f64 * 0.5))
-            .clamp(-1.0, 1.0);
+        let h_diff = f64::from(ground.height_m)
+            - f64::from(crate::ground_detail::mean_sample().height_m);
+        let h_norm = (h_diff / 0.0016).clamp(-1.0, 1.0);
         let q = dir.map(|v| v * field.params.radius_m);
         let w_meso = band_weight(3.2, texel_m);
         let w_micro = band_weight(1.1, texel_m);
+        let w_nano = band_weight(0.35, texel_m);
         let n_macro = rng::perlin3(field.params.seed, 6141, q[0] / 8.4, q[1] / 8.4, q[2] / 8.4);
         let n_litter = rng::perlin3(field.params.seed, 6142, q[0] / 3.2, q[1] / 3.2, q[2] / 3.2);
         let n_moss = rng::value_noise3(field.params.seed, 6143, q[0] / 1.1, q[1] / 1.1, q[2] / 1.1);
 
         // Accumulated dry senescent frond / needle litter around plant colonies:
         let litter_signal = ((n_macro * 0.40 + n_litter * 0.60) * w_meso).clamp(-1.0, 1.0);
-        let litter_warmth = [1.42, 0.98, 0.52];
+        let litter_warmth = [1.38, 0.94, 0.46];
 
         // Peat and organic humus darkening in moist forest environments:
         // Damp coastal forest soils have rich organic matter, absorbing light down to 6-10% reflectance.
-        let humus_base = 1.0 - damp * 0.52;
-        let hollow_darkening = 1.0 + (h_norm.min(0.0) * 0.45 + litter_signal.min(0.0) * 0.35);
-        let humus_factor = (humus_base * hollow_darkening).clamp(0.22, 1.0);
+        let humus_base = 1.0 - damp * 0.68;
+        let hollow_darkening = 1.0 + (h_norm.min(0.0) * 0.70 + litter_signal.min(0.0) * 0.35);
+        let humus_factor = (humus_base * hollow_darkening).clamp(0.10, 1.0);
 
-        // Dry senescent fronds on elevated mounds:
-        let mound_drying = 1.0 + h_norm.max(0.0) * 0.45 + litter_signal.max(0.0) * 0.35;
+        // Moderate drying on elevated micro-mounds:
+        let mound_drying = 1.0 + h_norm.max(0.0) * 0.18 + litter_signal.max(0.0) * 0.14;
 
         // Fine bryophyte (moss) colonies on moist elevated hummocks:
-        let moss_eligible = h_norm > -0.15 && damp > 0.45 && ecological_cover.canopy01 > 0.25;
+        let moss_eligible = h_norm > -0.05 && damp > 0.45 && ecological_cover.canopy01 > 0.20;
         let moss_cover = if moss_eligible {
-            smooth(0.25, 0.65, n_moss) * (h_norm + 0.15).clamp(0.0, 1.0) * w_micro * 0.35
+            smooth(0.20, 0.60, n_moss) * (h_norm + 0.05).clamp(0.0, 1.0) * w_micro * 0.45
         } else {
             0.0
         };
-        let moss_linear = [0.08, 0.15, 0.04];
+        let moss_linear = [0.06, 0.14, 0.04];
 
         // Scattered bleached twigs and decaying wood debris:
         let n_twig = rng::value_noise3(field.params.seed, 6144, q[0] / 0.45, q[1] / 0.45, q[2] / 0.45);
-        let twig_cover = if h_norm > -0.25 {
-            smooth(0.70, 0.84, n_twig) * w_micro * 0.35
+        let twig_cover = if h_norm > -0.30 {
+            smooth(0.68, 0.82, n_twig) * w_micro * 0.30
         } else {
             0.0
         };
-        let twig_linear = [0.22, 0.18, 0.13];
+        let twig_linear = [0.20, 0.17, 0.12];
+
+        // Coastal gravel, rounded beach pebbles and quartz mineral flecks:
+        let n_pebble = rng::value_noise3(field.params.seed, 6145, q[0] / 0.18, q[1] / 0.18, q[2] / 0.18);
+        let pebble_eligible = h_norm > -0.40 && exposed < 0.85;
+        let pebble_cover = if pebble_eligible {
+            smooth(0.72, 0.86, n_pebble) * w_nano * 0.32
+        } else {
+            0.0
+        };
+        let pebble_linear = [0.14, 0.15, 0.16];
+
+        // Fibrous rootlets and decaying rhizomes:
+        let n_root = rng::perlin3(field.params.seed, 6146, q[0] / 0.22, q[1] / 0.22, q[2] / 0.22);
+        let root_cover = smooth(0.65, 0.82, n_root.abs()) * w_nano * 0.25;
+        let root_linear = [0.07, 0.05, 0.03];
 
         color = std::array::from_fn(|i| {
             let base = f64::from(ground.albedo_linear[i]);
             let litter_gain = 1.0
-                + (h_norm.max(0.0) * 0.55 + litter_signal.max(0.0) * 0.45)
+                + (h_norm.max(0.0) * 0.45 + litter_signal.max(0.0) * 0.35)
                     * (litter_warmth[i] - 1.0);
             let floor_raw = base * humus_factor * litter_gain * mound_drying;
             let moss_term = moss_linear[i] * (base / 0.15);
-            let floor_organic = floor_raw * (1.0 - moss_cover) + moss_term * moss_cover;
-            let floor_linear = floor_organic * (1.0 - twig_cover)
+            let floor_moss = floor_raw * (1.0 - moss_cover) + moss_term * moss_cover;
+            let floor_twig = floor_moss * (1.0 - twig_cover)
                 + twig_linear[i] * (base / 0.15) * twig_cover;
+            let floor_pebble = floor_twig * (1.0 - pebble_cover)
+                + pebble_linear[i] * pebble_cover;
+            let floor_linear = floor_pebble * (1.0 - root_cover)
+                + root_linear[i] * (base / 0.15) * root_cover;
             crate::ground_detail::encode_srgb(
                 crate::ground_detail::decode_srgb(color[i]) * (1.0 - ground_weight)
                     + floor_linear * ground_weight,
@@ -661,16 +681,20 @@ pub(crate) fn surface_appearance_with_ground_detail(
         + substrate_roughness_delta(substrate, rock) * visible_substrate)
         .clamp(0.45, 0.98) as f32;
     if let Some(ground) = ground {
-        let h_norm = (f64::from(ground.height_m)
-            / (crate::ground_detail::HEIGHT_RANGE_M as f64 * 0.5))
-            .clamp(-1.0, 1.0);
+        let h_diff = f64::from(ground.height_m)
+            - f64::from(crate::ground_detail::mean_sample().height_m);
+        let h_norm = (h_diff / 0.0016).clamp(-1.0, 1.0);
         let q = dir.map(|v| v * field.params.radius_m);
         let w_meso = band_weight(3.2, texel_m);
+        let w_nano = band_weight(0.35, texel_m);
         let n_macro = rng::perlin3(field.params.seed, 6141, q[0] / 8.4, q[1] / 8.4, q[2] / 8.4);
         let n_litter = rng::perlin3(field.params.seed, 6142, q[0] / 3.2, q[1] / 3.2, q[2] / 3.2);
         let litter_signal = ((n_macro * 0.40 + n_litter * 0.60) * w_meso).clamp(-1.0, 1.0);
-        let water_film = (damp * 0.50 - h_norm * 0.38 - litter_signal * 0.22).clamp(0.0, 1.0);
-        let floor_roughness = (ground.roughness - water_film as f32 * 0.68).clamp(0.22, 0.98);
+        let water_film = (damp * 0.58 - h_norm * 0.45 - litter_signal * 0.22).clamp(0.0, 1.0);
+        let n_pebble = rng::value_noise3(field.params.seed, 6145, q[0] / 0.18, q[1] / 0.18, q[2] / 0.18);
+        let pebble_sheen = smooth(0.72, 0.86, n_pebble) * w_nano * 0.42;
+        let floor_roughness = (ground.roughness - water_film as f32 * 0.72 - pebble_sheen as f32 * 0.42)
+            .clamp(0.18, 0.98);
         roughness += (floor_roughness - roughness) * ground_weight as f32;
     }
     (

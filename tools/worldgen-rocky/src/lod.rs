@@ -872,7 +872,7 @@ pub fn build_gpu_material_page_with_ground_detail(
                     height(x, y1) - height(x, y0),
                 );
                 for i in 0..2 {
-                    gradient[i] += floor_gradient[i] * (10.0 * ground_weights[y * size + x]);
+                    gradient[i] += floor_gradient[i] * (13.5 * ground_weights[y * size + x]);
                 }
             }
             let [dx, dy] = gradient;

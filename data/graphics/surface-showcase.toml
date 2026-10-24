@@ -21,7 +21,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 12.90
+exposure_ev100 = 12.80
 fleet_meshes = true
 fleet_quality = "high"
 
@@ -51,8 +51,8 @@ integrator = "march"
 ray_steps = 24
 cast_shadows = true
 layers = 2
-coverage = 0.55
-opacity = 0.95
+coverage = 0.48
+opacity = 0.72
 animate = true
 
 [night_lights]

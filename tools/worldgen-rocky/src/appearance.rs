@@ -514,9 +514,9 @@ pub(crate) fn surface_appearance_with_ground_detail(
 
         // Peat and organic humus darkening in moist forest environments:
         // Damp coastal forest soils have rich organic matter, absorbing light down to 6-10% reflectance.
-        let humus_base = 1.0 - damp * 0.68;
+        let humus_base = 1.0 - damp * 0.72;
         let hollow_darkening = 1.0 + (h_norm.min(0.0) * 0.70 + litter_signal.min(0.0) * 0.35);
-        let humus_factor = (humus_base * hollow_darkening).clamp(0.10, 1.0);
+        let humus_factor = (humus_base * hollow_darkening).clamp(0.08, 1.0);
 
         // Moderate drying on elevated micro-mounds:
         let mound_drying = 1.0 + h_norm.max(0.0) * 0.18 + litter_signal.max(0.0) * 0.14;

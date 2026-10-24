@@ -1298,7 +1298,7 @@ fn lycopsid_tree(mesh: &mut PlantMesh) {
     // The two crowns share the same 48-frond budget as the single umbrella.
     // Count, attachment height, reach, arch rise, terminal drop, azimuth.
     const TIERS: [(usize, f64, f64, f64, f64, f64); 4] = [
-        (6, 8.08, 3.35, 2.10, 0.35, 0.00), // Ascending young fronds
+        (6, 8.12, 3.45, 2.25, 0.35, 0.00), // Ascending young fronds
         (9, 7.82, 4.70, 1.72, 1.55, 0.35), // Spreading mature fronds
         (6, 7.50, 4.25, 0.65, 2.50, 0.72), // Descending outer fronds
         (3, 7.18, 2.05, 0.10, 3.25, 1.15), // Hanging dry mantle

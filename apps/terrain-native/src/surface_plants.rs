@@ -480,7 +480,7 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
-                        [0.72, 0.70, 0.62, 1.0]
+                        [0.62, 0.40, 0.66, 1.0]
                     }
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
                         [1.0, 0.96, 0.90, 1.0]

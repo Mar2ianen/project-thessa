@@ -250,12 +250,13 @@ pub(crate) fn forest_floor(
         smooth(0.50, 0.80, noise(6151, 0.36, true)) * (0.30 + 0.70 * smooth(0.02, 0.20, canopy));
     let litter = (coarse_litter * 0.35 + fine_litter * 0.30).clamp(0.0, 0.60);
     let albedo_linear = std::array::from_fn(|i| {
-        let wet_darkening = [0.48, 0.45, 0.35][i];
+        let wet_darkening = [0.42, 0.46, 0.36][i];
         let substrate = f64::from(ground.albedo_linear[i])
             * (1.0 + mineral_patch * 0.15)
             * (1.0 - wet * wet_darkening);
-        let covered = substrate * (1.0 - moss) + [0.036, 0.076, 0.024][i] * moss;
-        let litter_albedo = [0.058, 0.042, 0.030][i];
+        let moss_albedo = [0.045, 0.058, 0.028][i];
+        let covered = substrate * (1.0 - moss) + moss_albedo * moss;
+        let litter_albedo = [0.072, 0.048, 0.032][i];
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);

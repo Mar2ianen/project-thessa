@@ -94,7 +94,7 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     let dist=length(in.position);
     let view_dir=in.position/max(dist,0.001);
     let horizon_radiance=select(light.ambient.rgb/OCEAN_PI,env_base_radiance(view_dir,light.ambient.rgb),env_enabled());
-    let haze=1.0-exp(-dist*0.0012);
+    let haze=1.0-exp(-dist*0.0025);
     if (material.quality==0u && material.reflections==0u) {
         let low_rad = mix(diffuse_total*(1.0-material.factors.x),horizon_radiance,haze);
         return vec4(low_rad*view.exposure,1.0);

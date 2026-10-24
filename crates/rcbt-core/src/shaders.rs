@@ -695,21 +695,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         }
         let environment = cbt_land_environment(input.render_position,specular_normal,eye,roughness,lighting.ambient_lux.rgb);
         land_reflection += environment.rgb;
-        if (puddle_mask > 0.0) {
-            let puddle_reflected = reflect(-eye, specular_normal);
-            let puddle_fresnel = ocean_schlick(0.04, max(dot(specular_normal, eye), 0.0));
-            var puddle_sky_illuminance = lighting.ambient_lux.rgb;
-            for (var i = 0u; i < 3u; i = i + 1u) {
-                puddle_sky_illuminance += lighting.colors_lux[i].rgb
-                    * max(dot(surface_up, lighting.directions[i].xyz), 0.0) * lighting.ocean_appearance.y;
-            }
-            let puddle_sky_rad = puddle_sky_illuminance / OCEAN_PI;
-            let puddle_sky = ocean_sky_radiance(puddle_reflected, surface_up,
-                puddle_sky_rad * vec3(0.20, 0.28, 0.42),
-                puddle_sky_rad * vec3(0.50, 0.58, 0.65),
-                puddle_sky_rad * vec3(0.02, 0.02, 0.02));
-            land_reflection += puddle_sky * puddle_fresnel * puddle_mask;
-        }
         var land_ambient = lighting.ambient_lux.rgb;
         if (any(land_ambient > vec3(0.0))) {
             land_ambient *= cbt_land_ambient_transmission(roughness);

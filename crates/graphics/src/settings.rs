@@ -791,6 +791,8 @@ pub struct SurfacePlantsSettings {
     pub quality: Quality,
     /// Additional bounded near-eye fern/reed layer; not planetary streaming.
     pub understory: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_distance_m: Option<u32>,
 }
 
 impl Default for SurfacePlantsSettings {
@@ -799,6 +801,7 @@ impl Default for SurfacePlantsSettings {
             enabled: false,
             quality: Quality::High,
             understory: false,
+            detail_distance_m: None,
         }
     }
 }
@@ -1274,7 +1277,8 @@ mod tests {
                     SurfacePlantsSettings {
                         enabled,
                         quality,
-                        understory: false
+                        understory: false,
+                        detail_distance_m: None,
                     }
                 );
                 assert_eq!(
@@ -1286,6 +1290,10 @@ mod tests {
         let quality_only = RequestedGraphics::from_toml("[surface_plants]\nquality='low'").unwrap();
         assert!(!quality_only.surface_plants.enabled);
         assert_eq!(quality_only.surface_plants.quality, Quality::Low);
+        let custom_distance =
+            RequestedGraphics::from_toml("[surface_plants]\nenabled=true\ndetail_distance_m=24")
+                .unwrap();
+        assert_eq!(custom_distance.surface_plants.detail_distance_m, Some(24));
         for assignment in [
             "quality='ultra'",
             "quality='off'",
@@ -1315,7 +1323,8 @@ mod tests {
                     SurfacePlantsSettings {
                         enabled,
                         quality,
-                        understory: false
+                        understory: false,
+                        detail_distance_m: None,
                     }
                 );
                 assert!(!config.is_custom());

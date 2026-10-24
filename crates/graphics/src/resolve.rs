@@ -836,11 +836,15 @@ impl ResolvedGraphicsSettings {
                 0
             },
             surface_plants_detail_distance_m: if requested.surface_plants.enabled {
-                match requested.surface_plants.quality {
-                    Quality::Low => 24.0,
-                    Quality::Medium => 36.0,
-                    Quality::High => 48.0,
-                }
+                requested
+                    .surface_plants
+                    .detail_distance_m
+                    .map(f64::from)
+                    .unwrap_or_else(|| match requested.surface_plants.quality {
+                        Quality::Low => 24.0,
+                        Quality::Medium => 36.0,
+                        Quality::High => 48.0,
+                    })
             } else {
                 0.0
             },
@@ -1493,6 +1497,16 @@ mod tests {
         }
         let restored: ResolvedGraphicsSettings = legacy.try_into().unwrap();
         assert_eq!(restored, baseline);
+    }
+
+    #[test]
+    fn surface_plants_detail_distance_explicit_override_survives_resolution() {
+        let mut requested = RequestedGraphics::default();
+        requested.surface_plants.enabled = true;
+        requested.surface_plants.detail_distance_m = Some(24);
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(resolved.surface_plants_detail_distance_m, 24.0);
     }
 
     #[test]

@@ -244,19 +244,26 @@ pub(crate) fn forest_floor(
         * smooth(0.04, 0.20, canopy)
         * smooth(0.45, 0.72, moss_noise)
         * 0.85;
-    let litter = smooth(0.52, 0.78, noise(6142, 1.6, true)) * smooth(0.06, 0.25, canopy) * 0.40;
+    let coarse_litter =
+        smooth(0.48, 0.76, noise(6142, 1.6, true)) * (0.35 + 0.65 * smooth(0.04, 0.25, canopy));
+    let fine_litter =
+        smooth(0.50, 0.80, noise(6151, 0.36, true)) * (0.30 + 0.70 * smooth(0.02, 0.20, canopy));
+    let litter = (coarse_litter * 0.35 + fine_litter * 0.30).clamp(0.0, 0.60);
     let albedo_linear = std::array::from_fn(|i| {
-        let substrate =
-            f64::from(ground.albedo_linear[i]) * (1.0 + mineral_patch * 0.15) * (1.0 - wet * 0.40);
+        let wet_darkening = [0.48, 0.45, 0.35][i];
+        let substrate = f64::from(ground.albedo_linear[i])
+            * (1.0 + mineral_patch * 0.15)
+            * (1.0 - wet * wet_darkening);
         let covered = substrate * (1.0 - moss) + [0.036, 0.076, 0.024][i] * moss;
-        (covered * (1.0 - litter) + [0.082, 0.045, 0.024][i] * litter).clamp(0.0, 1.0) as f32
+        let litter_albedo = [0.058, 0.042, 0.030][i];
+        (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);
     let wet_roughness = dry * (1.0 - wet) + 0.28 * wet;
     let moss_roughness = wet_roughness * (1.0 - moss) + 0.95 * moss;
     GroundSample {
         albedo_linear,
-        roughness: (moss_roughness * (1.0 - litter) + 0.90 * litter).clamp(0.22, 0.98) as f32,
+        roughness: (moss_roughness * (1.0 - litter) + 0.90 * litter).clamp(0.26, 0.98) as f32,
         // Optical pigments/wetness do not amplify the scan's physical slope.
         height_m: ground.height_m,
     }

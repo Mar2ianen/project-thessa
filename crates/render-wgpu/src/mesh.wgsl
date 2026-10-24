@@ -91,8 +91,12 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;
     let diffuse_ambient=albedo*amb_up/OCEAN_PI;
     let diffuse_total=diffuse_ambient+diffuse_direct;
+    let dist=length(in.position);
+    let view_dir=in.position/max(dist,0.001);
+    let horizon_radiance=select(light.ambient.rgb/OCEAN_PI,env_base_radiance(view_dir,light.ambient.rgb),env_enabled());
+    let haze=1.0-exp(-dist*0.0012);
     if (material.quality==0u && material.reflections==0u) {
-        let low_rad = diffuse_total*(1.0-material.factors.x);
+        let low_rad = mix(diffuse_total*(1.0-material.factors.x),horizon_radiance,haze);
         return vec4(low_rad*view.exposure,1.0);
     }
     let eye=ocean_safe_normalize(-in.position,normal);
@@ -110,5 +114,6 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
             }
         }
     }
+    radiance=mix(radiance,horizon_radiance,haze);
     return vec4(radiance*view.exposure,1.0);
 }

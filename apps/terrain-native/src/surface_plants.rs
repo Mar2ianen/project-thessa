@@ -632,10 +632,10 @@ fn convert_with_detail(
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
-                        [0.65, 0.48, 0.65, 1.0]
+                        [0.72, 0.82, 0.68, 1.0]
                     }
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
-                        [0.85, 0.68, 0.85, 1.0]
+                        [0.82, 0.88, 0.78, 1.0]
                     }
                     _ => [0.75, 0.75, 0.75, 1.0],
                 }
@@ -645,7 +645,7 @@ fn convert_with_detail(
             } else if stem {
                 0.0
             } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
-                0.32
+                0.34
             } else {
                 0.45
             };
@@ -987,7 +987,7 @@ mod tests {
                 } else if stem {
                     0.0
                 } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
-                    0.32
+                    0.34
                 } else {
                     0.45
                 };

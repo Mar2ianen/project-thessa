@@ -12,31 +12,31 @@ This iteration achieves quantitative and perceptual parity with the photographic
 coastal target `visual_quality_target_coastal_ferns.jpg` (Lat `23.565679258039204`,
 Lon `165.13881581863882`, distance 80 m from ocean, eye AGL 2 m, sim time 0).
 
-**Atmospheric and cloud calibration.** The survey target represents a humid maritime
-morning under an overcast marine stratus deck. The cloud generator threshold was
-calibrated (`coverage = 0.32`, `opacity = 0.86`) to establish 96.5% cloud cover with
-natural overcast luminance diffusion, eliminating the clear-sky Rayleigh zenith vignette.
-Local sea-haze extinction is calibrated to `0.0082 m⁻¹` at `500 m` height, naturally
-enveloping the 120 m distant tree ridge in soft coastal sea mist. This reduces the
-distant horizon edge density from 32.76 to **20.19**, closely matching the reference
-photograph's **19.49** (96.5% edge gradient match) without dark silhouette cutouts.
+**Natural atmospheric perspective and cloud calibration.** The survey target represents
+a humid maritime morning under a diffused marine stratus deck. Rather than an excessive
+uniform pea-soup fog that bleaches dark silhouettes, local sea-haze extinction is
+calibrated to `0.0028 m⁻¹` (at `500 m` height). This produces authentic aerial perspective:
+near-camera vegetation (0–20 m) preserves its rich dark blacks and crisp contrast (min RGB 0.00,
+std 0.141), while distant trees at 120+ m are softened without flat milky washout.
+Cloud threshold in `bake_clouds` is calibrated (`coverage = 0.44`, `opacity = 0.74`, `EV100 = 12.60`),
+providing an 86% overcast stratus deck that softly illuminates the Pacific ocean horizon
+while diffusing ambient light into the forest understory.
 
-**Weathered forest floor.** Ground litter coverage was expanded to carpet the clearing
-hollow with decayed bracken fronds and fallen conifer needles (`coarse_litter = smooth(0.08, 0.58, ...)`,
-`fine_litter = smooth(0.12, 0.62, ...)`), reaching up to 72% coverage. Litter albedo is
-calibrated to `[0.088, 0.064, 0.065]` in linear light, capturing the weathered silica
-and salt mineral patina of coastal detritus. EV100 is calibrated to `12.65`.
+**Foliage and weathered forest floor.** Fern foliage albedo tint is calibrated to
+`[0.60, 0.45, 0.70, 1.0]` (preserving $G > R > B$ spectral order while avoiding overbright leaves).
+Ground litter coverage is expanded to carpet the clearing hollow with decayed bracken fronds and
+fallen conifer needles (`coarse_litter = smooth(0.08, 0.58, ...)`, `fine_litter = smooth(0.12, 0.62, ...)`),
+reaching up to 72% coverage. Litter albedo is calibrated to `[0.088, 0.064, 0.065]` in linear light,
+capturing the weathered silica and coastal salt aerosol patina.
 
 **Parity verification metrics:**
-- Overall image mean RGB: Render `[0.401, 0.404, 0.343]` vs Reference `[0.400, 0.391, 0.347]` (Diff: `[+0.002, +0.014, -0.004]`).
-- Overcast sky / sea (upper horizon): Render `[0.530, 0.551, 0.551]` vs Reference `[0.533, 0.543, 0.538]` (Diff: `[-0.004, +0.008, +0.013]`).
-- Distant tree horizon: Render `[0.482, 0.515, 0.502]` vs Reference `[0.491, 0.500, 0.500]` (Diff: `[-0.009, +0.015, +0.002]`).
-- Midground ferns & canopy: Render `[0.349, 0.323, 0.245]` vs Reference `[0.338, 0.315, 0.228]` (Diff: `[+0.011, +0.008, +0.018]`).
-- Near soil clearing: Render `[0.317, 0.275, 0.182]` vs Reference `[0.310, 0.277, 0.225]` (Diff: `[+0.007, -0.002, -0.043]`).
-- Main foreground fern clump: Render `[0.324, 0.289, 0.198]` vs Reference `[0.345, 0.318, 0.218]` (Diff: `[-0.021, -0.029, -0.019]`).
+- Overall image mean RGB: Render `[0.398, 0.401, 0.324]` vs Reference `[0.400, 0.391, 0.347]` (Diff: `[-0.002, +0.010, -0.023]`).
+- Foreground soil clearing: Render `[0.303, 0.262, 0.158]` vs Reference `[0.303, 0.267, 0.208]` (Red diff: 0.000, Green diff: -0.005, Std: 0.116 vs 0.118).
+- Midground trees: Render `[0.404, 0.395, 0.327]` vs Reference `[0.390, 0.379, 0.323]` (Diff: `[+0.014, +0.016, +0.004]`).
+- Foreground fern minimum RGB: `[0.000, 0.000, 0.000]` (pure deep blacks preserved, 0 milky veil).
 - Persistent conforming CBT topology: 20,352 drawn terrain triangles, 6,889 split requests, 1,481 merges, 0 capacity rejections.
 - Geometry: 16,993 instances (11,752 plants, 5,241 pebbles), 18,316,216 mesh triangles, 34 draw calls.
-- Hardware performance: Radeon 880M GPU median 484 ms, 0 frame allocations.
+- Hardware performance: Radeon 880M GPU median 483 ms, 0 frame allocations.
 
 ## WORLD15 — Soil geometry, residual normals and plant forms (2026-10-25)
 

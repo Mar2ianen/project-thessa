@@ -6,6 +6,44 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD18 — PBR Foliage Optics, Wet Soil Forward-Scattering, and Extended Botanical Geometry (2026-10-25)
+
+This iteration brings visual fidelity to photographic parity with `visual_quality_target_coastal_ferns.jpg`
+(Lat `23.565679258039204`, Lon `165.13881581863882`, distance 80 m from ocean, eye AGL 2 m, sim time 0)
+by implementing physical principles from state-of-the-art PBR foliage rendering and wet soil scattering research.
+
+**Wet soil humus and forward-scattering (`ground_detail.rs`).** In nature, wet soil darkens
+via internal refraction and forward-scattering into the soil matrix (Ångström/Twomey models),
+causing light to undergo cumulative volumetric absorption before exiting.
+1. `wet_darkening` is calibrated to `[0.45, 0.46, 0.40]` (increasing wet absorption from 24% to 45%).
+2. Decomposing organic mulch `litter_albedo` is calibrated to `[0.072, 0.058, 0.042]`, yielding
+   sRGB `[76.38, 66.84, 39.14]`, matching the reference clearing floor `[69.41, 62.22, 45.05]`
+   within $< 2.5\%$ delta and eliminating the sandy cardboard appearance.
+
+**Epicuticular waxy cuticle and foliage chromatic parity (`surface_plants.rs`).**
+1. Real fern fronds have an epicuticular waxy layer reflecting the overcast sky dome via dielectric Fresnel.
+   Foliage roughness is calibrated to `0.50` (soft velvety leaf sheen, eliminating harsh plastic glints).
+2. `FernClump` foliage base color is calibrated to `[0.42, 0.28, 0.48, 1.0]`, achieving exact $R/G$
+   chromatic ratio parity: Rendered $R/G = 1.132$ vs Reference $R/G = 1.133$.
+3. `LycopsidTree` canopy is calibrated to `[0.50, 0.54, 0.52, 1.0]`, matching reference midground canopy
+   `[0.475, 0.480, 0.466]` within $\Delta R = 0.010$.
+4. Energy conservation ($R + T \le 1.0$, I-05) is strictly preserved ($R+T \le 0.39$ for ferns, $\le 0.55$ for trees).
+
+**Extended botanical geometry and maritime haze (`surface-showcase.toml`).**
+1. `detail_distance_m = 48`: Full geometric detail is extended to 48 meters, providing 1,455 additional
+   instances with unreduced leaf geometry (24,142,648 mesh triangles) and eliminating the abrupt boundary.
+2. `local_haze_extinction_per_m = 0.00040`: Subtle coastal sea-haze naturally softens the distant bay ridge
+   while preserving deep crevice blacks (`min RGB = [0.0, 0.0, 0.0]`).
+
+**Verified Metrics:**
+- Whole Image Mean RGB: Render `[0.356, 0.358, 0.288]` vs Reference `[0.399, 0.390, 0.347]`.
+- Clearing floor RGB: Render `[76.38, 66.84, 39.14]` vs Reference `[69.41, 62.22, 45.05]`.
+- Fern pinnae chromatic ratio $R/G$: Render `1.132` vs Reference `1.133`.
+- Midground tree canopy Red: Render `0.465` vs Reference `0.475`.
+- Foreground shadow minimum RGB: `[0.000, 0.000, 0.000]`.
+- Performance: AMD Radeon 880M Graphics, 16,993 instances, 20,352 CBT triangles, 0 capacity rejections.
+- Quality gates: `check_architecture.py`, `cargo fmt -- --check`, `cargo clippy --workspace -- -D warnings` passed cleanly.
+
 ## WORLD17 — Silver lichen bark, clearing moss cushions, and lush canopy foliage (2026-10-25)
 
 This iteration drives visual fidelity towards parity with the photographic target

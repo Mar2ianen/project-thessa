@@ -35,7 +35,7 @@ enabled = true
 quality = "high"
 aerial_perspective = true
 # Authored local sea-haze optical prior, shared by ground/water/meshes.
-local_haze_extinction_per_m = 0.00035
+local_haze_extinction_per_m = 0.00040
 local_haze_height_m = 500.0
 density_scale = 1.05
 multiple_scattering = true
@@ -131,7 +131,7 @@ show_rt_proxies = false
 enabled = true
 quality = "high"
 understory = true
-detail_distance_m = 36
+detail_distance_m = 48
 
 [temporal]
 taa = false

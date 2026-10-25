@@ -1713,6 +1713,7 @@ fn crown_frond(
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
         let length = reach_m * 0.23 * blade_profile;
         for side in [-1.0, 1.0] {
+            let sweep = 0.26 + 0.26 * t;
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = i as f64 * 0.5;
                 let v_fold = 0.05 * length * (1.0 - s) * s;
@@ -1723,7 +1724,7 @@ fn crown_frond(
                     offset(
                         scaled(lateral, side * length * s),
                         offset(
-                            scaled(radial, length * s * 0.35),
+                            scaled(radial, length * s * sweep),
                             [0.0, v_fold - sag + torsion, 0.0],
                         ),
                     ),

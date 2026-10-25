@@ -1845,11 +1845,16 @@ fn pinna(
         }
         let t = uv[i][0] as f64;
         let side = 1.0 - 2.0 * uv[i][1] as f64;
+        let ripple = if half_width > 0.06 {
+            0.035 * half_width * (t * 4.0 * std::f64::consts::PI).sin()
+        } else {
+            0.0
+        };
         offset(
             at(t),
             scaled(
                 lateral,
-                side * half_width * (std::f64::consts::PI * t).sin(),
+                side * (half_width * (std::f64::consts::PI * t).sin() + ripple),
             ),
         )
     });

@@ -736,6 +736,7 @@ fn fine_relief_geometry_owns_normals_without_double_bump() {
     for relief_level in [17, 22] {
         let settings = thessa_graphics::ResolvedGraphicsSettings {
             terrain_ground_detail: true,
+            surface_quality: thessa_graphics::Quality::High,
             terrain_ground_relief_max_level: relief_level,
             terrain_normal_maps: true,
             specular_reflections: false,
@@ -768,7 +769,7 @@ fn fine_relief_geometry_owns_normals_without_double_bump() {
             )
             .unwrap();
         let center = DVec3::from(anchor.anchor_body_m);
-        let eye = center + DVec3::from(anchor.normal) * 2.0;
+        let eye = center + DVec3::from(anchor.normal) * 0.3;
         renderer
             .update_view(
                 &backend,
@@ -811,6 +812,38 @@ fn fine_relief_geometry_owns_normals_without_double_bump() {
             assert_eq!(
                 frames[0], frames[1],
                 "geometric relief must not receive its full bump slope twice"
+            );
+            // A matching fine page carries only the unresolved slope in BA.
+            // The full RG slope is zero here, so an observed Lambert response
+            // independently proves that the real atlas/directory selects BA.
+            let id = thessa_rcbt_core::conforming_surface::page_id(anchor.tile).unwrap();
+            source.set_priority(vec![id]);
+            let mut residual_frames = Vec::new();
+            for residual in [0, 102] {
+                source.set_page(
+                    id,
+                    CbtMaterialPage::from_rgba8_with_normals(
+                        [255, 0, 0, 255].repeat(128 * 128),
+                        Some([0, 0].repeat(128 * 128)),
+                    )
+                    .unwrap()
+                    .with_relief_residuals([residual, 0].repeat(128 * 128))
+                    .unwrap(),
+                );
+                renderer
+                    .update_materials(&backend, source.priority(), source.source_pages())
+                    .unwrap();
+                assert_eq!(renderer.material_relief_resident_pages(), 1);
+                residual_frames.push(render(&renderer));
+            }
+            let mid = (32 * 65 + 32) * 4;
+            let linear = (0.05 + 1.5 * (102.0 / 127.0)) / std::f64::consts::PI;
+            let reference = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+            assert!(residual_frames[1][mid] > residual_frames[0][mid] + 20);
+            assert!(
+                residual_frames[1][mid].abs_diff(reference) <= 3,
+                "residual Lambert oracle: actual={} reference={reference}",
+                residual_frames[1][mid]
             );
         } else {
             let mid = (32 * 65 + 32) * 4;

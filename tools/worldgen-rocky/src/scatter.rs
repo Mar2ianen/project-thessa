@@ -473,7 +473,7 @@ pub fn scatter_region(
             }
             let scale = if population == ScatterPopulation::GroundPebbles {
                 // Unit-diameter visual pebble: many small grains, rare cobbles.
-                0.04 + random(404).powi(3) * 0.26
+                0.04 + random(404).powi(4) * 0.42
             } else if population == ScatterPopulation::Understory {
                 policy.understory_min_scale
                     + random(404) * (policy.understory_max_scale - policy.understory_min_scale)

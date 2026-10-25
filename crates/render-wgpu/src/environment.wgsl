@@ -26,6 +26,7 @@ struct EnvMeta {
     local_haze: vec4<f32>,
     // Camera radial up; w selects directional (1) or isotropic (0) source.
     haze_up: vec4<f32>,
+    diffuse: array<vec4<f32>,9>,
 }
 
 @group(0) @binding(3) var<uniform> env_meta: EnvMeta;
@@ -224,4 +225,15 @@ fn env_local_haze(position:vec3<f32>,radiance:vec3<f32>,ambient:vec3<f32>)->vec3
     // shortcut: equilibrium sky-source approximation, replace with finite
     // single-scattering transport when weather/light-shaft accuracy is needed.
     return radiance*transmittance+source*(1.0-transmittance);
+}
+
+fn env_diffuse_irradiance(normal:vec3<f32>,fallback:vec3<f32>)->vec3<f32> {
+    if(!env_enabled()){return fallback;}
+    let n=ocean_safe_normalize(normal,vec3(0.0,1.0,0.0));
+    let basis=array<f32,9>(0.2820947918,0.4886025119*n.y,0.4886025119*n.z,0.4886025119*n.x,
+        1.092548431*n.x*n.y,1.092548431*n.y*n.z,0.3153915653*(3.0*n.z*n.z-1.0),
+        1.092548431*n.x*n.z,0.5462742153*(n.x*n.x-n.y*n.y));
+    var irradiance=vec3(0.0);
+    for(var i=0u;i<9u;i++){irradiance+=env_meta.diffuse[i].rgb*basis[i];}
+    return max(irradiance,vec3(0.0));
 }

@@ -8,10 +8,12 @@ Project Thessa is a mixed-license repository.
 
 ### MIT — reusable engine/tooling
 
-The optional worldgen ground-detail swatch is CC0-1.0 content, not MIT source
-code. Its source, authors and conversion are recorded in
-`assets/textures/forest-ground-04.LICENSE.txt`. The importer is MIT; its
-Pillow/NumPy requirements are offline-only and add no runtime dependencies.
+The optional worldgen ground-detail swatches are CC0-1.0 content, not MIT source
+code. Sources, authors and conversions are recorded in
+`assets/textures/forest-ground-04.LICENSE.txt` and
+`assets/textures/mud-litter-01.LICENSE.txt`, with adjacent provenance hashes.
+The importers are MIT; their Pillow/NumPy requirements are offline-only and add
+no runtime dependencies.
 
 Intended for:
 

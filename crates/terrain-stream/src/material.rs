@@ -41,6 +41,7 @@ pub struct MaterialStream {
     cache_budget: usize,
     normal_maps: bool,
     ground_detail: bool,
+    ground_relief: bool,
     max_level: u8,
     reference_height_m: f64,
 }
@@ -66,10 +67,27 @@ impl MaterialStream {
     /// it, so old pages cannot masquerade as the new optical representation.
     pub fn with_detail(
         cache_budget: usize,
+        source: MaterialPageStore,
+        normal_maps: bool,
+        ground_detail: bool,
+        max_level: u8,
+    ) -> Self {
+        Self::with_relief(
+            cache_budget,
+            source,
+            normal_maps,
+            ground_detail,
+            max_level,
+            false,
+        )
+    }
+    pub fn with_relief(
+        cache_budget: usize,
         mut source: MaterialPageStore,
         normal_maps: bool,
         ground_detail: bool,
         max_level: u8,
+        ground_relief: bool,
     ) -> Self {
         source.trim_to_budget(cache_budget);
         Self {
@@ -80,6 +98,7 @@ impl MaterialStream {
             cache_budget,
             normal_maps,
             ground_detail,
+            ground_relief,
             max_level: if ground_detail {
                 max_level.clamp(17, 22)
             } else {
@@ -156,8 +175,15 @@ impl MaterialStream {
         }
         let normal_maps = self.normal_maps;
         let ground_detail = self.ground_detail;
+        let ground_relief = self.ground_relief;
         self.reconcile_with(demand, geometry_sources, |key| {
-            crate::spawn_material_job_with_detail(field.clone(), key, normal_maps, ground_detail)
+            crate::spawn_material_job_with_relief(
+                field.clone(),
+                key,
+                normal_maps,
+                ground_detail,
+                ground_relief,
+            )
         });
     }
 

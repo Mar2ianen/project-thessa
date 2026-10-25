@@ -134,12 +134,13 @@ impl TerrainStream {
             heights,
             materials: {
                 materials.set_priority((8..14).collect());
-                MaterialStream::with_detail(
+                MaterialStream::with_relief(
                     policy.material_cache,
                     materials,
                     policy.normal_maps,
                     policy.ground_detail,
                     policy.material_max_level,
+                    policy.persistent_topology && policy.ground_relief_max_level > 17,
                 )
             },
             epoch: 0,

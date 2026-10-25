@@ -15,7 +15,7 @@ pub use thessa_rcbt_core::material_page::MaterialPages;
 #[derive(Debug, Clone)]
 pub struct MaterialBinding {
     pub texture: wgpu::TextureView,
-    /// Optional RG8_SNORM tangent-space normal plane. Pages without a normal
+    /// RG8_SNORM full normals, or RGBA8_SNORM with relief residual in BA. Pages without a normal
     /// layer are absent from `normal_directory` and resolve to a flat normal.
     pub normal_texture: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
@@ -46,6 +46,7 @@ pub(crate) struct MaterialArray {
     texture: wgpu::Texture,
     normal_texture: wgpu::Texture,
     normal_maps: bool,
+    relief: bool,
     cache: SlotCache,
     directory_data: Vec<[u32; 4]>,
     normal_directory_data: Vec<[u32; 4]>,
@@ -53,6 +54,12 @@ pub(crate) struct MaterialArray {
 }
 
 impl MaterialArray {
+    pub fn relief_resident_pages(&self) -> usize {
+        self.normal_directory_data
+            .iter()
+            .filter(|e| e[3] & 0x80000000 != 0)
+            .count()
+    }
     pub fn binding(&self) -> MaterialBinding {
         MaterialBinding {
             texture: self.view.clone(),
@@ -68,7 +75,9 @@ impl MaterialArray {
         geometry_count: usize,
         normal_maps: bool,
         anisotropy: u16,
+        relief: bool,
     ) -> Result<Self, BackendError> {
+        let relief = relief && normal_maps;
         let limits = backend.device.limits();
         if !(1..=16).contains(&anisotropy)
             || (anisotropy > 1 && backend.caps.terrain_anisotropy_supported != Some(true))
@@ -119,7 +128,11 @@ impl MaterialArray {
             mip_level_count: if normal_maps { 8 } else { 1 },
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg8Snorm,
+            format: if relief {
+                wgpu::TextureFormat::Rgba8Snorm
+            } else {
+                wgpu::TextureFormat::Rg8Snorm
+            },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -166,6 +179,7 @@ impl MaterialArray {
             texture,
             normal_texture,
             normal_maps,
+            relief,
             cache,
             directory_data,
             normal_directory_data,
@@ -234,6 +248,20 @@ impl MaterialArray {
             {
                 for (level, data) in normal.iter().enumerate() {
                     let size = MATERIAL_PAGE_SIZE >> level;
+                    let packed: std::borrow::Cow<'_, [u8]> = if self.relief {
+                        let residual = page.relief_residual_mips().map(|m| m[level].as_slice());
+                        let mut packed = Vec::with_capacity(data.len() * 2);
+                        for (i, xy) in data.as_chunks::<2>().0.iter().enumerate() {
+                            packed.extend_from_slice(xy);
+                            packed.extend_from_slice(
+                                residual.map_or(&[0, 0][..], |r| &r[i * 2..i * 2 + 2]),
+                            );
+                        }
+                        packed.into()
+                    } else {
+                        data.as_slice().into()
+                    };
+
                     backend.queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: &self.normal_texture,
@@ -245,10 +273,10 @@ impl MaterialArray {
                             },
                             aspect: wgpu::TextureAspect::All,
                         },
-                        data,
+                        &packed,
                         wgpu::TexelCopyBufferLayout {
                             offset: 0,
-                            bytes_per_row: Some(size * 2),
+                            bytes_per_row: Some(size * if self.relief { 4 } else { 2 }),
                             rows_per_image: Some(size),
                         },
                         wgpu::Extent3d {
@@ -257,7 +285,7 @@ impl MaterialArray {
                             depth_or_array_layers: 1,
                         },
                     );
-                    stats.bytes += data.len();
+                    stats.bytes += packed.len();
                 }
                 stats.normal_pages += 1;
             }
@@ -293,7 +321,18 @@ impl MaterialArray {
                         .is_some_and(|(_, page)| page.normal_mips().is_some())
                 })
                 .collect();
-            material_directory_with_capacity(normal_entries, self.cache.capacity()).unwrap()
+            let mut directory =
+                material_directory_with_capacity(normal_entries, self.cache.capacity()).unwrap();
+            for entry in &mut directory {
+                let id = u64::from(entry[0]) | (u64::from(entry[1]) << 32);
+                entry[3] |= u32::from(
+                    self.relief
+                        && pages
+                            .get(&id)
+                            .is_some_and(|(_, p)| p.relief_residual_mips().is_some()),
+                ) << 31;
+            }
+            directory
         } else {
             vec![[0; 4]]
         };
@@ -378,7 +417,7 @@ mod tests {
             }
             Err(e) => panic!("{e}"),
         };
-        let mut array = MaterialArray::new(&backend, 16, 1, false, 1).unwrap();
+        let mut array = MaterialArray::new(&backend, 16, 1, false, 1, false).unwrap();
         assert_eq!(
             array.normal_texture.size(),
             wgpu::Extent3d {
@@ -407,7 +446,22 @@ mod tests {
                 .iter()
                 .all(|entry| *entry == [0; 4])
         );
-        let mut enabled = MaterialArray::new(&backend, 16, 1, true, 1).unwrap();
+        let mut enabled = MaterialArray::new(&backend, 16, 1, true, 1, false).unwrap();
+        assert_eq!(
+            enabled.normal_texture.format(),
+            wgpu::TextureFormat::Rg8Snorm
+        );
+        let relief = MaterialArray::new(&backend, 16, 1, true, 1, true).unwrap();
+        assert_eq!(
+            relief.normal_texture.format(),
+            wgpu::TextureFormat::Rgba8Snorm
+        );
+        let disabled = MaterialArray::new(&backend, 16, 1, false, 1, true).unwrap();
+        assert_eq!(disabled.normal_texture.size().width, 1);
+        assert_eq!(
+            disabled.normal_texture.format(),
+            wgpu::TextureFormat::Rg8Snorm
+        );
         assert!(enabled.prepare(&backend, &[12], &[12], &pages).is_err());
     }
 
@@ -421,9 +475,9 @@ mod tests {
             }
             Err(e) => panic!("{e}"),
         };
-        assert!(MaterialArray::new(&backend, 0, 2, true, 1).is_err());
+        assert!(MaterialArray::new(&backend, 0, 2, true, 1, false).is_err());
         for invalid in [0, 17] {
-            assert!(MaterialArray::new(&backend, 2, 2, false, invalid).is_err());
+            assert!(MaterialArray::new(&backend, 2, 2, false, invalid, false).is_err());
         }
         assert!(
             MaterialArray::new(
@@ -431,11 +485,12 @@ mod tests {
                 backend.device.limits().max_texture_array_layers + 1,
                 2,
                 true,
-                1
+                1,
+                false
             )
             .is_err()
         );
-        let mut array = MaterialArray::new(&backend, 2, 2, true, 1).unwrap();
+        let mut array = MaterialArray::new(&backend, 2, 2, true, 1, false).unwrap();
         let page = CbtMaterialPage::from_rgba8(vec![128; 128 * 128 * 4]).unwrap();
         let mut pages = MaterialPages::from([
             (12, (1, page.clone())),

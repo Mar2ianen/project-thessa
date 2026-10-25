@@ -5,6 +5,18 @@ Scope: sky, background stars, clouds and aurora. The Bevy client remains runnabl
 its implementation is evidence of existing mechanisms, not a visual oracle.
 
 
+## WORLD15 diffuse-consumer continuation (2026-10-25)
+
+The existing backend-neutral sky/emission radiance field now publishes SH9
+Lambert coefficients for Medium/High surface consumers (doc 77); Low retains
+isotropic ambient and unavailable fields retain the explicit legacy fallback.
+The existing metadata uniform grows to 208 bytes. No new pass, binding or sky
+source is added. Primary terrain, thin mesh reflection/transmission diffuse and
+secondary mesh diffuse hits consume the same coefficients. Uniform/rotated
+half-sky integrals and production WGSL are checked independently. This improves
+normal-dependent light but does not integrate cloud multiple scattering into
+the diffuse field or complete canopy GI/full finite-segment atmospheric transport.
+
 ## WORLD14 local-weather continuation (2026-10-25)
 
 Doc 77 records a configurable homogeneous spherical local-haze layer shared by

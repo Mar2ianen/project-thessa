@@ -1,5 +1,5 @@
-//! Optional, body-fixed optical soil/gravel swatch. No terrain or collision state.
-//! Source and authored scales: assets/textures/forest-ground-04.LICENSE.txt.
+//! Optional body-fixed optical soil scans; no authoritative collision state.
+//! Source scales/licenses: assets/textures/{forest-ground-04,mud-litter-01}.LICENSE.txt.
 use std::{io::Read, sync::OnceLock};
 
 pub const SWATCH_WIDTH_M: f64 = 3.15;
@@ -22,6 +22,14 @@ struct Mip {
 
 struct Texture(Vec<Mip>);
 static TEXTURE: OnceLock<Texture> = OnceLock::new();
+static LITTER: OnceLock<Texture> = OnceLock::new();
+const LITTER_WIDTH_M: f64 = 1.3;
+const LITTER_HEIGHT_RANGE_M: f32 = 0.025;
+const LITTER_MEAN: GroundSample = GroundSample {
+    albedo_linear: [0.13887769, 0.10027028, 0.03611909],
+    roughness: 0.9196433,
+    height_m: -0.0054620567,
+};
 
 pub(crate) fn decode_srgb(v: f64) -> f64 {
     if v <= 0.04045 {
@@ -41,7 +49,7 @@ pub(crate) fn encode_srgb(v: f64) -> f64 {
 
 /// Last mip after intrinsic forest-substrate processing. Coarse pages use the
 /// same material mean, not legacy canopy colour. Pinned against the asset below.
-pub(crate) fn mean_sample() -> GroundSample {
+fn swatch_mean() -> GroundSample {
     GroundSample {
         albedo_linear: [0.089_765_41, 0.062_935_11, 0.039_580_63],
         roughness: 0.807_225_05,
@@ -49,15 +57,39 @@ pub(crate) fn mean_sample() -> GroundSample {
     }
 }
 
+pub(crate) fn mean_sample() -> GroundSample {
+    let a = swatch_mean();
+    let w = 0.475_f32;
+    GroundSample {
+        albedo_linear: std::array::from_fn(|i| {
+            a.albedo_linear[i] * (1.0 - w) + LITTER_MEAN.albedo_linear[i] * w
+        }),
+        roughness: a.roughness * (1.0 - w) + LITTER_MEAN.roughness * w,
+        height_m: a.height_m,
+    }
+}
+
 impl Texture {
     fn decode() -> Self {
-        let mut raw = Vec::new();
-        flate2::read::GzDecoder::new(
-            &include_bytes!("../../../assets/textures/forest-ground-04.bin.gz")[..],
+        Self::decode_source(
+            include_bytes!("../../../assets/textures/forest-ground-04.bin.gz"),
+            HEIGHT_RANGE_M,
+            true,
         )
-        .take(RAW_BYTES as u64 + 1)
-        .read_to_end(&mut raw)
-        .expect("embedded ground material gzip");
+    }
+    fn decode_litter() -> Self {
+        Self::decode_source(
+            include_bytes!("../../../assets/textures/mud-litter-01.bin.gz"),
+            LITTER_HEIGHT_RANGE_M,
+            false,
+        )
+    }
+    fn decode_source(bytes: &[u8], height_range_m: f32, transfer: bool) -> Self {
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(bytes)
+            .take(RAW_BYTES as u64 + 1)
+            .read_to_end(&mut raw)
+            .expect("embedded ground material gzip");
         assert_eq!(raw.len(), RAW_BYTES, "bounded embedded material payload");
         assert_eq!(&raw[..8], &[b'F', b'G', b'0', b'1', 0, 2, 0, 0]);
         let pixels = raw[8..]
@@ -66,13 +98,18 @@ impl Texture {
             .iter()
             .map(|p| {
                 let rgb = std::array::from_fn(|i| decode_srgb(f64::from(p[i]) / 255.0) as f32);
-                let (rgb, roughness) = forest_substrate(rgb, f32::from(p[3]) / 255.0);
+                let roughness = f32::from(p[3]) / 255.0;
+                let (rgb, roughness) = if transfer {
+                    forest_substrate(rgb, roughness)
+                } else {
+                    (rgb, roughness)
+                };
                 [
                     rgb[0],
                     rgb[1],
                     rgb[2],
                     roughness,
-                    (f32::from(u16::from_le_bytes([p[4], p[5]])) / 65535.0 - 0.5) * HEIGHT_RANGE_M,
+                    (f32::from(u16::from_le_bytes([p[4], p[5]])) / 65535.0 - 0.5) * height_range_m,
                 ]
             })
             .collect();
@@ -104,11 +141,22 @@ impl Texture {
         let b = self.0[lod.ceil() as usize].sample(uv);
         std::array::from_fn(|c| a[c] + (b[c] - a[c]) * lod.fract() as f32)
     }
+    #[cfg(test)]
     fn sample_stochastic(&self, uv: [f64; 2], lod: f64, seed: u64, projection: u32) -> [f32; 5] {
+        self.sample_stochastic_width(uv, lod, seed, projection, SWATCH_WIDTH_M)
+    }
+    fn sample_stochastic_width(
+        &self,
+        uv: [f64; 2],
+        lod: f64,
+        seed: u64,
+        projection: u32,
+        width_m: f64,
+    ) -> [f32; 5] {
         let cell = uv.map(|v| v.floor() as i64);
         // A 30 cm transition keeps most of each patch unblurred. Adjacent
         // cells share corner sources, so colour and physical height agree.
-        let half_blend = 0.15 / SWATCH_WIDTH_M;
+        let half_blend = 0.15 / width_m;
         let t = uv
             .map(|v| crate::appearance::smooth(0.5 - half_blend, 0.5 + half_blend, v - v.floor()));
         let mut result = [0.0; 5];
@@ -162,30 +210,75 @@ impl Mip {
 /// Triplanar body-space projection avoids cube-face/latitude seams. Texture
 /// phase is seed-owned, never page-, worker-, camera- or geometry-LOD-owned.
 pub(crate) fn sample(dir: [f64; 3], radius_m: f64, seed: u64, texel_m: f64) -> GroundSample {
-    if texel_m * 2.0 >= SWATCH_WIDTH_M {
-        return mean_sample();
+    let q = dir.map(|v| v * radius_m / 8.0);
+    let field = crate::rng::perlin3(seed, 6200, q[0], q[1], q[2]);
+    let w = (0.1
+        + 0.75
+            * crate::appearance::smooth(-0.25, 0.30, field)
+            * crate::appearance::band_weight(8.0, texel_m)
+        + 0.375 * (1.0 - crate::appearance::band_weight(8.0, texel_m))) as f32;
+    let a = if texel_m * 2.0 >= SWATCH_WIDTH_M {
+        swatch_mean()
+    } else {
+        sample_texture(
+            TEXTURE.get_or_init(Texture::decode),
+            dir,
+            radius_m,
+            seed,
+            texel_m,
+            SWATCH_WIDTH_M,
+        )
+    };
+    let b = if texel_m * 2.0 >= LITTER_WIDTH_M {
+        LITTER_MEAN
+    } else {
+        sample_texture(
+            LITTER.get_or_init(Texture::decode_litter),
+            dir,
+            radius_m,
+            seed ^ 0x6c6974746572,
+            texel_m,
+            LITTER_WIDTH_M,
+        )
+    };
+    let mean = swatch_mean().height_m;
+    GroundSample {
+        albedo_linear: std::array::from_fn(|i| {
+            a.albedo_linear[i] * (1.0 - w) + b.albedo_linear[i] * w
+        }),
+        roughness: a.roughness * (1.0 - w) + b.roughness * w,
+        // Center both physical sources independently: changing litter coverage
+        // must not invent a bump from unrelated displacement-map zero points.
+        height_m: mean + (a.height_m - mean) * (1.0 - w) + (b.height_m - LITTER_MEAN.height_m) * w,
     }
-    let texture = TEXTURE.get_or_init(Texture::decode);
+}
+fn sample_texture(
+    texture: &Texture,
+    dir: [f64; 3],
+    radius_m: f64,
+    seed: u64,
+    texel_m: f64,
+    width_m: f64,
+) -> GroundSample {
     let p: [f64; 3] = std::array::from_fn(|i| {
-        dir[i] * radius_m / SWATCH_WIDTH_M + crate::rng::hash01(seed, 1741 + i as u32, 0, 0)
+        dir[i] * radius_m / width_m + crate::rng::hash01(seed, 1741 + i as u32, 0, 0)
     });
     let weights = dir.map(|v| v.abs().powi(8));
     let sum: f64 = weights.iter().sum();
-    // Filter source wavelengths shorter than two destination texels.
-    let lod = (2.0 * texel_m * SIDE as f64 / SWATCH_WIDTH_M)
-        .max(1.0)
-        .log2();
+    let lod = (2.0 * texel_m * SIDE as f64 / width_m).max(1.0).log2();
     let projections = [[p[2], p[1]], [p[0], p[2]], [p[0], p[1]]];
     let mut value = [0.0; 5];
     for (projection, (uv, weight)) in projections.into_iter().zip(weights).enumerate() {
         if weight / sum < 1e-8 {
             continue;
         }
-        for (out, sample) in
-            value
-                .iter_mut()
-                .zip(texture.sample_stochastic(uv, lod, seed, projection as u32))
-        {
+        for (out, sample) in value.iter_mut().zip(texture.sample_stochastic_width(
+            uv,
+            lod,
+            seed,
+            projection as u32,
+            width_m,
+        )) {
             *out += sample * (weight / sum) as f32;
         }
     }
@@ -274,6 +367,45 @@ pub(crate) fn forest_floor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_mud_litter_preserves_means_and_world_patch_continuity() {
+        let tex = Texture::decode_litter();
+        let last = tex.0.last().unwrap().pixels[0];
+        let expected = [
+            LITTER_MEAN.albedo_linear[0],
+            LITTER_MEAN.albedo_linear[1],
+            LITTER_MEAN.albedo_linear[2],
+            LITTER_MEAN.roughness,
+            LITTER_MEAN.height_m,
+        ];
+        for (a, b) in last.into_iter().zip(expected) {
+            assert!((a - b).abs() < 2e-7);
+        }
+        let r = 3_200_000.0;
+        let mut min = 1.0_f32;
+        let mut max = 0.0_f32;
+        for x in 0..160 {
+            let dir = crate::lod::normalize([1.0, x as f64 * 0.5 / r, 0.137 / r]);
+            let a = sample(dir, r, 42, 0.01);
+            let b = sample(
+                crate::lod::normalize([1.0, (x as f64 * 0.5 + 1e-6) / r, 0.137 / r]),
+                r,
+                42,
+                0.01,
+            );
+            for (a, b) in a.albedo_linear.into_iter().zip(b.albedo_linear) {
+                assert!((a - b).abs() < 0.0001);
+            }
+            assert!((a.height_m - b.height_m).abs() < 0.00001);
+            min = min.min(a.albedo_linear[1]);
+            max = max.max(a.albedo_linear[1]);
+        }
+        assert!(
+            max - min > 0.03,
+            "ground must contain distinct correlated material variation"
+        );
+    }
 
     #[test]
     fn stochastic_patches_are_continuous_without_swatch_repetition() {
@@ -408,7 +540,7 @@ mod tests {
                 assert!((a - b).abs() < 1e-4);
             }
         }
-        let mean = mean_sample();
+        let mean = swatch_mean();
         let expected = [
             mean.albedo_linear[0],
             mean.albedo_linear[1],
@@ -423,8 +555,8 @@ mod tests {
             assert!((a - b).abs() < 2e-7);
         }
         assert_eq!(
-            sample([1.0, 0.0, 0.0], 3_200_000.0, 42, 3.125).albedo_linear,
-            mean.albedo_linear
+            sample([1.0, 0.0, 0.0], 3_200_000.0, 42, 16.0).albedo_linear,
+            mean_sample().albedo_linear
         );
     }
 

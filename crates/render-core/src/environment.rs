@@ -37,6 +37,7 @@ pub struct EnvironmentRadiance {
     height: u32,
     texels: Vec<[f32; 3]>,
     ambient_lux: [f32; 3],
+    diffuse_coefficients: [[f32; 3]; 9],
 }
 
 impl EnvironmentRadiance {
@@ -63,12 +64,35 @@ impl EnvironmentRadiance {
             return None;
         }
         let ambient_lux = irradiance(width, height, &texels, up)?;
+        let diffuse_coefficients = diffuse_coefficients(width, height, &texels)?;
         Some(Self {
             width,
             height,
             texels,
             ambient_lux,
+            diffuse_coefficients,
         })
+    }
+
+    /// Three-band Lambert-convolved radiance SH in the grid's body frame.
+    /// Computed only when the source field is constructed, never per pixel.
+    pub fn diffuse_coefficients(&self) -> &[[f32; 3]; 9] {
+        &self.diffuse_coefficients
+    }
+    pub fn diffuse_irradiance(&self, normal: [f32; 3]) -> Option<[f32; 3]> {
+        let n = glam::DVec3::from_array(normal.map(f64::from)).try_normalize()?;
+        if !n.is_finite() {
+            return None;
+        }
+        let basis = diffuse_basis(n);
+        Some(std::array::from_fn(|c| {
+            self.diffuse_coefficients
+                .iter()
+                .zip(basis)
+                .map(|(v, b)| f64::from(v[c]) * b)
+                .sum::<f64>()
+                .max(0.0) as f32
+        }))
     }
 
     pub fn width(&self) -> u32 {
@@ -128,6 +152,68 @@ impl EnvironmentRadiance {
         }
         out
     }
+}
+
+// Real orthonormal SH, l<=2. Lambert convolution factors are pi, 2pi/3,
+// pi/4 (Ramamoorthi & Hanrahan, SIGGRAPH 2001). Body axes never rotate here.
+fn diffuse_basis(n: glam::DVec3) -> [f64; 9] {
+    let [x, y, z] = n.to_array();
+    [
+        0.28209479177387814,
+        0.4886025119029199 * y,
+        0.4886025119029199 * z,
+        0.4886025119029199 * x,
+        1.0925484305920792 * x * y,
+        1.0925484305920792 * y * z,
+        0.31539156525252005 * (3.0 * z * z - 1.0),
+        1.0925484305920792 * x * z,
+        0.5462742152960396 * (x * x - y * y),
+    ]
+}
+fn diffuse_coefficients(width: u32, height: u32, texels: &[[f32; 3]]) -> Option<[[f32; 3]; 9]> {
+    let mut mean = [0.0; 3];
+    let mut cells = Vec::with_capacity(texels.len());
+    for y in 0..height {
+        let lo = (f64::from(y) / f64::from(height) - 0.5) * std::f64::consts::PI;
+        let hi = (f64::from(y + 1) / f64::from(height) - 0.5) * std::f64::consts::PI;
+        let elevation = (lo + hi) * 0.5;
+        let area = std::f64::consts::TAU / f64::from(width) * (hi.sin() - lo.sin());
+        for x in 0..width {
+            let az = ((f64::from(x) + 0.5) / f64::from(width) - 0.5) * std::f64::consts::TAU;
+            let d = glam::DVec3::new(
+                elevation.cos() * az.cos(),
+                elevation.sin(),
+                elevation.cos() * az.sin(),
+            );
+            let value = texels[(y * width + x) as usize].map(f64::from);
+            for c in 0..3 {
+                mean[c] += value[c] * area / (4.0 * std::f64::consts::PI);
+            }
+            cells.push((diffuse_basis(d), area, value));
+        }
+    }
+    let mut coefficients = [[0.0_f64; 3]; 9];
+    for c in 0..3 {
+        coefficients[0][c] = mean[c] * (4.0 * std::f64::consts::PI).sqrt() * std::f64::consts::PI;
+    }
+    for (basis, area, value) in cells {
+        for i in 1..9 {
+            let convolution = if i < 4 {
+                2.0 * std::f64::consts::PI / 3.0
+            } else {
+                std::f64::consts::PI / 4.0
+            };
+            for c in 0..3 {
+                coefficients[i][c] += (value[c] - mean[c]) * basis[i] * area * convolution;
+            }
+        }
+    }
+    let result = coefficients.map(|v| v.map(|c| c as f32));
+    result
+        .iter()
+        .flatten()
+        .all(|v| v.is_finite())
+        .then_some(result)
 }
 
 /// Cosine-weighted +Y hemisphere irradiance, normalized to `PI` for a uniform
@@ -192,6 +278,56 @@ fn irradiance(width: u32, height: u32, texels: &[[f32; 3]], up: [f32; 3]) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diffuse_irradiance_matches_uniform_and_rotated_half_sky_oracles() {
+        for resolution in [(8, 4), (64, 32)] {
+            let f = EnvironmentRadiance::new(
+                resolution.0,
+                resolution.1,
+                vec![[2.0; 3]; (resolution.0 * resolution.1) as usize],
+            )
+            .unwrap();
+            for n in [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, -1.0],
+                [0.3, -0.4, 0.5],
+            ] {
+                for v in f.diffuse_irradiance(n).unwrap() {
+                    assert!((v - 2.0 * PI).abs() < 0.00001);
+                }
+            }
+        }
+        for up in [glam::DVec3::Y, glam::DVec3::new(0.7, 0.2, -0.6).normalize()] {
+            let mut texels = Vec::new();
+            for y in 0..64 {
+                for x in 0..128 {
+                    let e = ((y as f64 + 0.5) / 64.0 - 0.5) * std::f64::consts::PI;
+                    let a = ((x as f64 + 0.5) / 128.0 - 0.5) * std::f64::consts::TAU;
+                    let d = glam::DVec3::new(e.cos() * a.cos(), e.sin(), e.cos() * a.sin());
+                    texels.push([if d.dot(up) > 0.0 { 1.0 } else { 0.0 }; 3]);
+                }
+            }
+            let field = EnvironmentRadiance::new(128, 64, texels).unwrap();
+            for n in [
+                glam::DVec3::X,
+                glam::DVec3::Y,
+                glam::DVec3::Z,
+                -up,
+                up,
+                glam::DVec3::new(0.4, -0.5, 0.3).normalize(),
+            ] {
+                let expected = std::f64::consts::PI * (1.0 + n.dot(up)) * 0.5;
+                for value in field.diffuse_irradiance(n.as_vec3().to_array()).unwrap() {
+                    assert!(
+                        (f64::from(value) - expected).abs() < 0.004 * std::f64::consts::PI,
+                        "half sky {up:?} n={n:?}: {value} vs {expected}"
+                    );
+                }
+            }
+        }
+    }
 
     fn uniform(width: u32, height: u32, radiance: f32) -> EnvironmentRadiance {
         EnvironmentRadiance::new(

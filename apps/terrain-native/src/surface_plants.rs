@@ -154,8 +154,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m ground; no collision; shared opaque/shadow/environment path"
-            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; scale-aware full/reduced leaf geometry; canonical 32 m ground; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
+                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path"
+            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; scale-aware full/reduced leaf geometry; canonical 32 m descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }
@@ -185,6 +185,10 @@ impl Prepared {
                                 && (item.kind
                                     != thessa_worldgen_rocky::scatter::ScatterKind::Pebble
                                     || ground::variant(item.id) == ground::variant(other.id))
+                                && thessa_worldgen_rocky::offline::plant_form(item.id, item.kind)
+                                    == thessa_worldgen_rocky::offline::plant_form(
+                                        other.id, other.kind,
+                                    )
                         })
                 })
             })
@@ -479,7 +483,7 @@ pub fn prepare(
     } else {
         0.0
     };
-    let prepared = convert_with_detail(
+    let mut prepared = convert_with_detail(
         batch.items,
         field.params.radius_m,
         Some((
@@ -488,6 +492,18 @@ pub fn prepare(
             uncertainty_m,
         )),
     )?;
+    if settings.terrain_ground_relief_max_level > 17 {
+        for (instance, item) in prepared.instances.iter_mut().zip(&prepared.descriptors) {
+            if item.kind != thessa_worldgen_rocky::scatter::ScatterKind::Pebble {
+                instance.position_m += DVec3::from(item.direction)
+                    * thessa_worldgen_rocky::lod::ground_relief_height_m(
+                        field,
+                        item.direction,
+                        0.012,
+                    );
+            }
+        }
+    }
     diagnostics.reduced_instances = prepared
         .ranges
         .iter()
@@ -549,10 +565,23 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
 }
 
 fn convert_with_detail(
-    items: Vec<ScatterItem>,
+    mut items: Vec<ScatterItem>,
     radius_m: f64,
     detail: Option<(DVec3, f64, f64)>,
 ) -> Result<Prepared, String> {
+    if let Some((anchor, _, _)) = detail {
+        // Opaque near-first publication reduces overdraw. Organ ranges retain
+        // the paired canonical descriptors and rigid instances.
+        let distance = |item: &ScatterItem| {
+            (DVec3::from(item.direction) * (radius_m + item.ground_height_m) - anchor)
+                .length_squared()
+        };
+        items.sort_by(|a, b| {
+            distance(a)
+                .total_cmp(&distance(b))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+    }
     let mut prepared = Prepared {
         asset: MeshAsset {
             primitives: vec![],
@@ -569,23 +598,33 @@ fn convert_with_detail(
         item.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump
             && detail.is_some_and(|(anchor, distance, uncertainty)| {
                 (DVec3::from(item.direction) * radius_m - anchor).length()
-                    > distance * item.scale + uncertainty
+                    > distance
+                        * item.scale
+                        * f64::from(
+                            thessa_worldgen_rocky::offline::plant_form_scale(
+                                thessa_worldgen_rocky::offline::plant_form(item.id, item.kind),
+                            )
+                            .into_iter()
+                            .fold(1.0_f32, f32::max),
+                        )
+                        + uncertainty
             })
     };
-    let full = thessa_worldgen_rocky::offline::plant_prototypes()
+    let full = thessa_worldgen_rocky::offline::plant_prototype_forms(false)
         .into_iter()
-        .map(|p| (p, false));
+        .map(|(p, form)| (p, false, form));
     let coarse = detail
         .into_iter()
-        .flat_map(|_| thessa_worldgen_rocky::offline::reduced_plant_prototypes())
-        .filter(|p| p.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump)
-        .map(|p| (p, true));
-    for (prototype, is_reduced) in full.chain(coarse) {
+        .flat_map(|_| thessa_worldgen_rocky::offline::plant_prototype_forms(true))
+        .filter(|(p, _)| p.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump)
+        .map(|(p, form)| (p, true, form));
+    for (prototype, is_reduced, form) in full.chain(coarse) {
         let start = u32::try_from(prepared.instances.len()).map_err(|_| "plant range overflow")?;
-        for item in items
-            .iter()
-            .filter(|i| i.kind == prototype.kind && reduced(i) == is_reduced)
-        {
+        for item in items.iter().filter(|i| {
+            i.kind == prototype.kind
+                && reduced(i) == is_reduced
+                && thessa_worldgen_rocky::offline::plant_form(i.id, i.kind) == form
+        }) {
             prepared.instances.push(instance(item, radius_m));
             prepared.descriptors.push(*item);
         }
@@ -866,8 +905,8 @@ mod tests {
                 assert!(prepared.descriptors.contains(&tree));
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
-            assert!(prepared.ranges.len() <= 11);
-            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 1_800_000);
+            assert!(prepared.ranges.len() <= 31);
+            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 6_000_000);
             let (_, disabled) = prepare(Context::Disabled, &resolved, field).unwrap();
             assert_eq!(
                 (
@@ -960,17 +999,27 @@ mod tests {
                 assert!(range.end > range.start);
                 let group = &prepared.descriptors[range.start as usize..range.end as usize];
                 assert!(group.iter().all(|d| d.kind == group[0].kind));
-                assert!(group.windows(2).all(|w| w[0].id < w[1].id));
-                let prototype = if *reduced {
-                    thessa_worldgen_rocky::offline::reduced_plant_prototypes()
-                } else {
-                    thessa_worldgen_rocky::offline::plant_prototypes()
-                }
-                .into_iter()
-                .find(|p| p.kind == group[0].kind)
-                .unwrap();
+                assert_eq!(
+                    group
+                        .iter()
+                        .map(|item| item.id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len(),
+                    group.len()
+                );
+                let form = thessa_worldgen_rocky::offline::plant_form(group[0].id, group[0].kind);
+                assert!(
+                    group
+                        .iter()
+                        .all(|d| thessa_worldgen_rocky::offline::plant_form(d.id, d.kind) == form)
+                );
+                let prototype = thessa_worldgen_rocky::offline::plant_prototype_forms(*reduced)
+                    .into_iter()
+                    .find(|(p, f)| p.kind == group[0].kind && *f == form)
+                    .unwrap()
+                    .0;
                 let offset = *seen
-                    .entry((group[0].kind as u8, *reduced))
+                    .entry((group[0].kind as u8, *reduced, form))
                     .or_insert(0usize);
                 let end = offset + primitive.vertices.len();
                 let material = &prepared.asset.materials[primitive.material];
@@ -1038,18 +1087,17 @@ mod tests {
                     primitive.ambient_visibility,
                     prototype.ambient_visibility[offset..end]
                 );
-                seen.insert((group[0].kind as u8, *reduced), end);
+                seen.insert((group[0].kind as u8, *reduced, form), end);
                 prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
                     + primitive.indices.len() * std::mem::size_of::<u32>()
                     + primitive.ambient_visibility.len() * std::mem::size_of::<f32>();
             }
-            for ((kind, reduced), end) in seen {
-                let prototypes = if reduced {
-                    thessa_worldgen_rocky::offline::reduced_plant_prototypes()
-                } else {
-                    thessa_worldgen_rocky::offline::plant_prototypes()
-                };
-                let prototype = prototypes.iter().find(|p| p.kind as u8 == kind).unwrap();
+            for ((kind, reduced, form), end) in seen {
+                let prototype = thessa_worldgen_rocky::offline::plant_prototype_forms(reduced)
+                    .into_iter()
+                    .find(|(p, f)| p.kind as u8 == kind && *f == form)
+                    .unwrap()
+                    .0;
                 assert_eq!(end, prototype.positions.len());
             }
             assert_eq!(stats.prototype_bytes, prototype_payload);
@@ -1090,8 +1138,16 @@ mod tests {
             let window = survey_window(dir);
             assert!(window.face < 6 && window.x < 16384 && window.y < 16384);
         }
-        let prototypes = thessa_worldgen_rocky::offline::plant_prototypes();
-        for prototype in prototypes {
+        let prototypes = thessa_worldgen_rocky::offline::plant_prototype_forms(false);
+        for (prototype, form) in prototypes {
+            if form
+                != thessa_worldgen_rocky::offline::plant_form(
+                    thessa_worldgen_rocky::scatter::ScatterId(1),
+                    prototype.kind,
+                )
+            {
+                continue;
+            }
             let item = ScatterItem {
                 id: thessa_worldgen_rocky::scatter::ScatterId(1),
                 kind: prototype.kind,
@@ -1110,7 +1166,12 @@ mod tests {
                     .sum::<usize>(),
                 prototype.positions.len()
             );
-            assert!(prototype.positions.iter().all(|p| p[1] >= 0.0));
+            assert!(prototype.positions.iter().all(|p| p[1]
+                >= if prototype.kind == ScatterKind::LycopsidTree {
+                    -0.15
+                } else {
+                    0.0
+                }));
             // The producer's fern fronds now meet the local ground plane
             // (they previously began at 0.1 m); the adapter still adds no offset.
             let min_y = prototype
@@ -1119,7 +1180,12 @@ mod tests {
                 .map(|p| p[1])
                 .fold(f32::INFINITY, f32::min);
             assert!(
-                (0.0..=0.02).contains(&min_y),
+                (if prototype.kind == ScatterKind::LycopsidTree {
+                    -0.15..=0.02
+                } else {
+                    0.0..=0.02
+                })
+                .contains(&min_y),
                 "{:?} prototype must sit on its local ground plane, got {min_y}",
                 prototype.kind
             );
@@ -1137,6 +1203,41 @@ mod tests {
                 (radial_gap - f64::from(min_y) * root.scale).abs() < 1e-8,
                 "intrinsic prototype/root gap only; this is NOT a resident-terrain residual"
             );
+        }
+    }
+
+    #[test]
+    fn opaque_near_first_order_keeps_canonical_descriptors_and_instance_ranges() {
+        let radius = 3_200_000.0;
+        let items: Vec<_> = [30.0, 1.0, 10.0]
+            .into_iter()
+            .map(|h| ScatterItem {
+                id: thessa_worldgen_rocky::scatter::ScatterId(h as u64),
+                kind: ScatterKind::ReedClump,
+                direction: DVec3::X.to_array(),
+                ground_height_m: h,
+                scale: 1.0,
+                yaw_rad: 0.0,
+            })
+            .collect();
+        let original = convert(items.clone(), radius).unwrap();
+        let sorted =
+            convert_with_detail(items.clone(), radius, Some((DVec3::X * radius, 48.0, 0.0)))
+                .unwrap();
+        assert_eq!(sorted.descriptors, [items[1], items[2], items[0]]);
+        assert!(original.same_prototypes(&sorted));
+        assert_eq!(sorted.ranges, original.ranges);
+        for (descriptor, pose) in sorted.descriptors.iter().zip(&sorted.instances) {
+            assert_eq!(*pose, instance(descriptor, radius));
+        }
+        for (a, b) in original
+            .asset
+            .primitives
+            .iter()
+            .zip(&sorted.asset.primitives)
+        {
+            assert_eq!(a.vertices, b.vertices);
+            assert_eq!(a.indices, b.indices);
         }
     }
 
@@ -1289,7 +1390,11 @@ mod tests {
         assert!(prepared.rt_admitted(&settings));
         assert_eq!(prepared.descriptors.len(), 300);
         assert_eq!(prepared.instances.len(), 300);
-        assert_eq!(prepared.ranges, vec![0..150, 0..150, 150..300]);
+        let demand: u32 = prepared.ranges.iter().map(|r| r.end - r.start).sum();
+        assert_eq!(demand, 450);
+        let unique: std::collections::BTreeSet<_> =
+            prepared.ranges.iter().map(|r| (r.start, r.end)).collect();
+        assert_eq!(unique.iter().map(|(a, b)| b - a).sum::<u32>(), 300);
         assert!(
             prepared
                 .asset

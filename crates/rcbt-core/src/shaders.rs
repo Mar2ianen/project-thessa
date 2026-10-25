@@ -364,6 +364,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     r#"
 const MATERIAL_MAX_LEVEL: f32 = 17.0;
 const GROUND_RELIEF_GEOMETRY: bool = false;
+const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;
 const MATERIAL_ANISOTROPY: f32 = 1.0;
 struct Params {
     leaf_count: u32,
@@ -507,6 +508,8 @@ fn vertex(
         output.material_chart = vec3(delta * major, major);
         output.material_face = face;
         output.geometry_level = min(a0.w, min(a1.w, a2.w));
+        // Mixed height-data levels have no single matching residual plane.
+        if(a0.w!=a1.w || a0.w!=a2.w){output.geometry_level+=32u;}
         return output;
     }
     return cbt_vertex(vertex_index);
@@ -622,8 +625,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // chosen in screen space rather than inheriting a coarse mesh page.
     let material_lod = clamp(log2(2.0 * bitcast<f32>(params.radius_bits)
         / (125.0 * max(material_texel_m, 0.001))), 0.0, MATERIAL_MAX_LEVEL);
-    let coarse = material_at_level_raster(address, address_dx, address_dy, u32(floor(material_lod)));
-    let fine = material_at_level_raster(address, address_dx, address_dy, u32(ceil(material_lod)));
+    // Eight-metre source grain reaches the height grid when its spacing is
+    // below four metres. Mixed source levels retain the safe zero residual.
+    let relief_geometry=GROUND_RELIEF_GEOMETRY && (2.0*bitcast<f32>(params.radius_bits)/exp2(f32(input.geometry_level & 31u))/32.0)<4.0;
+    let coarse = material_at_level_raster_with_geometry(address, address_dx, address_dy, u32(floor(material_lod)), select(0u,input.geometry_level,relief_geometry));
+    let fine = material_at_level_raster_with_geometry(address, address_dx, address_dy, u32(ceil(material_lod)), select(0u,input.geometry_level,relief_geometry));
     let coverage = mix(coarse.coverage, fine.coverage, fract(material_lod));
     let detail = mix(coarse.value, fine.value, fract(material_lod)) / max(coverage, 0.00001);
     detail_weight *= coverage;
@@ -647,10 +653,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // a tiny resident normal contribution to full strength.
     var tangent = mix(coarse.normal, fine.normal, fract(material_lod))
         * (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m));
-    // Relief pages already generate their physical geometric normals. A second
-    // full-height bump perturbation would count the same source slope twice.
-    if (GROUND_RELIEF_GEOMETRY && input.geometry_level > 17u) { tangent = vec2(0.0); }
-    let shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
+    var shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
+    if(relief_geometry) {
+        shaded_normal=material_compose_height_normal(normal,address,tangent*(1.0-water_material),render_from_body);
+    }
+    if(MATERIAL_SPECULAR_FILTER_ENABLED && cbt_specular_enabled()) {
+        roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);
+    }
     var direct = vec3(0.0);
     var land_direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
@@ -679,7 +688,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         let cloud_alpha = textureSample(cloud_texture, surface_sampler, shell_mesh_uv(local)).a;
         shadow = 1.0 - lighting.shadow_params.y * smoothstep(0.05, 0.6, cloud_alpha);
     }
-    var illuminance = lighting.ambient_lux.rgb + direct * shadow;
+    let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
+    var illuminance = surface_ambient + direct * shadow;
     let diffuse = albedo * illuminance / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
     // Land roughness is a material property, not only an ocean classifier.
@@ -698,7 +708,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         }
         let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
         land_reflection += environment.rgb;
-        var land_ambient = lighting.ambient_lux.rgb;
+        var land_ambient = surface_ambient;
         if (any(land_ambient > vec3(0.0))) {
             land_ambient *= cbt_land_ambient_transmission(roughness);
         }

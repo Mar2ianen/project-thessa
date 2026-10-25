@@ -149,7 +149,9 @@ fn rt_reflection(
         let column=cloud_transport(origin,direction,length(surface.position-origin));
         radiance+=column.rgb*throughput;
         throughput*=column.a;
-        var illuminance = light.ambient.rgb;
+        var ambient=light.ambient.rgb;
+        if(!RT_LOW_QUALITY){ambient=(1.0-surface.transmission)*env_diffuse_irradiance(surface.normal,ambient)+surface.transmission*env_diffuse_irradiance(-surface.normal,ambient);}
+        var illuminance = ambient;
         var visibility:array<f32,3>;
         for (var i = 0u; i < 3u; i++) {
             if any(light.colors[i].rgb > vec3(0.0)) {
@@ -169,7 +171,7 @@ fn rt_reflection(
         // continuation of the same weighted chain.
         radiance +=
             throughput * (vec3(1.0) - hit_fresnel) * (1.0 - surface.metallic) * surface.albedo
-            * (illuminance-light.ambient.rgb*(1.0-surface.occlusion)) / OCEAN_PI;
+            * (illuminance-ambient*(1.0-surface.occlusion)) / OCEAN_PI;
         for (var i=0u;i<3u;i++) {
             if (any(light.colors[i].rgb>vec3(0.0)) && dot(surface.geometry,light.directions[i].xyz)>0.0) {
                 radiance += throughput*surface_sun_reflection(surface.normal,-direction,light.directions[i].xyz,

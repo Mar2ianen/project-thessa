@@ -108,7 +108,7 @@ The checked-in vertical slice currently contains:
   experiment: continuous mineral/humus processing before mip averaging, shared
   moisture/pigment roughness response, one explicit 60 mm optical height range,
   and view-cone-aware material admission within the existing cache budgets.
-  These are authored material priors, not terrain displacement or hydrology.
+  WORLD12 used authored optical priors; later render-only relief does not alter hydrology.
   WORLD13 promotes persistent GPU CBT in both native launch configurations,
   separates sparse height-page residency from geometric split/merge, fixes
   elevation-driven exhaustion with source/chord probes and parent merge validation,
@@ -120,6 +120,11 @@ The checked-in vertical slice currently contains:
   detail override; an opt-in spherical local-haze layer now shares one environment
   publication across primary terrain, water and meshes, with explicit clear and
   cheaper isotropic fallbacks. Full physical aerial transport remains open.
+  WORLD15 adds a second CC0 mud/litter scan, promotes the existing sub-8 m grain
+  into resolved render-height pages, preserves unresolved normals without double
+  bumping, introduces grounded single/forked tree forms and larger pebble variation,
+  and adds SH9 directional diffuse lighting plus specular footprint filtering.
+  Low/disabled policies retain their cheaper representations; TAA remains off.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

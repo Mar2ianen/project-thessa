@@ -155,6 +155,19 @@ pub(crate) fn base_capture_metadata(
     let resolved = backend.resolve_graphics(&scene.requested);
     meta.graphics.ray_tracing = format!("{:?}", resolved.ray_tracing);
     meta.graphics.resolved.extend(resolved.as_meta_map());
+    meta.graphics.resolved.insert(
+        "native_material_relief_residual_pages".into(),
+        scene.material_relief_resident_pages.to_string(),
+    );
+    meta.graphics.resolved.insert(
+        "native_diffuse_irradiance".into(),
+        if resolved.surface_quality == thessa_graphics::Quality::Low {
+            "isotropic"
+        } else {
+            "sh9"
+        }
+        .into(),
+    );
     meta.graphics
         .resolved
         .insert("settings".into(), format!("{resolved:?}"));

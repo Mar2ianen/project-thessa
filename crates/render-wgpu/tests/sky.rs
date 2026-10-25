@@ -32,9 +32,11 @@ fn renderer_sampled(backend: &Backend, empty: bool, jitter: bool) -> (TerrainRen
     let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
     // Isolate background depth/composition from the legitimate material
     // response to a newly published sky. GGX terrain reflection is covered by
-    // terrain_environment; it must not be mistaken for a depth overwrite.
+    // terrain_environment; SH9 diffuse has its own analytic GPU oracle. Low
+    // keeps this fixture's foreground irradiance fixed across sky publication.
     let settings = thessa_graphics::ResolvedGraphicsSettings {
         specular_reflections: false,
+        surface_quality: thessa_graphics::Quality::Low,
         temporal_jitter: jitter,
         ..Default::default()
     };
@@ -198,7 +200,7 @@ fn primary_clear_field_does_not_replace_total_indirect_radiance() {
         total.ambient_lux(),
         "primary emission must not be removed from indirect light"
     );
-    assert_eq!(binding.storage_bytes(), 32 * 16 + 8 * 16 + 64);
+    assert_eq!(binding.storage_bytes(), 32 * 16 + 8 * 16 + 208);
     binding.update_background(&backend, None);
     terrain.share_environment(&backend, Some(&binding));
     let pixels = draw(&backend, &mut terrain, &target, &camera);

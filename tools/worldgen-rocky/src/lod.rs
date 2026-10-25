@@ -93,7 +93,7 @@ pub fn bake_height_page_with_ground_detail(
                 let v = y as f64 / cells as f64;
                 let dir = key.direction(u, v);
                 let base = field.height_m(dir, wavelength).max(0.0);
-                let relief = if ground_detail && key.level > 17 && base > 0.0 {
+                let relief = if ground_detail && base > 0.0 {
                     ground_relief_height_m(
                         field,
                         dir,
@@ -114,7 +114,7 @@ pub fn bake_height_page_with_ground_detail(
 /// Direction must be finite/unit and footprint finite/nonnegative, as in the
 /// existing canonical field/material sampling APIs.
 pub fn ground_relief_height_m(field: &PlanetField, dir: [f64; 3], texel_m: f64) -> f64 {
-    if texel_m * 2.0 >= crate::ground_detail::SWATCH_WIDTH_M {
+    if texel_m >= 4.0 {
         return 0.0;
     }
     let (prefix, macro_h) = field.height_prefix_m(dir);
@@ -128,15 +128,18 @@ pub fn ground_relief_height_m(field: &PlanetField, dir: [f64; 3], texel_m: f64) 
     sample.curvature_per_m = curvature;
     let ground =
         crate::ground_detail::sample(dir, field.params.radius_m, field.params.seed, texel_m);
-    let (_, coverage) = crate::appearance::surface_appearance_with_ground_detail(
+    let (material, coverage) = crate::appearance::surface_appearance_with_ground_detail(
         field,
         &sample,
         dir,
         texel_m,
-        false,
+        true,
         Some(ground),
     );
-    f64::from(ground.height_m - crate::ground_detail::mean_sample().height_m) * coverage
+    (f64::from(ground.height_m - crate::ground_detail::mean_sample().height_m)
+        + crate::appearance::surface_ground_grain_height(field, dir, texel_m)
+            * f64::from(material.normal_detail_scale))
+        * coverage
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -749,6 +752,7 @@ pub struct GpuMaterialPage {
     pub size: u32,
     pub rgba: Vec<u8>,
     pub normal: Vec<u8>,
+    pub relief_residual: Vec<u8>,
 }
 
 pub const GPU_MATERIAL_PAGE_SIZE: u32 = 128;
@@ -790,6 +794,18 @@ pub fn build_gpu_material_page_with_ground_detail(
     key: TileKey,
     normal_maps: bool,
     ground_detail: bool,
+) -> GpuMaterialPage {
+    build_gpu_material_page_with_relief(field, key, normal_maps, ground_detail, false)
+}
+
+/// Preserve the full optical normal and separately encode the gradient left
+/// after the same quantized 33-square soil geometry. No second height gain.
+pub fn build_gpu_material_page_with_relief(
+    field: &PlanetField,
+    key: TileKey,
+    normal_maps: bool,
+    ground_detail: bool,
+    relief: bool,
 ) -> GpuMaterialPage {
     let size = GPU_MATERIAL_PAGE_SIZE as usize;
     let cells = GPU_MATERIAL_PAGE_CELLS;
@@ -880,9 +896,26 @@ pub fn build_gpu_material_page_with_ground_detail(
             size: GPU_MATERIAL_PAGE_SIZE,
             rgba,
             normal: Vec::new(),
+            relief_residual: Vec::new(),
         };
     }
     let grain = material_normal_grain_samples(field, &dirs, &samples, size, texel_m);
+    let geometry = (relief
+        && ground_detail
+        && key.span_m(field.params.radius_m) / 32.0 < 4.0
+        && !ground.is_empty())
+    .then(|| {
+        (
+            bake_height_page_with_ground_detail(field, key, 33, 0.001, true),
+            bake_height_page_with_ground_detail(field, key, 33, 0.001, false),
+        )
+    })
+    .and_then(|(a, b)| Some((a.ok()?, b.ok()?)));
+    let mut relief_residual = Vec::with_capacity(if geometry.is_some() {
+        size * size * 2
+    } else {
+        0
+    });
     let mut normal = Vec::with_capacity(size * size * 2);
     for y in 0..size {
         for x in 0..size {
@@ -927,6 +960,39 @@ pub fn build_gpu_material_page_with_ground_detail(
                     gradient[i] += floor_gradient[i] * ground_weights[y * size + x];
                 }
             }
+            if let Some((full, base)) = &geometry {
+                let uv = [
+                    (x as f64 - 1.0) / cells as f64,
+                    (y as f64 - 1.0) / cells as f64,
+                ];
+                let uv = uv.map(|v| v.clamp(0.0, 1.0));
+                let u0 = (uv[0] - 1.0 / 32.0).max(0.0);
+                let u1 = (uv[0] + 1.0 / 32.0).min(1.0);
+                let v0 = (uv[1] - 1.0 / 32.0).max(0.0);
+                let v1 = (uv[1] + 1.0 / 32.0).min(1.0);
+                // Borders sample the same clamped page law as surface_sample.wgsl.
+                let delta = |u: f64, v: f64| {
+                    f64::from(full.sample(u as f32, v as f32))
+                        - f64::from(base.sample(u as f32, v as f32))
+                };
+                let resolved = material_chart_gradient(
+                    key.face,
+                    dirs[y * size + x],
+                    sub(key.direction(u1, uv[1]), key.direction(u0, uv[1]))
+                        .map(|v| v * field.params.radius_m),
+                    sub(key.direction(uv[0], v1), key.direction(uv[0], v0))
+                        .map(|v| v * field.params.radius_m),
+                    delta(u1, uv[1]) - delta(u0, uv[1]),
+                    delta(uv[0], v1) - delta(uv[0], v0),
+                );
+                let dx = gradient[0] - resolved[0];
+                let dy = gradient[1] - resolved[1];
+                let length = (dx * dx + dy * dy + 1.0).sqrt();
+                relief_residual.extend([
+                    encode_material_normal_component(-dx / length),
+                    encode_material_normal_component(-dy / length),
+                ]);
+            }
             let [dx, dy] = gradient;
             let length = (dx * dx + dy * dy + 1.0).sqrt();
             normal.push(encode_material_normal_component(-dx / length));
@@ -937,6 +1003,7 @@ pub fn build_gpu_material_page_with_ground_detail(
         size: GPU_MATERIAL_PAGE_SIZE,
         rgba,
         normal,
+        relief_residual,
     }
 }
 
@@ -1237,7 +1304,7 @@ mod surface_regressions {
                 let delta = f64::from(new.decoded_sample(x, y).unwrap())
                     - field.height_m(dir, 32.0).max(0.0);
                 assert!(
-                    delta.abs() < 0.061,
+                    delta.abs() < 2.0,
                     "metre-space displacement exceeds source range: {delta}"
                 );
                 max_delta = max_delta.max(delta.abs());
@@ -1247,10 +1314,25 @@ mod surface_regressions {
             max_delta > 0.0001,
             "coastal geometry must receive actual relief"
         );
+        let full = build_gpu_material_page_with_ground_detail(&field, key, true, true);
+        let residual = build_gpu_material_page_with_relief(&field, key, true, true, true);
+        assert_eq!(full.rgba, residual.rgba);
+        assert_eq!(full.normal, residual.normal);
+        assert_eq!(residual.relief_residual.len(), 128 * 128 * 2);
+        assert!(residual.relief_residual.iter().any(|b| *b != 0));
+        assert_ne!(
+            residual.relief_residual, residual.normal,
+            "resolved soil slope must be subtracted, not copied twice"
+        );
+        assert!(
+            build_gpu_material_page_with_relief(&field, key, false, true, true)
+                .relief_residual
+                .is_empty()
+        );
         let coarse = TileKey {
-            level: 17,
-            x: key.x >> 5,
-            y: key.y >> 5,
+            level: 15,
+            x: key.x >> 7,
+            y: key.y >> 7,
             ..key
         };
         let old = bake_height_page(&field, coarse, 33, 0.5).unwrap();

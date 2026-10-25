@@ -267,6 +267,18 @@ pub(crate) fn surface_normal_grain_height(
     dir: [f64; 3],
     texel_wavelength_m: f64,
 ) -> f64 {
+    ground_grain_height(field, dir, texel_wavelength_m, f64::INFINITY)
+}
+/// Existing sub-32m optical grain, promoted into resolved soil geometry.
+pub(crate) fn surface_ground_grain_height(field: &PlanetField, dir: [f64; 3], texel_m: f64) -> f64 {
+    ground_grain_height(field, dir, texel_m, 8.0)
+}
+fn ground_grain_height(
+    field: &PlanetField,
+    dir: [f64; 3],
+    texel_wavelength_m: f64,
+    max_scale_m: f64,
+) -> f64 {
     [
         (8.0, 0.42),
         (4.0, 0.21),
@@ -279,7 +291,9 @@ pub(crate) fn surface_normal_grain_height(
     ]
     .into_iter()
     .enumerate()
-    .filter(|(_, (scale, _))| band_weight(*scale, texel_wavelength_m) > 0.0)
+    .filter(|(_, (scale, _))| {
+        *scale <= max_scale_m && band_weight(*scale, texel_wavelength_m) > 0.0
+    })
     .map(|(band, (scale, weight))| {
         let q = dir.map(|v| v * field.params.radius_m / scale);
         weight

@@ -10,6 +10,21 @@ meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
 normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
+WORLD15 ([doc 77](77_NATIVE_SURFACE_SHOWCASE.md)) supersedes the older prototype
+counts below: stable identity selects three fern forms, three tree forms (broad
+fork, single crown, narrow drooping fork), and one reed form. Six structural
+root flares and optical poses follow the shared render-only soil source.
+Full/reduced trunks use 16/8 sides and roots 8/4; all forms are checked against
+projected-area and sampled surface-distance oracles. The native adapter keeps
+shared rigid instancing, material boundaries, texture deduplication, visibility,
+shadow and whole-partition RT preflight. At most 34 plant/pebble primitive ranges
+and <=6 MB prototype vertex/index/AO payload are admitted. Pebbles now span
+4–46 cm, retaining their source IDs and patch density; exact resident-triangle
+contact is still not established. Medium/High use directional SH9 diffuse light,
+and primary specular filtering consumes the existing normal-map mip mean.
+Low and feature-off fallbacks remain explicit. Older WORLD13/14 counts and
+4–30 cm dimensions below are historical snapshots, not the current limits.
+
 WORLD14 (doc 77) retains the latest authored optical priors: green fern tint
 [0.67, 0.48, 0.80], tree tint [0.74, 0.68, 0.80], green-leaf roughness factor
 0.46 and fern diffuse transmission 0.34. Stem/dry roughness factor remains 0.85.

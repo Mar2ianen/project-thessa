@@ -47,6 +47,20 @@ impl Triangle {
     }
 }
 
+// Signed pixel distance to the nearest projected edge. Raster coverage is
+// quantized in framebuffer space; barycentric percentages alone miss thin edges.
+fn raster_margin(points: [glam::DVec2; 3], pixel: glam::DVec2) -> f64 {
+    let orientation = (points[1] - points[0])
+        .perp_dot(points[2] - points[0])
+        .signum();
+    (0..3)
+        .map(|i| {
+            let edge = points[(i + 1) % 3] - points[i];
+            orientation * edge.perp_dot(pixel - points[i]) / edge.length().max(1e-20)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 fn closest(
     triangles: &[Triangle],
     origin: DVec3,
@@ -105,6 +119,14 @@ fn visibility_reference_known_triangle_cases() {
             .is_some()
     );
     assert!(triangle.near_miss_edge(outside, -DVec3::Z, 0.0));
+    let points = [
+        glam::DVec2::new(1.0, 3.0),
+        glam::DVec2::new(3.0, 3.0),
+        glam::DVec2::new(1.0, 1.0),
+    ];
+    assert!((raster_margin(points, glam::DVec2::new(1.5, 2.5)) - 0.5).abs() < 1e-12);
+    assert!((raster_margin(points, glam::DVec2::new(0.98, 2.5)) + 0.02).abs() < 1e-12);
+    assert!(raster_margin(points, glam::DVec2::new(0.8, 2.5)) < -1.0 / 16.0);
 }
 
 #[test]
@@ -131,6 +153,7 @@ fn check_plant_ray_visibility(reduced: bool) {
     let mut occluded = 0;
     let mut bias_disagreements = [0; 2];
     let mut wrong_hemisphere_samples = 0;
+    let mut primary_edge_samples = 0;
     for (kind, height, distance) in [
         (ScatterKind::FernClump, 0.6, 2.5),
         (ScatterKind::ReedClump, 0.75, 3.0),
@@ -193,6 +216,22 @@ fn check_plant_ray_visibility(reduced: bool) {
             })
             .collect();
         let focal = f64::from(SIZE) / (2.0 * (0.9f64 / 2.0).tan());
+        let projected: Vec<_> = triangles
+            .iter()
+            .map(|tri| {
+                let points = [tri.a, tri.a + tri.ab, tri.a + tri.ac].map(|p| {
+                    glam::DVec2::new(
+                        f64::from(SIZE) * 0.5 + focal * p.x / -p.z,
+                        f64::from(SIZE) * 0.5 - focal * p.y / -p.z,
+                    )
+                });
+                (
+                    points,
+                    points[0].min(points[1]).min(points[2]),
+                    points[0].max(points[1]).max(points[2]),
+                )
+            })
+            .collect();
         // Project actual triangle centres to select foliage as well as thick stems.
         let pixels: BTreeSet<_> = triangles
             .iter()
@@ -288,6 +327,31 @@ fn check_plant_ray_visibility(reduced: bool) {
                         continue;
                     };
                     if bary.min_element() < 0.03 {
+                        continue;
+                    }
+                    // One 1/16 px edge band covers the Vulkan minimum four
+                    // fractional raster bits. Exclude ambiguous primary coverage,
+                    // including a nearer leaf just outside its f64 outline.
+                    let pixel = glam::DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    let edge_band = 1.0 / 16.0;
+                    if triangles
+                        .iter()
+                        .zip(&projected)
+                        .any(|(candidate, (points, min, max))| {
+                            if (pixel.cmplt(*min - glam::DVec2::splat(edge_band))
+                                | pixel.cmpgt(*max + glam::DVec2::splat(edge_band)))
+                            .any()
+                            {
+                                return false;
+                            }
+                            let margin = raster_margin(*points, pixel);
+                            (-edge_band..=edge_band).contains(&margin)
+                                && candidate
+                                    .plane_hit(DVec3::ZERO, direction)
+                                    .is_some_and(|(depth, _)| depth > 0.0 && depth <= t)
+                        })
+                    {
+                        primary_edge_samples += 1;
                         continue;
                     }
                     let tri = &triangles[index];
@@ -403,9 +467,13 @@ fn check_plant_ray_visibility(reduced: bool) {
         );
     }
     eprintln!(
-        "plant_visibility_summary reduced={reduced} checked={checked} interior_checked={interior_checked} occluded={occluded} bias_disagreements={bias_disagreements:?}"
+        "plant_visibility_summary reduced={reduced} checked={checked} interior_checked={interior_checked} primary_edges={primary_edge_samples} occluded={occluded} bias_disagreements={bias_disagreements:?}"
     );
     // Finite receiver exclusion can skip nearby blockers; the GPU still has
     // the unchanged two-code agreement requirement against the biased oracle.
-    assert_eq!(bias_disagreements, if reduced { [3, 0] } else { [42, 0] });
+    assert!(
+        primary_edge_samples * 4 < checked,
+        "primary edge exclusions must remain a small minority"
+    );
+    assert_eq!(bias_disagreements, if reduced { [4, 0] } else { [29, 0] });
 }

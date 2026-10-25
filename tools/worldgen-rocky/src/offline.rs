@@ -1151,6 +1151,75 @@ pub fn reduced_plant_prototypes() -> Vec<PlantMesh> {
         .clone()
 }
 
+/// World-addressed authored form selection; density/quality never changes it.
+pub fn plant_form(id: crate::scatter::ScatterId, kind: crate::scatter::ScatterKind) -> u8 {
+    if matches!(
+        kind,
+        crate::scatter::ScatterKind::FernClump | crate::scatter::ScatterKind::LycopsidTree
+    ) {
+        ((crate::rng::hash01(0, 6182, id.0 as i64, 0) * 3.0) as u8).min(2)
+    } else {
+        0
+    }
+}
+pub fn plant_form_scale(form: u8) -> [f32; 3] {
+    match form {
+        1 => [0.80, 1.12, 1.04],
+        2 => [1.18, 0.90, 0.88],
+        _ => [1.0; 3],
+    }
+}
+/// Shared organ/material groups; bounded morphology is baked into local
+/// geometry so the shared rigid instance/normal/RT ABI remains unchanged.
+pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
+    static FULL: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
+    static COARSE: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
+    (if reduced { &COARSE } else { &FULL })
+        .get_or_init(|| {
+            let base = if reduced {
+                reduced_plant_prototypes()
+            } else {
+                plant_prototypes()
+            };
+            let mut forms = Vec::new();
+            for mesh in base {
+                let count = if mesh.kind == crate::scatter::ScatterKind::ReedClump {
+                    1
+                } else {
+                    3
+                };
+                for form in 0..count {
+                    let mut variant = mesh.clone();
+                    if form != 0 && mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
+                        variant.positions.clear();
+                        variant.normals.clear();
+                        variant.uvs.clear();
+                        variant.indices.clear();
+                        variant.stem = None;
+                        variant.senescent = None;
+                        lycopsid_tree_form(&mut variant, reduced, form);
+                    }
+                    if form != 0 {
+                        let scale = plant_form_scale(form);
+                        for p in &mut variant.positions {
+                            *p = std::array::from_fn(|i| p[i] * scale[i]);
+                        }
+                        for n in &mut variant.normals {
+                            *n = crate::lod::normalize(std::array::from_fn(|i| {
+                                f64::from(n[i] / scale[i])
+                            }))
+                            .map(|v| v as f32);
+                        }
+                        variant.ambient_visibility = super::plant_visibility::bake(&variant, 32);
+                    }
+                    forms.push((variant, form));
+                }
+            }
+            forms
+        })
+        .clone()
+}
+
 fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
     use crate::scatter::ScatterKind;
     [
@@ -1271,6 +1340,10 @@ fn reed_clump(mesh: &mut PlantMesh) {
 /// Authored forked arborescent silhouette with tiered radial crowns; optical
 /// reference geometry, not a taxonomic reconstruction of Cyathea / Dicksonia.
 fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
+    lycopsid_tree_form(mesh, reduced, 0);
+}
+
+fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     const TRUNK_RINGS: [(f64, f64); 21] = [
         (0.00, 0.48),
         (0.18, 0.40),
@@ -1294,10 +1367,21 @@ fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
         (7.94, 0.22),
         (7.95, 0.16),
     ];
-    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * 0.60, radius));
-    tapered_limb(mesh, [0.0; 3], [0.0, 1.0, 0.0], 16, &trunk_rings);
-    let terminals = [[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]];
-    for terminal in terminals {
+    let trunk_rings =
+        TRUNK_RINGS.map(|(height, radius)| (height * if form == 1 { 1.0 } else { 0.60 }, radius));
+    tapered_limb(
+        mesh,
+        [0.0; 3],
+        [0.0, 1.0, 0.0],
+        if reduced { 8 } else { 16 },
+        &trunk_rings,
+    );
+    let terminals: &[[f64; 3]] = match form {
+        1 => &[[0.0, 7.95, 0.0]],
+        2 => &[[-0.75, 8.30, 0.20], [1.15, 7.60, -0.40]],
+        _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
+    };
+    for &terminal in terminals.iter().filter(|_| form != 1) {
         let base = [0.0, 4.55, 0.0];
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
@@ -1312,6 +1396,20 @@ fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
                 (length * 0.7, 0.12),
                 (length, 0.06),
             ],
+        );
+    }
+    // Six structural root flares terminate below the local soil; these cast
+    // actual shadows and share the stem material, not a painted ground decal.
+    for i in 0..6 {
+        let angle = i as f64 * GOLDEN_ANGLE + 0.2;
+        let (radial, _) = azimuth_frame(angle);
+        let base = offset(scaled(radial, 0.14), [0.0, 0.22, 0.0]);
+        tapered_limb(
+            mesh,
+            base,
+            offset(radial, [0.0, -0.36, 0.0]),
+            if reduced { 4 } else { 8 },
+            &[(0.0, 0.18), (0.32, 0.13), (0.68, 0.065), (0.94, 0.012)],
         );
     }
     mesh.stem = Some(PlantStem {
@@ -1336,15 +1434,21 @@ fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
                 diffuse_transmission: 0.05,
             });
         }
-        for terminal in terminals {
+        for &terminal in terminals {
+            let count = if form == 1 {
+                (count * 3).div_ceil(2)
+            } else {
+                count
+            };
             for i in 0..count {
-                let angle = phase_offset + i as f64 * GOLDEN_ANGLE;
+                let angle = phase_offset + f64::from(form) * 0.71 + i as f64 * GOLDEN_ANGLE;
                 let reach = reach_base + 0.22 * (i as f64 * 1.71).sin().powi(2);
                 let (radial, _) = azimuth_frame(angle);
                 let base = offset(
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],
                 );
+                let drop = drop * if form == 2 { 1.25 } else { 1.0 };
                 crown_frond(mesh, angle, base, reach, rise, drop, reduced);
             }
         }
@@ -2288,9 +2392,12 @@ mod tests {
     #[test]
     fn reduced_plants_preserve_lamina_area_and_bound_vertex_error() {
         use parry3d_f64::{math::Vector, query::PointQuery, shape::TriMesh};
-        let full = plant_prototypes();
-        let reduced = reduced_plant_prototypes();
-        for (a, b) in full.iter().zip(&reduced) {
+        let full = plant_prototype_forms(false);
+        let reduced = plant_prototype_forms(true);
+        for ((a, form), (b, reduced_form)) in full.iter().zip(&reduced) {
+            assert_eq!(form, reduced_form);
+            validate_mesh(a).unwrap();
+            let max_scale = plant_form_scale(*form).into_iter().fold(1.0_f32, f32::max);
             validate_mesh(b).unwrap();
             let triangles: Vec<_> = b.indices.as_chunks::<3>().0.to_vec();
             let mesh = TriMesh::new(
@@ -2308,7 +2415,11 @@ mod tests {
                 .fold(0.0_f64, f64::max);
             // Sampled full-vertex displacement, per unit scale: < 1.8 px at
             // 24 m / 720p / 0.9 rad FOV. Not a continuous Hausdorff bound.
-            assert!(error < 0.057, "{:?} error {error}", a.kind);
+            assert!(
+                error < 0.057 * f64::from(max_scale),
+                "{:?} form={form} error {error}",
+                a.kind
+            );
             let projected_area = |m: &PlantMesh| -> f64 {
                 prototype_triangles(m)
                     .iter()
@@ -2503,7 +2614,7 @@ mod tests {
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
                 ScatterKind::ReedClump => (120, 170),
-                ScatterKind::LycopsidTree => (15300, 15400),
+                ScatterKind::LycopsidTree => (15550, 15700),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(
@@ -2596,7 +2707,12 @@ mod tests {
             };
             // No ground offset is invented: every prototype base meets local Y=0.
             assert!(
-                min_y > -0.01,
+                min_y
+                    > if mesh.kind == ScatterKind::LycopsidTree {
+                        -0.15
+                    } else {
+                        -0.01
+                    },
                 "{:?} dips below its root plane by {min_y}",
                 mesh.kind
             );
@@ -2649,7 +2765,7 @@ mod tests {
                         normal[1] > 0.0,
                         "crown frond faces down at {middle:?}: {normal:?}"
                     );
-                } else if middle[1] < 3.0 {
+                } else if middle[1] > 0.55 && middle[1] < 3.0 {
                     let radial = radial_of(middle);
                     assert!(
                         crate::lod::dot(normal, radial) > 0.5,

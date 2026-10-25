@@ -363,7 +363,10 @@ fn grazing_terrain_environment_remains_bounded() {
             for nv in [0.7, 0.2, 0.05, 0.01] {
                 let look_at = DVec3::Z * 1010.0;
                 let eye = look_at + DVec3::new((1.0_f64 - nv * nv).sqrt(), 0.0, nv) * 1500.0;
-                let pixel = center(&draw_from(&backend, &mut terrain, [65, 65], eye, look_at));
+                // Resolve the sphere-normal footprint before comparing to a
+                // point BRDF oracle; 65px legitimately broadens the AA lobe.
+                let frame = draw_from(&backend, &mut terrain, [1025, 1025], eye, look_at);
+                let pixel: [u8; 3] = frame[(512 * 1025 + 512) * 4..][..3].try_into().unwrap();
                 let reference = grazing_reference(f64::from(roughness) / 255.0, nv);
                 let expected = (reference * 2550.0).round() as u8;
                 assert!(reference > 0.0 && reference < 1.0);

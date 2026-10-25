@@ -4,8 +4,8 @@
 // residency hierarchy, feathering and page transform stay identical, but the
 // normal plane is sampled in the same pass instead of forcing every secondary
 // consumer (ray-traced terrain, ocean geometry) to declare unused bindings.
-// Normal pages are body-space cube pages; xy is RG8_SNORM and z is
-// reconstructed positive in the page's face tangent frame.
+// Body-space cube pages: full XY in RG, optional relief-residual XY in BA;
+// positive Z is reconstructed in the page face tangent frame.
 @group(0) @binding(19) var material_normal_texture: texture_2d_array<f32>;
 @group(0) @binding(20) var<storage, read> material_normal_directory: array<vec4<u32>>;
 // Consumers opt in at shader assembly time. Bevy's albedo-only path and
@@ -19,19 +19,22 @@ struct RasterMaterialSample {
     coverage: f32,
 };
 
-fn material_normal_layer(id: vec2<u32>) -> u32 {
+fn material_normal_layer(id: vec2<u32>) -> vec2<u32> {
     let mask = arrayLength(&material_normal_directory) - 1u;
     var index = (id.x * 0x9e3779b9u ^ id.y * 0x85ebca6bu) & mask;
     for (var probe = 0u; probe <= mask; probe += 1u) {
         let entry = material_normal_directory[index];
-        if (all(entry.xy == id)) { return entry.z; }
+        if (all(entry.xy == id)) { return entry.zw; }
         if (all(entry.xy == vec2(0u))) { break; }
         index = (index + 1u) & mask;
     }
-    return 0xffffffffu;
+    return vec2(0xffffffffu,0u);
 }
 
 fn material_at_level_raster(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, requested: u32) -> RasterMaterialSample {
+    return material_at_level_raster_with_geometry(address,dx,dy,requested,0u);
+}
+fn material_at_level_raster_with_geometry(address:MaterialAddress,dx:vec2<f32>,dy:vec2<f32>,requested:u32,geometry_level:u32)->RasterMaterialSample {
     var level = requested;
     var extent = exp2(f32(level));
     var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
@@ -49,10 +52,17 @@ fn material_at_level_raster(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f3
                 dx * footprint, dy * footprint) * weight;
             if (MATERIAL_NORMALS_ENABLED) {
               let normal_layer = material_normal_layer(id);
-              if (normal_layer != 0xffffffffu) {
+              if (normal_layer.x != 0xffffffffu) {
                 let normal_footprint = footprint * exp2(MATERIAL_NORMAL_MIP_BIAS);
-                let xy = textureSampleGrad(material_normal_texture, material_sampler, uv,
-                    i32(normal_layer), dx * normal_footprint, dy * normal_footprint).rg;
+                let channels = textureSampleGrad(material_normal_texture, material_sampler, uv,
+                    i32(normal_layer.x), dx * normal_footprint, dy * normal_footprint);
+                var xy=channels.rg;
+                if(geometry_level>0u) {
+                    // Mismatched or old pages retain geometry-only normals;
+                    // adding their full soil gradient would count relief twice.
+                    xy=vec2(0.0);
+                    if(level==geometry_level && (normal_layer.y & 0x80000000u)!=0u){xy=channels.ba;}
+                }
                 // Blend height gradients, not unit-normal XY; absent pages
                 // contribute zero rather than amplifying sparse coverage.
                 let z = sqrt(max(0.0001, 1.0 - dot(xy, xy)));
@@ -107,4 +117,15 @@ fn material_perturb_normal(geometric: vec3<f32>, address: MaterialAddress, tange
     // independently normalizing the axes (which would change slope energy).
     let projected = gradient - geometric * dot(geometric, gradient);
     return normalize(geometric + projected);
+}
+
+// Both terms are radial-height gradients in the same face chart. Adding the
+// remaining slope needs N_geo dot radial, not a second tangent-plane bump.
+fn material_compose_height_normal(geometric:vec3<f32>,address:MaterialAddress,tangent:vec2<f32>,render_from_body:mat4x4<f32>)->vec3<f32> {
+    if(dot(tangent,tangent)<=0.0){return geometric;}
+    let basis=material_face_basis(address.uv+address.offset,address.face);
+    let rotation=mat3x3<f32>(render_from_body[0].xyz,render_from_body[1].xyz,render_from_body[2].xyz);
+    let radial=rotation*basis[2];
+    let gradient=rotation*(basis[0]*tangent.x+basis[1]*tangent.y);
+    return normalize(geometric+gradient*max(0.0,dot(geometric,radial)));
 }

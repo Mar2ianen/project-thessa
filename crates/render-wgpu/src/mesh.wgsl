@@ -87,7 +87,9 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
             direct_transmit+=light.colors[i].rgb*bwd*visibility[i];
         }
     }
-    let amb_up=light.ambient.rgb*ao;
+    var ambient=light.ambient.rgb;
+    if(material.quality!=0u){ambient=(1.0-transmission)*env_diffuse_irradiance(normal,ambient)+transmission*env_diffuse_irradiance(-normal,ambient);}
+    let amb_up=ambient*ao;
     let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;
     let diffuse_ambient=albedo*amb_up/OCEAN_PI;
     let diffuse_total=diffuse_ambient+diffuse_direct;
@@ -97,7 +99,14 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
-    let roughness=material.factors.y*mr.g;
+    var roughness=material.factors.y*mr.g;
+    var normal_variance=0.0;
+    if(material.quality==2u && material.pad!=0u) {
+        // Averaged unit-map normals retain covariance trace 1-|mean(N)|².
+        // Split it across the two tangent axes; preserve existing mip storage.
+        normal_variance=0.5*max(0.0,1.0-dot(map_normal,map_normal))*material.factors.z*material.factors.z;
+    }
+    if(material.quality!=0u && material.reflections!=0u){roughness=surface_filtered_roughness_variance(roughness,dpdx(normal),dpdy(normal),normal_variance);}
     let f0=mix(vec3(0.04),albedo,metallic);
     var fresnel=f0;
     if (material.quality!=0u) { fresnel=f0+(vec3(1.0)-f0)*pow(1.0-max(dot(normal,eye),0.0),5.0); }

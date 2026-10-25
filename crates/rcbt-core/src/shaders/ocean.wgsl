@@ -244,3 +244,16 @@ fn ocean_shade(
     ) * sun_strength;
     return max(sky + sun_reflection, vec3(0.0, 0.0, 0.0));
 }
+
+// Raster-footprint approximation: a linear normal field over a unit pixel
+// box has variance (|dN/dx|^2+|dN/dy|^2)/12. Broaden the GGX lobe rather
+// than turning unresolved normal variation into isolated bright samples.
+fn surface_filtered_roughness(roughness:f32,dx:vec3<f32>,dy:vec3<f32>)->f32 {
+    return surface_filtered_roughness_variance(roughness,dx,dy,0.0);
+}
+fn surface_filtered_roughness_variance(roughness:f32,dx:vec3<f32>,dy:vec3<f32>,subpixel:f32)->f32 {
+    let variance=(dot(dx,dx)+dot(dy,dy))/12.0+subpixel;
+    if(variance<=0.0){return roughness;}
+    let alpha=roughness*roughness;
+    return sqrt(sqrt(min(1.0,alpha*alpha+variance)));
+}

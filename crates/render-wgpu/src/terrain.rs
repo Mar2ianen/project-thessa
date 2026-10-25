@@ -464,6 +464,8 @@ impl TerrainRenderer {
             capacity,
             normal_maps,
             settings.map_or(1, |s| s.terrain_material_anisotropy),
+            settings
+                .is_some_and(|s| s.terrain_ground_detail && s.terrain_ground_relief_max_level > 17),
         )?;
         let mut node_ids = Vec::with_capacity(capacity);
         let mut residuals = Vec::with_capacity(residual_bytes as usize);
@@ -670,7 +672,10 @@ impl TerrainRenderer {
             )
         });
         let reflections = settings.is_none_or(|s| s.specular_reflections);
-        let raster_environment = ocean.is_some()
+        let directional_diffuse =
+            settings.is_some_and(|s| s.surface_quality != thessa_graphics::Quality::Low);
+        let raster_environment = directional_diffuse
+            || ocean.is_some()
             || reflections
             || settings.is_some_and(|s| s.local_haze_extinction_per_m > 0.0);
         let land_environment_samples = settings.map_or(16, |s| s.terrain_environment_samples());
@@ -704,6 +709,7 @@ impl TerrainRenderer {
         let mut hooks = format!(
             "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun)*cloud_terrain_sun_visibility(p,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
+        hooks.push_str(if directional_diffuse {"fn cbt_diffuse_environment(n:vec3<f32>,a:vec3<f32>)->vec3<f32>{return env_diffuse_irradiance(n,a);}"}else{"fn cbt_diffuse_environment(n:vec3<f32>,a:vec3<f32>)->vec3<f32>{return a;}"});
         hooks.push_str(&if reflections {
             format!("fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec4<f32>{{let response=env_specular_response(p,n,v,r,vec3(0.04),a,{land_environment_samples}u,vec3<u32>({cloud_directions}u,{cloud_steps}u,{cloud_sun_steps}u));return vec4(response.radiance,response.reflectance.r);}}\nfn cbt_land_transmission(n:vec3<f32>,l:vec3<f32>,r:f32)->f32{{return 1.0-env_directional_reflectance(n,l,r,vec3(0.04),{land_environment_samples}u).r;}}\nfn cbt_land_ambient_transmission(r:f32)->f32{{return 1.0-env_average_reflectance(r,vec3(0.04),{land_environment_samples}u).r;}}\n")
         } else {
@@ -739,6 +745,7 @@ impl TerrainRenderer {
             "return vec4(radiance * view.exposure, 1.0);".into()
         };
         let raster_source = shaders::CBT_RASTER_WGSL
+            .replace("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;",&format!("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = {};",settings.is_some_and(|s|s.surface_quality!=thessa_graphics::Quality::Low)))
             .replace(
                 "const GROUND_RELIEF_GEOMETRY: bool = false;",
                 &format!(
@@ -1981,6 +1988,10 @@ impl TerrainRenderer {
 
     /// Share existing canonical material residency without a geometry-specific
     /// layer assignment, second cache or texture upload.
+    pub fn material_relief_resident_pages(&self) -> usize {
+        self.materials.relief_resident_pages()
+    }
+
     pub fn material_binding(&self) -> crate::material::MaterialBinding {
         self.materials.binding()
     }

@@ -280,7 +280,7 @@ pub fn bake_page_with_ground_detail(
     key: TileKey,
     ground_detail: bool,
 ) -> Result<HeightPage, String> {
-    let error = if ground_detail && key.level > 17 {
+    let error = if ground_detail && key.span_m(field.params.radius_m) / 32.0 < 4.0 {
         0.001
     } else {
         0.5

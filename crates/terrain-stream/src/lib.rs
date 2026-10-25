@@ -61,17 +61,35 @@ pub fn spawn_material_job_with_detail(
     normal_maps: bool,
     ground_detail: bool,
 ) -> JobHandle<thessa_rcbt_core::material_page::CbtMaterialPage> {
+    spawn_material_job_with_relief(field, key, normal_maps, ground_detail, false)
+}
+
+pub fn spawn_material_job_with_relief(
+    field: std::sync::Arc<thessa_worldgen_rocky::field::PlanetField>,
+    key: thessa_worldgen_rocky::lod::TileKey,
+    normal_maps: bool,
+    ground_detail: bool,
+    relief: bool,
+) -> JobHandle<thessa_rcbt_core::material_page::CbtMaterialPage> {
     JobHandle::spawn(move || {
-        let page = thessa_worldgen_rocky::lod::build_gpu_material_page_with_ground_detail(
+        let page = thessa_worldgen_rocky::lod::build_gpu_material_page_with_relief(
             &field,
             key,
             normal_maps,
             ground_detail,
+            relief,
         );
-        thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8_with_normals(
+        let material = thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8_with_normals(
             page.rgba,
             normal_maps.then_some(page.normal),
         )
-        .expect("fixed material page layout")
+        .expect("fixed material page layout");
+        if page.relief_residual.is_empty() {
+            material
+        } else {
+            material
+                .with_relief_residuals(page.relief_residual)
+                .expect("fixed residual plane")
+        }
     })
 }

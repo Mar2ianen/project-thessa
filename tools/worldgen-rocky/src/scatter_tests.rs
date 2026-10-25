@@ -738,7 +738,7 @@ fn ground_pebbles_are_nested_world_fixed_and_disjoint_from_understory() {
             .all(|item| item.kind == ScatterKind::Pebble
                 && item.id.0 & 1 == 0
                 && item.id.cell().unwrap().level == UNDERSTORY_CANDIDATE_LEVEL
-                && (0.04..=0.30).contains(&item.scale))
+                && (0.04..=0.46).contains(&item.scale))
     );
     let mut children = tile
         .children()

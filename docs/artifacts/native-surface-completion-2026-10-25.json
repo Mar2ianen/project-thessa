@@ -1,0 +1,85 @@
+{
+  "status": "engineering completion; WORLD15 integrated and verified",
+  "date": "2026-10-25",
+  "reviewed_commits": [
+    "060d966a240b192afcfda62774236b18db572800",
+    "2693d1fb5b9ea5847543d0f17e1c66c7f89affd4",
+    "271e65a98dd0fb9d551bbfbc2a1682e69ead4cd2",
+    "84f2cf6c27a4bc6fb341457d2acb58c9988a3454"
+  ],
+  "release": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "thessa-terrain-native",
+      "--release"
+    ],
+    "binary_sha256": "6d72f5444155250a2e54bf08f96a6ed7bbd69246060f6a8d328f5419967c3c3d"
+  },
+  "world15_features": [
+    "Brown Mud Leaves 01 (CC0 Poly Haven) 512x512 micro-scan blended with Forest Ground 04 using 8 m world field.",
+    "Unresolved normal detail: RGBA8_SNORM normal atlas with BA residual plane when geometric relief is active.",
+    "Lycopsid tree root flares (6 flares/tree) terminating beneath local soil, casting real shadows.",
+    "SH9 Lambert irradiance convolution for Medium/High terrain and meshes from environment cubemap.",
+    "GGX roughness broadening by normal variance over unit pixel box ((length(dNdx)^2 + length(dNdy)^2)/12).",
+    "Near-first sorting of prepared opaque instances within organ/form ranges."
+  ],
+  "checks": {
+    "tests_passed": "all workspace tests passing (257 worldgen-rocky, 74 rcbt-core, 29 terrain-stream, 162 terrain-native, render-wgpu)",
+    "architecture": "OK (12 guarded foundational crates)",
+    "clippy": "clean (-D warnings)",
+    "formatting": "clean (cargo fmt)"
+  },
+  "measurements": {
+    "drawn_triangles": 20352,
+    "submitted_mesh_triangles": 18316216,
+    "draw_calls": 34,
+    "median_gpu_ms": 460.77361557568935,
+    "p95_gpu_ms": 523.7604573550822,
+    "p99_gpu_ms": 525.3097186707676
+  },
+  "visual_metrics": {
+    "sky_horizon_rgb": [
+      0.516,
+      0.551,
+      0.541
+    ],
+    "sky_horizon_ref": [
+      0.529,
+      0.549,
+      0.56
+    ],
+    "ground_clearing_rgb": [
+      0.3,
+      0.275,
+      0.128
+    ],
+    "ground_clearing_ref": [
+      0.256,
+      0.221,
+      0.156
+    ],
+    "foreground_fern_rgb": [
+      0.331,
+      0.299,
+      0.144
+    ],
+    "foreground_fern_ref": [
+      0.276,
+      0.231,
+      0.129
+    ],
+    "foreground_fern_std_rgb": [
+      0.128,
+      0.116,
+      0.111
+    ],
+    "foreground_fern_std_ref": [
+      0.128,
+      0.124,
+      0.104
+    ]
+  },
+  "reference": "docs/reference/visual_quality_target_coastal_ferns.jpg"
+}

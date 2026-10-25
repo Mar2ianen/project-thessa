@@ -7,8 +7,8 @@
 //! the frame bind group; same-size updates only write buffers.
 use thessa_render_core::environment::EnvironmentRadiance;
 
-/// `vec4<u32>` header + ambient and two local-layer vec4s, matching `environment.wgsl`.
-const META_BYTES: u64 = 64;
+/// Header, ambient, two local-layer vec4s and nine diffuse SH vec4s.
+const META_BYTES: u64 = 208;
 /// `array<vec4<f32>>` texel stride.
 const TEXEL_BYTES: u64 = 16;
 /// Placeholder texel so the storage binding is always valid.
@@ -161,6 +161,13 @@ impl EnvironmentBinding {
             0,
             &meta_bytes(true, field.width(), field.height(), field.ambient_lux())[..32],
         );
+        let coefficients: Vec<u8> = field
+            .diffuse_coefficients()
+            .iter()
+            .flat_map(|rgb| rgb.iter().copied().chain([0.0]))
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        backend.queue.write_buffer(&self.meta, 64, &coefficients);
         self.enabled = true;
         self.width = field.width();
         self.height = field.height();
@@ -313,7 +320,7 @@ pub(crate) fn shader(group: u32) -> String {
     .replace("@group(0)", &format!("@group({group})"))
 }
 
-fn meta_bytes(enabled: bool, width: u32, height: u32, ambient_lux: [f32; 3]) -> [u8; 64] {
+fn meta_bytes(enabled: bool, width: u32, height: u32, ambient_lux: [f32; 3]) -> [u8; 208] {
     let mut bytes = [0_u8; META_BYTES as usize];
     let header = [u32::from(enabled), width, height, 0];
     for (index, word) in header.iter().enumerate() {
@@ -340,6 +347,55 @@ fn buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "hardware: SH9 diffuse and raster footprint roughness against analytic oracles"]
+    fn diffuse_sky_and_footprint_roughness_match_analytic_oracles() {
+        let backend = crate::Backend::bring_up().unwrap();
+        let field = EnvironmentRadiance::new(
+            64,
+            32,
+            (0..2048)
+                .map(|i| [if i / 64 >= 16 { 1.0 } else { 0.0 }; 3])
+                .collect(),
+        )
+        .unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        let normals = [
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let body=normals.iter().enumerate().map(|(i,n)|format!("let n{i}=vec3({:?},{:?},{:?});probe_out[{i}]=vec4(env_diffuse_irradiance(n{i},vec3(9.0))+env_radiance(n{i},vec3(0.0))*1e-30,surface_filtered_roughness_variance(0.2,vec3(0.4,0.0,0.0),vec3(0.0,0.2,0.0),0.18));",n[0],n[1],n[2])).collect::<String>();
+        let shader = format!(
+            "{}\n{}\n@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{{body}}}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0)
+        );
+        for enabled in [true, false] {
+            if !enabled {
+                binding.update(&backend, None);
+            }
+            let actual = probe(&backend, &binding, shader.clone(), 4, [1, 1, 1]);
+            for (n, value) in normals.iter().zip(actual) {
+                let expected = if enabled {
+                    std::f32::consts::PI * (1.0 + n[1]) * 0.5
+                } else {
+                    9.0
+                };
+                for v in &value[..3] {
+                    assert!((*v - expected).abs() < 0.005);
+                }
+                let roughness =
+                    (0.2_f64.powi(4) + (0.4_f64.powi(2) + 0.2_f64.powi(2)) / 12.0 + 0.18)
+                        .sqrt()
+                        .sqrt();
+                assert!((f64::from(value[3]) - roughness).abs() < 1e-6);
+            }
+        }
+    }
 
     #[test]
     fn local_haze_transport_preserves_small_height_and_rejects_invalid_inputs() {
@@ -462,7 +518,7 @@ mod tests {
     #[test]
     fn meta_layout_matches_the_shader() {
         let bytes = meta_bytes(true, 32, 16, [1.0, 2.0, 3.0]);
-        assert_eq!(bytes.len(), 64);
+        assert_eq!(bytes.len(), 208);
         assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 32);
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 16);

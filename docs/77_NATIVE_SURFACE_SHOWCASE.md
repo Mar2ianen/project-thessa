@@ -6,6 +6,138 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD15 — Soil geometry, residual normals and plant forms (2026-10-25)
+
+This continuation reviews `84f2cf6` and keeps persistent native CBT, the canonical
+surface/scatter identities, existing field/job/cache/mesh/shadow/RT publication,
+manual EV100 12.80, 4× MSAA and **TAA off**. It adds no render pass or scheduler.
+It is an implemented visual-development slice, not reference acceptance.
+The WORLD12–14 sections below are dated snapshots; the following contracts
+supersede their single-swatch, geometry-only normal and prototype-count limits.
+
+**Soil source and geometry.** Ground detail now mixes the existing 3.15 m Forest
+Ground 04 scan with the CC0 [Brown Mud Leaves 01 scan](https://polyhaven.com/a/brown_mud_leaves_01)
+by Rob Tuytel / Poly Haven (reported width 1.3 m). The new checked-in 512²
+RGB8/R8/R16 payload is 1,415,479 compressed bytes. Its importer pins the original
+SHA256 hashes, averages reflectance in linear light, normalizes 16-bit roughness
+before conversion, preserves relative-height precision and writes deterministic
+gzip. License, source hashes and quantized means accompany the payload.
+The 60 mm / 25 mm source height ranges remain explicit **authored optical priors**;
+the photographic plants are an optical proxy, not a Paleozoic botanical claim.
+
+Each source retains world-fixed stochastic triplanar mapping, its physical width,
+shared albedo/roughness/height coordinates and mean-preserving mips. A continuous
+8 m world field blends their coverage (0.10–0.85); the blend itself filters to
+its coarse prior. Relative heights are centered independently, avoiding a step
+from unrelated scan zero points. Existing moisture, canopy, geology and later
+rock/snow/salt cover continue to own eligibility and ordered optical response.
+This is not categorical RGB classification or a new terrain/soil simulation.
+
+The previously shading-only 0.5/1/2/4/8 m grain octaves now enter the same
+render-height law as scan relief when the 33² source grid resolves them. The
+existing channels, amplitudes, filtering and material response are reused;
+32 m and larger grain stays optical. Grids with spacing >=4 m reproduce the
+legacy height source exactly. Medium/High ground relief uses a 1 mm quantization
+target on admitted pages; Low retains optical-only soil. Authoritative planetary
+height, collisions, water depth and scatter descriptors remain unchanged.
+The native plant instance pose and pebble anchoring sample this same render-only
+source at a fixed 12 mm footprint. This improves local contact; it does not
+establish exact intersection with every asynchronously resident raster triangle.
+A loose analytical envelope is 5.2 m (Perlin corner bound 2.8, existing summed
+amplitudes, response <=1.12, scan extrema and coverage <=1), **not** a measured
+soil-height distribution. The fixed coastal regression separately pins <2 m;
+coarse and disabled byte equivalence are also tested.
+
+**Unresolved normal detail.** Fine geometry used to suppress all material normals
+to avoid counting scan relief twice, also losing unresolved grain. The producer
+now retains full RG8_SNORM normals and optionally publishes a second independently
+mipped RG8_SNORM plane: full optical height gradient minus the gradient of the
+actual quantized render-height grid relative to its base-only grid. The stencil
+and cube-face metric match the production height sampler. The immutable residual
+travels through the existing material page, generation, priority and upload path.
+
+The native normal atlas uses RGBA8_SNORM only when geometric ground relief is
+resolved: RG is full optical normal, BA is residual. The normal directory preserves
+its level and adds a validity bit. A material page must match all three geometry
+vertices' source level; old, mixed or mismatched pages use geometry-only normals.
+Matched radial-height gradients compose as `normalize(Ngeo + Gres * dot(Ngeo, radial))`,
+so resolved slope is not added a second time. Ordinary/disabled-ground normals
+retain the previous RG8_SNORM atlas and upload cost; normals-off retains only its
+1² dummy. Relief costs another 43,690 GPU bytes per allocated normal layer
+(11,184,640 bytes at 256 layers) and 43,690 CPU bytes per residual-bearing page,
+without another texture, binding or pass. Capture metadata reports actual residual
+resident pages. The GPU regression independently checks full-normal suppression,
+BA selection through the real directory/atlas and Lambert radiance.
+
+**Plant and stone representation.** Stable world identity chooses three fern
+forms and three tree forms; reeds retain one. Tree forms include the retained
+broad fork, one straight trunk with a single crown, and a narrower fork with
+more drooping outer fronds. Bounded diagonal proportions are baked into local
+geometry with inverse-transpose normals and rebaked 32-ray BVH visibility; the
+shared rigid instance ABI remains unchanged. Six root flares per tree terminate
+below local soil and cast real shadows. Full/reduced roots use 8/4 sides and
+trunks 16/8 sides. Full/reduced pairs retain organ/material boundaries and world
+identity. Independent projected-area and sampled-vertex-distance checks cover
+all forms: <2.5% projected-area difference and <57 mm times maximum form scale
+per unit instance scale; this is not a continuous Hausdorff bound. The existing
+scale-aware detail-distance rule includes maximum form stretch. Prepared opaque
+instances are ordered near-first within each organ/form range using the existing
+window anchor; canonical descriptors stay paired with their rigid poses. Sorting
+runs only on preparation/publication, not as a new per-frame scheduler. Geometry,
+materials, instance counts, shadow/RT membership and canonical world IDs are
+unchanged by ordering; a separate identical-geometry capture compares it with
+the retained unsorted executable. Complete native
+plant/stone publication has at most 34 primitive ranges, with deduplicated existing
+textures; the prototype payload is bounded by 6 MB. Pebble diameters now span
+4–46 cm with a fourth-power size distribution, retaining the same source IDs,
+2/m² candidate policy and 8 m spatial colony field. Disabled plants and the
+independently gated ground-prop path preserve their existing fallbacks.
+
+**Lighting and filtering.** Medium/High primary terrain and meshes now convolve
+the already-published radiance field into SH9 Lambert irradiance. The backend-neutral
+producer computes nine coefficients only when a field is constructed; GPU consumers
+use the existing environment uniform (64 ->208 bytes), without new bindings,
+passes, targets or per-pixel field integration. Low remains isotropic and absent
+fields reproduce the ambient fallback. Thin leaves combine the front and back
+hemispheres with their existing R/T partition and baked visibility. Secondary
+mesh diffuse hits use the same irradiance contract. Tests cover uniform and
+rotated half-sky analytic integrals, including actual production WGSL. This is
+three-band quadrature of the **clear sky/emission source**, not complete cloudy
+multiple scattering or canopy GI. Background and specular cloud transport remain
+owned by their existing models.
+
+Medium/High specular shading also broadens GGX roughness by the normal variance
+over a unit pixel box, `(length(dNdx)^2 + length(dNdy)^2)/12`. High mesh normal maps
+add half the unresolved normal covariance trace recovered from the existing
+unnormalized mip mean (`1-length(mean(N))^2`), scaled by the material normal strength.
+No new mip texture or sample is required. Zero variance preserves roughness,
+Low and reflection-disabled paths omit the correction, and spectral water retains
+its own normal law. This is an approximate lobe filter; it does not eliminate
+coverage aliasing of arbitrarily small pinnae. TAA remains default-off.
+
+Research: [Ramamoorthi/Hanrahan diffuse environment maps](https://vis.stanford.edu/papers/envmap/),
+[Filament material filtering](https://google.github.io/filament/main/materials.html),
+[NVIDIA GPU Gems vegetation](https://developer.nvidia.com/gpugems/gpugems3/part-iii-rendering/chapter-16-vegetation-procedural-animation-and-shading-crysis).
+Algorithms are independently implemented; no external engine code is copied.
+
+Validation and fixed-camera capture evidence are recorded in
+[`artifacts/native-surface-completion-2026-10-25.json`](artifacts/native-surface-completion-2026-10-25.json).
+Capture timings are serial native diagnostics, not game FPS. Differing geometry
+and shading workloads must not be presented as equal-workload CBT benchmarks.
+The extended plant GPU oracle separates a 1/16-pixel primary coverage edge band
+from interior shading ([Vulkan's minimum four fractional raster bits](https://docs.vulkan.org/spec/latest/chapters/limits.html)), including
+nearer leaves just outside their f64 outline. It retains the two-code colour
+agreement requirement and the separate blocker-edge checks. This does not certify
+coverage/temporal antialiasing; bias-induced geometric visibility differences are
+reported separately. The coarse grazing BRDF oracle now resolves its footprint
+at 1025² before comparison to the unchanged point-integral tolerance. Sky-depth
+fixtures hold isotropic foreground irradiance fixed; directional diffuse has its
+own CPU and production-WGSL analytic oracles.
+
+No independent blind preference or reference parity is claimed. Remaining limits
+include finite vegetation windows, simplified pinnae, cloud/indirect-light coupling,
+exact ground contact/collision and temporal/platform acceptance.
+
 ## WORLD14 — Coastal material review and shared local weather (2026-10-25)
 
 Review baseline is `271e65a` plus the user's uncommitted green-leaf roughness

@@ -2,6 +2,17 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+WORLD15 ([doc 77](77_NATIVE_SURFACE_SHOWCASE.md)) extends the current material
+contract with optional unresolved render-height gradient planes. Native geometric
+ground relief uses RGBA8_SNORM (full normal RG, residual BA) and a matching
+source-level validity bit; ordinary normals retain RG8_SNORM and normals-off a
+1² dummy. Mixed or mismatched source levels fall back to geometry-only normals.
+The shared page/cache/priority path is unchanged. Medium/High also evaluate
+SH9 diffuse irradiance from the existing sky field and filter specular roughness
+by raster normal variance; Low keeps the original isotropic/unfiltered fallback.
+See doc 77 for memory costs, source-height priors and independent GPU oracles.
+Earlier dated implementation sections describe the representation at that time.
+
 The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
 material coordinates as a dyadic anchor plus small offsets through raster
 interpolation and page lookup. WORLD13 extends this precision contract to

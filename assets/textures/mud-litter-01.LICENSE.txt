@@ -1,0 +1,23 @@
+SPDX-License-Identifier: CC0-1.0
+
+Brown Mud Leaves 01 — Rob Tuytel / Poly Haven.
+Source: https://polyhaven.com/a/brown_mud_leaves_01
+License: https://polyhaven.com/license
+CC0 legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+Retrieved: 2026-10-25 through the public direct asset download links.
+
+The derived mud-litter-01.bin.gz contains a 512-square RGB8 sRGB reflectance,
+R8 linear roughness and R16 relative-height swatch. The source is downsampled
+in linear RGB; the source 16-bit roughness is normalized before conversion to
+8-bit (never truncated/modulo-wrapped). The source displacement remains 16-bit.
+All three maps share the same coordinates. No baked AO or lighting is imported.
+
+The source page reports a 1.3 m swatch width. The 0.025 m displacement range
+is an explicit authored optical prior; no calibrated height scale, Thessa
+botany, sediment inventory, collision or water depth is claimed.
+
+Reproduce with tools/worldgen-rocky/import_mud_litter.py SOURCE_DIR DESTINATION.
+Exact URLs use https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/
+brown_mud_leaves_01/brown_mud_leaves_01_{diff,rough,disp}_1k.png.
+Source SHA256 hashes, output hash and quantized means are recorded in the
+adjacent mud-litter-01.provenance.json. Pillow/NumPy are offline tooling only.

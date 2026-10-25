@@ -939,6 +939,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             resolved.local_haze_height_m,
             resolved.atmosphere_quality
         );
+        println!(
+            "material_relief_residual_pages={} diffuse_irradiance=SH9_for_medium_high",
+            renderer.material_relief_resident_pages()
+        );
         let ocean = renderer.ocean_stats();
         let night = renderer.night_lights_stats();
         println!(

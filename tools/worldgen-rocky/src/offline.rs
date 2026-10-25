@@ -1234,13 +1234,23 @@ fn apply_crown_core_occlusion(mesh: &mut PlantMesh) {
     if mesh.kind != crate::scatter::ScatterKind::LycopsidTree {
         return;
     }
-    // Deepen cavity occlusion inside the apical rosette core where stipes converge.
-    for (p, ao) in mesh.positions.iter().zip(&mut mesh.ambient_visibility) {
+    let stem_end = mesh.stem.as_ref().map_or(0, |s| s.vertex_count as usize);
+    // Deepen cavity occlusion inside the apical rosette core and basal trunk crevices.
+    for (idx, (p, ao)) in mesh
+        .positions
+        .iter()
+        .zip(&mut mesh.ambient_visibility)
+        .enumerate()
+    {
         let y = f64::from(p[1]);
         if y > 6.0 {
             let r = f64::from(p[0]).hypot(f64::from(p[2]));
             let core_factor = (r / 3.2).clamp(0.45, 1.0) as f32;
             *ao = (*ao * core_factor).clamp(0.15, 1.0);
+        } else if idx < stem_end && y < 2.0 {
+            // Basal trunk ambient occlusion from surrounding understory ferns & soil.
+            let basal_factor = (0.42 + 0.58 * (y / 2.0).clamp(0.0, 1.0)) as f32;
+            *ao = (*ao * basal_factor).clamp(0.15, 1.0);
         }
     }
 }

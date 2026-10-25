@@ -1679,19 +1679,18 @@ fn crown_frond(
         for side in [-1.0, 1.0] {
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = i as f64 * 0.5;
+                let v_fold = 0.05 * length * (1.0 - s) * s;
+                let sag = 0.16 * length * s * s;
                 offset(
                     at(t),
                     offset(
                         scaled(lateral, side * length * s),
-                        offset(
-                            scaled(radial, length * s * 0.35),
-                            [0.0, -0.20 * length * s * s, 0.0],
-                        ),
+                        offset(scaled(radial, length * s * 0.35), [0.0, v_fold - sag, 0.0]),
                     ),
                 )
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna(mesh, nodes, tangent, length * 0.22, length * 0.030, reduced);
+            pinna(mesh, nodes, tangent, length * 0.22, length * 0.038, reduced);
         }
     }
 }

@@ -1268,10 +1268,10 @@ fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
     const FRONDS: usize = 13;
     // Explicit non-random per-frond variation (length, arch height, base height).
     const LENGTH_M: [f64; FRONDS] = [
-        1.25, 1.50, 1.65, 1.35, 1.05, 1.55, 0.75, 1.45, 0.95, 1.65, 0.65, 1.35, 0.85,
+        1.25, 1.50, 1.75, 1.35, 1.05, 1.65, 0.75, 1.45, 0.95, 1.78, 0.65, 1.35, 0.85,
     ];
     const HEIGHT_M: [f64; FRONDS] = [
-        1.05, 0.95, 0.72, 1.10, 1.25, 0.85, 1.45, 1.00, 1.30, 0.68, 1.40, 1.05, 1.35,
+        1.05, 0.95, 0.38, 1.10, 1.25, 0.44, 1.45, 1.00, 1.30, 0.32, 1.40, 1.05, 1.35,
     ];
     const BASE_Y_M: [f64; FRONDS] = [
         0.0, 0.02, 0.01, 0.03, 0.015, 0.005, 0.025, 0.0, 0.018, 0.008, 0.022, 0.012, 0.006,
@@ -1285,7 +1285,7 @@ fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
         if order == 10 {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
-                albedo_srgb: [0.22, 0.15, 0.08],
+                albedo_srgb: [0.18, 0.12, 0.06],
                 diffuse_transmission: 0.05,
             });
         }
@@ -1453,7 +1453,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         if base_y == 7.20 {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
-                albedo_srgb: [0.30, 0.22, 0.11],
+                albedo_srgb: [0.24, 0.16, 0.08],
                 diffuse_transmission: 0.05,
             });
         }

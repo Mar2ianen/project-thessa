@@ -34,20 +34,30 @@ pub(crate) fn bake(mesh: &PlantMesh, samples: usize) -> Vec<f32> {
                 // Offset bounds f32 source-coordinate rounding at this prototype's
                 // scale. Rays otherwise include every surface, on both sides.
                 let origin = Vector::from_array(p.map(f64::from)) + normal * 0.00002;
-                let visible = (0..samples)
-                    .filter(|&i| {
+                // Planetary ground reflects diffuse ambient irradiance up into understory foliage
+                // (soil/rock reflectance ~ 0.22), preventing downward-facing crown foliage
+                // from collapsing into absolute black voids.
+                const GROUND_ALBEDO_BOUNCE: f64 = 0.22;
+                let visible: f64 = (0..samples)
+                    .map(|i| {
                         let u = (i as f64 + 0.5) / samples as f64;
                         let angle = i as f64 * 2.399_963_229_728_653;
                         let direction = tangent * (u.sqrt() * angle.cos())
                             + bitangent * (u.sqrt() * angle.sin())
                             + normal * (1.0 - u).sqrt();
-                        direction.y > 0.0
-                            && shape
-                                .cast_local_ray(&Ray::new(origin, direction), f64::MAX, false)
-                                .is_none()
+                        if shape
+                            .cast_local_ray(&Ray::new(origin, direction), f64::MAX, false)
+                            .is_some()
+                        {
+                            0.0
+                        } else if direction.y > 0.0 {
+                            1.0
+                        } else {
+                            GROUND_ALBEDO_BOUNCE
+                        }
                     })
-                    .count();
-                visible as f32 / samples as f32
+                    .sum();
+                (visible / samples as f64) as f32
             })
         })
         .collect()

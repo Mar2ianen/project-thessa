@@ -1190,6 +1190,15 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
                 };
                 for form in 0..count {
                     let mut variant = mesh.clone();
+                    if form != 0 && mesh.kind == crate::scatter::ScatterKind::FernClump {
+                        variant.positions.clear();
+                        variant.normals.clear();
+                        variant.uvs.clear();
+                        variant.indices.clear();
+                        variant.stem = None;
+                        variant.senescent = None;
+                        fern_clump_form(&mut variant, reduced, form);
+                    }
                     if form != 0 && mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
                         variant.positions.clear();
                         variant.normals.clear();
@@ -1265,7 +1274,16 @@ const GOLDEN_ANGLE: f64 = 2.399_963_229_728_653;
 
 /// Grounded fern rosette with paired pinnae along thirteen arching rachises.
 fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
+    fern_clump_form(mesh, reduced, 0);
+}
+
+fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     const FRONDS: usize = 13;
+    let (length_scale, height_scale, arch_shift) = match form {
+        1 => (1.05, 1.15, 0.94), // Form 1: Upright tall shuttlecock rosette
+        2 => (1.10, 0.88, 1.05), // Form 2: Broad decumbent spreading rosette
+        _ => (1.00, 1.00, 1.00), // Form 0: Balanced shuttlecock rosette
+    };
     // Explicit non-random per-frond variation (length, arch height, base height).
     const LENGTH_M: [f64; FRONDS] = [
         1.25, 1.50, 1.75, 1.35, 1.05, 1.65, 0.75, 1.45, 0.95, 1.78, 0.65, 1.35, 0.85,
@@ -1289,11 +1307,16 @@ fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
                 diffuse_transmission: 0.05,
             });
         }
+        let (len, hgt) = if order >= 10 {
+            (LENGTH_M[i] * length_scale, HEIGHT_M[i])
+        } else {
+            (LENGTH_M[i] * length_scale, HEIGHT_M[i] * height_scale)
+        };
         fern_frond(
             mesh,
-            0.37 + i as f64 * GOLDEN_ANGLE,
-            LENGTH_M[i],
-            HEIGHT_M[i],
+            0.37 + (i as f64 * GOLDEN_ANGLE) * arch_shift,
+            len,
+            hgt,
             BASE_Y_M[i],
             reduced,
         );

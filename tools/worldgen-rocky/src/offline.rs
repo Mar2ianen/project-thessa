@@ -1458,22 +1458,25 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     for i in 0..6 {
         let angle = i as f64 * GOLDEN_ANGLE + 0.2 + f64::from(form) * 0.73;
         let (radial, _) = azimuth_frame(angle);
-        let flare_reach = match form {
+        let flare_scale = match form {
             1 => 0.82,
             2 => 1.12,
             _ => 0.94,
         };
-        let base = offset(scaled(radial, 0.14), [0.0, 0.22, 0.0]);
+        let reach_jitter = 0.88 + 0.24 * (i as f64 * 2.3 + f64::from(form)).sin().powi(2);
+        let flare_reach = flare_scale * reach_jitter;
+        let base_y = 0.22 + 0.03 * (i as f64 * 1.7).cos().powi(2);
+        let base = offset(scaled(radial, 0.14), [0.0, base_y, 0.0]);
         tapered_limb(
             mesh,
             base,
-            offset(scaled(radial, flare_reach), [0.0, -0.36, 0.0]),
+            offset(scaled(radial, flare_reach), [0.0, -0.14 - base_y, 0.0]),
             if reduced { 4 } else { 8 },
             &[
-                (0.0, 0.18),
-                (0.32, 0.13),
-                (0.68, 0.065),
-                (flare_reach, 0.012),
+                (0.0, 0.19),
+                (flare_reach * 0.34, 0.13),
+                (flare_reach * 0.72, 0.065),
+                (flare_reach, 0.015),
             ],
         );
     }

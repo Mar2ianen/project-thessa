@@ -69,6 +69,7 @@ mod tests {
             ],
             normals: vec![[0.0, 1.0, 0.0]; 5],
             uvs: vec![],
+            foliage_tones: vec![],
             indices: vec![1, 3, 2, 1, 4, 3],
             albedo_srgb: [0.3; 3],
             stem: None,

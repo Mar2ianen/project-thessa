@@ -722,16 +722,16 @@ fn convert_with_detail(
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => match form {
-                        1 => [0.32, 0.36, 0.19, 1.0],
-                        2 => [0.30, 0.34, 0.18, 1.0],
+                        1 => [0.30, 0.40, 0.22, 1.0],
+                        2 => [0.38, 0.34, 0.16, 1.0],
                         _ => [0.31, 0.35, 0.19, 1.0],
                     },
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
-                        1 => [0.34, 0.38, 0.18, 1.0],
-                        2 => [0.31, 0.36, 0.17, 1.0],
+                        1 => [0.31, 0.41, 0.21, 1.0],
+                        2 => [0.38, 0.35, 0.16, 1.0],
                         _ => [0.33, 0.37, 0.19, 1.0],
                     },
-                    _ => [0.75, 0.75, 0.75, 1.0],
+                    _ => [0.48, 0.58, 0.30, 1.0],
                 }
             };
             let diffuse_transmission = if dry {
@@ -773,7 +773,17 @@ fn convert_with_detail(
                     .map(|index| Vertex {
                         position: prototype.positions[index],
                         normal: prototype.normals[index],
-                        uv: prototype.uvs.get(index).copied().unwrap_or([0.0; 2]),
+                        uv: {
+                            let uv = prototype.uvs.get(index).copied().unwrap_or([0.0; 2]);
+                            if stem {
+                                uv
+                            } else {
+                                crate::surface_plant_materials::foliage_uv(
+                                    uv,
+                                    prototype.foliage_tones.get(index).copied().unwrap_or(0),
+                                )
+                            }
+                        },
                     })
                     .collect(),
                 indices: prototype
@@ -1116,7 +1126,8 @@ mod tests {
                     let texture = &prepared.asset.textures[material.base_texture.unwrap()];
                     let image = &prepared.asset.images[texture.image];
                     let mut reflectance = [0.0_f64; 3];
-                    for pixel in image.rgba8.as_chunks::<4>().0 {
+                    // Browning is intentional in the fourth pigment cohort.
+                    for pixel in image.rgba8[..image.rgba8.len() * 3 / 4].as_chunks::<4>().0 {
                         for channel in 0..3 {
                             let encoded = f64::from(pixel[channel]) / 255.0;
                             let linear = if encoded <= 0.04045 {
@@ -1136,10 +1147,21 @@ mod tests {
                 for (i, v) in primitive.vertices.iter().enumerate() {
                     assert_eq!(v.position, prototype.positions[offset + i]);
                     assert_eq!(v.normal, prototype.normals[offset + i]);
-                    assert_eq!(
-                        v.uv,
-                        prototype.uvs.get(offset + i).copied().unwrap_or([0.0; 2])
-                    );
+                    assert_eq!(v.uv, {
+                        let uv = prototype.uvs.get(offset + i).copied().unwrap_or([0.0; 2]);
+                        if stem {
+                            uv
+                        } else {
+                            crate::surface_plant_materials::foliage_uv(
+                                uv,
+                                prototype
+                                    .foliage_tones
+                                    .get(offset + i)
+                                    .copied()
+                                    .unwrap_or(0),
+                            )
+                        }
+                    });
                 }
                 let indices: Vec<_> = prototype
                     .indices
@@ -1168,7 +1190,7 @@ mod tests {
                 assert_eq!(end, prototype.positions.len());
             }
             assert_eq!(stats.prototype_bytes, prototype_payload);
-            assert_eq!(stats.prototype_texture_bytes, 3_219_456);
+            assert_eq!(stats.prototype_texture_bytes, 3_760_128);
             prepared.asset.validate().unwrap();
             eprintln!("WORLD04 {quality:?}: {stats:?}");
             previous = prepared.descriptors;

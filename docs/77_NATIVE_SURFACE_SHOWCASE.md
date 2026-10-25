@@ -6,6 +6,86 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
+
+This continuation reviews and retains user commit `3d58502`: the solitary
+48-frond umbrella, dual-terminal veteran, 21-frond ground rosette and ecological
+understory niches. The veteran implementation emits 24 fronds at each terminal;
+the earlier WORLD80–83 prose's 28/20 split does not describe that source.
+Morphology alone left the three living-material factors almost identical and
+every pinna sampled the same small green patch.
+
+Four authored pigment cohorts now belong to complete fronds/blades: mature,
+juvenile, olive and weathered. A default-empty `PlantMesh.foliage_tones` byte
+array preserves historical bake decoding; nonempty arrays must match vertex
+counts, use 0–3 and never cross a triangle's cohort. Both representations retain
+the same organ sequence. These are authored optical age cues, not simulated
+plant development or measured pigment spectra. Existing form identity selects
+different green/olive material factors; dry organs retain their separate brown
+material and low transmission. Reed factors are less yellow and more restrained.
+
+The native consumer grades the existing CC0 pinna base map in **linear RGB** and
+packs four copies into one padded 160×320 atlas. Normal/roughness maps repeat the
+same source and padding; only base reflectance is graded. UVs address texel centers
+inside 16-pixel gutters. Existing linear-light mip filtering is retained (see
+[PBRT image filtering](https://www.pbr-book.org/4ed/Textures_and_Materials/Image_Texture));
+the small shared atlas avoids extra organ primitives/material draws. The linear
+RGB grades are mature `[0.82,0.94,0.86]`, juvenile `[1.32,1.35,0.92]`, olive
+`[1.22,1.03,0.67]` and weathered `[1.70,0.65,0.35]`, before the existing
+form-dependent material factors. Cohort centers
+remain distinct through tested mip 4; wider footprints converge toward an area
+mean, not a promise of distant color separation or temporal acceptance. Raster,
+shadow and RT sources still consume the same mesh/material publication.
+
+Rachises now bend sideways, and opposed pinnae vary in length, attachment position
+and roll. Full/reduced geometry uses identical deterministic parameters. No new
+frond, pinna or scatter identity is added, and the existing extent, projected-area
+and sampled-distance oracles remain unchanged. Dry pinna control points stop at
+the authored soil datum. The retained basal visibility prior clamps its height
+input before a fractional power, avoiding nonfinite AO below the local root plane.
+The existing geometric visibility bake and the user's additional authored
+core/base attenuation remain distinct; the latter is not measured contact
+visibility or computed global illumination.
+
+The existing `surface_plants` quality/disable policy is unchanged: full/reduced
+geometry selection remains scale-aware, the disabled path prepares no plants,
+and no new render pass, shader option, capability requirement or graphics knob
+is introduced. The shared RGBA source images grow from 3,219,456 to 3,760,128 B
+(+540,672 B before GPU mips); the 7 MB vertex/index/AO and 37-range admission
+limits are unchanged. Optical cohort metadata is CPU asset data, outside the
+unchanged 32-byte vertex / 64-byte rigid-instance ABI.
+
+Seven local command gates passed: 266 worldgen and 130 native CPU tests
+(37 ignored), formatting, strict affected all-target/all-feature Clippy,
+the architecture guard (12 foundational crates), feature-off compilation and
+release build. Cohort tests validate historical decoding, reject malformed or
+mixed-triangle metadata, preserve full/reduced organ transitions, check padded
+UV/data-map/mip behavior and distinguish green, brighter juvenile, olive and
+brown mean reflectance. These are authored asset contracts, not botanical
+measurements. The first palette trial was retained separately after its standing
+frame showed insufficient weathered-leaf separation; the final palette deepens
+the weathered cohort without changing the other three.
+
+Evidence and actual capture limitations are recorded in
+[`native-foliage-diversity-2026-10-26.json`](artifacts/native-foliage-diversity-2026-10-26.json).
+The pinned baseline's local-RT capture caused an AMD device loss/gfx ring reset;
+matched comparisons therefore use RT Off with the existing raster shadow
+fallback on **both** versions. The checked-in showcase still requests local RT;
+this iteration does not establish its stability. Earlier WORLD55–83 image L1
+scores are image statistics, not photometric calibration or reference acceptance.
+All three final before/after pairs match actual survey camera, canonical height
+residency, CBT slots, instance/triangle counts and 37 draws. Standing retains
+14,005 instances / 28,246,314 mesh triangles / 25,266 CBT slots; source vertex,
+index and AO payload stays 6,219,328 B. GPU medians before→after are
+595.970→592.716 ms (standing), 613.184→592.990 ms (composed), and
+688.432→688.560 ms (grove), AMD Radeon 880M / RADV / Mesa 26.2.5. Some baseline
+runs overlapped CPU compilation; these are descriptive samples, not a performance
+win. Runtime cost remains far above interactive quality. Three blind pairs are
+prepared with a separate origin key and remain unvoted.
+
+Reference parity, independent blind preference, full motion-sequence acceptance,
+and the remaining repeated instance silhouettes are open.
+
 ## WORLD43 — Prioritize the visible floor instead of geometry prefetch (2026-10-25)
 
 This iteration starts from WORLD42 commit `446357a`. The source-only resolution

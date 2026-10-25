@@ -1,15 +1,20 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current review (WORLD40, doc 77): Gemini's asymmetric crown/fern forms, clearings
-and optical calibration are retained. The tall fork's branches now overlap the
-actual tilted stem below its tip. Prototype ambient visibility again represents
-only geometric occlusion; the fixed 0.22 downward-ray multiplier was removed.
-Directional sky response belongs to the shared environment, and no computed
-diffuse ground bounce is claimed. Existing shared resources/budgets remain.
-Current living fern/tree texture factors are `[0.31,0.35,0.19]` /
-`[0.33,0.37,0.19]`, bark `[0.55,0.52,0.44]` and living roughness factor 0.60;
-transmission remains 0.18. Earlier dated checkpoints describe prior forms and
-material calibration, not reference acceptance.
+Current review (WORLD84, doc 77) retains the user's solitary umbrella,
+dual-terminal crowns and 21-frond hero fern. Stable form identity now combines
+with four organ-level pigment cohorts, shared padded leaf atlases and bounded
+asymmetric pinna/rachis geometry. Full/reduced representations retain identical
+cohort sequences and canonical instances. The source texture payload is
+3,760,128 B; 37 aggregate/plant ranges and the 7 MB vertex/index/AO limit remain.
+Current bark factors are form-dependent `[0.36,0.32,0.25]`,
+`[0.38,0.34,0.27]`, `[0.34,0.31,0.24]`; living roughness is 0.60,
+fern transmission 0.22, tree transmission 0.18/0.20/0.16 and reed 0.18.
+The geometric visibility bake is followed by retained authored crown/base
+attenuation; this is not computed ground bounce or measured contact visibility.
+The shared image atlas adds no pass/draw and the disabled path remains empty.
+Historical checkpoints below describe previous geometry/materials, not the
+current calibration or reference acceptance. RT stability and independent visual
+acceptance remain open; WORLD84 records an original-baseline AMD device loss.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid
@@ -287,6 +292,13 @@ budget, so the whole shared plant RT partition is withheld; raster/shadows and
 environment fallback remain. Increasing coverage is not a free performance win.
 
 ### Material and geometry ownership
+
+WORLD84 adds optional `foliage_tones`: empty historical arrays select the mature
+cohort; present byte arrays must match vertices, use 0–3 and be constant across
+each triangle. Native UV conversion addresses the shared padded pigment atlas;
+source UVs remain organ-local. This metadata changes neither rigid instances nor
+material-group ownership. The earlier checkpoint below describes the previous
+unatlased source and organ layout.
 
 `PlantMesh.uvs` and `.ambient_visibility` are optional serde-default arrays;
 empty historical arrays remain valid. Present arrays must match vertex count

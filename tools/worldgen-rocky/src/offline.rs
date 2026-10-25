@@ -377,6 +377,10 @@ pub struct PlantMesh {
     pub normals: Vec<[f32; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uvs: Vec<[f32; 2]>,
+    /// Authored per-organ pigment cohort: mature, juvenile, olive, weathered.
+    /// Empty on historical bakes; optical metadata, not simulated leaf age.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub foliage_tones: Vec<u8>,
     pub indices: Vec<u32>,
     pub albedo_srgb: [f32; 3],
     /// Optional separate stem reflectance. Historical bakes are single-material.
@@ -1194,6 +1198,7 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
                         variant.positions.clear();
                         variant.normals.clear();
                         variant.uvs.clear();
+                        variant.foliage_tones.clear();
                         variant.indices.clear();
                         variant.stem = None;
                         variant.senescent = None;
@@ -1203,6 +1208,7 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
                         variant.positions.clear();
                         variant.normals.clear();
                         variant.uvs.clear();
+                        variant.foliage_tones.clear();
                         variant.indices.clear();
                         variant.stem = None;
                         variant.senescent = None;
@@ -1268,7 +1274,7 @@ fn apply_crown_core_occlusion(mesh: &mut PlantMesh) {
             };
             // Ground plane contact occlusion anchoring to the local soil:
             let ground_ao = if y < 0.22 {
-                (0.28 + 0.72 * (y / 0.22).powf(1.4)).clamp(0.22, 1.0)
+                (0.28 + 0.72 * (y / 0.22).clamp(0.0, 1.0).powf(1.4)).clamp(0.22, 1.0)
             } else {
                 1.0
             };
@@ -1303,6 +1309,7 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
             positions: Vec::new(),
             normals: Vec::new(),
             uvs: Vec::new(),
+            foliage_tones: Vec::new(),
             indices: Vec::new(),
             albedo_srgb: [0.16, 0.30, 0.12],
             stem: None,
@@ -1324,6 +1331,7 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
             }
             _ => unreachable!(),
         }
+        mesh.foliage_tones.resize(mesh.positions.len(), 0);
         mesh.ambient_visibility = super::plant_visibility::bake(&mesh, 32);
         apply_crown_core_occlusion(&mut mesh);
         mesh
@@ -1605,7 +1613,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             (3, 7.20, 2.05, 0.15, 2.55, 1.25), // Hanging senescent mantle skirt
         ],
     };
-    for &(count, base_y, reach_base, rise, drop, phase_offset) in &tiers {
+    for (tier, &(count, base_y, reach_base, rise, drop, phase_offset)) in tiers.iter().enumerate() {
         if base_y == 7.20 || (form == 1 && base_y == 7.30) {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
@@ -1660,7 +1668,11 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 let drop_jitter =
                     0.90 + 0.20 * (i as f64 * 2.71 + term_idx as f64 * 1.7).cos().powi(2);
                 let drop = drop * if form == 2 { 1.42 } else { 1.0 } * drop_jitter;
+                let first = mesh.positions.len();
                 crown_frond(mesh, angle, base, reach, rise, drop, reduced);
+                if tier == 0 {
+                    assign_foliage_tone(mesh, first, 1);
+                }
             }
         }
     }
@@ -1715,7 +1727,9 @@ fn fern_frond(
     form: u8,
     reduced: bool,
 ) {
+    let first_vertex = mesh.positions.len();
     let (radial, lateral) = azimuth_frame(angle);
+    let bend = 0.055 * length_m * (angle * 2.7).sin();
     let at = |t: f64| {
         // Multi-tier rosette vertical curvature:
         // Senescent outer fronds drape directly towards the soil datum without phototropic lift;
@@ -1736,7 +1750,10 @@ fn fern_frond(
             0.0
         };
         offset(
-            scaled(radial, 0.04 + t * length_m),
+            offset(
+                scaled(radial, 0.04 + t * length_m),
+                scaled(lateral, bend * t * t),
+            ),
             [0.0, base_y_m + arch * height_m + tip_lift, 0.0],
         )
     };
@@ -1752,19 +1769,32 @@ fn fern_frond(
         let t = 0.11 + pair as f64 * 0.063;
         let length = length_m * 0.27 * (std::f64::consts::PI * t).sin().powf(0.65);
         for side in [-1.0, 1.0] {
+            let stagger = side * 0.008 * (pair as f64 * 1.7 + angle).sin();
+            let t = t + stagger;
+            let length = length * (1.0 + 0.13 * (pair as f64 * 2.1 + angle + side).sin());
             let attachment = at(t);
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = [0.0, 0.5, 1.0][i];
-                offset(
+                let mut point = offset(
                     attachment,
                     offset(
                         scaled(lateral, side * length * s),
                         offset(
                             scaled(radial, length * s * 0.28),
-                            [0.0, length * (std::f64::consts::PI * s).sin() * 0.07, 0.0],
+                            [
+                                0.0,
+                                length
+                                    * ((std::f64::consts::PI * s).sin() * 0.07
+                                        + 0.10 * (angle + pair as f64 * 0.8).sin() * s),
+                                0.0,
+                            ],
                         ),
                     ),
-                )
+                );
+                if senescent {
+                    point[1] = point[1].max(base_y_m);
+                }
+                point
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
             pinna(
@@ -1777,6 +1807,23 @@ fn fern_frond(
             );
         }
     }
+    let tone = if height_m / length_m > 1.1 {
+        1
+    } else if senescent {
+        3
+    } else if (angle * 1.7).sin() > 0.25 {
+        2
+    } else if angle.cos() < -0.75 {
+        3
+    } else {
+        0
+    };
+    assign_foliage_tone(mesh, first_vertex, tone);
+}
+
+fn assign_foliage_tone(mesh: &mut PlantMesh, first: usize, tone: u8) {
+    mesh.foliage_tones.resize(mesh.positions.len(), 0);
+    mesh.foliage_tones[first..].fill(tone);
 }
 
 /// One tapered reed blade: wide at the base, narrow at the drooping tip.
@@ -1788,6 +1835,7 @@ fn reed_blade(
     height_m: f64,
     width_m: f64,
 ) {
+    let first_vertex = mesh.positions.len();
     const T: [f64; 7] = [0.0, 0.17, 0.34, 0.51, 0.68, 0.84, 1.0];
     const HEIGHT_T: [f64; 7] = [0.0, 0.22, 0.44, 0.64, 0.79, 0.84, 0.62];
     const LEAN_T: [f64; 7] = [0.0, 0.04, 0.14, 0.33, 0.62, 0.96, 1.75];
@@ -1804,6 +1852,7 @@ fn reed_blade(
     let widths = T.map(|t| width_m * (1.0 - 0.85 * t));
     // Follow the upper side continuously across the arch and drooping tip.
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+    assign_foliage_tone(mesh, first_vertex, if angle.sin() > 0.4 { 2 } else { 0 });
 }
 
 /// One arching crown frond: rises from the trunk, then droops outward. Broad
@@ -1817,6 +1866,8 @@ fn crown_frond(
     drop_m: f64,
     reduced: bool,
 ) {
+    let first_vertex = mesh.positions.len();
+    let reach_m = reach_m * 0.99;
     let (radial, lateral) = azimuth_frame(angle);
     let is_senescent = rise_m < 0.3;
     let is_emerging = rise_m > 2.4 && reach_m < 2.6;
@@ -1840,7 +1891,10 @@ fn crown_frond(
         offset(
             base,
             offset(
-                scaled(radial, t * reach_m),
+                offset(
+                    scaled(radial, t * reach_m),
+                    scaled(lateral, 0.045 * reach_m * (angle * 2.3).sin() * t * t),
+                ),
                 [
                     0.0,
                     rise_m * (std::f64::consts::PI * t).sin() - drop_curve + recurve,
@@ -1858,6 +1912,8 @@ fn crown_frond(
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
         let length = reach_m * 0.23 * blade_profile;
         for side in [-1.0, 1.0] {
+            let t = t + side * 0.006 * (angle + pair as f64 * 1.3).sin();
+            let length = length * (0.97 + 0.08 * (angle + pair as f64 * 2.1 + side).sin());
             let sweep = 0.26 + 0.26 * t;
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = i as f64 * 0.5;
@@ -1899,6 +1955,21 @@ fn crown_frond(
             );
         }
     }
+    assign_foliage_tone(
+        mesh,
+        first_vertex,
+        if is_senescent {
+            3
+        } else if is_emerging {
+            1
+        } else if (angle * 1.7).sin() > 0.1 {
+            2
+        } else if angle.cos() < -0.75 {
+            3
+        } else {
+            0
+        },
+    );
 }
 
 fn offset(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -2177,6 +2248,14 @@ fn validate_mesh(mesh: &PlantMesh) -> Result<(), String> {
         || (!mesh.uvs.is_empty()
             && (mesh.uvs.len() != mesh.positions.len()
                 || mesh.uvs.iter().flatten().any(|v| !v.is_finite())))
+        || (!mesh.foliage_tones.is_empty()
+            && (mesh.foliage_tones.len() != mesh.positions.len()
+                || mesh.foliage_tones.iter().any(|&tone| tone > 3)
+                || mesh.indices.as_chunks::<3>().0.iter().any(|tri| {
+                    tri.iter().any(|&i| {
+                        mesh.foliage_tones[i as usize] != mesh.foliage_tones[tri[0] as usize]
+                    })
+                })))
         || (!mesh.ambient_visibility.is_empty()
             && (mesh.ambient_visibility.len() != mesh.positions.len()
                 || mesh
@@ -2261,6 +2340,46 @@ fn oriented_triangle(mesh: &mut PlantMesh, mut points: [[f64; 3]; 3], hint: [f64
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn foliage_cohorts_are_organ_constant_validated_and_lod_stable() {
+        let full = super::plant_prototype_forms(false);
+        let reduced = super::plant_prototype_forms(true);
+        let transitions = |mesh: &super::PlantMesh| {
+            let mut tones = mesh.foliage_tones.clone();
+            tones.dedup();
+            tones
+        };
+        for ((mesh, form), (coarse, coarse_form)) in full.iter().zip(&reduced) {
+            assert_eq!(form, coarse_form);
+            super::validate_mesh(mesh).unwrap();
+            super::validate_mesh(coarse).unwrap();
+            assert_eq!(transitions(mesh), transitions(coarse));
+            assert_eq!(mesh.foliage_tones.len(), mesh.positions.len());
+            assert!(mesh.foliage_tones.contains(&0));
+            assert!(mesh.foliage_tones.contains(&2));
+            if mesh.kind != crate::scatter::ScatterKind::ReedClump {
+                assert!(mesh.foliage_tones.contains(&1));
+                assert!(mesh.foliage_tones.contains(&3));
+            }
+        }
+        let mesh = &full[0].0;
+        let mut broken = mesh.clone();
+        broken.foliage_tones.pop();
+        assert!(super::validate_mesh(&broken).is_err());
+        broken = mesh.clone();
+        broken.foliage_tones[0] = 4;
+        assert!(super::validate_mesh(&broken).is_err());
+        broken = mesh.clone();
+        let index = mesh.indices[0] as usize;
+        broken.foliage_tones[index] = (broken.foliage_tones[index] + 1) % 4;
+        assert!(super::validate_mesh(&broken).is_err());
+        let mut legacy = serde_json::to_value(mesh).unwrap();
+        legacy.as_object_mut().unwrap().remove("foliage_tones");
+        let legacy: super::PlantMesh = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.foliage_tones.is_empty());
+        super::validate_mesh(&legacy).unwrap();
+    }
+
     use super::*;
     use crate::scatter::ScatterKind;
 

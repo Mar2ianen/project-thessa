@@ -1682,11 +1682,15 @@ fn crown_frond(
                 let s = i as f64 * 0.5;
                 let v_fold = 0.05 * length * (1.0 - s) * s;
                 let sag = 0.16 * length * s * s;
+                let torsion = side * 0.025 * length * s * (t - 0.25).max(0.0);
                 offset(
                     at(t),
                     offset(
                         scaled(lateral, side * length * s),
-                        offset(scaled(radial, length * s * 0.35), [0.0, v_fold - sag, 0.0]),
+                        offset(
+                            scaled(radial, length * s * 0.35),
+                            [0.0, v_fold - sag + torsion, 0.0],
+                        ),
                     ),
                 )
             });

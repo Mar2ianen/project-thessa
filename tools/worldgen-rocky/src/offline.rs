@@ -1507,7 +1507,8 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         for (term_idx, &terminal) in terminals.iter().enumerate() {
             for i in 0..count {
                 let term_offset = term_idx as f64 * 1.57 + f64::from(form) * 0.93;
-                let angle = phase_offset + term_offset + i as f64 * GOLDEN_ANGLE;
+                let angle_jitter = 0.08 * (i as f64 * 3.17 + term_idx as f64 * 2.4).sin();
+                let angle = phase_offset + term_offset + i as f64 * GOLDEN_ANGLE + angle_jitter;
                 let (radial, _) = azimuth_frame(angle);
                 let reach_scale = match form {
                     1 => {

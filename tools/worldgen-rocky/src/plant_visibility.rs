@@ -34,30 +34,19 @@ pub(crate) fn bake(mesh: &PlantMesh, samples: usize) -> Vec<f32> {
                 // Offset bounds f32 source-coordinate rounding at this prototype's
                 // scale. Rays otherwise include every surface, on both sides.
                 let origin = Vector::from_array(p.map(f64::from)) + normal * 0.00002;
-                // Planetary ground reflects diffuse ambient irradiance up into understory foliage
-                // (soil/rock reflectance ~ 0.22), preventing downward-facing crown foliage
-                // from collapsing into absolute black voids.
-                const GROUND_ALBEDO_BOUNCE: f64 = 0.22;
-                let visible: f64 = (0..samples)
-                    .map(|i| {
+                let visible = (0..samples)
+                    .filter(|&i| {
                         let u = (i as f64 + 0.5) / samples as f64;
                         let angle = i as f64 * 2.399_963_229_728_653;
                         let direction = tangent * (u.sqrt() * angle.cos())
                             + bitangent * (u.sqrt() * angle.sin())
                             + normal * (1.0 - u).sqrt();
-                        if shape
+                        shape
                             .cast_local_ray(&Ray::new(origin, direction), f64::MAX, false)
-                            .is_some()
-                        {
-                            0.0
-                        } else if direction.y > 0.0 {
-                            1.0
-                        } else {
-                            GROUND_ALBEDO_BOUNCE
-                        }
+                            .is_none()
                     })
-                    .sum();
-                (visible / samples as f64) as f32
+                    .count();
+                visible as f32 / samples as f32
             })
         })
         .collect()
@@ -89,6 +78,11 @@ mod tests {
         for samples in [16, 32, 128] {
             assert_eq!(bake(&mesh, samples), vec![1.0; 5]);
         }
+        // Visibility is geometry-only, independent of the world's horizon or
+        // ground pigment. Both sides of an open sheet see an empty hemisphere.
+        mesh.normals.fill([0.0, -1.0, 0.0]);
+        assert_eq!(bake(&mesh, 128), vec![1.0; 5]);
+        mesh.normals.fill([0.0, 1.0, 0.0]);
         mesh.positions.extend([
             [-1.0, 1.0, -1.0],
             [1.0, 1.0, -1.0],

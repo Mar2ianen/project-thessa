@@ -475,5 +475,7 @@ fn check_plant_ray_visibility(reduced: bool) {
         primary_edge_samples * 4 < checked,
         "primary edge exclusions must remain a small minority"
     );
-    assert_eq!(bias_disagreements, if reduced { [8, 0] } else { [24, 0] });
+    // WORLD40's retained canopy geometry changes the independent physical
+    // ray counts; keep the exact diagnostic pin and the same RGB tolerance.
+    assert_eq!(bias_disagreements, if reduced { [4, 0] } else { [11, 0] });
 }

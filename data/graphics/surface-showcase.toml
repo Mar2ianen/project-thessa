@@ -113,7 +113,8 @@ max_distance_m = 500000.0
 scene_memory_mib = 64
 max_instances = 32768
 reflection_bounces = 1
-ray_bias_m = 0.01
+# Near-camera botanical oracle retains sub-millimetre blockers at this bias.
+ray_bias_m = 0.0001
 
 [shadows]
 first_cascade_distance_m = 25.0

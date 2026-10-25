@@ -655,6 +655,16 @@ Use it for:
 
 ## Implementation checkpoint (2026-10-15, `feat/fastrt-stage1`)
 
+Current continuation note (WORLD40, 2026-10-25): `render-wgpu` now consumes
+FastRT's full/conditional triangle policy for both mesh prototypes and retained
+terrain slots. Hardware feasibility remains in the existing native ray scene;
+terrain admission uses live mesh pairings in a bounded shared TLAS, with
+whole-partition overflow/recovery and dirty-epoch retention. Medium/High RT hit
+textures use pixel-cone mip gradients; Low keeps LOD0. There is still one mirror
+ray per bounce, no stochastic denoiser/GI or complete sparse ray allocator.
+See docs 77/79 and the pinned WORLD40 artifact for current scope; the following
+checkpoint remains the dated Stage 1 snapshot.
+
 This isolated branch is not a replacement of the production Bevy client yet.
 `thessa-fastrt` supplies classification, including deterministic duplicate-key
 ordering by `(key, RtClass declaration order)`. `thessa-fastrt-wgpu` supplies

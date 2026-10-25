@@ -15,6 +15,19 @@
 
 ## 0. Executive decision
 
+**Implementation checkpoint — WORLD40 (2026-10-25):** this source inventory is
+still pinned to `e820f42`. The later `4cabc10` scene retained the FastRT mesh
+adapter and Medium/High pixel-cone texture mips. WORLD40 extends the same policy
+to terrain representation admission and fixes shared-TLAS capacity accounting,
+floating forks, horizon-weighted AO and a demonstrated distance-bias leak.
+The configurable bias is retained; WP1's complete numerical error bounds are
+not implemented. Actual reflected tracing remains one mirror ray per bounce;
+the unused sample-count shader constant is removed and metadata states that
+the requested 1/2/4 value is not an active stochastic estimator. WP2's checker
+test is local evidence, not full temporal acceptance. WP3–6 remain proposals.
+Current scope and pinned checks/captures: doc 77 WORLD40 and
+[`native-gemini-rt-audit-2026-10-25.json`](artifacts/native-gemini-rt-audit-2026-10-25.json).
+
 **Adopt an incremental, hybrid raster/RT upgrade path; do not port RTXPT's source or replace the planet renderer with its unified forward PT.** The strongest reference is **RTXPT 1.9 Intro Sample**: its nine-stage progression from deferred raster through RT AO/GI/reflections to indirect PT, SHaRC and ReSTIR DI is intentionally built for engines with an existing ray-tracing integration [N02–N04]. Use it as a conceptual progression, not copied code.
 
 **Earliest engineering value:** (1) baseline instrumentation and invariant locks; (2) RT-specific ray-origin precision and secondary-hit texture LOD; (3) careful shader/material/RT-scene planning cleanup; (4) separable noisy signal + reconstruction; (5) *optional* stochastic GGX and one-bounce diffuse GI against reference images. **SHaRC/NEE-AT/large-scale light reservoirs/GPU-authored TLAS** are conditional, later work, not prerequisites for a viable Thessa renderer.

@@ -795,7 +795,7 @@ fn terrain_budget_rejects_whole_partition_and_recovers_without_stale_blockers() 
         return;
     };
     let mut settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
-    settings.rt_max_instances = 3; // two reserved mesh pairings + one terrain.
+    settings.rt_max_instances = 2; // one live mesh pairing + one terrain; unused capacity is not a pairing.
     let mut scene = TerrainMirror::new(&backend, &settings, false);
     scene.material(&backend, [255, 0, 0, 255], 1);
     let lights = lighting([0.0; 3]);
@@ -833,8 +833,32 @@ fn terrain_budget_rejects_whole_partition_and_recovers_without_stale_blockers() 
         )
         .unwrap();
     assert_eq!(scene.draw(&backend, &lights), enabled);
-    assert_eq!(scene.mesh.rt_stats().terrain_blas_builds, 1);
+    assert_eq!(
+        scene.mesh.rt_stats().terrain_blas_builds,
+        0,
+        "a TLAS-capacity rejection preserves the unchanged terrain BLAS"
+    );
     assert!(scene.mesh.rt_terrain_reason().is_none());
+    // A geometry epoch published while the entire terrain is withheld must
+    // remain dirty until an admitted frame actually builds its BLAS.
+    let changed_page = scene.page.clone();
+    let changed = |anchor| thessa_render_wgpu::terrain::ResidentTerrainPatch {
+        anchor,
+        page: &changed_page,
+        generation: 1,
+    };
+    scene
+        .terrain
+        .publish_partition(&backend, &[changed(scene.anchor), changed(other)])
+        .unwrap();
+    assert_eq!(center(&scene.draw(&backend, &lights)), [0; 3]);
+    assert_eq!(scene.mesh.rt_stats().terrain_blas_builds, 0);
+    scene
+        .terrain
+        .publish_partition(&backend, &[changed(scene.anchor)])
+        .unwrap();
+    assert_eq!(scene.draw(&backend, &lights), enabled);
+    assert_eq!(scene.mesh.rt_stats().terrain_blas_builds, 1);
     // Disabled terrain participation adds no ray-source capability/resources.
     settings.rt_terrain = false;
     let off = TerrainMirror::new(&backend, &settings, false);
@@ -1771,6 +1795,83 @@ fn ray_shadow_bias_does_not_move_the_stellar_ray_sideways() {
     let excluded = center(&draw(&backend, &mut short, &placed, &[0..1, 1..2], &lights));
     assert_rgb_near(excluded, [0.48 * d; 3]);
     assert!(short.rt_stats().active);
+}
+
+#[test]
+fn ray_shadow_bias_preserves_a_millimetre_blocker_across_camera_distance_and_planet_origin() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let mut request = requested(RayTracingRequest::Local);
+    request.renderer.specular_reflections = false;
+    request.shadows.enabled = true;
+    request.raytracing.ray_bias_m = 0.0001;
+    let settings = backend.resolve_graphics(&request);
+    let mut asset = source();
+    asset.primitives = vec![quad(0.01, 1), quad(0.00025, 1)];
+    asset.materials[1].base_color = [1.0; 4];
+    let d = std::f32::consts::FRAC_1_SQRT_2;
+    let direction = DVec3::new(f64::from(d), 0.0, f64::from(d));
+    let lights = SurfaceLighting {
+        directions: [[d, 0.0, d, 0.0], [0.0; 4], [0.0; 4]],
+        colors_lux: [[std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+        ..Default::default()
+    };
+    let mut mesh = MeshRenderer::with_surface(
+        &backend,
+        &asset,
+        SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 2,
+            quality: settings.surface_quality,
+            reflections: false,
+            shadows: None,
+            ray_tracing: Some(&settings),
+        },
+    )
+    .unwrap();
+    for origin in [
+        DVec3::ZERO,
+        DVec3::new(3_200_000.0, -1_000_000.0, 2_000_000.0),
+    ] {
+        for distance in [2.0, 1000.0] {
+            let receiver = origin + DVec3::new(0.0, 0.0, -distance);
+            let mut placed = [MeshInstance {
+                position_m: receiver,
+                rotation: DQuat::IDENTITY,
+                scale: 1.0,
+            }; 2];
+            placed[1].position_m += direction * 0.002;
+            let mut view = camera(origin);
+            view.clip_from_view = glam::dcamera::rh::proj::directx::orthographic(
+                -0.02, 0.02, -0.02, 0.02, 0.1, 2000.0,
+            );
+            let blocked = center(&draw_at(
+                &backend,
+                &mut mesh,
+                &placed,
+                &[0..1, 1..2],
+                &lights,
+                &view,
+            ));
+            assert!(mesh.rt_stats().active);
+            assert_eq!(
+                blocked, [0; 3],
+                "2 mm physical blocker was skipped at distance={distance} origin={origin:?}"
+            );
+            // The same thin blade beside the physical stellar ray must not occlude it.
+            placed[1].position_m.x += 0.001;
+            let clear = center(&draw_at(
+                &backend,
+                &mut mesh,
+                &placed,
+                &[0..1, 1..2],
+                &lights,
+                &view,
+            ));
+            assert_rgb_near(clear, [0.48 * d; 3]);
+        }
+    }
 }
 
 #[test]

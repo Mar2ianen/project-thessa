@@ -6,6 +6,117 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD40 — Review of Gemini WORLD24–39 and RT admission (2026-10-25)
+
+This audit starts from `4cabc10`, including Gemini's import of the prior
+FastRT/footprint work. It preserves the three tree/fern forms, asymmetric
+crowns, small clearings, detritus/humus optics, 15% crown-normal warp and coastal
+weather profile. Current showcase settings are High, EV100 12.10, 4× MSAA,
+TAA off, local RT, 32,768 requested instances and a 64 MiB RT planning budget;
+plant detail remains 48 m. Density 1.35, local haze 0.00235/m at 580 m, cloud
+coverage 0.22/opacity 0.54 and material tint factors are authored optical priors.
+Living fern/tree texture factors are `[0.31,0.35,0.19]` /
+`[0.33,0.37,0.19]`, bark `[0.55,0.52,0.44]`; living roughness factor is
+0.60 and thin-diffuse transmission remains 0.18. These are retained art settings.
+Changing these values does not implement a CIE overcast sky. RGB/L1 differences
+against the AI concept do not establish photographic or photometric parity.
+Earlier WORLD23B/24 assertions of eliminated ray errors, active terrain counts,
+reflection sample counts, green gates or visual parity describe those authors'
+iterations; this checkpoint supersedes them as current acceptance evidence.
+
+**Four reproduced defects and corrections.**
+
+- The tall forked tree's branch bases started above its shortened tilted trunk.
+  A full/reduced all-form stem-interval regression found a 0.507 m vertical gap
+  in the transformed full form. Forks now start on the actual trunk axis below
+  its tip; crown endpoints and botanical forms are retained. The test excludes
+  empty horizontal stem intervals; it does not certify mesh manifold union or
+  bark contact at every crossing of independent limbs.
+- The ambient-visibility bake multiplied unobstructed downward rays by 0.22.
+  This was neither geometric visibility nor computed ground bounce, and it
+  multiplied a second horizon response into the directional sky lighting.
+  The bake again measures only cosine-weighted prototype occlusion. Both
+  unobstructed sides of a sheet return 1, a closed cavity returns 0 and the
+  open-aperture numerical reference remains. Actual diffuse ground bounce is
+  still future radiance transport, not a coefficient embedded in AO.
+- The distance heuristic `length(position)*1e-5` skipped a real 2 mm blocker
+  at 1 km camera distance. Cosine/t clamps also changed the configured physical
+  exclusion. Visibility again keeps the stellar ray fixed and uses
+  `ray_bias_m/cosine`; secondary reflections retain the configured geometric
+  offset. GPU checks cover 2 m/1 km receiver distance and a translated
+  planetary origin, plus a neighboring blade that must not invent a shadow.
+  This removes the demonstrated regression; it does **not** implement or
+  certify reconstruction/transform/intersection error bounds. Finite bias can
+  still skip blockers inside its explicit exclusion distance. The showcase
+  alone lowers its normal-distance bias from 0.01 m to 0.0001 m using the
+  near-camera botanical oracle; generic graphics defaults are unchanged.
+- Construction-time mesh capacity consumed the entire shared TLAS reservation
+  before live ranges were known. Terrain slots are now bounded independently
+  by the existing memory/device policy; complete terrain membership is admitted
+  against actual mesh pairings at frame publication. Overflow withholds the
+  whole terrain partition and removes stale instances. Unchanged BLASes remain
+  reusable; dirty epochs withheld from tracing remain dirty until really built.
+  Tests exercise admission, exhaustion, recovery and pending geometry epochs.
+  The planning budget still estimates driver AS overhead rather than measuring
+  a hard VRAM bound. No requested scene/instance/memory budget is raised here.
+
+**FastRT and footprint continuation.** Both mesh prototype and terrain-slot
+triangle representation decisions now use the backend-neutral FastRT policy;
+device, binding, memory and transactional instance feasibility stay in the
+existing wgpu scene. No proxy is invented, and sparse visibility/ray allocation
+is not completed. The retained Medium/High pixel cone carries primary width
+and angular spread through mirror paths and filters existing material mips;
+Low keeps point sampling and RT off compiles the environment-only fallback.
+The analytic UV Jacobian supports instancing; the terrain cube-chart derivative
+avoids subtracting tiny angular displacements in f32. Terrain still uses its
+existing L17 secondary material ceiling. The cone omits secondary curvature and
+visibility filtering, caps extreme grazing projection and is not a stochastic
+GGX integrator or denoiser. The earlier checker experiment (against `e820f42`)
+changed five moving-camera centre samples from 129/135/142/129/136 to 136 each,
+matching an independently computed linear-area mean; this is not a new gain
+over `4cabc10`, which already retained that change.
+
+An unused `RT_REFLECTION_SAMPLES` shader constant is removed. Actual tracing
+still takes one mirror ray per bounce; requested `rt_reflection_samples=1/2/4`
+does not activate that many samples. Native capture metadata names the actual
+estimator. No noisy reflection pass, GI, SHaRC, rain or refraction is added.
+
+Exact commands, source/binary hashes, regression logs and matched RT-on/off
+captures are recorded in
+[`native-gemini-rt-audit-2026-10-25.json`](artifacts/native-gemini-rt-audit-2026-10-25.json).
+Independent visual/reference, temporal and other-platform acceptance remains
+open; no whole-scene performance win is inferred from the tests.
+
+The full/reduced plant GPU oracle keeps its unchanged two-code radiance
+tolerance and reports no GPU disagreements with independently intersected
+biased geometry. The changed canopy produces 11/4 physical-versus-biased
+disagreements at 0.01 m, and zero at 0.0001 m in these fixtures. Its obsolete
+24/8 diagnostic count pin is refreshed to those exact new counts; no
+radiance tolerance or edge exclusion is widened. This is a local finite-bias
+limit, not proof of arbitrary scene visibility equality.
+
+All 12 scoped local gates passed: 724 successful test executions across
+overlapping core/graphics/worldgen/native and GPU suites, strict all-target /
+all-feature workspace Clippy, formatting, architecture, feature-off compilation
+and a pinned release build. GPU ray scenes also retain RT-off zero-AS work,
+exact environment misses, material colour-space/wrap/normal/AO contracts and
+terrain dirty-only / whole-partition recovery checks. No remote CI or full
+workspace/ignored performance-diagnostic sweep is claimed.
+
+The newly captured High RT-on scene admits 22,289 TLAS pairings, including
+64 retained conforming terrain slots; the pinned `4cabc10` baseline admitted
+22,225 pairings and zero terrain slots. Both retain 29,974 primary CBT triangles,
+14,058 raster mesh-instance submissions, 36 draws and 19,906,846 drawn mesh
+triangles. RT planning bytes change 11,457,304→30,356,248 under the same 64 MiB
+limit, without claiming measured driver allocation. Last measured static frames
+build no AS; initial construction is outside these warmed samples. GPU median
+changes 922.959→1185.594 ms on Radeon 880M/Vulkan/RADV Mesa 26.2.5. Actual RT
+membership and the bias accuracy target change, so this is neither an isolated
+shader-cost comparison nor a performance win; interactive performance remains
+unaccepted. The numerical `traced_triangles` log field counts BLAS triangle
+records (including padded conforming-slot capacity), not ray/triangle tests or
+the primary CBT live count.
+
 ## WORLD23 — Shallow puddles, wet soil and moss volume (2026-10-25)
 
 This continuation starts from `851572f`. It retains WORLD22's canonical soil

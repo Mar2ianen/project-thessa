@@ -22,6 +22,14 @@ meshes use the shared material's validated `dielectric_f0` (0.04 default, about
 primary uniform padding is reused; RT material records are now 64 bytes.
 See doc 77 for sampled closure, Low fallback, limits and static-water scope.
 
+WORLD40 audits the subsequent Gemini scene. Secondary mesh/terrain material
+lookups retain Medium/High pixel-cone mip filtering (Low point fallback, existing
+RT terrain L17 ceiling), not stochastic GGX tracing. A single mirror ray is
+traced per bounce regardless of the requested 1/2/4 sample policy value. Shared
+TLAS terrain admission now uses live mesh pairings and preserves whole-partition
+fallback. Configured ray bias replaces the demonstrated distance-heuristic
+regression; complete error-bounded ray spawning remains open (docs 77/79).
+
 The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
 material coordinates as a dyadic anchor plus small offsets through raster
 interpolation and page lookup. WORLD13 extends this precision contract to

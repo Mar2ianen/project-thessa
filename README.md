@@ -130,10 +130,15 @@ The checked-in vertical slice currently contains:
   retains millimetre scan detail with bounded High L24 material pages, restores
   spatial moss patches and scan contrast, bounds understory cohorts
   to requested sizes, and makes bark import reproducible.
-  The showcase retains 48 m plant detail, EV100 12.50, 4× MSAA and TAA off.
+  WORLD22 retained 48 m plant detail, EV100 12.50, 4× MSAA and TAA off.
   WORLD23 adds wet-soil variation, source-height moss cushions and bounded moss
   shoots, plus default-off sampled-basin puddles through the shared mesh/shadow
   path. The showcase opts in; these are static optical scenery, not new hydrology.
+  WORLD40 audits Gemini's later crowns, clearings and coastal weather (EV100
+  12.10, 4× MSAA, TAA off, local RT), connects both mesh/terrain representation
+  decisions to FastRT, preserves filtered secondary-hit texture mips and fixes
+  floating forks, horizon-dependent AO, distance-dependent shadow leaks and
+  premature shared-TLAS exhaustion. Ground bounce and stochastic GI remain open.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

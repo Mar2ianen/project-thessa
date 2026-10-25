@@ -137,6 +137,18 @@ impl Policy {
     pub fn new(full_budget_tris: u64) -> Self {
         Self { full_budget_tris }
     }
+
+    /// Shared representation choice after the caller's visibility/effect gates.
+    /// A retained terrain slot can use this without inventing a scene AABB.
+    pub fn classify_representation(&self, full_tris: u64, proxy_tris: u64) -> RtClass {
+        if full_tris <= self.full_budget_tris {
+            RtClass::RtFull
+        } else if proxy_tris > 0 && proxy_tris < full_tris {
+            RtClass::RtProxy
+        } else {
+            RtClass::RtConditional
+        }
+    }
 }
 
 /// Classify one candidate. Decision order is part of the contract:
@@ -153,13 +165,7 @@ pub fn classify(candidate: &Candidate, policy: &Policy) -> RtClass {
     if candidate.rt_effects == 0 {
         return RtClass::RasterOnly;
     }
-    if candidate.full_tris <= policy.full_budget_tris {
-        return RtClass::RtFull;
-    }
-    if candidate.proxy_tris > 0 && candidate.proxy_tris < candidate.full_tris {
-        return RtClass::RtProxy;
-    }
-    RtClass::RtConditional
+    policy.classify_representation(candidate.full_tris, candidate.proxy_tris)
 }
 
 /// Classify a whole frame. Returns `(key, class)` pairs sorted by key then

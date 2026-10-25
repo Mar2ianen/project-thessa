@@ -193,6 +193,7 @@ pub(crate) fn base_capture_metadata(
         ("native_terrain_environment_samples", resolved.terrain_environment_samples().to_string()),
         ("native_terrain_environment_cloud_budget", format!("{:?}", resolved.terrain_environment_cloud_budget())),
         ("native_terrain_environment_scope", "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections".into()),
+        ("native_rt_reflection_estimator", "when admitted: one mirror ray per bounce; Medium/High pixel-cone texture mips, Low point sampling; resolved rt_reflection_samples is a requested policy value, not an active stochastic sample count".into()),
         ("native_night_lights_extent", format!("{:?}", resolved.night_light_mask_size())),
         ("native_night_lights_source", "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission".into()),
         ("native_hdr", display.enabled().to_string()),

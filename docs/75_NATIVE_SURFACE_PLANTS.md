@@ -1,5 +1,16 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
+Current review (WORLD40, doc 77): Gemini's asymmetric crown/fern forms, clearings
+and optical calibration are retained. The tall fork's branches now overlap the
+actual tilted stem below its tip. Prototype ambient visibility again represents
+only geometric occlusion; the fixed 0.22 downward-ray multiplier was removed.
+Directional sky response belongs to the shared environment, and no computed
+diffuse ground bounce is claimed. Existing shared resources/budgets remain.
+Current living fern/tree texture factors are `[0.31,0.35,0.19]` /
+`[0.33,0.37,0.19]`, bark `[0.55,0.52,0.44]` and living roughness factor 0.60;
+transmission remains 0.18. Earlier dated checkpoints describe prior forms and
+material calibration, not reference acceptance.
+
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid
 prototypes, per-kind albedo and a second matched capture/blind-review stage are

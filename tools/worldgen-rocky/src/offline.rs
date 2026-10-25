@@ -1396,14 +1396,15 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         _ => 0.60,
     };
     let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * trunk_scale, radius));
+    let trunk_axis = crate::lod::normalize(match form {
+        1 => [0.02, 1.0, 0.01],
+        2 => [-0.02, 1.0, 0.03],
+        _ => [0.0, 1.0, 0.0],
+    });
     tapered_limb(
         mesh,
         [0.0; 3],
-        match form {
-            1 => [0.02, 1.0, 0.01],
-            2 => [-0.02, 1.0, 0.03],
-            _ => [0.0, 1.0, 0.0],
-        },
+        trunk_axis,
         if reduced { 8 } else { 16 },
         &trunk_rings,
     );
@@ -1413,12 +1414,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
     let base_y = match form {
-        1 => 5.85,
+        1 => 5.10,
         2 => 4.10,
         _ => 4.55,
     };
     for &terminal in terminals {
-        let base = [0.0, base_y, 0.0];
+        // Forks overlap the actual tilted trunk, below its closed tip.
+        let base = scaled(trunk_axis, base_y);
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
         tapered_limb(
@@ -2826,6 +2828,39 @@ mod tests {
                 "{:?} reach {max_reach} exceeds {max_extent}",
                 mesh.kind
             );
+        }
+    }
+
+    #[test]
+    fn every_tree_form_has_uninterrupted_stem_height_below_its_crowns() {
+        use crate::scatter::ScatterKind;
+        for reduced in [false, true] {
+            for (mesh, form) in plant_prototype_forms(reduced)
+                .into_iter()
+                .filter(|(m, _)| m.kind == ScatterKind::LycopsidTree)
+            {
+                let stem_end = mesh.stem.as_ref().unwrap().vertex_count;
+                let mut intervals: Vec<_> = prototype_triangles(&mesh)
+                    .into_iter()
+                    .filter(|(first, _, _)| *first < stem_end)
+                    .map(|(_, p, _)| {
+                        (
+                            p.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
+                            p.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
+                        )
+                    })
+                    .collect();
+                intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut covered_until = 0.0_f64;
+                for (low, high) in intervals {
+                    assert!(
+                        low <= covered_until + 1e-5,
+                        "floating stem component form={form} reduced={reduced}: gap {covered_until}..{low} m"
+                    );
+                    covered_until = covered_until.max(high);
+                }
+                assert!(covered_until > 7.0);
+            }
         }
     }
 

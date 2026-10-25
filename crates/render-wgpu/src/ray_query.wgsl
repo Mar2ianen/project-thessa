@@ -31,9 +31,10 @@ fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32 {
     let atlas=shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);
     let cosine=dot(normal,light.directions[sun].xyz);
     if (!RT_SHADOWS || atlas<=0.0 || cosine<=0.0) { return atlas; }
-    // Robust error-scaled ray spawn bounds along the stellar ray:
-    let pos_error=max(RT_BIAS,length(position)*1e-5);
-    let min_t=clamp(pos_error/max(cosine,0.05),pos_error,2.0);
+    // Keep the physical stellar line and configured normal-distance exclusion.
+    // Camera distance is not an intersection-error bound; arbitrary cosine/t
+    // clamps can restore self hits or skip a nearby real blocker.
+    let min_t=RT_BIAS/cosine;
     if (min_t>=RT_TMAX) { return atlas; }
     let hit=rt_trace(position,light.directions[sun].xyz,min_t,RT_TMAX,RAY_FLAG_TERMINATE_ON_FIRST_HIT);
     return select(atlas,0.0,hit.hit);

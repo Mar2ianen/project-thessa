@@ -114,7 +114,6 @@ pub struct Plan {
     bias_m: f32,
     max_distance_m: f32,
     bounces: u32,
-    reflection_samples: u32,
 }
 
 /// Decide whether this scene can trace at all. Never panics; every rejection
@@ -370,7 +369,6 @@ fn plan_inner(
         bias_m: resolved.rt_ray_bias_m,
         max_distance_m: resolved.rt_max_distance_m.clamp(0.01, 1.0e7) as f32,
         bounces: resolved.rt_reflection_bounces,
-        reflection_samples: resolved.rt_reflection_samples,
     }))
 }
 
@@ -404,14 +402,8 @@ pub fn plan_with_terrain(
             .saturating_sub(terrain.index_bytes());
         let slots = (available / terrain.slot_bytes())
             .min(terrain.capacity as u64)
-            .min(u64::from(
-                settings.rt_max_instances.saturating_sub(plan.instances),
-            ))
-            .min(u64::from(
-                limits
-                    .max_tlas_instance_count
-                    .saturating_sub(plan.instances),
-            )) as usize;
+            .min(u64::from(settings.rt_max_instances))
+            .min(u64::from(limits.max_tlas_instance_count)) as usize;
         if slots == 0 {
             plan.terrain_reason =
                 Some("RT terrain has no instance/memory capacity; raster terrain fallback".into());
@@ -425,12 +417,22 @@ pub fn plan_with_terrain(
             plan.terrain_reason = Some(
                 "RT terrain hit bindings exceed device limits; raster terrain fallback".into(),
             );
-        } else if limits.max_blas_primitive_count < 2048 {
+        } else if Policy::new(u64::from(limits.max_blas_primitive_count))
+            .classify_representation(2048, 0)
+            != RtClass::RtFull
+        {
             plan.terrain_reason = Some(
                 "RT terrain grid exceeds BLAS primitive limit; raster terrain fallback".into(),
             );
         } else {
-            plan.instances += slots as u32;
+            // Mesh construction capacity is not the live pairing count.
+            // Reserve one bounded shared TLAS; admit the complete terrain
+            // partition against actual mesh pairings at frame publication.
+            plan.instances = plan
+                .instances
+                .saturating_add(slots as u32)
+                .min(settings.rt_max_instances)
+                .min(limits.max_tlas_instance_count);
             plan.bytes += slots as u64 * terrain.slot_bytes() + terrain.index_bytes();
             plan.terrain = Some((terrain.clone(), slots));
         }
@@ -507,14 +509,13 @@ pub fn shader(plan: &Plan) -> String {
         "if ((pair.words.x & 0x80000000u) != 0u) { return rt_terrain_surface(hit, pair, ray_direction,cone_width); }"
     } else { "" });
     format!(
-        "enable wgpu_ray_query;\nconst RT_BIAS:f32={};\nconst RT_TMAX:f32={};\nconst RT_BOUNCES:u32={};\nconst RT_ROUGHNESS_CUTOFF:f32={};\nconst RT_LOW_QUALITY:bool={};\nconst RT_SHADOWS:bool={};\nconst RT_REFLECTION_SAMPLES:u32={};\n{}\n{}\n{}",
+        "enable wgpu_ray_query;\nconst RT_BIAS:f32={};\nconst RT_TMAX:f32={};\nconst RT_BOUNCES:u32={};\nconst RT_ROUGHNESS_CUTOFF:f32={};\nconst RT_LOW_QUALITY:bool={};\nconst RT_SHADOWS:bool={};\n{}\n{}\n{}",
         plan.bias_m,
         plan.max_distance_m,
         plan.bounces,
         ROUGHNESS_CUTOFF,
         plan.quality == Quality::Low,
         plan.shadow_rays,
-        plan.reflection_samples,
         sampling,
         include_str!("ray_query.wgsl"),
         if plan.reflections {
@@ -540,6 +541,8 @@ pub struct RayScene {
     mesh_enabled: bool,
     terrain: Option<TerrainRays>,
     terrain_reason: Option<String>,
+    terrain_live: bool,
+    terrain_tlas_reason: Option<String>,
     queue: std::sync::Arc<wgpu::Queue>,
     mesh_count: usize,
     camera_m: glam::DVec3,
@@ -780,6 +783,8 @@ impl RayScene {
             mesh_enabled: plan.mesh_enabled,
             terrain,
             terrain_reason: plan.terrain_reason,
+            terrain_live: false,
+            terrain_tlas_reason: None,
             queue: backend.queue.clone(),
             mesh_count: 0,
             camera_m: glam::DVec3::ZERO,
@@ -815,19 +820,30 @@ impl RayScene {
         RayStats {
             active: self.built && !self.transforms.is_empty(),
             instances: self.transforms.len() as u32,
-            triangles: self.triangles + self.terrain.as_ref().map_or(0, |t| t.triangle_count()),
+            triangles: self.triangles
+                + self
+                    .terrain
+                    .as_ref()
+                    .filter(|_| self.terrain_live)
+                    .map_or(0, |t| t.triangle_count()),
             bytes: self.bytes,
             passes: self.passes,
-            terrain_instances: self.terrain.as_ref().map_or(0, |t| t.active.len() as u32),
+            terrain_instances: self
+                .terrain
+                .as_ref()
+                .filter(|_| self.terrain_live)
+                .map_or(0, |t| t.active.len() as u32),
             terrain_blas_builds: self.terrain_blas_builds,
         }
     }
 
     pub fn terrain_reason(&self) -> Option<&str> {
-        self.terrain
-            .as_ref()
-            .and_then(|t| t.reason.as_deref())
-            .or(self.terrain_reason.as_deref())
+        self.terrain_tlas_reason.as_deref().or_else(|| {
+            self.terrain
+                .as_ref()
+                .and_then(|t| t.reason.as_deref())
+                .or(self.terrain_reason.as_deref())
+        })
     }
 
     pub fn sync_terrain(
@@ -918,7 +934,14 @@ impl RayScene {
         }
         self.transforms.truncate(self.mesh_count);
         self.primitives.truncate(self.mesh_count);
-        if let Some(terrain) = &self.terrain {
+        let remaining = self.tlas.get().len().saturating_sub(self.mesh_count);
+        self.terrain_live = self
+            .terrain
+            .as_ref()
+            .is_some_and(|t| t.active.len() <= remaining);
+        self.terrain_tlas_reason = self.terrain.as_ref().filter(|_|!self.terrain_live).map(|t|format!(
+            "RT terrain partition has {} slots but only {remaining} shared TLAS instances remain; whole terrain partition uses raster fallback",t.active.len()));
+        if let Some(terrain) = self.terrain.as_ref().filter(|_| self.terrain_live) {
             for (slot, anchor) in &terrain.active {
                 let translation =
                     (glam::DVec3::from_array(anchor.origin_m) - self.camera_m).as_vec3();
@@ -941,7 +964,7 @@ impl RayScene {
         }
         if self.transforms != self.previous
             || self.primitives != self.previous_primitives
-            || self.terrain.as_ref().is_some_and(|t| !t.dirty.is_empty())
+            || (self.terrain_live && self.terrain.as_ref().is_some_and(|t| !t.dirty.is_empty()))
         {
             // The shader reads the same pairing it traces against: slot index
             // in `custom_data`, primitive and camera-relative rows in `pairs`.
@@ -1029,7 +1052,7 @@ impl RayScene {
             } else {
                 Vec::new()
             };
-            if let Some(terrain) = &self.terrain {
+            if let Some(terrain) = self.terrain.as_ref().filter(|_| self.terrain_live) {
                 self.terrain_blas_builds = terrain.dirty.len() as u32;
                 entries.extend(terrain.builds());
             }
@@ -1037,7 +1060,7 @@ impl RayScene {
         }
         self.built = true;
         self.dirty = false;
-        if let Some(terrain) = &mut self.terrain {
+        if let Some(terrain) = self.terrain.as_mut().filter(|_| self.terrain_live) {
             terrain.mark_built();
         }
         self.passes = 1;
@@ -1058,6 +1081,34 @@ mod tests {
     use super::*;
     use glam::{DQuat, DVec3};
     use thessa_render_core::mesh::{Material, Primitive, Vertex};
+
+    #[test]
+    fn primitive_admission_uses_fastrt_inclusive_budget_and_no_invented_proxy() {
+        let primitive = Primitive {
+            vertices: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+                .map(|position| Vertex {
+                    position,
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0; 2],
+                })
+                .to_vec(),
+            indices: vec![0, 1, 2],
+            material: 0,
+            ambient_visibility: vec![],
+        };
+        assert_eq!(
+            primitive_class(&primitive, 7, 1, &Policy::new(1)),
+            Some(RtClass::RtFull)
+        );
+        assert_eq!(
+            primitive_class(&primitive, 7, 1, &Policy::new(0)),
+            Some(RtClass::RtConditional)
+        );
+        assert_eq!(
+            primitive_class(&primitive, 7, 0, &Policy::new(0)),
+            Some(RtClass::RasterOnly)
+        );
+    }
 
     #[test]
     #[allow(clippy::single_range_in_vec_init)] // One instance range per primitive.

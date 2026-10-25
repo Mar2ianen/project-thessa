@@ -3,7 +3,7 @@ use super::*;
 use bevy::{
     asset::RenderAssetUsages,
     ecs::system::SystemParam,
-    math::{DQuat, DVec3},
+    math::{DMat4, DQuat, DVec3},
     mesh::{Indices, PrimitiveTopology},
 };
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
@@ -1062,6 +1062,7 @@ struct FrameView {
     eye: DVec3,
     forward_body: DVec3,
     frustum: Option<lod::SelectionFrustum>,
+    material_clip_from_eye: Option<DMat4>,
     radius: f64,
 }
 
@@ -1213,6 +1214,10 @@ fn frame_view(
         eye,
         forward_body,
         frustum,
+        material_clip_from_eye: Some(
+            projection.get_clip_from_view().as_dmat4()
+                * DMat4::from_quat(camera.rotation.as_dquat().conjugate() * frame.rotation()),
+        ),
         radius,
     }
 }
@@ -1241,6 +1246,7 @@ fn run_tile_selection(
         radius,
         forward_body,
         frustum,
+        material_clip_from_eye,
     } = *view;
     let selection_started = Instant::now();
     let selected = world.selection_history.update(
@@ -1251,6 +1257,7 @@ fn run_tile_selection(
             forward: forward_body,
             radius,
             frustum,
+            material_clip_from_eye,
         },
         now_s,
         &world.fine_selection,
@@ -1377,6 +1384,7 @@ fn spawn_height_jobs(
             forward: view.forward_body,
             stream_origin: DVec3::ZERO,
             frustum: view.frustum,
+            material_clip_from_eye: view.material_clip_from_eye,
         },
         &world.wanted,
         world.visible.iter().copied(),
@@ -1420,6 +1428,7 @@ fn material_view_selection(base: &[TileKey], view: &FrameView, pixel_angle: f64)
             forward: view.forward_body,
             radius: view.radius,
             frustum: view.frustum,
+            material_clip_from_eye: view.material_clip_from_eye,
         },
         pixel_angle,
     )
@@ -1464,6 +1473,7 @@ fn run_material_streaming(
                 forward: view.forward_body,
                 stream_origin: DVec3::ZERO,
                 frustum: view.frustum,
+                material_clip_from_eye: view.material_clip_from_eye,
             },
             pixel_angle,
             height_jobs: world.heights.pending_count(),
@@ -2228,6 +2238,9 @@ mod streaming_tests {
             after.frustum.unwrap().forward,
             after.forward_body.to_array()
         );
+        let projected =
+            after.material_clip_from_eye.unwrap() * (after.forward_body * 10.0).extend(1.0);
+        assert!(projected.w > 0.0 && projected.x.abs() < 1e-6 && projected.y.abs() < 1e-6);
         let from_matrix = frame.render_from_body().transform_point3(clamped);
         assert!((from_matrix - frame.body_to_render_point(clamped)).length() < 1e-8);
     }
@@ -2246,6 +2259,7 @@ mod streaming_tests {
             eye: DVec3::from_array(base[0].direction(0.5, 0.5)) * (radius + 2000.),
             forward_body: DVec3::NEG_X,
             frustum: None,
+            material_clip_from_eye: None,
             radius,
         };
         let pages = material_view_selection(&base, &view, 0.001);

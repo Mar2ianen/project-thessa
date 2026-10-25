@@ -1898,6 +1898,8 @@ impl Scene {
             .transform_vector3(DVec3::NEG_Z)
             .normalize();
         let half_angle = 0.45f64.max((0.45f64.tan() * width as f64 / height as f64).atan()) + 0.6;
+        let mut orientation = camera.world_from_view;
+        orientation.w_axis = glam::DVec4::W;
         let update = self.stream.tick(
             SelectionView {
                 eye: camera.world_position_m,
@@ -1908,6 +1910,7 @@ impl Scene {
                     forward: forward.to_array(),
                     cos_limit: half_angle.cos().clamp(-1.0, 1.0),
                 }),
+                material_clip_from_eye: Some(camera.clip_from_view * orientation.inverse()),
             },
             2.0 * 0.45f64.tan() / height as f64,
             now_s,

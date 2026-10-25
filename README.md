@@ -145,6 +145,9 @@ The checked-in vertical slice currently contains:
   WORLD42 restores native 1K soil scan data for near-camera detail, filters each
   source at its actual resolution and extends regular/conforming material-motion
   oracles through L24; GPU page budgets remain, CPU source mips add 20 MiB.
+  WORLD43 fixes close pages below the frame outranking visible soil: native/Bevy
+  material priority uses the actual camera projection while the shared refinement
+  cover and soil-height prefetch remain, under the same page/cache budgets.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

@@ -6,6 +6,61 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD43 — Prioritize the visible floor instead of geometry prefetch (2026-10-25)
+
+This iteration starts from WORLD42 commit `446357a`. The source-only resolution
+change is retained; this checkpoint fixes a separate reproduced admission defect.
+Native and Bevy geometry selection deliberately use a broad cone with a 0.6 rad
+swing/prefetch margin. Material admission priority inherited that same
+cone. On a standing 0.9 rad vertical-FOV, 16:9 view, a ground page about 0.95 m
+forward projects below NDC y=-4.34 yet wins distance priority over visible
+ground 5.15 m forward (y=-0.80). Filtering outside the broad cone was insufficient:
+the highest-priority close pages could still be below the actual frame.
+
+`SelectionView.material_clip_from_eye` now supplies the actual camera projection
+of camera-relative body axes. Material demand/admission ordering uses
+the existing backend-neutral `render-core::shadow::sphere_intersects_clip`
+predicate and the existing conservative page sphere. Native derives the matrix
+from its actual camera projection/orientation; Bevy composes its camera
+projection, inverse camera rotation and body rotation. Translation is subtracted
+in f64 before clipping so a planetary origin does not inflate the clip predicate's
+f32 arithmetic envelope. The wider geometry cone, projection,
+canonical field/scatter and geometry authority remain unchanged. The existing
+shared broad refinement cover also feeds fine soil-height requests; it is kept
+identical to the legacy cover, and height demand explicitly keeps its wider
+prefetch cone. No second refinement planner or cache is added. Existing
+consumers without a material matrix retain the cone/no-frustum fallback.
+
+This is an existing material allocation correction, not a new effect, renderer,
+scheduler or user setting. It retains quality ceilings, 256 GPU layers, 512
+admitted demand pages, 1,024 source-cache pages, hierarchical coarse fallback,
+the existing selection debounce and the 7 MB plant payload limit. The optional
+matrix is math-only; `terrain-stream` adds a direct MIT `render-core` dependency
+to reuse the clip test, not a renderer/backend API. Capture metadata names the
+material view policy. A six-face regression at reference elevations -1,000/0/
+1,000 m reproduces the old wrong order, checks visible-first priority with the
+actual frame, verifies that the shared prefetch cover is unchanged and preserves
+exact partition area under the same 2,048 temporary-leaf bound. The Bevy rebase/camera
+test also checks the body-axis projection after clearance/rotation edits.
+
+Page spheres still use one cached local canonical reference height, not exact
+per-page relief, terrain occlusion or a certified global height envelope. The
+change favors estimated visible optical detail; it does not cull authoritative
+geometry or eliminate moving-camera residency latency. Source magnification,
+exact CBT contact, canopy transport, full temporal/reference acceptance and
+interactive RT performance remain open.
+
+Checks, pins and actual static/sweep frames are recorded in
+[`native-material-frustum-2026-10-25.json`](artifacts/native-material-frustum-2026-10-25.json).
+An earlier trial applied actual-frame clipping to the shared refinement cover;
+review caught the resulting soil-height residency/CBT changes. That trial and
+its pins/captures are retained separately; the final correction changes material
+priority while preserving both shared cover and height-prefetch policy.
+The baseline reuses WORLD42's complete pinned candidate captures, including
+their original commands and binary/source hashes; no favorable baseline was
+selected from repeated runs. Changed resident material maps are the intended
+effect here. Blind comparisons remain unvoted and do not certify reference parity.
+
 ## WORLD42 — Near-camera source resolution (2026-10-25)
 
 This continuation starts from `56d6b22`, following the report of degrading soil

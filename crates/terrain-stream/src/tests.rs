@@ -60,6 +60,7 @@ pub(crate) fn view() -> SelectionView {
         forward: DVec3::NEG_Z,
         radius: 3_200_000.0,
         frustum: None,
+        material_clip_from_eye: None,
     }
 }
 
@@ -201,6 +202,7 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
         forward: -dir,
         radius: 3_200_000.0,
         frustum: None,
+        material_clip_from_eye: None,
     };
     for limit in [17, 20, 21, 22, 23, 24, 255] {
         let pages = material_view_selection_with_limit(&[key], view, 1e-5, limit);
@@ -270,6 +272,7 @@ fn elevated_material_reference_measures_distance_to_ground_not_the_body_datum() 
                 forward: (-dir).to_array(),
                 cos_limit: 0.0,
             }),
+            material_clip_from_eye: None,
         };
         let refined = material_view_selection_at_height(&[key], view, 0.001, 22, elevation);
         assert!(refined.len() <= 2048);
@@ -322,6 +325,7 @@ fn standing_material_priority_admits_visible_floor_before_underfoot_pages() {
                 forward: forward.to_array(),
                 cos_limit: 0.7,
             }),
+            material_clip_from_eye: None,
         };
         assert_eq!(
             material_demand_at_height([underfoot, visible], view, elevation)[0],
@@ -329,11 +333,88 @@ fn standing_material_priority_admits_visible_floor_before_underfoot_pages() {
         );
         let legacy = SelectionView {
             frustum: None,
+            material_clip_from_eye: None,
             ..view
         };
         assert_eq!(
             material_demand_at_height([underfoot, visible], legacy, elevation)[0],
             underfoot
         );
+    }
+}
+
+#[test]
+fn material_frame_rejects_below_screen_prefetch_without_losing_cover() {
+    let radius = 3_200_000.0;
+    for face in 0..6 {
+        let root = TileKey::root(face);
+        let up = DVec3::from(root.direction(0.5, 0.5));
+        let forward = (DVec3::from(root.direction(0.501, 0.5)) - up)
+            .reject_from_normalized(up)
+            .normalize();
+        for elevation in [-1000.0, 0.0, 1000.0] {
+            let hidden = TileKey {
+                face,
+                level: 24,
+                x: 8_388_610,
+                y: 8_388_608,
+            };
+            let visible = TileKey {
+                x: 8_388_621,
+                ..hidden
+            };
+            let clip =
+                glam::dcamera::rh::proj::directx::perspective(0.9, 16.0 / 9.0, 0.1, 100000.0)
+                    * glam::dcamera::rh::view::look_at_mat4(DVec3::ZERO, forward, up);
+            let view = SelectionView {
+                eye: up * (radius + elevation + 2.0),
+                stream_origin: up * (radius + elevation),
+                forward,
+                radius,
+                frustum: Some(lod::SelectionFrustum {
+                    forward: forward.to_array(),
+                    cos_limit: ((0.45_f64.tan() * 16.0 / 9.0).atan() + 0.6).cos(),
+                }),
+                material_clip_from_eye: Some(clip),
+            };
+            let project = |key: TileKey| {
+                let p = DVec3::from(key.direction(0.5, 0.5)) * (radius + elevation) - view.eye;
+                let p = clip * p.extend(1.0);
+                p.truncate() / p.w
+            };
+            assert!(project(hidden).y < -4.0 && project(visible).y.abs() < 0.9);
+            assert_eq!(
+                material_demand_at_height([hidden, visible], view, elevation)[0],
+                visible
+            );
+            let legacy = SelectionView {
+                material_clip_from_eye: None,
+                ..view
+            };
+            assert_eq!(
+                material_demand_at_height([hidden, visible], legacy, elevation)[0],
+                hidden
+            );
+            let base = TileKey {
+                face,
+                level: 20,
+                x: 1 << 19,
+                y: 1 << 19,
+            };
+            let pages = material_view_selection_at_height(&[base], view, 0.0007, 24, elevation);
+            assert!(pages.len() <= 2048);
+            assert_eq!(
+                pages
+                    .iter()
+                    .map(|key| 4_f64.powi(i32::from(base.level) - i32::from(key.level)))
+                    .sum::<f64>(),
+                1.0
+            );
+            assert_eq!(
+                pages,
+                material_view_selection_at_height(&[base], legacy, 0.0007, 24, elevation),
+                "camera-frame priority must preserve the shared soil-height prefetch cover"
+            );
+        }
     }
 }

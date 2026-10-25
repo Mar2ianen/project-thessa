@@ -6572,6 +6572,7 @@ dependencies = [
  "glam 0.33.7",
  "rayon",
  "thessa-rcbt-core",
+ "thessa-render-core",
  "thessa-worldgen-rocky",
 ]
 

@@ -278,6 +278,7 @@ impl TerrainStream {
         );
         let height_wanted =
             if self.policy.persistent_topology && self.policy.ground_relief_max_level > 17 {
+                // Soil-height prefetch must not inherit material-only clipping.
                 let mut pages = crate::selection::material_demand_at_height(
                     self.materials.refined().iter().copied().map(|mut key| {
                         while key.level > self.policy.ground_relief_max_level {
@@ -285,7 +286,10 @@ impl TerrainStream {
                         }
                         key
                     }),
-                    view,
+                    SelectionView {
+                        material_clip_from_eye: None,
+                        ..view
+                    },
                     self.materials.reference_height_m(),
                 );
                 pages.extend(self.wanted.iter().copied());

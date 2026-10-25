@@ -185,6 +185,7 @@ pub(crate) fn base_capture_metadata(
         .extend(scene.surface_plants_metadata());
     for (key, value) in [
         ("native_material_resident_levels", format!("{:?}", scene.material_resident_levels)),
+        ("native_material_view_policy", "actual camera-relative clip planes for material priority; shared refinement and soil heights retain the wider prefetch cone; local reference-height sphere, not exact terrain occlusion".into()),
         ("native_material_reference_height_m", scene.stream.material_reference_height_m().to_string()),
         ("native_material_reference_height_source", "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height".into()),
         ("native_docking_fixture", scene.docking.is_some().to_string()),

@@ -2,6 +2,15 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+WORLD43 (doc 77) separates optical material visibility from the geometry cone's
+0.6 rad prefetch margin. Shared material admission priority now uses the actual
+camera-relative projection and the existing conservative sphere/clip predicate;
+native and Bevy both provide it. Missing matrices keep the prior cone fallback.
+GPU/CPU page budgets, quality caps, the shared broad refinement cover and soil-height
+prefetch remain. Spheres still
+use the cached local height reference; this is not exact per-page height or
+occlusion. Regression and capture evidence are in doc 77 WORLD43.
+
 WORLD42 (doc 77) preserves the primary soil scan's original 1024² samples instead
 of the previous 512² downsample: native 3.08 mm source spacing now matches High
 L24 pages more closely. Each source uses its own dimension for mip selection;

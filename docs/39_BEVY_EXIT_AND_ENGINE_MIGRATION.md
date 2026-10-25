@@ -1070,6 +1070,12 @@ checkpoint) removes duplicated material ownership from the two hosts:
   priorities, missing removals and satisfied budgets preserve revision/directory.
   Removal and reinsertion cannot reuse a page generation. Revision exhaustion
   is rejected before mutation, not saturated into an aliased dirty identity.
+- Current WORLD43 continuation: `SelectionView.material_clip_from_eye` supplies
+  the actual camera-relative body-axis projection for material priority in native
+  and Bevy. Shared refinement and soil-height demand keep the wider prefetch cone;
+  the optional matrix uses the shared backend-neutral `render-core` sphere/clip
+  test. Missing matrices keep legacy selection, budgets remain, and the local
+  height-reference approximation is documented in doc 77 WORLD43.
 - GPL `terrain-stream::material::MaterialStream` owns nonblocking completion
   polling, refined material demand, regional-ancestor build dependencies,
   deduplication, job admission and source-cache policy. Both `WorldTerrain`

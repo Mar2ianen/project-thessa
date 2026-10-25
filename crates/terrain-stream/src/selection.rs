@@ -1,5 +1,5 @@
 //! The existing client's selection, spawn and material dependency policies.
-use glam::DVec3;
+use glam::{DMat4, DVec3};
 use std::collections::BTreeSet;
 use thessa_worldgen_rocky::{
     field::PlanetField,
@@ -13,6 +13,9 @@ pub struct SelectionView {
     pub forward: DVec3,
     pub radius: f64,
     pub frustum: Option<lod::SelectionFrustum>,
+    /// Actual projection of camera-relative body axes. Material priority must
+    /// not inherit the geometry cone's offscreen prefetch margin.
+    pub material_clip_from_eye: Option<DMat4>,
 }
 
 /// Visual/cache budgets, not simulation laws. Defaults preserve the client.
@@ -210,16 +213,18 @@ pub fn material_view_selection_with_limit(
     material_view_selection_at_height(base, view, pixel_angle, max_level, 0.0)
 }
 
-// A conservative tile sphere intersects the view cone. Use the same test for
-// refinement and residency priority, so underfoot/offscreen pages cannot win
-// every cache slot over the ground actually visible to a standing camera.
+// Clip a conservative page sphere for material admission. The shared prefetch
+// cover omits the material matrix and retains the wider geometry cone.
 fn material_page_in_view(key: TileKey, view: SelectionView, surface_radius: f64) -> bool {
+    let delta = DVec3::from(key.direction(0.5, 0.5)) * surface_radius - view.eye;
+    let bound = key.span_m(view.radius) * 0.75;
+    if let Some(clip) = view.material_clip_from_eye {
+        return thessa_render_core::shadow::sphere_intersects_clip(clip, delta, bound);
+    }
     let Some(frustum) = view.frustum else {
         return true;
     };
-    let delta = DVec3::from(key.direction(0.5, 0.5)) * surface_radius - view.eye;
     let distance = delta.length();
-    let bound = key.span_m(view.radius) * 0.75;
     if distance <= bound {
         return true;
     }
@@ -252,8 +257,15 @@ pub(crate) fn material_view_selection_at_height(
         let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
         key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
     };
-    let split_candidate =
-        |key: &TileKey| key.level < max_level && material_page_in_view(*key, view, surface_radius);
+    // This shared cover also feeds CBT soil-height prefetch. Preserve its
+    // wider cone; actual-frame clipping belongs to material admission priority.
+    let prefetch_view = SelectionView {
+        material_clip_from_eye: None,
+        ..view
+    };
+    let split_candidate = |key: &TileKey| {
+        key.level < max_level && material_page_in_view(*key, prefetch_view, surface_radius)
+    };
     // More temporary leaves prevent the broad geometry cover from consuming
     // the entire near-floor refinement budget. Admission still retains 512.
     let leaf_budget = match max_level {
@@ -300,7 +312,7 @@ pub(crate) fn material_demand_at_height(
         let delta =
             DVec3::from(key.direction(0.5, 0.5)) * (view.radius + reference_height_m) - view.eye;
         (
-            if view.frustum.is_some() {
+            if view.material_clip_from_eye.is_some() || view.frustum.is_some() {
                 !material_page_in_view(*key, view, view.radius + reference_height_m)
             } else {
                 delta.normalize_or_zero().dot(view.forward) < -0.15

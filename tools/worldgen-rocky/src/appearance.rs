@@ -432,14 +432,16 @@ pub(crate) fn surface_appearance_with_ground_detail(
         );
         let c = mix(shallow, [0.018 * drift, 0.095 * drift, 0.19 * drift], shelf);
         let c = mix(c, [0.014, 0.044, 0.11], smooth(600.0, 6000.0, -h));
-        // Shallow scatter: turquoise lift in the first ~60 m, broken by grain
-        // so the coast reads as a shelf, not a flat cyan disk. Earth-ref
+        // Shallow scatter: cold/temperate coastal waters scatter slate-blue;
+        // warm tropical shallows lift towards turquoise coral reefs. Earth-ref
         // (ISS shallow reefs): bright rim only where water is thin.
         let turq = 1.0 - smooth(8.0, 60.0, -h);
         let shelf_break = 0.6 + 0.4 * grain.clamp(-1.0, 1.0);
+        let tropical = smooth(280.0, 298.0, sample.temperature_k);
+        let shelf_scatter = mix([0.10, 0.26, 0.30], [0.16, 0.55, 0.55], tropical);
         let mut c = mix(
             c,
-            [0.16, 0.55, 0.55],
+            shelf_scatter,
             (turq * 0.35 * shelf_break).clamp(0.0, 1.0),
         );
         // Surf foam: narrow band around the datum, broken into streaks
@@ -481,7 +483,8 @@ pub(crate) fn surface_appearance_with_ground_detail(
     // vegetation/mud keeps the same opacity as roughness and normal response.
     let maritime = maritime_material_support(field, sample);
     let beach_cover = beach_material_coverage(maritime, sample, exposed);
-    let beach_albedo = weathered_soil.map(|c| c * (1.0 + cover_texture * 0.12 - damp * 0.18));
+    let wet_beach = mix(weathered_soil, stone.map(|c| c * 0.65), damp * 0.7);
+    let beach_albedo = wet_beach.map(|c| c * (1.0 + cover_texture * 0.12 - damp * 0.22));
     dry = mix(dry, beach_albedo, beach_cover);
     let wet_rim = (1.0 - smooth(0.0, 3.0, h)) * beach_cover;
     dry = dry.map(|c| c * (1.0 - wet_rim * 0.18));

@@ -131,7 +131,7 @@ show_rt_proxies = false
 enabled = true
 quality = "high"
 understory = true
-detail_distance_m = 24
+detail_distance_m = 36
 
 [temporal]
 taa = false

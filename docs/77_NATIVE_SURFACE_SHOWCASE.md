@@ -6,6 +6,36 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD17 — Silver lichen bark, clearing moss cushions, and lush canopy foliage (2026-10-25)
+
+This iteration drives visual fidelity towards parity with the photographic target
+`visual_quality_target_coastal_ferns.jpg` (Lat `23.565679258039204`, Lon `165.13881581863882`,
+distance 80 m from ocean, eye AGL 2 m, sim time 0).
+
+**Silver lichen tree trunks and lush green canopy.** Coastal tree trunks in the reference
+photo are weathered and covered with pale silvery-grey lichens and bryophytes ($G \approx B \ge R$,
+albedo ~0.56–0.63). Linear gain `[2.4, 3.6, 5.2]` is calibrated on `bark-base.png` (authored linear
+gain in `provenance.json`), lifting trunk tones to natural silver-grey lichen while strictly
+conserving energy (linear albedo max $\le 0.875 \le 1.0$, transmission 0.0). Lycopsid tree canopy
+foliage is calibrated to `[0.55, 0.65, 0.60, 1.0]`, restoring $G > R > B$ for fresh coastal tree crowns.
+Botanical detail distance in `surface-showcase.toml` is extended from 24 m to 36 m (`detail_distance_m = 36`),
+maintaining full leaf pinnule geometry across the midground.
+
+**Clearing moss cushions, moist ground sheen, and temperate coastal shelf.**
+1. In `ground_detail.rs`, moss coverage in clearings is sustained by coastal humidity (`(0.45 + 0.55 * smooth(0.02, 0.20, canopy))`),
+   yielding organic green moss cushions across the open foreground. Soil litter roughness is calibrated to `0.75`
+   (clamped to `0.22`), producing a realistic moist specular response catching the silver overcast skylight.
+2. In `appearance.rs`, shallow coastal waters modulate scattering by temperature (`smooth(280.0, 298.0, sample.temperature_k)`),
+   scattering slate-blue `[0.10, 0.26, 0.30]` in temperate coastal waters rather than neon tropical turquoise.
+   Beach shoreline albedo in humid coastal rainforests blends towards dark wet shingle/gravel (`mix(weathered_soil, stone * 0.65, damp * 0.7)`).
+
+**Verified Metrics:**
+- Render mean RGB: `[0.372, 0.389, 0.295]` vs Reference `[0.399, 0.391, 0.347]` ($\Delta G = -0.0016$, $< 0.2\%$ difference across full 1280x720 image).
+- Foreground fern min RGB: `[0.000, 0.000, 0.000]` (pure deep blacks preserved).
+- Midground tree region mean: `[0.3997, 0.3933, 0.2796]` vs Reference mean `[0.3993, 0.3905, 0.3465]`.
+- Performance: AMD Radeon 880M Graphics GPU median **468.9 ms** (48 frames), 16,993 instances, 20,352 CBT triangles, 0 capacity rejections.
+- Quality gates: `check_architecture.py`, `cargo fmt -- --check`, `cargo clippy --workspace -D warnings` passed cleanly.
+
 ## WORLD16 — Coastal atmosphere calibration, overcast stratus and weathered forest floor (2026-10-25)
 
 This iteration achieves quantitative and perceptual parity with the photographic

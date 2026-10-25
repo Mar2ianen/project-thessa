@@ -28,8 +28,8 @@
   "derived": [
     {
       "path": "bark-base.png",
-      "bytes": 467551,
-      "sha256": "ca0ac442a4e9e312a31201add81c2fe26ffda93ec8c00eb8088e2dd4a1cdcf24"
+      "bytes": 588012,
+      "sha256": "016905a154ae80fe2afb07d23a1b5ceb1b3787219f1f5ea0d948b7f2a786d819"
     },
     {
       "path": "bark-mr.png",
@@ -77,5 +77,10 @@
     2.6,
     2.5,
     1.8
+  ],
+  "bark_authored_linear_albedo_gain": [
+    2.4,
+    3.6,
+    5.2
   ]
 }

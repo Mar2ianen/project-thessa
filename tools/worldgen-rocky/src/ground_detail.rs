@@ -334,9 +334,9 @@ pub(crate) fn forest_floor(
     let fine_mineral = smooth(0.52, 0.82, noise(6147, 0.22, false)) * 0.25;
     let wet = damp;
     let moss_noise = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
-    let moss = smooth(0.30, 0.60, damp)
-        * smooth(0.04, 0.20, canopy)
-        * smooth(0.45, 0.72, moss_noise)
+    let moss = smooth(0.28, 0.58, damp)
+        * (0.45 + 0.55 * smooth(0.02, 0.20, canopy))
+        * smooth(0.40, 0.70, moss_noise)
         * 0.85;
     let coarse_litter =
         smooth(0.08, 0.58, noise(6142, 1.6, true)) * (0.40 + 0.60 * smooth(0.04, 0.25, canopy));
@@ -355,10 +355,10 @@ pub(crate) fn forest_floor(
     });
     let dry = f64::from(ground.roughness);
     let wet_roughness = dry * (1.0 - wet) + (0.28 * (1.0 - fine_mineral * 0.20)) * wet;
-    let moss_roughness = wet_roughness * (1.0 - moss) + 0.95 * moss;
+    let moss_roughness = wet_roughness * (1.0 - moss) + 0.92 * moss;
     GroundSample {
         albedo_linear,
-        roughness: (moss_roughness * (1.0 - litter) + 0.90 * litter).clamp(0.26, 0.98) as f32,
+        roughness: (moss_roughness * (1.0 - litter) + 0.75 * litter).clamp(0.22, 0.98) as f32,
         // Optical pigments/wetness do not amplify the scan's physical slope.
         height_m: ground.height_m,
     }

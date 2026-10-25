@@ -1491,8 +1491,12 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             for i in 0..count {
                 let term_offset = term_idx as f64 * 1.57 + f64::from(form) * 0.93;
                 let angle = phase_offset + term_offset + i as f64 * GOLDEN_ANGLE;
+                let (radial, _) = azimuth_frame(angle);
                 let reach_scale = match form {
-                    1 => 0.94,
+                    1 => {
+                        let wind_align = radial[0] * 0.707 + radial[2] * 0.707;
+                        0.90 + 0.28 * wind_align
+                    }
                     2 => {
                         if terminal[0] < 0.0 {
                             0.88
@@ -1513,11 +1517,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 let reach = reach_base * reach_scale * reach_jitter;
                 let rise =
                     rise * match form {
-                        1 => 1.25,
+                        1 => {
+                            let wind_align = radial[0] * 0.707 + radial[2] * 0.707;
+                            1.20 - 0.22 * wind_align
+                        }
                         2 => 0.85,
                         _ => 1.0,
                     } * (0.92 + 0.16 * (i as f64 * 1.63).cos().powi(2));
-                let (radial, _) = azimuth_frame(angle);
                 let base = offset(
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],

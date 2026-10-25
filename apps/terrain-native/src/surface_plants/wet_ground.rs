@@ -207,9 +207,9 @@ pub(super) fn append(
         let material = prepared.asset.materials.len();
         let f0 = ((1.333_f32 - 1.0) / (1.333 + 1.0)).powi(2);
         prepared.asset.materials.push(Material {
-            base_color: [0.025, 0.022, 0.016, 1.0],
+            base_color: [0.020, 0.018, 0.014, 1.0],
             metallic: 0.0,
-            roughness: 0.075,
+            roughness: 0.065,
             dielectric_f0: f0,
             ..Default::default()
         });

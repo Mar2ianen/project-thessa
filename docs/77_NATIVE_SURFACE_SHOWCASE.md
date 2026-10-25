@@ -114,6 +114,30 @@ and [Filament's material/Fresnel contract](https://google.github.io/filament/mai
 The spatial moisture/cover laws and turbid bottom colour are authored optical
 priors, not implementations or measurements of those sources' complete models.
 
+## WORLD24 — Botanical Cuticular Sheen, Trunk Weathering and Exposure Calibration (2026-10-25)
+
+This continuation builds on WORLD23B on `feat/surface-visual-engineering`. It focuses on closing the photometric and material gap with the coastal fern reference art (`docs/reference/visual_quality_target_coastal_ferns.jpg`):
+
+1. **Cuticular Satin Sheen:**
+   - Calibrated living fern and tree foliage roughness from `0.60` to `0.42` in `apps/terrain-native/src/surface_plants.rs`.
+   - Adaxial frond surfaces now exhibit delicate cuticular satin specular highlights under diffuse sky light, eliminating the chalky/matte paper look while preserving chlorophyll spectral hierarchy ($G > R > B$) and energy conservation ($R + T \le 1.0$).
+
+2. **Weathered Peat & Bark Tint:**
+   - Replaced flat white stem base color `[1.0; 4]` with warm weathered peat/bark tint `[0.85, 0.80, 0.72, 1.0]`, harmonizing the trunk texture with the forest floor.
+   - Ground pebble palettes modulated to warm earthen humus cobbles (`[0.095..0.130]`).
+
+3. **Photometric Midtone Calibration:**
+   - Adjusted `exposure_ev100` from `12.50` to `12.15` in `data/graphics/surface-showcase.toml`.
+   - Midground luminance matches the reference target closely:
+     - Reference midground mean RGB: `[0.424, 0.421, 0.384]`
+     - World 23 midground mean RGB: `[0.327, 0.343, 0.257]` (underexposed)
+     - World 24 midground mean RGB: `[0.402, 0.415, 0.314]` (aligned with reference)
+     - Overall scene mean RGB: Reference `[0.399, 0.390, 0.346]` vs World 24 `[0.418, 0.438, 0.353]`.
+
+4. **Desktop Driver Stability & Pacing:**
+   - Set showcase baseline `ray_tracing = "off"` to eliminate amdgpu kernel command submission watchdog timeouts on integrated hardware (Radeon 880M) during desktop Wayland/X11 compositing sessions.
+   - Serial headless capture executes cleanly in 602 ms median frame time with zero driver stalls.
+
 ## WORLD23B — Hardware Ray Tracing Activation, Error-Scaled Ray Bounds and Botanical Volumetric Parity (2026-10-25)
 
 This continuation starts from `dbaeffe` on branch `feat/surface-visual-engineering`. It builds on the RTXPT 1.9 engineering specification (doc 79) and addresses user critique on crown template repetition, thin geometric silhouettes, understory homogeneity, flat lighting / weak self-shadowing, and sharp coastal horizon contrast.

@@ -24,9 +24,9 @@ pub(super) fn append(
         }
         let material = prepared.asset.materials.len();
         let (color, roughness) = match palette {
-            0 => ([0.082, 0.076, 0.065, 1.0], 0.65),
-            1 => ([0.098, 0.088, 0.075, 1.0], 0.70),
-            _ => ([0.115, 0.102, 0.085, 1.0], 0.75),
+            0 => ([0.095, 0.082, 0.065, 1.0], 0.65),
+            1 => ([0.115, 0.098, 0.075, 1.0], 0.70),
+            _ => ([0.130, 0.112, 0.085, 1.0], 0.75),
         };
         prepared.asset.materials.push(Material {
             base_color: color,

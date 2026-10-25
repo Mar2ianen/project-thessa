@@ -13,7 +13,7 @@ terrain_normal_maps = true
 specular_reflections = true
 shadow_memory_mib = 64
 backend = "auto"
-ray_tracing = "local"
+ray_tracing = "off"
 terrain = "gpu_auto"
 terrain_mesh_cells = 24
 material_storage = "rgba_array"
@@ -22,7 +22,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 12.50
+exposure_ev100 = 12.15
 fleet_meshes = true
 fleet_quality = "high"
 

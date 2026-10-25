@@ -1368,7 +1368,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         (7.95, 0.16),
     ];
     let trunk_scale = match form {
-        1 => 0.66,
+        1 => 0.67,
         2 => 0.58,
         _ => 0.60,
     };
@@ -1376,18 +1376,22 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     tapered_limb(
         mesh,
         [0.0; 3],
-        [0.0, 1.0, 0.0],
+        match form {
+            1 => [0.02, 1.0, 0.01],
+            2 => [-0.02, 1.0, 0.03],
+            _ => [0.0, 1.0, 0.0],
+        },
         if reduced { 8 } else { 16 },
         &trunk_rings,
     );
     let terminals: &[[f64; 3]] = match form {
-        1 => &[[-1.15, 8.55, 0.20], [1.15, 8.25, -0.20]],
-        2 => &[[-0.65, 8.40, 0.35], [1.35, 7.50, -0.55]],
+        1 => &[[-0.85, 8.85, 0.15], [0.85, 8.55, -0.15]],
+        2 => &[[-1.45, 7.15, 0.45], [1.95, 7.85, -0.55]],
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
     let base_y = match form {
-        1 => 5.35,
-        2 => 4.30,
+        1 => 5.85,
+        2 => 4.10,
         _ => 4.55,
     };
     for &terminal in terminals {
@@ -1410,15 +1414,25 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     // Six structural root flares terminate below the local soil; these cast
     // actual shadows and share the stem material, not a painted ground decal.
     for i in 0..6 {
-        let angle = i as f64 * GOLDEN_ANGLE + 0.2;
+        let angle = i as f64 * GOLDEN_ANGLE + 0.2 + f64::from(form) * 0.73;
         let (radial, _) = azimuth_frame(angle);
+        let flare_reach = match form {
+            1 => 0.82,
+            2 => 1.12,
+            _ => 0.94,
+        };
         let base = offset(scaled(radial, 0.14), [0.0, 0.22, 0.0]);
         tapered_limb(
             mesh,
             base,
-            offset(radial, [0.0, -0.36, 0.0]),
+            offset(scaled(radial, flare_reach), [0.0, -0.36, 0.0]),
             if reduced { 4 } else { 8 },
-            &[(0.0, 0.18), (0.32, 0.13), (0.68, 0.065), (0.94, 0.012)],
+            &[
+                (0.0, 0.18),
+                (0.32, 0.13),
+                (0.68, 0.065),
+                (flare_reach, 0.012),
+            ],
         );
     }
     mesh.stem = Some(PlantStem {
@@ -1448,12 +1462,12 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 let term_offset = term_idx as f64 * 1.57 + f64::from(form) * 0.93;
                 let angle = phase_offset + term_offset + i as f64 * GOLDEN_ANGLE;
                 let reach_scale = match form {
-                    1 => 1.08,
+                    1 => 0.94,
                     2 => {
                         if terminal[0] < 0.0 {
-                            0.88
+                            0.82
                         } else {
-                            1.04
+                            1.15
                         }
                     }
                     _ => {
@@ -1469,8 +1483,8 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 let reach = reach_base * reach_scale * reach_jitter;
                 let rise =
                     rise * match form {
-                        1 => 1.15,
-                        2 => 0.90,
+                        1 => 1.25,
+                        2 => 0.85,
                         _ => 1.0,
                     } * (0.92 + 0.16 * (i as f64 * 1.63).cos().powi(2));
                 let (radial, _) = azimuth_frame(angle);
@@ -1478,7 +1492,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],
                 );
-                let drop = drop * if form == 2 { 1.25 } else { 1.0 };
+                let drop = drop * if form == 2 { 1.35 } else { 1.0 };
                 crown_frond(mesh, angle, base, reach, rise, drop, reduced);
             }
         }
@@ -1509,10 +1523,8 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         if radial_len_sq > 1e-6 {
             let spherical = scaled(radial, 1.0 / radial_len_sq.sqrt());
             let current = n.map(f64::from);
-            let blended = crate::lod::normalize(offset(
-                scaled(current, 0.85),
-                scaled(spherical, 0.15),
-            ));
+            let blended =
+                crate::lod::normalize(offset(scaled(current, 0.85), scaled(spherical, 0.15)));
             *n = blended.map(|v| v as f32);
         }
     }

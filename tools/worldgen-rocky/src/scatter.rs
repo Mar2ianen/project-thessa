@@ -183,8 +183,8 @@ impl Default for ScatterPolicy {
             min_plant_height_m: 2.0,
             max_plant_slope_rise_run: 0.25,
             understory_spacing_m: 0.8,
-            understory_min_scale: 0.55,
-            understory_max_scale: 1.10,
+            understory_min_scale: 0.75,
+            understory_max_scale: 1.50,
         }
     }
 }
@@ -427,12 +427,28 @@ pub fn scatter_region(
                         continue;
                     }
                     let canopy_cover = surface.vegetation.canopy01.clamp(0.0, 1.0);
-                    let canopy_density_prior = (1.0 - canopy_cover * 0.48).max(0.20);
+                    // Dappled light niche: suppressed under dense canopy cores (canopy > 0.65)
+                    // and open barren ground, peaking in forest glades and canopy margins.
+                    let light_niche = (1.0 - canopy_cover * 0.62).clamp(0.12, 1.0);
+                    // Moisture niche: understory thrives in moist hollows and near water
+                    let moisture_factor = if let Some(water_h) = surface.water_height_m {
+                        let elev = (surface.ground_height_m - water_h).max(0.0);
+                        if elev < 2.5 {
+                            1.35
+                        } else if elev < 8.0 {
+                            1.0 + 0.35 * (1.0 - (elev - 2.5) / 5.5)
+                        } else {
+                            0.88
+                        }
+                    } else {
+                        1.0
+                    };
                     reference_density
                         * if population == ScatterPopulation::Understory {
                             (surface.vegetation.ground01 + surface.vegetation.reeds01)
                                 * patch_density
-                                * canopy_density_prior
+                                * light_niche
+                                * moisture_factor
                         } else {
                             surface.vegetation.total()
                         }
@@ -455,9 +471,16 @@ pub fn scatter_region(
                     }
                 }
                 ScatterPopulation::Understory => {
-                    let choice =
-                        random(431) * (surface.vegetation.ground01 + surface.vegetation.reeds01);
-                    if choice < surface.vegetation.reeds01 {
+                    let moisture_bias = if let Some(water_h) = surface.water_height_m {
+                        let elev = (surface.ground_height_m - water_h).max(0.0);
+                        if elev < 2.2 { 1.75 } else { 0.45 }
+                    } else {
+                        1.0
+                    };
+                    let reed_weight = surface.vegetation.reeds01 * moisture_bias;
+                    let ground_weight = surface.vegetation.ground01;
+                    let choice = random(431) * (ground_weight + reed_weight);
+                    if choice < reed_weight {
                         ScatterKind::ReedClump
                     } else {
                         ScatterKind::FernClump

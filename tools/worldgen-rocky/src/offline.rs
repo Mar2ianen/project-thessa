@@ -1231,31 +1231,60 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
 }
 
 fn apply_crown_core_occlusion(mesh: &mut PlantMesh) {
-    if mesh.kind != crate::scatter::ScatterKind::LycopsidTree {
-        return;
-    }
     let stem_end = mesh.stem.as_ref().map_or(0, |s| s.vertex_count as usize);
-    // Deepen cavity occlusion inside the apical rosette core and basal trunk crevices.
-    for (idx, (p, ao)) in mesh
-        .positions
-        .iter()
-        .zip(&mut mesh.ambient_visibility)
-        .enumerate()
-    {
-        let y = f64::from(p[1]);
-        if y > 6.0 {
+    if mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
+        // Deepen cavity occlusion inside the apical rosette core and basal trunk crevices.
+        for (idx, (p, ao)) in mesh
+            .positions
+            .iter()
+            .zip(&mut mesh.ambient_visibility)
+            .enumerate()
+        {
+            let y = f64::from(p[1]);
+            if y > 6.0 {
+                let r = f64::from(p[0]).hypot(f64::from(p[2]));
+                let core_factor = (r / 3.2).clamp(0.45, 1.0) as f32;
+                *ao = (*ao * core_factor).clamp(0.15, 1.0);
+            } else if idx < stem_end && y < 2.0 {
+                // Basal trunk ambient occlusion and root flare contact crevices.
+                let root_contact = if y < 0.35 {
+                    0.28 + 0.14 * (y / 0.35).clamp(0.0, 1.0)
+                } else {
+                    0.42 + 0.58 * ((y - 0.35) / 1.65).clamp(0.0, 1.0)
+                };
+                let basal_factor = root_contact as f32;
+                *ao = (*ao * basal_factor).clamp(0.10, 1.0);
+            }
+        }
+    } else if mesh.kind == crate::scatter::ScatterKind::FernClump {
+        for (p, ao) in mesh.positions.iter().zip(&mut mesh.ambient_visibility) {
+            let y = f64::from(p[1]);
             let r = f64::from(p[0]).hypot(f64::from(p[2]));
-            let core_factor = (r / 3.2).clamp(0.45, 1.0) as f32;
-            *ao = (*ao * core_factor).clamp(0.15, 1.0);
-        } else if idx < stem_end && y < 2.0 {
-            // Basal trunk ambient occlusion and root flare contact crevices.
-            let root_contact = if y < 0.35 {
-                0.28 + 0.14 * (y / 0.35).clamp(0.0, 1.0)
+            // Deep basal crown cavity occlusion:
+            let core_ao = if r < 0.35 && y < 0.45 {
+                (0.25 + 0.75 * (r / 0.35).max(y / 0.45)).clamp(0.20, 1.0)
             } else {
-                0.42 + 0.58 * ((y - 0.35) / 1.65).clamp(0.0, 1.0)
+                1.0
             };
-            let basal_factor = root_contact as f32;
-            *ao = (*ao * basal_factor).clamp(0.10, 1.0);
+            // Ground plane contact occlusion anchoring to the local soil:
+            let ground_ao = if y < 0.22 {
+                (0.28 + 0.72 * (y / 0.22).powf(1.4)).clamp(0.22, 1.0)
+            } else {
+                1.0
+            };
+            *ao = (*ao * (core_ao * ground_ao) as f32).clamp(0.16, 1.0);
+        }
+    } else if mesh.kind == crate::scatter::ScatterKind::ReedClump {
+        for (p, ao) in mesh.positions.iter().zip(&mut mesh.ambient_visibility) {
+            let y = f64::from(p[1]);
+            let r = f64::from(p[0]).hypot(f64::from(p[2]));
+            let basal_ao = if y < 0.25 {
+                (0.32 + 0.68 * (y / 0.25)).clamp(0.30, 1.0)
+            } else {
+                1.0
+            };
+            let core_ao = if r < 0.12 && y < 0.60 { 0.55 } else { 1.0 };
+            *ao = (*ao * (basal_ao * core_ao) as f32).clamp(0.25, 1.0);
         }
     }
 }
@@ -1310,10 +1339,47 @@ fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
 }
 
 fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
+    if form == 2 {
+        // Form 2: Broad decumbent hero rosette with 21 layered fronds (4 juvenile upright,
+        // 10 mature arching fountain fronds, 7 long ground-draping senescent skirts).
+        const FORM2_FRONDS: usize = 21;
+        const F2_LEN: [f64; FORM2_FRONDS] = [
+            0.85, 1.15, 1.45, 1.25, 1.65, 1.85, 1.95, 1.75, 1.60, 1.90, 1.70, 1.80, 2.05, 1.68,
+            1.95, 2.10, 1.85, 2.15, 1.90, 2.20, 1.80,
+        ];
+        const F2_HGT: [f64; FORM2_FRONDS] = [
+            1.35, 1.45, 1.30, 1.40, 1.15, 1.25, 1.10, 1.20, 1.05, 1.15, 1.00, 1.25, 1.10, 0.95,
+            0.45, 0.38, 0.42, 0.35, 0.40, 0.32, 0.36,
+        ];
+        const F2_BASE_Y: [f64; FORM2_FRONDS] = [
+            0.0, 0.022, 0.028, 0.020, 0.015, 0.018, 0.012, 0.016, 0.010, 0.014, 0.008, 0.015,
+            0.011, 0.009, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        for i in 0..FORM2_FRONDS {
+            if i == 14 {
+                mesh.senescent = Some(PlantSenescence {
+                    first_vertex: mesh.positions.len() as u32,
+                    albedo_srgb: [0.18, 0.12, 0.06],
+                    diffuse_transmission: 0.05,
+                });
+            }
+            let angle = 0.22 + i as f64 * GOLDEN_ANGLE;
+            fern_frond(
+                mesh,
+                angle,
+                F2_LEN[i],
+                F2_HGT[i],
+                F2_BASE_Y[i],
+                i >= 14,
+                form,
+                reduced,
+            );
+        }
+        return;
+    }
     const FRONDS: usize = 13;
     let (length_scale, height_scale, arch_shift) = match form {
         1 => (1.05, 1.15, 0.94), // Form 1: Upright tall shuttlecock rosette
-        2 => (1.10, 0.88, 1.05), // Form 2: Broad decumbent spreading rosette
         _ => (1.00, 1.00, 1.00), // Form 0: Balanced shuttlecock rosette
     };
     // Explicit non-random per-frond variation (length, arch height, base height).
@@ -1324,7 +1390,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         1.05, 0.95, 0.38, 1.10, 1.25, 0.44, 1.45, 1.00, 1.30, 0.32, 1.40, 1.05, 1.35,
     ];
     const BASE_Y_M: [f64; FRONDS] = [
-        0.0, 0.02, 0.01, 0.03, 0.015, 0.005, 0.025, 0.0, 0.018, 0.008, 0.022, 0.012, 0.006,
+        0.0, 0.02, 0.003, 0.03, 0.015, 0.002, 0.025, 0.0, 0.018, 0.004, 0.022, 0.012, 0.006,
     ];
     // Keep the same thirteen fronds and attachment angles; publish the three
     // long, low outer fronds last so age owns a real material boundary.
@@ -1351,6 +1417,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             hgt,
             BASE_Y_M[i],
             order >= 10,
+            form,
             reduced,
         );
     }
@@ -1364,7 +1431,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
     const LEAN_M: [f64; STEMS] = [0.24, 0.36, 0.18, 0.30, 0.42, 0.22, 0.34, 0.20, 0.28, 0.26];
     const BASE_R_M: [f64; STEMS] = [0.10, 0.03, 0.15, 0.06, 0.11, 0.02, 0.14, 0.08, 0.05, 0.12];
     const WIDTH_M: [f64; STEMS] = [
-        0.040, 0.052, 0.038, 0.048, 0.055, 0.042, 0.050, 0.036, 0.046, 0.035,
+        0.058, 0.072, 0.052, 0.068, 0.075, 0.060, 0.070, 0.054, 0.064, 0.050,
     ];
     for i in 0..STEMS {
         reed_blade(
@@ -1424,20 +1491,20 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         (7.95, 0.16),
     ];
     let trunk_scale = match form {
-        1 => 0.67,
+        1 => 1.05,
         2 => 0.58,
         _ => 0.60,
     };
     let trunk_rings = TRUNK_RINGS.map(|(height, radius)| {
         let r = match form {
             2 => radius * 1.14,
-            1 => radius * 0.94,
+            1 => radius * 1.06,
             _ => radius,
         };
         (height * trunk_scale, r)
     });
     let trunk_axis = crate::lod::normalize(match form {
-        1 => [0.02, 1.0, 0.01],
+        1 => [0.03, 1.0, 0.02],
         2 => [-0.02, 1.0, 0.03],
         _ => [0.0, 1.0, 0.0],
     });
@@ -1449,13 +1516,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         &trunk_rings,
     );
     let terminals: &[[f64; 3]] = match form {
-        1 => &[[-0.85, 8.85, 0.15], [0.85, 8.55, -0.15]],
-        2 => &[[-1.65, 7.25, 0.50], [2.15, 7.95, -0.60]],
+        1 => &[[0.12, 8.45, 0.08]],
+        2 => &[[-0.75, 9.15, 0.25], [2.45, 6.75, -0.55]],
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
     let base_y = match form {
-        1 => 5.10,
-        2 => 4.10,
+        1 => 8.10,
+        2 => 3.95,
         _ => 4.55,
     };
     for &terminal in terminals {
@@ -1465,7 +1532,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         let length = crate::lod::dot(axis, axis).sqrt();
         let fork_thickness = match form {
             2 => (0.27, 0.21, 0.14, 0.07),
-            1 => (0.21, 0.16, 0.11, 0.055),
+            1 => (0.24, 0.20, 0.15, 0.10),
             _ => (0.23, 0.18, 0.12, 0.06),
         };
         tapered_limb(
@@ -1487,7 +1554,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         let angle = i as f64 * GOLDEN_ANGLE + 0.2 + f64::from(form) * 0.73;
         let (radial, _) = azimuth_frame(angle);
         let flare_scale = match form {
-            1 => 0.82,
+            1 => 0.98,
             2 => 1.12,
             _ => 0.94,
         };
@@ -1514,21 +1581,32 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         albedo_srgb: [0.18, 0.15, 0.11],
     });
 
-    // The two crowns share the same 48-frond budget as the single umbrella.
     // Count, attachment height, reach, arch rise, terminal drop, azimuth.
+    // Form 1 is a solitary massive monopodial crown (48 fronds on 1 terminal);
+    // Form 0 and 2 are dichotomous/asymmetric dual-terminal crowns (24 fronds per terminal).
     let (spread_reach, outer_reach) = match form {
+        1 => (5.20, 4.50),
         2 => (5.35, 4.85),
         _ => (4.68, 4.20),
     };
-    let tiers: [(usize, f64, f64, f64, f64, f64); 5] = [
-        (3, 8.28, 2.35, 2.60, 0.15, 0.12), // Emerging apical young fronds
-        (5, 8.10, 3.65, 2.30, 0.45, 0.35), // Ascending juvenile fronds
-        (8, 7.85, spread_reach, 1.95, 1.05, 0.62), // Spreading mature canopy umbrella
-        (5, 7.55, outer_reach, 1.10, 1.75, 0.95), // Descending cascading fronds
-        (3, 7.20, 2.05, 0.15, 2.55, 1.25), // Hanging senescent mantle skirt
-    ];
+    let tiers: [(usize, f64, f64, f64, f64, f64); 5] = match form {
+        1 => [
+            (6, 8.55, 2.50, 2.80, 0.15, 0.10), // Emerging apical young fronds (6 total)
+            (10, 8.35, 3.85, 2.40, 0.45, 0.30), // Ascending juvenile fronds (10 total)
+            (16, 8.05, spread_reach, 1.90, 1.15, 0.60), // Spreading mature canopy umbrella (16 total)
+            (10, 7.70, outer_reach, 1.05, 1.85, 0.90),  // Descending cascading fronds (10 total)
+            (6, 7.30, 2.30, 0.15, 2.60, 1.20),          // Hanging senescent mantle skirt (6 total)
+        ],
+        _ => [
+            (3, 8.28, 2.35, 2.60, 0.15, 0.12), // Emerging apical young fronds
+            (5, 8.10, 3.65, 2.30, 0.45, 0.35), // Ascending juvenile fronds
+            (8, 7.85, spread_reach, 1.95, 1.05, 0.62), // Spreading mature canopy umbrella
+            (5, 7.55, outer_reach, 1.10, 1.75, 0.95), // Descending cascading fronds
+            (3, 7.20, 2.05, 0.15, 2.55, 1.25), // Hanging senescent mantle skirt
+        ],
+    };
     for &(count, base_y, reach_base, rise, drop, phase_offset) in &tiers {
-        if base_y == 7.20 {
+        if base_y == 7.20 || (form == 1 && base_y == 7.30) {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
                 albedo_srgb: [0.24, 0.16, 0.08],
@@ -1544,7 +1622,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 let reach_scale = match form {
                     1 => {
                         let wind_align = radial[0] * 0.707 + radial[2] * 0.707;
-                        0.90 + 0.28 * wind_align
+                        0.95 + 0.18 * wind_align
                     }
                     2 => {
                         if terminal[0] < 0.0 {
@@ -1570,7 +1648,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     rise * match form {
                         1 => {
                             let wind_align = radial[0] * 0.707 + radial[2] * 0.707;
-                            1.20 - 0.22 * wind_align
+                            1.10 - 0.15 * wind_align
                         }
                         2 => 0.85,
                         _ => 1.0,
@@ -1626,6 +1704,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
 
 /// One arching rachis with fourteen opposed pairs of separate tapered pinnae.
 /// Gaps are geometry shared by primary raster, shadows and optional RT.
+#[allow(clippy::too_many_arguments)]
 fn fern_frond(
     mesh: &mut PlantMesh,
     angle: f64,
@@ -1633,6 +1712,7 @@ fn fern_frond(
     height_m: f64,
     base_y_m: f64,
     senescent: bool,
+    form: u8,
     reduced: bool,
 ) {
     let (radial, lateral) = azimuth_frame(angle);
@@ -1641,7 +1721,12 @@ fn fern_frond(
         // Senescent outer fronds drape directly towards the soil datum without phototropic lift;
         // living fronds have graceful outward fountain arch with phototropic tip lift.
         let arch = if senescent {
-            (t * std::f64::consts::PI * 0.92).sin()
+            let raw_arch = (t * std::f64::consts::PI).sin();
+            if t > 0.35 {
+                raw_arch * (1.0 - ((t - 0.35) / 0.65).powf(1.6))
+            } else {
+                raw_arch
+            }
         } else {
             (t * std::f64::consts::PI * 0.80).sin()
         };
@@ -1658,6 +1743,11 @@ fn fern_frond(
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));
     let widths = std::array::from_fn::<_, 13, _>(|i| 0.006 * (1.0 - 0.85 * i as f64 / 12.0));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+    let width_scale = match form {
+        2 => 1.35,
+        1 => 1.10,
+        _ => 1.00,
+    };
     for pair in 0..14 {
         let t = 0.11 + pair as f64 * 0.063;
         let length = length_m * 0.27 * (std::f64::consts::PI * t).sin().powf(0.65);
@@ -1681,7 +1771,7 @@ fn fern_frond(
                 mesh,
                 nodes,
                 tangent,
-                length * 0.085,
+                length * 0.085 * width_scale,
                 length * 0.015,
                 reduced,
             );
@@ -2746,7 +2836,7 @@ mod tests {
         mesh.positions.clear();
         mesh.normals.clear();
         mesh.indices.clear();
-        fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0, false, false);
+        fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0, false, 0, false);
         // Independent vertical ray/triangle test in XZ. Paired pinnae attach
         // along this one-metre rachis, with true air between them.
         let covered = |x, z| covered_from_above(&mesh, x, z);

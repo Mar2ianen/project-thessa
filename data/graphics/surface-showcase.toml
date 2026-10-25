@@ -36,8 +36,8 @@ enabled = true
 quality = "high"
 aerial_perspective = true
 # Authored local sea-haze optical prior, shared by ground/water/meshes.
-local_haze_extinction_per_m = 0.00255
-local_haze_height_m = 520.0
+local_haze_extinction_per_m = 0.00125
+local_haze_height_m = 480.0
 density_scale = 1.42
 multiple_scattering = true
 eclipses = true
@@ -56,8 +56,8 @@ integrator = "march"
 ray_steps = 24
 cast_shadows = true
 layers = 2
-coverage = 0.38
-opacity = 0.60
+coverage = 0.46
+opacity = 0.45
 animate = true
 
 [night_lights]

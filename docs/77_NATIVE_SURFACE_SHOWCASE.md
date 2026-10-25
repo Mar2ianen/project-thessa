@@ -2519,3 +2519,27 @@ Addressing botanical fidelity critiques on mechanical starburst crowns, flat bil
         - 100% session stability: 25 consecutive iterations executed autonomously without session drops or desktop instability.
         - All 265 worldgen-rocky tests, 21 terrain-native tests, and 12 foundational crate architecture checks passed.
 
+11. **Deep Visual & Ecological Architecture Overhaul (Worlds 80–83 RT):**
+    - **Tree Crown Polymorphic Silhouette Architecture:**
+      - Replaced uniform Y-fork dumbbell silhouette with 3 distinct morphological archetypes:
+        - **Form 1 (Solitary Monopodial Umbrella):** Full $8.35\text{ m}$ straight caudex with a single apex terminal at `[0.12, 8.45, 0.08]` bearing a dense 48-frond 360-degree domed umbrella canopy (6 apical, 10 ascending juvenile, 16 spreading canopy umbrella, 10 cascading, 6 senescent).
+        - **Form 2 (Asymmetric Stepped Veteran):** Low trunk split at $y = 3.95\text{ m}$ into two sharply tiered limbs: dominant upright apex at `[-0.75, 9.15, 0.25]` (28 fronds) and low sweeping horizontal bough at `[2.45, 6.75, -0.55]` (20 fronds).
+        - **Form 0 (Balanced Canonical):** Exact 2-fork canonical contract (`[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]]`, 24 fronds each).
+      - Oblate SpeedTree dome normal warping updated for single or dual terminals.
+    - **Botanical Hero Rosette & Soil Draping Contact:**
+      - Form 2 redesigned as a **21-frond hero rosette** (4 juvenile upright, 10 spreading fountain fronds up to $2.05\text{ m}$, 7 senescent skirts up to $2.20\text{ m}$ with `width_scale = 1.35`).
+      - Senescent fronds decline directly to the soil datum with flat terminal ground contact ($y = 0.0$ at $t = 1.0$), eliminating floating rosettes.
+      - Cavity and basal ground contact ambient occlusion extended to `FernClump` (inner cavity down to 0.20, soil contact down to 0.22) and `ReedClump` (basal mud emergence down to 0.30).
+    - **Ecological Understory Niche Partitioning:**
+      - Understory scale interval expanded from `0.55..1.10` to `0.75..1.50`, enabling foreground hero ferns to reach realistic $2.0\text{--}2.5\text{ m}$ diameter.
+      - **Dappled light niche:** Suppresses understory in dense dark canopy cores (`canopy > 0.65`) and bare ground, peaking in forest glades.
+      - **Moisture niche:** Proximity to water table elevates density ($1.35\times$ for elevation $< 2.5\text{ m}$) and biases species selection ($1.75\times$ reed weight in riparian hollows).
+    - **Stem Bark Radiometric Reflectance:**
+      - Calibrated stem `base_color` from pitch-black `[0.24, 0.21, 0.16]` to weathered bark `[0.36, 0.32, 0.25]` to reveal rhomboidal leaf-scar normal maps under diffuse overcast illumination.
+    - **Atmosphere & Depth Contrast:**
+      - Tuned `local_haze_extinction_per_m = 0.00125` ($h = 480\text{ m}$) and cloud deck (`coverage = 0.46, opacity = 0.45`), preventing distant forest from collapsing into flat 2D silhouettes while preserving rich inner canopy shadows.
+    - **Photometric RT Convergence (World 81–83 RT):**
+      - Floor Row 3 Mean $L_1$ reached an all-time best of **37.80** (improved from 40.41 in World 79).
+      - Dark shadows $L_1$ reached an all-time best of **42.93** (improved from 50.21 in World 79).
+      - Traced triangles: 226,802; TLAS instances: 23,021; 100% test passing across 435 unit and regression tests.
+

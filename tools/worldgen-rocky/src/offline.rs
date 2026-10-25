@@ -1555,9 +1555,11 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                         }
                     }
                 };
+                let outward_dot = radial[0] * if terminal[0] < 0.0 { -1.0 } else { 1.0 };
+                let crotch_attenuation = 0.94 + 0.06 * outward_dot;
                 let reach_jitter =
                     0.86 + 0.28 * (i as f64 * 2.17 + term_idx as f64 * 1.3).sin().powi(2);
-                let reach = reach_base * reach_scale * reach_jitter;
+                let reach = reach_base * reach_scale * reach_jitter * crotch_attenuation;
                 let rise =
                     rise * match form {
                         1 => {

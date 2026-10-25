@@ -6,6 +6,114 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD23 — Shallow puddles, wet soil and moss volume (2026-10-25)
+
+This continuation starts from `851572f`. It retains WORLD22's canonical soil
+normal composition, High L24 optical ceiling, source identities, exposure,
+4× MSAA and TAA off. WORLD22 below is the preceding audit; its cover and total
+prototype-budget limits are superseded here.
+
+**Wet soil and moss source.** One body-fixed `GroundCover` evaluation distributes
+canonical moisture availability over metre-scale retention patterns and scan
+hollows. Wet regions retain the existing substrate absorption response and use
+an authored wet roughness endpoint of 0.18 (final floor minimum 0.22). Moss
+pigment and cushions use the same spatial mask: broad cushions and smaller
+hummocks add at most 43.35 mm before habitat weighting. Their height enters the
+existing render-height pages and optical normal gradients once. The canonical
+32 m base, authoritative terrain/collision, water depths and scatter descriptors
+do not change. Coarse source filtering removes unresolved cushions; Low keeps
+optical detail, Medium/High use existing geometric soil relief. The preceding
+loose 5.2 m analytical soil envelope becomes 5.3 m including this bounded cover;
+it is not a measured soil-height distribution.
+
+The native near-eye ground adapter adds at most 128/384 moss clumps at
+Medium/High, eight small geometric shoots per clump. These reuse the same worker,
+mesh material, opaque pass and shadow atlas as existing plants/pebbles. There are
+no moss textures, alpha-blended shells, extra passes or independent scheduler.
+The source height/pigment field remains common to both representations.
+
+**Closed sampled puddles.** The default-off setting
+`renderer.terrain_ground_puddles` requires `renderer.terrain_ground_detail`.
+The showcase profile opts in. Low retains optical wet soil and admits no pool
+meshes; Medium/High cap sampled puddle patches at 8/24; a patch may contain several
+separately closed basins. The bounded existing near-ground descriptor
+cover supplies candidate centres, ordered by a stable hash of world addresses
+rather than Morton order or distance to the window centre. This avoids placing
+all admitted pools on one side of the view. A zero near-ground pebble/item budget
+admits no local moss/puddle meshes. Up to 256 eligible candidates sample
+a 17², 2.5 m-wide render-ground grid. The existing hydrology priority-flood core is reused with the actual
+six-connected triangle graph and open patch edges. Each disconnected hollow
+gets its own level below its local spill, with a 1 mm margin and at most 45 mm
+depth above that basin's minimum. A lower outlet elsewhere in the patch does
+not incorrectly empty enclosed hollows. The existing planetary hydrology
+adapter retains its previous graph/outlets and numerical behavior. Moisture
+controls static fill availability. Open planar slopes and flat grids produce
+no puddle. Each ground triangle is clipped against the resulting level,
+so shores follow the sampled depression rather than a circular card or quad.
+
+These are **static optical scene reconstructions**, not rain, infiltration,
+runoff, conserved water inventory or new gameplay water/collision. Closure is
+established on the sampled piecewise-linear grid; unsampled drains, sub-grid
+relief and exact intersection with asynchronous CBT triangles remain outside
+that guarantee. No moving ocean waves are added to sheltered puddles.
+
+The calm turbid-water approximation uses the existing opaque dielectric mesh
+material: diffuse bottom/backscatter colour, roughness 0.075 and normal-incidence
+Fresnel `(1.333-1)^2/(1.333+1)^2 ≈0.02037`. It receives sky/stellar lighting and
+shared shadows/reflections under existing renderer policy. Clear-water
+refraction, depth-dependent bottom transmission and multiple scattering are
+not implemented. The shared mesh material now exposes validated `dielectric_f0`,
+default 0.04; primary uniform padding carries it and reflected mesh hits use
+it too. Primary bindings/uniform size are unchanged; RT material records grow
+48→64 bytes, including updated memory admission and disabled-mesh placeholders.
+No water-specific render pass, texture or framebuffer is allocated.
+
+**Publication and budgets.** Moss/pools add at most two aggregated primitive
+ranges and two rigid instances (36 total ranges with full plants/pebbles).
+They append no fake scatter identities. Their actual immutable vertices and
+indices participate in source reuse checks, preventing stale geometry from
+being accepted because counts happen to agree. The total prototype payload
+has an explicit 7 MB admission ceiling. Per-frame mesh/shadow/RT publication
+uses existing paths and whole-partition RT fallback. Puddles disabled means
+zero basin sampling and no pool geometry/material publication; ground detail
+disabled removes both cover representations. Local counters expose moss
+clumps, admitted puddle patches, enclosed basins, water samples and triangles. Window changes may require a new
+combined immutable mesh source and can cost more than instance-only reuse.
+
+**Verification.** Tests cover an analytic paraboloid's clipped area/level,
+independent local hollows beside a lower patch outlet,
+open-slope/flat/dry rejection, bounded moisture/cushion response, actual coastal
+mesh admission and winding, at least one pool in the fixed showcase camera
+cone, disabled water sampling, exact local source reuse, parent/tier resolution
+and GPU Fresnel radiance. Numerical and capture evidence is recorded in
+[`native-wet-ground-2026-10-25.json`](artifacts/native-wet-ground-2026-10-25.json).
+Independent visual, temporal and platform acceptance remain open.
+
+All 12 local command gates passed (710 successful test executions across
+overlapping suites), including strict workspace Clippy, the architecture gate,
+feature-off compilation and the release build. The fixed coastal High source
+admits 384 moss clumps, 24 sampled patches containing 67 basins and 1,524 water
+triangles after 7,514 height queries. The bare-ground water-on/off captures have
+the same 29,974 CBT triangles and material-level histogram; switching water on
+adds one draw and 1,524 triangles. Their GPU medians are 180.419/180.238 ms
+(on/off), serial offscreen on Radeon 880M/Vulkan, not game FPS or a speedup
+claim. Puddles affect 768 pixels by more than five display codes in the
+1280×720 pair: a modest visible mid-ground effect, not an aesthetic score.
+The preceding-build baseline frames are retained from the exact pinned
+`851572f` binary earlier the same day; the candidate frames are newly captured.
+Three randomized pairs remain unvoted. Actual commands, source/binary hashes,
+residency and raw timing boundaries accompany the artifact. Clear-water optics,
+stronger near-eye composition and reference-quality acceptance remain open.
+The complete static scene measures 472.106 ms GPU median; the moving diagnostic
+measures 722.897 ms and visibly loses fine soil detail during asynchronous
+residency changes. Neither interactive performance nor temporal quality is
+accepted by these captures.
+
+Primary research references: [Lagarde's wet-surface theory](https://seblagarde.wordpress.com/2013/03/19/water-drop-3a-physically-based-wet-surfaces/)
+and [Filament's material/Fresnel contract](https://google.github.io/filament/main/materials.html).
+The spatial moisture/cover laws and turbid bottom colour are authored optical
+priors, not implementations or measurements of those sources' complete models.
+
 ## WORLD22 — Review of Gemini's latest scene and soil normal continuity (2026-10-25)
 
 This continuation starts from `d4a780f`, retaining WORLD16–21's crown geometry,

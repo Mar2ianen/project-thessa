@@ -3284,6 +3284,11 @@ remote CI or production-parity acceptance.
 
 ### Native textured hits and scene-object RT shadows (2026-10-17, follow-up)
 
+Current layout note (WORLD23, 2026-10-25): mesh RT material records now use
+64 bytes to carry validated dielectric F0. Raster uniform size stays 64 bytes;
+vertex stride stays 48 bytes. The dated 48-byte material accounting below is
+historical; current implementation and evidence are in [doc 77](77_NATIVE_SURFACE_SHOWCASE.md).
+
 This partially supersedes the factors-only-hit/no-RT-shadow limits in the dated
 checkpoints above. It does **not** add terrain/ocean RT membership or complete
 client replacement.

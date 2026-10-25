@@ -113,6 +113,8 @@ pub struct Material {
     /// Fraction of diffuse scattering leaving the opposite hemisphere.
     /// Reflectance = albedo * (1-t), transmittance = albedo * t.
     pub diffuse_transmission: f32,
+    /// Normal-incidence dielectric Fresnel reflectance; water is about 0.0204.
+    pub dielectric_f0: f32,
 }
 impl Default for Material {
     fn default() -> Self {
@@ -128,6 +130,7 @@ impl Default for Material {
             occlusion_strength: 1.0,
             double_sided: false,
             diffuse_transmission: 0.0,
+            dielectric_f0: 0.04,
         }
     }
 }
@@ -190,6 +193,7 @@ impl MeshAsset {
                     material.roughness,
                     material.occlusion_strength,
                     material.diffuse_transmission,
+                    material.dielectric_f0,
                 ]
                 .into_iter()
                 .any(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))

@@ -51,8 +51,8 @@ const INSTANCE_RECORD_BYTES: u64 = 64;
 const PAIR_RECORD_BYTES: u64 = 64;
 /// Three padded vec4s: position, smooth normal, UV. Also the BLAS stride.
 const VERTEX_BYTES: u64 = 48;
-/// Colour/metallic, roughness/normal-scale/AO, four texture indices.
-const MATERIAL_BYTES: u64 = 48;
+/// Colour/metallic, roughness/normal-scale/AO/transmission, texture indices, dielectric optics.
+const MATERIAL_BYTES: u64 = 64;
 
 /// Per-frame accounting for telemetry and captures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -263,6 +263,7 @@ fn plan_inner(
             });
             records.extend(index.to_le_bytes());
         }
+        records.extend(f32_bytes([material.dielectric_f0, 0.0, 0.0, 0.0]));
     }
     // Static texture/sampler switches need no optional bindless features.
     // Reserve the primary material's four maps, shadow atlas and shared cloud
@@ -304,7 +305,7 @@ fn plan_inner(
     } else {
         // Shader-required placeholders, no mesh geometry or structures.
         if reflections {
-            48 + 4 + 16 + 48
+            48 + 4 + 16 + MATERIAL_BYTES
         } else {
             16 + 4
         }
@@ -605,7 +606,7 @@ impl RayScene {
                 contents: if plan.mesh_enabled {
                     &plan.records
                 } else {
-                    &[0; 48]
+                    &[0; 64]
                 },
                 usage: wgpu::BufferUsages::STORAGE,
             })

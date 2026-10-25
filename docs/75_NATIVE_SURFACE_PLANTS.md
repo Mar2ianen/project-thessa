@@ -10,6 +10,15 @@ meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
 normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
+WORLD23 (doc 77) adds bounded near-eye moss shoots and optional puddle meshes
+through this adapter's existing preparation and publication. Medium/High admit
+128/384 clumps and 8/24 sampled puddle patches; Low keeps optical cover only. The puddle setting
+is default-off and parent-gated by ground detail. At most two aggregate primitive
+ranges/instances are added, raising total admission to 36 ranges / 7 MB. These
+local meshes carry actual geometry in source-reuse checks and append no fake
+world scatter identities. Pool closure is sampled, not a hydrology/collision
+claim; dynamic-window rebuild costs and exact CBT contact remain open.
+
 WORLD15 ([doc 77](77_NATIVE_SURFACE_SHOWCASE.md)) supersedes the older prototype
 counts below: stable identity selects three fern forms, three tree forms (broad
 fork, single crown, narrow drooping fork), and one reed form. Six structural

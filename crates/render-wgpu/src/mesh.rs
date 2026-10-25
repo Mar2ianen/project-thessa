@@ -577,7 +577,12 @@ impl MeshRenderer {
                 material.normal_scale,
                 material.occlusion_strength,
             ]));
-            data.extend(words([material.diffuse_transmission, 0.0, 0.0, 0.0]));
+            data.extend(words([
+                material.diffuse_transmission,
+                material.dielectric_f0,
+                0.0,
+                0.0,
+            ]));
             let params = buffer(&data, wgpu::BufferUsages::UNIFORM);
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("mesh-material"),

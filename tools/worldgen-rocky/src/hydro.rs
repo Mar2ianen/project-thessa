@@ -485,6 +485,19 @@ fn neighbors(rows: usize, cols: usize, r: usize, c: usize) -> Vec<(usize, usize)
 /// Cells where `filled - h` is large sit in true closed depressions.
 /// Pole rows and ocean cells are outlets; longitude wraps.
 fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
+    priority_filled_heights(
+        &grid.h,
+        |r, c| grid.adjacent(r, c),
+        |r, c| grid.h[r][c] < 0.0 || grid.is_open_edge(r, c),
+    )
+}
+
+// Shared priority-flood core; callers provide their actual graph and outlets.
+pub(crate) fn priority_filled_heights<I: IntoIterator<Item = (usize, usize)>>(
+    heights: &[Vec<f64>],
+    adjacent: impl Fn(usize, usize) -> I,
+    extra_outlet: impl Fn(usize, usize) -> bool,
+) -> Vec<Vec<f64>> {
     use std::collections::BinaryHeap;
     #[derive(PartialEq, Eq)]
     struct Item {
@@ -507,7 +520,7 @@ fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
             Some(self.cmp(other))
         }
     }
-    let (rows, cols) = (grid.rows(), grid.cols());
+    let (rows, cols) = (heights.len(), heights[0].len());
     let mut filled = vec![vec![f64::INFINITY; cols]; rows];
     let mut visited = vec![vec![false; cols]; rows];
     let mut heap = BinaryHeap::new();
@@ -516,10 +529,10 @@ fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
                        heap: &mut BinaryHeap<Item>,
                        r: usize,
                        c: usize| {
-        filled[r][c] = grid.h[r][c];
+        filled[r][c] = heights[r][c];
         visited[r][c] = true;
         heap.push(Item {
-            key: height_order_key(grid.h[r][c]),
+            key: height_order_key(heights[r][c]),
             r,
             c,
         });
@@ -531,7 +544,7 @@ fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
     }
     for r in 0..rows {
         for c in 0..cols {
-            if (grid.h[r][c] < 0.0 || grid.is_open_edge(r, c)) && !visited[r][c] {
+            if extra_outlet(r, c) && !visited[r][c] {
                 seed_outlet(&mut filled, &mut visited, &mut heap, r, c);
             }
         }
@@ -541,7 +554,7 @@ fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
         let mut min = (0usize, 0usize);
         for r in 0..rows {
             for c in 0..cols {
-                if grid.h[r][c] < grid.h[min.0][min.1] {
+                if heights[r][c] < heights[min.0][min.1] {
                     min = (r, c);
                 }
             }
@@ -549,13 +562,13 @@ fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
         seed_outlet(&mut filled, &mut visited, &mut heap, min.0, min.1);
     }
     while let Some(Item { r, c, .. }) = heap.pop() {
-        for (nr, nc) in grid.adjacent(r, c) {
+        for (nr, nc) in adjacent(r, c) {
             if visited[nr][nc] {
                 continue;
             }
             visited[nr][nc] = true;
             // A standing lake is level: do not add fictitious depth on flats.
-            filled[nr][nc] = grid.h[nr][nc].max(filled[r][c]);
+            filled[nr][nc] = heights[nr][nc].max(filled[r][c]);
             heap.push(Item {
                 key: height_order_key(filled[nr][nc]),
                 r: nr,

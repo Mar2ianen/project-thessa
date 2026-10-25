@@ -286,3 +286,79 @@ fn textured_instances_move_rebase_keep_depth_and_reject_failed_updates_atomicall
         .unwrap();
     assert_eq!(changed(&render(&mut renderer, 1.0)), 0);
 }
+
+#[test]
+fn dielectric_fresnel_parameter_reaches_the_primary_shader() {
+    let backend = Backend::bring_up().unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    for f0 in [((1.333_f32 - 1.0) / (1.333 + 1.0)).powi(2), 0.04, 0.25] {
+        let mut asset = source();
+        asset.materials[0].base_texture = None;
+        asset.materials[0].dielectric_f0 = f0;
+        for v in &mut asset.primitives[0].vertices {
+            v.normal = [0.0, 0.0, -1.0];
+        }
+        let mut renderer = MeshRenderer::with_surface(
+            &backend,
+            &asset,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality: thessa_graphics::Quality::High,
+                reflections: false,
+                shadows: None,
+                ray_tracing: None,
+            },
+        )
+        .unwrap();
+        let light = SurfaceLighting {
+            ambient_lux: [
+                std::f32::consts::PI,
+                std::f32::consts::PI,
+                std::f32::consts::PI,
+                0.0,
+            ],
+            ..Default::default()
+        };
+        renderer
+            .update(
+                &backend,
+                &view(DVec3::ZERO),
+                &light,
+                &[MeshInstance {
+                    position_m: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.0,
+                }],
+            )
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        renderer.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        let pixels = target.read_rgba8(&backend).unwrap();
+        let linear = 1.0 - f64::from(f0);
+        let expected = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+        assert!(
+            pixels[(32 * 65 + 32) * 4].abs_diff(expected) <= 1,
+            "F0={f0}: {} vs {expected}",
+            pixels[(32 * 65 + 32) * 4]
+        );
+    }
+}

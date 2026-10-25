@@ -15,6 +15,13 @@ isotropic/unfiltered fallback. See doc 77 for memory costs, source-height priors
 independent CPU/GPU oracles and known optical reconstruction limits.
 Earlier dated implementation sections describe the representation at that time.
 
+WORLD23 extends the same soil field with spatial wetness and bounded moss
+cushion height, shared by render displacement and optical normals. Native puddle
+meshes use the shared material's validated `dielectric_f0` (0.04 default, about
+0.02037 for the water prior); reflected hits consume the same property. Existing
+primary uniform padding is reused; RT material records are now 64 bytes.
+See doc 77 for sampled closure, Low fallback, limits and static-water scope.
+
 The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
 material coordinates as a dyadic anchor plus small offsets through raster
 interpolation and page lookup. WORLD13 extends this precision contract to
@@ -685,7 +692,7 @@ addresses and hash-threshold density subsets. Its existing offline consumer
 uses the final frozen global DEM; full native runtime terrain placement and
 plant/rock rendering remain separate integration work.
 
-### WORLD09 shared thin-diffuse mesh material
+### WORLD09 shared thin-diffuse mesh material (historical layout; WORLD23 above supersedes RT size)
 
 Opaque mesh materials now carry a [0,1] diffuse-transmission partition, default
 zero. Total scattering albedo is split as R=A(1-t), T=At; both primary raster

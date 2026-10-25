@@ -21,6 +21,7 @@ struct RtMaterial {
     factors: vec4<f32>,
     // Base colour, metallic/roughness, normal, AO; UINT_MAX means absent.
     textures: vec4<u32>,
+    optical: vec4<f32>,
 }
 
 struct RtVertex { position:vec4<f32>, normal:vec4<f32>, uv:vec4<f32> }
@@ -108,7 +109,7 @@ fn rt_surface(hit: RtHit, ray_direction: vec3<f32>) -> RtSurface {
     surface.metallic = material.color.w * mr.b;
     surface.roughness = material.factors.x * mr.g;
     surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv).r,material.factors.z)*(v0.uv.z*bary.x+v1.uv.z*bary.y+v2.uv.z*bary.z);
-    surface.dielectric=0.04;
+    surface.dielectric=material.optical.x;
     surface.transmission=material.factors.w;
     return surface;
 }

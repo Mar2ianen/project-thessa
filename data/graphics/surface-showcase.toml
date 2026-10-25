@@ -7,6 +7,7 @@ preset = "high"
 msaa_samples = 4
 tone_mapping = "pbr_neutral"
 terrain_ground_detail = true
+terrain_ground_puddles = true
 surface_quality = "high"
 terrain_normal_maps = true
 specular_reflections = true

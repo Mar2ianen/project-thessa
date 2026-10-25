@@ -107,7 +107,7 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
         normal_variance=0.5*max(0.0,1.0-dot(map_normal,map_normal))*material.factors.z*material.factors.z;
     }
     if(material.quality!=0u && material.reflections!=0u){roughness=surface_filtered_roughness_variance(roughness,dpdx(normal),dpdy(normal),normal_variance);}
-    let f0=mix(vec3(0.04),albedo,metallic);
+    let f0=mix(vec3(material.optical.y),albedo,metallic);
     var fresnel=f0;
     if (material.quality!=0u) { fresnel=f0+(vec3(1.0)-f0)*pow(1.0-max(dot(normal,eye),0.0),5.0); }
     var radiance=(vec3(1.0)-fresnel)*(1.0-metallic)*diffuse_total;

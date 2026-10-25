@@ -13,6 +13,7 @@ use thessa_worldgen_rocky::{
 };
 
 mod ground;
+mod wet_ground;
 
 pub const WINDOW_LEVEL: u8 = 14;
 pub const UNDERSTORY_WINDOW_LEVEL: u8 = 18;
@@ -105,6 +106,11 @@ pub struct Diagnostics {
     pub rt_policy: &'static str,
     pub ground_window: Option<TileKey>,
     pub ground_pebbles: usize,
+    pub ground_moss_clumps: usize,
+    pub ground_puddles: usize,
+    pub ground_water_samples: usize,
+    pub ground_water_basins: usize,
+    pub ground_water_triangles: usize,
     pub ground_candidates: u64,
     pub ground_samples: u64,
     pub understory_window: Option<TileKey>,
@@ -123,6 +129,11 @@ pub struct Diagnostics {
 impl Diagnostics {
     pub fn metadata(&self) -> BTreeMap<String, String> {
         [
+            ("native_surface_ground_water_basins", self.ground_water_basins.to_string()),
+            ("native_surface_ground_moss_clumps", self.ground_moss_clumps.to_string()),
+            ("native_surface_ground_puddles", self.ground_puddles.to_string()),
+            ("native_surface_ground_water_samples", self.ground_water_samples.to_string()),
+            ("native_surface_ground_water_triangles", self.ground_water_triangles.to_string()),
             ("native_surface_ground_pebbles", self.ground_pebbles.to_string()),
             ("native_surface_ground_samples", self.ground_samples.to_string()),
             ("native_surface_ground_window", self.ground_window.map_or_else(|| "none".into(), |w| format!("{},{},{},{}",w.face,w.level,w.x,w.y))),
@@ -162,36 +173,61 @@ impl Diagnostics {
 
 pub struct Prepared {
     pub asset: MeshAsset,
-    /// Grouped by prototype kind, with exact world-local identity/height metadata.
+    /// Canonical instances grouped by kind; local cover aggregates append no fake scatter IDs.
     pub descriptors: Vec<ScatterItem>,
     pub instances: Vec<MeshInstance>,
     pub ranges: Vec<Range<u32>>,
     reduced_primitives: Vec<bool>,
+    local_ground_start: Option<usize>,
 }
 
 impl Prepared {
     /// The producer is fixed for this executable; represented kinds identify
     /// its exact immutable geometry/material layout, independent of instances.
     pub fn same_prototypes(&self, other: &Self) -> bool {
-        self.reduced_primitives == other.reduced_primitives
+        let local_equal = match (self.local_ground_start, other.local_ground_start) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                self.asset.primitives[a..]
+                    .iter()
+                    .zip(&other.asset.primitives[b..])
+                    .all(|(a, b)| a.vertices == b.vertices && a.indices == b.indices)
+                    && self.asset.primitives.len() - a == other.asset.primitives.len() - b
+            }
+            _ => false,
+        };
+        local_equal
+            && self.reduced_primitives == other.reduced_primitives
             && self.ranges.len() == other.ranges.len()
-            && self.ranges.iter().zip(&other.ranges).all(|(a, b)| {
-                self.descriptors.get(a.start as usize).is_some_and(|item| {
-                    other
-                        .descriptors
-                        .get(b.start as usize)
-                        .is_some_and(|other| {
-                            item.kind == other.kind
-                                && (item.kind
-                                    != thessa_worldgen_rocky::scatter::ScatterKind::Pebble
-                                    || ground::variant(item.id) == ground::variant(other.id))
-                                && thessa_worldgen_rocky::offline::plant_form(item.id, item.kind)
-                                    == thessa_worldgen_rocky::offline::plant_form(
+            && self
+                .ranges
+                .iter()
+                .zip(&other.ranges)
+                .enumerate()
+                .all(|(primitive, (a, b))| {
+                    if self
+                        .local_ground_start
+                        .is_some_and(|start| primitive >= start)
+                    {
+                        return true;
+                    }
+                    self.descriptors.get(a.start as usize).is_some_and(|item| {
+                        other
+                            .descriptors
+                            .get(b.start as usize)
+                            .is_some_and(|other| {
+                                item.kind == other.kind
+                                    && (item.kind
+                                        != thessa_worldgen_rocky::scatter::ScatterKind::Pebble
+                                        || ground::variant(item.id) == ground::variant(other.id))
+                                    && thessa_worldgen_rocky::offline::plant_form(
+                                        item.id, item.kind,
+                                    ) == thessa_worldgen_rocky::offline::plant_form(
                                         other.id, other.kind,
                                     )
-                        })
+                            })
+                    })
                 })
-            })
     }
 
     pub fn rt_admitted(&self, settings: &ResolvedGraphicsSettings) -> bool {
@@ -504,6 +540,9 @@ pub fn prepare(
             }
         }
     }
+    if let Some(near) = near_window.filter(|_| settings.terrain_ground_pebbles_max_items > 0) {
+        wet_ground::append(&mut prepared, settings, field, near, &mut diagnostics)?;
+    }
     diagnostics.reduced_instances = prepared
         .ranges
         .iter()
@@ -524,6 +563,9 @@ pub fn prepare(
                 + p.ambient_visibility.len() * std::mem::size_of::<f32>()
         })
         .sum();
+    if diagnostics.prototype_bytes > 7_000_000 {
+        return Err("ground/plant prototype payload exceeds 7 MB admission budget".into());
+    }
     diagnostics.prototype_texture_bytes = prepared
         .asset
         .images
@@ -593,6 +635,7 @@ fn convert_with_detail(
         instances: Vec::with_capacity(items.len()),
         ranges: vec![],
         reduced_primitives: vec![],
+        local_ground_start: None,
     };
     let reduced = |item: &ScatterItem| {
         item.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump

@@ -305,6 +305,8 @@ pub struct ResolvedGraphicsSettings {
     pub terrain_normal_maps: bool,
     #[serde(default)]
     pub terrain_ground_detail: bool,
+    #[serde(default)]
+    pub terrain_ground_puddles: bool,
     #[serde(default = "default_terrain_anisotropy")]
     pub terrain_material_anisotropy: u16,
     pub specular_reflections: bool,
@@ -465,6 +467,27 @@ mod terrain_topology_tests {
                 .terrain_material_anisotropy,
             1
         );
+    }
+    #[test]
+    fn puddles_require_explicit_opt_in_and_ground_parent() {
+        let mut request = RequestedGraphics::default();
+        assert!(
+            !ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown())
+                .terrain_ground_puddles
+        );
+        request.renderer.terrain_ground_puddles = true;
+        assert!(
+            !ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown())
+                .terrain_ground_puddles
+        );
+        request.renderer.terrain_ground_detail = true;
+        for quality in [Quality::Low, Quality::Medium, Quality::High] {
+            request.renderer.surface_quality = quality;
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+            assert!(resolved.terrain_ground_puddles);
+            assert_eq!(resolved.as_meta_map()["terrain_ground_puddles"], "true");
+        }
     }
     #[test]
     fn ground_detail_is_independent_of_geometry_topology() {
@@ -905,6 +928,8 @@ impl ResolvedGraphicsSettings {
             surface_quality: requested.renderer.surface_quality,
             terrain_normal_maps: requested.renderer.terrain_normal_maps,
             terrain_ground_detail,
+            terrain_ground_puddles: terrain_ground_detail
+                && requested.renderer.terrain_ground_puddles,
             terrain_material_anisotropy,
             specular_reflections: requested.renderer.specular_reflections,
             backend: ResolvedBackend { name: backend_name },
@@ -1206,6 +1231,10 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "terrain_ground_detail".into(),
             self.terrain_ground_detail.to_string(),
+        );
+        map.insert(
+            "terrain_ground_puddles".into(),
+            self.terrain_ground_puddles.to_string(),
         );
         map.insert(
             "terrain_material_max_level".into(),

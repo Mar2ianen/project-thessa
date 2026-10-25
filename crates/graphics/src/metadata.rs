@@ -158,6 +158,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Stellar and ambient-environment reflection; not scene-object ray tracing.",
         },
         SettingMeta {
+            path: "renderer.terrain_ground_puddles",
+            label: "Near-ground puddles",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: true,
+            description: "Optional bounded standing-water meshes in sampled closed soil hollows. Requires ground detail; optical wet soil remains the Low fallback. Static moisture availability, not rain/runoff simulation. Restart required.",
+        },
+        SettingMeta {
             path: "renderer.terrain_ground_detail",
             label: "Experimental native ground detail",
             kind: SettingKind::Bool,
@@ -166,7 +177,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: true,
-            description: "Body-fixed CC0 soil/gravel optical proxy through existing material pages. Surface quality bounds refinement at L20/L21/L22 and sampler anisotropy at 1/4/16 when supported; automatic isotropic fallback otherwise. Conforming topology falls back to legacy materials. Disabled retains L17 and skips swatch work. Restart required.",
+            description: "Body-fixed CC0 soil/gravel optical proxy through existing material pages. Surface quality bounds refinement at L20/L21/L24 and sampler anisotropy at 1/4/16 when supported; automatic isotropic fallback otherwise. Regular and persistent conforming topology share the material path. Disabled retains L17 and skips swatch work. Restart required.",
         },
         SettingMeta {
             path: "renderer.shadow_memory_mib",

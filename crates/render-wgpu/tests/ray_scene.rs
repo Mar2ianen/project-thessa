@@ -1187,8 +1187,8 @@ fn reflection_replaces_environment_with_scene_geometry() {
     assert!(mesh.rt_reason().is_none(), "{:?}", mesh.rt_reason());
     assert_eq!(stats.triangles, 4);
     assert_eq!(
-        stats.bytes, 1584,
-        "48-byte vertices + exact hit tables + AS/pair planning terms"
+        stats.bytes, 1616,
+        "48-byte vertices + 64-byte material records + exact hit tables + AS/pair planning terms"
     );
     assert_eq!(stats.instances, 0, "RT instances are published by update");
     let mirror = draw(

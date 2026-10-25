@@ -203,6 +203,9 @@ pub struct RendererSettings {
     /// Experimental native soil/gravel swatch and bounded sub-L17 pages.
     #[serde(default)]
     pub terrain_ground_detail: bool,
+    /// Bounded near-eye standing-water geometry; requires ground detail.
+    #[serde(default)]
+    pub terrain_ground_puddles: bool,
     #[serde(default = "default_true")]
     pub specular_reflections: bool,
     /// Maximum native depth-atlas storage across three lights and all cascades.
@@ -271,6 +274,7 @@ impl Default for RendererSettings {
             surface_quality: Quality::High,
             terrain_normal_maps: true,
             terrain_ground_detail: false,
+            terrain_ground_puddles: false,
             specular_reflections: true,
             shadow_memory_mib: default_shadow_memory(),
             fleet_meshes: true,

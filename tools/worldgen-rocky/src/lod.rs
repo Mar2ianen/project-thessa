@@ -136,10 +136,68 @@ pub fn ground_relief_height_m(field: &PlanetField, dir: [f64; 3], texel_m: f64) 
         true,
         Some(ground),
     );
+    let moss_height =
+        ground_cover_from_sample(field, dir, &sample, texel_m, f64::from(ground.height_m))
+            .moss_height_m;
     (f64::from(ground.height_m - crate::ground_detail::mean_sample().height_m)
+        + moss_height
         + crate::appearance::surface_ground_grain_height(field, dir, texel_m)
             * f64::from(material.normal_detail_scale))
         * coverage
+}
+
+fn ground_cover_from_sample(
+    field: &PlanetField,
+    dir: [f64; 3],
+    sample: &crate::field::TerrainSample,
+    texel_m: f64,
+    source_height_m: f64,
+) -> crate::ground_detail::GroundCover {
+    crate::ground_detail::cover(
+        dir.map(|v| v * field.params.radius_m),
+        field.params.seed,
+        texel_m,
+        crate::appearance::smooth(0.35, 0.95, sample.moisture01),
+        crate::ecology::vegetation_cover(sample, sample.slope_hint).canopy01,
+        source_height_m,
+    )
+}
+
+/// Canonical habitat gates for the optional near-eye optical cover meshes.
+pub fn ground_cover_at(
+    field: &PlanetField,
+    dir: [f64; 3],
+    texel_m: f64,
+) -> crate::ground_detail::GroundCover {
+    let (prefix, macro_h) = field.height_prefix_m(dir);
+    let mut sample = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+    let (slope, curvature) =
+        field.surface_geometry_from_prefix(dir, prefix, macro_h, MATERIAL_SLOPE_WAVELENGTH_M);
+    sample.slope_hint = slope;
+    sample.curvature_per_m = curvature;
+    if sample.height_m <= 0.0
+        || sample.temperature_k < 278.0
+        || sample.slope_hint > 0.3
+        || sample.salt01 > 0.3
+    {
+        return Default::default();
+    }
+    let ground =
+        crate::ground_detail::sample(dir, field.params.radius_m, field.params.seed, texel_m);
+    let (_, weight) = crate::appearance::surface_appearance_with_ground_detail(
+        field,
+        &sample,
+        dir,
+        texel_m,
+        true,
+        Some(ground),
+    );
+    let mut cover =
+        ground_cover_from_sample(field, dir, &sample, texel_m, f64::from(ground.height_m));
+    cover.moss *= weight;
+    cover.moss_height_m *= weight;
+    cover.wetness *= weight;
+    cover
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -899,6 +957,21 @@ pub fn build_gpu_material_page_with_relief(
             base_normal: Vec::new(),
         };
     }
+    let floor_heights: Vec<f64> = ground
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            f64::from(g.height_m)
+                + ground_cover_from_sample(
+                    field,
+                    dirs[i],
+                    &samples[i],
+                    texel_m,
+                    f64::from(g.height_m),
+                )
+                .moss_height_m
+        })
+        .collect();
     let grain = material_normal_grain_samples(field, &dirs, &samples, size, texel_m);
     let has_base = relief
         && ground_detail
@@ -942,8 +1015,8 @@ pub fn build_gpu_material_page_with_relief(
                         .map(|v| v * field.params.radius_m),
                     sub(dirs[y1 * size + x], dirs[y0 * size + x])
                         .map(|v| v * field.params.radius_m),
-                    f64::from(ground[y * size + x1].height_m - ground[y * size + x0].height_m),
-                    f64::from(ground[y1 * size + x].height_m - ground[y0 * size + x].height_m),
+                    floor_heights[y * size + x1] - floor_heights[y * size + x0],
+                    floor_heights[y1 * size + x] - floor_heights[y0 * size + x],
                 );
                 for i in 0..2 {
                     gradient[i] += floor_gradient[i] * ground_weights[y * size + x];

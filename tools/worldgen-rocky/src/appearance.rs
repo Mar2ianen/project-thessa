@@ -515,7 +515,7 @@ pub(crate) fn surface_appearance_with_ground_detail(
             dir.map(|v| v * field.params.radius_m),
             field.params.seed,
             texel_m,
-            damp,
+            smooth(0.35, 0.95, sample.moisture01),
             ecological_cover.canopy01,
         )
     });

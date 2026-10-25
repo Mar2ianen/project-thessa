@@ -310,6 +310,51 @@ fn forest_substrate(rgb: [f32; 3], roughness: f32) -> ([f32; 3], f32) {
     )
 }
 
+/// Body-fixed optical cover, not authoritative water storage or moss biology.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GroundCover {
+    pub wetness: f64,
+    pub moss: f64,
+    pub moss_height_m: f64,
+}
+
+pub fn cover(
+    q: [f64; 3],
+    seed: u64,
+    texel_m: f64,
+    damp: f64,
+    canopy: f64,
+    source_height_m: f64,
+) -> GroundCover {
+    use crate::appearance::{band_weight, smooth};
+    let noise = |channel, wavelength, perlin| {
+        let p = q.map(|v| v / wavelength);
+        let value = if perlin {
+            crate::rng::perlin3(seed, channel, p[0], p[1], p[2])
+        } else {
+            crate::rng::value_noise3(seed, channel, p[0], p[1], p[2])
+        };
+        value * band_weight(wavelength, texel_m)
+    };
+    let moss_field = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
+    let moss = smooth(0.28, 0.58, damp)
+        * (0.45 + 0.55 * smooth(0.02, 0.20, canopy))
+        * smooth(-0.12, 0.18, moss_field)
+        * band_weight(0.85, texel_m)
+        * 0.85;
+    // A connected cushion and smaller hummocks share the pigment's world phase.
+    let cushion = moss * moss * (0.035 + 0.025 * smooth(-0.25, 0.25, noise(6160, 0.18, true)));
+    // Moisture availability is canonical; scan hollows and metre-scale retention
+    // distribute that availability. This is not a rain/runoff integrator.
+    let retention = smooth(-0.30, 0.25, noise(6161, 2.4, true));
+    let hollows = 1.0 - smooth(-0.018, 0.012, source_height_m);
+    GroundCover {
+        wetness: (damp * (0.50 + 0.35 * retention + 0.35 * hollows)).clamp(0.0, 1.0),
+        moss,
+        moss_height_m: cushion,
+    }
+}
+
 /// Authored forest-floor optical layers. Wetness is a material response to the
 /// canonical moisture field, not a standing-water or drainage simulation.
 pub(crate) fn forest_floor(
@@ -332,15 +377,9 @@ pub(crate) fn forest_floor(
     };
     let mineral_patch = smooth(0.05, 0.45, noise(6146, 3.2, true));
     let fine_mineral = smooth(0.52, 0.82, noise(6147, 0.22, false)) * 0.25;
-    let wet = damp;
-    // Both noises are signed and centered near zero. A 0.40..0.70
-    // threshold selected only their rare upper tail, almost erasing moss.
-    let moss_noise = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
-    let moss = smooth(0.28, 0.58, damp)
-        * (0.45 + 0.55 * smooth(0.02, 0.20, canopy))
-        * smooth(-0.12, 0.18, moss_noise)
-        * band_weight(0.85, texel_m)
-        * 0.85;
+    let cover = cover(q, seed, texel_m, damp, canopy, f64::from(ground.height_m));
+    let wet = cover.wetness;
+    let moss = cover.moss;
     let coarse_litter =
         smooth(0.08, 0.58, noise(6142, 1.6, true)) * (0.40 + 0.60 * smooth(0.04, 0.25, canopy));
     let fine_litter =
@@ -361,7 +400,7 @@ pub(crate) fn forest_floor(
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);
-    let wet_roughness = dry * (1.0 - wet) + (0.28 * (1.0 - fine_mineral * 0.20)) * wet;
+    let wet_roughness = dry * (1.0 - wet) + (0.18 * (1.0 - fine_mineral * 0.20)) * wet;
     let moss_roughness = wet_roughness * (1.0 - moss) + 0.92 * moss;
     GroundSample {
         albedo_linear,
@@ -375,6 +414,28 @@ pub(crate) fn forest_floor(
 mod tests {
     use super::*;
 
+    #[test]
+    fn cover_retains_hollow_wetness_and_bounded_resolved_cushions() {
+        let q = [137.0, 29.0, -18.0];
+        let low = cover(q, 77, 0.012, 0.9, 0.6, -0.025);
+        let high = cover(q, 77, 0.012, 0.9, 0.6, 0.025);
+        assert!(low.wetness > high.wetness);
+        let mut maximum = 0.0_f64;
+        for i in 0..400 {
+            let q = [
+                137.0 + (i % 20) as f64 * 0.13,
+                29.0,
+                -18.0 + (i / 20) as f64 * 0.13,
+            ];
+            let c = cover(q, 77, 0.012, 0.9, 0.6, 0.0);
+            assert!((0.0..=0.06).contains(&c.moss_height_m));
+            maximum = maximum.max(c.moss_height_m);
+            let coarse = cover(q, 77, 2.0, 0.9, 0.6, 0.0);
+            assert_eq!(coarse.moss_height_m, 0.0);
+            assert_eq!(cover(q, 77, 0.012, 0.0, 0.6, 0.0).moss_height_m, 0.0);
+        }
+        assert!(maximum > 0.015);
+    }
     #[test]
     fn imported_mud_litter_preserves_means_and_world_patch_continuity() {
         let tex = Texture::decode_litter();

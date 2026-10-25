@@ -185,7 +185,12 @@ mod tests {
                 && stats.ground_pebbles <= settings.terrain_ground_pebbles_max_items as usize
         );
         assert_eq!(stats.ground_candidates, 9 * 4096);
-        assert_eq!(prepared.instances.len(), stats.ground_pebbles);
+        assert_eq!(
+            prepared.instances.len(),
+            stats.ground_pebbles
+                + usize::from(stats.ground_moss_clumps > 0)
+                + usize::from(stats.ground_puddles > 0)
+        );
         assert!(prepared.asset.images.is_empty());
         for item in prepared.descriptors.iter().take(16) {
             assert_eq!(

@@ -204,6 +204,7 @@ fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, St
             occlusion_strength: m.occlusion_texture().map_or(1.0, |t| t.strength()),
             double_sided: m.double_sided(),
             diffuse_transmission: 0.0,
+            dielectric_f0: 0.04,
         });
     }
     materials.push(Material::default());

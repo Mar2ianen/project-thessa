@@ -1739,7 +1739,8 @@ fn crown_frond(
         )
     };
     let nodes: [[f64; 3]; 9] = std::array::from_fn(|i| at(i as f64 / 8.0));
-    let widths = std::array::from_fn::<_, 9, _>(|i| 0.018 * (1.0 - i as f64 / 9.0));
+    let widths =
+        std::array::from_fn::<_, 9, _>(|i| 0.024 * (1.0 - 0.85 * (i as f64 / 8.0)).powf(1.35));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
     for pair in 0..18 {
         let t = 0.10 + pair as f64 * 0.048;

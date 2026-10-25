@@ -1345,6 +1345,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             len,
             hgt,
             BASE_Y_M[i],
+            order >= 10,
             reduced,
         );
     }
@@ -1626,15 +1627,20 @@ fn fern_frond(
     length_m: f64,
     height_m: f64,
     base_y_m: f64,
+    senescent: bool,
     reduced: bool,
 ) {
     let (radial, lateral) = azimuth_frame(angle);
     let at = |t: f64| {
         // Multi-tier rosette vertical curvature:
-        // Young inner fiddleheads have a more upright posture;
-        // mature spreading fronds have a graceful outward arch with phototropic tip lift.
-        let arch = (t * std::f64::consts::PI * 0.8).sin();
-        let tip_lift = if length_m > 0.9 {
+        // Senescent outer fronds drape directly towards the soil datum without phototropic lift;
+        // living fronds have graceful outward fountain arch with phototropic tip lift.
+        let arch = if senescent {
+            (t * std::f64::consts::PI * 0.92).sin()
+        } else {
+            (t * std::f64::consts::PI * 0.80).sin()
+        };
+        let tip_lift = if !senescent && length_m > 0.9 {
             0.022 * ((t - 0.72).max(0.0) / 0.28).powi(2)
         } else {
             0.0
@@ -2732,7 +2738,7 @@ mod tests {
         mesh.positions.clear();
         mesh.normals.clear();
         mesh.indices.clear();
-        fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0, false);
+        fern_frond(&mut mesh, 0.0, 1.0, 0.6, 0.0, false, false);
         // Independent vertical ray/triangle test in XZ. Paired pinnae attach
         // along this one-metre rachis, with true air between them.
         let covered = |x, z| covered_from_above(&mesh, x, z);

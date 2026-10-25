@@ -37,7 +37,7 @@
         "clouds": "true",
         "clouds_volumetric": "true",
         "eclipses": "true",
-        "exposure_ev100": "12.6",
+        "exposure_ev100": "12.5",
         "fleet_meshes": "true",
         "fleet_min_pixels": "0.5",
         "gas_giant": "true",
@@ -45,7 +45,7 @@
         "hdr": "true",
         "instrument_layout": "aircraft",
         "instruments": "true",
-        "local_haze_extinction_per_m": "0.0028",
+        "local_haze_extinction_per_m": "0.00035",
         "local_haze_height_m": "500",
         "material_storage": "rgba_array",
         "measurement_boundary": "Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained",
@@ -73,7 +73,7 @@
         "native_material_reference_height_m": "5.007671312155324",
         "native_material_reference_height_source": "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height",
         "native_material_relief_residual_pages": "248",
-        "native_material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 4, 6, 5, 40, 87, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+        "native_material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 4, 6, 4, 50, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
         "native_motion_scope": "render.motion_vectors; stored opaque depth + alpha mask, before temporal resolve and translucent overlays",
         "native_motion_target_bytes": "0",
         "native_motion_vectors": "false",
@@ -99,13 +99,13 @@
         "native_surface_plants_draw_calls": "34",
         "native_surface_plants_frame_upload_bytes": "1088128",
         "native_surface_plants_instance_buffer_bytes": "1087552",
-        "native_surface_plants_preparation_cpu_ms": "3388.359223",
+        "native_surface_plants_preparation_cpu_ms": "3385.4331850000003",
         "native_surface_plants_preparation_job_pending": "false",
         "native_surface_plants_preparation_jobs_discarded": "0",
         "native_surface_plants_preparation_jobs_started": "0",
         "native_surface_plants_prototype_payload_bytes": "4802616",
         "native_surface_plants_prototype_texture_bytes": "3219456",
-        "native_surface_plants_publication_cpu_ms": "43.162054",
+        "native_surface_plants_publication_cpu_ms": "36.493457",
         "native_surface_plants_reduced_instances": "7508",
         "native_surface_plants_renderer_reused": "false",
         "native_surface_plants_retained": "11752",
@@ -162,13 +162,13 @@
         "preset": "custom",
         "raster_msaa_samples": "4",
         "ray_tracing": "local",
-        "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.6\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.0028\nlocal_haze_height_m = 500.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.25\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.44\nopacity = 0.74\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+        "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.5\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.00035\nlocal_haze_height_m = 500.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.05\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.12\nopacity = 0.42\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
         "resolution_scale": "1.000",
         "rt_max_distance_m": "500000",
         "rt_max_instances": "4096",
         "rt_reflection_bounces": "2",
         "rt_scene_memory_bytes": "33554432",
-        "settings": "ResolvedGraphicsSettings { surface_plants_enabled: true, surface_plants_density_scale: 1.0, surface_plants_max_candidates: 36864, surface_plants_max_items: 36864, surface_plants_detail_distance_m: 24.0, surface_understory_enabled: true, surface_understory_max_candidates: 200704, surface_understory_max_items: 200704, terrain_ground_pebbles_density_scale: 1.0, terrain_ground_relief_max_level: 22, terrain_ground_pebbles_max_candidates: 36864, terrain_ground_pebbles_max_items: 36864, terrain_topology: ResolvedTerrainTopology { capacity: 131072, waves: 4, split_area_px: 64.0, merge_area_px: 8.0 }, instruments: ResolvedInstruments { enabled: true, layout: Aircraft, renderer: Analytic, diameter_points: 320, atlas_width: 0 }, ocean: OceanSettings { enabled: true, quality: High, wind_speed_m_s: 10.0, wind_direction_rad: 0.0, significant_height_m: 2.0, depth_m: 100.0, seed: 17, geometry_patches: 32, geometry_distance_m: 300.0 }, ocean_size: 128, rt_scene_memory_bytes: 33554432, rt_max_instances: 4096, rt_reflection_bounces: 2, rt_reflection_samples: 4, rt_ray_bias_m: 0.01, surface_quality: High, terrain_normal_maps: true, terrain_ground_detail: true, terrain_material_anisotropy: 16, specular_reflections: true, native_shadow_map_size: 1024, shadow_filter_radius: 2, fleet_meshes: true, fleet_min_pixels: 0.5, preset_label: \"custom\", backend: ResolvedBackend { name: \"auto\" }, terrain: GpuMesh, terrain_mesh_cells: 24, material_storage: RgbaArray, ray_tracing: Local, resolution_scale: 1.0, raster_msaa_samples: 4, tone_mapping: PbrNeutral, vsync: false, hdr: true, temporal_motion_vectors: false, temporal_jitter: false, temporal_taa: false, temporal_quality: High, bloom: false, exposure_ev100: 12.6, auto_exposure: false, atmosphere_enabled: true, atmosphere_quality: High, atmosphere_steps: 24, aerial_perspective: true, local_haze_extinction_per_m: 0.0028, local_haze_height_m: 500.0, multiple_scattering: true, eclipses: true, multi_star: true, limb_scattering: true, sky_dome: true, stars: true, stars_quality: High, atmosphere_density_scale: 1.25, airglow: true, aurora_shell: true, aurora_lighting: false, aurora_quality: Low, aurora_intensity: 1.0, aurora_animate: true, clouds_enabled: true, clouds_quality: High, cloud_integrator: March, clouds_volumetric: true, clouds_steps: 24, clouds_layers: 2, clouds_coverage: 0.44, clouds_opacity: 0.74, clouds_animate: true, clouds_cast_shadows: true, night_lights_enabled: true, night_lights_quality: Medium, night_lights_intensity: 1.0, gas_giant_enabled: true, gas_giant_quality: Medium, gas_giant_animate: true, gas_giant_limb: true, plume_enabled: true, plume_quality: Medium, plume_diamonds: true, plume_flicker: true, plume_light: true, rt_terrain: true, rt_vehicles: true, rt_landmarks: false, rt_atmosphere_queries: true, rt_clouds: false, rt_max_distance_m: 500000.0, shadow_enabled: true, shadow_cascades: 4, shadow_max_distance_m: 12000.0, shadow_first_cascade_distance_m: Some(25.0), shadow_map_size: 4096, shadow_normal_bias_m: 0.001, notes: [\"auto: ray-query capable adapter, enabling local RT\", \"native shadow atlas memory budget resolves map size to 1024\"] }",
+        "settings": "ResolvedGraphicsSettings { surface_plants_enabled: true, surface_plants_density_scale: 1.0, surface_plants_max_candidates: 36864, surface_plants_max_items: 36864, surface_plants_detail_distance_m: 24.0, surface_understory_enabled: true, surface_understory_max_candidates: 200704, surface_understory_max_items: 200704, terrain_ground_pebbles_density_scale: 1.0, terrain_ground_relief_max_level: 22, terrain_ground_pebbles_max_candidates: 36864, terrain_ground_pebbles_max_items: 36864, terrain_topology: ResolvedTerrainTopology { capacity: 131072, waves: 4, split_area_px: 64.0, merge_area_px: 8.0 }, instruments: ResolvedInstruments { enabled: true, layout: Aircraft, renderer: Analytic, diameter_points: 320, atlas_width: 0 }, ocean: OceanSettings { enabled: true, quality: High, wind_speed_m_s: 10.0, wind_direction_rad: 0.0, significant_height_m: 2.0, depth_m: 100.0, seed: 17, geometry_patches: 32, geometry_distance_m: 300.0 }, ocean_size: 128, rt_scene_memory_bytes: 33554432, rt_max_instances: 4096, rt_reflection_bounces: 2, rt_reflection_samples: 4, rt_ray_bias_m: 0.01, surface_quality: High, terrain_normal_maps: true, terrain_ground_detail: true, terrain_material_anisotropy: 16, specular_reflections: true, native_shadow_map_size: 1024, shadow_filter_radius: 2, fleet_meshes: true, fleet_min_pixels: 0.5, preset_label: \"custom\", backend: ResolvedBackend { name: \"auto\" }, terrain: GpuMesh, terrain_mesh_cells: 24, material_storage: RgbaArray, ray_tracing: Local, resolution_scale: 1.0, raster_msaa_samples: 4, tone_mapping: PbrNeutral, vsync: false, hdr: true, temporal_motion_vectors: false, temporal_jitter: false, temporal_taa: false, temporal_quality: High, bloom: false, exposure_ev100: 12.5, auto_exposure: false, atmosphere_enabled: true, atmosphere_quality: High, atmosphere_steps: 24, aerial_perspective: true, local_haze_extinction_per_m: 0.00035, local_haze_height_m: 500.0, multiple_scattering: true, eclipses: true, multi_star: true, limb_scattering: true, sky_dome: true, stars: true, stars_quality: High, atmosphere_density_scale: 1.05, airglow: true, aurora_shell: true, aurora_lighting: false, aurora_quality: Low, aurora_intensity: 1.0, aurora_animate: true, clouds_enabled: true, clouds_quality: High, cloud_integrator: March, clouds_volumetric: true, clouds_steps: 24, clouds_layers: 2, clouds_coverage: 0.12, clouds_opacity: 0.42, clouds_animate: true, clouds_cast_shadows: true, night_lights_enabled: true, night_lights_quality: Medium, night_lights_intensity: 1.0, gas_giant_enabled: true, gas_giant_quality: Medium, gas_giant_animate: true, gas_giant_limb: true, plume_enabled: true, plume_quality: Medium, plume_diamonds: true, plume_flicker: true, plume_light: true, rt_terrain: true, rt_vehicles: true, rt_landmarks: false, rt_atmosphere_queries: true, rt_clouds: false, rt_max_distance_m: 500000.0, shadow_enabled: true, shadow_cascades: 4, shadow_max_distance_m: 12000.0, shadow_first_cascade_distance_m: Some(25.0), shadow_map_size: 4096, shadow_normal_bias_m: 0.001, notes: [\"auto: ray-query capable adapter, enabling local RT\", \"native shadow atlas memory budget resolves map size to 1024\"] }",
         "shadow_cascades": "4",
         "shadow_filter_radius": "2",
         "shadow_first_cascade_distance_m": "25",
@@ -216,27 +216,27 @@
   "frames": [
     {
       "frame_index": 0,
-      "wall_timestamp_s": 39.943151023,
+      "wall_timestamp_s": 39.933751131,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.518664459,
-      "frame_cpu_s": 0.004315616,
+      "frame_wall_s": 0.510715929,
+      "frame_cpu_s": 0.005728807,
       "gpu": {
         "available": true,
-        "frame_s": 0.513425434684021,
+        "frame_s": 0.5044864505033798,
         "scopes": {
-          "render.display_transform": 0.00022114016905975343,
-          "render.motion_vectors": 6.732792388916016e-6,
+          "render.display_transform": 0.0002271115146903992,
+          "render.motion_vectors": 5.089670436859132e-6,
           "render.rt_as_build": 3.927462226867676e-6,
-          "render.scene_classify_and_raster": 0.38014255556315235,
-          "render.scene_overlays": 0.051616111250576024,
-          "render.surface_and_shadows": 0.08142771366434098,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.8911933403015145e-6
+          "render.scene_classify_and_raster": 0.3681097731275139,
+          "render.scene_overlays": 0.0553137367848816,
+          "render.surface_and_shadows": 0.08081935778062821,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.131650211334229e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.004315616,
-        "world.streaming": 0.002038295
+        "frame.cpu": 0.005728807,
+        "world.streaming": 0.002515904
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -301,7 +301,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 294764544,
+        "rss_bytes": 290209792,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -309,27 +309,27 @@
     },
     {
       "frame_index": 1,
-      "wall_timestamp_s": 40.483677096,
+      "wall_timestamp_s": 40.477835139,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.540408464,
-      "frame_cpu_s": 0.026288336,
+      "frame_wall_s": 0.544003418,
+      "frame_cpu_s": 0.026923249,
       "gpu": {
         "available": true,
-        "frame_s": 0.5130397819390297,
+        "frame_s": 0.5164226895052986,
         "scopes": {
-          "render.display_transform": 0.0002135257014770508,
-          "render.motion_vectors": 5.490431888580323e-6,
-          "render.rt_as_build": 4.0076145172119145e-6,
-          "render.scene_classify_and_raster": 0.38052191635335164,
-          "render.scene_overlays": 0.051895842743877416,
-          "render.surface_and_shadows": 0.08039226630152893,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.370203453063965e-6
+          "render.display_transform": 0.00022450656525421143,
+          "render.motion_vectors": 4.608756694793702e-6,
+          "render.rt_as_build": 7.213706130981446e-6,
+          "render.scene_classify_and_raster": 0.3794066773855019,
+          "render.scene_overlays": 0.05364700998331833,
+          "render.surface_and_shadows": 0.08312674183891297,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 4.608756694793702e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026288336,
-        "world.streaming": 0.024085875
+        "frame.cpu": 0.026923249,
+        "world.streaming": 0.024694679
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -394,7 +394,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 295485440,
+        "rss_bytes": 290897920,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -402,27 +402,27 @@
     },
     {
       "frame_index": 2,
-      "wall_timestamp_s": 41.00587266,
+      "wall_timestamp_s": 40.984302548,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.522047357,
-      "frame_cpu_s": 0.003933714,
+      "frame_wall_s": 0.506408399,
+      "frame_cpu_s": 0.006255427,
       "gpu": {
         "available": true,
-        "frame_s": 0.5174122897580338,
+        "frame_s": 0.49972857047240066,
         "scopes": {
-          "render.display_transform": 0.00022446648910903934,
-          "render.motion_vectors": 8.175533615112306e-6,
-          "render.rt_as_build": 4.127842952728272e-6,
-          "render.scene_classify_and_raster": 0.3844919795225373,
-          "render.scene_overlays": 0.05183015794194031,
-          "render.surface_and_shadows": 0.08084556757957077,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.452259372711182e-6
+          "render.display_transform": 0.0002231840524635315,
+          "render.motion_vectors": 6.251878646850586e-6,
+          "render.rt_as_build": 4.288147533416749e-6,
+          "render.scene_classify_and_raster": 0.3655957163885765,
+          "render.scene_overlays": 0.05385416357771302,
+          "render.surface_and_shadows": 0.08003811340664292,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.530508033752442e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.003933714,
-        "world.streaming": 0.001678776
+        "frame.cpu": 0.006255427,
+        "world.streaming": 0.002318717
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -487,7 +487,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 296239104,
+        "rss_bytes": 291618816,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -495,27 +495,27 @@
     },
     {
       "frame_index": 3,
-      "wall_timestamp_s": 41.549242066,
+      "wall_timestamp_s": 41.516398023,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.543271605,
-      "frame_cpu_s": 0.026479963,
+      "frame_wall_s": 0.53200623,
+      "frame_cpu_s": 0.027586805,
       "gpu": {
         "available": true,
-        "frame_s": 0.5161382691030122,
+        "frame_s": 0.5038989742913018,
         "scopes": {
-          "render.display_transform": 0.0002059913861846924,
-          "render.motion_vectors": 8.85682808303833e-6,
-          "render.rt_as_build": 3.927462226867676e-6,
-          "render.scene_classify_and_raster": 0.3832215657205811,
-          "render.scene_overlays": 0.05249714522603989,
-          "render.surface_and_shadows": 0.08019376915449143,
+          "render.display_transform": 0.00023937481511306763,
+          "render.motion_vectors": 6.973249259948731e-6,
+          "render.rt_as_build": 4.20799524307251e-6,
+          "render.scene_classify_and_raster": 0.3706106448146897,
+          "render.scene_overlays": 0.052839916495697026,
+          "render.surface_and_shadows": 0.08018976153997422,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 5.690812614440919e-6
+          "render.ui": 6.772868534088135e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026479963,
-        "world.streaming": 0.024259599
+        "frame.cpu": 0.027586805,
+        "world.streaming": 0.024752707
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -580,7 +580,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 296964096,
+        "rss_bytes": 292306944,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -588,27 +588,27 @@
     },
     {
       "frame_index": 4,
-      "wall_timestamp_s": 42.074464726,
+      "wall_timestamp_s": 42.031517441,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.525114918,
-      "frame_cpu_s": 0.004448052,
+      "frame_wall_s": 0.515005777,
+      "frame_cpu_s": 0.004925221,
       "gpu": {
         "available": true,
-        "frame_s": 0.5202294824590531,
+        "frame_s": 0.5093390304654007,
         "scopes": {
-          "render.display_transform": 0.00021817453431701662,
-          "render.motion_vectors": 7.895000598907471e-6,
-          "render.rt_as_build": 4.167919097900391e-6,
-          "render.scene_classify_and_raster": 0.38533806709941104,
-          "render.scene_overlays": 0.05173273283302689,
-          "render.surface_and_shadows": 0.08292067030043794,
+          "render.display_transform": 0.0002269111339645386,
+          "render.motion_vectors": 7.734696018218994e-6,
+          "render.rt_as_build": 3.807233791351319e-6,
+          "render.scene_classify_and_raster": 0.37074918804854967,
+          "render.scene_overlays": 0.05622414657475663,
+          "render.surface_and_shadows": 0.08211954815844727,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.412183227539063e-6
+          "render.ui": 6.332030937194825e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.004448052,
-        "world.streaming": 0.00197161
+        "frame.cpu": 0.004925221,
+        "world.streaming": 0.002517697
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -673,7 +673,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 297619456,
+        "rss_bytes": 293060608,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -681,27 +681,27 @@
     },
     {
       "frame_index": 5,
-      "wall_timestamp_s": 42.622101418,
+      "wall_timestamp_s": 42.568725947,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.547485952,
-      "frame_cpu_s": 0.026505581,
+      "frame_wall_s": 0.537148785,
+      "frame_cpu_s": 0.026941563,
       "gpu": {
         "available": true,
-        "frame_s": 0.5201737365411185,
+        "frame_s": 0.5096279393959465,
         "scopes": {
-          "render.display_transform": 0.0002189359810752869,
-          "render.motion_vectors": 6.772868534088135e-6,
-          "render.rt_as_build": 3.847309936523438e-6,
-          "render.scene_classify_and_raster": 0.3865062867311783,
-          "render.scene_overlays": 0.05303208161179734,
-          "render.surface_and_shadows": 0.0803985181801758,
+          "render.display_transform": 0.00022450656525421143,
+          "render.motion_vectors": 5.169822727203369e-6,
+          "render.rt_as_build": 3.967538372039795e-6,
+          "render.scene_classify_and_raster": 0.3736533059084473,
+          "render.scene_overlays": 0.05259428980193711,
+          "render.surface_and_shadows": 0.08314004711911012,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.931269485473633e-6
+          "render.ui": 5.290051162719727e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026505581,
-        "world.streaming": 0.024209385
+        "frame.cpu": 0.026941563,
+        "world.streaming": 0.024354857
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -766,7 +766,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 298373120,
+        "rss_bytes": 293715968,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -774,27 +774,27 @@
     },
     {
       "frame_index": 6,
-      "wall_timestamp_s": 43.147491058,
+      "wall_timestamp_s": 43.083207788,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.525333796,
-      "frame_cpu_s": 0.004539873,
+      "frame_wall_s": 0.514362128,
+      "frame_cpu_s": 0.004786382,
       "gpu": {
         "available": true,
-        "frame_s": 0.5203797279273032,
+        "frame_s": 0.5083128006159783,
         "scopes": {
-          "render.display_transform": 0.00021941689481735232,
-          "render.motion_vectors": 7.093477695465089e-6,
-          "render.rt_as_build": 4.248071388244629e-6,
-          "render.scene_classify_and_raster": 0.3888618823921051,
-          "render.scene_overlays": 0.05247806898093796,
-          "render.surface_and_shadows": 0.07880332729774475,
+          "render.display_transform": 0.00022815349446487427,
+          "render.motion_vectors": 6.492335517883302e-6,
+          "render.rt_as_build": 3.887386081695557e-6,
+          "render.scene_classify_and_raster": 0.3724756283064194,
+          "render.scene_overlays": 0.053113035425045016,
+          "render.surface_and_shadows": 0.08247810942930223,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 4.368299823760986e-6
+          "render.ui": 6.171726356506348e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.004539873,
-        "world.streaming": 0.0022531850000000004
+        "frame.cpu": 0.004786382,
+        "world.streaming": 0.002301355
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -859,7 +859,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 299061248,
+        "rss_bytes": 294371328,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -867,27 +867,27 @@
     },
     {
       "frame_index": 7,
-      "wall_timestamp_s": 43.694830547,
+      "wall_timestamp_s": 43.627093396,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.547273336,
-      "frame_cpu_s": 0.026926605,
+      "frame_wall_s": 0.543786624,
+      "frame_cpu_s": 0.027816512,
       "gpu": {
         "available": true,
-        "frame_s": 0.5196882140423584,
+        "frame_s": 0.5146734859969712,
         "scopes": {
-          "render.display_transform": 0.00021308486388015748,
-          "render.motion_vectors": 5.8911933403015145e-6,
-          "render.rt_as_build": 3.927462226867676e-6,
-          "render.scene_classify_and_raster": 0.3844715006123543,
-          "render.scene_overlays": 0.05196649698781586,
-          "render.surface_and_shadows": 0.08302009921660997,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.851117195129395e-6
+          "render.display_transform": 0.00022763250457763674,
+          "render.motion_vectors": 6.2118025016784675e-6,
+          "render.rt_as_build": 4.0076145172119145e-6,
+          "render.scene_classify_and_raster": 0.37730692783535386,
+          "render.scene_overlays": 0.05296651703829575,
+          "render.surface_and_shadows": 0.08415481519101334,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.051497920989991e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026926605,
-        "world.streaming": 0.023987823
+        "frame.cpu": 0.027816512,
+        "world.streaming": 0.025517321
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -952,7 +952,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 299782144,
+        "rss_bytes": 295092224,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -960,27 +960,27 @@
     },
     {
       "frame_index": 8,
-      "wall_timestamp_s": 44.220655258,
+      "wall_timestamp_s": 44.145065135,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.525706971,
-      "frame_cpu_s": 0.003967116,
+      "frame_wall_s": 0.517812062,
+      "frame_cpu_s": 0.004998437,
       "gpu": {
         "available": true,
-        "frame_s": 0.5211835351710206,
+        "frame_s": 0.5119797278230821,
         "scopes": {
-          "render.display_transform": 0.00022562869731903077,
+          "render.display_transform": 0.00022807334217453005,
           "render.motion_vectors": 6.812944679260255e-6,
-          "render.rt_as_build": 4.047690662384033e-6,
-          "render.scene_classify_and_raster": 0.38778078829994206,
-          "render.scene_overlays": 0.05212988743168259,
-          "render.surface_and_shadows": 0.08102895601987839,
+          "render.rt_as_build": 3.887386081695557e-6,
+          "render.scene_classify_and_raster": 0.37809149852938845,
+          "render.scene_overlays": 0.0528051704778328,
+          "render.surface_and_shadows": 0.08083554854327775,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 6.09157406616211e-6
+          "render.ui": 7.414086856842042e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.003967116,
-        "world.streaming": 0.001632309
+        "frame.cpu": 0.004998437,
+        "world.streaming": 0.002366015
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1045,7 +1045,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 300503040,
+        "rss_bytes": 295747584,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1053,27 +1053,27 @@
     },
     {
       "frame_index": 9,
-      "wall_timestamp_s": 44.771689456,
+      "wall_timestamp_s": 44.688633823,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.550842711,
-      "frame_cpu_s": 0.028097715,
+      "frame_wall_s": 0.543501744,
+      "frame_cpu_s": 0.027144742,
       "gpu": {
         "available": true,
-        "frame_s": 0.5214122096553726,
+        "frame_s": 0.5158843065710563,
         "scopes": {
-          "render.display_transform": 0.00022142070207595827,
-          "render.motion_vectors": 6.812944679260255e-6,
-          "render.rt_as_build": 3.847309936523438e-6,
-          "render.scene_classify_and_raster": 0.3882610608236847,
-          "render.scene_overlays": 0.05191543997886658,
-          "render.surface_and_shadows": 0.08099593327625657,
+          "render.display_transform": 0.00021468790968704225,
+          "render.motion_vectors": 5.410279598236085e-6,
+          "render.rt_as_build": 4.087766807556153e-6,
+          "render.scene_classify_and_raster": 0.3783468637264252,
+          "render.scene_overlays": 0.053293378078319555,
+          "render.surface_and_shadows": 0.08401198380961991,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 6.372107082366944e-6
+          "render.ui": 6.572487808227539e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.028097715,
-        "world.streaming": 0.025229625
+        "frame.cpu": 0.027144742,
+        "world.streaming": 0.023442538
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1138,7 +1138,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 301158400,
+        "rss_bytes": 296468480,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1146,27 +1146,27 @@
     },
     {
       "frame_index": 10,
-      "wall_timestamp_s": 45.299007516,
+      "wall_timestamp_s": 45.213185483,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.527230077,
-      "frame_cpu_s": 0.003788374,
+      "frame_wall_s": 0.524385981,
+      "frame_cpu_s": 0.006081092,
       "gpu": {
         "available": true,
-        "frame_s": 0.522475429786789,
+        "frame_s": 0.5169486488345376,
         "scopes": {
-          "render.display_transform": 0.00021536920415496827,
-          "render.motion_vectors": 8.736599647521973e-6,
-          "render.rt_as_build": 4.167919097900391e-6,
-          "render.scene_classify_and_raster": 0.388695846922657,
-          "render.scene_overlays": 0.051691013565902715,
-          "render.surface_and_shadows": 0.08185324217377854,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.690812614440919e-6
+          "render.display_transform": 0.0002485522523574829,
+          "render.motion_vectors": 6.251878646850586e-6,
+          "render.rt_as_build": 3.887386081695557e-6,
+          "render.scene_classify_and_raster": 0.3797332979686547,
+          "render.scene_overlays": 0.05264995556758118,
+          "render.surface_and_shadows": 0.08429884885676193,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.5324116630554205e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.003788374,
-        "world.streaming": 0.001536882
+        "frame.cpu": 0.006081092,
+        "world.streaming": 0.002123173
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1231,7 +1231,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 301846528,
+        "rss_bytes": 297189376,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1239,27 +1239,27 @@
     },
     {
       "frame_index": 11,
-      "wall_timestamp_s": 45.84377148,
+      "wall_timestamp_s": 45.75235488,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.544631507,
-      "frame_cpu_s": 0.026390567,
+      "frame_wall_s": 0.539073037,
+      "frame_cpu_s": 0.027335887,
       "gpu": {
         "available": true,
-        "frame_s": 0.5175087931156083,
+        "frame_s": 0.5107320371954384,
         "scopes": {
-          "render.display_transform": 0.0002357278859024048,
-          "render.motion_vectors": 6.8530208244323735e-6,
-          "render.rt_as_build": 4.087766807556153e-6,
-          "render.scene_classify_and_raster": 0.3825124984840508,
-          "render.scene_overlays": 0.05194641883908463,
-          "render.surface_and_shadows": 0.0827955124990654,
+          "render.display_transform": 0.00022911532194900514,
+          "render.motion_vectors": 5.971345630645752e-6,
+          "render.rt_as_build": 4.0076145172119145e-6,
+          "render.scene_classify_and_raster": 0.3714174176931496,
+          "render.scene_overlays": 0.05279002169495774,
+          "render.surface_and_shadows": 0.086278931037426,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 6.372107082366944e-6
+          "render.ui": 5.249975017547608e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026390567,
-        "world.streaming": 0.024249761
+        "frame.cpu": 0.027335887,
+        "world.streaming": 0.024577882
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1324,7 +1324,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 302567424,
+        "rss_bytes": 297877504,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1332,27 +1332,27 @@
     },
     {
       "frame_index": 12,
-      "wall_timestamp_s": 46.364490213,
+      "wall_timestamp_s": 46.272268504,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.52063659,
-      "frame_cpu_s": 0.004537137,
+      "frame_wall_s": 0.519759628,
+      "frame_cpu_s": 0.004202835,
       "gpu": {
         "available": true,
-        "frame_s": 0.5156032124888191,
+        "frame_s": 0.5146186217542306,
         "scopes": {
-          "render.display_transform": 0.00024057709946823122,
-          "render.motion_vectors": 6.5324116630554205e-6,
-          "render.rt_as_build": 3.927462226867676e-6,
-          "render.scene_classify_and_raster": 0.381987500982296,
-          "render.scene_overlays": 0.052049374456031805,
-          "render.surface_and_shadows": 0.08130968941680909,
+          "render.display_transform": 0.0002880673314971924,
+          "render.motion_vectors": 6.652640098571778e-6,
+          "render.rt_as_build": 3.887386081695557e-6,
+          "render.scene_classify_and_raster": 0.373141453382309,
+          "render.scene_overlays": 0.05869712526489258,
+          "render.surface_and_shadows": 0.0824720980075264,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 4.288147533416749e-6
+          "render.ui": 8.015229034423829e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.004537137,
-        "world.streaming": 0.001978013
+        "frame.cpu": 0.004202835,
+        "world.streaming": 0.001841018
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1417,7 +1417,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 303091712,
+        "rss_bytes": 298401792,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1425,27 +1425,27 @@
     },
     {
       "frame_index": 13,
-      "wall_timestamp_s": 46.914596023,
+      "wall_timestamp_s": 46.82682469,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.549962383,
-      "frame_cpu_s": 0.026266847,
+      "frame_wall_s": 0.554470246,
+      "frame_cpu_s": 0.027645905,
       "gpu": {
         "available": true,
-        "frame_s": 0.5230399824438285,
+        "frame_s": 0.5262936043657722,
         "scopes": {
-          "render.display_transform": 0.000218294762752533,
-          "render.motion_vectors": 5.690812614440919e-6,
-          "render.rt_as_build": 4.127842952728272e-6,
-          "render.scene_classify_and_raster": 0.38938675966542435,
-          "render.scene_overlays": 0.052372067576957705,
-          "render.surface_and_shadows": 0.0810461887623024,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.490431888580323e-6
+          "render.display_transform": 0.00021997796084976198,
+          "render.motion_vectors": 6.492335517883302e-6,
+          "render.rt_as_build": 4.448452114105225e-6,
+          "render.scene_classify_and_raster": 0.3822954460817986,
+          "render.scene_overlays": 0.05274036735108948,
+          "render.surface_and_shadows": 0.09102009931586838,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.450355743408203e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026266847,
-        "world.streaming": 0.023949111
+        "frame.cpu": 0.027645905,
+        "world.streaming": 0.024503614
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1510,7 +1510,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 303616000,
+        "rss_bytes": 299089920,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1518,27 +1518,27 @@
     },
     {
       "frame_index": 14,
-      "wall_timestamp_s": 47.443239992,
+      "wall_timestamp_s": 47.3477833,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.528551337,
-      "frame_cpu_s": 0.005206734,
+      "frame_wall_s": 0.52081867,
+      "frame_cpu_s": 0.004714739,
       "gpu": {
         "available": true,
-        "frame_s": 0.5226537285566598,
+        "frame_s": 0.5154237114345932,
         "scopes": {
-          "render.display_transform": 0.00021701232610702516,
-          "render.motion_vectors": 5.450355743408203e-6,
-          "render.rt_as_build": 3.967538372039795e-6,
-          "render.scene_classify_and_raster": 0.38856531891783147,
-          "render.scene_overlays": 0.05191467853210831,
-          "render.surface_and_shadows": 0.0819408486271248,
+          "render.display_transform": 0.0002564071768112183,
+          "render.motion_vectors": 5.330127307891846e-6,
+          "render.rt_as_build": 3.927462226867676e-6,
+          "render.scene_classify_and_raster": 0.37789592694094853,
+          "render.scene_overlays": 0.05477070501779938,
+          "render.surface_and_shadows": 0.08248424107951356,
           "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 5.12974658203125e-6
+          "render.ui": 5.851117195129395e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.005206734,
-        "world.streaming": 0.002409356
+        "frame.cpu": 0.004714739,
+        "world.streaming": 0.002122251
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1603,7 +1603,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 304435200,
+        "rss_bytes": 299614208,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1611,27 +1611,27 @@
     },
     {
       "frame_index": 15,
-      "wall_timestamp_s": 47.997198656,
+      "wall_timestamp_s": 47.889804787,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.553762658,
-      "frame_cpu_s": 0.02776753,
+      "frame_wall_s": 0.541924026,
+      "frame_cpu_s": 0.026255696,
       "gpu": {
         "available": true,
-        "frame_s": 0.5251434189993325,
+        "frame_s": 0.5150647494022866,
         "scopes": {
-          "render.display_transform": 0.000228393951335907,
-          "render.motion_vectors": 8.977056518554689e-6,
-          "render.rt_as_build": 4.0076145172119145e-6,
-          "render.scene_classify_and_raster": 0.3882551295541993,
-          "render.scene_overlays": 0.05485730956751633,
-          "render.surface_and_shadows": 0.08178138564548493,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.8530208244323735e-6
+          "render.display_transform": 0.00025348161821365356,
+          "render.motion_vectors": 7.414086856842042e-6,
+          "render.rt_as_build": 3.887386081695557e-6,
+          "render.scene_classify_and_raster": 0.3767061864192238,
+          "render.scene_overlays": 0.052701613718708046,
+          "render.surface_and_shadows": 0.08538403071573258,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.812944679260255e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.02776753,
-        "world.streaming": 0.024934556
+        "frame.cpu": 0.026255696,
+        "world.streaming": 0.023641889
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1696,7 +1696,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 304762880,
+        "rss_bytes": 300191744,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1704,27 +1704,27 @@
     },
     {
       "frame_index": 16,
-      "wall_timestamp_s": 48.527880189,
+      "wall_timestamp_s": 48.412749796,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.530596996,
-      "frame_cpu_s": 0.005232612,
+      "frame_wall_s": 0.522806361,
+      "frame_cpu_s": 0.004827819,
       "gpu": {
         "available": true,
-        "frame_s": 0.524859479510788,
+        "frame_s": 0.5171838156544076,
         "scopes": {
-          "render.display_transform": 0.00020839595489501956,
-          "render.motion_vectors": 6.652640098571778e-6,
-          "render.rt_as_build": 3.927462226867676e-6,
-          "render.scene_classify_and_raster": 0.3895763999843789,
-          "render.scene_overlays": 0.05184045751124955,
-          "render.surface_and_shadows": 0.08321727385085678,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.009518146514893e-6
+          "render.display_transform": 0.00022747219999694825,
+          "render.motion_vectors": 6.291954792022706e-6,
+          "render.rt_as_build": 4.528604404449463e-6,
+          "render.scene_classify_and_raster": 0.3792928611332131,
+          "render.scene_overlays": 0.05314653908240891,
+          "render.surface_and_shadows": 0.08450031163854219,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 4.4885282592773444e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.005232612,
-        "world.streaming": 0.002196069
+        "frame.cpu": 0.004827819,
+        "world.streaming": 0.002770017
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1789,7 +1789,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 305438720,
+        "rss_bytes": 300781568,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1797,27 +1797,27 @@
     },
     {
       "frame_index": 17,
-      "wall_timestamp_s": 49.090300898,
+      "wall_timestamp_s": 48.963322204,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.562325391,
-      "frame_cpu_s": 0.029767074,
+      "frame_wall_s": 0.550479525,
+      "frame_cpu_s": 0.029312808,
       "gpu": {
         "available": true,
-        "frame_s": 0.5317888854679185,
+        "frame_s": 0.5206796577977715,
         "scopes": {
-          "render.display_transform": 0.00021717263068771363,
-          "render.motion_vectors": 7.213706130981446e-6,
-          "render.rt_as_build": 4.167919097900391e-6,
-          "render.scene_classify_and_raster": 0.39345104185190966,
-          "render.scene_overlays": 0.05386650703042603,
-          "render.surface_and_shadows": 0.08423604953727723,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.370203453063965e-6
+          "render.display_transform": 0.0002308786723365784,
+          "render.motion_vectors": 0.000012022843551635744,
+          "render.rt_as_build": 3.927462226867676e-6,
+          "render.scene_classify_and_raster": 0.3793632749202805,
+          "render.scene_overlays": 0.05563634975351715,
+          "render.surface_and_shadows": 0.08542599043972779,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.8911933403015145e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.029767074,
-        "world.streaming": 0.027012885
+        "frame.cpu": 0.029312808,
+        "world.streaming": 0.026380569
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1882,7 +1882,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 306257920,
+        "rss_bytes": 304754688,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1890,27 +1890,27 @@
     },
     {
       "frame_index": 18,
-      "wall_timestamp_s": 49.622944464,
+      "wall_timestamp_s": 49.486648913,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.532523473,
-      "frame_cpu_s": 0.005093534,
+      "frame_wall_s": 0.523229979,
+      "frame_cpu_s": 0.00557492,
       "gpu": {
         "available": true,
-        "frame_s": 0.5268341113357086,
+        "frame_s": 0.5166996557445832,
         "scopes": {
-          "render.display_transform": 0.00021897605722045901,
-          "render.motion_vectors": 5.410279598236085e-6,
-          "render.rt_as_build": 4.0076145172119145e-6,
-          "render.scene_classify_and_raster": 0.3918032710670128,
-          "render.scene_overlays": 0.052002525442325594,
-          "render.surface_and_shadows": 0.08279302777806473,
-          "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 5.570584178924561e-6
+          "render.display_transform": 0.00021589019404220583,
+          "render.motion_vectors": 7.614467582702638e-6,
+          "render.rt_as_build": 3.967538372039795e-6,
+          "render.scene_classify_and_raster": 0.3796029703445549,
+          "render.scene_overlays": 0.05380274588345719,
+          "render.surface_and_shadows": 0.08305901315357209,
+          "render.temporal_resolve": 1.3625889358520509e-6,
+          "render.ui": 6.09157406616211e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.005093534,
-        "world.streaming": 0.00207274
+        "frame.cpu": 0.00557492,
+        "world.streaming": 0.002569444
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -1975,7 +1975,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 306880512,
+        "rss_bytes": 305213440,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -1983,27 +1983,27 @@
     },
     {
       "frame_index": 19,
-      "wall_timestamp_s": 50.1749387,
+      "wall_timestamp_s": 50.02840128,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.551902956,
-      "frame_cpu_s": 0.027523527,
+      "frame_wall_s": 0.541661868,
+      "frame_cpu_s": 0.027042732,
       "gpu": {
         "available": true,
-        "frame_s": 0.523802391029583,
+        "frame_s": 0.5140811204951821,
         "scopes": {
-          "render.display_transform": 0.00020783488886260987,
-          "render.motion_vectors": 8.135457469940185e-6,
-          "render.rt_as_build": 3.967538372039795e-6,
-          "render.scene_classify_and_raster": 0.3891533161197968,
-          "render.scene_overlays": 0.051718786334506994,
-          "render.surface_and_shadows": 0.08270293660371782,
+          "render.display_transform": 0.00023837291148376467,
+          "render.motion_vectors": 5.851117195129395e-6,
+          "render.rt_as_build": 4.889289710998536e-6,
+          "render.scene_classify_and_raster": 0.3791033410426941,
+          "render.scene_overlays": 0.052809699082237246,
+          "render.surface_and_shadows": 0.0819119537264557,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.051497920989991e-6
+          "render.ui": 5.650736469268799e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.027523527,
-        "world.streaming": 0.02518371
+        "frame.cpu": 0.027042732,
+        "world.streaming": 0.024104981
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2068,7 +2068,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 307240960,
+        "rss_bytes": 305639424,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2076,27 +2076,27 @@
     },
     {
       "frame_index": 20,
-      "wall_timestamp_s": 50.635873831,
+      "wall_timestamp_s": 50.487574531,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.460766648,
-      "frame_cpu_s": 0.003960574,
+      "frame_wall_s": 0.459082562,
+      "frame_cpu_s": 0.004954995,
       "gpu": {
         "available": true,
-        "frame_s": 0.45618960590053936,
+        "frame_s": 0.4537448007404595,
         "scopes": {
-          "render.display_transform": 0.000212924559299469,
-          "render.motion_vectors": 7.093477695465089e-6,
-          "render.rt_as_build": 6.412183227539063e-6,
-          "render.scene_classify_and_raster": 0.4040924606794625,
-          "render.scene_overlays": 0.05185740972065735,
-          "render.surface_and_shadows": 6.412183227539063e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.530508033752442e-6
+          "render.display_transform": 0.00021721270683288575,
+          "render.motion_vectors": 7.1736299858093265e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.39810340139265066,
+          "render.scene_overlays": 0.055396453948516854,
+          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.492335517883302e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.003960574,
-        "world.streaming": 0.001751592
+        "frame.cpu": 0.004954995,
+        "world.streaming": 0.002680441
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2161,7 +2161,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 307601408,
+        "rss_bytes": 306393088,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2169,27 +2169,27 @@
     },
     {
       "frame_index": 21,
-      "wall_timestamp_s": 51.126901382,
+      "wall_timestamp_s": 50.968685468,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.490930701,
-      "frame_cpu_s": 0.027100869,
+      "frame_wall_s": 0.480964244,
+      "frame_cpu_s": 0.026510801,
       "gpu": {
         "available": true,
-        "frame_s": 0.4634479969333878,
+        "frame_s": 0.45377557921995165,
         "scopes": {
-          "render.display_transform": 0.00023067829161071778,
-          "render.motion_vectors": 5.931269485473633e-6,
-          "render.rt_as_build": 6.332030937194825e-6,
-          "render.scene_classify_and_raster": 0.4109420750315552,
-          "render.scene_overlays": 0.052249274268150334,
-          "render.surface_and_shadows": 6.412183227539063e-6,
-          "render.temporal_resolve": 1.3225127906799318e-6,
-          "render.ui": 5.971345630645752e-6
+          "render.display_transform": 0.0002273519715614319,
+          "render.motion_vectors": 5.490431888580323e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.3994216661119423,
+          "render.scene_overlays": 0.05410083225124741,
+          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.temporal_resolve": 1.3625889358520509e-6,
+          "render.ui": 6.131650211334229e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.027100869,
-        "world.streaming": 0.025290719
+        "frame.cpu": 0.026510801,
+        "world.streaming": 0.02448532
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2254,7 +2254,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 308191232,
+        "rss_bytes": 308457472,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2262,27 +2262,27 @@
     },
     {
       "frame_index": 22,
-      "wall_timestamp_s": 51.598462589,
+      "wall_timestamp_s": 51.432285351,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.471474615,
-      "frame_cpu_s": 0.004268347,
+      "frame_wall_s": 0.463488365,
+      "frame_cpu_s": 0.00583801,
       "gpu": {
         "available": true,
-        "frame_s": 0.46640225005089575,
+        "frame_s": 0.45689298232445535,
         "scopes": {
-          "render.display_transform": 0.0002219016158180237,
-          "render.motion_vectors": 7.774772163391115e-6,
-          "render.rt_as_build": 6.332030937194825e-6,
-          "render.scene_classify_and_raster": 0.4142255937577973,
-          "render.scene_overlays": 0.05192790366001511,
+          "render.display_transform": 0.00022695121010971072,
+          "render.motion_vectors": 5.290051162719727e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.4032391593964577,
+          "render.scene_overlays": 0.05340142336570359,
           "render.surface_and_shadows": 6.372107082366944e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.009518146514893e-6
+          "render.ui": 6.051497920989991e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.004268347,
-        "world.streaming": 0.002240491
+        "frame.cpu": 0.00583801,
+        "world.streaming": 0.003155235
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2347,7 +2347,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 309338112,
+        "rss_bytes": 309342208,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2355,27 +2355,27 @@
     },
     {
       "frame_index": 23,
-      "wall_timestamp_s": 52.082072929,
+      "wall_timestamp_s": 51.940946844,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.483553465,
-      "frame_cpu_s": 0.026298596,
+      "frame_wall_s": 0.508450972,
+      "frame_cpu_s": 0.040876508,
       "gpu": {
         "available": true,
-        "frame_s": 0.4569118982649765,
+        "frame_s": 0.46717976734338,
         "scopes": {
-          "render.display_transform": 0.0002174932398490906,
-          "render.motion_vectors": 7.333934566497803e-6,
-          "render.rt_as_build": 7.253782276153565e-6,
-          "render.scene_classify_and_raster": 0.4042678338907357,
-          "render.scene_overlays": 0.05239843768048096,
-          "render.surface_and_shadows": 6.412183227539063e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.770964904785156e-6
+          "render.display_transform": 0.00024318204890441897,
+          "render.motion_vectors": 6.772868534088135e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.4111057860845833,
+          "render.scene_overlays": 0.05580326689815903,
+          "render.surface_and_shadows": 6.332030937194825e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.732792388916016e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026298596,
-        "world.streaming": 0.024454983
+        "frame.cpu": 0.040876508,
+        "world.streaming": 0.038983443
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2440,7 +2440,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 309501952,
+        "rss_bytes": 309538816,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2448,27 +2448,27 @@
     },
     {
       "frame_index": 24,
-      "wall_timestamp_s": 52.544450707,
+      "wall_timestamp_s": 52.391232518,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.462235693,
-      "frame_cpu_s": 0.005352466,
+      "frame_wall_s": 0.450192519,
+      "frame_cpu_s": 0.003903017,
       "gpu": {
         "available": true,
-        "frame_s": 0.4564409234069138,
+        "frame_s": 0.4455715113894768,
         "scopes": {
-          "render.display_transform": 0.00022538824044799808,
-          "render.motion_vectors": 8.41599048614502e-6,
+          "render.display_transform": 0.0002342450685310364,
+          "render.motion_vectors": 7.414086856842042e-6,
           "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.4044176785975342,
-          "render.scene_overlays": 0.05176948265814972,
-          "render.surface_and_shadows": 6.332030937194825e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.8911933403015145e-6
+          "render.scene_classify_and_raster": 0.3923506310577736,
+          "render.scene_overlays": 0.052959183103729254,
+          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.971345630645752e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.005352466,
-        "world.streaming": 0.002822134
+        "frame.cpu": 0.003903017,
+        "world.streaming": 0.002416399
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2533,7 +2533,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 309829632,
+        "rss_bytes": 309702656,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2541,27 +2541,27 @@
     },
     {
       "frame_index": 25,
-      "wall_timestamp_s": 53.036442884,
+      "wall_timestamp_s": 52.869357194,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.491927386,
-      "frame_cpu_s": 0.026641264,
+      "frame_wall_s": 0.478033467,
+      "frame_cpu_s": 0.02555976,
       "gpu": {
         "available": true,
-        "frame_s": 0.4645418352397156,
+        "frame_s": 0.4520815605635262,
         "scopes": {
-          "render.display_transform": 0.00021324516846084598,
-          "render.motion_vectors": 7.895000598907471e-6,
+          "render.display_transform": 0.00024041679488754275,
+          "render.motion_vectors": 7.854924453735352e-6,
           "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.41205418806008154,
-          "render.scene_overlays": 0.05224670939485932,
-          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.39877696116455846,
+          "render.scene_overlays": 0.053036009074024205,
+          "render.surface_and_shadows": 6.332030937194825e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.690812614440919e-6
+          "render.ui": 6.251878646850586e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026641264,
-        "world.streaming": 0.024892908999999998
+        "frame.cpu": 0.02555976,
+        "world.streaming": 0.023678748
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2626,7 +2626,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 310616064,
+        "rss_bytes": 310161408,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2634,27 +2634,27 @@
     },
     {
       "frame_index": 26,
-      "wall_timestamp_s": 53.509635057,
+      "wall_timestamp_s": 53.334945309,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.473074434,
-      "frame_cpu_s": 0.005300168,
+      "frame_wall_s": 0.46553213,
+      "frame_cpu_s": 0.004157851,
       "gpu": {
         "available": true,
-        "frame_s": 0.4667771623889809,
+        "frame_s": 0.46101377187563325,
         "scopes": {
-          "render.display_transform": 0.00021737301141357425,
-          "render.motion_vectors": 5.249975017547608e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.41472955128333666,
-          "render.scene_overlays": 0.051805270655788424,
+          "render.display_transform": 0.00024518585616302495,
+          "render.motion_vectors": 6.372107082366944e-6,
+          "render.rt_as_build": 6.332030937194825e-6,
+          "render.scene_classify_and_raster": 0.40347737200336076,
+          "render.scene_overlays": 0.05726408246582795,
           "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.61066032409668e-6
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.732792388916016e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.005300168,
-        "world.streaming": 0.003172126
+        "frame.cpu": 0.004157851,
+        "world.streaming": 0.00222372
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2719,7 +2719,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 311828480,
+        "rss_bytes": 311230464,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2727,27 +2727,27 @@
     },
     {
       "frame_index": 27,
-      "wall_timestamp_s": 54.005106292,
+      "wall_timestamp_s": 53.81496783,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.495385656,
-      "frame_cpu_s": 0.028618545,
+      "frame_wall_s": 0.479900774,
+      "frame_cpu_s": 0.025855451,
       "gpu": {
         "available": true,
-        "frame_s": 0.46592077524279785,
+        "frame_s": 0.45314886846175007,
         "scopes": {
-          "render.display_transform": 0.00021697224996185304,
-          "render.motion_vectors": 7.574391437530518e-6,
-          "render.rt_as_build": 1.40266508102417e-6,
-          "render.scene_classify_and_raster": 0.41388751139712526,
-          "render.scene_overlays": 0.05179865809183502,
-          "render.surface_and_shadows": 1.3625889358520509e-6,
+          "render.display_transform": 0.00021657148851013185,
+          "render.motion_vectors": 6.772868534088135e-6,
+          "render.rt_as_build": 1.3625889358520509e-6,
+          "render.scene_classify_and_raster": 0.40023392942229086,
+          "render.scene_overlays": 0.052682016483718876,
+          "render.surface_and_shadows": 1.3225127906799318e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.931269485473633e-6
+          "render.ui": 5.530508033752442e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.028618545,
-        "world.streaming": 0.024432321
+        "frame.cpu": 0.025855451,
+        "world.streaming": 0.023786127
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2812,7 +2812,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312582144,
+        "rss_bytes": 311590912,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2820,27 +2820,27 @@
     },
     {
       "frame_index": 28,
-      "wall_timestamp_s": 54.468235969,
+      "wall_timestamp_s": 54.260470518,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.463057663,
-      "frame_cpu_s": 0.004901396,
+      "frame_wall_s": 0.445371964,
+      "frame_cpu_s": 0.003370946,
       "gpu": {
         "available": true,
-        "frame_s": 0.45776792472585304,
+        "frame_s": 0.4416269366486207,
         "scopes": {
-          "render.display_transform": 0.0002200180369949341,
-          "render.motion_vectors": 7.854924453735352e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.40189067726370625,
-          "render.scene_overlays": 0.05562945665654755,
-          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.display_transform": 0.00022470694598007205,
+          "render.motion_vectors": 6.692716243743897e-6,
+          "render.rt_as_build": 1.3625889358520509e-6,
+          "render.scene_classify_and_raster": 0.38852776756980517,
+          "render.scene_overlays": 0.052859032816944124,
+          "render.surface_and_shadows": 1.3225127906799318e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.811041049957276e-6
+          "render.ui": 4.68890898513794e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.004901396,
-        "world.streaming": 0.002175531
+        "frame.cpu": 0.003370946,
+        "world.streaming": 0.001873798
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2905,7 +2905,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -2913,27 +2913,27 @@
     },
     {
       "frame_index": 29,
-      "wall_timestamp_s": 54.922918769,
+      "wall_timestamp_s": 54.70326335,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.454527381,
-      "frame_cpu_s": 0.026592153,
+      "frame_wall_s": 0.442729404,
+      "frame_cpu_s": 0.028785176,
       "gpu": {
         "available": true,
-        "frame_s": 0.42752717693054865,
+        "frame_s": 0.4136235699050217,
         "scopes": {
-          "render.display_transform": 0.00022586915419006348,
-          "render.motion_vectors": 8.496142776489258e-6,
-          "render.rt_as_build": 1.3625889358520509e-6,
-          "render.scene_classify_and_raster": 0.37538470558928205,
-          "render.scene_overlays": 0.051898808378620154,
-          "render.surface_and_shadows": 1.3625889358520509e-6,
+          "render.display_transform": 0.0002190161333656311,
+          "render.motion_vectors": 6.372107082366944e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.36053578245143514,
+          "render.scene_overlays": 0.05284208060753632,
+          "render.surface_and_shadows": 6.372107082366944e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.209898872375489e-6
+          "render.ui": 6.2118025016784675e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.026592153,
-        "world.streaming": 0.025069116
+        "frame.cpu": 0.028785176,
+        "world.streaming": 0.027153678
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -2998,7 +2998,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3006,27 +3006,27 @@
     },
     {
       "frame_index": 30,
-      "wall_timestamp_s": 55.350463741,
+      "wall_timestamp_s": 55.122351736,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.427451187,
-      "frame_cpu_s": 0.001727396,
+      "frame_wall_s": 0.418959797,
+      "frame_cpu_s": 0.00207307,
       "gpu": {
         "available": true,
-        "frame_s": 0.425388393215003,
+        "frame_s": 0.41656311507725147,
         "scopes": {
-          "render.display_transform": 0.00022771265686798097,
-          "render.motion_vectors": 4.929365856170655e-6,
-          "render.rt_as_build": 1.3625889358520509e-6,
-          "render.scene_classify_and_raster": 0.373518720193923,
-          "render.scene_overlays": 0.05162757302809525,
-          "render.surface_and_shadows": 1.3625889358520509e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.370203453063965e-6
+          "render.display_transform": 0.00022330428089904788,
+          "render.motion_vectors": 5.770964904785156e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.3617570628994103,
+          "render.scene_overlays": 0.05455689878330613,
+          "render.surface_and_shadows": 6.332030937194825e-6,
+          "render.temporal_resolve": 1.5629696617126466e-6,
+          "render.ui": 5.811041049957276e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.001727396,
-        "world.streaming": 0.000060623
+        "frame.cpu": 0.00207307,
+        "world.streaming": 0.000033362
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3091,7 +3091,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3099,27 +3099,27 @@
     },
     {
       "frame_index": 31,
-      "wall_timestamp_s": 55.806080731,
+      "wall_timestamp_s": 55.566204131,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.455471138,
-      "frame_cpu_s": 0.030310175,
+      "frame_wall_s": 0.443759271,
+      "frame_cpu_s": 0.025438614,
       "gpu": {
         "available": true,
-        "frame_s": 0.4246663914026184,
+        "frame_s": 0.41794510086736686,
         "scopes": {
-          "render.display_transform": 0.000226710753238678,
-          "render.motion_vectors": 5.490431888580323e-6,
+          "render.display_transform": 0.00024045687103271487,
+          "render.motion_vectors": 5.450355743408203e-6,
           "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.3724367945217476,
-          "render.scene_overlays": 0.051977117166286474,
+          "render.scene_classify_and_raster": 0.3650068775875626,
+          "render.scene_overlays": 0.05267127607681275,
           "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.171726356506348e-6
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.973249259948731e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.030310175,
-        "world.streaming": 0.02868534
+        "frame.cpu": 0.025438614,
+        "world.streaming": 0.023943361
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3184,7 +3184,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3192,27 +3192,27 @@
     },
     {
       "frame_index": 32,
-      "wall_timestamp_s": 56.23427969,
+      "wall_timestamp_s": 55.98367729,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.428104574,
-      "frame_cpu_s": 0.002741604,
+      "frame_wall_s": 0.417311909,
+      "frame_cpu_s": 0.001711386,
       "gpu": {
         "available": true,
-        "frame_s": 0.4247171278024064,
+        "frame_s": 0.41509115834122473,
         "scopes": {
-          "render.display_transform": 0.00020751427970123294,
-          "render.motion_vectors": 5.770964904785156e-6,
-          "render.rt_as_build": 1.3625889358520509e-6,
-          "render.scene_classify_and_raster": 0.3729373856510926,
-          "render.scene_overlays": 0.051557079088737495,
-          "render.surface_and_shadows": 1.3625889358520509e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.290051162719727e-6
+          "render.display_transform": 0.00022077948375320437,
+          "render.motion_vectors": 4.929365856170655e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.3623026595397835,
+          "render.scene_overlays": 0.05254291218382645,
+          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.811041049957276e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.002741604,
-        "world.streaming": 0.000060263
+        "frame.cpu": 0.001711386,
+        "world.streaming": 0.000033352
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3277,7 +3277,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3285,27 +3285,27 @@
     },
     {
       "frame_index": 33,
-      "wall_timestamp_s": 56.695668867,
+      "wall_timestamp_s": 56.436891055,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.461205535,
-      "frame_cpu_s": 0.036069187,
+      "frame_wall_s": 0.453101406,
+      "frame_cpu_s": 0.037981118,
       "gpu": {
         "available": true,
-        "frame_s": 0.4246883130540276,
+        "frame_s": 0.41475612176758575,
         "scopes": {
-          "render.display_transform": 0.00021300471158981326,
-          "render.motion_vectors": 6.612563953399659e-6,
-          "render.rt_as_build": 6.332030937194825e-6,
-          "render.scene_classify_and_raster": 0.3727945943458443,
-          "render.scene_overlays": 0.05165446412150574,
-          "render.surface_and_shadows": 6.412183227539063e-6,
+          "render.display_transform": 0.00022510770743179324,
+          "render.motion_vectors": 5.650736469268799e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.3617016375906372,
+          "render.scene_overlays": 0.05280428880263901,
+          "render.surface_and_shadows": 6.372107082366944e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.530508033752442e-6
+          "render.ui": 5.330127307891846e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.036069187,
-        "world.streaming": 0.034114228
+        "frame.cpu": 0.037981118,
+        "world.streaming": 0.036148385
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3370,7 +3370,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3378,27 +3378,27 @@
     },
     {
       "frame_index": 34,
-      "wall_timestamp_s": 57.122682199,
+      "wall_timestamp_s": 56.855708707,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.426935858,
-      "frame_cpu_s": 0.00227704,
+      "frame_wall_s": 0.418726192,
+      "frame_cpu_s": 0.00213747,
       "gpu": {
         "available": true,
-        "frame_s": 0.4243962481270495,
+        "frame_s": 0.41554193482212076,
         "scopes": {
-          "render.display_transform": 0.00021745316370391847,
-          "render.motion_vectors": 6.652640098571778e-6,
-          "render.rt_as_build": 1.3625889358520509e-6,
-          "render.scene_classify_and_raster": 0.37251940147598367,
-          "render.scene_overlays": 0.051642481354099275,
-          "render.surface_and_shadows": 1.3625889358520509e-6,
+          "render.display_transform": 0.0002332431649017334,
+          "render.motion_vectors": 5.650736469268799e-6,
+          "render.rt_as_build": 6.332030937194825e-6,
+          "render.scene_classify_and_raster": 0.36277038823008734,
+          "render.scene_overlays": 0.05251333598868943,
+          "render.surface_and_shadows": 6.412183227539063e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.171726356506348e-6
+          "render.ui": 5.209898872375489e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.00227704,
-        "world.streaming": 0.000060843
+        "frame.cpu": 0.00213747,
+        "world.streaming": 0.000034283
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3463,7 +3463,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3471,27 +3471,27 @@
     },
     {
       "frame_index": 35,
-      "wall_timestamp_s": 57.583254816,
+      "wall_timestamp_s": 57.309682057,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.460410936,
-      "frame_cpu_s": 0.035308171,
+      "frame_wall_s": 0.453843949,
+      "frame_cpu_s": 0.039468557,
       "gpu": {
         "available": true,
-        "frame_s": 0.4242833035309182,
+        "frame_s": 0.41400357191354376,
         "scopes": {
-          "render.display_transform": 0.00022855425591659549,
-          "render.motion_vectors": 7.774772163391115e-6,
+          "render.display_transform": 0.00022298367173767092,
+          "render.motion_vectors": 5.811041049957276e-6,
           "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.3724551093200913,
-          "render.scene_overlays": 0.05157138627256394,
+          "render.scene_classify_and_raster": 0.3612813590562172,
+          "render.scene_overlays": 0.052473460224243165,
           "render.surface_and_shadows": 6.372107082366944e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.372107082366944e-6
+          "render.ui": 5.851117195129395e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.035308171,
-        "world.streaming": 0.03336901
+        "frame.cpu": 0.039468557,
+        "world.streaming": 0.036723796
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3556,7 +3556,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3564,27 +3564,27 @@
     },
     {
       "frame_index": 36,
-      "wall_timestamp_s": 58.010523954,
+      "wall_timestamp_s": 57.730045868,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.427175133,
-      "frame_cpu_s": 0.00213781,
+      "frame_wall_s": 0.42026669,
+      "frame_cpu_s": 0.002163959,
       "gpu": {
         "available": true,
-        "frame_s": 0.4241883631430054,
+        "frame_s": 0.4172457120198955,
         "scopes": {
-          "render.display_transform": 0.00022061917917251588,
-          "render.motion_vectors": 5.370203453063965e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.3724169568298874,
-          "render.scene_overlays": 0.05152505824874497,
-          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.display_transform": 0.00021360585376739504,
+          "render.motion_vectors": 5.650736469268799e-6,
+          "render.rt_as_build": 1.3625889358520509e-6,
+          "render.scene_classify_and_raster": 0.3642351112219105,
+          "render.scene_overlays": 0.05278208661821366,
+          "render.surface_and_shadows": 1.3225127906799318e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.251878646850586e-6
+          "render.ui": 5.209898872375489e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.00213781,
-        "world.streaming": 0.000063088
+        "frame.cpu": 0.002163959,
+        "world.streaming": 0.000064049
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3649,7 +3649,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3657,27 +3657,27 @@
     },
     {
       "frame_index": 37,
-      "wall_timestamp_s": 58.471798177,
+      "wall_timestamp_s": 58.184322592,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.461185598,
-      "frame_cpu_s": 0.036416865,
+      "frame_wall_s": 0.4541941,
+      "frame_cpu_s": 0.038943008,
       "gpu": {
         "available": true,
-        "frame_s": 0.4240719018651352,
+        "frame_s": 0.4149083309669495,
         "scopes": {
-          "render.display_transform": 0.000237811845451355,
-          "render.motion_vectors": 6.8530208244323735e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.3721482863526535,
-          "render.scene_overlays": 0.05165971409652329,
-          "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.12974658203125e-6
+          "render.display_transform": 0.00022783288530349734,
+          "render.motion_vectors": 4.809137420654297e-6,
+          "render.rt_as_build": 6.332030937194825e-6,
+          "render.scene_classify_and_raster": 0.3618562914348564,
+          "render.scene_overlays": 0.05279919913220215,
+          "render.surface_and_shadows": 6.412183227539063e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.131650211334229e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.036416865,
-        "world.streaming": 0.034445534
+        "frame.cpu": 0.038943008,
+        "world.streaming": 0.036946761
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3742,7 +3742,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3750,27 +3750,27 @@
     },
     {
       "frame_index": 38,
-      "wall_timestamp_s": 58.899257479,
+      "wall_timestamp_s": 58.600116444,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.427362923,
-      "frame_cpu_s": 0.002043966,
+      "frame_wall_s": 0.415707652,
+      "frame_cpu_s": 0.002298249,
       "gpu": {
         "available": true,
-        "frame_s": 0.42472081480776225,
+        "frame_s": 0.41310161819029995,
         "scopes": {
-          "render.display_transform": 0.000212243264831543,
-          "render.motion_vectors": 8.85682808303833e-6,
-          "render.rt_as_build": 1.3625889358520509e-6,
-          "render.scene_classify_and_raster": 0.3729475649919663,
-          "render.scene_overlays": 0.05154329289479828,
+          "render.display_transform": 0.0002291954742393494,
+          "render.motion_vectors": 6.051497920989991e-6,
+          "render.rt_as_build": 1.3225127906799318e-6,
+          "render.scene_classify_and_raster": 0.36043743559118274,
+          "render.scene_overlays": 0.052418155143905645,
           "render.surface_and_shadows": 1.3625889358520509e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 4.769061275482178e-6
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.772868534088135e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.002043966,
-        "world.streaming": 0.000034564
+        "frame.cpu": 0.002298249,
+        "world.streaming": 0.000032971
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3835,7 +3835,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3843,27 +3843,27 @@
     },
     {
       "frame_index": 39,
-      "wall_timestamp_s": 59.360125906,
+      "wall_timestamp_s": 59.052556318,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.460774121,
-      "frame_cpu_s": 0.035632054,
+      "frame_wall_s": 0.452335139,
+      "frame_cpu_s": 0.037793859,
       "gpu": {
         "available": true,
-        "frame_s": 0.4247588470695306,
+        "frame_s": 0.41400357191354376,
         "scopes": {
-          "render.display_transform": 0.00026382126366806033,
-          "render.motion_vectors": 5.8911933403015145e-6,
-          "render.rt_as_build": 6.332030937194825e-6,
-          "render.scene_classify_and_raster": 0.3727069077402077,
-          "render.scene_overlays": 0.051761226972244265,
-          "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.933173114776612e-6
+          "render.display_transform": 0.0002275523522872925,
+          "render.motion_vectors": 8.656447357177735e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.3611271861257401,
+          "render.scene_overlays": 0.052620299220153814,
+          "render.surface_and_shadows": 6.332030937194825e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.851117195129395e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.035632054,
-        "world.streaming": 0.033597095
+        "frame.cpu": 0.037793859,
+        "world.streaming": 0.035450045
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -3928,7 +3928,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -3936,27 +3936,27 @@
     },
     {
       "frame_index": 40,
-      "wall_timestamp_s": 59.786316056,
+      "wall_timestamp_s": 59.469468633,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.426038086,
-      "frame_cpu_s": 0.00217003,
+      "frame_wall_s": 0.416815474,
+      "frame_cpu_s": 0.002513459,
       "gpu": {
         "available": true,
-        "frame_s": 0.4233998249105988,
+        "frame_s": 0.4135889040394478,
         "scopes": {
-          "render.display_transform": 0.00022005811314010622,
-          "render.motion_vectors": 6.772868534088135e-6,
-          "render.rt_as_build": 6.332030937194825e-6,
-          "render.scene_classify_and_raster": 0.37121018394646454,
-          "render.scene_overlays": 0.05194257152914811,
-          "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 6.171726356506348e-6
+          "render.display_transform": 0.0002271515908355713,
+          "render.motion_vectors": 5.730888759613038e-6,
+          "render.rt_as_build": 1.3225127906799318e-6,
+          "render.scene_classify_and_raster": 0.36078842247060017,
+          "render.scene_overlays": 0.052558381575862886,
+          "render.surface_and_shadows": 1.3625889358520509e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 5.209898872375489e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.00217003,
-        "world.streaming": 0.000035666
+        "frame.cpu": 0.002513459,
+        "world.streaming": 0.000036668
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4021,7 +4021,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4029,27 +4029,27 @@
     },
     {
       "frame_index": 41,
-      "wall_timestamp_s": 60.247701626,
+      "wall_timestamp_s": 59.922360849,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.46129966,
-      "frame_cpu_s": 0.035598922,
+      "frame_wall_s": 0.452806427,
+      "frame_cpu_s": 0.038888437,
       "gpu": {
         "available": true,
-        "frame_s": 0.4252850067794953,
+        "frame_s": 0.41356525911379627,
         "scopes": {
-          "render.display_transform": 0.0002097585438308716,
-          "render.motion_vectors": 7.374010711669922e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.37346150147765356,
-          "render.scene_overlays": 0.05158677551231003,
-          "render.surface_and_shadows": 6.332030937194825e-6,
-          "render.temporal_resolve": 1.40266508102417e-6,
-          "render.ui": 5.490431888580323e-6
+          "render.display_transform": 0.00022158100665664674,
+          "render.motion_vectors": 5.971345630645752e-6,
+          "render.rt_as_build": 6.412183227539063e-6,
+          "render.scene_classify_and_raster": 0.3604849258232117,
+          "render.scene_overlays": 0.05283250240884018,
+          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.171726356506348e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.035598922,
-        "world.streaming": 0.0336591
+        "frame.cpu": 0.038888437,
+        "world.streaming": 0.036930081
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4114,7 +4114,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4122,27 +4122,27 @@
     },
     {
       "frame_index": 42,
-      "wall_timestamp_s": 60.675243252,
+      "wall_timestamp_s": 60.339188727,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.427465344,
-      "frame_cpu_s": 0.001995666,
+      "frame_wall_s": 0.416764089,
+      "frame_cpu_s": 0.002558704,
       "gpu": {
         "available": true,
-        "frame_s": 0.4251418948650857,
+        "frame_s": 0.4139518736862716,
         "scopes": {
-          "render.display_transform": 0.00021344554918670657,
-          "render.motion_vectors": 6.973249259948731e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.37336347522656255,
-          "render.scene_overlays": 0.05153900474726487,
-          "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 4.889289710998536e-6
+          "render.display_transform": 0.00021681194538116457,
+          "render.motion_vectors": 5.450355743408203e-6,
+          "render.rt_as_build": 1.3225127906799318e-6,
+          "render.scene_classify_and_raster": 0.3610916385849724,
+          "render.scene_overlays": 0.05262767323086548,
+          "render.surface_and_shadows": 1.3225127906799318e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.332030937194825e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.001995666,
-        "world.streaming": 0.000034474
+        "frame.cpu": 0.002558704,
+        "world.streaming": 0.000034053
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4207,7 +4207,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4215,27 +4215,27 @@
     },
     {
       "frame_index": 43,
-      "wall_timestamp_s": 61.134381097,
+      "wall_timestamp_s": 60.789026376,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.459054179,
-      "frame_cpu_s": 0.035382559,
+      "frame_wall_s": 0.449743554,
+      "frame_cpu_s": 0.035764581,
       "gpu": {
         "available": true,
-        "frame_s": 0.42339709973272704,
+        "frame_s": 0.41332868962884517,
         "scopes": {
-          "render.display_transform": 0.00021280433086395264,
-          "render.motion_vectors": 0.000010059112438201905,
-          "render.rt_as_build": 1.3625889358520509e-6,
-          "render.scene_classify_and_raster": 0.37133193527549746,
-          "render.scene_overlays": 0.05183364456657029,
-          "render.surface_and_shadows": 1.3625889358520509e-6,
+          "render.display_transform": 0.00022366496620559694,
+          "render.motion_vectors": 6.051497920989991e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.36068895347828295,
+          "render.scene_overlays": 0.052390262146865846,
+          "render.surface_and_shadows": 6.372107082366944e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 4.568680549621582e-6
+          "render.ui": 5.650736469268799e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.035382559,
-        "world.streaming": 0.033405348
+        "frame.cpu": 0.035764581,
+        "world.streaming": 0.033756342
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4300,7 +4300,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4308,27 +4308,27 @@
     },
     {
       "frame_index": 44,
-      "wall_timestamp_s": 61.562181374,
+      "wall_timestamp_s": 61.206328236,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.427667971,
-      "frame_cpu_s": 0.0022503,
+      "frame_wall_s": 0.417166538,
+      "frame_cpu_s": 0.002113425,
       "gpu": {
         "available": true,
-        "frame_s": 0.4249724929994431,
+        "frame_s": 0.4146390192713928,
         "scopes": {
-          "render.display_transform": 0.00021244364555740358,
-          "render.motion_vectors": 6.2118025016784675e-6,
+          "render.display_transform": 0.00023536720059585573,
+          "render.motion_vectors": 6.772868534088135e-6,
           "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.373132837011097,
-          "render.scene_overlays": 0.05160232505663682,
+          "render.scene_classify_and_raster": 0.36178010668288424,
+          "render.scene_overlays": 0.05259589284774399,
           "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.40266508102417e-6,
-          "render.ui": 4.528604404449463e-6
+          "render.temporal_resolve": 1.3625889358520509e-6,
+          "render.ui": 6.772868534088135e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.0022503,
-        "world.streaming": 0.00003176
+        "frame.cpu": 0.002113425,
+        "world.streaming": 0.000034524
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4393,7 +4393,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4401,27 +4401,27 @@
     },
     {
       "frame_index": 45,
-      "wall_timestamp_s": 62.025913223,
+      "wall_timestamp_s": 61.659439169,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.463605383,
-      "frame_cpu_s": 0.037812363,
+      "frame_wall_s": 0.45303944,
+      "frame_cpu_s": 0.036794037,
       "gpu": {
         "available": true,
-        "frame_s": 0.4253555407949982,
+        "frame_s": 0.41598686018582154,
         "scopes": {
-          "render.display_transform": 0.00021741308755874635,
-          "render.motion_vectors": 5.931269485473633e-6,
-          "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.3736205236216965,
-          "render.scene_overlays": 0.051492275961994176,
-          "render.surface_and_shadows": 6.372107082366944e-6,
+          "render.display_transform": 0.00024658852124404907,
+          "render.motion_vectors": 8.656447357177735e-6,
+          "render.rt_as_build": 1.3625889358520509e-6,
+          "render.scene_classify_and_raster": 0.36309059663001253,
+          "render.scene_overlays": 0.05263043848488236,
+          "render.surface_and_shadows": 1.3225127906799318e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.290051162719727e-6
+          "render.ui": 6.5324116630554205e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.037812363,
-        "world.streaming": 0.034468939
+        "frame.cpu": 0.036794037,
+        "world.streaming": 0.034665153
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4486,7 +4486,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4494,27 +4494,27 @@
     },
     {
       "frame_index": 46,
-      "wall_timestamp_s": 62.453812053,
+      "wall_timestamp_s": 62.077558612,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.427730207,
-      "frame_cpu_s": 0.002718982,
+      "frame_wall_s": 0.418032391,
+      "frame_cpu_s": 0.002268684,
       "gpu": {
         "available": true,
-        "frame_s": 0.42461801949539574,
+        "frame_s": 0.4149298518569069,
         "scopes": {
-          "render.display_transform": 0.00025219918156814576,
-          "render.motion_vectors": 7.01332540512085e-6,
-          "render.rt_as_build": 6.332030937194825e-6,
-          "render.scene_classify_and_raster": 0.3725673225265732,
-          "render.scene_overlays": 0.051771766998424534,
+          "render.display_transform": 0.00021725278297805788,
+          "render.motion_vectors": 7.053401550292969e-6,
+          "render.rt_as_build": 6.372107082366944e-6,
+          "render.scene_classify_and_raster": 0.3620085407103653,
+          "render.scene_overlays": 0.05267696688942719,
           "render.surface_and_shadows": 6.372107082366944e-6,
           "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 5.650736469268799e-6
+          "render.ui": 5.931269485473633e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.002718982,
-        "world.streaming": 0.000055504
+        "frame.cpu": 0.002268684,
+        "world.streaming": 0.000029064
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4579,7 +4579,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null
@@ -4587,27 +4587,27 @@
     },
     {
       "frame_index": 47,
-      "wall_timestamp_s": 62.915090905,
+      "wall_timestamp_s": 62.527601082,
       "sim_time_s": 0.0,
-      "frame_wall_s": 0.461186058,
-      "frame_cpu_s": 0.03588272,
+      "frame_wall_s": 0.449960647,
+      "frame_cpu_s": 0.034825211,
       "gpu": {
         "available": true,
-        "frame_s": 0.42456604073510745,
+        "frame_s": 0.41479864255761345,
         "scopes": {
-          "render.display_transform": 0.00022639014407730104,
-          "render.motion_vectors": 7.133553840637208e-6,
+          "render.display_transform": 0.00022895501736831667,
+          "render.motion_vectors": 5.61066032409668e-6,
           "render.rt_as_build": 6.372107082366944e-6,
-          "render.scene_classify_and_raster": 0.3724431265526848,
-          "render.scene_overlays": 0.05187067492470932,
-          "render.surface_and_shadows": 6.372107082366944e-6,
-          "render.temporal_resolve": 1.3625889358520509e-6,
-          "render.ui": 4.608756694793702e-6
+          "render.scene_classify_and_raster": 0.3620449699263268,
+          "render.scene_overlays": 0.05249894865257264,
+          "render.surface_and_shadows": 6.412183227539063e-6,
+          "render.temporal_resolve": 1.3225127906799318e-6,
+          "render.ui": 6.051497920989991e-6
         }
       },
       "cpu_scopes": {
-        "frame.cpu": 0.03588272,
-        "world.streaming": 0.033884149
+        "frame.cpu": 0.034825211,
+        "world.streaming": 0.032903493
       },
       "sim": {
         "fixed_dt_s": 0.008333333333333333,
@@ -4672,7 +4672,7 @@
         "rt_instances": 0
       },
       "memory": {
-        "rss_bytes": 312881152,
+        "rss_bytes": 311918592,
         "asset_cache_bytes": null,
         "terrain_cache_bytes": null,
         "gpu_mem_bytes": null

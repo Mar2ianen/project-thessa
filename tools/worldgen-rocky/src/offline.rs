@@ -1285,7 +1285,7 @@ fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
         if order == 10 {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
-                albedo_srgb: [0.34, 0.25, 0.13],
+                albedo_srgb: [0.22, 0.15, 0.08],
                 diffuse_transmission: 0.05,
             });
         }

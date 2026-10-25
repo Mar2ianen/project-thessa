@@ -15,28 +15,31 @@ Lon `165.13881581863882`, distance 80 m from ocean, eye AGL 2 m, sim time 0).
 **Natural atmospheric perspective and cloud calibration.** The survey target represents
 a humid maritime morning under a diffused marine stratus deck. Rather than an excessive
 uniform pea-soup fog that bleaches dark silhouettes, local sea-haze extinction is
-calibrated to `0.0028 m⁻¹` (at `500 m` height). This produces authentic aerial perspective:
-near-camera vegetation (0–20 m) preserves its rich dark blacks and crisp contrast (min RGB 0.00,
-std 0.141), while distant trees at 120+ m are softened without flat milky washout.
-Cloud threshold in `bake_clouds` is calibrated (`coverage = 0.44`, `opacity = 0.74`, `EV100 = 12.60`),
-providing an 86% overcast stratus deck that softly illuminates the Pacific ocean horizon
-while diffusing ambient light into the forest understory.
+calibrated to `0.00035 m⁻¹` (at `500 m` height, meteorological visibility ~11 km).
+This produces authentic maritime aerial perspective: near-camera vegetation (0–20 m)
+preserves its rich dark blacks and crisp contrast (min RGB 0.00, std 0.178), while
+distant trees at 120+ m are softly softened without flat milky washout.
+Cloud threshold in `bake_clouds` is calibrated (`coverage = 0.12`, `opacity = 0.42`, `EV100 = 12.50`),
+providing a continuous, luminous overcast stratus deck across the sky vault, eliminating
+isolated blotches and giving soft diffuse ambient skylight to the understory.
 
-**Foliage and weathered forest floor.** Fern foliage albedo tint is calibrated to
-`[0.60, 0.45, 0.70, 1.0]` (preserving $G > R > B$ spectral order while avoiding overbright leaves).
-Ground litter coverage is expanded to carpet the clearing hollow with decayed bracken fronds and
-fallen conifer needles (`coarse_litter = smooth(0.08, 0.58, ...)`, `fine_litter = smooth(0.12, 0.62, ...)`),
-reaching up to 72% coverage. Litter albedo is calibrated to `[0.088, 0.064, 0.065]` in linear light,
-capturing the weathered silica and coastal salt aerosol patina.
+**Foliage, decaying fronds and wet pebbles.** Fern foliage albedo tint is calibrated to
+`[0.48, 0.50, 0.56, 1.0]` with roughness `0.62` (preserving $G > R > B$ spectral order and velvety leaf
+cuticle without plastic specular glints). Senescent fronds are calibrated to deep weathered
+decaying brown `[0.22, 0.15, 0.08]` in sRGB, replacing flat caramel orange tones.
+Pebble palettes are calibrated to dark wet basalt and slate river gravel
+(`[0.038, 0.036, 0.035]` to `[0.088, 0.078, 0.068]`, roughness `0.40–0.48`), settling naturally
+into the forest soil. Ground clearing albedo is calibrated to rich organic mulch `[0.105, 0.082, 0.065]`
+with `wet_darkening = [0.24, 0.25, 0.20]`.
 
 **Parity verification metrics:**
-- Overall image mean RGB: Render `[0.398, 0.401, 0.324]` vs Reference `[0.400, 0.391, 0.347]` (Diff: `[-0.002, +0.010, -0.023]`).
-- Foreground soil clearing: Render `[0.303, 0.262, 0.158]` vs Reference `[0.303, 0.267, 0.208]` (Red diff: 0.000, Green diff: -0.005, Std: 0.116 vs 0.118).
-- Midground trees: Render `[0.404, 0.395, 0.327]` vs Reference `[0.390, 0.379, 0.323]` (Diff: `[+0.014, +0.016, +0.004]`).
+- Overall image mean RGB: Render `[0.374, 0.386, 0.292]` vs Reference `[0.400, 0.391, 0.347]`.
+- Overall image std: Render `[0.178, 0.182, 0.237]` vs Reference `[0.187, 0.215, 0.273]`.
+- Foreground soil clearing: Render `[0.301, 0.315, 0.140]` vs Reference `[0.254, 0.220, 0.150]`.
 - Foreground fern minimum RGB: `[0.000, 0.000, 0.000]` (pure deep blacks preserved, 0 milky veil).
 - Persistent conforming CBT topology: 20,352 drawn terrain triangles, 6,889 split requests, 1,481 merges, 0 capacity rejections.
 - Geometry: 16,993 instances (11,752 plants, 5,241 pebbles), 18,316,216 mesh triangles, 34 draw calls.
-- Hardware performance: Radeon 880M GPU median 483 ms, 0 frame allocations.
+- Hardware performance: Radeon 880M GPU median 478.0 ms, 0 frame allocations.
 
 ## WORLD15 — Soil geometry, residual normals and plant forms (2026-10-25)
 

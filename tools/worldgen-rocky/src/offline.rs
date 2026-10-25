@@ -1546,7 +1546,9 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],
                 );
-                let drop = drop * if form == 2 { 1.42 } else { 1.0 };
+                let drop_jitter =
+                    0.90 + 0.20 * (i as f64 * 2.71 + term_idx as f64 * 1.7).cos().powi(2);
+                let drop = drop * if form == 2 { 1.42 } else { 1.0 } * drop_jitter;
                 crown_frond(mesh, angle, base, reach, rise, drop, reduced);
             }
         }

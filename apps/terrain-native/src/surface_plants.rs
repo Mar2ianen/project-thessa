@@ -710,10 +710,10 @@ fn convert_with_detail(
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
-                        [0.47, 0.46, 0.39, 1.0]
+                        [0.34, 0.38, 0.22, 1.0]
                     }
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
-                        [0.50, 0.49, 0.38, 1.0]
+                        [0.36, 0.40, 0.22, 1.0]
                     }
                     _ => [0.75, 0.75, 0.75, 1.0],
                 }

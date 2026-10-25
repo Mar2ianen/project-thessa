@@ -1412,7 +1412,14 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         2 => 0.58,
         _ => 0.60,
     };
-    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * trunk_scale, radius));
+    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| {
+        let r = match form {
+            2 => radius * 1.14,
+            1 => radius * 0.94,
+            _ => radius,
+        };
+        (height * trunk_scale, r)
+    });
     let trunk_axis = crate::lod::normalize(match form {
         1 => [0.02, 1.0, 0.01],
         2 => [-0.02, 1.0, 0.03],

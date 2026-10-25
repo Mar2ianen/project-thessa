@@ -129,9 +129,9 @@ pub(super) fn append(
     let start = prepared.asset.primitives.len();
     let moss_material = prepared.asset.materials.len();
     prepared.asset.materials.push(Material {
-        base_color: [0.045, 0.058, 0.028, 1.0],
+        base_color: [0.040, 0.052, 0.024, 1.0],
         metallic: 0.0,
-        roughness: 0.92,
+        roughness: 0.94,
         double_sided: true,
         ..Default::default()
     });
@@ -174,8 +174,8 @@ pub(super) fn append(
     publish(prepared, moss, anchor);
     let litter_material = prepared.asset.materials.len();
     prepared.asset.materials.push(Material {
-        base_color: [0.048, 0.031, 0.016, 1.0],
-        roughness: 0.85,
+        base_color: [0.042, 0.028, 0.015, 1.0],
+        roughness: 0.88,
         double_sided: true,
         ..Default::default()
     });

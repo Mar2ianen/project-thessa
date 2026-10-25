@@ -1605,8 +1605,12 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         if oblate_len_sq > 1e-6 {
             let ellipsoid = scaled(oblate, 1.0 / oblate_len_sq.sqrt());
             let current = n.map(f64::from);
-            let blended =
+            let mut blended =
                 crate::lod::normalize(offset(scaled(current, 0.82), scaled(ellipsoid, 0.18)));
+            if blended[1] < 0.03 {
+                blended[1] = 0.03;
+                blended = crate::lod::normalize(blended);
+            }
             *n = blended.map(|v| v as f32);
         }
     }
@@ -1704,6 +1708,8 @@ fn crown_frond(
 ) {
     let (radial, lateral) = azimuth_frame(angle);
     let is_senescent = rise_m < 0.3;
+    let is_emerging = rise_m > 2.4 && reach_m < 2.6;
+    let pinna_width_scale = if is_emerging { 0.76 } else { 1.0 };
     let tip_lift = if is_senescent {
         0.0
     } else {
@@ -1743,9 +1749,17 @@ fn crown_frond(
             let sweep = 0.26 + 0.26 * t;
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = i as f64 * 0.5;
-                let v_fold = 0.05 * length * (1.0 - s) * s;
+                let v_fold = if is_emerging {
+                    0.08 * length * (1.0 - s) * s
+                } else {
+                    0.05 * length * (1.0 - s) * s
+                };
                 let sag = 0.16 * length * s * s;
-                let torsion = side * 0.025 * length * s * (t - 0.25).max(0.0);
+                let torsion = if is_emerging {
+                    0.0
+                } else {
+                    side * 0.025 * length * s * (t - 0.25).max(0.0)
+                };
                 offset(
                     at(t),
                     offset(
@@ -1758,7 +1772,19 @@ fn crown_frond(
                 )
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna(mesh, nodes, tangent, length * 0.22, length * 0.038, reduced);
+            let fold_h = if is_emerging {
+                length * 0.020
+            } else {
+                length * 0.038
+            };
+            pinna(
+                mesh,
+                nodes,
+                tangent,
+                length * 0.22 * pinna_width_scale,
+                fold_h,
+                reduced,
+            );
         }
     }
 }

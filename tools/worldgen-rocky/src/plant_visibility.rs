@@ -41,9 +41,10 @@ pub(crate) fn bake(mesh: &PlantMesh, samples: usize) -> Vec<f32> {
                         let direction = tangent * (u.sqrt() * angle.cos())
                             + bitangent * (u.sqrt() * angle.sin())
                             + normal * (1.0 - u).sqrt();
-                        shape
-                            .cast_local_ray(&Ray::new(origin, direction), f64::MAX, false)
-                            .is_none()
+                        direction.y > 0.0
+                            && shape
+                                .cast_local_ray(&Ray::new(origin, direction), f64::MAX, false)
+                                .is_none()
                     })
                     .count();
                 visible as f32 / samples as f32

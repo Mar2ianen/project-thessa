@@ -731,7 +731,15 @@ fn convert_with_detail(
             } else if stem {
                 0.0
             } else {
-                0.18
+                match prototype.kind {
+                    thessa_worldgen_rocky::scatter::ScatterKind::FernClump => 0.22,
+                    thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
+                        1 => 0.20,
+                        2 => 0.16,
+                        _ => 0.18,
+                    },
+                    _ => 0.18,
+                }
             };
             prepared.asset.materials.push(Material {
                 base_color,
@@ -1081,7 +1089,15 @@ mod tests {
                 } else if stem {
                     0.0
                 } else {
-                    0.18
+                    match prototype.kind {
+                        thessa_worldgen_rocky::scatter::ScatterKind::FernClump => 0.22,
+                        thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
+                            1 => 0.20,
+                            2 => 0.16,
+                            _ => 0.18,
+                        },
+                        _ => 0.18,
+                    }
                 };
                 assert_eq!(material.diffuse_transmission, expected_transmission);
                 assert_eq!(material.metallic, 0.0);

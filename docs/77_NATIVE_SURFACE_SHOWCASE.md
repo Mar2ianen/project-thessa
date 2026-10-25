@@ -2483,3 +2483,39 @@ Addressing botanical fidelity critiques on mechanical starburst crowns, flat bil
      Overall $L_1 = 49.04$ (Canopy Row 0 $L_1 = 54.71$, Floor Row 3 $L_1 = 41.20$, Horizon Sky $L_1 = 53.54$).
    - All 20 offline botanical tests, 19 terrain-native surface tests, and 12 foundational crate architecture checks passed.
 
+10. **25-Iteration Autonomous RT Refinement (World 55 RT through World 79 RT):**
+    - **Block 1: Caudex & Epiphytic Growth (Worlds 55–59 RT):**
+      - Calibrated dark fibrous tree caudex bark reflectance (`[0.24, 0.21, 0.16]`).
+      - Basal buttress root flares and organic soil anchorage with continuous ground plane meeting ($y = -0.14\text{ m}$).
+      - Polymorphic caudex trunk girth and taper profile ($1.14\times$ for veteran Form 2).
+      - Basal trunk ambient occlusion gradient from surrounding understory ferns and soil.
+      - Polymorphic branch fork structural thickening.
+    - **Block 2: Tree Crown Micro-Fidelity (Worlds 60–64 RT):**
+      - Apical crozier fiddlehead cluster vernation in the central crown.
+      - Pinna edge crenation and organic blade undulation (`0.035 * half_width * sin(4*pi*t)`).
+      - Stipe base thickness and power-law rachis taper (`0.024 * (1.0 - 0.85*t)^1.35`).
+      - Branch fork crown crotch attenuation and self-pruning (`0.94 + 0.06 * outward_dot`).
+      - Crown silhouette edge cuticular forward-scattering and transmission calibration per botanical form.
+    - **Block 3: Understory Fern Rosettes & Ground Flora (Worlds 65–69 RT):**
+      - Understory fern clump multi-tier rosette with central vertical fiddleheads and spreading mature fronds.
+      - Ground-contact senescent fern fronds draping directly onto the local soil datum.
+      - Polymorphic understory rosette chloroplast calibration per form ($G > R > B$ strictly preserved).
+      - Reed clump blade droop and maritime coastal wind deflection.
+      - Understory spatial clumping and canopy clearing glades modulation (`canopy_density_prior = (1.0 - canopy_cover * 0.48).max(0.20)`).
+    - **Block 4: Forest Floor, Detritus & Coastal Soil Wetting (Worlds 70–74 RT):**
+      - Basalt river shingle and pebble reflectance calibration towards earthen dark matte gravel tones (`roughness 0.75..0.85`).
+      - Forest floor humus and decaying leaf litter detritus reflectance calibration (`[0.042, 0.028, 0.015]`, roughness 0.88).
+      - Wet soil specular response and puddle rim darkening (`roughness 0.065`, `dielectric_f0` exact water interface).
+      - Coastal soil scan transition and scale-aware near-ground filtering ($0.048\text{ m}$ tree buttress footprint).
+      - Deep root cavity contact ambient occlusion in basal crevices (`clamp(0.10, 1.0)`).
+    - **Block 5: Atmospheric Coastal Haze, Overcast Sky & Photometric Convergence (Worlds 75–79 RT):**
+      - Maritime overcast sky chromaticity calibration and stratus cloud deck (`density_scale = 1.42`, `coverage = 0.38`, `opacity = 0.60`).
+      - Sea-level coastal fog and marine spray aerosol calibration (`local_haze_extinction_per_m = 0.00255`, `height_m = 520.0`).
+      - Distant ridge atmospheric depth cueing and quadrature precision (`ray_steps = 32`).
+      - Radiometric EV12.22 exposure calibration and shadow deepening.
+      - **Photometric Convergence (World 79 RT):**
+        - Headless survey capture (`standing_world79_rt.png`, 1280x720, Hardware Ray Tracing active with 21,944 TLAS instances, 64 terrain BLAS instances):
+          Overall $L_1 = 48.85$ (Canopy Row 0 $L_1 = 53.81$, Floor Row 3 $L_1 = 40.41$, Midground $L_1 = 42.39$, Dark Shadows $L_1 = 50.21$).
+        - 100% session stability: 25 consecutive iterations executed autonomously without session drops or desktop instability.
+        - All 265 worldgen-rocky tests, 21 terrain-native tests, and 12 foundational crate architecture checks passed.
+

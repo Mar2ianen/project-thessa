@@ -706,7 +706,7 @@ fn convert_with_detail(
                 });
                 [r, g, b, 1.0]
             } else if stem {
-                [0.85, 0.80, 0.72, 1.0]
+                [0.55, 0.52, 0.44, 1.0]
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {

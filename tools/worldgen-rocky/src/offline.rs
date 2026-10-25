@@ -1461,7 +1461,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     mesh.stem = Some(PlantStem {
         vertex_count: mesh.positions.len() as u32,
         // Authored weathered stem reflectance, not a measured fossil spectrum.
-        albedo_srgb: [0.29, 0.25, 0.17],
+        albedo_srgb: [0.26, 0.24, 0.18],
     });
 
     // The two crowns share the same 48-frond budget as the single umbrella.

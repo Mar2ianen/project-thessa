@@ -1409,7 +1409,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     );
     let terminals: &[[f64; 3]] = match form {
         1 => &[[-0.85, 8.85, 0.15], [0.85, 8.55, -0.15]],
-        2 => &[[-1.45, 7.15, 0.45], [1.95, 7.85, -0.55]],
+        2 => &[[-1.65, 7.25, 0.50], [2.15, 7.95, -0.60]],
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
     let base_y = match form {
@@ -1466,13 +1466,17 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
 
     // The two crowns share the same 48-frond budget as the single umbrella.
     // Count, attachment height, reach, arch rise, terminal drop, azimuth.
-    const TIERS: [(usize, f64, f64, f64, f64, f64); 4] = [
-        (6, 8.15, 3.45, 2.30, 0.30, 0.00), // Ascending young fronds
-        (9, 7.85, 4.68, 1.95, 1.05, 0.35), // Spreading mature fronds
-        (6, 7.55, 4.20, 1.10, 1.75, 0.72), // Descending outer fronds
-        (3, 7.20, 2.05, 0.15, 2.55, 1.15), // Hanging dry mantle
+    let (spread_reach, outer_reach) = match form {
+        2 => (5.10, 4.45),
+        _ => (4.68, 4.20),
+    };
+    let tiers: [(usize, f64, f64, f64, f64, f64); 4] = [
+        (6, 8.15, 3.45, 2.30, 0.30, 0.00),         // Ascending young fronds
+        (9, 7.85, spread_reach, 1.95, 1.05, 0.35), // Spreading mature fronds
+        (6, 7.55, outer_reach, 1.10, 1.75, 0.72),  // Descending outer fronds
+        (3, 7.20, 2.05, 0.15, 2.55, 1.15),         // Hanging dry mantle
     ];
-    for &(count, base_y, reach_base, rise, drop, phase_offset) in &TIERS {
+    for &(count, base_y, reach_base, rise, drop, phase_offset) in &tiers {
         if base_y == 7.20 {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
@@ -1488,9 +1492,9 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     1 => 0.94,
                     2 => {
                         if terminal[0] < 0.0 {
-                            0.82
+                            0.88
                         } else {
-                            1.15
+                            1.25
                         }
                     }
                     _ => {

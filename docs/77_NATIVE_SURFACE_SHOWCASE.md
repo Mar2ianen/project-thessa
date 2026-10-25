@@ -6,6 +6,82 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD41 — Resolved soil scans and geometric floor litter (2026-10-25)
+
+This continuation starts from `4bd9744`. It retains the coastal camera/profile,
+CBT policy, canonical heights/scatter identities, exposure, 4× MSAA, TAA off and
+WORLD40's RT corrections. This is a floor-detail iteration, not reference parity.
+
+**Source filtering.** Soil scan prefiltering now uses one destination texel's
+physical width: `log2(max(1, texel_m * 512 / source_width_m))`. Previously the
+producer doubled that footprint before the resident texture's existing GPU
+derivative/mip filtering. At native scan spacing this unnecessarily selected
+mip 1 instead of mip 0. Both scan means remain the coarse fallback; source
+triplanar addressing, stochastic rotations, linear-light mips, source-height
+bounds and residency budgets remain. The native-spacing regression compares the
+world projection against the original filtered asset at mip zero; existing
+source mean, seam, normal-composition and bounded-relief checks also apply.
+The litter pigment now retains the same bounded source contrast as moss instead
+of mixing the underlying scan toward a constant swatch. No illumination is baked
+into either pigment. See [PBRT's image texture filtering](https://www.pbr-book.org/4ed/Textures_and_Materials/Image_Texture)
+for the footprint/mipmap foundation; Thessa's chart and residency implementation
+is independent. Removing the extra prefilter is not an alias-free motion claim.
+
+**Near-floor representation.** Existing moss clumps retain their 8 shoots and
+128/384 Medium/High limits. Each shoot is now a folded 5-vertex, 4-triangle leaf
+with area-weighted geometric vertex normals, replacing the flat 2-triangle
+blade. An additional aggregate contains at most 512/2,048 fallen leaf fragments
+at Medium/High, admitted from the existing deterministic ground sites. Their
+wetness/moss eligibility, seed, position, orientation and size are world-fixed.
+Each fragment has 5 vertices/4 triangles, spans 8–24 cm, and samples the shared
+soil at all corners and its fold. Vertex clearance is checked against that
+source (0.5–14 mm tolerance); this is not exact contact with the final adaptive
+CBT triangles or a continuous nonintersection proof. The existing cushion
+height field is retained. Fragment pigment `[0.048,0.031,0.016]`, roughness 0.85,
+folds and eligibility thresholds are authored optical scenery, not litter mass,
+decomposition, hydrology or measured botanical parameters.
+
+All local cover uses the shared preparation job, opaque/material/shadow and RT
+publication. No textures or render passes are added. There are at most three
+local aggregate ranges (moss/litter/water), raising the total to 37; the existing
+7 MB prototype payload limit remains. A rejected first implementation exceeded
+that limit with duplicated flat-shaded vertices; shared vertices fixed admission
+rather than raising the cap. A full coastal canopy/understory/ground regression
+now checks combined admission. `native_surface_ground_litter_fragments` exposes
+the admitted count. Low retains optical floor detail without local cover meshes;
+ground-detail off (or the existing zero ground-item budget) performs no local
+cover preparation. Puddles remain separately default-off and parent-gated.
+
+Checks, exact source/binary/profile hashes, actual standing frames and isolated
+floor diagnostic frames are recorded in
+[`native-forest-floor-2026-10-25.json`](artifacts/native-forest-floor-2026-10-25.json).
+The floor diagnostic disables canopy/understory in both versions to expose
+material and local-ground changes; it is not the reference composition. Static
+captures do not certify temporal stability, planetary streaming or aesthetics.
+Independent blind preference and reference acceptance remain open.
+
+All 9 scoped local gates passed, with 518 successful test executions across
+overlapping worldgen/stream/graphics/native and GPU material/environment suites,
+strict Clippy for the changed packages, formatting, architecture, native
+feature-off compilation and the pinned release build. The captured High scene
+admits 384 moss clumps, 1,211 leaf fragments and 24 sampled puddle patches;
+prototype payload changes 5,630,480→6,054,976 bytes within 7 MB. Mesh submission
+adds one range/instance and 11,004 triangles (including the changed sampled
+water shoreline), to 37 draws and 19,917,850 mesh triangles. Both captures retain
+64 RT terrain slots with no terrain fallback. Finer source height also changes
+adaptive primary CBT output: 18,118→25,266 triangles at the same frame count,
+with no capacity rejections. This is changed representation work, not a fixed
+triangle workload or a converged-topology guarantee.
+
+On Radeon 880M/Vulkan/RADV Mesa 26.2.5, 16 measured standing frames after 30
+warmup give GPU medians 1,178.129→1,136.280 ms; the isolated floor gives
+196.407→199.145 ms. GPU jobs are serial, but baseline standing overlaps CPU
+compilation; no isolated speedup, controlled CPU/wall timing or acceptable
+interactive rate is claimed. CBT/AS update work remains in measured frames.
+The standing pair has differing coarse material-level histograms and is invalid
+for isolated floor preference. The floor diagnostic's level histograms match,
+but resident page identities were not compared; both pairs remain unvoted.
+
 ## WORLD40 — Review of Gemini WORLD24–39 and RT admission (2026-10-25)
 
 This audit starts from `4cabc10`, including Gemini's import of the prior

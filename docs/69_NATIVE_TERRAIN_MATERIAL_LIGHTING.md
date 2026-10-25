@@ -15,6 +15,14 @@ isotropic/unfiltered fallback. See doc 77 for memory costs, source-height priors
 independent CPU/GPU oracles and known optical reconstruction limits.
 Earlier dated implementation sections describe the representation at that time.
 
+WORLD41 removes an extra factor of two from the soil scans' physical source
+prefilter footprint; native scan spacing retains mip zero before the existing
+resident-page derivative filtering. Both scans keep linear-light mip averages,
+world addressing, coarse means, normal composition and unchanged height bounds.
+Litter pigment retains bounded scan contrast. This changes optical/soil detail,
+not canonical collision heights or the CBT algorithm; motion/alias acceptance
+remains open. Exact settings, checks and captures are in doc 77 WORLD41.
+
 WORLD23 extends the same soil field with spatial wetness and bounded moss
 cushion height, shared by render displacement and optical normals. Native puddle
 meshes use the shared material's validated `dielectric_f0` (0.04 default, about

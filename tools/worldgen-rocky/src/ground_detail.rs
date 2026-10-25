@@ -217,7 +217,7 @@ pub(crate) fn sample(dir: [f64; 3], radius_m: f64, seed: u64, texel_m: f64) -> G
             * crate::appearance::smooth(-0.25, 0.30, field)
             * crate::appearance::band_weight(8.0, texel_m)
         + 0.375 * (1.0 - crate::appearance::band_weight(8.0, texel_m))) as f32;
-    let a = if texel_m * 2.0 >= SWATCH_WIDTH_M {
+    let a = if texel_m >= SWATCH_WIDTH_M {
         swatch_mean()
     } else {
         sample_texture(
@@ -229,7 +229,7 @@ pub(crate) fn sample(dir: [f64; 3], radius_m: f64, seed: u64, texel_m: f64) -> G
             SWATCH_WIDTH_M,
         )
     };
-    let b = if texel_m * 2.0 >= LITTER_WIDTH_M {
+    let b = if texel_m >= LITTER_WIDTH_M {
         LITTER_MEAN
     } else {
         sample_texture(
@@ -265,7 +265,9 @@ fn sample_texture(
     });
     let weights = dir.map(|v| v.abs().powi(8));
     let sum: f64 = weights.iter().sum();
-    let lod = (2.0 * texel_m * SIDE as f64 / width_m).max(1.0).log2();
+    // A mip texel integrates one footprint width. Doubling it here adds a
+    // blur before the resident page receives its own derivative filtering.
+    let lod = (texel_m * SIDE as f64 / width_m).max(1.0).log2();
     let projections = [[p[2], p[1]], [p[0], p[2]], [p[0], p[1]]];
     let mut value = [0.0; 5];
     for (projection, (uv, weight)) in projections.into_iter().zip(weights).enumerate() {
@@ -396,7 +398,7 @@ pub(crate) fn forest_floor(
         .clamp(0.5, 1.5);
         let moss_albedo = [0.045, 0.058, 0.028][i] * texture_detail;
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
-        let litter_albedo = [0.062, 0.049, 0.035][i];
+        let litter_albedo = [0.062, 0.049, 0.035][i] * texture_detail;
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);
@@ -413,6 +415,32 @@ pub(crate) fn forest_floor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_scan_footprint_does_not_add_an_extra_mip_of_blur() {
+        let texture = Texture::decode();
+        let seed = 42;
+        let r = 3_200_000.0;
+        let uv = [
+            crate::rng::hash01(seed, 1743, 0, 0),
+            crate::rng::hash01(seed, 1742, 0, 0),
+        ];
+        let expected = texture.sample_stochastic(uv, 0.0, seed, 0);
+        let actual = sample_texture(
+            &texture,
+            [1.0, 0.0, 0.0],
+            r,
+            seed,
+            SWATCH_WIDTH_M / SIDE as f64,
+            SWATCH_WIDTH_M,
+        );
+        for (a, e) in actual.albedo_linear.into_iter().zip(expected) {
+            assert!(
+                (a - e).abs() < 1e-7,
+                "native scan footprint must retain mip zero"
+            );
+        }
+    }
 
     #[test]
     fn cover_retains_hollow_wetness_and_bounded_resolved_cushions() {

@@ -139,6 +139,9 @@ The checked-in vertical slice currently contains:
   decisions to FastRT, preserves filtered secondary-hit texture mips and fixes
   floating forks, horizon-dependent AO, distance-dependent shadow leaks and
   premature shared-TLAS exhaustion. Ground bounce and stochastic GI remain open.
+  WORLD41 removes redundant soil-scan prefilter blur, retains scan contrast
+  through litter pigment and adds bounded folded moss/ground-leaf geometry in
+  the shared mesh/shadow path, within the existing 7 MB prototype limit.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

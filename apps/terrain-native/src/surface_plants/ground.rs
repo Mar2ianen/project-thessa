@@ -189,6 +189,7 @@ mod tests {
             prepared.instances.len(),
             stats.ground_pebbles
                 + usize::from(stats.ground_moss_clumps > 0)
+                + usize::from(stats.ground_litter_fragments > 0)
                 + usize::from(stats.ground_puddles > 0)
         );
         assert!(prepared.asset.images.is_empty());

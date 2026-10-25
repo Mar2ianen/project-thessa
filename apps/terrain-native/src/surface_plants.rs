@@ -107,6 +107,7 @@ pub struct Diagnostics {
     pub ground_window: Option<TileKey>,
     pub ground_pebbles: usize,
     pub ground_moss_clumps: usize,
+    pub ground_litter_fragments: usize,
     pub ground_puddles: usize,
     pub ground_water_samples: usize,
     pub ground_water_basins: usize,
@@ -131,6 +132,7 @@ impl Diagnostics {
         [
             ("native_surface_ground_water_basins", self.ground_water_basins.to_string()),
             ("native_surface_ground_moss_clumps", self.ground_moss_clumps.to_string()),
+            ("native_surface_ground_litter_fragments", self.ground_litter_fragments.to_string()),
             ("native_surface_ground_puddles", self.ground_puddles.to_string()),
             ("native_surface_ground_water_samples", self.ground_water_samples.to_string()),
             ("native_surface_ground_water_triangles", self.ground_water_triangles.to_string()),

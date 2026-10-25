@@ -21,11 +21,15 @@ meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
 normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
-WORLD23 (doc 77) adds bounded near-eye moss shoots and optional puddle meshes
-through this adapter's existing preparation and publication. Medium/High admit
-128/384 clumps and 8/24 sampled puddle patches; Low keeps optical cover only. The puddle setting
-is default-off and parent-gated by ground detail. At most two aggregate primitive
-ranges/instances are added, raising total admission to 36 ranges / 7 MB. These
+WORLD23 (doc 77), extended by WORLD41, adds bounded near-eye moss shoots, fallen
+leaf fragments and optional puddle meshes through this adapter's existing
+preparation and publication. Medium/High admit 128/384 moss clumps, 512/2,048
+leaf fragments and 8/24 sampled puddle patches; Low keeps optical cover only.
+Moss shoots and fallen leaves use folded 5-vertex/4-triangle geometry with
+area-weighted normals. Fragment corners sample the shared optical soil source;
+dimensions/pigments are authored scenery, not simulated litter mass. The puddle
+setting is default-off and parent-gated by ground detail. At most three aggregate
+primitive ranges/instances are added, raising total admission to 37 ranges / 7 MB. These
 local meshes carry actual geometry in source-reuse checks and append no fake
 world scatter identities. Pool closure is sampled, not a hydrology/collision
 claim; dynamic-window rebuild costs and exact CBT contact remain open.

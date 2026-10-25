@@ -18,6 +18,58 @@ fn vertex(mesh: &mut Primitive, p: DVec3, n: DVec3, anchor: DVec3) {
         uv: [0.0; 2],
     });
 }
+fn folded_leaf(mesh: &mut Primitive, points: [DVec3; 5], anchor: DVec3) {
+    let faces = [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]];
+    let mut normals = [DVec3::ZERO; 5];
+    for face in faces {
+        let [a, b, c] = face.map(|i| points[i]);
+        let area = (b - a).cross(c - a);
+        for i in face {
+            normals[i] += area;
+        }
+    }
+    let start = mesh.vertices.len() as u32;
+    for (p, n) in points.into_iter().zip(normals) {
+        mesh.vertices.push(Vertex {
+            position: (p - anchor).as_vec3().to_array(),
+            normal: n.normalize().as_vec3().to_array(),
+            uv: [0.0; 2],
+        });
+    }
+    mesh.indices
+        .extend(faces.into_iter().flatten().map(|i| start + i as u32));
+}
+
+fn ground_position(field: &PlanetField, p: DVec3) -> DVec3 {
+    let dir = p.normalize();
+    let height = field.height_m(dir.to_array(), 32.0).max(0.0)
+        + lod::ground_relief_height_m(field, dir.to_array(), 0.012);
+    dir * (field.params.radius_m + height)
+}
+
+// Authored fallen pinnae, not simulated litter mass or decomposition. Each
+// corner follows the same soil source as pebbles, cushions and sampled pools.
+fn fallen_leaf(
+    mesh: &mut Primitive,
+    field: &PlanetField,
+    center: DVec3,
+    along: DVec3,
+    length: f64,
+    width: f64,
+    anchor: DVec3,
+) {
+    let up = center.normalize();
+    let across = up.cross(along).normalize();
+    let at = |x: f64, y: f64, lift: f64| {
+        ground_position(field, center + along * x + across * y) + up * lift
+    };
+    let root = at(-length * 0.5, 0.0, 0.001);
+    let tip = at(length * 0.5, 0.0, 0.002);
+    let left = at(0.0, -width, 0.001);
+    let right = at(length * 0.1, width, 0.001);
+    let ridge = at(0.0, 0.0, width * 0.35 + 0.002);
+    folded_leaf(mesh, [root, left, tip, right, ridge], anchor);
+}
 fn publish(prepared: &mut Prepared, mut mesh: Primitive, anchor: DVec3) {
     if mesh.indices.is_empty() {
         return;
@@ -107,22 +159,50 @@ pub(super) fn append(
                 + lod::ground_relief_height_m(field, dir.to_array(), 0.012);
             let base = dir * (field.params.radius_m + height - 0.002);
             let length = 0.018 + hash(7080 + shoot) * 0.035;
-            let half = radial * 0.007;
-            let tip = base + up * length + radial * 0.008;
-            for p in [
-                base - half,
-                tip - half * 0.15,
-                base + half,
-                base + half,
-                tip - half * 0.15,
-                tip + half * 0.15,
-            ] {
-                vertex(&mut moss, p, up.cross(radial).normalize(), anchor);
-            }
+            let half = up.cross(radial) * 0.007;
+            let shoulder = base + up * (length * 0.55) + radial * 0.009;
+            let ridge = shoulder - radial * 0.004;
+            let tip = base + up * length + radial * 0.018;
+            folded_leaf(
+                &mut moss,
+                [base, shoulder - half, tip, shoulder + half, ridge],
+                anchor,
+            );
         }
         stats.ground_moss_clumps += 1;
     }
     publish(prepared, moss, anchor);
+    let litter_material = prepared.asset.materials.len();
+    prepared.asset.materials.push(Material {
+        base_color: [0.048, 0.031, 0.016, 1.0],
+        roughness: 0.85,
+        double_sided: true,
+        ..Default::default()
+    });
+    let mut litter = blank(litter_material);
+    for d in sites.iter().take(if high { 2048 } else { 512 }) {
+        let cover = lod::ground_cover_at(field, d.direction, 0.012);
+        if cover.wetness < 0.25 || cover.moss > 0.6 {
+            continue;
+        }
+        let hash = |c| rng::hash01(field.params.seed, c, d.id.0 as i64, 0);
+        let up = DVec3::from(d.direction);
+        let (east, north, _) = enu_basis(d.direction);
+        let angle = hash(7310) * std::f64::consts::TAU;
+        let along = DVec3::from(east) * angle.cos() + DVec3::from(north) * angle.sin();
+        let center = up * field.params.radius_m + along * (0.12 + hash(7311) * 0.25);
+        fallen_leaf(
+            &mut litter,
+            field,
+            center,
+            along,
+            0.08 + hash(7312) * 0.16,
+            0.012 + hash(7313) * 0.018,
+            anchor,
+        );
+        stats.ground_litter_fragments += 1;
+    }
+    publish(prepared, litter, anchor);
     if settings.terrain_ground_puddles {
         let material = prepared.asset.materials.len();
         let f0 = ((1.333_f32 - 1.0) / (1.333 + 1.0)).powi(2);
@@ -211,6 +291,41 @@ pub(super) fn append(
 mod tests {
     use super::*;
     #[test]
+    fn coastal_cover_fits_shared_budget_with_full_canopy_and_understory() {
+        let request = thessa_graphics::RequestedGraphics::from_toml(include_str!(
+            "../../../../data/graphics/surface-showcase.toml"
+        ))
+        .unwrap();
+        let settings = ResolvedGraphicsSettings::from_requested(
+            &request,
+            &thessa_graphics::Capabilities::unknown(),
+        );
+        let field = thessa_flight_authority::launch_site::canonical_world_field().unwrap();
+        let dir = DVec3::new(-2835051.776623983, 1279289.634545036, -752292.6983244818)
+            .normalize()
+            .to_array();
+        let context = Context::SurveyWithUnderstory {
+            canopy: survey_window(dir.into()),
+            understory: understory_window(dir.into()),
+        };
+        let (prepared, stats) = prepare(context, &settings, &field).unwrap();
+        let prepared = prepared.unwrap();
+        assert!(stats.retained > 1000 && stats.understory_accepted > 1000);
+        assert!(
+            stats.ground_litter_fragments > 0
+                && stats.ground_moss_clumps > 0
+                && stats.ground_puddles > 0
+        );
+        assert!(stats.prototype_bytes < 7_000_000 && prepared.asset.primitives.len() <= 37);
+        prepared.asset.validate().unwrap();
+        eprintln!(
+            "full_coastal_cover payload={} ranges={} litter={}",
+            stats.prototype_bytes,
+            prepared.ranges.len(),
+            stats.ground_litter_fragments
+        );
+    }
+    #[test]
     fn equal_counts_cannot_reuse_different_local_cover_geometry() {
         let make = |height: f64| {
             let rock = ScatterItem {
@@ -264,9 +379,25 @@ mod tests {
             prepared.asset.primitives.len()
         );
         assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 384);
+        assert!(stats.ground_litter_fragments > 0 && stats.ground_litter_fragments <= 2048);
         assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 24);
         assert!(stats.ground_water_samples <= 256 * 17 * 17);
-        assert!(stats.prototype_bytes < 7_000_000 && prepared.asset.primitives.len() <= 36);
+        assert!(stats.prototype_bytes < 7_000_000 && prepared.asset.primitives.len() <= 37);
+        let local = &prepared.asset.primitives[prepared.local_ground_start.unwrap()..];
+        let litter = &local[1];
+        assert_eq!(litter.indices.len(), stats.ground_litter_fragments * 12);
+        let litter_anchor = prepared.instances
+            [prepared.ranges[prepared.local_ground_start.unwrap() + 1].start as usize]
+            .position_m;
+        for v in &litter.vertices {
+            let p = litter_anchor + DVec3::from(v.position.map(f64::from));
+            let clearance = p.length() - ground_position(&field, p).length();
+            assert!(
+                (0.0005..=0.014).contains(&clearance),
+                "litter clearance {clearance}"
+            );
+            assert!(DVec3::from(v.normal.map(f64::from)).dot(p.normalize()) > 0.0);
+        }
         let mut visible = 0;
         for (primitive, range) in prepared.asset.primitives.iter().zip(&prepared.ranges) {
             if prepared.asset.materials[primitive.material].dielectric_f0 >= 0.03 {
@@ -315,6 +446,15 @@ mod tests {
         );
         assert!(!prepared.same_prototypes(&dry.unwrap()));
         request.renderer.terrain_ground_puddles = true;
+        request.renderer.surface_quality = thessa_graphics::Quality::Medium;
+        let medium = ResolvedGraphicsSettings::from_requested(
+            &request,
+            &thessa_graphics::Capabilities::unknown(),
+        );
+        let (_, stats) = prepare(context, &medium, &field).unwrap();
+        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 128);
+        assert!(stats.ground_litter_fragments > 0 && stats.ground_litter_fragments <= 512);
+        assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 8);
         request.renderer.surface_quality = thessa_graphics::Quality::Low;
         let low = ResolvedGraphicsSettings::from_requested(
             &request,
@@ -325,10 +465,11 @@ mod tests {
         assert_eq!(
             (
                 stats.ground_moss_clumps,
+                stats.ground_litter_fragments,
                 stats.ground_puddles,
                 stats.ground_water_samples
             ),
-            (0, 0, 0)
+            (0, 0, 0, 0)
         );
         request.renderer.terrain_ground_detail = false;
         let off = ResolvedGraphicsSettings::from_requested(
@@ -340,10 +481,11 @@ mod tests {
         assert_eq!(
             (
                 stats.ground_moss_clumps,
+                stats.ground_litter_fragments,
                 stats.ground_puddles,
                 stats.ground_water_samples
             ),
-            (0, 0, 0)
+            (0, 0, 0, 0)
         );
     }
 }

@@ -156,8 +156,8 @@ pub(crate) fn base_capture_metadata(
     meta.graphics.ray_tracing = format!("{:?}", resolved.ray_tracing);
     meta.graphics.resolved.extend(resolved.as_meta_map());
     meta.graphics.resolved.insert(
-        "native_material_relief_residual_pages".into(),
-        scene.material_relief_resident_pages.to_string(),
+        "native_material_height_field_pages".into(),
+        scene.material_height_field_pages.to_string(),
     );
     meta.graphics.resolved.insert(
         "native_diffuse_irradiance".into(),

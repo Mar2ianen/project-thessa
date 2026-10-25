@@ -82,5 +82,6 @@
     2.4,
     3.6,
     5.2
-  ]
+  ],
+  "bark_gain_input": "quantized_srgb8_after_linear_downsample"
 }

@@ -23,3 +23,9 @@ Leaf base colour is an authored archetype: the importer applies linear RGB
 albedo gains [2.6, 2.5, 1.8] and clamps to [0,1]. The provenance manifest records
 this transformation and pins all source SHA256s. It is not calibrated source
 photometry or a measured fossil-leaf spectrum. Geometry UV U follows pinna length.
+
+Bark colour also retains an authored linear RGB gain [2.4, 3.6, 5.2],
+clamped to [0,1]. To reproduce the published patch exactly, the importer first
+quantizes the linear-light 2x downsample to sRGB8, decodes that intermediate,
+and then applies the gain. The gain is an appearance prior, not measured
+lichen cover, a measured bark spectrum or a biological reconstruction.

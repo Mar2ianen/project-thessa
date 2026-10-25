@@ -4,7 +4,7 @@
 // residency hierarchy, feathering and page transform stay identical, but the
 // normal plane is sampled in the same pass instead of forcing every secondary
 // consumer (ray-traced terrain, ocean geometry) to declare unused bindings.
-// Body-space cube pages: full XY in RG, optional relief-residual XY in BA;
+// Body-space cube pages: full XY in RG, optional canonical base-height XY in BA;
 // positive Z is reconstructed in the page face tangent frame.
 @group(0) @binding(19) var material_normal_texture: texture_2d_array<f32>;
 @group(0) @binding(20) var<storage, read> material_normal_directory: array<vec4<u32>>;
@@ -16,6 +16,8 @@ const MATERIAL_NORMAL_MIP_BIAS: f32 = 0.0;
 struct RasterMaterialSample {
     value: vec4<f32>,
     normal: vec2<f32>,
+    base_normal: vec2<f32>,
+    height_coverage: f32,
     coverage: f32,
 };
 
@@ -32,13 +34,13 @@ fn material_normal_layer(id: vec2<u32>) -> vec2<u32> {
 }
 
 fn material_at_level_raster(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, requested: u32) -> RasterMaterialSample {
-    return material_at_level_raster_with_geometry(address,dx,dy,requested,0u);
+    return material_at_level_raster_with_height_field(address,dx,dy,requested,false);
 }
-fn material_at_level_raster_with_geometry(address:MaterialAddress,dx:vec2<f32>,dy:vec2<f32>,requested:u32,geometry_level:u32)->RasterMaterialSample {
+fn material_at_level_raster_with_height_field(address:MaterialAddress,dx:vec2<f32>,dy:vec2<f32>,requested:u32,reconstruct:bool)->RasterMaterialSample {
     var level = requested;
     var extent = exp2(f32(level));
     var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
-    var result = RasterMaterialSample(vec4(0.0), vec2(0.0), 0.0);
+    var result = RasterMaterialSample(vec4(0.0), vec2(0.0), vec2(0.0), 0.0, 0.0);
     var remaining = 1.0;
     loop {
         let layer = material_layer(id);
@@ -57,14 +59,18 @@ fn material_at_level_raster_with_geometry(address:MaterialAddress,dx:vec2<f32>,d
                 let channels = textureSampleGrad(material_normal_texture, material_sampler, uv,
                     i32(normal_layer.x), dx * normal_footprint, dy * normal_footprint);
                 var xy=channels.rg;
-                if(geometry_level>0u) {
-                    // Mismatched or old pages retain geometry-only normals;
-                    // adding their full soil gradient would count relief twice.
+                if(reconstruct) {
                     xy=vec2(0.0);
-                    if(level==geometry_level && (normal_layer.y & 0x80000000u)!=0u){xy=channels.ba;}
+                    if((normal_layer.y & 0x40000000u)!=0u) {
+                        xy=channels.rg;
+                        let base=channels.ba;
+                        let base_z=sqrt(max(0.0001,1.0-dot(base,base)));
+                        result.base_normal+=base/base_z*weight;
+                        result.height_coverage+=weight;
+                    }
                 }
-                // Blend height gradients, not unit-normal XY; absent pages
-                // contribute zero rather than amplifying sparse coverage.
+                // Both planes average gradients; missing height fields retain
+                // geometry instead of amplifying a tiny resident contribution.
                 let z = sqrt(max(0.0001, 1.0 - dot(xy, xy)));
                 result.normal += xy / z * weight;
               }
@@ -119,13 +125,13 @@ fn material_perturb_normal(geometric: vec3<f32>, address: MaterialAddress, tange
     return normalize(geometric + projected);
 }
 
-// Both terms are radial-height gradients in the same face chart. Adding the
-// remaining slope needs N_geo dot radial, not a second tangent-plane bump.
-fn material_compose_height_normal(geometric:vec3<f32>,address:MaterialAddress,tangent:vec2<f32>,render_from_body:mat4x4<f32>)->vec3<f32> {
-    if(dot(tangent,tangent)<=0.0){return geometric;}
+// Resolve canonical base + optical grain once. The geometry normal remains
+// authoritative for visibility; source shading is independent of height LOD.
+fn material_height_field_normal(geometric:vec3<f32>,address:MaterialAddress,gradient:vec2<f32>,coverage:f32,render_from_body:mat4x4<f32>)->vec3<f32> {
+    if(coverage<=0.0){return geometric;}
     let basis=material_face_basis(address.uv+address.offset,address.face);
     let rotation=mat3x3<f32>(render_from_body[0].xyz,render_from_body[1].xyz,render_from_body[2].xyz);
     let radial=rotation*basis[2];
-    let gradient=rotation*(basis[0]*tangent.x+basis[1]*tangent.y);
-    return normalize(geometric+gradient*max(0.0,dot(geometric,radial)));
+    let tangent=rotation*(basis[0]*gradient.x+basis[1]*gradient.y);
+    return normalize(geometric*(1.0-coverage)+(radial*coverage+tangent)*max(0.0001,dot(geometric,radial)));
 }

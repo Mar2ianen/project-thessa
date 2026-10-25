@@ -6,108 +6,140 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
-## WORLD18 — PBR Foliage Optics, Wet Soil Forward-Scattering, and Extended Botanical Geometry (2026-10-25)
+## WORLD22 — Review of Gemini's latest scene and soil normal continuity (2026-10-25)
 
-This iteration brings visual fidelity to photographic parity with `visual_quality_target_coastal_ferns.jpg`
-(Lat `23.565679258039204`, Lon `165.13881581863882`, distance 80 m from ocean, eye AGL 2 m, sim time 0)
-by implementing physical principles from state-of-the-art PBR foliage rendering and wet soil scattering research.
+This continuation starts from `d4a780f`, retaining WORLD16–21's crown geometry,
+coastal shelf, atmospheric profile, litter/moss response and spatial understory.
+The source reference is an **AI-generated concept**, as recorded in
+[reference provenance](reference/README.md). RGB averages, clamped reflectance,
+and an implementer's image inspection establish neither photographic parity nor
+independent visual acceptance. The historical calibration claims below are
+superseded by this scope statement.
 
-**Wet soil humus and forward-scattering (`ground_detail.rs`).** In nature, wet soil darkens
-via internal refraction and forward-scattering into the soil matrix (Ångström/Twomey models),
-causing light to undergo cumulative volumetric absorption before exiting.
-1. `wet_darkening` is calibrated to `[0.45, 0.46, 0.40]` (increasing wet absorption from 24% to 45%).
-2. Decomposing organic mulch `litter_albedo` is calibrated to `[0.072, 0.058, 0.042]`, yielding
-   sRGB `[76.38, 66.84, 39.14]`, matching the reference clearing floor `[69.41, 62.22, 45.05]`
-   within $< 2.5\%$ delta and eliminating the sandy cardboard appearance.
+**Canonical soil normals across levels.** WORLD15's material plane subtracted
+one particular quantized height-grid gradient. Its source-level equality guard
+then suppressed all unresolved soil normals when the material and triangle
+used different levels. Fine material residency does not imply that the CBT
+triangle vertices use the same height level. The new page instead publishes
+full optical soil normals in RG and the canonical 32 m-filtered base-height
+normal in BA, with a distinct directory-validity bit (bit 30). The base plane
+uses the material bake's existing height samples and the shared spherical metric;
+no second pair of 33² height bakes is needed. Both planes average gradients in
+mips. Source-page old/missing fields fall back to geometric normals.
 
-**Epicuticular waxy cuticle and foliage chromatic parity (`surface_plants.rs`).**
-1. Real fern fronds have an epicuticular waxy layer reflecting the overcast sky dome via dielectric Fresnel.
-   Foliage roughness is calibrated to `0.50` (soft velvety leaf sheen, eliminating harsh plastic glints).
-2. `FernClump` foliage base color is calibrated to `[0.42, 0.28, 0.48, 1.0]`, achieving exact $R/G$
-   chromatic ratio parity: Rendered $R/G = 1.132$ vs Reference $R/G = 1.133$.
-3. `LycopsidTree` canopy is calibrated to `[0.50, 0.54, 0.52, 1.0]`, matching reference midground canopy
-   `[0.475, 0.480, 0.466]` within $\Delta R = 0.010$.
-4. Energy conservation ($R + T \le 1.0$, I-05) is strictly preserved ($R+T \le 0.39$ for ferns, $\le 0.55$ for trees).
+The raster blends the canonical base and optical gradients once, independently
+of the triangle's sampled height level. For height-field coverage C, radial
+normal n, negative tangent gradient G already weighted by C, and geometric
+normal Ng, it evaluates
+`normalize((1-C)*Ng + (C*n + G)*dot(Ng,n))`; C=0 returns Ng exactly. The same
+resident, globe and water weights apply to both planes and C. This restores
+unresolved soil response without adding the mesh slope twice. It is a shading
+reconstruction; triangle visibility, shadows, canonical displacement and physics
+continue through their existing paths. Optical coverage masks are not themselves
+differentiated into fictitious biome cliffs. This is not a claim that every
+masked render displacement has an exactly reconstructed derivative.
 
-**Extended botanical geometry and maritime haze (`surface-showcase.toml`).**
-1. `detail_distance_m = 48`: Full geometric detail is extended to 48 meters, providing 1,455 additional
-   instances with unreduced leaf geometry (24,142,648 mesh triangles) and eliminating the abrupt boundary.
-2. `local_haze_extinction_per_m = 0.00040`: Subtle coastal sea-haze naturally softens the distant bay ridge
-   while preserving deep crevice blacks (`min RGB = [0.0, 0.0, 0.0]`).
+The implementation independently follows the surface-gradient composition idea
+in [Mikkelsen 2020](https://jcgt.org/published/0009/03/04/). Native ground relief
+keeps WORLD15's RGBA8_SNORM allocation; ordinary normals/Low keep RG8_SNORM and
+normals-off keeps the 1² dummy. There is no additional texture, binding, pass,
+setting or varying. The optional BA plane costs 43,690 bytes per page/layer
+(11,184,640 bytes for 256 layers), unchanged from WORLD15. Capture metadata now
+reports `native_material_height_field_pages`, replacing the residual-page name.
+An independent f64 spherical-height secant oracle checks a nonflat base field;
+an actual-atlas Lambert oracle checks L20/L22 material on L22 geometry and
+separate base/optical slopes without widening its three-code tolerance.
 
-**Verified Metrics:**
-- Whole Image Mean RGB: Render `[0.356, 0.358, 0.288]` vs Reference `[0.399, 0.390, 0.347]`.
-- Clearing floor RGB: Render `[76.38, 66.84, 39.14]` vs Reference `[69.41, 62.22, 45.05]`.
-- Fern pinnae chromatic ratio $R/G$: Render `1.132` vs Reference `1.133`.
-- Midground tree canopy Red: Render `0.465` vs Reference `0.475`.
-- Foreground shadow minimum RGB: `[0.000, 0.000, 0.000]`.
-- Performance: AMD Radeon 880M Graphics, 16,993 instances, 20,352 CBT triangles, 0 capacity rejections.
-- Quality gates: `check_architecture.py`, `cargo fmt -- --check`, `cargo clippy --workspace -- -D warnings` passed cleanly.
+**Scan resolution.** High optical soil pages now admit L24 (about 3.05 mm
+per material texel at radius 3,200 km), instead of L22 (12.21 mm). The two scans
+contain roughly 6.15 mm and 2.54 mm source texels; the old ceiling blurred much
+of their structure before shading. Only material selection/producer admission
+and the existing High resolved ceiling change. Medium/Low keep L21/L20, disabled
+keeps L17, geometric relief remains L22, and the existing 2,048 temporary leaves,
+512 admitted pages, 1,024 CPU source pages, worker limits and 256 GPU layers stay
+bounded. This improves available optical detail, not CBT geometry or physics;
+actual resident levels and streaming counters must accompany captures. A tier
+regression checks the millimetre ceiling independently of geometric relief, and
+the selector test checks coverage, maximum level and unchanged leaf budgets
+through L24. Finer material distributions differ intentionally from baseline,
+so before/after timings are not equal-workload measurements. The higher ceiling
+permits finer pages; it is not a per-pixel resolution guarantee. Under the same
+atlas budget, near-page admission may reduce mid-distance material residency.
 
-## WORLD17 — Silver lichen bark, clearing moss cushions, and lush canopy foliage (2026-10-25)
+**Resolved moss coverage.** The old moss mask thresholded the weighted signed
+noise field at 0.40–0.70, selecting only its rare upper tail. It effectively
+removed most damp moss despite the intended coastal eligibility. The threshold
+now spans the field's central range; existing footprint filtering
+removes unresolved patches. Pigment coverage retains bounded source-scan
+reflectance detail rather than replacing it with constant green paint. A small
+spatial regression checks distinct damp patches, retained scan contrast and
+unchanged source height. This remains an authored optical material layer.
 
-This iteration drives visual fidelity towards parity with the photographic target
-`visual_quality_target_coastal_ferns.jpg` (Lat `23.565679258039204`, Lon `165.13881581863882`,
-distance 80 m from ocean, eye AGL 2 m, sim time 0).
+**Bounded understory and reproducible bark.** Spatial cohorts now bias a bounded
+scale fraction rather than multiply the requested scale after interpolation.
+Every plant respects `understory_min_scale..understory_max_scale`, including a
+fixed interval. Canopy cover is an authored density prior, not a sampled shadow
+or irradiance solver; the occupancy field retains its 20% pioneer floor. Bark
+import now reproduces the authored linear gain `[2.4, 3.6, 5.2]` after the original
+quantized sRGB8 downsample stage. All six bundled PNGs reproduce byte-for-byte
+from the pinned raw maps. No bitmap or license attribution is replaced; the gain
+is an artistic material factor, not measured lichen or bark spectra.
 
-**Silver lichen tree trunks and lush green canopy.** Coastal tree trunks in the reference
-photo are weathered and covered with pale silvery-grey lichens and bryophytes ($G \approx B \ge R$,
-albedo ~0.56–0.63). Linear gain `[2.4, 3.6, 5.2]` is calibrated on `bark-base.png` (authored linear
-gain in `provenance.json`), lifting trunk tones to natural silver-grey lichen while strictly
-conserving energy (linear albedo max $\le 0.875 \le 1.0$, transmission 0.0). Lycopsid tree canopy
-foliage is calibrated to `[0.55, 0.65, 0.60, 1.0]`, restoring $G > R > B$ for fresh coastal tree crowns.
-Botanical detail distance in `surface-showcase.toml` is extended from 24 m to 36 m (`detail_distance_m = 36`),
-maintaining full leaf pinnule geometry across the midground.
+**Retained current profile.** PBR Neutral, EV100 12.50, 4× MSAA, TAA off; local
+haze extinction 0.00062/m at 600 m height, density scale 1.05; cloud coverage
+0.12/opacity 0.42; full botanical detail distance 48 m. Fern/tree tint factors
+are `[0.44, 0.48, 0.46]` / `[0.48, 0.52, 0.44]`, green-leaf roughness factor
+0.50 and diffuse transmission 0.18. These authored factors multiply the existing
+CC0 materials; they are not measured biological constants. WORLD21's fuller
+crowns and matte earth-coloured pebbles remain in the shared mesh/shadow path.
+The independent primary-ray oracle retains its two-code interior tolerance and
+1/16-pixel coverage exclusion. With this new crown geometry, its explicitly
+counted finite-bias misses are 24/0 full and 8/0 reduced for the two bias scales;
+these counts do not relax the GPU shading error envelope.
 
-**Clearing moss cushions, moist ground sheen, and temperate coastal shelf.**
-1. In `ground_detail.rs`, moss coverage in clearings is sustained by coastal humidity (`(0.45 + 0.55 * smooth(0.02, 0.20, canopy))`),
-   yielding organic green moss cushions across the open foreground. Soil litter roughness is calibrated to `0.75`
-   (clamped to `0.22`), producing a realistic moist specular response catching the silver overcast skylight.
-2. In `appearance.rs`, shallow coastal waters modulate scattering by temperature (`smooth(280.0, 298.0, sample.temperature_k)`),
-   scattering slate-blue `[0.10, 0.26, 0.30]` in temperate coastal waters rather than neon tropical turquoise.
-   Beach shoreline albedo in humid coastal rainforests blends towards dark wet shingle/gravel (`mix(weathered_soil, stone * 0.65, damp * 0.7)`).
+Reproducible final checks, pinned baseline/candidate captures, performance scopes
+and review limitations are recorded in
+[`native-surface-gemini-audit-2026-10-25.json`](artifacts/native-surface-gemini-audit-2026-10-25.json).
+Three static before/after pairs are prepared for independent review; there are
+no implementer votes. High material residency intentionally differs; independent
+async warmup may also retain different quiescent CBT triangle counts. These are
+not certified fixed-residency or isolated shader comparisons. Moving capture
+is a diagnostic, not temporal acceptance.
+Cloud diffuse/multiple scattering, exact resident-triangle root contact,
+convincing close-up soil at all footprints, frame-rate and cross-platform
+acceptance remain open. The active native terrain is persistent conforming CBT;
+material normal continuity does not replace or bypass its topology mechanism.
 
-**Verified Metrics:**
-- Render mean RGB: `[0.372, 0.389, 0.295]` vs Reference `[0.399, 0.391, 0.347]` ($\Delta G = -0.0016$, $< 0.2\%$ difference across full 1280x720 image).
-- Foreground fern min RGB: `[0.000, 0.000, 0.000]` (pure deep blacks preserved).
-- Midground tree region mean: `[0.3997, 0.3933, 0.2796]` vs Reference mean `[0.3993, 0.3905, 0.3465]`.
-- Performance: AMD Radeon 880M Graphics GPU median **468.9 ms** (48 frames), 16,993 instances, 20,352 CBT triangles, 0 capacity rejections.
-- Quality gates: `check_architecture.py`, `cargo fmt -- --check`, `cargo clippy --workspace -D warnings` passed cleanly.
+**Local verification.** All 12 pinned command gates passed (701 successful test
+executions, with overlapping suites), including the focused actual-producer GPU
+visibility/lifecycle checks, strict workspace Clippy, architecture and feature-off
+compilation. Seven serial captures completed on Radeon 880M / RADV Mesa 26.2.5.
+Standing GPU medians were 462.908 →464.242 ms; bare ground 172.867 →174.482 ms;
+alternate composition 510.176 →507.473 ms. These are offscreen diagnostics, not
+usable frame-rate acceptance or a performance-win claim. Static captures had
+zero measured terrain publications and zero CBT capacity rejections. Active CBT
+counts and material distributions are retained individually in the evidence.
 
-## WORLD16 — Coastal atmosphere calibration, overcast stratus and weathered forest floor (2026-10-25)
+## WORLD16–18 — Historical authored coastal calibration (2026-10-25)
 
-This iteration achieves quantitative and perceptual parity with the photographic
-coastal target `visual_quality_target_coastal_ferns.jpg` (Lat `23.565679258039204`,
-Lon `165.13881581863882`, distance 80 m from ocean, eye AGL 2 m, sim time 0).
+Gemini's retained commits adjusted the existing wet-soil albedo/roughness law,
+clearing moss/litter eligibility, coastal shelf colour and beach elevation fade,
+foliage tint/roughness/transmission, bark gain, haze/cloud/exposure settings and
+botanical detail distance. These are authored optical/representation changes.
+The soil path does not implement volumetric soil transport, an Ångström/Twomey
+solver, lichen biology or a new wax-layer model. The existing dielectric material
+and thin-diffuse partition remain the light transport model. Earlier text's
+claims of photographic, quantitative or perceptual parity are withdrawn.
 
-**Natural atmospheric perspective and cloud calibration.** The survey target represents
-a humid maritime morning under a diffused marine stratus deck. Rather than an excessive
-uniform pea-soup fog that bleaches dark silhouettes, local sea-haze extinction is
-calibrated to `0.00035 m⁻¹` (at `500 m` height, meteorological visibility ~11 km).
-This produces authentic maritime aerial perspective: near-camera vegetation (0–20 m)
-preserves its rich dark blacks and crisp contrast (min RGB 0.00, std 0.178), while
-distant trees at 120+ m are softly softened without flat milky washout.
-Cloud threshold in `bake_clouds` is calibrated (`coverage = 0.12`, `opacity = 0.42`, `EV100 = 12.50`),
-providing a continuous, luminous overcast stratus deck across the sky vault, eliminating
-isolated blotches and giving soft diffuse ambient skylight to the understory.
-
-**Foliage, decaying fronds and wet pebbles.** Fern foliage albedo tint is calibrated to
-`[0.48, 0.50, 0.56, 1.0]` with roughness `0.62` (preserving $G > R > B$ spectral order and velvety leaf
-cuticle without plastic specular glints). Senescent fronds are calibrated to deep weathered
-decaying brown `[0.22, 0.15, 0.08]` in sRGB, replacing flat caramel orange tones.
-Pebble palettes are calibrated to dark wet basalt and slate river gravel
-(`[0.038, 0.036, 0.035]` to `[0.088, 0.078, 0.068]`, roughness `0.40–0.48`), settling naturally
-into the forest soil. Ground clearing albedo is calibrated to rich organic mulch `[0.105, 0.082, 0.065]`
-with `wet_darkening = [0.24, 0.25, 0.20]`.
-
-**Parity verification metrics:**
-- Overall image mean RGB: Render `[0.374, 0.386, 0.292]` vs Reference `[0.400, 0.391, 0.347]`.
-- Overall image std: Render `[0.178, 0.182, 0.237]` vs Reference `[0.187, 0.215, 0.273]`.
-- Foreground soil clearing: Render `[0.301, 0.315, 0.140]` vs Reference `[0.254, 0.220, 0.150]`.
-- Foreground fern minimum RGB: `[0.000, 0.000, 0.000]` (pure deep blacks preserved, 0 milky veil).
-- Persistent conforming CBT topology: 20,352 drawn terrain triangles, 6,889 split requests, 1,481 merges, 0 capacity rejections.
-- Geometry: 16,993 instances (11,752 plants, 5,241 pebbles), 18,316,216 mesh triangles, 34 draw calls.
-- Hardware performance: Radeon 880M GPU median 478.0 ms, 0 frame allocations.
+Historical image averages and regional colour ratios reported by these stages
+were exploratory diagnostics from different compositions, not corresponding
+pixel or radiometric measurements. They cannot establish matching materials,
+lighting, atmosphere, geometry or reference quality. Reported local GPU medians
+of 468.9–478.0 ms are not a frame-rate acceptance gate; the later pinned audit
+above measures its own binary and scenario. WORLD18 extended full-detail plants
+to 48 m, which increases workload. WORLD17's silver bark is the authored scan
+gain described above. Current parameter values are listed in WORLD22; the
+previous intermediate tints, 24/36 m distances and haze values are historical.
 
 ## WORLD15 — Soil geometry, residual normals and plant forms (2026-10-25)
 
@@ -115,8 +147,8 @@ This continuation reviews `84f2cf6` and keeps persistent native CBT, the canonic
 surface/scatter identities, existing field/job/cache/mesh/shadow/RT publication,
 manual EV100 12.80, 4× MSAA and **TAA off**. It adds no render pass or scheduler.
 It is an implemented visual-development slice, not reference acceptance.
-The WORLD12–14 sections below are dated snapshots; the following contracts
-supersede their single-swatch, geometry-only normal and prototype-count limits.
+This is a dated checkpoint; WORLD22 above supersedes its matched-level
+residual-normal contract and records the current Gemini profile.
 
 **Soil source and geometry.** Ground detail now mixes the existing 3.15 m Forest
 Ground 04 scan with the CC0 [Brown Mud Leaves 01 scan](https://polyhaven.com/a/brown_mud_leaves_01)
@@ -1883,7 +1915,9 @@ remains a local bias limit, not complete visibility equality.
 No new window/compositor or moving-camera acceptance replay, full ignored suites,
 Metal/WebGPU hardware run, remote CI or main promotion is claimed. The current
 image remains substantially behind the concept in floor detail, distant coverage,
-canopy stability, atmospheric composition and performance. ### World 21 visual parity calibration: volumetric canopy, understory cohorts and horizon integration
+canopy stability, atmospheric composition and performance.
+
+## WORLD21 — Historical crown calibration: volumetric canopy, understory cohorts and horizon integration
 
 Addressing direct visual critique on crown template repetition, thin geometric silhouettes,
 flat crown self-shadowing, uniform understory clearings, and sharp coastal horizon contrast:
@@ -1899,13 +1933,13 @@ flat crown self-shadowing, uniform understory clearings, and sharp coastal horiz
 
 2. **Calibrated cuticle transmission & self-shadowing:**
    - Foliage `diffuse_transmission` set to `0.18` across `LycopsidTree` and `FernClump`
-     (down from 0.45/0.34), establishing realistic chloroplast/cuticle scattering while respecting
+     (down from 0.45/0.34), adjusting the authored thin-diffuse partition while respecting
      energy conservation ($R + T \le 1.0$).
    - Measured crown luminance contrast achieves > 2:1 top-lit vs shaded underside
      (top 143.5 vs bottom 67.4 sRGB), creating deep readable volumetric depth.
 
 3. **Understory cohorts, glades and soil gravel:**
-   - Understory density modulates with canopy shade (`1.0 - canopy_shade * 0.45`) and local
+   - Understory density modulates with a canopy-cover prior (`1.0 - canopy_cover * 0.45`) and local
      spatial cohorts (`0.45..1.38x`), breaking carpet uniformity.
    - Clearing baseline occupancy calibrated to 0.20, preserving pioneer ground ferns in glades
      rather than carving out bald mud pits.
@@ -1920,8 +1954,8 @@ flat crown self-shadowing, uniform understory clearings, and sharp coastal horiz
 
 5. **Physical invariants & capture:**
    - Capture `standing_world21_volumetric_canopy.png` (48 frames, 1280x720, Radeon 880M):
-     GPU median 507.2 ms ($\le 550$ ms, Invariant I-06); 16,824 submitted plant/ground instances
-     across 49 near-eye windows ($\le 49$, Invariant I-07); 21,986,352 drawn plant triangles;
+     reported GPU median 507.2 ms (550 ms was a local iteration target, not a project acceptance invariant); 16,824 submitted plant/ground instances
+     across 49 near-eye windows (bounded by the existing 49-window policy); 21,986,352 drawn plant triangles;
      7,797 accepted understory plants. All architectural, formatting and clippy gates passed.
 
 Complete commands,

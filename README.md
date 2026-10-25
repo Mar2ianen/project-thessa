@@ -125,6 +125,12 @@ The checked-in vertical slice currently contains:
   bumping, introduces grounded single/forked tree forms and larger pebble variation,
   and adds SH9 directional diffuse lighting plus specular footprint filtering.
   Low/disabled policies retain their cheaper representations; TAA remains off.
+  WORLD22 reviews Gemini's fuller crowns and coastal profile, restores soil
+  normal detail across material/geometry levels using canonical base gradients,
+  retains millimetre scan detail with bounded High L24 material pages, restores
+  spatial moss patches and scan contrast, bounds understory cohorts
+  to requested sizes, and makes bark import reproducible.
+  The showcase retains 48 m plant detail, EV100 12.50, 4× MSAA and TAA off.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
@@ -216,7 +222,7 @@ The checked-in vertical slice currently contains:
      Regular-patch material sampling preserves local chart precision; the tested
       forest-floor colour-noise prototype was rejected, not shipped (doc 77).
       A distinct default-off CC0 soil/gravel experiment can refine regular-patch
-       materials to L20/L21/L22 with capability-resolved 1/4/16x anisotropy by
+       materials to L20/L21/L24 with capability-resolved 1/4/16x anisotropy by
        quality and a terrain-aware local distance reference; cross-LOD appearance and visual
       acceptance remain open (doc 77).
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO

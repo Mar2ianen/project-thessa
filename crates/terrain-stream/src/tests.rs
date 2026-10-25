@@ -202,15 +202,16 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
         radius: 3_200_000.0,
         frustum: None,
     };
-    for limit in [17, 20, 21, 22, 255] {
+    for limit in [17, 20, 21, 22, 23, 24, 255] {
         let pages = material_view_selection_with_limit(&[key], view, 1e-5, limit);
-        let budget = match limit.min(22) {
+        let budget = match limit.min(24) {
             17..=20 => 512,
             21 => 1024,
             _ => 2048,
         };
         assert!(pages.len() <= budget);
-        assert_eq!(pages.iter().map(|k| k.level).max().unwrap(), limit.min(22));
+        // The broad, unculled window hits its existing leaf budget at L23.
+        assert_eq!(pages.iter().map(|k| k.level).max().unwrap(), limit.min(23));
         let relative_area: f64 = pages
             .iter()
             .map(|k| 4f64.powi(i32::from(key.level) - i32::from(k.level)))
@@ -218,6 +219,31 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
         assert_eq!(relative_area, 1.0);
         assert!(pages.iter().all(|p| p.face == key.face));
     }
+    // A focused near-floor window reaches the new optical ceiling under
+    // the same budget; broad views must not grow memory to force that level.
+    let near = TileKey {
+        level: 20,
+        x: 1 << 19,
+        y: 1 << 19,
+        ..key
+    };
+    let near_dir = DVec3::from(near.direction(0.5, 0.5));
+    let near_view = SelectionView {
+        eye: near_dir * (view.radius + 2.0),
+        stream_origin: near_dir * view.radius,
+        forward: -near_dir,
+        ..view
+    };
+    let pages = material_view_selection_with_limit(&[near], near_view, 1e-5, 24);
+    assert_eq!(pages.iter().map(|k| k.level).max(), Some(24));
+    assert!(pages.len() <= 2048);
+    assert_eq!(
+        pages
+            .iter()
+            .map(|k| 4f64.powi(i32::from(near.level) - i32::from(k.level)))
+            .sum::<f64>(),
+        1.0
+    );
     assert_eq!(
         material_view_selection(&[key], view, 1e-5),
         material_view_selection_with_limit(&[key], view, 1e-5, 17)

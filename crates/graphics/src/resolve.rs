@@ -473,8 +473,13 @@ mod terrain_topology_tests {
         request.terrain_topology.enabled = true;
         let settings = ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
         assert!(settings.terrain_ground_detail);
-        assert_eq!(settings.terrain_material_max_level(), 22);
+        assert_eq!(settings.terrain_material_max_level(), 24);
         assert_eq!(settings.terrain_ground_relief_max_level, 22);
+        // High optical pages retain millimetre scan structure independently
+        // of the coarser height grid, without increasing page/layer budgets.
+        let high_texel_m =
+            6_400_000.0 / 2_f64.powi(i32::from(settings.terrain_material_max_level())) / 125.0;
+        assert!(high_texel_m < 0.004);
         let fallback = ResolvedGraphicsSettings::from_requested(
             &request,
             &Capabilities {
@@ -503,7 +508,7 @@ mod terrain_topology_tests {
                         match quality {
                             Quality::Low => 20,
                             Quality::Medium => 21,
-                            Quality::High => 22,
+                            Quality::High => 24,
                         }
                     } else {
                         17
@@ -596,7 +601,7 @@ impl ResolvedGraphicsSettings {
         match self.surface_quality {
             Quality::Low => 20,
             Quality::Medium => 21,
-            Quality::High => 22,
+            Quality::High => 24,
         }
     }
     /// Extra normal-map mip filtering; coarser tiers reduce texture bandwidth

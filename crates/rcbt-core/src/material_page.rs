@@ -1,5 +1,5 @@
 //! Immutable 128² material pages: RGB sRGB albedo, alpha linear roughness.
-//! Optional RG8_SNORM planes carry full tangent normals and unresolved relief normals.
+//! Optional RG8_SNORM planes carry full tangent normals and canonical base-height normals.
 use std::sync::Arc;
 
 /// Immutable page payloads keyed by canonical CBT cube-tile ID, with source
@@ -25,7 +25,7 @@ pub fn decode_material_normal_component(encoded: u8) -> f32 {
 pub struct CbtMaterialPage {
     mips: Arc<[Vec<u8>]>,
     normal_mips: Option<Arc<[Vec<u8>]>>,
-    relief_residual_mips: Option<Arc<[Vec<u8>]>>,
+    base_normal_mips: Option<Arc<[Vec<u8>]>>,
 }
 
 impl CbtMaterialPage {
@@ -50,24 +50,25 @@ impl CbtMaterialPage {
         Some(Self {
             mips: mips.into(),
             normal_mips: normal_mips.map(Into::into),
-            relief_residual_mips: None,
+            base_normal_mips: None,
         })
     }
 
-    /// Optional material gradient remaining after the matching 33-square
-    /// rendered soil-height page. Full optical normals remain available.
-    pub fn with_relief_residuals(mut self, rg8: Vec<u8>) -> Option<Self> {
+    /// Optional canonical base-height normal plane in the same face chart.
+    /// Together with full optical normals it reconstructs land shading
+    /// independently of the resident displacement-grid level.
+    pub fn with_base_normals(mut self, rg8: Vec<u8>) -> Option<Self> {
         self.normal_mips.as_ref()?;
-        self.relief_residual_mips = Some(normal_mips_from_rg8(rg8)?.into());
+        self.base_normal_mips = Some(normal_mips_from_rg8(rg8)?.into());
         Some(self)
     }
 
-    pub fn relief_residual_mips(&self) -> Option<&[Vec<u8>]> {
-        self.relief_residual_mips.as_deref()
+    pub fn base_normal_mips(&self) -> Option<&[Vec<u8>]> {
+        self.base_normal_mips.as_deref()
     }
 
     pub fn byte_len(&self) -> usize {
-        self.relief_residual_mips
+        self.base_normal_mips
             .as_ref()
             .map_or(0, |mips| mips.iter().map(Vec::len).sum::<usize>())
             + self.mips.iter().map(Vec::len).sum::<usize>()
@@ -109,7 +110,7 @@ impl CbtMaterialPage {
         Some(Self {
             mips: mips.into(),
             normal_mips: normal_mips.map(Into::into),
-            relief_residual_mips: None,
+            base_normal_mips: None,
         })
     }
 }
@@ -227,27 +228,25 @@ fn valid_chain(mips: &[Vec<u8>], stride: usize) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn residual_plane_is_validated_shared_and_independently_mipped() {
+    fn base_plane_is_validated_shared_and_independently_mipped() {
         let full = super::CbtMaterialPage::from_rgba8_with_normals(
             vec![0; 128 * 128 * 4],
             Some([32, 0].repeat(128 * 128)),
         )
         .unwrap();
-        assert!(full.clone().with_relief_residuals(vec![0; 2]).is_none());
+        assert!(full.clone().with_base_normals(vec![0; 2]).is_none());
         let length = full.byte_len();
-        let residual = full
-            .with_relief_residuals([0, 16].repeat(128 * 128))
-            .unwrap();
-        assert_eq!(residual.byte_len(), length + 43690);
+        let page = full.with_base_normals([0, 16].repeat(128 * 128)).unwrap();
+        assert_eq!(page.byte_len(), length + 43690);
         assert!(
-            residual.normal_mips().unwrap().iter().all(|m| m
+            page.normal_mips().unwrap().iter().all(|m| m
                 .as_chunks::<2>()
                 .0
                 .iter()
                 .all(|xy| *xy == [32, 0]))
         );
         assert!(
-            residual.relief_residual_mips().unwrap().iter().all(|m| m
+            page.base_normal_mips().unwrap().iter().all(|m| m
                 .as_chunks::<2>()
                 .0
                 .iter()
@@ -256,7 +255,7 @@ mod tests {
         assert!(
             super::CbtMaterialPage::from_rgba8(vec![0; 128 * 128 * 4])
                 .unwrap()
-                .with_relief_residuals(vec![0; 128 * 128 * 2])
+                .with_base_normals(vec![0; 128 * 128 * 2])
                 .is_none()
         );
     }

@@ -25,14 +25,21 @@ and primary specular filtering consumes the existing normal-map mip mean.
 Low and feature-off fallbacks remain explicit. Older WORLD13/14 counts and
 4–30 cm dimensions below are historical snapshots, not the current limits.
 
-WORLD14 (doc 77) retains the latest authored optical priors: green fern tint
-[0.67, 0.48, 0.80], tree tint [0.74, 0.68, 0.80], green-leaf roughness factor
-0.46 and fern diffuse transmission 0.34. Stem/dry roughness factor remains 0.85.
-The three pebble palettes use linear RGB [0.040, 0.044, 0.046],
-[0.078, 0.072, 0.062], [0.118, 0.098, 0.072] and roughness 0.45/0.52/0.56.
-These are material factors combined with existing textures, not measured
-botanical/mineral spectra. Local weather now shares the environment publication
-with terrain/water; the mesh shader no longer owns unconditional extinction.
+WORLD22 reviews Gemini's WORLD16–21 calibration (doc 77). Current authored
+fern/tree tint factors are [0.44, 0.48, 0.46] / [0.48, 0.52, 0.44], green-leaf
+roughness factor 0.50 and diffuse transmission 0.18; stem/dry roughness remains
+0.85. The showcase uses 48 m full-detail distance. Fuller crowns retain shared
+organ/material boundaries. Spatial understory cohorts bias a bounded scale
+fraction, respecting requested min/max and fixed-size policies. Canopy density
+and the 20% pioneer floor are authored ecological priors, not solved sunlight.
+The three pebble palettes use linear RGB [0.082, 0.076, 0.065],
+[0.098, 0.088, 0.075], [0.115, 0.102, 0.085], roughness 0.65/0.70/0.75.
+These factors combine with existing textures; they are not measured spectra.
+The bark importer now reproduces all six maps byte-for-byte, including the
+retained authored gain after intermediate sRGB8 quantization. Local weather
+shares the environment publication with terrain/water; the mesh shader no
+longer owns unconditional extinction. Earlier dated optical parameters below
+are historical, not the current calibration.
 
 WORLD13 extends this existing adapter with a bounded native ground-pebble
 consumer, independently of the plant toggle. It reuses the same preparation

@@ -333,10 +333,13 @@ pub(crate) fn forest_floor(
     let mineral_patch = smooth(0.05, 0.45, noise(6146, 3.2, true));
     let fine_mineral = smooth(0.52, 0.82, noise(6147, 0.22, false)) * 0.25;
     let wet = damp;
+    // Both noises are signed and centered near zero. A 0.40..0.70
+    // threshold selected only their rare upper tail, almost erasing moss.
     let moss_noise = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
     let moss = smooth(0.28, 0.58, damp)
         * (0.45 + 0.55 * smooth(0.02, 0.20, canopy))
-        * smooth(0.40, 0.70, moss_noise)
+        * smooth(-0.12, 0.18, moss_noise)
+        * band_weight(0.85, texel_m)
         * 0.85;
     let coarse_litter =
         smooth(0.08, 0.58, noise(6142, 1.6, true)) * (0.40 + 0.60 * smooth(0.04, 0.25, canopy));
@@ -348,7 +351,11 @@ pub(crate) fn forest_floor(
         let mineral_factor = 1.0 + mineral_patch * 0.15 + fine_mineral * [0.15, 0.18, 0.28][i];
         let substrate =
             f64::from(ground.albedo_linear[i]) * mineral_factor * (1.0 - wet * wet_darkening);
-        let moss_albedo = [0.045, 0.058, 0.028][i];
+        // Pigment coverage retains scan contrast instead of painting a flat swatch.
+        let texture_detail = (f64::from(ground.albedo_linear[i])
+            / f64::from(mean_sample().albedo_linear[i]))
+        .clamp(0.5, 1.5);
+        let moss_albedo = [0.045, 0.058, 0.028][i] * texture_detail;
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
         let litter_albedo = [0.072, 0.058, 0.042][i];
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
@@ -517,6 +524,65 @@ mod tests {
         let b = forest_floor(mean, [0.0, 1000.0, 8.0], 77, 2.0, 0.5, 0.5);
         assert_eq!(a.albedo_linear, b.albedo_linear);
         assert_eq!(a.roughness, b.roughness);
+    }
+
+    #[test]
+    fn damp_moss_forms_resolved_patches_without_erasing_scan_detail() {
+        let mean = mean_sample();
+        let mut green_ratio = [f32::INFINITY, 0.0_f32];
+        let mut patch = [0.0; 3];
+        for i in 0..400 {
+            let q = [
+                137.0 + (i % 20) as f64 * 0.13,
+                29.0,
+                -18.0 + (i / 20) as f64 * 0.13,
+            ];
+            let floor = forest_floor(mean, q, 77, 0.012, 0.9, 0.6);
+            let ratio = floor.albedo_linear[1] / floor.albedo_linear[0];
+            green_ratio[0] = green_ratio[0].min(ratio);
+            if ratio > green_ratio[1] {
+                green_ratio[1] = ratio;
+                patch = q;
+            }
+        }
+        assert!(
+            green_ratio[1] > 1.0,
+            "damp coastal ground needs visible moss patches"
+        );
+        assert!(
+            green_ratio[1] - green_ratio[0] > 0.2,
+            "coverage must be spatially varied"
+        );
+        let dark = forest_floor(
+            GroundSample {
+                albedo_linear: mean.albedo_linear.map(|v| v * 0.8),
+                ..mean
+            },
+            patch,
+            77,
+            0.012,
+            0.9,
+            0.6,
+        );
+        let bright = forest_floor(
+            GroundSample {
+                albedo_linear: mean.albedo_linear.map(|v| v * 1.2),
+                ..mean
+            },
+            patch,
+            77,
+            0.012,
+            0.9,
+            0.6,
+        );
+        assert!(
+            bright
+                .albedo_linear
+                .into_iter()
+                .zip(dark.albedo_linear)
+                .all(|(a, b)| a > b * 1.1)
+        );
+        assert_eq!(bright.height_m, dark.height_m);
     }
 
     #[test]

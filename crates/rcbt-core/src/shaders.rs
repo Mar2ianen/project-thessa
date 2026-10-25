@@ -423,7 +423,6 @@ struct VertexOutput {
     @location(6) material_chart: vec3<f32>,
     @location(7) @interpolate(flat) material_anchor: vec2<f32>,
     @location(8) @interpolate(flat) material_face: u32,
-    @location(9) @interpolate(flat) geometry_level: u32,
 };
 
 @group(0) @binding(6) var albedo_texture: texture_2d<f32>;
@@ -507,9 +506,6 @@ fn vertex(
         output.material_anchor = vec2<f32>(origin) / 536870912.0;
         output.material_chart = vec3(delta * major, major);
         output.material_face = face;
-        output.geometry_level = min(a0.w, min(a1.w, a2.w));
-        // Mixed height-data levels have no single matching residual plane.
-        if(a0.w!=a1.w || a0.w!=a2.w){output.geometry_level+=32u;}
         return output;
     }
     return cbt_vertex(vertex_index);
@@ -561,7 +557,6 @@ fn cbt_vertex(vertex_index: u32) -> VertexOutput {
     let chart = material_address(frame.geometry.raw_center.xyz);
     output.material_anchor = chart.uv;
     output.material_face = chart.face;
-    output.geometry_level = (leaves[ordinal].z - 3u) / 2u;
     // Rational interpolation reproduces projection of the interpolated body
     // direction, rather than linearly interpolating spherical chart UVs. The
     // anchor is identical for every vertex of this patch and exactly dyadic.
@@ -625,11 +620,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // chosen in screen space rather than inheriting a coarse mesh page.
     let material_lod = clamp(log2(2.0 * bitcast<f32>(params.radius_bits)
         / (125.0 * max(material_texel_m, 0.001))), 0.0, MATERIAL_MAX_LEVEL);
-    // Eight-metre source grain reaches the height grid when its spacing is
-    // below four metres. Mixed source levels retain the safe zero residual.
-    let relief_geometry=GROUND_RELIEF_GEOMETRY && (2.0*bitcast<f32>(params.radius_bits)/exp2(f32(input.geometry_level & 31u))/32.0)<4.0;
-    let coarse = material_at_level_raster_with_geometry(address, address_dx, address_dy, u32(floor(material_lod)), select(0u,input.geometry_level,relief_geometry));
-    let fine = material_at_level_raster_with_geometry(address, address_dx, address_dy, u32(ceil(material_lod)), select(0u,input.geometry_level,relief_geometry));
+    let coarse = material_at_level_raster_with_height_field(address,address_dx,address_dy,u32(floor(material_lod)),GROUND_RELIEF_GEOMETRY);
+    let fine = material_at_level_raster_with_height_field(address,address_dx,address_dy,u32(ceil(material_lod)),GROUND_RELIEF_GEOMETRY);
     let coverage = mix(coarse.coverage, fine.coverage, fract(material_lod));
     let detail = mix(coarse.value, fine.value, fract(material_lod)) / max(coverage, 0.00001);
     detail_weight *= coverage;
@@ -654,8 +646,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var tangent = mix(coarse.normal, fine.normal, fract(material_lod))
         * (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m));
     var shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
-    if(relief_geometry) {
-        shaded_normal=material_compose_height_normal(normal,address,tangent*(1.0-water_material),render_from_body);
+    if(GROUND_RELIEF_GEOMETRY) {
+        let weight=(1.0-smoothstep(globe_texel_m,globe_texel_m*2.0,footprint_m))*(1.0-water_material);
+        let base=mix(coarse.base_normal,fine.base_normal,fract(material_lod));
+        let height_coverage=mix(coarse.height_coverage,fine.height_coverage,fract(material_lod))*weight;
+        shaded_normal=material_height_field_normal(normal,address,(mix(coarse.normal,fine.normal,fract(material_lod))+base)*weight,height_coverage,render_from_body);
     }
     if(MATERIAL_SPECULAR_FILTER_ENABLED && cbt_specular_enabled()) {
         roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);

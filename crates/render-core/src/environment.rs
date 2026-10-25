@@ -74,7 +74,7 @@ impl EnvironmentRadiance {
         })
     }
 
-    /// Three-band Lambert-convolved radiance SH in the grid's body frame.
+    /// Three-band Lambert-convolved radiance SH in the grid frame.
     /// Computed only when the source field is constructed, never per pixel.
     pub fn diffuse_coefficients(&self) -> &[[f32; 3]; 9] {
         &self.diffuse_coefficients

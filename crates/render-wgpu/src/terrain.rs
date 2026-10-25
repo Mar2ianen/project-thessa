@@ -1988,8 +1988,8 @@ impl TerrainRenderer {
 
     /// Share existing canonical material residency without a geometry-specific
     /// layer assignment, second cache or texture upload.
-    pub fn material_relief_resident_pages(&self) -> usize {
-        self.materials.relief_resident_pages()
+    pub fn material_height_field_pages(&self) -> usize {
+        self.materials.height_field_pages()
     }
 
     pub fn material_binding(&self) -> crate::material::MaterialBinding {

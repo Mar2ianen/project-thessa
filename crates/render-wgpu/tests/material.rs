@@ -728,11 +728,12 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
 
 #[test]
 #[ignore = "requires a wgpu adapter; run with --ignored"]
-fn fine_relief_geometry_owns_normals_without_double_bump() {
+fn height_field_normals_are_independent_of_geometry_and_material_levels() {
     let backend = Backend::bring_up().expect("requires a local hardware adapter");
     let anchor =
         TileAnchor::new(TileKey::new(4, 22, 1 << 21, 1 << 21).unwrap(), 3_200_000.0).unwrap();
-    let height = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let delta = 0.15 * 2.0 * 3_200_000.0 / (1_u64 << 22) as f64;
+    let height = HeightPage::bake(&[delta, -delta, delta, -delta], 2, 0.001).unwrap();
     for relief_level in [17, 22] {
         let settings = thessa_graphics::ResolvedGraphicsSettings {
             terrain_ground_detail: true,
@@ -813,13 +814,12 @@ fn fine_relief_geometry_owns_normals_without_double_bump() {
                 frames[0], frames[1],
                 "geometric relief must not receive its full bump slope twice"
             );
-            // A matching fine page carries only the unresolved slope in BA.
-            // The full RG slope is zero here, so an observed Lambert response
-            // independently proves that the real atlas/directory selects BA.
+            // Full RG is zero; the BA canonical base normal independently
+            // changes the actual Lambert raster, regardless of geometry slope.
             let id = thessa_rcbt_core::conforming_surface::page_id(anchor.tile).unwrap();
             source.set_priority(vec![id]);
-            let mut residual_frames = Vec::new();
-            for residual in [0, 102] {
+            let mut base_frames = Vec::new();
+            for base in [0, 102] {
                 source.set_page(
                     id,
                     CbtMaterialPage::from_rgba8_with_normals(
@@ -827,24 +827,57 @@ fn fine_relief_geometry_owns_normals_without_double_bump() {
                         Some([0, 0].repeat(128 * 128)),
                     )
                     .unwrap()
-                    .with_relief_residuals([residual, 0].repeat(128 * 128))
+                    .with_base_normals([base, 0].repeat(128 * 128))
                     .unwrap(),
                 );
                 renderer
                     .update_materials(&backend, source.priority(), source.source_pages())
                     .unwrap();
-                assert_eq!(renderer.material_relief_resident_pages(), 1);
-                residual_frames.push(render(&renderer));
+                assert_eq!(renderer.material_height_field_pages(), 1);
+                base_frames.push(render(&renderer));
             }
             let mid = (32 * 65 + 32) * 4;
             let linear = (0.05 + 1.5 * (102.0 / 127.0)) / std::f64::consts::PI;
             let reference = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
-            assert!(residual_frames[1][mid] > residual_frames[0][mid] + 20);
+            assert!(base_frames[1][mid] > base_frames[0][mid] + 20);
             assert!(
-                residual_frames[1][mid].abs_diff(reference) <= 3,
-                "residual Lambert oracle: actual={} reference={reference}",
-                residual_frames[1][mid]
+                base_frames[1][mid].abs_diff(reference) <= 3,
+                "canonical base Lambert oracle: actual={} reference={reference}",
+                base_frames[1][mid]
             );
+            // The same source normal must work on a different material
+            // level and must not receive the geometry's 0.3 slope twice.
+            for level in [22, 20] {
+                let key = TileKey::new(4, level, 1 << (level - 1), 1 << (level - 1)).unwrap();
+                let id = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+                source.set_priority(vec![id]);
+                source.set_page(
+                    id,
+                    CbtMaterialPage::from_rgba8_with_normals(
+                        [255, 0, 0, 255].repeat(128 * 128),
+                        Some([47, 0].repeat(128 * 128)),
+                    )
+                    .unwrap()
+                    .with_base_normals([36, 0].repeat(128 * 128))
+                    .unwrap(),
+                );
+                renderer
+                    .update_materials(&backend, source.priority(), source.source_pages())
+                    .unwrap();
+                let frame = render(&renderer);
+                let a = 47.0_f64 / 127.0;
+                let b = 36.0_f64 / 127.0;
+                let slope = a / (1.0 - a * a).sqrt() + b / (1.0 - b * b).sqrt();
+                let nx = slope / (1.0 + slope * slope).sqrt();
+                let linear = (0.05 + 1.5 * nx) / std::f64::consts::PI;
+                let expected = ((1.055 * linear.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+                let mid = (32 * 65 + 32) * 4;
+                assert!(
+                    frame[mid].abs_diff(expected) <= 3,
+                    "L{level} field oracle: {} vs {expected}",
+                    frame[mid]
+                );
+            }
         } else {
             let mid = (32 * 65 + 32) * 4;
             assert!(

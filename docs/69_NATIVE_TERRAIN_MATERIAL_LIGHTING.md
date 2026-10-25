@@ -2,15 +2,17 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
-WORLD15 ([doc 77](77_NATIVE_SURFACE_SHOWCASE.md)) extends the current material
-contract with optional unresolved render-height gradient planes. Native geometric
-ground relief uses RGBA8_SNORM (full normal RG, residual BA) and a matching
-source-level validity bit; ordinary normals retain RG8_SNORM and normals-off a
-1² dummy. Mixed or mismatched source levels fall back to geometry-only normals.
-The shared page/cache/priority path is unchanged. Medium/High also evaluate
-SH9 diffuse irradiance from the existing sky field and filter specular roughness
-by raster normal variance; Low keeps the original isotropic/unfiltered fallback.
-See doc 77 for memory costs, source-height priors and independent GPU oracles.
+WORLD22 ([doc 77](77_NATIVE_SURFACE_SHOWCASE.md)) replaces WORLD15's
+matched-level residual with canonical base-height and full optical gradient
+composition. Native geometric ground relief keeps RGBA8_SNORM (full optical
+normal RG, base-height normal BA, bit-30 validity). Material and triangle source
+levels may differ; absent/old fields retain geometry. Ordinary normals retain
+RG8_SNORM and normals-off a 1² dummy. Existing page/cache/priority and quality
+policies remain. Captures expose `native_material_height_field_pages`.
+Medium/High also evaluate SH9 diffuse irradiance from the existing sky field
+and filter specular roughness by raster normal variance; Low keeps the original
+isotropic/unfiltered fallback. See doc 77 for memory costs, source-height priors,
+independent CPU/GPU oracles and known optical reconstruction limits.
 Earlier dated implementation sections describe the representation at that time.
 
 The [surface-showcase continuation](77_NATIVE_SURFACE_SHOWCASE.md) preserves
@@ -18,7 +20,8 @@ material coordinates as a dyadic anchor plus small offsets through raster
 interpolation and page lookup. WORLD13 extends this precision contract to
 persistent conforming bisectors, reconstructing a common triangle face from
 exact integer addresses. The default material limit remains L17; optional
-ground detail permits bounded L20/L21/L22 refinement on both topology paths.
+ground detail permits bounded L20/L21/L24 material refinement on both topology
+paths (WORLD22); geometric relief retains its independent L22 maximum.
 
 With detail enabled, `surface_quality` Low/Medium/High resolves 1/4/16x material
 anisotropy against the adapter capability. Unknown/unsupported capabilities use
@@ -37,7 +40,7 @@ at most 512 pages using the same view-cone test as refinement. The 1,024-page
 CPU source, bounded worker jobs and 256 GPU layers are unchanged. Captures expose
 `native_material_reference_height_m` and its source/limitation string.
 
-## Current ground optical material (WORLD12)
+## Ground optical material foundation (WORLD12; extended in doc 77)
 
 The optional scan is processed into continuous humus/mineral reflectance and
 roughness before mip averaging, preserving the same processed-material mean
@@ -52,8 +55,9 @@ review findings, scoped validation and source-pinned actual captures.
 WORLD13 adds continuous stochastic mapping, mean-centered source relief in
 fine CBT height pages and bounded native pebble meshes under the same resolved
 effect (docs 63/70/75/77). These are render geometry, not authoritative collision.
-Fine displaced-page normals own the source slope; coarse pages retain material
-normal perturbation. A sub-grid residual normal remains unimplemented.
+WORLD22 reconstructs base-height plus full optical normals where the optional
+canonical plane is resident, avoiding double slope and matched-level suppression.
+The two CC0 scan sources and current coverage/relief contract are in doc 77.
 
 ## Near shadow precision
 

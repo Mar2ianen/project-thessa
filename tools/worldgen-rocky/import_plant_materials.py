@@ -34,6 +34,10 @@ for asset,tag in [('bark_willow','bark'),('fern_02','pinna')]:
     if tag=='bark':
         def average(a): return (a[0::2,0::2]+a[1::2,0::2]+a[0::2,1::2]+a[1::2,1::2])*.25
         diffuse,normal,rough=map(average,[diffuse,normal,rough])
+        # Preserve the published 8-bit downsample stage before the authored
+        # gain, so the existing bark asset remains exactly reproducible.
+        diffuse=linear(np.rint(np.clip(srgb(diffuse),0,1)*255)/255)
+        diffuse=np.clip(diffuse*np.array([2.4,3.6,5.2]),0,1)
     else:
         # One actual pinna, not the whole alpha-masked fern card. The source
         # padding is kept; runtime silhouette remains explicit mesh geometry.
@@ -49,6 +53,6 @@ for asset,tag in [('bark_willow','bark'),('fern_02','pinna')]:
     normal/=np.linalg.norm(normal,axis=2,keepdims=True)
     write(tag+'-base',srgb(diffuse));write(tag+'-normal',normal*.5+.5)
     mr=np.ones_like(rough);mr[:,:,1]=rough[:,:,0];mr[:,:,2]=0;write(tag+'-mr',mr)
-manifest={'sources':records,'derived':[],'leaf_affine_2k_pixels':{'origin':[323,1518],'length_axis':[-105,30],'width_axis':[-10,-35]},'bark_width_m':1.0,'leaf_is_authored_scaled_archetype':True,'leaf_authored_linear_albedo_gain':[2.6,2.5,1.8]}
+manifest={'sources':records,'derived':[],'leaf_affine_2k_pixels':{'origin':[323,1518],'length_axis':[-105,30],'width_axis':[-10,-35]},'bark_width_m':1.0,'leaf_is_authored_scaled_archetype':True,'leaf_authored_linear_albedo_gain':[2.6,2.5,1.8],'bark_authored_linear_albedo_gain':[2.4,3.6,5.2],'bark_gain_input':'quantized_srgb8_after_linear_downsample'}
 for path in sorted(destination.glob('*.png')):manifest['derived'].append(dict(path=path.name,bytes=path.stat().st_size,sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
 (destination/'provenance.json').write_text(json.dumps(manifest,indent=2)+'\n')

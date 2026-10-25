@@ -475,5 +475,5 @@ fn check_plant_ray_visibility(reduced: bool) {
         primary_edge_samples * 4 < checked,
         "primary edge exclusions must remain a small minority"
     );
-    assert_eq!(bias_disagreements, if reduced { [4, 0] } else { [29, 0] });
+    assert_eq!(bias_disagreements, if reduced { [8, 0] } else { [24, 0] });
 }

@@ -1539,8 +1539,8 @@ mod lod_fade_tests {
             surface_appearance_with_ground_detail(&field, &sample, dir, 0.01, true, Some(ground));
         assert!(gw > 0.0 && gw <= 1.0, "coastal floor weight: {gw}");
         assert!(
-            mat.albedo_srgb[0] > mat.albedo_srgb[1],
-            "red must exceed green for warm humus"
+            mat.albedo_srgb[0] > mat.albedo_srgb[2],
+            "humus/moss must retain red above blue; local moss may exceed red in green"
         );
         assert!(
             mat.albedo_srgb[1] > mat.albedo_srgb[2],

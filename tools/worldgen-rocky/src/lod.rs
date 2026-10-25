@@ -752,7 +752,7 @@ pub struct GpuMaterialPage {
     pub size: u32,
     pub rgba: Vec<u8>,
     pub normal: Vec<u8>,
-    pub relief_residual: Vec<u8>,
+    pub base_normal: Vec<u8>,
 }
 
 pub const GPU_MATERIAL_PAGE_SIZE: u32 = 128;
@@ -798,8 +798,8 @@ pub fn build_gpu_material_page_with_ground_detail(
     build_gpu_material_page_with_relief(field, key, normal_maps, ground_detail, false)
 }
 
-/// Preserve the full optical normal and separately encode the gradient left
-/// after the same quantized 33-square soil geometry. No second height gain.
+/// Preserve full optical normals and the canonical base-height normal in one
+/// shared chart. Neither shading plane depends on height-grid residency.
 pub fn build_gpu_material_page_with_relief(
     field: &PlanetField,
     key: TileKey,
@@ -896,26 +896,15 @@ pub fn build_gpu_material_page_with_relief(
             size: GPU_MATERIAL_PAGE_SIZE,
             rgba,
             normal: Vec::new(),
-            relief_residual: Vec::new(),
+            base_normal: Vec::new(),
         };
     }
     let grain = material_normal_grain_samples(field, &dirs, &samples, size, texel_m);
-    let geometry = (relief
+    let has_base = relief
         && ground_detail
         && key.span_m(field.params.radius_m) / 32.0 < 4.0
-        && !ground.is_empty())
-    .then(|| {
-        (
-            bake_height_page_with_ground_detail(field, key, 33, 0.001, true),
-            bake_height_page_with_ground_detail(field, key, 33, 0.001, false),
-        )
-    })
-    .and_then(|(a, b)| Some((a.ok()?, b.ok()?)));
-    let mut relief_residual = Vec::with_capacity(if geometry.is_some() {
-        size * size * 2
-    } else {
-        0
-    });
+        && !ground.is_empty();
+    let mut base_normal = Vec::with_capacity(if has_base { size * size * 2 } else { 0 });
     let mut normal = Vec::with_capacity(size * size * 2);
     for y in 0..size {
         for x in 0..size {
@@ -960,35 +949,21 @@ pub fn build_gpu_material_page_with_relief(
                     gradient[i] += floor_gradient[i] * ground_weights[y * size + x];
                 }
             }
-            if let Some((full, base)) = &geometry {
-                let uv = [
-                    (x as f64 - 1.0) / cells as f64,
-                    (y as f64 - 1.0) / cells as f64,
-                ];
-                let uv = uv.map(|v| v.clamp(0.0, 1.0));
-                let u0 = (uv[0] - 1.0 / 32.0).max(0.0);
-                let u1 = (uv[0] + 1.0 / 32.0).min(1.0);
-                let v0 = (uv[1] - 1.0 / 32.0).max(0.0);
-                let v1 = (uv[1] + 1.0 / 32.0).min(1.0);
-                // Borders sample the same clamped page law as surface_sample.wgsl.
-                let delta = |u: f64, v: f64| {
-                    f64::from(full.sample(u as f32, v as f32))
-                        - f64::from(base.sample(u as f32, v as f32))
-                };
-                let resolved = material_chart_gradient(
+            if has_base {
+                let metric_radius = field.params.radius_m + samples[y * size + x].height_m.max(0.0);
+                let base_gradient = material_chart_gradient(
                     key.face,
                     dirs[y * size + x],
-                    sub(key.direction(u1, uv[1]), key.direction(u0, uv[1]))
-                        .map(|v| v * field.params.radius_m),
-                    sub(key.direction(uv[0], v1), key.direction(uv[0], v0))
-                        .map(|v| v * field.params.radius_m),
-                    delta(u1, uv[1]) - delta(u0, uv[1]),
-                    delta(uv[0], v1) - delta(uv[0], v0),
+                    sub(dirs[y * size + x1], dirs[y * size + x0]).map(|v| v * metric_radius),
+                    sub(dirs[y1 * size + x], dirs[y0 * size + x]).map(|v| v * metric_radius),
+                    samples[y * size + x1].height_m.max(0.0)
+                        - samples[y * size + x0].height_m.max(0.0),
+                    samples[y1 * size + x].height_m.max(0.0)
+                        - samples[y0 * size + x].height_m.max(0.0),
                 );
-                let dx = gradient[0] - resolved[0];
-                let dy = gradient[1] - resolved[1];
-                let length = (dx * dx + dy * dy + 1.0).sqrt();
-                relief_residual.extend([
+                let [dx, dy] = base_gradient;
+                let length = (1.0 + dx * dx + dy * dy).sqrt();
+                base_normal.extend([
                     encode_material_normal_component(-dx / length),
                     encode_material_normal_component(-dy / length),
                 ]);
@@ -1003,7 +978,7 @@ pub fn build_gpu_material_page_with_relief(
         size: GPU_MATERIAL_PAGE_SIZE,
         rgba,
         normal,
-        relief_residual,
+        base_normal,
     }
 }
 
@@ -1315,18 +1290,21 @@ mod surface_regressions {
             "coastal geometry must receive actual relief"
         );
         let full = build_gpu_material_page_with_ground_detail(&field, key, true, true);
-        let residual = build_gpu_material_page_with_relief(&field, key, true, true, true);
-        assert_eq!(full.rgba, residual.rgba);
-        assert_eq!(full.normal, residual.normal);
-        assert_eq!(residual.relief_residual.len(), 128 * 128 * 2);
-        assert!(residual.relief_residual.iter().any(|b| *b != 0));
+        let canonical = build_gpu_material_page_with_relief(&field, key, true, true, true);
+        assert_eq!(full.rgba, canonical.rgba);
+        assert_eq!(full.normal, canonical.normal);
+        assert_eq!(canonical.base_normal.len(), 128 * 128 * 2);
+        assert!(
+            canonical.base_normal.iter().all(|b| *b == 0),
+            "this coastal base is neutral at SNORM precision; a present neutral plane is still valid"
+        );
         assert_ne!(
-            residual.relief_residual, residual.normal,
-            "resolved soil slope must be subtracted, not copied twice"
+            canonical.base_normal, canonical.normal,
+            "canonical base and optical detail are distinct source planes"
         );
         assert!(
             build_gpu_material_page_with_relief(&field, key, false, true, true)
-                .relief_residual
+                .base_normal
                 .is_empty()
         );
         let coarse = TileKey {
@@ -1339,6 +1317,63 @@ mod surface_regressions {
         let same = bake_height_page_with_ground_detail(&field, coarse, 33, 0.5, true).unwrap();
         assert_eq!(old.residual_bytes(), same.residual_bytes());
         assert_eq!(old.base_height_m(), same.base_height_m());
+    }
+
+    #[test]
+    fn canonical_base_normals_match_independent_height_secants() {
+        let field = field();
+        let dir = [
+            -0.44575261109709685,
+            -0.8191520442889918,
+            0.36096334722141254,
+        ];
+        let extent = (1_u32 << 16) as f64;
+        let key = TileKey {
+            face: 3,
+            level: 16,
+            x: ((dir[0] / -dir[1] + 1.0) * 0.5 * extent) as u32,
+            y: ((dir[2] / -dir[1] + 1.0) * 0.5 * extent) as u32,
+        };
+        let page = build_gpu_material_page_with_relief(&field, key, true, true, true);
+        assert_eq!(page.base_normal.len(), 128 * 128 * 2);
+        let mut largest_slope = 0.0_f64;
+        for y in [16_usize, 64, 112] {
+            for x in [16_usize, 64, 112] {
+                let at = |xx: f64, yy: f64| key.direction((xx - 1.0) / 125.0, (yy - 1.0) / 125.0);
+                let point = |xx: f64, yy: f64| {
+                    let d = at(xx, yy);
+                    d.map(|v| v * (field.params.radius_m + field.height_m(d, 32.0).max(0.0)))
+                };
+                let du = sub(
+                    point(x as f64 + 1.0, y as f64),
+                    point(x as f64 - 1.0, y as f64),
+                );
+                let dv = sub(
+                    point(x as f64, y as f64 + 1.0),
+                    point(x as f64, y as f64 - 1.0),
+                );
+                let normal = normalize(cross(du, dv));
+                let radial = at(x as f64, y as f64);
+                let chart_du = sub(at(x as f64 + 1.0, y as f64), at(x as f64 - 1.0, y as f64));
+                let tangent = normalize(sub(chart_du, radial.map(|v| v * dot(chart_du, radial))));
+                let bitangent = cross(radial, tangent);
+                for (axis, basis) in [tangent, bitangent].into_iter().enumerate() {
+                    let expected = dot(normal, basis);
+                    largest_slope = largest_slope.max(expected.abs());
+                    let actual = thessa_rcbt_core::material_page::decode_material_normal_component(
+                        page.base_normal[(y * 128 + x) * 2 + axis],
+                    );
+                    assert!(
+                        (f64::from(actual) - expected).abs() < 0.005,
+                        "canonical field normal {x}/{y}/{axis}: {actual} vs {expected}"
+                    );
+                }
+            }
+        }
+        assert!(
+            largest_slope > 0.01,
+            "the oracle must exercise non-flat source terrain: {largest_slope}"
+        );
     }
 
     #[test]

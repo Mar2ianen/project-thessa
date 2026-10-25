@@ -84,11 +84,11 @@ pub fn spawn_material_job_with_relief(
             normal_maps.then_some(page.normal),
         )
         .expect("fixed material page layout");
-        if page.relief_residual.is_empty() {
+        if page.base_normal.is_empty() {
             material
         } else {
             material
-                .with_relief_residuals(page.relief_residual)
+                .with_base_normals(page.base_normal)
                 .expect("fixed residual plane")
         }
     })

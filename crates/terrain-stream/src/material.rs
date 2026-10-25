@@ -100,7 +100,7 @@ impl MaterialStream {
             ground_detail,
             ground_relief,
             max_level: if ground_detail {
-                max_level.clamp(17, 22)
+                max_level.clamp(17, 24)
             } else {
                 17
             },

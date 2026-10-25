@@ -131,6 +131,35 @@ fn understory_colonies_are_bounded_continuous_and_world_addressed() {
 }
 
 #[test]
+fn understory_cohorts_respect_requested_scale_bounds_and_fixed_scale() {
+    for (min, max) in [(0.55, 1.10), (0.8, 0.8)] {
+        let batch = scatter_region(
+            7,
+            RADIUS_M,
+            region(0, 18, 131_072, 131_072),
+            ScatterPopulation::Understory,
+            ScatterPolicy {
+                understory_min_scale: min,
+                understory_max_scale: max,
+                ..Default::default()
+            },
+            surface,
+        )
+        .unwrap();
+        assert!(!batch.items.is_empty());
+        assert!(
+            batch
+                .items
+                .iter()
+                .all(|item| (min..=max).contains(&item.scale))
+        );
+        if min == max {
+            assert!(batch.items.iter().all(|item| item.scale == min));
+        }
+    }
+}
+
+#[test]
 fn understory_has_disjoint_ids_nested_density_and_exact_window_unions() {
     let tile = region(0, 18, 131_072, 131_072);
     let high = query(tile, ScatterPopulation::Understory, 1.0);

@@ -15,7 +15,7 @@ pub use thessa_rcbt_core::material_page::MaterialPages;
 #[derive(Debug, Clone)]
 pub struct MaterialBinding {
     pub texture: wgpu::TextureView,
-    /// RG8_SNORM full normals, or RGBA8_SNORM with relief residual in BA. Pages without a normal
+    /// RG8_SNORM full normals, or RGBA8_SNORM with base-height normal in BA. Pages without a normal
     /// layer are absent from `normal_directory` and resolve to a flat normal.
     pub normal_texture: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
@@ -54,10 +54,10 @@ pub(crate) struct MaterialArray {
 }
 
 impl MaterialArray {
-    pub fn relief_resident_pages(&self) -> usize {
+    pub fn height_field_pages(&self) -> usize {
         self.normal_directory_data
             .iter()
-            .filter(|e| e[3] & 0x80000000 != 0)
+            .filter(|e| e[3] & 0x40000000 != 0)
             .count()
     }
     pub fn binding(&self) -> MaterialBinding {
@@ -249,12 +249,12 @@ impl MaterialArray {
                 for (level, data) in normal.iter().enumerate() {
                     let size = MATERIAL_PAGE_SIZE >> level;
                     let packed: std::borrow::Cow<'_, [u8]> = if self.relief {
-                        let residual = page.relief_residual_mips().map(|m| m[level].as_slice());
+                        let base = page.base_normal_mips().map(|m| m[level].as_slice());
                         let mut packed = Vec::with_capacity(data.len() * 2);
                         for (i, xy) in data.as_chunks::<2>().0.iter().enumerate() {
                             packed.extend_from_slice(xy);
                             packed.extend_from_slice(
-                                residual.map_or(&[0, 0][..], |r| &r[i * 2..i * 2 + 2]),
+                                base.map_or(&[0, 0][..], |r| &r[i * 2..i * 2 + 2]),
                             );
                         }
                         packed.into()
@@ -329,8 +329,8 @@ impl MaterialArray {
                     self.relief
                         && pages
                             .get(&id)
-                            .is_some_and(|(_, p)| p.relief_residual_mips().is_some()),
-                ) << 31;
+                            .is_some_and(|(_, p)| p.base_normal_mips().is_some()),
+                ) << 30;
             }
             directory
         } else {

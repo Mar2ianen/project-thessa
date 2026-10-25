@@ -21,7 +21,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 12.80
+exposure_ev100 = 12.65
 fleet_meshes = true
 fleet_quality = "high"
 
@@ -35,7 +35,7 @@ enabled = true
 quality = "high"
 aerial_perspective = true
 # Authored local sea-haze optical prior, shared by ground/water/meshes.
-local_haze_extinction_per_m = 0.002
+local_haze_extinction_per_m = 0.0082
 local_haze_height_m = 500.0
 density_scale = 1.25
 multiple_scattering = true
@@ -55,8 +55,8 @@ integrator = "march"
 ray_steps = 24
 cast_shadows = true
 layers = 2
-coverage = 0.48
-opacity = 0.72
+coverage = 0.32
+opacity = 0.86
 animate = true
 
 [night_lights]

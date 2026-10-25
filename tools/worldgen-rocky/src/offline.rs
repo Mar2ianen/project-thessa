@@ -1630,13 +1630,18 @@ fn fern_frond(
 ) {
     let (radial, lateral) = azimuth_frame(angle);
     let at = |t: f64| {
+        // Multi-tier rosette vertical curvature:
+        // Young inner fiddleheads have a more upright posture;
+        // mature spreading fronds have a graceful outward arch with phototropic tip lift.
+        let arch = (t * std::f64::consts::PI * 0.8).sin();
+        let tip_lift = if length_m > 0.9 {
+            0.022 * ((t - 0.72).max(0.0) / 0.28).powi(2)
+        } else {
+            0.0
+        };
         offset(
             scaled(radial, 0.04 + t * length_m),
-            [
-                0.0,
-                base_y_m + (t * std::f64::consts::PI * 0.8).sin() * height_m,
-                0.0,
-            ],
+            [0.0, base_y_m + arch * height_m + tip_lift, 0.0],
         )
     };
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));

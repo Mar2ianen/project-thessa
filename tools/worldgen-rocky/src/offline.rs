@@ -1472,11 +1472,12 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         2 => (5.10, 4.45),
         _ => (4.68, 4.20),
     };
-    let tiers: [(usize, f64, f64, f64, f64, f64); 4] = [
-        (6, 8.15, 3.45, 2.30, 0.30, 0.00),         // Ascending young fronds
-        (9, 7.85, spread_reach, 1.95, 1.05, 0.35), // Spreading mature fronds
-        (6, 7.55, outer_reach, 1.10, 1.75, 0.72),  // Descending outer fronds
-        (3, 7.20, 2.05, 0.15, 2.55, 1.15),         // Hanging dry mantle
+    let tiers: [(usize, f64, f64, f64, f64, f64); 5] = [
+        (3, 8.28, 2.35, 2.60, 0.15, 0.12), // Emerging apical young fronds
+        (5, 8.10, 3.65, 2.30, 0.45, 0.35), // Ascending juvenile fronds
+        (8, 7.85, spread_reach, 1.95, 1.05, 0.62), // Spreading mature canopy umbrella
+        (5, 7.55, outer_reach, 1.10, 1.75, 0.95), // Descending cascading fronds
+        (3, 7.20, 2.05, 0.15, 2.55, 1.25), // Hanging senescent mantle skirt
     ];
     for &(count, base_y, reach_base, rise, drop, phase_offset) in &tiers {
         if base_y == 7.20 {

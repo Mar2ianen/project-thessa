@@ -533,11 +533,17 @@ pub fn prepare(
     if settings.terrain_ground_relief_max_level > 17 {
         for (instance, item) in prepared.instances.iter_mut().zip(&prepared.descriptors) {
             if item.kind != thessa_worldgen_rocky::scatter::ScatterKind::Pebble {
+                let texel_m =
+                    if item.kind == thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree {
+                        0.048
+                    } else {
+                        0.012
+                    };
                 instance.position_m += DVec3::from(item.direction)
                     * thessa_worldgen_rocky::lod::ground_relief_height_m(
                         field,
                         item.direction,
-                        0.012,
+                        texel_m,
                     );
             }
         }

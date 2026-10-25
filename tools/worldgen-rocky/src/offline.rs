@@ -1573,12 +1573,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         };
         let dome_center = [center[0], center[1] + 0.35, center[2]];
         let radial = crate::lod::sub(pf, dome_center);
-        let radial_len_sq = crate::lod::dot(radial, radial);
-        if radial_len_sq > 1e-6 {
-            let spherical = scaled(radial, 1.0 / radial_len_sq.sqrt());
+        let oblate = [radial[0], radial[1] * 1.85, radial[2]];
+        let oblate_len_sq = crate::lod::dot(oblate, oblate);
+        if oblate_len_sq > 1e-6 {
+            let ellipsoid = scaled(oblate, 1.0 / oblate_len_sq.sqrt());
             let current = n.map(f64::from);
             let blended =
-                crate::lod::normalize(offset(scaled(current, 0.85), scaled(spherical, 0.15)));
+                crate::lod::normalize(offset(scaled(current, 0.82), scaled(ellipsoid, 0.18)));
             *n = blended.map(|v| v as f32);
         }
     }

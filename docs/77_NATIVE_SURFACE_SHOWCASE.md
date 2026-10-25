@@ -6,6 +6,85 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD14 — Coastal material review and shared local weather (2026-10-25)
+
+Review baseline is `271e65a` plus the user's uncommitted green-leaf roughness
+0.46, revised three wet-pebble palettes and mesh extinction 0.0075/0.0095/0.0125
+per metre. The material edits are retained. Commits `060d966`, `2693d1f` and
+`271e65a` add the optional full-detail distance override, optical forest-floor
+litter/mineral variation and leaf tints; these are authored appearance priors,
+not measured chlorophyll, fossil spectra, soil moisture or meteorology.
+The profile keeps EV100 12.80, 4× MSAA and TAA off. Its explicit
+`surface_plants.detail_distance_m=24` overrides the High tier's default 48 m;
+scale and conservative near-eye cell padding still apply. The override now has
+GUI metadata and the current plant documentation records it.
+
+The review found that the recent mesh-only haze was unconditional: it ignored
+`atmosphere.enabled` and `aerial_perspective`, left terrain/water unfaded and
+extended through empty space. It is replaced by **one shared local weather
+layer** in the existing environment uniform. The primary mesh, regular terrain,
+conforming terrain and water shade through the same function, after material
+lighting and before exposure. No new pass, scheduler, attachment, texture,
+sampler, bind-group slot or readback is introduced. Mesh material and primary
+terrain quality/reflection switches remain independent of weather. Reflections
+inside secondary rays do not yet integrate the additional local-weather segment.
+
+| Requested setting | Default | Surface profile | Resolution / fallback |
+| --- | ---: | ---: | --- |
+| `atmosphere.local_haze_extinction_per_m` | 0 | 0.002 m⁻¹ | finite [0, 0.1]; non-finite/negative -> 0; atmosphere or aerial disabled -> 0 |
+| `atmosphere.local_haze_height_m` | 500 m | 500 m | finite [1, 20000] m; non-finite -> 500 m |
+| `atmosphere.quality` | High | High | Low isotropic sky-source estimate; Medium/High directional sky-source estimate |
+
+The layer occupies the spherical shell between the body datum and the configured
+height. Finite-segment sphere intersections subtract the interior solid-body
+length; this avoids applying a local marine medium to an entire orbital sight
+line. Stable quadratic roots and a camera datum height computed in f64 preserve
+near-ground precision without subtracting absolute f32 radii. Beer–Lambert
+transmittance is `exp(-sigma_t * length_inside_layer)`, shared across objects.
+The source is the existing sky field: Low uses ambient irradiance / pi;
+Medium/High sample the viewing azimuth, clamping directions below the horizon
+to that horizon so opaque-body sky texels do not make the medium black.
+
+This is a bounded **homogeneous local-weather optical prior with an equilibrium
+sky-source approximation**, not the physical atmosphere's full finite-segment
+single/multiple-scattering solution. It adds neither moisture transport nor a
+measured sea-aerosol spectrum. It does not mask finite planting windows. Changing
+quality changes the source quadrature approximation, not extinction or shell
+height. Zero extinction bypasses source sampling and intersection math; the native
+publisher performs no layer upload while disabled. Enabled publication adds a
+32-byte camera-layer write to the shared uniform each displayed frame. The
+uniform grows from 32 to 64 bytes; there are no new GPU resources. Airless/no-field
+consumers remain clear. Existing full planetary aerial-perspective work remains
+open (doc 65).
+
+Validation and captures are recorded in
+[`artifacts/native-surface-coastal-continuity-2026-10-25.json`](artifacts/native-surface-coastal-continuity-2026-10-25.json).
+The ten final gates passed (493 test invocations), including production WGSL
+versus an independent f64 finite-shell/Beer–Lambert oracle, primary regular and
+conforming raster at all material tiers, worldgen/native regressions, material,
+mesh and sky GPU fixtures, strict workspace clippy, formatting, architecture and
+native feature-off compilation. All Cargo commands used the project-required
+`TMPDIR=/home/chechulin/Projects/project-thessa/target/tmp`.
+
+Five actual captures cover the user baseline, standing, moving endpoint,
+ground without plants and the clear toggle. Standing baseline/candidate match
+11,752 plants, 5,241 pebbles, 16,993 submitted instances, 14,950 active CBT slots,
+canonical source and height-level residency counts. Both static topology counters
+settled with zero remaining requests/commits and zero capacity rejections.
+Radeon 880M / Vulkan median GPU times are 405.571 -> 408.718 ms (48 measured
+frames each after 30 warmup and 20 s prestream, epoch 0). These are serial
+headless diagnostics, not game FPS or a performance win. One short moving sweep
+does not establish temporal-flicker acceptance.
+
+These are labeled engineering comparisons; no blind preference or reference
+parity is claimed. Repeated crowns, simplified ground pinnae, missing subgrid
+soil-normal residuals and the flat sky/cloud composition remain visible gaps.
+
+Primary transport reference:
+[PBRT 4e, Transmittance](https://pbr-book.org/4ed/Volume_Scattering/Transmittance).
+The finite shell/source approximation above is this implementation's explicit
+scope, not a claim that PBRT validates its appearance.
+
 ## WORLD13 — Native persistent CBT migration and soil geometry (2026-10-24)
 
 The native launch configuration and the surface-showcase profile now select

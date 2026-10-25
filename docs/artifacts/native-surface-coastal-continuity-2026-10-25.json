@@ -1,0 +1,579 @@
+{
+  "status": "engineering review; reference parity and blind preference unaccepted",
+  "date": "2026-10-25",
+  "reviewed_commits": [
+    "060d966a240b192afcfda62774236b18db572800",
+    "2693d1fb5b9ea5847543d0f17e1c66c7f89affd4",
+    "271e65a98dd0fb9d551bbfbc2a1682e69ead4cd2"
+  ],
+  "baseline": {
+    "head": "271e65a98dd0fb9d551bbfbc2a1682e69ead4cd2",
+    "user_patch": "user-start.patch",
+    "binary_sha256": "8d6cbb4b0107ca1881ac046228827c6dd16f3215985c31fa1447f0bbbf27a142",
+    "source_sha256": "60ed1e05090fccc7dbad77d6e55e613464e0e2df0950938aa55b320a7060c9bd"
+  },
+  "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+  "release": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "thessa-terrain-native",
+      "--release"
+    ],
+    "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+    "binary_sha256": "0e0c29b28f2b0192f115c0e087e6149443feb0d33747f9248f5fb09bacb4f1b3"
+  },
+  "changes": [
+    "Retain user-authored foliage tint/transmission, green roughness 0.46, wet pebble palettes/roughness and fine/coarse soil pigments. These are optical priors, not physical calibration from a rendered image.",
+    "Document optional full plant detail distance and add its missing GUI metadata; review profile explicitly chooses 24m while omitted High retains 48m.",
+    "Replace unconditional mesh-only RGB extinction with one parent-gated spherical local weather layer shared by primary regular/conforming terrain, water and meshes.",
+    "Use existing environment uniform/publication, sky source, Low isotropic fallback and clear zero-work shader branch; no new draw, GPU resource, scheduler or attachment."
+  ],
+  "checks": [
+    {
+      "name": "units",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.5884697899455205,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 79,
+      "log_sha256": "f7c1dac3287b3b83701ddb683972ec4d9b4c3519c09358bb86ff58cd222e98f1"
+    },
+    {
+      "name": "haze-gpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "local_haze_matches_finite_shell_and_clear_fallback",
+        "--",
+        "--include-ignored",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.5873465290060267,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 1,
+      "log_sha256": "d0ae1d466a2040a6e9469f88d8520253eafadd0bdc4ca63d571645956412cffc"
+    },
+    {
+      "name": "worldgen",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky"
+      ],
+      "exit_code": 0,
+      "seconds": 3.538096721051261,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 261,
+      "log_sha256": "2c712ccf8d9556d3a058ff0048c354430bd29efde0c93612b051a90439d73982"
+    },
+    {
+      "name": "native",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 9.109022114076652,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 125,
+      "log_sha256": "bbe2a2ec87bf0ce089271c423b1a87f40f8661ab575dd255e6d0a1c1ab36dc53"
+    },
+    {
+      "name": "terrain-environment",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "terrain_environment",
+        "--",
+        "--include-ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 8.721137766027823,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 13,
+      "log_sha256": "10efdd0e36d70c6a14af5a7599f549a01164c6a1cd334ae01be8616a96f8e065"
+    },
+    {
+      "name": "material-mesh-sky",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "material",
+        "--test",
+        "mesh",
+        "--test",
+        "sky",
+        "--",
+        "--include-ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 3.086548227001913,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 14,
+      "log_sha256": "f1d3cb1778c2cbf574ef0f02a58a6c21998b6928f7c6c7149c8635cc32dbd9c6"
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.536610095994547,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 0.28315112297423184,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 0,
+      "log_sha256": "76a6b1e2fcde8d19182bb30ea112f3769665547dac0ee9eba94ae98e71c19a89"
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.04624804900959134,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 0,
+      "log_sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 2.107770908041857,
+      "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+      "inputs_stable": true,
+      "passed": 0,
+      "log_sha256": "4090e245967339d99466170f9f0a364c672d717a2e24527163cbb53a059ae1ab"
+    }
+  ],
+  "test_invocations_passed": 493,
+  "scenes": {
+    "before-standing": {
+      "png_sha256": "4ff682daf92c153a2e25544d7ec7457fcade5415ff72f67508d1d286fecdc074",
+      "performance_json_sha256": "da0e811c58e0ede5fff250b268f8e67501f9135913db2ea74c975f93209cbce6",
+      "log_sha256": "ca3e63d96c16ea275d66d204d0844ad5d0fc2ad4cedd6de4ad3ef81ec12f28e2",
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "frame_count": 48,
+      "gpu_median_ms": 405.57050898955544,
+      "wall_median_ms": 442.589468,
+      "gpu_scope_median_ms": {
+        "render.display_transform": 0.21166216072654725,
+        "render.motion_vectors": 0.006592525880813598,
+        "render.rt_as_build": 0.004608756694793702,
+        "render.scene_classify_and_raster": 354.234274508307,
+        "render.scene_overlays": 49.976836608455656,
+        "render.surface_and_shadows": 0.006412183227539063,
+        "render.temporal_resolve": 0.0013225127906799318,
+        "render.ui": 0.0056707745418548595
+      },
+      "topology": {
+        "cbt_active_slots": 14950,
+        "cbt_split_requests": 5191,
+        "cbt_merges": 1481,
+        "cbt_capacity_rejections": 0,
+        "cbt_last_requests": 0,
+        "cbt_last_commits": 0
+      },
+      "plants": 11752,
+      "pebbles": 5241,
+      "instances": 16993,
+      "height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 57, 102, 78, 68, 80, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.8\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.25\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.48\nopacity = 0.72\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+      "canonical_source_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+    },
+    "after-standing": {
+      "png_sha256": "2b205747241c3810c1a2f0d66824054dd20b857e9fd24d63ee860874a4ffb6ce",
+      "performance_json_sha256": "1cfa07c1e7d3a7823831c7029806a4d2271c0fc27012bdff5f5fa4828bedabe8",
+      "log_sha256": "b38c13dfa05dbfcf94eaef2cd640d1b2c157410a21bc2d2c6e05e85a76b2149b",
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "frame_count": 48,
+      "gpu_median_ms": 408.71839000246234,
+      "wall_median_ms": 445.651595,
+      "gpu_scope_median_ms": {
+        "render.display_transform": 0.2233844331893921,
+        "render.motion_vectors": 0.007193668058395386,
+        "render.rt_as_build": 0.003927462226867676,
+        "render.scene_classify_and_raster": 357.3700274777814,
+        "render.scene_overlays": 50.019938502588275,
+        "render.surface_and_shadows": 0.006412183227539063,
+        "render.temporal_resolve": 0.0013225127906799318,
+        "render.ui": 0.0059513075580596925
+      },
+      "topology": {
+        "cbt_active_slots": 14950,
+        "cbt_split_requests": 5191,
+        "cbt_merges": 1481,
+        "cbt_capacity_rejections": 0,
+        "cbt_last_requests": 0,
+        "cbt_last_commits": 0
+      },
+      "plants": 11752,
+      "pebbles": 5241,
+      "instances": 16993,
+      "height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 57, 102, 78, 68, 80, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.8\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.002\nlocal_haze_height_m = 500.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.25\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.48\nopacity = 0.72\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-standing.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-standing.json"
+        ],
+        "exit_code": 0,
+        "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+        "binary_sha256": "0e0c29b28f2b0192f115c0e087e6149443feb0d33747f9248f5fb09bacb4f1b3",
+        "inputs_stable": true,
+        "seconds": 61.272830837988295
+      },
+      "canonical_source_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+    },
+    "after-moving": {
+      "png_sha256": "e12047911ac31a2c7f6a4705a148a6ead7d653eae69824c24eb3acab067baff7",
+      "performance_json_sha256": "ad58205c94b822f71ddae10c8a4f089beba74bf3082c0d95fd6a98cc1489730b",
+      "log_sha256": "d9727a1a19fdb06490d52c0f8e7cf7d5a8b986936e94f9938f1fb7237d0763c3",
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "frame_count": 48,
+      "gpu_median_ms": 656.7966217148495,
+      "wall_median_ms": 670.9530065,
+      "gpu_scope_median_ms": {
+        "render.display_transform": 0.22320409053611756,
+        "render.motion_vectors": 0.0068530208244323735,
+        "render.rt_as_build": 0.0043682998237609865,
+        "render.scene_classify_and_raster": 522.4581168920746,
+        "render.scene_overlays": 51.63142033803177,
+        "render.surface_and_shadows": 83.16391246356011,
+        "render.temporal_resolve": 0.0013225127906799318,
+        "render.ui": 0.006031459848403932
+      },
+      "topology": {
+        "cbt_active_slots": 18608,
+        "cbt_split_requests": 10034,
+        "cbt_merges": 6669,
+        "cbt_capacity_rejections": 0,
+        "cbt_last_requests": 255,
+        "cbt_last_commits": 89
+      },
+      "plants": 11303,
+      "pebbles": 5162,
+      "instances": 16465,
+      "height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 20, 22, 32, 24, 23, 32, 29, 20, 57, 110, 85, 77, 95, 114, 157, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.8\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.002\nlocal_haze_height_m = 500.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.25\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.48\nopacity = 0.72\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-moving.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-moving.json",
+          "--sweep"
+        ],
+        "exit_code": 0,
+        "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+        "binary_sha256": "0e0c29b28f2b0192f115c0e087e6149443feb0d33747f9248f5fb09bacb4f1b3",
+        "inputs_stable": true,
+        "seconds": 70.11030890897382
+      },
+      "canonical_source_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+    },
+    "after-bare": {
+      "png_sha256": "de9fd24cf0f79622f4a877f35699f4be3b1de8e2fc9fb7b86356b7c5cc9a3244",
+      "performance_json_sha256": "735f3c3cef57c86a93fb3fe7ae545b60c8effdb6c0b3fdf427e27a11c9b88fea",
+      "log_sha256": "904c35e12d2d8f7621d23870698e25c815681c00926e5b078079fd8b270ae370",
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "frame_count": 48,
+      "gpu_median_ms": 168.2347531142907,
+      "wall_median_ms": 193.3147505,
+      "gpu_scope_median_ms": {
+        "render.display_transform": 0.16856026659393314,
+        "render.motion_vectors": 0.006532411663055421,
+        "render.rt_as_build": 0.0038473099365234375,
+        "render.scene_classify_and_raster": 96.57496362684918,
+        "render.scene_overlays": 71.10922841458512,
+        "render.surface_and_shadows": 0.006412183227539063,
+        "render.temporal_resolve": 0.0013625889358520509,
+        "render.ui": 0.005009518146514893
+      },
+      "topology": {
+        "cbt_active_slots": 14950,
+        "cbt_split_requests": 5191,
+        "cbt_merges": 1481,
+        "cbt_capacity_rejections": 0,
+        "cbt_last_requests": 0,
+        "cbt_last_commits": 0
+      },
+      "plants": 0,
+      "pebbles": 5241,
+      "instances": 5241,
+      "height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 57, 102, 78, 68, 80, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = false\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.8\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.002\nlocal_haze_height_m = 500.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.25\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.48\nopacity = 0.72\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/bare.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-bare.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-bare.json"
+        ],
+        "exit_code": 0,
+        "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+        "binary_sha256": "0e0c29b28f2b0192f115c0e087e6149443feb0d33747f9248f5fb09bacb4f1b3",
+        "inputs_stable": true,
+        "seconds": 38.865120813949034
+      },
+      "canonical_source_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+    },
+    "after-clear": {
+      "png_sha256": "9f20f67bd1adee7a2048322e752e84f57a5f692fe73608f999c8211cc269da97",
+      "performance_json_sha256": "595539a34bc584d5d4148bf5d668ab04ce5c1fe57388a6c51396df9b84a520ad",
+      "log_sha256": "cd38a5c958234bee6d7057b04747db14aea250ff2cc1ec3383d5ea7768b2244a",
+      "platform": {
+        "os": "linux",
+        "cpu": "x86_64",
+        "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+        "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+      },
+      "frame_count": 48,
+      "gpu_median_ms": 407.6951257877827,
+      "wall_median_ms": 444.12966600000004,
+      "gpu_scope_median_ms": {
+        "render.display_transform": 0.23580803819274904,
+        "render.motion_vectors": 0.006772868534088135,
+        "render.rt_as_build": 0.0040476906623840335,
+        "render.scene_classify_and_raster": 356.54786535957527,
+        "render.scene_overlays": 50.08155557579041,
+        "render.surface_and_shadows": 0.006372107082366943,
+        "render.temporal_resolve": 0.0013225127906799318,
+        "render.ui": 0.005991383703231812
+      },
+      "topology": {
+        "cbt_active_slots": 14950,
+        "cbt_split_requests": 5191,
+        "cbt_merges": 1481,
+        "cbt_capacity_rejections": 0,
+        "cbt_last_requests": 0,
+        "cbt_last_commits": 0
+      },
+      "plants": 11752,
+      "pebbles": 5241,
+      "instances": 16993,
+      "height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 57, 102, 78, 68, 80, 78, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 24\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"auto\"\nray_tracing = \"auto\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 12.8\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.0\nlocal_haze_height_m = 500.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 24\ndensity_scale = 1.25\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.48\nopacity = 0.72\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 32\nmax_instances = 4096\nreflection_bounces = 2\nray_bias_m = 0.01\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+      "command": {
+        "command": [
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/clear.toml",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--prestream-seconds",
+          "20",
+          "--frames",
+          "48",
+          "--mute",
+          "--no-hud",
+          "--headless",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-clear.png",
+          "--perf-capture",
+          "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/coastal-continuity-2026-10-25/after-clear.json"
+        ],
+        "exit_code": 0,
+        "source_sha256": "a98775a3873678e2ce9989eec509ae599b6053bc3523517e001a51564c9dc238",
+        "binary_sha256": "0e0c29b28f2b0192f115c0e087e6149443feb0d33747f9248f5fb09bacb4f1b3",
+        "inputs_stable": true,
+        "seconds": 61.64950121496804
+      },
+      "canonical_source_sha256": "b886b41a8e0dc99a3dfbba4c5c3df6507212f9be6f289b81c274cb6a75d8f9c8"
+    }
+  },
+  "comparison": {
+    "camera": "lat 23.565679258039204 lon 165.13881581863882 survey-distance 80m eye AGL 2m",
+    "time": "epoch 0; simulation step 0",
+    "display": "1280x720; 4xMSAA; PBR Neutral; EV100 12.80; TAA/jitter off; no HUD",
+    "sampling": "20s prestream; 30 warmup frames; 48 measured; serial headless GPU completion; not game FPS",
+    "source_and_counts_matched": true,
+    "gpu_standing_delta_ms": 3.1478810129069075,
+    "interpretation": "Single runs, revised transport and extinction/source policy. No isolated speedup, subjective winner or general error guarantee claimed."
+  },
+  "visual_inspection": {
+    "inspected": [
+      "reference concept",
+      "user standing_iter6",
+      "before-standing",
+      "after-standing",
+      "after-moving",
+      "after-bare",
+      "after-clear"
+    ],
+    "observations": [
+      "Distant foliage no longer has an independently stronger blue/grey fade than the ground/water.",
+      "Existing wet ground and pebble optical detail retained; this change does not add soil geometry.",
+      "Repeated crown silhouettes, coarse pinnae, weak root/soil transitions and flat sky/cloud composition remain."
+    ]
+  },
+  "known_limits": [
+    "Equilibrium sky-source approximation in a homogeneous authored local layer; full physical finite-segment atmospheric transport and local-weather transport on secondary rays unported.",
+    "No soil subgrid normal residual was added. Existing fine height pages, optical texture filtering, exact ground contact and collision limits remain.",
+    "Optical priors are not measured fossil leaf/mineral spectra or sea-aerosol data; no physical meteorology claim.",
+    "One fixed location, limited sweep and one GPU/backend. No temporal-flicker acceptance, blind votes, reference parity, remote CI or game-FPS claim.",
+    "No new fundamental CBT topology or terrain source changes. Moving topology remains asynchronous; only measured/static counters and existing bounded fallback are reported."
+  ],
+  "reference": "docs/reference/visual_quality_target_coastal_ferns.jpg",
+  "primary_research": "https://pbr-book.org/4ed/Volume_Scattering/Transmittance"
+}

@@ -340,6 +340,10 @@ pub struct ResolvedGraphicsSettings {
     pub atmosphere_quality: Quality,
     pub atmosphere_steps: u32,
     pub aerial_perspective: bool,
+    #[serde(default)]
+    pub local_haze_extinction_per_m: f32,
+    #[serde(default)]
+    pub local_haze_height_m: f32,
     pub multiple_scattering: bool,
     pub eclipses: bool,
     pub multi_star: bool,
@@ -954,6 +958,25 @@ impl ResolvedGraphicsSettings {
             atmosphere_quality: requested.atmosphere.quality,
             atmosphere_steps: requested.atmosphere.ray_steps,
             aerial_perspective: requested.atmosphere.aerial_perspective,
+            local_haze_extinction_per_m: if requested.atmosphere.enabled
+                && requested.atmosphere.aerial_perspective
+                && requested.atmosphere.local_haze_extinction_per_m.is_finite()
+            {
+                requested
+                    .atmosphere
+                    .local_haze_extinction_per_m
+                    .clamp(0.0, 0.1)
+            } else {
+                0.0
+            },
+            local_haze_height_m: if requested.atmosphere.local_haze_height_m.is_finite() {
+                requested
+                    .atmosphere
+                    .local_haze_height_m
+                    .clamp(1.0, 20_000.0)
+            } else {
+                500.0
+            },
             multiple_scattering: requested.atmosphere.multiple_scattering,
             eclipses: requested.atmosphere.eclipses,
             multi_star: requested.atmosphere.multi_star,
@@ -1298,6 +1321,14 @@ impl ResolvedGraphicsSettings {
             "atmosphere_steps".to_string(),
             self.atmosphere_steps.to_string(),
         );
+        map.insert(
+            "local_haze_extinction_per_m".into(),
+            self.local_haze_extinction_per_m.to_string(),
+        );
+        map.insert(
+            "local_haze_height_m".into(),
+            self.local_haze_height_m.to_string(),
+        );
         map.insert("eclipses".to_string(), self.eclipses.to_string());
         map.insert("stars".into(), self.stars.to_string());
         map.insert(
@@ -1497,6 +1528,33 @@ mod tests {
         }
         let restored: ResolvedGraphicsSettings = legacy.try_into().unwrap();
         assert_eq!(restored, baseline);
+    }
+
+    #[test]
+    fn local_haze_is_opt_in_parent_gated_and_finite() {
+        let mut request = RequestedGraphics::default();
+        let resolve = |r: &RequestedGraphics| {
+            ResolvedGraphicsSettings::from_requested(r, &Capabilities::unknown())
+        };
+        assert_eq!(resolve(&request).local_haze_extinction_per_m, 0.0);
+        request.atmosphere.local_haze_extinction_per_m = 0.002;
+        request.atmosphere.local_haze_height_m = 500.0;
+        assert_eq!(resolve(&request).local_haze_extinction_per_m, 0.002);
+        request.atmosphere.aerial_perspective = false;
+        assert_eq!(resolve(&request).local_haze_extinction_per_m, 0.0);
+        request.atmosphere.aerial_perspective = true;
+        request.atmosphere.enabled = false;
+        assert_eq!(resolve(&request).local_haze_extinction_per_m, 0.0);
+        request.atmosphere.enabled = true;
+        for invalid in [f32::NAN, f32::INFINITY, -1.0] {
+            request.atmosphere.local_haze_extinction_per_m = invalid;
+            assert_eq!(resolve(&request).local_haze_extinction_per_m, 0.0);
+        }
+        request.atmosphere.local_haze_extinction_per_m = 0.002;
+        request.atmosphere.local_haze_height_m = f32::NAN;
+        assert_eq!(resolve(&request).local_haze_height_m, 500.0);
+        request.atmosphere.local_haze_height_m = -1.0;
+        assert_eq!(resolve(&request).local_haze_height_m, 1.0);
     }
 
     #[test]

@@ -123,6 +123,7 @@ pub struct TerrainRenderer {
     ocean_bind: Option<wgpu::BindGroup>,
     ocean_environment: Option<crate::environment::EnvironmentBinding>,
     land_environment_samples: u32,
+    raster_environment: bool,
     ocean_settings: thessa_graphics::OceanSettings,
     ocean_dirty: bool,
     ocean_last_camera: Option<[f64; 3]>,
@@ -669,6 +670,9 @@ impl TerrainRenderer {
             )
         });
         let reflections = settings.is_none_or(|s| s.specular_reflections);
+        let raster_environment = ocean.is_some()
+            || reflections
+            || settings.is_some_and(|s| s.local_haze_extinction_per_m > 0.0);
         let land_environment_samples = settings.map_or(16, |s| s.terrain_environment_samples());
         let [cloud_directions, cloud_steps, cloud_sun_steps] =
             settings.map_or([4, 4, 1], |s| s.terrain_environment_cloud_budget());
@@ -711,10 +715,13 @@ impl TerrainRenderer {
         if ocean.is_some() {
             hooks.push_str(&crate::ocean::shader(2));
         }
-        if ocean.is_some() || reflections {
+        if raster_environment {
             hooks.push_str(&crate::environment::shader(2));
         } else {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
+            hooks.push_str(
+                "fn env_local_haze(p:vec3<f32>,r:vec3<f32>,a:vec3<f32>)->vec3<f32>{return r;}\n",
+            );
         }
         // Displacement samples material at vertices, independently of this
         // fragment's filtered material. Conservatively mask the whole height
@@ -752,6 +759,7 @@ impl TerrainRenderer {
                 "return vec4(radiance * view.exposure, 1.0);",
                 &temporal_alpha,
             )
+            .replace("radiance * view.exposure", "env_local_haze(input.render_position, radiance, lighting.ambient_lux.rgb) * view.exposure")
             .replacen(shaders::RASTER_SURFACE_HOOKS_WGSL, &hooks, 1)
             .replace(
                 "const MATERIAL_MAX_LEVEL: f32 = 17.0;",
@@ -927,7 +935,7 @@ impl TerrainRenderer {
             let mut entries = ocean
                 .as_ref()
                 .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
-            if ocean.is_some() || reflections {
+            if raster_environment {
                 entries.extend(environment.entries());
             } else {
                 entries.extend(environment.cloud_entries());
@@ -963,6 +971,7 @@ impl TerrainRenderer {
             ocean_environment,
             raster_samples: settings.map_or(1, |s| s.raster_msaa_samples),
             land_environment_samples,
+            raster_environment,
             ocean_settings,
             ocean_dirty: true,
             ocean_last_camera: None,
@@ -1676,7 +1685,7 @@ impl TerrainRenderer {
                 .ocean
                 .as_ref()
                 .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
-            if self.ocean.is_some() || self.land_environment_samples > 0 {
+            if self.raster_environment {
                 entries.extend(environment.entries());
             } else {
                 entries.extend(environment.cloud_entries());

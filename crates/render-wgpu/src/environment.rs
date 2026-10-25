@@ -7,12 +7,60 @@
 //! the frame bind group; same-size updates only write buffers.
 use thessa_render_core::environment::EnvironmentRadiance;
 
-/// `vec4<u32>` header + `vec4<f32>` ambient, matching `environment.wgsl`.
-const META_BYTES: u64 = 32;
+/// `vec4<u32>` header + ambient and two local-layer vec4s, matching `environment.wgsl`.
+const META_BYTES: u64 = 64;
 /// `array<vec4<f32>>` texel stride.
 const TEXEL_BYTES: u64 = 16;
 /// Placeholder texel so the storage binding is always valid.
 const PLACEHOLDER_TEXELS: u64 = 1;
+
+/// SI optical prior supplied by the scene's resolved weather policy. Transport
+/// only: this does not change authoritative atmospheric physics.
+pub struct LocalHaze {
+    pub extinction_per_m: f32,
+    pub height_m: f32,
+    pub radius_m: f64,
+    pub camera_m: [f64; 3],
+    pub directional_source: bool,
+}
+impl LocalHaze {
+    fn to_bytes(&self) -> Option<[u8; 32]> {
+        let camera = glam::DVec3::from_array(self.camera_m);
+        let radius = camera.length();
+        if !camera.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !self.radius_m.is_finite()
+            || self.radius_m <= 0.0
+            || self.radius_m > f64::from(f32::MAX).sqrt() * 0.25
+            || !self.extinction_per_m.is_finite()
+            || !(0.0..=0.1).contains(&self.extinction_per_m)
+            || !self.height_m.is_finite()
+            || !(1.0..=20_000.0).contains(&self.height_m)
+            || radius > f64::from(f32::MAX).sqrt() * 0.25
+        {
+            return None;
+        }
+        let up = camera / radius;
+        // Subtract the datum in f64; preserving a two-metre eye above a
+        // million-metre body must not depend on an absolute f32 subtraction.
+        let values = [
+            self.extinction_per_m,
+            self.height_m,
+            self.radius_m as f32,
+            (radius - self.radius_m) as f32,
+            up.x as f32,
+            up.y as f32,
+            up.z as f32,
+            if self.directional_source { 1.0 } else { 0.0 },
+        ];
+        let mut bytes = [0; 32];
+        for (i, v) in values.iter().enumerate() {
+            bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        Some(bytes)
+    }
+}
 
 /// Bound environment field and its reported diagnostics.
 /// Clones share GPU buffers (including same-size writes); they are publication
@@ -111,7 +159,7 @@ impl EnvironmentBinding {
         backend.queue.write_buffer(
             &self.meta,
             0,
-            &meta_bytes(true, field.width(), field.height(), field.ambient_lux()),
+            &meta_bytes(true, field.width(), field.height(), field.ambient_lux())[..32],
         );
         self.enabled = true;
         self.width = field.width();
@@ -119,6 +167,23 @@ impl EnvironmentBinding {
         self.ambient_lux = field.ambient_lux();
         self.uploads += 1;
         reallocated
+    }
+
+    /// Update the per-camera local layer in the shared uniform. No allocations,
+    /// field uploads or bind-group rebuilds; None restores the exact clear path.
+    pub fn update_local_haze(
+        &self,
+        backend: &crate::Backend,
+        haze: Option<&LocalHaze>,
+    ) -> Result<(), crate::BackendError> {
+        let data = match haze {
+            Some(layer) => layer
+                .to_bytes()
+                .ok_or_else(|| crate::BackendError::Device("invalid local haze layer".into()))?,
+            None => [0; 32],
+        };
+        backend.queue.write_buffer(&self.meta, 32, &data);
+        Ok(())
     }
 
     /// Bind group entries 3 and 4 of the shared frame group.
@@ -248,7 +313,7 @@ pub(crate) fn shader(group: u32) -> String {
     .replace("@group(0)", &format!("@group({group})"))
 }
 
-fn meta_bytes(enabled: bool, width: u32, height: u32, ambient_lux: [f32; 3]) -> [u8; 32] {
+fn meta_bytes(enabled: bool, width: u32, height: u32, ambient_lux: [f32; 3]) -> [u8; 64] {
     let mut bytes = [0_u8; META_BYTES as usize];
     let header = [u32::from(enabled), width, height, 0];
     for (index, word) in header.iter().enumerate() {
@@ -277,9 +342,127 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_haze_transport_preserves_small_height_and_rejects_invalid_inputs() {
+        let mut layer = LocalHaze {
+            extinction_per_m: 0.002,
+            height_m: 500.0,
+            radius_m: 3_200_000.0,
+            camera_m: [0.0, 3_200_000.002, 0.0],
+            directional_source: true,
+        };
+        let bytes = layer.to_bytes().unwrap();
+        assert!((f32::from_le_bytes(bytes[12..16].try_into().unwrap()) - 0.002).abs() < 1e-7);
+        layer.camera_m = [f64::NAN, 0.0, 0.0];
+        assert!(layer.to_bytes().is_none());
+        layer.camera_m = [0.0; 3];
+        assert!(layer.to_bytes().is_none());
+        layer.camera_m = [0.0, 3_200_002.0, 0.0];
+        layer.extinction_per_m = f32::INFINITY;
+        assert!(layer.to_bytes().is_none());
+    }
+
+    #[test]
+    #[ignore = "hardware: production local-haze shader vs independent f64 sphere and Beer-Lambert oracle"]
+    fn local_haze_matches_finite_shell_and_clear_fallback() {
+        let backend = crate::Backend::bring_up().unwrap();
+        let field = EnvironmentRadiance::new(
+            8,
+            4,
+            (0..32)
+                .map(|i| [1.0 + (i / 8) as f32 * 0.25, 2.0, 3.0])
+                .collect(),
+        )
+        .unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        // Independent f64 intersection: adequate precision to use R^2 here.
+        let inside = |camera: glam::DVec3, delta: glam::DVec3, r: f64| {
+            let distance = delta.length();
+            if distance == 0.0 {
+                return 0.0;
+            }
+            let d = delta / distance;
+            let b = camera.dot(d);
+            let c = camera.length_squared() - r * r;
+            let disc = b * b - c;
+            if disc <= 0.0 {
+                return 0.0;
+            }
+            (distance.min(-b + disc.sqrt()) - 0.0_f64.max(-b - disc.sqrt())).max(0.0)
+        };
+        for (height, delta) in [
+            (2.0, [100.0, 0.0, 0.0]),
+            (2.0, [0.0, 1000.0, 0.0]),
+            (2.0, [0.0, -100.0, 0.0]),
+            (800.0, [0.0, -1000.0, 0.0]),
+            (800.0, [1000.0, 0.0, 0.0]),
+            (50_000.0, [0.0, -60_000.0, 0.0]),
+            (2.0, [0.0, 0.0, 0.0]),
+            (2.0, [8000.0, 0.0, 0.0]),
+        ] {
+            let camera = glam::DVec3::new(0.0, 3_200_000.0 + height, 0.0);
+            let delta = glam::DVec3::from_array(delta);
+            let length = inside(camera, delta, 3_200_500.0) - inside(camera, delta, 3_200_000.0);
+            for directional in [false, true] {
+                let layer = LocalHaze {
+                    extinction_per_m: 0.002,
+                    height_m: 500.0,
+                    radius_m: 3_200_000.0,
+                    camera_m: camera.to_array(),
+                    directional_source: directional,
+                };
+                for enabled in [true, false] {
+                    binding
+                        .update_local_haze(&backend, enabled.then_some(&layer))
+                        .unwrap();
+                    let d = delta.to_array();
+                    let source = format!(
+                        "{}\n{}\n@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe() {{ let p=vec3({:?},{:?},{:?});let d=ocean_safe_normalize(p,vec3(0.0,1.0,0.0));probe_out[0]=vec4(env_haze_sphere_length(d,length(p),env_meta.local_haze.y)-env_haze_sphere_length(d,length(p),0.0),env_local_haze(p,vec3(10.0,20.0,30.0),vec3(0.0))+env_radiance(d,vec3(0.0))*1e-30); }}",
+                        include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+                        shader(0),
+                        d[0],
+                        d[1],
+                        d[2]
+                    );
+                    let actual = probe(&backend, &binding, source, 1, [1, 1, 1])[0];
+                    let expected_t = if enabled {
+                        (-0.002 * length).exp()
+                    } else {
+                        1.0
+                    };
+                    let sky = if directional {
+                        field.sample({
+                            let d = delta.as_vec3().normalize_or_zero();
+                            let sky = d - glam::Vec3::Y * d.y.min(0.0);
+                            sky.try_normalize().unwrap_or(glam::Vec3::Y).to_array()
+                        })
+                    } else {
+                        field.ambient_lux().map(|v| v / std::f32::consts::PI)
+                    };
+                    if enabled {
+                        assert!(
+                            (f64::from(actual[0]) - length).abs() < 0.1,
+                            "shell {height} {delta:?}: {} vs {length}",
+                            actual[0]
+                        );
+                    }
+                    for c in 0..3 {
+                        let expected = (10.0 * (c + 1) as f64) * expected_t
+                            + f64::from(sky[c]) * (1.0 - expected_t);
+                        assert!(
+                            (f64::from(actual[c + 1]) - expected).abs() < 0.003,
+                            "transport h={height} delta={delta:?} enabled={enabled} directional={directional}: {actual:?} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn meta_layout_matches_the_shader() {
         let bytes = meta_bytes(true, 32, 16, [1.0, 2.0, 3.0]);
-        assert_eq!(bytes.len(), 32);
+        assert_eq!(bytes.len(), 64);
         assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 32);
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 16);

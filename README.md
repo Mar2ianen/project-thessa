@@ -116,6 +116,10 @@ The checked-in vertical slice currently contains:
   preserves exact fine material coordinates on bisectors, and adds stochastic soil mapping,
   render-only height relief and bounded near-eye pebble meshes. Low keeps optical
   soil; Medium/High refine the same source and thin one world-addressed population.
+  WORLD14 retains the reviewed soil/foliage material priors and optional 24 m plant
+  detail override; an opt-in spherical local-haze layer now shares one environment
+  publication across primary terrain, water and meshes, with explicit clear and
+  cheaper isotropic fallbacks. Full physical aerial transport remains open.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
@@ -220,7 +224,7 @@ The checked-in vertical slice currently contains:
        Opt-in `[ocean]` now adds a shared multiband spectral field, filtered
        water optics and bounded near-grid displacement shared by raster/shadows/RT
        ([doc 56](docs/56_NATIVE_SPECTRAL_OCEAN.md)); overflow is optical-only.
-         Source discs/stars now have native consumers (doc 65); aerial perspective,
+         Source discs/stars now have native consumers (doc 65); full physical aerial perspective,
         auto exposure/bloom and primary terrain/ocean mesh-query
         reflection consumers remain missing: **not** complete PBR/Bevy parity.
        Seasonal regressions use actual Thessa/Nereid/BC ephemerides: distant

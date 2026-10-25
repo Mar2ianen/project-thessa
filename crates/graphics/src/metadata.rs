@@ -81,6 +81,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Nested density subsets 0.25/0.5/1.0; up to nine L14 windows (36864 candidates/items). Full leaf detail within 24/36/48 metres per instance scale, with a conservative near-eye cell margin; cheaper distant geometry retains every frond. Identity, habitat and ground height are independent of quality.",
         },
         SettingMeta {
+            path: "surface_plants.detail_distance_m",
+            label: "Full plant detail distance override",
+            kind: SettingKind::Int,
+            range: "0..=4294967295",
+            step: "1",
+            unit: "m",
+            advanced: true,
+            restart_required: true,
+            description: "Optional full-detail distance per unit instance scale; omit to use 24/36/48 m by quality. The conservative near-eye cell margin is retained.",
+        },
+        SettingMeta {
             path: "surface_plants.understory",
             label: "Near-ground fern/reed layer",
             kind: SettingKind::Bool,
@@ -398,6 +409,28 @@ pub fn describe() -> Vec<SettingMeta> {
             advanced: false,
             restart_required: false,
             description: "Apply distance-dependent atmospheric depth and color to scene geometry.",
+        },
+        SettingMeta {
+            path: "atmosphere.local_haze_extinction_per_m",
+            label: "Native local haze extinction",
+            kind: SettingKind::Float,
+            range: "0..=0.1",
+            step: "0.0001",
+            unit: "1/m",
+            advanced: true,
+            restart_required: true,
+            description: "Local weather optical prior; zero disables it. Native primary ground, water and meshes share one spherical layer. Requires atmosphere and aerial perspective.",
+        },
+        SettingMeta {
+            path: "atmosphere.local_haze_height_m",
+            label: "Native local haze layer top",
+            kind: SettingKind::Float,
+            range: "1..=20000",
+            step: "10",
+            unit: "m",
+            advanced: true,
+            restart_required: true,
+            description: "Top of the homogeneous local weather layer above the body datum. Independent of the physical atmosphere shell.",
         },
         SettingMeta {
             path: "atmosphere.density_scale",
@@ -1090,9 +1123,14 @@ mod tests {
             .iter()
             .filter(|meta| meta.path.starts_with("surface_plants."))
             .collect();
-        assert_eq!(plants.len(), 3);
+        assert_eq!(plants.len(), 4);
         for (path, kind, range) in [
             ("surface_plants.enabled", SettingKind::Bool, "true | false"),
+            (
+                "surface_plants.detail_distance_m",
+                SettingKind::Int,
+                "0..=4294967295",
+            ),
             (
                 "surface_plants.understory",
                 SettingKind::Bool,

@@ -24,6 +24,15 @@ fn scene(
     reflections: bool,
     conforming: bool,
 ) -> TerrainRenderer {
+    scene_with_haze(backend, quality, reflections, conforming, false)
+}
+fn scene_with_haze(
+    backend: &Backend,
+    quality: Quality,
+    reflections: bool,
+    conforming: bool,
+    haze: bool,
+) -> TerrainRenderer {
     let page = HeightPage::bake(&[10.0; 4], 2, 0.001).unwrap();
     let patches = (0..6)
         .map(|face| TerrainPatch {
@@ -33,6 +42,7 @@ fn scene(
         .collect::<Vec<_>>();
     let mut settings = ResolvedGraphicsSettings {
         surface_quality: quality,
+        local_haze_extinction_per_m: if haze { 0.002 } else { 0.0 },
         specular_reflections: reflections,
         shadow_enabled: false,
         night_lights_enabled: false,
@@ -740,5 +750,41 @@ fn terrain_reflected_cloud_budget_preserves_transport() {
         eprintln!(
             "terrain_cloud conforming={conforming} actual={pixel:?} reference={expected:?} tolerance_u8=8"
         );
+    }
+}
+
+#[test]
+#[ignore = "hardware: primary terrain shares finite local weather at every material tier, regular/conforming and clear lifecycle"]
+fn primary_local_haze_is_shared_and_releases_without_material_uploads() {
+    let backend = Backend::bring_up().unwrap();
+    let field = EnvironmentRadiance::new(8, 4, vec![[1.0; 3]; 32]).unwrap();
+    let mut binding = EnvironmentBinding::new(&backend.device);
+    binding.update(&backend, Some(&field));
+    let layer = thessa_render_wgpu::environment::LocalHaze {
+        extinction_per_m: 0.002,
+        height_m: 500.0,
+        radius_m: 1000.0,
+        camera_m: [0.0, 0.0, 2500.0],
+        directional_source: true,
+    };
+    for conforming in [false, true] {
+        for quality in [Quality::Low, Quality::Medium, Quality::High] {
+            let mut terrain = scene_with_haze(&backend, quality, false, conforming, true);
+            material(&backend, &mut terrain, 153, 1);
+            terrain.share_environment(&backend, Some(&binding));
+            binding.update_local_haze(&backend, None).unwrap();
+            let clear = center(&draw(&backend, &mut terrain, [65, 65]));
+            assert_eq!(clear, [0; 3]);
+            binding.update_local_haze(&backend, Some(&layer)).unwrap();
+            let fog = center(&draw(&backend, &mut terrain, [65, 65]));
+            // Center ray enters R+500 and meets actual geometry at R+10.
+            let expected = (255.0 * 0.1 * (1.0 - (-0.002_f64 * 490.0).exp())).round() as u8;
+            assert!(
+                fog.into_iter().all(|v| v.abs_diff(expected) <= 1),
+                "{quality:?} conforming={conforming}: {fog:?} vs {expected}"
+            );
+            binding.update_local_haze(&backend, None).unwrap();
+            assert_eq!(center(&draw(&backend, &mut terrain, [65, 65])), clear);
+        }
     }
 }

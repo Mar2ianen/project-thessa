@@ -82,6 +82,7 @@ pub struct Scene {
     /// One GPU publication used by both background and mesh/RT consumers.
     gpu_environment: Option<thessa_render_wgpu::environment::EnvironmentBinding>,
     gpu_environment_revision: Option<u64>,
+    local_haze_policy: Option<(f32, f32, bool)>,
     lighting_dirty: bool,
     presentation_revision: u64,
 }
@@ -523,6 +524,7 @@ impl Scene {
             environment,
             gpu_environment: None,
             gpu_environment_revision: None,
+            local_haze_policy: None,
             sample,
             lighting_dirty: false,
             presentation_revision: 1,
@@ -1674,6 +1676,26 @@ impl Scene {
         height: u32,
         exposure: f32,
     ) -> Result<(), BackendError> {
+        if let Some(binding) = &self.gpu_environment {
+            let haze =
+                self.local_haze_policy
+                    .map(|(extinction_per_m, height_m, directional_source)| {
+                        thessa_render_wgpu::environment::LocalHaze {
+                            extinction_per_m,
+                            height_m,
+                            directional_source,
+                            radius_m: self.stream_radius(),
+                            camera_m: self
+                                .view(width, height, exposure)
+                                .world_position_m
+                                .to_array(),
+                        }
+                    });
+            // Disabled is a no-op: a new binding starts with zero layer data.
+            if haze.is_some() {
+                binding.update_local_haze(backend, haze.as_ref())?;
+            }
+        }
         if !layers.enabled() {
             return Ok(());
         }
@@ -1751,6 +1773,17 @@ impl Scene {
         format: wgpu::TextureFormat,
     ) -> Result<TerrainRenderer, BackendError> {
         let resolved = backend.resolve_graphics(&self.requested);
+        self.local_haze_policy = (resolved.local_haze_extinction_per_m > 0.0).then_some((
+            resolved.local_haze_extinction_per_m,
+            resolved.local_haze_height_m,
+            resolved.atmosphere_quality != thessa_graphics::Quality::Low,
+        ));
+        if self.local_haze_policy.is_none()
+            && let Some(binding) = &self.gpu_environment
+        {
+            binding.update_local_haze(backend, None)?;
+        }
+
         self.stream
             .configure_topology(resolved.terrain_topology.capacity > 0)
             .map_err(BackendError::Device)?;

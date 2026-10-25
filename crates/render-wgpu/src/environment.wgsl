@@ -22,6 +22,10 @@ struct EnvMeta {
     header: vec4<u32>,
     // rgb = cos-weighted local-up hemisphere irradiance in lux, w = reserved.
     ambient: vec4<f32>,
+    // sigma_t per metre, layer top, body datum radius, camera datum height.
+    local_haze: vec4<f32>,
+    // Camera radial up; w selects directional (1) or isotropic (0) source.
+    haze_up: vec4<f32>,
 }
 
 @group(0) @binding(3) var<uniform> env_meta: EnvMeta;
@@ -186,4 +190,38 @@ fn env_specular_response(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,rough
 fn env_specular_from(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f32>,ambient:vec3<f32>,samples:u32,cloud_budget:vec3<u32>)->vec3<f32> {
     if(!env_enabled() || samples==0u){return vec3(0.0);}
     return env_specular_response(position,normal,eye,roughness,f0,ambient,samples,cloud_budget).radiance;
+}
+
+// Length of a finite camera segment inside one sphere. Form c from the small
+// datum heights, and use stable quadratic roots instead of R^2 subtraction.
+fn env_haze_sphere_length(direction:vec3<f32>,distance:f32,top:f32)->f32 {
+    let h=env_meta.local_haze.w;let r=env_meta.local_haze.z;
+    let b=(r+h)*dot(env_meta.haze_up.xyz,direction);
+    let c=(h-top)*(2.0*r+h+top);
+    let disc=b*b-c;
+    if(disc<=0.0){return 0.0;}
+    let root=sqrt(disc);
+    let q=-b-select(-root,root,b>=0.0);
+    var a=-b-root;var z=-b+root;
+    if(abs(q)>0.0){a=min(q,c/q);z=max(q,c/q);}
+    return max(0.0,min(distance,z)-max(0.0,a));
+}
+fn env_local_haze(position:vec3<f32>,radiance:vec3<f32>,ambient:vec3<f32>)->vec3<f32> {
+    if(env_meta.local_haze.x<=0.0 || !env_enabled()){return radiance;}
+    let distance=length(position);
+    if(distance<=0.0){return radiance;}
+    let direction=position/distance;
+    let length_m=max(0.0,env_haze_sphere_length(direction,distance,env_meta.local_haze.y)
+        -env_haze_sphere_length(direction,distance,0.0));
+    let transmittance=exp(-env_meta.local_haze.x*length_m);
+    var source=env_ambient_lux(ambient)/OCEAN_PI;
+    if(env_meta.haze_up.w>0.0){
+        // Below-horizon sky texels include solid-body occlusion, not the
+        // equilibrium radiance of the local air. Preserve azimuth at horizon.
+        let sky_direction=ocean_safe_normalize(direction-env_meta.haze_up.xyz*min(dot(direction,env_meta.haze_up.xyz),0.0),env_meta.haze_up.xyz);
+        source=env_base_radiance(sky_direction,ambient);
+    }
+    // shortcut: equilibrium sky-source approximation, replace with finite
+    // single-scattering transport when weather/light-shaft accuracy is needed.
+    return radiance*transmittance+source*(1.0-transmittance);
 }

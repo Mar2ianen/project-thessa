@@ -428,7 +428,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     eprintln!(
-        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
+        "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; full physical aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
     );
     let mut scene = scene::Scene::load(requested)?;
     #[cfg(feature = "hud")]
@@ -930,8 +930,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             resolved.specular_reflections
         );
         println!(
-            "sky_background={} shared_environment_publication=true; single-scattering field, native stars/source discs and depth-clipped clouds/aurora; no aerial perspective",
+            "sky_background={} shared_environment_publication=true; single-scattering field, native stars/source discs and depth-clipped clouds/aurora; full physical aerial perspective unported",
             renderer.sky_enabled()
+        );
+        println!(
+            "native_local_haze extinction_per_m={} height_m={} source={:?} uniform_bytes=32; primary terrain/water/mesh spherical layer, sky-source approximation",
+            resolved.local_haze_extinction_per_m,
+            resolved.local_haze_height_m,
+            resolved.atmosphere_quality
         );
         let ocean = renderer.ocean_stats();
         let night = renderer.night_lights_stats();

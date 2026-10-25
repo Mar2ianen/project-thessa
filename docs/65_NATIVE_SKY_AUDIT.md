@@ -5,6 +5,16 @@ Scope: sky, background stars, clouds and aurora. The Bevy client remains runnabl
 its implementation is evidence of existing mechanisms, not a visual oracle.
 
 
+## WORLD14 local-weather continuation (2026-10-25)
+
+Doc 77 records a configurable homogeneous spherical local-haze layer shared by
+primary terrain/water/meshes through the existing environment publication.
+Low uses an isotropic source estimate; Medium/High a directional sky-source
+estimate. Clear/default-off and parent-toggle fallbacks are explicit. This
+replaces the later unconditional mesh-only fog experiment; it does not complete
+the full physical finite-segment atmosphere migration described in this audit.
+
+
 ## WORLD10 shared cloud-density review (2026-10-24)
 
 Native volumetric clouds now upload a body-fixed, periodic 16.384 km R8 density

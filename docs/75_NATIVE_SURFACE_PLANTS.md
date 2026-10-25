@@ -10,6 +10,15 @@ meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
 normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
+WORLD14 (doc 77) retains the latest authored optical priors: green fern tint
+[0.67, 0.48, 0.80], tree tint [0.74, 0.68, 0.80], green-leaf roughness factor
+0.46 and fern diffuse transmission 0.34. Stem/dry roughness factor remains 0.85.
+The three pebble palettes use linear RGB [0.040, 0.044, 0.046],
+[0.078, 0.072, 0.062], [0.118, 0.098, 0.072] and roughness 0.45/0.52/0.56.
+These are material factors combined with existing textures, not measured
+botanical/mineral spectra. Local weather now shares the environment publication
+with terrain/water; the mesh shader no longer owns unconditional extinction.
+
 WORLD13 extends this existing adapter with a bounded native ground-pebble
 consumer, independently of the plant toggle. It reuses the same preparation
 queue, source reuse, instancing, RT admission and shared shadow pass. The
@@ -94,8 +103,10 @@ leaf area and triangle count are unchanged; emission order changes to keep the
 material boundary contiguous. At most eleven primitives represent three kinds
 and two leaf detail levels. Compatible GPU reuse also compares the representation layout.
 
-The shared resolver maps Low/Medium/High to 24/36/48 m full-detail distance
-per unit instance scale. Near-eye contexts add the conservative L18 cell
+The shared resolver defaults Low/Medium/High to 24/36/48 m full-detail distance
+per unit instance scale. Optional `surface_plants.detail_distance_m` overrides
+this distance (u32 metres); omission preserves tier defaults. The current review
+profile explicitly selects 24 m at High. Near-eye contexts add the conservative L18 cell
 half-diagonal, accounting for movement inside the current anchor cell; this
 avoids coarse leaves at the eye without rebuilding every frame. The anchor
 otherwise follows the survey window center. No new scheduler, pass, shader,
@@ -272,7 +283,7 @@ instance ranges and no duplicated descriptors. Vertex/index/AO payload is
 primitive's repeated range.
 
 The shared opaque material's [0,1] `diffuse_transmission` partitions total diffuse
-scattering albedo A as R=A(1-t), T=At. Ferns use t=0.32, other green foliage 0.45,
+scattering albedo A as R=A(1-t), T=At. Ferns now use t=0.34 (WORLD14; previously 0.32), other green foliage 0.45,
 dry fronds 0.05 and wood/default materials zero. Raster and secondary RT shading
 share front/back cosine terms and physical stellar-ray direction. Occluders
 still cast opaque shadows; coloured transmitted shadows and subsurface multiple

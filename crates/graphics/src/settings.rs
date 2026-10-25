@@ -301,6 +301,12 @@ pub struct AtmosphereSettings {
     pub quality: Quality,
     #[serde(default = "default_true")]
     pub aerial_perspective: bool,
+    /// Native local homogeneous weather layer; zero disables it. SI extinction.
+    #[serde(default)]
+    pub local_haze_extinction_per_m: f32,
+    /// Top of the local weather layer above the spherical body datum, metres.
+    #[serde(default = "default_local_haze_height_m")]
+    pub local_haze_height_m: f32,
     #[serde(default)]
     pub multiple_scattering: bool,
     #[serde(default = "default_true")]
@@ -325,6 +331,10 @@ pub struct AtmosphereSettings {
     pub density_scale: f32,
 }
 
+fn default_local_haze_height_m() -> f32 {
+    500.0
+}
+
 fn default_density_scale() -> f32 {
     1.0
 }
@@ -339,6 +349,8 @@ impl Default for AtmosphereSettings {
             enabled: true,
             quality: Quality::High,
             aerial_perspective: true,
+            local_haze_extinction_per_m: 0.0,
+            local_haze_height_m: default_local_haze_height_m(),
             multiple_scattering: false,
             eclipses: true,
             multi_star: true,

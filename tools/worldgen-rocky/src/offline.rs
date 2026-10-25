@@ -1457,16 +1457,21 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         let base = scaled(trunk_axis, base_y);
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
+        let fork_thickness = match form {
+            2 => (0.27, 0.21, 0.14, 0.07),
+            1 => (0.21, 0.16, 0.11, 0.055),
+            _ => (0.23, 0.18, 0.12, 0.06),
+        };
         tapered_limb(
             mesh,
             base,
             axis,
             8,
             &[
-                (0.0, 0.23),
-                (length * 0.35, 0.18),
-                (length * 0.7, 0.12),
-                (length, 0.06),
+                (0.0, fork_thickness.0),
+                (length * 0.35, fork_thickness.1),
+                (length * 0.7, fork_thickness.2),
+                (length, fork_thickness.3),
             ],
         );
     }

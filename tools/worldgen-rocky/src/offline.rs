@@ -1486,7 +1486,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     // The two crowns share the same 48-frond budget as the single umbrella.
     // Count, attachment height, reach, arch rise, terminal drop, azimuth.
     let (spread_reach, outer_reach) = match form {
-        2 => (5.10, 4.45),
+        2 => (5.35, 4.85),
         _ => (4.68, 4.20),
     };
     let tiers: [(usize, f64, f64, f64, f64, f64); 5] = [
@@ -1545,7 +1545,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     offset(scaled(radial, 0.06), terminal),
                     [0.0, base_y - 7.95, 0.0],
                 );
-                let drop = drop * if form == 2 { 1.35 } else { 1.0 };
+                let drop = drop * if form == 2 { 1.42 } else { 1.0 };
                 crown_frond(mesh, angle, base, reach, rise, drop, reduced);
             }
         }

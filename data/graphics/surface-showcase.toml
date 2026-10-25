@@ -46,7 +46,7 @@ limb_scattering = true
 sky_dome = true
 stars = true
 stars_quality = "high"
-ray_steps = 24
+ray_steps = 32
 
 [clouds]
 enabled = true

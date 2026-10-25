@@ -427,7 +427,7 @@ pub fn scatter_region(
                         continue;
                     }
                     let canopy_cover = surface.vegetation.canopy01.clamp(0.0, 1.0);
-                    let canopy_density_prior = 1.0 - canopy_cover * 0.45;
+                    let canopy_density_prior = (1.0 - canopy_cover * 0.48).max(0.20);
                     reference_density
                         * if population == ScatterPopulation::Understory {
                             (surface.vegetation.ground01 + surface.vegetation.reeds01)

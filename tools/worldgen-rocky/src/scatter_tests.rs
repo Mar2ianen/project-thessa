@@ -160,6 +160,45 @@ fn understory_cohorts_respect_requested_scale_bounds_and_fixed_scale() {
 }
 
 #[test]
+fn wider_understory_spacing_thins_the_same_world_population() {
+    let mut old_count = 0;
+    let mut new_count = 0;
+    for face in 0..6 {
+        let tile = region(face, 18, 131_072, 131_072);
+        let run = |population, spacing| {
+            scatter_region(
+                7,
+                RADIUS_M,
+                tile,
+                population,
+                ScatterPolicy {
+                    understory_spacing_m: spacing,
+                    ..Default::default()
+                },
+                surface,
+            )
+            .unwrap()
+        };
+        let old = run(ScatterPopulation::Understory, 0.8);
+        let new = run(
+            ScatterPopulation::Understory,
+            ScatterPolicy::default().understory_spacing_m,
+        );
+        assert!(new.items.iter().all(|item| old.items.contains(item)));
+        old_count += old.items.len();
+        new_count += new.items.len();
+        for population in [ScatterPopulation::Plants, ScatterPopulation::GroundPebbles] {
+            assert_eq!(run(population, 0.8), run(population, 1.25));
+        }
+    }
+    let ratio = new_count as f64 / old_count as f64;
+    assert!(
+        (0.32..0.50).contains(&ratio),
+        "understory retained fraction {ratio}"
+    );
+}
+
+#[test]
 fn understory_has_disjoint_ids_nested_density_and_exact_window_unions() {
     let tile = region(0, 18, 131_072, 131_072);
     let high = query(tile, ScatterPopulation::Understory, 1.0);

@@ -6,6 +6,42 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD85+ — Coastal composition iterations (2026-10-26, in progress)
+
+The overnight continuation starts from `89d1e2a`, following the report that the
+understory contains too many oversized ferns and lacks intermediate vegetation.
+The target remains `docs/reference/visual_quality_target_coastal_ferns.jpg`:
+patches of different plant sizes separated by readable litter/soil corridors,
+with layered silhouettes rather than an even wall. Reference art is not a
+measured optical/placement oracle. User-authored tree architecture and WORLD84
+pigment cohorts are retained. Each iteration pins its source/binary, executes
+relevant checks, and captures the same frozen coastal camera before proceeding.
+
+| Stage | Change | Near clumps | Submitted instances | Mesh triangles | GPU median |
+| --- | --- | ---: | ---: | ---: | ---: |
+| WORLD84 baseline | 0.8 m spacing, scales 0.75–1.50 | 6,546 | 14,005 | 28,246,314 | 592.716 ms |
+| WORLD85 | 1.25 m spacing | 2,617 | 10,076 | 16,081,890 | 457.692 ms |
+
+WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
+positions, sizes and organ forms survive thinning; canopy and pebble descriptors
+are unchanged. A six-face regression checks that subset and bounds retained
+count fraction at 0.32–0.50 of the 0.8 m population. Density quality still thins
+world-fixed candidates; zero-work disable and budget failures are unchanged.
+The existing five stage gates passed: formatting, 267 worldgen + 130 native
+CPU tests, strict affected all-target/all-feature Clippy and release build.
+The standing frame retains 25,266 CBT slots, 37 draw ranges and the 7 MB source
+payload ceiling. These are local verification results, not green remote CI.
+
+Evidence is in
+[`native-coastal-night-2026-10-26.json`](artifacts/native-coastal-night-2026-10-26.json).
+Matched development captures use the same RT Off/raster-shadow profile after
+the earlier baseline AMD RT device loss; the checked-in profile still requests
+local RT. Intermediate timings describe these samples, not an isolated speedup
+benchmark. Population/size/shape changes are intentional **scene-content** changes;
+these frames support composition review, not strict renderer-equivalence blind
+acceptance. Independent preference/reference acceptance and full motion-sequence
+stability remain open. Further stages are recorded below as they are verified.
+
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 
 This continuation reviews and retains user commit `3d58502`: the solitary

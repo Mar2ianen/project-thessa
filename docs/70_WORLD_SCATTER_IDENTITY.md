@@ -177,8 +177,8 @@ canonical cells and no blue-noise claim.
 ## Budgets and offline final-surface scope
 
 `ScatterPolicy` defaults to 16,777,216 candidate visits, 1,024,000 output items,
-density scale 1, minimum plant elevation 2 m, maximum plant slope 0.25 and
-`understory_spacing_m = 0.8` and understory clump scales 0.55–1.10. Candidate
+density scale 1, minimum plant elevation 2 m, maximum plant slope 0.25,
+`understory_spacing_m = 1.25` (WORLD85) and understory clump scales 0.75–1.50. Candidate
 work is exactly preflighted as
 `4^(candidate_level-query_level)` for coarser/equal windows, or one overlapping
 cell for finer windows; the latter may own no candidate.
@@ -496,3 +496,13 @@ render placement uses the 32 m-filtered canonical terrain base plus the
 mean-centered, fixed-12-mm-footprint optical soil relief. This callback is
 independent of query window, camera and quality; it is not collision ownership
 or exact contact against the current streamed triangulation.
+
+## WORLD85 composition continuation (2026-10-26)
+
+The default near-clump centre spacing is now 1.25 m rather than 0.8 m. This
+changes authored density, not the candidate lattice, world ID, jitter or quality
+subsets. Surviving descriptors remain exactly identical; canopy, rocks and
+pebbles do not consume this setting and remain unchanged. Six-face regressions
+check that boundary and the retained-count envelope. The standing coastal
+consumer retains 2,617 near clumps versus 6,546, before any later scale/shape
+iterations. See doc 77 for the evolving campaign and its non-acceptance limits.

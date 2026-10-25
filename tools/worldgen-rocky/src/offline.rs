@@ -1694,12 +1694,15 @@ fn reed_blade(
     width_m: f64,
 ) {
     const T: [f64; 7] = [0.0, 0.17, 0.34, 0.51, 0.68, 0.84, 1.0];
-    const HEIGHT_T: [f64; 7] = [0.0, 0.20, 0.40, 0.60, 0.75, 0.82, 0.60];
-    const LEAN_T: [f64; 7] = [0.0, 0.05, 0.15, 0.35, 0.65, 0.95, 1.8];
+    const HEIGHT_T: [f64; 7] = [0.0, 0.22, 0.44, 0.64, 0.79, 0.84, 0.62];
+    const LEAN_T: [f64; 7] = [0.0, 0.04, 0.14, 0.33, 0.62, 0.96, 1.75];
     let (radial, lateral) = azimuth_frame(angle);
+    // Coastal wind deflection: subtle leeward maritime tilt
+    let wind_align = angle.cos();
+    let wind_lean = 1.0 + 0.10 * wind_align;
     let nodes: [[f64; 3]; 7] = std::array::from_fn(|i| {
         offset(
-            scaled(radial, base_radius + LEAN_T[i] * lean_m),
+            scaled(radial, base_radius + LEAN_T[i] * lean_m * wind_lean),
             [0.0, HEIGHT_T[i] * height_m, 0.0],
         )
     });

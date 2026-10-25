@@ -1483,6 +1483,39 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             }
         }
     }
+    // Volumetric canopy shading (SpeedTree / Crytek normal warping): blend leaf
+    // normals outward from the crown dome center so the canopy shades as a 3D organic volume.
+    let foliage_start = mesh.stem.as_ref().map_or(0, |s| s.vertex_count as usize);
+    for (p, n) in mesh.positions[foliage_start..]
+        .iter()
+        .zip(&mut mesh.normals[foliage_start..])
+    {
+        let pf = p.map(f64::from);
+        let center = if terminals.len() > 1
+            && crate::lod::dot(
+                crate::lod::sub(pf, terminals[0]),
+                crate::lod::sub(pf, terminals[0]),
+            ) > crate::lod::dot(
+                crate::lod::sub(pf, terminals[1]),
+                crate::lod::sub(pf, terminals[1]),
+            ) {
+            terminals[1]
+        } else {
+            terminals[0]
+        };
+        let dome_center = [center[0], center[1] + 0.35, center[2]];
+        let radial = crate::lod::sub(pf, dome_center);
+        let radial_len_sq = crate::lod::dot(radial, radial);
+        if radial_len_sq > 1e-6 {
+            let spherical = scaled(radial, 1.0 / radial_len_sq.sqrt());
+            let current = n.map(f64::from);
+            let blended = crate::lod::normalize(offset(
+                scaled(current, 0.85),
+                scaled(spherical, 0.15),
+            ));
+            *n = blended.map(|v| v as f32);
+        }
+    }
 }
 
 /// One arching rachis with fourteen opposed pairs of separate tapered pinnae.

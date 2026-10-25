@@ -1657,12 +1657,22 @@ fn crown_frond(
     reduced: bool,
 ) {
     let (radial, lateral) = azimuth_frame(angle);
-    let tip_lift = 0.22 * (rise_m.max(0.1) * reach_m).sqrt().min(0.60);
+    let is_senescent = rise_m < 0.3;
+    let tip_lift = if is_senescent {
+        0.0
+    } else {
+        0.22 * (rise_m.max(0.1) * reach_m).sqrt().min(0.60)
+    };
     let at = |t: f64| {
-        let recurve = if t > 0.68 {
+        let recurve = if t > 0.68 && !is_senescent {
             tip_lift * ((t - 0.68) / 0.32).powi(2)
         } else {
             0.0
+        };
+        let drop_curve = if is_senescent {
+            drop_m * (0.35 * t + 0.65 * t * t)
+        } else {
+            drop_m * t * t
         };
         offset(
             base,
@@ -1670,7 +1680,7 @@ fn crown_frond(
                 scaled(radial, t * reach_m),
                 [
                     0.0,
-                    rise_m * (std::f64::consts::PI * t).sin() - drop_m * t * t + recurve,
+                    rise_m * (std::f64::consts::PI * t).sin() - drop_curve + recurve,
                     0.0,
                 ],
             ),

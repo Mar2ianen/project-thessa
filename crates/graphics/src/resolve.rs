@@ -907,7 +907,7 @@ impl ResolvedGraphicsSettings {
             rt_scene_memory_bytes: u64::from(requested.raytracing.scene_memory_mib.clamp(1, 128))
                 * 1024
                 * 1024,
-            rt_max_instances: requested.raytracing.max_instances.clamp(1, 16384),
+            rt_max_instances: requested.raytracing.max_instances.clamp(1, 32768),
             rt_reflection_bounces: requested.raytracing.reflection_bounces.clamp(1, 4),
             rt_reflection_samples: match requested.renderer.surface_quality {
                 Quality::Low => 1,

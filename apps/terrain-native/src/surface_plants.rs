@@ -710,10 +710,10 @@ fn convert_with_detail(
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
-                        [0.44, 0.48, 0.46, 1.0]
+                        [0.47, 0.46, 0.39, 1.0]
                     }
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
-                        [0.48, 0.52, 0.44, 1.0]
+                        [0.50, 0.49, 0.38, 1.0]
                     }
                     _ => [0.75, 0.75, 0.75, 1.0],
                 }
@@ -731,7 +731,7 @@ fn convert_with_detail(
                 normal_texture: Some(normal),
                 metallic_roughness_texture: Some(mr),
                 metallic: 0.0,
-                roughness: if stem || dry { 0.85 } else { 0.50 },
+                roughness: if stem || dry { 0.85 } else { 0.60 },
                 double_sided: true,
                 // Authored total scattering and partition, not a measured
                 // fossil spectrum; R + T never exceeds the source albedo.

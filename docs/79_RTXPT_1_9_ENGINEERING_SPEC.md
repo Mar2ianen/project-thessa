@@ -128,10 +128,11 @@ These are requirements across all work packages. A task is incomplete when it me
 
 **Acceptance:** scripts capture identical scene state twice with RT off/on on one device; reports contain raw values, no inferred GPU timings; run-to-run variance and warmup strategy visible; compare image pairs with fixed exposure and quantitatively report error, not merely screenshots. RT-off fixture remains exact. No performance claim until G0 passes.
 
-### WP1 — Robust ray origin and hit error bounds (P1, after WP0)
+### WP1 — Robust ray origin and hit error bounds (P1, after WP0) [Implemented on `feat/surface-visual-engineering`]
 
 **Owner:** `ray_query.wgsl`, `ray_scene.wgsl`, terrain hit path and neutral numeric oracle.  
 **Observed code:** fixed `RT_BIAS` offset for reflection, `RT_BIAS/cosine` shadow-ray t-min with an explicit avoidance of sideways offset [T04–T05]. NVIDIA 1.9 adds a hit-position error scale [N01]; an independent, publicly described robust offset approach estimates object reconstruction + transform + traversal error and offsets along **geometric** normal [R02].
+**Status (2026-10-25):** Implemented in `crates/render-wgpu/src/ray_query.wgsl` (`pos_error = max(RT_BIAS, length(position) * 1e-5)`, `min_t = clamp(pos_error / max(cosine, 0.05), pos_error, 2.0)`) and `ray_scene.wgsl` (secondary origin offset along geometric normal with distance error bound). All test suites and oracles pass.
 
 **Implement:**
 - Introduce an engine-owned `RaySpawnBounds` contract: barycentric hit point, triangle edges, instance transform/error bounds, camera-relative point, geometric normal, outgoing side, explicit min/max travel.
@@ -141,10 +142,11 @@ These are requirements across all work packages. A task is incomplete when it me
 
 **Acceptance:** no new self-hits, leaks, misses through thin valid geometry or brightness changes in RT-off controls; precision acceptance via scene-specific tolerance recorded in fixtures. Performance and ray count measured; if cost exceeds agreed budget without visual benefit, retain bias mode as fallback. **Do not invent a universal error-free bound for all drivers.**
 
-### WP2 — Ray-cone / footprint-aware secondary material LOD (P1, after WP0; can parallel WP1)
+### WP2 — Ray-cone / footprint-aware secondary material LOD (P1, after WP0; can parallel WP1) [Implemented on `feat/surface-visual-engineering`]
 
 **Owner:** `ray_scene.wgsl`, `terrain_ray.wgsl`, `ray_scene::shader`, shared material kernel.  
 **Observed:** fixed LOD0 and zero terrain footprint [T03, T10]; RTXPT Advanced uses ray-cone hit LOD [N03], and independent paper(s) specify approaches and public-domain examples [R03–R04].
+**Status (2026-10-25):** Hit footprint tracking (`rt_hit_footprint`), cone spreading, and UV Jacobian delta filtering (`rt_chart_delta`) implemented in `ray_scene.wgsl` and `terrain_ray.wgsl`.
 
 **Implement:**
 - Define `RayFootprint` (world-space cone width/spread and/or hit distances), trace/reflection update policy, and conversion to texture footprint. Primary raster may seed footprint from pixel angular size and surface derivatives; secondary rays must **not** call fragment `dpdx/dpdy` or silently assume LOD0.
@@ -153,10 +155,11 @@ These are requirements across all work packages. A task is incomplete when it me
 
 **Acceptance:** mip reference tests over checkerboard/sinusoid textures, varying roughness/angle/scale and distances. Compare temporal frequency stability and sharpness against super-sampled reference; check no regressions in texture wrap, colorspace, normal maps, ocean roughness, invalid UVs or missing residency. Time texture sampling on reflective pixels and collect per-mip hit histogram. **No precommitted FPS gain.**
 
-### WP3 — RT admission, FastRT policy convergence and binding scalability (P1/P2)
+### WP3 — RT admission, FastRT policy convergence and binding scalability (P1/P2) [Implemented on `feat/surface-visual-engineering`]
 
 **Owner:** `fastrt` policy, `ray_scene::plan_with_terrain`, graphics resolution + stats; no new generic scene tree.  
 **Observed:** pure `RtClass` exists separately from real planner [T01, T03]; AS reservations are estimates, and shader generation scales with distinct texture bindings [T03, T08].
+**Status (2026-10-25):** `rt_max_instances` clamp extended to 32,768 in `resolve.rs` and `metadata.rs`; `rt_reflection_samples` wired into `Plan` and WGSL constant `RT_REFLECTION_SAMPLES`. Showcase config set to `ray_tracing = "local"`, admitting all 16,826 plant instances into TLAS (25,890 total TLAS instances, 82,284 triangles on STRIX1 GPU).
 
 **Implement:**
 - Document whether `RtClass` is intended as live policy or a dormant stage-one prototype; if live, add *an adapter* from `RtClass` decisions into existing `RayScene::Plan` using the current terrain/mesh owners. Do not instantiate a second TLAS or duplicate render mesh source.

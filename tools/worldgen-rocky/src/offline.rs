@@ -1367,8 +1367,12 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         (7.94, 0.22),
         (7.95, 0.16),
     ];
-    let trunk_rings =
-        TRUNK_RINGS.map(|(height, radius)| (height * if form == 1 { 1.0 } else { 0.60 }, radius));
+    let trunk_scale = match form {
+        1 => 0.66,
+        2 => 0.58,
+        _ => 0.60,
+    };
+    let trunk_rings = TRUNK_RINGS.map(|(height, radius)| (height * trunk_scale, radius));
     tapered_limb(
         mesh,
         [0.0; 3],
@@ -1377,12 +1381,17 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         &trunk_rings,
     );
     let terminals: &[[f64; 3]] = match form {
-        1 => &[[0.0, 7.95, 0.0]],
-        2 => &[[-0.75, 8.30, 0.20], [1.15, 7.60, -0.40]],
+        1 => &[[-1.15, 8.55, 0.20], [1.15, 8.25, -0.20]],
+        2 => &[[-0.65, 8.40, 0.35], [1.35, 7.50, -0.55]],
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
-    for &terminal in terminals.iter().filter(|_| form != 1) {
-        let base = [0.0, 4.55, 0.0];
+    let base_y = match form {
+        1 => 5.35,
+        2 => 4.30,
+        _ => 4.55,
+    };
+    for &terminal in terminals {
+        let base = [0.0, base_y, 0.0];
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
         tapered_limb(
@@ -1421,13 +1430,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     // The two crowns share the same 48-frond budget as the single umbrella.
     // Count, attachment height, reach, arch rise, terminal drop, azimuth.
     const TIERS: [(usize, f64, f64, f64, f64, f64); 4] = [
-        (6, 8.12, 3.45, 2.25, 0.35, 0.00), // Ascending young fronds
-        (9, 7.82, 4.70, 1.72, 1.55, 0.35), // Spreading mature fronds
-        (6, 7.50, 4.25, 0.65, 2.50, 0.72), // Descending outer fronds
-        (3, 7.18, 2.05, 0.10, 3.25, 1.15), // Hanging dry mantle
+        (6, 8.15, 3.45, 2.30, 0.30, 0.00), // Ascending young fronds
+        (9, 7.85, 4.68, 1.95, 1.05, 0.35), // Spreading mature fronds
+        (6, 7.55, 4.20, 1.10, 1.75, 0.72), // Descending outer fronds
+        (3, 7.20, 2.05, 0.15, 2.55, 1.15), // Hanging dry mantle
     ];
     for &(count, base_y, reach_base, rise, drop, phase_offset) in &TIERS {
-        if base_y == 7.18 {
+        if base_y == 7.20 {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
                 albedo_srgb: [0.30, 0.22, 0.11],
@@ -1435,16 +1444,6 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             });
         }
         for (term_idx, &terminal) in terminals.iter().enumerate() {
-            let count = if form == 1 {
-                match count {
-                    6 => 12,
-                    9 => 18,
-                    3 => 6,
-                    _ => count,
-                }
-            } else {
-                count
-            };
             for i in 0..count {
                 let term_offset = term_idx as f64 * 1.57 + f64::from(form) * 0.93;
                 let angle = phase_offset + term_offset + i as f64 * GOLDEN_ANGLE;
@@ -1611,14 +1610,7 @@ fn crown_frond(
                 )
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna(
-                mesh,
-                nodes,
-                tangent,
-                length * 0.175,
-                length * 0.030,
-                reduced,
-            );
+            pinna(mesh, nodes, tangent, length * 0.21, length * 0.030, reduced);
         }
     }
 }

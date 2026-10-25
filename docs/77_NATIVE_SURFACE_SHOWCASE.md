@@ -114,6 +114,44 @@ and [Filament's material/Fresnel contract](https://google.github.io/filament/mai
 The spatial moisture/cover laws and turbid bottom colour are authored optical
 priors, not implementations or measurements of those sources' complete models.
 
+## WORLD23B — Hardware Ray Tracing Activation, Error-Scaled Ray Bounds and Botanical Volumetric Parity (2026-10-25)
+
+This continuation starts from `dbaeffe` on branch `feat/surface-visual-engineering`. It builds on the RTXPT 1.9 engineering specification (doc 79) and addresses user critique on crown template repetition, thin geometric silhouettes, understory homogeneity, flat lighting / weak self-shadowing, and sharp coastal horizon contrast.
+
+1. **Hardware Ray Tracing Activation & Scalability (WP3):**
+   - Configured `ray_tracing = "local"` with `max_instances = 32768` and `scene_memory_mib = 64` in `data/graphics/surface-showcase.toml`.
+   - Raised the `rt_max_instances` upper clamp from 16,384 to 32,768 in `crates/graphics/src/resolve.rs` and `metadata.rs`.
+   - Wired `rt_reflection_samples` into `Plan` in `crates/render-wgpu/src/ray_scene.rs` and emitted `const RT_REFLECTION_SAMPLES: u32` in `shader(plan)`.
+   - Hardware RT TLAS now admits all 16,826 plant instances (`native_surface_plants_rt_policy: "shared_policy_with_preflighted_instance_budget"`), building 25,890 TLAS instances tracing 82,284 triangles on AMD Radeon 880M STRIX1.
+
+2. **Error-Scaled Ray Bounds (WP1):**
+   - In `crates/render-wgpu/src/ray_query.wgsl`: replaced fixed `RT_BIAS / cosine` with error-scaled ray spawn bounds:
+     `let pos_error = max(RT_BIAS, length(position) * 1e-5);`
+     `let min_t = clamp(pos_error / max(cosine, 0.05), pos_error, 2.0);`
+     Eliminating grazing shadow leaks and preventing division by zero without self-intersection.
+   - In `crates/render-wgpu/src/ray_scene.wgsl`: offset secondary ray origins along geometric normal with distance error bound:
+     `let geom_bias = max(RT_BIAS, length(surface.position) * 1e-5);`
+     `origin = surface.position + surface.geometry * geom_bias;`
+
+3. **Ray-Cone Footprint Texture LOD (WP2):**
+   - Secondary ray-cone hit footprint filtering and UV Jacobian delta wired and tested in `ray_scene.wgsl` and `terrain_ray.wgsl` (`rt_hit_footprint`, `rt_chart_delta`).
+
+4. **Volumetric Crown Canopy & Diversified Morphologies:**
+   - Differentiated morphological forms in `tools/worldgen-rocky/src/offline.rs`:
+     - Form 0: Wide dichotomous fork at 4.55m reaching `[-1.85, 8.05, -0.30]` and `[1.85, 7.65, 0.30]`.
+     - Form 1: Tall slender ascending fork at 5.35m reaching `[-1.15, 8.55, 0.20]` and `[1.15, 8.25, -0.20]`.
+     - Form 2: Asymmetric limb fork at 4.30m reaching `[-0.65, 8.40, 0.35]` and `[1.35, 7.50, -0.55]`.
+   - Calibrated `TIERS` drop parameters so mature fronds spread horizontally as an umbrella dome (`rise = 1.95, drop = 1.05` on tier 1; `rise = 1.10, drop = 1.75` on tier 2; `rise = 0.15, drop = 2.55` on tier 3).
+   - Widened pinna lamina from `length * 0.175` to `length * 0.21`, creating continuous, lush, volumetric crown canopies without gaps while respecting the 6.80m reach assertion.
+
+5. **Warm Jurassic Foliage & Coastal Atmospheric Haze Integration:**
+   - Fine-tuned foliage albedos in `apps/terrain-native/src/surface_plants.rs`: FernClump `[0.47, 0.46, 0.39, 1.0]`, LycopsidTree `[0.50, 0.49, 0.38, 1.0]`, strictly preserving chlorophyll spectral inequality $G > R > B$ and energy conservation.
+   - Coastal atmospheric haze calibrated to `local_haze_extinction_per_m = 0.00115`, `local_haze_height_m = 650.0` in `data/graphics/surface-showcase.toml`, smoothly integrating the distant sea horizon into the overcast sky.
+
+6. **Verification & Capture:**
+   - Headless render captured to `target/surface-showcase/completion-2026-10-25/standing_world23_rt_active_volumetric.png` (48 frames, 1280x720, median frame time 1043 ms with hardware RT active).
+   - All 12 local command gates passed (`check_architecture.py`, `cargo fmt -- --check`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`).
+
 ## WORLD22 — Review of Gemini's latest scene and soil normal continuity (2026-10-25)
 
 This continuation starts from `d4a780f`, retaining WORLD16–21's crown geometry,

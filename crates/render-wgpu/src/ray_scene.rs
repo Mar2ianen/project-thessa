@@ -114,6 +114,7 @@ pub struct Plan {
     bias_m: f32,
     max_distance_m: f32,
     bounces: u32,
+    reflection_samples: u32,
 }
 
 /// Decide whether this scene can trace at all. Never panics; every rejection
@@ -369,6 +370,7 @@ fn plan_inner(
         bias_m: resolved.rt_ray_bias_m,
         max_distance_m: resolved.rt_max_distance_m.clamp(0.01, 1.0e7) as f32,
         bounces: resolved.rt_reflection_bounces,
+        reflection_samples: resolved.rt_reflection_samples,
     }))
 }
 
@@ -505,13 +507,14 @@ pub fn shader(plan: &Plan) -> String {
         "if ((pair.words.x & 0x80000000u) != 0u) { return rt_terrain_surface(hit, pair, ray_direction,cone_width); }"
     } else { "" });
     format!(
-        "enable wgpu_ray_query;\nconst RT_BIAS:f32={};\nconst RT_TMAX:f32={};\nconst RT_BOUNCES:u32={};\nconst RT_ROUGHNESS_CUTOFF:f32={};\nconst RT_LOW_QUALITY:bool={};\nconst RT_SHADOWS:bool={};\n{}\n{}\n{}",
+        "enable wgpu_ray_query;\nconst RT_BIAS:f32={};\nconst RT_TMAX:f32={};\nconst RT_BOUNCES:u32={};\nconst RT_ROUGHNESS_CUTOFF:f32={};\nconst RT_LOW_QUALITY:bool={};\nconst RT_SHADOWS:bool={};\nconst RT_REFLECTION_SAMPLES:u32={};\n{}\n{}\n{}",
         plan.bias_m,
         plan.max_distance_m,
         plan.bounces,
         ROUGHNESS_CUTOFF,
         plan.quality == Quality::Low,
         plan.shadow_rays,
+        plan.reflection_samples,
         sampling,
         include_str!("ray_query.wgsl"),
         if plan.reflections {

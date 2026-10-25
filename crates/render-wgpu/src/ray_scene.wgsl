@@ -220,7 +220,8 @@ fn rt_reflection(
         let continuation = clamp((RT_ROUGHNESS_CUTOFF-surface.roughness)/RT_ROUGHNESS_CUTOFF,0.0,1.0);
         radiance += throughput*hit_fresnel*env_radiance_from(surface.position,reflected,ambient)*surface.occlusion*(1.0-continuation);
         throughput *= hit_fresnel*continuation*surface.occlusion;
-        origin = surface.position + surface.geometry * RT_BIAS;
+        let geom_bias = max(RT_BIAS, length(surface.position) * 1e-5);
+        origin = surface.position + surface.geometry * geom_bias;
         direction = reflected;
         if all(throughput < vec3(0.002)) {
             break;

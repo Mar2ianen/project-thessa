@@ -898,7 +898,7 @@ pub fn describe() -> Vec<SettingMeta> {
             path: "raytracing.max_instances",
             label: "RT max instances",
             kind: SettingKind::Int,
-            range: "1..=16384",
+            range: "1..=32768",
             step: "1",
             unit: "-",
             advanced: true,

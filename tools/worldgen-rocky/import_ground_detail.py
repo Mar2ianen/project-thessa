@@ -21,25 +21,40 @@ maps = {}
 for name, digest in expected.items():
     path = source / f"forest_ground_04_{name}_1k.png"
     assert hashlib.md5(path.read_bytes()).hexdigest() == digest, path
-    maps[name] = np.asarray(Image.open(path)).astype(np.float64)
+    maps[name] = np.asarray(Image.open(path))
 
 
-def average(a):
-    return (a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2]) * 0.25
-
-
-rgb = maps["diff"] / 255.0
-linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
-linear = average(linear)
-rgb = np.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - 0.055)
-rough = np.rint(average(maps["rough"])).astype(np.uint8)
-height = np.rint(average(maps["disp"])).astype("<u2")
-packed = np.empty((512, 512, 6), dtype=np.uint8)
-packed[:, :, :3] = np.rint(rgb * 255).astype(np.uint8)
-packed[:, :, 3] = rough
-packed[:, :, 4:] = height.view(np.uint8).reshape(512, 512, 2)
-raw = b"FG01" + (512).to_bytes(4, "little") + packed.tobytes()
+side = 1024
+assert maps["diff"].shape == (side, side, 3)
+assert maps["rough"].shape == maps["disp"].shape == (side, side)
+height = maps["disp"].astype("<u2")
+packed = np.empty((side, side, 6), dtype=np.uint8)
+packed[:, :, :3] = maps["diff"].astype(np.uint8)
+packed[:, :, 3] = maps["rough"].astype(np.uint8)
+packed[:, :, 4:] = height.view(np.uint8).reshape(side, side, 2)
+raw = b"FG01" + side.to_bytes(4, "little") + packed.tobytes()
 destination.parent.mkdir(parents=True, exist_ok=True)
 destination.write_bytes(gzip.compress(raw, compresslevel=9, mtime=0))
-print(json.dumps({"path": str(destination), "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
-                  "bytes": destination.stat().st_size, "decoded_bytes": len(raw)}))
+metadata = {
+    "path": str(destination),
+    "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+    "bytes": destination.stat().st_size,
+    "decoded_bytes": len(raw),
+    "side": side,
+    "source_url": "https://polyhaven.com/a/forest_ground_04",
+    "license": "CC0-1.0",
+    "width_m": 3.15,
+    "height_range_m": 0.060,
+    "height_is_authored_optical_prior": True,
+    "sources": {
+        name: {
+            "url": f"https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_{name}_1k.png",
+            "md5": digest,
+            "sha256": hashlib.sha256((source / f"forest_ground_04_{name}_1k.png").read_bytes()).hexdigest(),
+        } for name, digest in expected.items()
+    },
+}
+destination.with_name(destination.name.removesuffix(".bin.gz") + ".provenance.json").write_text(
+    json.dumps(metadata, indent=2) + "\n"
+)
+print(json.dumps(metadata))

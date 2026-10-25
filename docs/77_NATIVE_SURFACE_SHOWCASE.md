@@ -6,6 +6,79 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+## WORLD42 — Near-camera source resolution (2026-10-25)
+
+This continuation starts from `56d6b22`, following the report of degrading soil
+very close to the camera. The existing High L24 material ceiling is about
+3.05 mm/texel at the canonical 3.2 Mm radius, but the primary 3.15 m soil scan
+was downsampled to 512² (6.15 mm/source texel). Finer resident pages could not
+recover the discarded source information. This is a verified source-resolution
+ceiling, not proof that it accounts for every visible close-ground defect.
+
+The importer now preserves the verified original 1024² CC0 reflectance,
+roughness and 16-bit displacement samples (3.08 mm/source texel). Asset hashes,
+original URLs and attribution are in `assets/textures/forest-ground-04.provenance.json`
+and its adjacent license file. No new photograph, generated texture or noise
+layer is introduced. A native-channel roundtrip checks every packed sample;
+reimporting produces identical gzip bytes. Runtime decoding validates the exact
+bounded payload and expected dimensions for each source. The second mud/litter
+scan stays 512² at its existing 1.3 m width. Source mip selection now uses each
+texture's actual dimension, with all five channels checked at four physical
+footprints for both sources.
+
+The existing intrinsic humus/mineral transfer runs before mip averaging, now
+at native 1K resolution. Its measured coarse mean is updated to match the new
+pyramid: linear RGB `[0.09703242,0.068543516,0.043225687]`, roughness 0.7991561.
+This differs from applying a nonlinear transfer after the old offline 2×2
+downsample; the material change therefore includes a modest optical mean change.
+Exposure, illumination, source width/height range, canonical terrain/scatter
+identities and graphics defaults are unchanged. This is an authored optical
+soil prior, not calibrated Thessa geology or a new collision-height model.
+
+Regular and production conforming raster tests now cover material L23/L24 in
+all six cube charts. They retain supported L22 geometry, independently project
+small camera displacements in f64 and compare the actual filtered raster with
+the same two-code radiance tolerance and monotonic-motion requirement. Both
+passed before any production shader change; no coordinate-shader defect was
+demonstrated, and no production shader was modified. These isolated fixtures
+do not certify full-scene temporal stability or moving residency/contact.
+
+Low/Medium/High material ceilings, 256 GPU layers, 512 demand pages, 1,024 cached
+CPU pages, normal composition and the 7 MB plant prototype limit remain. The
+source's decoded five-float mip pyramid grows 6,990,500→27,962,020 bytes (+20 MiB);
+compressed data grows 1,382,947→5,696,506 bytes. These are source/payload sizes,
+not a measured total-RSS or VRAM bound. Detail-off retains the existing no-scan
+decode path. Enabled lower tiers still filter the same source to their cheaper
+resolved representation. No new GPU texture array, mesh, pass or draw is added.
+
+Exact checks, source/binary/profile pins and matched standing/isolated-floor
+captures are recorded in
+[`native-near-soil-2026-10-25.json`](artifacts/native-near-soil-2026-10-25.json).
+Reference parity and independent blind preference remain open. Source
+magnification, finite native resolution, sampled CBT contact, streaming and
+full-scene motion remain limits; increasing the source resolution does not
+solve those mechanisms by itself.
+
+All 10 scoped local gates passed, with 519 successful test executions across
+overlapping worldgen/stream/graphics/native and GPU suites. These include strict
+all-target/all-feature Clippy for affected packages, architecture, formatting,
+native feature-off compilation, the release build and the extended regular and
+conforming L24 oracles. Six actual captures cover the standing view, isolated
+floor and camera sweep before/after. Reported height/material-level histograms
+match in each pair, although resident page identities were not compared. Source
+resolution changes neither submitted plant geometry nor these final CBT counts:
+25,266 static and 23,996 sweep triangles, with zero capacity rejections and 64 RT
+terrain slots. The 7 MB prototype limit is retained.
+
+Descriptive GPU medians on Radeon 880M/Vulkan/RADV Mesa 26.2.5 are
+1,204.459→1,133.695 ms standing, 235.991→202.177 ms isolated floor and
+1,399.000→1,406.145 ms sweep. Baseline static captures overlap CPU compilation,
+and no isolated speedup or controlled CPU/wall timing is claimed. Sweep checks
+exercise the moving pipeline but retain only final images and frame counters,
+not an image sequence or temporal visual acceptance. Three blind pairs remain
+unvoted. An independently reproduced offscreen material-priority defect remains
+open; this source-only checkpoint does not fix it.
+
 ## WORLD41 — Resolved soil scans and geometric floor litter (2026-10-25)
 
 This continuation starts from `4bd9744`. It retains the coastal camera/profile,

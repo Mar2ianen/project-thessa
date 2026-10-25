@@ -18,6 +18,7 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
     let backend = Backend::bring_up().expect("requires the local hardware adapter");
     let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
     let settings = thessa_graphics::ResolvedGraphicsSettings {
+        surface_quality: thessa_graphics::Quality::High,
         terrain_normal_maps: false,
         terrain_ground_detail: true,
         specular_reflections: false,
@@ -31,15 +32,27 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
         .flat_map(|i| [if i % 128 < 64 { 32 } else { 224 }, 0, 0, 255])
         .collect();
     let material = CbtMaterialPage::from_rgba8(rgba).unwrap();
-    for (face, level) in (0..6).flat_map(|face| [17, 21, 22].map(|level| (face, level))) {
+    for (face, level) in (0..6).flat_map(|face| [17, 21, 22, 23, 24].map(|level| (face, level))) {
         // Away from face centre, to catch direction/chart cancellation.
         let scale = 1 << (level - 17);
         let key = TileKey::new(face, level, 113_491 * scale, 95_110 * scale).unwrap();
         let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
+        let geometry_level = level.min(22);
+        let geometry_anchor = TileAnchor::new(
+            TileKey::new(
+                face,
+                geometry_level,
+                key.x >> (level - geometry_level),
+                key.y >> (level - geometry_level),
+            )
+            .unwrap(),
+            3_200_000.0,
+        )
+        .unwrap();
         let mut renderer = TerrainRenderer::with_capacity_and_lighting(
             &backend,
             &[TerrainPatch {
-                anchor,
+                anchor: geometry_anchor,
                 page: &height,
             }],
             OffscreenTarget::FORMAT,
@@ -61,7 +74,10 @@ fn close_material_raster_keeps_subtexel_motion_in_all_cube_charts() {
                 },
             )
             .unwrap();
-        let id = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+        // Fine material is the zero-path descendant of the supported geometry
+        // tile; the height-page ID helper intentionally stops at L22.
+        let id = thessa_rcbt_core::conforming_surface::page_id(geometry_anchor.tile).unwrap()
+            << (2 * (level - geometry_level));
         let pages = [(id, (1, material.clone()))].into_iter().collect();
         renderer.update_materials(&backend, &[id], &pages).unwrap();
         let mut reds = Vec::new();

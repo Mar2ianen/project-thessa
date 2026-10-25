@@ -142,6 +142,9 @@ The checked-in vertical slice currently contains:
   WORLD41 removes redundant soil-scan prefilter blur, retains scan contrast
   through litter pigment and adds bounded folded moss/ground-leaf geometry in
   the shared mesh/shadow path, within the existing 7 MB prototype limit.
+  WORLD42 restores native 1K soil scan data for near-camera detail, filters each
+  source at its actual resolution and extends regular/conforming material-motion
+  oracles through L24; GPU page budgets remain, CPU source mips add 20 MiB.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

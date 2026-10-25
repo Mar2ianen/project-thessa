@@ -403,11 +403,12 @@ fn native_topology_settings_select_shared_production_consumers() {
 }
 
 #[test]
-#[ignore = "hardware: production conforming raster must preserve subtexel L22 motion in all cube charts"]
+#[ignore = "hardware: production conforming raster must preserve subtexel L22-L24 material motion in all cube charts"]
 fn conforming_material_coordinates_keep_centimetre_detail() {
     use wgpu::util::DeviceExt;
     let backend = Backend::bring_up().unwrap();
     let settings = thessa_graphics::ResolvedGraphicsSettings {
+        surface_quality: thessa_graphics::Quality::High,
         terrain_topology: thessa_graphics::ResolvedTerrainTopology {
             capacity: 4096,
             waves: 1,
@@ -442,14 +443,19 @@ fn conforming_material_coordinates_keep_centimetre_detail() {
             compilation_options: Default::default(),
             cache: None,
         });
-    for face in 0..6 {
-        let level = 22;
-        let key = TileKey::new(face, level, 113_491 * 32, 95_110 * 32).unwrap();
+    for (face, level) in (0..6).flat_map(|face| [22, 23, 24].map(|level| (face, level))) {
+        let scale = 1 << (level - 17);
+        let key = TileKey::new(face, level, 113_491 * scale, 95_110 * scale).unwrap();
         let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
+        let geometry_anchor = TileAnchor::new(
+            TileKey::new(face, 22, key.x >> (level - 22), key.y >> (level - 22)).unwrap(),
+            3_200_000.0,
+        )
+        .unwrap();
         let mut terrain = TerrainRenderer::with_capacity_and_lighting(
             &backend,
             &[TerrainPatch {
-                anchor,
+                anchor: geometry_anchor,
                 page: &height,
             }],
             OffscreenTarget::FORMAT,
@@ -471,7 +477,8 @@ fn conforming_material_coordinates_keep_centimetre_detail() {
                 },
             )
             .unwrap();
-        let id = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+        let id = thessa_rcbt_core::conforming_surface::page_id(geometry_anchor.tile).unwrap()
+            << (2 * (level - 22));
         terrain
             .update_materials(
                 &backend,
@@ -492,7 +499,7 @@ fn conforming_material_coordinates_keep_centimetre_detail() {
                 )
                 .inverse(),
                 clip_from_view: glam::dcamera::rh::proj::directx::perspective(
-                    0.01 / 32.0,
+                    0.01 / f64::from(scale),
                     1.0,
                     0.01,
                     1000.0,

@@ -6,13 +6,13 @@ License: https://polyhaven.com/license
 CC0 legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
 Retrieved: 2026-10-22 via the public asset API and direct asset downloads.
 
-forest-ground-04.bin.gz is a derived 512x512 material swatch, not project code.
+forest-ground-04.bin.gz is a packed native 1024x1024 material swatch, not project code.
 It contains sRGB reflectance RGB8, linear roughness R8, and relative height R16.
-The importer verifies the source PNG checksums, averages 2x2 pixels (RGB in linear
-light), quantizes and packs them with a deterministic gzip header. Runtime uses
+The importer verifies the source PNG checksums and preserves native RGB8,
+roughness R8 and height R16 samples with a deterministic gzip header. Runtime uses
 the existing flate2 dependency; Pillow and NumPy are offline tooling only.
 Reproduce with tools/worldgen-rocky/import_ground_detail.py; exact download URLs
-and hashes are recorded in the surface-showcase evidence.
+and hashes are recorded in forest-ground-04.provenance.json and the surface-showcase evidence.
 
 This is an authored optical proxy for soil/gravel/organic debris, not measured
 Thessa geology, botanical taxonomy, collision geometry or sediment inventory.
@@ -22,3 +22,6 @@ range as rendering priors, not a claim about the scan's calibrated dimensions.
 Opt-in runtime material processing applies a continuous authored humus/mineral
 reflectance and roughness transfer before linear-light mip averaging. This
 leaves the packed CC0 source unchanged; it is not measured mineral taxonomy.
+The transfer runs at native resolution before runtime linear-light mip averaging.
+The old 512x512 downsample is superseded by WORLD42 (doc 77); GPU residency
+budgets and the second mud/litter scan's 512x512 source are unchanged.

@@ -2,6 +2,16 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+WORLD42 (doc 77) preserves the primary soil scan's original 1024² samples instead
+of the previous 512² downsample: native 3.08 mm source spacing now matches High
+L24 pages more closely. Each source uses its own dimension for mip selection;
+the mud/litter scan stays 512². Native-resolution intrinsic transfer precedes
+linear-light mip filtering, with updated matching coarse means. GPU page budgets,
+quality ceilings and shading/geometry contracts remain; the CPU float source
+pyramid costs an additional 20 MiB. Extended regular/conforming GPU oracles pass
+through L24 without a production shader change. Exact source provenance,
+checks, captures and remaining contact/temporal limits are in doc 77 WORLD42.
+
 WORLD22 ([doc 77](77_NATIVE_SURFACE_SHOWCASE.md)) replaces WORLD15's
 matched-level residual with canonical base-height and full optical gradient
 composition. Native geometric ground relief keeps RGBA8_SNORM (full optical

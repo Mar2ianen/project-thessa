@@ -4,8 +4,8 @@ use std::{io::Read, sync::OnceLock};
 
 pub const SWATCH_WIDTH_M: f64 = 3.15;
 pub const HEIGHT_RANGE_M: f32 = 0.060;
-const SIDE: usize = 512;
-const RAW_BYTES: usize = 8 + SIDE * SIDE * 6;
+const SOIL_SIDE: usize = 1024;
+const LITTER_SIDE: usize = 512;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GroundSample {
@@ -51,9 +51,9 @@ pub(crate) fn encode_srgb(v: f64) -> f64 {
 /// same material mean, not legacy canopy colour. Pinned against the asset below.
 fn swatch_mean() -> GroundSample {
     GroundSample {
-        albedo_linear: [0.089_765_41, 0.062_935_11, 0.039_580_63],
-        roughness: 0.807_225_05,
-        height_m: -0.0068553747,
+        albedo_linear: [0.097_032_42, 0.068_543_516, 0.043_225_687],
+        roughness: 0.799_156_1,
+        height_m: -0.006_855_374,
     }
 }
 
@@ -73,6 +73,7 @@ impl Texture {
     fn decode() -> Self {
         Self::decode_source(
             include_bytes!("../../../assets/textures/forest-ground-04.bin.gz"),
+            SOIL_SIDE,
             HEIGHT_RANGE_M,
             true,
         )
@@ -80,18 +81,24 @@ impl Texture {
     fn decode_litter() -> Self {
         Self::decode_source(
             include_bytes!("../../../assets/textures/mud-litter-01.bin.gz"),
+            LITTER_SIDE,
             LITTER_HEIGHT_RANGE_M,
             false,
         )
     }
-    fn decode_source(bytes: &[u8], height_range_m: f32, transfer: bool) -> Self {
+    fn decode_source(bytes: &[u8], side: usize, height_range_m: f32, transfer: bool) -> Self {
+        let raw_bytes = 8 + side * side * 6;
         let mut raw = Vec::new();
         flate2::read::GzDecoder::new(bytes)
-            .take(RAW_BYTES as u64 + 1)
+            .take(raw_bytes as u64 + 1)
             .read_to_end(&mut raw)
             .expect("embedded ground material gzip");
-        assert_eq!(raw.len(), RAW_BYTES, "bounded embedded material payload");
-        assert_eq!(&raw[..8], &[b'F', b'G', b'0', b'1', 0, 2, 0, 0]);
+        assert_eq!(raw.len(), raw_bytes, "bounded embedded material payload");
+        assert_eq!(&raw[..4], b"FG01");
+        assert_eq!(
+            u32::from_le_bytes(raw[4..8].try_into().unwrap()) as usize,
+            side
+        );
         let pixels = raw[8..]
             .as_chunks::<6>()
             .0
@@ -113,7 +120,7 @@ impl Texture {
                 ]
             })
             .collect();
-        let mut mips = vec![Mip { side: SIDE, pixels }];
+        let mut mips = vec![Mip { side, pixels }];
         while mips.last().unwrap().side > 1 {
             let previous = mips.last().unwrap();
             let side = previous.side / 2;
@@ -267,7 +274,9 @@ fn sample_texture(
     let sum: f64 = weights.iter().sum();
     // A mip texel integrates one footprint width. Doubling it here adds a
     // blur before the resident page receives its own derivative filtering.
-    let lod = (texel_m * SIDE as f64 / width_m).max(1.0).log2();
+    let lod = (texel_m * texture.0[0].side as f64 / width_m)
+        .max(1.0)
+        .log2();
     let projections = [[p[2], p[1]], [p[0], p[2]], [p[0], p[1]]];
     let mut value = [0.0; 5];
     for (projection, (uv, weight)) in projections.into_iter().zip(weights).enumerate() {
@@ -418,27 +427,39 @@ mod tests {
 
     #[test]
     fn native_scan_footprint_does_not_add_an_extra_mip_of_blur() {
-        let texture = Texture::decode();
         let seed = 42;
         let r = 3_200_000.0;
         let uv = [
             crate::rng::hash01(seed, 1743, 0, 0),
             crate::rng::hash01(seed, 1742, 0, 0),
         ];
-        let expected = texture.sample_stochastic(uv, 0.0, seed, 0);
-        let actual = sample_texture(
-            &texture,
-            [1.0, 0.0, 0.0],
-            r,
-            seed,
-            SWATCH_WIDTH_M / SIDE as f64,
-            SWATCH_WIDTH_M,
-        );
-        for (a, e) in actual.albedo_linear.into_iter().zip(expected) {
-            assert!(
-                (a - e).abs() < 1e-7,
-                "native scan footprint must retain mip zero"
-            );
+        for (texture, width_m) in [
+            (Texture::decode(), SWATCH_WIDTH_M),
+            (Texture::decode_litter(), LITTER_WIDTH_M),
+        ] {
+            for mip in [0, 1, 2, 4] {
+                let expected =
+                    texture.sample_stochastic_width(uv, f64::from(mip), seed, 0, width_m);
+                let actual = sample_texture(
+                    &texture,
+                    [1.0, 0.0, 0.0],
+                    r,
+                    seed,
+                    width_m / texture.0[0].side as f64 * 2_f64.powi(mip),
+                    width_m,
+                );
+                for (a, e) in actual
+                    .albedo_linear
+                    .into_iter()
+                    .chain([actual.roughness, actual.height_m])
+                    .zip(expected)
+                {
+                    assert!(
+                        (a - e).abs() < 1e-7,
+                        "physical footprint must match source mip {mip}"
+                    );
+                }
+            }
         }
     }
 
@@ -677,14 +698,14 @@ mod tests {
     #[test]
     fn swatch_mips_preserve_linear_means_and_wrap_continuously() {
         let texture = Texture::decode();
-        assert_eq!(texture.0.len(), 10);
+        assert_eq!(texture.0.len(), 11);
         let base = &texture.0[0];
         for c in 0..5 {
             let mean =
                 base.pixels.iter().map(|p| f64::from(p[c])).sum::<f64>() / base.pixels.len() as f64;
             assert!((f64::from(texture.0.last().unwrap().pixels[0][c]) - mean).abs() < 2e-7);
         }
-        for lod in [0.0, 2.5, 9.0] {
+        for lod in [0.0, 2.5, 10.0] {
             assert_eq!(
                 texture.sample([0.125, 0.25], lod),
                 texture.sample([1.125, -0.75], lod)

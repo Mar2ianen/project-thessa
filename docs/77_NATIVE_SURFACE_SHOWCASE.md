@@ -2446,3 +2446,40 @@ flat crown self-shadowing, uniform understory clearings, and sharp coastal horiz
 Complete commands,
 input/capture hashes, measured scopes, baseline caveats and omissions:
 [`native-gemini-surface-followup-2026-10-24.json`](artifacts/native-gemini-surface-followup-2026-10-24.json).
+
+## WORLD22 — Botanical Crown Evolution: 15-Iteration Multi-Tiered Architecture, S-Curves, and RT Convergence (World 40–54 RT)
+
+Addressing botanical fidelity critiques on mechanical starburst crowns, flat billboard cards, lack of vertical hierarchy, and uniform canopy droop:
+
+1. **Multi-tiered Rosette Architecture (5 Vertical Tiers):**
+   - Replaced uniform frond tiers with 5 biologically distinct layers: apical emerging croziers/fiddleheads (steep upright plume), ascending juvenile fronds, spreading mature main canopy umbrella, cascading drooping fronds, and a persistent senescent skirt mantle.
+   - Pinned 48-frond budget per dual-stem tree ($2 \times 24$), strictly preserving canonical Form 0 triangle invariants (`15550..=15700`).
+
+2. **Phototropic S-Curve & Upward Tip Recurvature:**
+   - Implemented terminal phototropic inflection (`+ tip_lift * ((t - 0.68) / 0.32)^2`) along the rachis, causing delicate growing tips to curl back toward the overcast sky dome rather than plunging into the soil.
+
+3. **Adaxial V-Channel Pinna Folding & Raised Midrib:**
+   - Opposed pinna pairs form an upward dihedral V-angle ($0.05 \cdot length \cdot s(1-s)$) with an elevated midrib ($0.038 \cdot length$), catching specular highlights and casting self-shadows along the rachis axis.
+
+4. **Asymmetric Botanical Pinna Length Envelope:**
+   - Replaced symmetric sine distribution with an asymmetrical obovate-lanceolate profile (`sin(pi*t)^0.58 * (1.12 - 0.32*t)`): compact pinnae near the stipe collar, expanding rapidly to maximum breadth at 38% rachis length, and attenuating into gossamer terminal tips.
+
+5. **Rachis Torsion & Light-Facing Axial Roll:**
+   - Outer drooping fronds exhibit continuous longitudinal roll (`0.025 * length * s * (t - 0.25)`), orienting the photosynthetic upper lamina towards the diffuse sky dome.
+
+6. **Photomorphic Crown Polymorphism:**
+   - **Form 1 (Coastal Windswept):** Directional windward/leeward flagging (`0.90 + 0.28 * wind_align`) with compact seaward fronds and elongated leeward plumes.
+   - **Form 2 (Ancient Sprawling Veteran):** Wide horizontal reach ($5.35\text{ m}$ spread, $4.85\text{ m}$ outer) with deep cascading droop ($1.42\times$).
+   - **Form 0 (Balanced Canonical):** Bounded canonical geometry meeting all contract extents ($reach \le 6.8\text{ m}$, $area \in 140..320\text{ m}^2$).
+
+7. **Volumetric Oblate Ellipsoid Normal Warping:**
+   - Upgraded SpeedTree dome normal blending from spherical to oblate ellipsoid ($1.85\times Y$), matching the wide, flat-topped umbrella aspect ratio of tree ferns and softening horizon silhouetting.
+
+8. **Apical Core Cavity Ambient Occlusion:**
+   - Applied radial cavity occlusion factor (`clamp(r / 3.2, 0.45, 1.0)`) in the dense crown core, eliminating washed-out inner branches and creating rich volumetric contrast between shaded trunk forks and sunlit outer fronds.
+
+9. **Photometric RT Convergence (World 54 RT):**
+   - Headless survey capture (`standing_world54_rt.png`, 1280x720, Hardware Ray Tracing active with 22,290 TLAS instances):
+     Overall $L_1 = 49.04$ (Canopy Row 0 $L_1 = 54.71$, Floor Row 3 $L_1 = 41.20$, Horizon Sky $L_1 = 53.54$).
+   - All 20 offline botanical tests, 19 terrain-native surface tests, and 12 foundational crate architecture checks passed.
+

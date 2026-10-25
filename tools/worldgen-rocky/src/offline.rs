@@ -1675,7 +1675,8 @@ fn crown_frond(
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
     for pair in 0..18 {
         let t = 0.10 + pair as f64 * 0.048;
-        let length = reach_m * 0.23 * (std::f64::consts::PI * t).sin().powf(0.7);
+        let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
+        let length = reach_m * 0.23 * blade_profile;
         for side in [-1.0, 1.0] {
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = i as f64 * 0.5;

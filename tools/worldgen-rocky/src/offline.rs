@@ -1220,6 +1220,7 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
                             .map(|v| v as f32);
                         }
                         variant.ambient_visibility = super::plant_visibility::bake(&variant, 32);
+                        apply_crown_core_occlusion(&mut variant);
                     }
                     forms.push((variant, form));
                 }
@@ -1227,6 +1228,21 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
             forms
         })
         .clone()
+}
+
+fn apply_crown_core_occlusion(mesh: &mut PlantMesh) {
+    if mesh.kind != crate::scatter::ScatterKind::LycopsidTree {
+        return;
+    }
+    // Deepen cavity occlusion inside the apical rosette core where stipes converge.
+    for (p, ao) in mesh.positions.iter().zip(&mut mesh.ambient_visibility) {
+        let y = f64::from(p[1]);
+        if y > 6.0 {
+            let r = f64::from(p[0]).hypot(f64::from(p[2]));
+            let core_factor = (r / 3.2).clamp(0.45, 1.0) as f32;
+            *ao = (*ao * core_factor).clamp(0.15, 1.0);
+        }
+    }
 }
 
 fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
@@ -1265,6 +1281,7 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
             _ => unreachable!(),
         }
         mesh.ambient_visibility = super::plant_visibility::bake(&mesh, 32);
+        apply_crown_core_occlusion(&mut mesh);
         mesh
     })
     .collect()

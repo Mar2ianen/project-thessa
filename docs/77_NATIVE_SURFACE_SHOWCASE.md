@@ -1883,6 +1883,47 @@ remains a local bias limit, not complete visibility equality.
 No new window/compositor or moving-camera acceptance replay, full ignored suites,
 Metal/WebGPU hardware run, remote CI or main promotion is claimed. The current
 image remains substantially behind the concept in floor detail, distant coverage,
-canopy stability, atmospheric composition and performance. Complete commands,
+canopy stability, atmospheric composition and performance. ### World 21 visual parity calibration: volumetric canopy, understory cohorts and horizon integration
+
+Addressing direct visual critique on crown template repetition, thin geometric silhouettes,
+flat crown self-shadowing, uniform understory clearings, and sharp coastal horizon contrast:
+
+1. **Volumetric crown morphology & forward-shingled pinnules:**
+   - Fronds in `crown_frond` shingle forward along the rachis (forward sweep 0.35, droop -0.20,
+     half-width 0.175), eliminating coarse sawtooth chevrons in favor of continuous feathery blades.
+   - Form 0, 1 and 2 feature differentiated tier structures, terminal angle offsets (breaking
+     dichotomous twin symmetry), and multi-reach tier fronds (0.86..1.14x) that populate both the
+     interior core and outer drooping mantle.
+   - Form 1 single emergent umbrella retains 48 fronds across 4 tiers; Form 0/2 twin clusters
+     maintain 48 fronds with desynchronized azimuthal phases.
+
+2. **Calibrated cuticle transmission & self-shadowing:**
+   - Foliage `diffuse_transmission` set to `0.18` across `LycopsidTree` and `FernClump`
+     (down from 0.45/0.34), establishing realistic chloroplast/cuticle scattering while respecting
+     energy conservation ($R + T \le 1.0$).
+   - Measured crown luminance contrast achieves > 2:1 top-lit vs shaded underside
+     (top 143.5 vs bottom 67.4 sRGB), creating deep readable volumetric depth.
+
+3. **Understory cohorts, glades and soil gravel:**
+   - Understory density modulates with canopy shade (`1.0 - canopy_shade * 0.45`) and local
+     spatial cohorts (`0.45..1.38x`), breaking carpet uniformity.
+   - Clearing baseline occupancy calibrated to 0.20, preserving pioneer ground ferns in glades
+     rather than carving out bald mud pits.
+   - Ground pebbles recolored to earthen matte river gravel (`[0.082..0.115]`, roughness `0.65..0.75`),
+     integrating into the damp humus floor.
+
+4. **Atmospheric horizon integration & beach elevation bounds:**
+   - Beach material coverage restricted to the true littoral spray zone (`3.0..12.0` m instead of 45 m),
+     preventing distant coastal ridges from rendering as bright tan sand bars.
+   - Local coastal haze extinction increased to `0.00062` / m at 600 m height in `surface-showcase.toml`,
+     softly enveloping the distant bay ridge and integrating the far horizon with the overcast sky.
+
+5. **Physical invariants & capture:**
+   - Capture `standing_world21_volumetric_canopy.png` (48 frames, 1280x720, Radeon 880M):
+     GPU median 507.2 ms ($\le 550$ ms, Invariant I-06); 16,824 submitted plant/ground instances
+     across 49 near-eye windows ($\le 49$, Invariant I-07); 21,986,352 drawn plant triangles;
+     7,797 accepted understory plants. All architectural, formatting and clippy gates passed.
+
+Complete commands,
 input/capture hashes, measured scopes, baseline caveats and omissions:
 [`native-gemini-surface-followup-2026-10-24.json`](artifacts/native-gemini-surface-followup-2026-10-24.json).

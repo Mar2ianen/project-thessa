@@ -667,10 +667,10 @@ fn convert_with_detail(
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => {
-                        [0.42, 0.28, 0.48, 1.0]
+                        [0.44, 0.48, 0.46, 1.0]
                     }
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => {
-                        [0.50, 0.54, 0.52, 1.0]
+                        [0.48, 0.52, 0.44, 1.0]
                     }
                     _ => [0.75, 0.75, 0.75, 1.0],
                 }
@@ -679,10 +679,8 @@ fn convert_with_detail(
                 prototype.senescent.as_ref().unwrap().diffuse_transmission
             } else if stem {
                 0.0
-            } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
-                0.34
             } else {
-                0.45
+                0.18
             };
             prepared.asset.materials.push(Material {
                 base_color,
@@ -1031,10 +1029,8 @@ mod tests {
                     dry.diffuse_transmission
                 } else if stem {
                     0.0
-                } else if prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::FernClump {
-                    0.34
                 } else {
-                    0.45
+                    0.18
                 };
                 assert_eq!(material.diffuse_transmission, expected_transmission);
                 assert_eq!(material.metallic, 0.0);

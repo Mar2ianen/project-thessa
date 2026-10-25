@@ -426,10 +426,13 @@ pub fn scatter_region(
                     {
                         continue;
                     }
+                    let canopy_shade = surface.vegetation.canopy01.clamp(0.0, 1.0);
+                    let light_factor = 1.0 - canopy_shade * 0.45;
                     reference_density
                         * if population == ScatterPopulation::Understory {
                             (surface.vegetation.ground01 + surface.vegetation.reeds01)
                                 * patch_density
+                                * light_factor
                         } else {
                             surface.vegetation.total()
                         }
@@ -475,8 +478,12 @@ pub fn scatter_region(
                 // Unit-diameter visual pebble: many small grains, rare cobbles.
                 0.04 + random(404).powi(4) * 0.42
             } else if population == ScatterPopulation::Understory {
-                policy.understory_min_scale
-                    + random(404) * (policy.understory_max_scale - policy.understory_min_scale)
+                let p = direction.map(|v| v * (radius_m / 24.0));
+                let community = rng::value_noise3(planet_seed ^ 0x636f6d6d, 8192, p[0], p[1], p[2]);
+                let cohort_scale = 0.82 + 0.36 * crate::appearance::smooth(-0.25, 0.25, community);
+                (policy.understory_min_scale
+                    + random(404) * (policy.understory_max_scale - policy.understory_min_scale))
+                    * cohort_scale
             } else {
                 0.5 + random(404) * 1.8
             };
@@ -499,7 +506,7 @@ pub fn scatter_region(
 fn understory_patch_density(seed: u64, radius_m: f64, direction: [f64; 3]) -> f64 {
     let p = direction.map(|v| v * (radius_m / UNDERSTORY_PATCH_WAVELENGTH_M));
     let noise = rng::value_noise3(seed, 437, p[0], p[1], p[2]);
-    let occupancy = crate::appearance::smooth(-0.2, 0.2, noise);
+    let occupancy = 0.20 + 0.80 * crate::appearance::smooth(-0.25, 0.25, noise);
     UNDERSTORY_PATCH_MAX * occupancy
 }
 

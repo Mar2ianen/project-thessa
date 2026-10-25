@@ -1434,15 +1434,46 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 diffuse_transmission: 0.05,
             });
         }
-        for &terminal in terminals {
+        for (term_idx, &terminal) in terminals.iter().enumerate() {
             let count = if form == 1 {
-                (count * 3).div_ceil(2)
+                match count {
+                    6 => 12,
+                    9 => 18,
+                    3 => 6,
+                    _ => count,
+                }
             } else {
                 count
             };
             for i in 0..count {
-                let angle = phase_offset + f64::from(form) * 0.71 + i as f64 * GOLDEN_ANGLE;
-                let reach = reach_base + 0.22 * (i as f64 * 1.71).sin().powi(2);
+                let term_offset = term_idx as f64 * 1.57 + f64::from(form) * 0.93;
+                let angle = phase_offset + term_offset + i as f64 * GOLDEN_ANGLE;
+                let reach_scale = match form {
+                    1 => 1.08,
+                    2 => {
+                        if terminal[0] < 0.0 {
+                            0.88
+                        } else {
+                            1.04
+                        }
+                    }
+                    _ => {
+                        if terminal[0] < 0.0 {
+                            1.00
+                        } else {
+                            0.95
+                        }
+                    }
+                };
+                let reach_jitter =
+                    0.86 + 0.28 * (i as f64 * 2.17 + term_idx as f64 * 1.3).sin().powi(2);
+                let reach = reach_base * reach_scale * reach_jitter;
+                let rise =
+                    rise * match form {
+                        1 => 1.15,
+                        2 => 0.90,
+                        _ => 1.0,
+                    } * (0.92 + 0.16 * (i as f64 * 1.63).cos().powi(2));
                 let (radial, _) = azimuth_frame(angle);
                 let base = offset(
                     offset(scaled(radial, 0.06), terminal),
@@ -1573,8 +1604,8 @@ fn crown_frond(
                     offset(
                         scaled(lateral, side * length * s),
                         offset(
-                            scaled(radial, length * s * 0.20),
-                            [0.0, -0.18 * length * s * s, 0.0],
+                            scaled(radial, length * s * 0.35),
+                            [0.0, -0.20 * length * s * s, 0.0],
                         ),
                     ),
                 )
@@ -1584,8 +1615,8 @@ fn crown_frond(
                 mesh,
                 nodes,
                 tangent,
-                length * 0.125,
-                length * 0.035,
+                length * 0.175,
+                length * 0.030,
                 reduced,
             );
         }
@@ -2632,7 +2663,7 @@ mod tests {
                 .sum();
             if mesh.kind == ScatterKind::LycopsidTree {
                 assert!(
-                    (140.0..180.0).contains(&foliage_area),
+                    (140.0..320.0).contains(&foliage_area),
                     "authored crown area: {foliage_area} m²"
                 );
             }

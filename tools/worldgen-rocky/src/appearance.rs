@@ -189,7 +189,7 @@ fn beach_material_coverage(maritime: f64, sample: &TerrainSample, exposed: f64) 
         1.0 - smooth(0.0, 0.25, sample.salt01)
     };
     maritime
-        * (1.0 - smooth(3.0, 45.0, sample.height_m))
+        * (1.0 - smooth(3.0, 12.0, sample.height_m))
         * (1.0 - smooth(0.08, 0.35, sample.slope_hint))
         * (1.0 - exposed)
         * unsalted
@@ -1327,7 +1327,7 @@ mod shoreline_tests {
                 "macro coast context must not become a cell edge"
             );
         }
-        for h in [3.0, 45.0] {
+        for h in [3.0, 12.0] {
             sample.height_m = h - 1e-6;
             let a = beach_material_coverage(1.0, &sample, 0.0);
             sample.height_m = h + 1e-6;

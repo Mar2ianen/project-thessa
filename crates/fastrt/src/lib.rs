@@ -4,8 +4,9 @@
 //! (`docs/39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` §17): every candidate keeps
 //! its raster representation, and this crate decides which RT
 //! representation — if any — an accelerator should build for it. There is
-//! no accelerator here yet (no BLAS/TLAS, no budgets, no dispatch); this is
-//! the pure policy layer that later stages consume.
+//! no accelerator here (no BLAS/TLAS, frame allocator or dispatch); this is
+//! the pure policy layer. `render-wgpu` consumes full/conditional primitive
+//! classification before its existing hardware RT feasibility checks.
 //!
 //! Contract:
 //!

@@ -11,8 +11,8 @@
 // A ray that hits nothing contributes `env * fresnel`, identical to the
 // environment term it replaces, so RT never invents sky or ambient light.
 // Hits use barycentric smooth normals/UVs, shared raster textures/samplers,
-// sRGB base colour and linear MR/normal/AO. Samples have explicit LOD zero:
-// a reflected ray has no screen-space texture derivatives.
+// sRGB base colour and linear MR/normal/AO. Medium/High carry a pixel cone;
+// Low retains the point-sampled material fallback.
 
 struct RtMaterial {
     // rgb = linear base color, w = metallic.
@@ -67,7 +67,32 @@ fn rt_vector(pair:RtPair, vector:vec3<f32>)->vec3<f32> {
     return vec3(dot(pair.row0.xyz,vector),dot(pair.row1.xyz,vector),dot(pair.row2.xyz,vector));
 }
 
-fn rt_surface(hit: RtHit, ray_direction: vec3<f32>) -> RtSurface {
+// Project a full pixel-width cone onto the actual hit triangle, including
+// grazing incidence. No screen derivatives are evaluated inside ray traversal.
+fn rt_hit_footprint(direction:vec3<f32>,geometry:vec3<f32>,width:f32)->mat2x3<f32> {
+    let axis=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(direction.y)>0.9);
+    let x=normalize(cross(direction,axis));
+    let y=cross(direction,x);
+    let cosine=dot(direction,geometry);
+    // shortcut: cap the tangent projection at 10,000x at grazing silhouettes;
+    // exact visibility/curved-surface filtering needs additional ray samples.
+    let denominator=select(-1.0,1.0,cosine>=0.0)*max(abs(cosine),0.0001);
+    return mat2x3<f32>((x-direction*(dot(x,geometry)/denominator))*width,
+        (y-direction*(dot(y,geometry)/denominator))*width);
+}
+
+fn rt_uv_delta(delta:vec3<f32>,e1:vec3<f32>,e2:vec3<f32>,u1:vec2<f32>,u2:vec2<f32>)->vec2<f32> {
+    // Scale before forming area squared: centimetre blades and large instances
+    // must not underflow/overflow the same UV Jacobian.
+    let scale=max(length(e1),length(e2));
+    if(scale<=0.0){return vec2(0.0);}
+    let a=e1/scale;let b=e2/scale;let d=delta/scale;
+    let n=cross(a,b);let area=dot(n,n);
+    if(area<=1e-20){return vec2(0.0);}
+    return (u1*dot(cross(d,b),n)+u2*dot(cross(a,d),n))/area;
+}
+
+fn rt_surface(hit: RtHit, ray_direction: vec3<f32>,cone_width:f32) -> RtSurface {
     let pair = rt_pairs[hit.pair];
     // TERRAIN_HIT_HOOK
     let range = rt_ranges[pair.words.x];
@@ -93,22 +118,26 @@ fn rt_surface(hit: RtHit, ray_direction: vec3<f32>) -> RtSurface {
     let material = rt_materials[pair.words.x];
     let bary = vec3(1.0-hit.barycentrics.x-hit.barycentrics.y,hit.barycentrics);
     let uv = v0.uv.xy*bary.x + v1.uv.xy*bary.y + v2.uv.xy*bary.z;
+    let footprint=rt_hit_footprint(ray_direction,geometry,cone_width);
+    let e1=rt_vector(pair,p1-p0);let e2=rt_vector(pair,p2-p0);
+    let uv_dx=rt_uv_delta(footprint[0],e1,e2,v1.uv.xy-v0.uv.xy,v2.uv.xy-v0.uv.xy);
+    let uv_dy=rt_uv_delta(footprint[1],e1,e2,v1.uv.xy-v0.uv.xy,v2.uv.xy-v0.uv.xy);
     var shading = ocean_safe_normalize(rt_vector(pair,
         v0.normal.xyz*bary.x+v1.normal.xyz*bary.y+v2.normal.xyz*bary.z),geometry);
     shading = select(shading,-shading,dot(shading,geometry)<0.0);
     if (material.textures.z != 0xffffffffu) {
-        shading = surface_map_normal(shading,rt_sample(material.textures.z,uv).xyz*2.0-1.0,
+        shading = surface_map_normal(shading,rt_sample(material.textures.z,uv,uv_dx,uv_dy).xyz*2.0-1.0,
             material.factors.y,rt_vector(pair,p1-p0),rt_vector(pair,p2-p0),v1.uv.xy-v0.uv.xy,v2.uv.xy-v0.uv.xy);
     }
-    let mr = rt_sample(material.textures.y,uv);
+    let mr = rt_sample(material.textures.y,uv,uv_dx,uv_dy);
     var surface: RtSurface;
     surface.position = position;
     surface.normal = shading;
     surface.geometry = geometry;
-    surface.albedo = material.color.rgb * rt_sample(material.textures.x,uv).rgb;
+    surface.albedo = material.color.rgb * rt_sample(material.textures.x,uv,uv_dx,uv_dy).rgb;
     surface.metallic = material.color.w * mr.b;
     surface.roughness = material.factors.x * mr.g;
-    surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv).r,material.factors.z)*(v0.uv.z*bary.x+v1.uv.z*bary.y+v2.uv.z*bary.z);
+    surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv,uv_dx,uv_dy).r,material.factors.z)*(v0.uv.z*bary.x+v1.uv.z*bary.y+v2.uv.z*bary.z);
     surface.dielectric=material.optical.x;
     surface.transmission=material.factors.w;
     return surface;
@@ -124,6 +153,13 @@ fn rt_reflection(
     ambient: vec3<f32>,
     occlusion: f32,
 ) -> vec3<f32> {
+    var cone_width=0.0;
+    var cone_spread=0.0;
+    if(!RT_LOW_QUALITY){
+        cone_width=max(length(dpdx(position)),length(dpdy(position)));
+        let outgoing=reflect(-eye,normal);
+        cone_spread=max(length(dpdx(outgoing)),length(dpdy(outgoing)));
+    }
     let env = mesh_environment(position,normal,eye,f0,roughness,ambient,occlusion);
     // A single mirror-direction sample cannot represent a wide specular lobe;
     // above the cutoff the estimate yields to the shared environment
@@ -146,7 +182,8 @@ fn rt_reflection(
             radiance += env_radiance_from(origin,direction, ambient) * throughput;
             break;
         }
-        let surface = rt_surface(hit, direction);
+        cone_width+=hit.t*cone_spread;
+        let surface = rt_surface(hit, direction,cone_width);
         let column=cloud_transport(origin,direction,length(surface.position-origin));
         radiance+=column.rgb*throughput;
         throughput*=column.a;

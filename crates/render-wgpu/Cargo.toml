@@ -10,6 +10,7 @@ description = "Thessa-owned wgpu backend bring-up: headless device, capability p
 [dependencies]
 thessa-render-core = { path = "../render-core" }
 thessa-graphics = { path = "../graphics" }
+thessa-fastrt = { path = "../fastrt" }
 thessa-wgpu-exp = { path = "../wgpu-exp" }
 thessa-rcbt-core = { path = "../rcbt-core" }
 thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }

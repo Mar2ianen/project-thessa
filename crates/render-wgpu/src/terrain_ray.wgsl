@@ -4,7 +4,22 @@
 @group(3) @binding(8) var material_texture:texture_2d_array<f32>;
 @group(3) @binding(9) var material_sampler:sampler;
 
-fn rt_terrain_surface(hit:RtHit,pair:RtPair,ray_direction:vec3<f32>)->RtSurface {
+// Differentiate cube-face projection analytically. Subtracting unit vectors
+// loses millimetre footprints at planetary radii in f32.
+fn rt_chart_delta(d:vec3<f32>,delta:vec3<f32>,face:u32)->vec2<f32> {
+    var q:vec3<f32>;var dq:vec3<f32>;
+    switch face {
+        case 0u:{q=vec3(-d.z,d.y,d.x);dq=vec3(-delta.z,delta.y,delta.x);}
+        case 1u:{q=vec3(d.z,d.y,-d.x);dq=vec3(delta.z,delta.y,-delta.x);}
+        case 2u:{q=vec3(d.x,-d.z,d.y);dq=vec3(delta.x,-delta.z,delta.y);}
+        case 3u:{q=vec3(d.x,d.z,-d.y);dq=vec3(delta.x,delta.z,-delta.y);}
+        case 4u:{q=d;dq=delta;}
+        default:{q=vec3(-d.x,d.y,-d.z);dq=vec3(-delta.x,delta.y,-delta.z);}
+    }
+    return 0.5*(dq.xy*q.z-q.xy*dq.z)/(q.z*q.z*RT_TERRAIN_RADIUS);
+}
+
+fn rt_terrain_surface(hit:RtHit,pair:RtPair,ray_direction:vec3<f32>,cone_width:f32)->RtSurface {
     let slot=pair.words.x & 0x7fffffffu;
     var v0:vec4<f32>;var v1:vec4<f32>;var v2:vec4<f32>;
     var n0:vec4<f32>;var n1:vec4<f32>;var n2:vec4<f32>;
@@ -38,9 +53,11 @@ fn rt_terrain_surface(hit:RtHit,pair:RtPair,ray_direction:vec3<f32>)->RtSurface 
     let geometry=select(geometric,-geometric,dot(geometric,ray_direction)>0.0);
     var normal=normalize(n0.xyz*bary.x+n1.xyz*bary.y+n2.xyz*bary.z);
     normal=select(normal,-normal,dot(normal,geometry)<0.0);
-    // Explicit zero footprint matches mesh-hit LOD zero. Ray-cone filtering is
-    // future work; no primary screen derivatives are used on secondary hits.
-    let sample=material_at_level(material_address(direction),vec2(0.0),vec2(0.0),17u);
+    let address=material_address(direction);
+    let footprint=rt_hit_footprint(ray_direction,geometry,cone_width);
+    let sample=material_at_level(address,
+        rt_chart_delta(direction,footprint[0],address.face),
+        rt_chart_delta(direction,footprint[1],address.face),17u);
     // Same linear fallback globe/roughness as TerrainRenderer, not a new sky.
     let albedo=sample.value.rgb+RT_TERRAIN_FALLBACK*(1.0-sample.coverage);
     var roughness=sample.value.a+1.0-sample.coverage;

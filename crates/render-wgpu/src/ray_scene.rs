@@ -19,14 +19,15 @@
 //! Meshes can also borrow the resident generated terrain pool: its stable
 //! slots own persistent BLASes and only dirty geometry is rebuilt. Atmosphere
 //! and clouds keep their raster/map paths. Mesh hits interpolate UVs and
-//! normals and sample the raster material textures with explicit LOD zero.
+//! normals and filter shared raster mips with a transported pixel cone.
 //! A miss samples the shared environment; RT never invents reflected radiance.
 
 use crate::terrain_ray::{TERRAIN_TAG, TerrainRaySource, TerrainRays};
 use crate::{Backend, BackendError};
 use std::ops::Range;
+use thessa_fastrt::{Bounds3, Candidate, Policy, RtClass};
 use thessa_graphics::{Quality, ResolvedGraphicsSettings};
-use thessa_render_core::mesh::{MeshAsset, MeshInstance};
+use thessa_render_core::mesh::{MeshAsset, MeshInstance, Primitive};
 use wgpu::util::DeviceExt;
 
 /// Roughness above which the single mirror sample yields completely to the
@@ -136,6 +137,33 @@ pub fn plan(
     )
 }
 
+/// Raster supplies full prototypes only. Never label an invented proxy as
+/// geometry: over-budget Conditional candidates use the existing scene fallback.
+fn primitive_class(
+    primitive: &Primitive,
+    key: u64,
+    effects: u32,
+    policy: &Policy,
+) -> Option<RtClass> {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for v in &primitive.vertices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(f64::from(v.position[axis]));
+            max[axis] = max[axis].max(f64::from(v.position[axis]));
+        }
+    }
+    let candidate = Candidate {
+        key,
+        bounds: Bounds3::new(min, max)?,
+        visible: true, // Reflection/shadow casters must not be camera-culled.
+        rt_effects: effects,
+        full_tris: primitive.indices.len() as u64 / 3,
+        proxy_tris: 0,
+    };
+    Some(thessa_fastrt::classify(&candidate, policy))
+}
+
 fn plan_inner(
     backend: &Backend,
     source: &MeshAsset,
@@ -175,9 +203,24 @@ fn plan_inner(
     let mut vertices = 0u64;
     let mut indices = 0u64;
     let mut triangles = 0u64;
+    let mesh_enabled = resolved.rt_vehicles;
+    let policy = Policy::new(u64::from(limits.max_blas_primitive_count));
+    let effects = u32::from(reflections) | (u32::from(resolved.shadow_enabled) << 1);
     for (i, primitive) in source.primitives.iter().enumerate() {
         if primitive.indices.is_empty() || primitive.indices.len() % 3 != 0 {
             return Enable::Unavailable(format!("primitive {i} has no complete triangles"));
+        }
+        if mesh_enabled {
+            match primitive_class(primitive, i as u64, effects, &policy) {
+                Some(RtClass::RtFull) => {}
+                class => {
+                    return Enable::Unavailable(format!(
+                        "FastRT primitive {i} classified {class:?}: {} triangles, device limit {}; no proxy supplied, whole mesh partition uses raster fallback",
+                        primitive.indices.len() / 3,
+                        limits.max_blas_primitive_count
+                    ));
+                }
+            }
         }
         placements.push(Placement {
             index_base: indices as u32,
@@ -189,7 +232,6 @@ fn plan_inner(
         indices += primitive.indices.len() as u64;
         triangles += primitive.indices.len() as u64 / 3;
     }
-    let mesh_enabled = resolved.rt_vehicles;
     if !mesh_enabled {
         vertices = 0;
         indices = 0;
@@ -197,20 +239,6 @@ fn plan_inner(
     }
     if vertices > u64::from(u32::MAX) || indices > u64::from(u32::MAX) {
         return Enable::Unavailable("RT geometry exceeds 32-bit indices".into());
-    }
-    // One BLAS per primitive keeps per-primitive instancing possible, so the
-    // device limit applies per primitive, not to the scene total.
-    if let Some(primitive) = source
-        .primitives
-        .iter()
-        .filter(|_| mesh_enabled)
-        .find(|p| p.indices.len() as u64 / 3 > u64::from(limits.max_blas_primitive_count))
-    {
-        return Enable::Unavailable(format!(
-            "RT primitive has {} triangles, device limit is {}",
-            primitive.indices.len() / 3,
-            limits.max_blas_primitive_count
-        ));
     }
     let instances = if mesh_enabled {
         capacity
@@ -433,9 +461,11 @@ pub fn shader(plan: &Plan) -> String {
             map_base + index * 2, map_base + 1 + index * 2,
         ));
     }
-    sampling.push_str("fn rt_sample(index:u32,uv:vec2<f32>)->vec4<f32>{switch index{\n");
+    sampling.push_str(
+        "fn rt_sample(index:u32,uv:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32>{switch index{\n",
+    );
     for index in 0..plan.textures.len() {
-        sampling.push_str(&format!("case {index}u:{{return textureSampleLevel(rt_texture_{index},rt_sampler_{index},uv,0.0);}}\n"));
+        sampling.push_str(&format!("case {index}u:{{return textureSampleGrad(rt_texture_{index},rt_sampler_{index},uv,dx,dy);}}\n"));
     }
     sampling.push_str("default:{return vec4(1.0);}}}\n");
     if let Some((terrain, _)) = &plan.terrain
@@ -472,7 +502,7 @@ pub fn shader(plan: &Plan) -> String {
         sampling.push_str(&hit);
     }
     let hit_shader = include_str!("ray_scene.wgsl").replace("// TERRAIN_HIT_HOOK", if plan.terrain.is_some() {
-        "if ((pair.words.x & 0x80000000u) != 0u) { return rt_terrain_surface(hit, pair, ray_direction); }"
+        "if ((pair.words.x & 0x80000000u) != 0u) { return rt_terrain_surface(hit, pair, ray_direction,cone_width); }"
     } else { "" });
     format!(
         "enable wgpu_ray_query;\nconst RT_BIAS:f32={};\nconst RT_TMAX:f32={};\nconst RT_BOUNCES:u32={};\nconst RT_ROUGHNESS_CUTOFF:f32={};\nconst RT_LOW_QUALITY:bool={};\nconst RT_SHADOWS:bool={};\n{}\n{}\n{}",

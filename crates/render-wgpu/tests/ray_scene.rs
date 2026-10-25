@@ -1294,6 +1294,74 @@ fn reflected_sample(
 }
 
 #[test]
+fn reflected_subpixel_checker_converges_to_linear_mean_while_camera_moves() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
+    let mut asset = textured_target();
+    let pixels = (0..256 * 256)
+        .flat_map(|i| {
+            let c = if (i % 256 + i / 256) % 2 == 0 { 0 } else { 255 };
+            [c, c, c, 255]
+        })
+        .collect();
+    let id = map(&mut asset, 256, 256, pixels, true);
+    asset.textures[id].wrap = [Wrap::Repeat; 2];
+    asset.materials[1].base_texture = Some(id);
+    for v in &mut asset.primitives[1].vertices {
+        v.uv = v.uv.map(|u| u * 31.3 + 0.013);
+    }
+    let mut mesh = MeshRenderer::with_surface(
+        &backend,
+        &asset,
+        SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 2,
+            quality: settings.surface_quality,
+            reflections: true,
+            shadows: None,
+            ray_tracing: Some(&settings),
+        },
+    )
+    .unwrap();
+    let mut samples = Vec::new();
+    for (frame, shift) in [-0.002, -0.001, 0.0, 0.001, 0.002].into_iter().enumerate() {
+        let bytes = draw_at(
+            &backend,
+            &mut mesh,
+            &instances(),
+            &[0..1, 1..2],
+            &lighting([0.0; 3]),
+            &camera(DVec3::new(0.0, shift, 0.0)),
+        );
+        assert!(mesh.rt_stats().active);
+        // Optional test output only; it never selects a rendering algorithm.
+        if let Some(root) = std::env::var_os("THESSA_TEST_ARTIFACTS") {
+            let root = std::path::PathBuf::from(root);
+            std::fs::create_dir_all(&root).unwrap();
+            let file =
+                std::fs::File::create(root.join(format!("reflected-checker-{frame}.png"))).unwrap();
+            let mut encoder = png::Encoder::new(file, SIZE, SIZE);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&bytes)
+                .unwrap();
+        }
+        samples.push(center(&bytes));
+    }
+    eprintln!("reflected_checker samples={samples:?}");
+    // Equal black/white area has linear mean 0.5, NOT encoded mean 0.5.
+    // Diffuse (0.96*0.5) + GGX normal-incidence 0.01, exposed by 0.5.
+    for pixel in samples {
+        assert_rgb_near(pixel, [0.245; 3]);
+    }
+}
+
+#[test]
 fn reflected_uvs_use_srgb_decode_before_bilinear_filtering() {
     let Some(backend) = backend(RayTracingRequest::Local) else {
         return;

@@ -1248,9 +1248,14 @@ fn apply_crown_core_occlusion(mesh: &mut PlantMesh) {
             let core_factor = (r / 3.2).clamp(0.45, 1.0) as f32;
             *ao = (*ao * core_factor).clamp(0.15, 1.0);
         } else if idx < stem_end && y < 2.0 {
-            // Basal trunk ambient occlusion from surrounding understory ferns & soil.
-            let basal_factor = (0.42 + 0.58 * (y / 2.0).clamp(0.0, 1.0)) as f32;
-            *ao = (*ao * basal_factor).clamp(0.15, 1.0);
+            // Basal trunk ambient occlusion and root flare contact crevices.
+            let root_contact = if y < 0.35 {
+                0.28 + 0.14 * (y / 0.35).clamp(0.0, 1.0)
+            } else {
+                0.42 + 0.58 * ((y - 0.35) / 1.65).clamp(0.0, 1.0)
+            };
+            let basal_factor = root_contact as f32;
+            *ao = (*ao * basal_factor).clamp(0.10, 1.0);
         }
     }
 }

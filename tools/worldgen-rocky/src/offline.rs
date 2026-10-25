@@ -1610,7 +1610,7 @@ fn crown_frond(
                 )
             });
             let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna(mesh, nodes, tangent, length * 0.21, length * 0.030, reduced);
+            pinna(mesh, nodes, tangent, length * 0.22, length * 0.030, reduced);
         }
     }
 }

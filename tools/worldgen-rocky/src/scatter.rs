@@ -483,7 +483,7 @@ pub fn scatter_region(
                 // Authored spatial cohorts bias the size distribution within
                 // the caller's interval; a fixed scale must remain fixed.
                 let size_fraction =
-                    0.65 * random(404) + 0.35 * crate::appearance::smooth(-0.25, 0.25, community);
+                    0.40 * random(404) + 0.60 * crate::appearance::smooth(-0.25, 0.25, community);
                 policy.understory_min_scale
                     + size_fraction * (policy.understory_max_scale - policy.understory_min_scale)
             } else {
@@ -504,11 +504,11 @@ pub fn scatter_region(
 }
 
 /// Shared by every query window and quality tier; no cube-face seed or camera.
-/// A 20% pioneer floor and dense colonies share one fixed physical scale.
+/// Bounded pioneer floor and dense colonies create natural clearings and dense glades.
 fn understory_patch_density(seed: u64, radius_m: f64, direction: [f64; 3]) -> f64 {
     let p = direction.map(|v| v * (radius_m / UNDERSTORY_PATCH_WAVELENGTH_M));
     let noise = rng::value_noise3(seed, 437, p[0], p[1], p[2]);
-    let occupancy = 0.20 + 0.80 * crate::appearance::smooth(-0.25, 0.25, noise);
+    let occupancy = 0.08 + 0.92 * crate::appearance::smooth(-0.16, 0.25, noise);
     UNDERSTORY_PATCH_MAX * occupancy
 }
 

@@ -23,6 +23,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD85 | 1.25 m spacing | 2,617 | 10,076 | 16,081,890 | 457.692 ms |
 | WORLD86 | Continuous small/middle clumps | 2,617 | 10,076 | 14,009,106 | 412.008 ms |
 | WORLD87 | Juvenile / mature / rare hero forms | 2,617 | 10,076 | 12,547,498 | 376.970 ms |
+| WORLD88 | Divided veteran crown pinnules | 2,617 | 10,076 | 13,463,338 | 378.621 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -63,6 +64,18 @@ Fern form 1 is now an eight-frond juvenile, with six living and two dry fronds, 
 The stage passed 269 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,108,208 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD88 — Divided veteran crown pinnules
+
+The veteran tree form now has nine primary pinna pairs with three secondary pairs on each pinna: finer true silhouettes replace its solid broad blades. Full folded quads share the existing indexed lamina emitter; reduced triangles use the analytic trapezoid/triangle area ratio and retain the inter-pinnule gaps. Canonical fork and solitary-umbrella geometry is retained. Independent gap rays plus the unchanged full/reduced projected-area, sampled-distance and source-size oracles pass. This is authored divided-frond geometry inspired by the cited botanical descriptions, not a species reconstruction.
+
+The stage passed 270 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,896,176 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
 This is authored scene development with the same camera/profile; population

@@ -1681,7 +1681,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     0.90 + 0.20 * (i as f64 * 2.71 + term_idx as f64 * 1.7).cos().powi(2);
                 let drop = drop * if form == 2 { 1.42 } else { 1.0 } * drop_jitter;
                 let first = mesh.positions.len();
-                crown_frond(mesh, angle, base, reach, rise, drop, reduced);
+                crown_frond(mesh, angle, base, reach, rise, drop, form == 2, reduced);
                 if tier == 0 {
                     assign_foliage_tone(mesh, first, 1);
                 }
@@ -1880,6 +1880,7 @@ fn reed_blade(
 
 /// One arching crown frond: rises from the trunk, then droops outward. Broad
 /// enough to present a real silhouette from both above and eye level.
+#[allow(clippy::too_many_arguments)]
 fn crown_frond(
     mesh: &mut PlantMesh,
     angle: f64,
@@ -1887,6 +1888,7 @@ fn crown_frond(
     reach_m: f64,
     rise_m: f64,
     drop_m: f64,
+    compound: bool,
     reduced: bool,
 ) {
     let first_vertex = mesh.positions.len();
@@ -1930,8 +1932,8 @@ fn crown_frond(
     let widths =
         std::array::from_fn::<_, 9, _>(|i| 0.024 * (1.0 - 0.85 * (i as f64 / 8.0)).powf(1.35));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
-    for pair in 0..18 {
-        let t = 0.10 + pair as f64 * 0.048;
+    for pair in 0..if compound { 9 } else { 18 } {
+        let t = 0.10 + pair as f64 * if compound { 0.102 } else { 0.048 };
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
         let length = reach_m * 0.23 * blade_profile;
         for side in [-1.0, 1.0] {
@@ -1968,14 +1970,25 @@ fn crown_frond(
             } else {
                 length * 0.038
             };
-            pinna(
-                mesh,
-                nodes,
-                tangent,
-                length * 0.22 * pinna_width_scale,
-                fold_h,
-                reduced,
-            );
+            if compound {
+                compound_pinna(
+                    mesh,
+                    nodes,
+                    tangent,
+                    length * 0.22 * pinna_width_scale,
+                    fold_h,
+                    reduced,
+                );
+            } else {
+                pinna(
+                    mesh,
+                    nodes,
+                    tangent,
+                    length * 0.22 * pinna_width_scale,
+                    fold_h,
+                    reduced,
+                );
+            }
         }
     }
     assign_foliage_tone(
@@ -2009,6 +2022,71 @@ fn azimuth_frame(angle: f64) -> ([f64; 3], [f64; 3]) {
     ([cos, 0.0, sin], [-sin, 0.0, cos])
 }
 
+fn leaf_curve(nodes: [[f64; 3]; 3], t: f64) -> [f64; 3] {
+    std::array::from_fn(|axis| {
+        let control = 2.0 * nodes[1][axis] - 0.5 * (nodes[0][axis] + nodes[2][axis]);
+        (1.0 - t).powi(2) * nodes[0][axis] + 2.0 * t * (1.0 - t) * control + t * t * nodes[2][axis]
+    })
+}
+
+/// Three pairs of divided pinnules replace a solid blade in the veteran form.
+/// Full folded quads and reduced triangles preserve each lobe's area and gap.
+fn compound_pinna(
+    mesh: &mut PlantMesh,
+    nodes: [[f64; 3]; 3],
+    lateral: [f64; 3],
+    half_width: f64,
+    fold_m: f64,
+    reduced: bool,
+) {
+    let mut normal = crate::lod::normalize(crate::lod::cross(
+        lateral,
+        crate::lod::sub(nodes[2], nodes[0]),
+    ));
+    if normal[1] < 0.0 {
+        normal = scaled(normal, -1.0);
+    }
+    for (pair, width) in [0.6, 1.0, 0.6].into_iter().enumerate() {
+        let a = pair as f64 / 3.0;
+        let b = (pair + 1) as f64 / 3.0;
+        let middle = (a + b) * 0.5;
+        let tip_half_span = 0.015;
+        for side in [-1.0, 1.0] {
+            let wing = scaled(lateral, side * half_width * 1.3 * width);
+            let root = leaf_curve(nodes, a);
+            let end = leaf_curve(nodes, b);
+            if reduced {
+                // Trapezoid area / triangle area for the same root span.
+                let area_gain = 1.0 + 2.0 * tip_half_span / (b - a);
+                let tip = offset(leaf_curve(nodes, middle), scaled(wing, area_gain));
+                textured_triangle(
+                    mesh,
+                    [root, tip, end],
+                    [[0.0, 0.0], [1.0, 0.5], [0.0, 1.0]],
+                    normal,
+                );
+            } else {
+                let corners = [
+                    root,
+                    offset(leaf_curve(nodes, middle - tip_half_span), wing),
+                    offset(leaf_curve(nodes, middle + tip_half_span), wing),
+                    end,
+                ];
+                let center = offset(
+                    scaled(corners.into_iter().fold([0.0; 3], offset), 0.25),
+                    scaled(normal, fold_m * 0.3),
+                );
+                folded_lamina(
+                    mesh,
+                    [corners[0], corners[1], corners[2], corners[3], center],
+                    [[0.0, 0.0], [1.0, 0.4], [1.0, 0.6], [0.0, 1.0], [0.5, 0.5]],
+                    normal,
+                );
+            }
+        }
+    }
+}
+
 /// Rounded eight-edge lamina around a raised midrib. Nine shared vertices
 /// retain the curved outline and continuous normals with less vertex traffic.
 fn pinna(
@@ -2026,14 +2104,7 @@ fn pinna(
     if normal[1] < 0.0 {
         normal = scaled(normal, -1.0);
     }
-    let at = |t: f64| {
-        std::array::from_fn(|axis| {
-            let control = 2.0 * nodes[1][axis] - 0.5 * (nodes[0][axis] + nodes[2][axis]);
-            (1.0 - t).powi(2) * nodes[0][axis]
-                + 2.0 * t * (1.0 - t) * control
-                + t * t * nodes[2][axis]
-        })
-    };
+    let at = |t: f64| leaf_curve(nodes, t);
     let uv = [
         [0.0, 0.5],
         [0.25, 0.0],
@@ -2091,13 +2162,23 @@ fn pinna(
         }
         return;
     }
+    folded_lamina(mesh, points, uv, normal);
+}
+
+fn folded_lamina<const N: usize>(
+    mesh: &mut PlantMesh,
+    points: [[f64; 3]; N],
+    uv: [[f32; 2]; N],
+    normal: [f64; 3],
+) {
     let first = mesh.positions.len() as u32;
-    let mut normals = [[0.0; 3]; 9];
-    for edge in 0..8 {
-        let mut triangle = [8, edge, (edge + 1) % 8];
+    let mut normals = [[0.0; 3]; N];
+    let center = N - 1;
+    for edge in 0..center {
+        let mut triangle = [center, edge, (edge + 1) % center];
         let cross = crate::lod::cross(
-            crate::lod::sub(points[edge], points[8]),
-            crate::lod::sub(points[(edge + 1) % 8], points[8]),
+            crate::lod::sub(points[edge], points[center]),
+            crate::lod::sub(points[(edge + 1) % center], points[center]),
         );
         let cross = if crate::lod::dot(cross, normal) < 0.0 {
             triangle.swap(1, 2);
@@ -2995,13 +3076,37 @@ mod tests {
         mesh.normals.clear();
         mesh.indices.clear();
         mesh.stem = None;
-        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0, 0.68, 0.70, false);
+        crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0, 0.68, 0.70, false, false);
         // A 2 m pinnate frond has pinnae spreading to > 35 cm half-width in the mid-section:
         assert!(covered_from_above(&mesh, 0.9, 0.18));
         assert!(covered_from_above(&mesh, 0.9, -0.18));
         assert!(!covered_from_above(&mesh, 0.9, 0.50));
         assert!(covered_from_above(&mesh, 1.95, 0.0));
         assert!(!covered_from_above(&mesh, 1.95, 0.04));
+    }
+
+    #[test]
+    fn compound_pinna_keeps_secondary_gaps_in_both_representations() {
+        for reduced in [false, true] {
+            let mut mesh = plant_prototypes().remove(0);
+            mesh.positions.clear();
+            mesh.normals.clear();
+            mesh.uvs.clear();
+            mesh.indices.clear();
+            compound_pinna(
+                &mut mesh,
+                [[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                [0.0, 0.0, 1.0],
+                0.2,
+                0.02,
+                reduced,
+            );
+            for side in [-1.0, 1.0] {
+                assert!(covered_from_above(&mesh, 0.5, side * 0.15));
+                assert!(!covered_from_above(&mesh, 1.0 / 3.0, side * 0.05));
+                assert!(!covered_from_above(&mesh, 0.5, side * 0.30));
+            }
+        }
     }
 
     #[test]

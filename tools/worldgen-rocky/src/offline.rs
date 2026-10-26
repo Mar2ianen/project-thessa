@@ -1499,12 +1499,20 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         2 => [-0.02, 1.0, 0.03],
         _ => [0.0, 1.0, 0.0],
     });
+    // Reduced bark removes nearly collinear profile rings, preserving the
+    // crown attachment and root flare. The full/reduced surface oracle bounds it.
+    let coarse_trunk_rings =
+        [0, 1, 2, 3, 4, 6, 9, 12, 14, 16, 17, 18, 19, 20].map(|i| trunk_rings[i]);
     tapered_limb(
         mesh,
         [0.0; 3],
         trunk_axis,
         if reduced { 8 } else { 16 },
-        &trunk_rings,
+        if reduced {
+            &coarse_trunk_rings[..]
+        } else {
+            &trunk_rings[..]
+        },
     );
     let terminals: &[[f64; 3]] = match form {
         1 => &[[0.12, 8.45, 0.08]],
@@ -1820,6 +1828,89 @@ fn reed_blade(
     assign_foliage_tone(mesh, first_vertex, if angle.sin() > 0.4 { 2 } else { 0 });
 }
 
+/// Faceted, solid petiole: shared axial vertices, hard circumferential edges.
+/// Its open root intersects the trunk; the terminal tip closes without sliver rings.
+fn crown_rachis(mesh: &mut PlantMesh, nodes: &[[f64; 3]], radii: &[f64], lateral: [f64; 3]) {
+    let first_index = mesh.indices.len();
+    let start = mesh.positions.len() as u32;
+    for i in 0..nodes.len() - 1 {
+        let tangent = crate::lod::normalize(crate::lod::sub(
+            nodes[(i + 1).min(nodes.len() - 1)],
+            nodes[i.saturating_sub(1)],
+        ));
+        let side = crate::lod::normalize(crate::lod::sub(
+            lateral,
+            scaled(tangent, crate::lod::dot(lateral, tangent)),
+        ));
+        let up = crate::lod::cross(tangent, side);
+        for face in 0..3 {
+            for corner in [face, (face + 1) % 3] {
+                let phi = std::f64::consts::TAU * corner as f64 / 3.0;
+                let radial = offset(scaled(side, phi.cos()), scaled(up, phi.sin()));
+                mesh.positions
+                    .push(offset(nodes[i], scaled(radial, radii[i])).map(|v| v as f32));
+                mesh.normals.push(radial.map(|v| v as f32));
+                mesh.uvs.push([
+                    i as f32 / (nodes.len() - 1) as f32,
+                    (corner != face) as u8 as f32,
+                ]);
+            }
+        }
+    }
+    let tip = mesh.positions.len() as u32;
+    mesh.positions
+        .extend([nodes[nodes.len() - 1].map(|v| v as f32); 3]);
+    mesh.normals.extend([[0.0, 1.0, 0.0]; 3]);
+    mesh.uvs.extend([[1.0, 0.5]; 3]);
+    for i in 0..nodes.len() - 1 {
+        for face in 0..3 {
+            let a = start + (i * 6 + face * 2) as u32;
+            let triangles = if i + 2 == nodes.len() {
+                vec![[a, a + 1, tip + face as u32]]
+            } else {
+                vec![[a, a + 1, a + 7], [a, a + 7, a + 6]]
+            };
+            for mut tri in triangles {
+                let points = tri.map(|j| mesh.positions[j as usize].map(f64::from));
+                let hint = crate::lod::sub(scaled(offset(points[0], points[1]), 0.5), nodes[i]);
+                if crate::lod::dot(face_normal(points), hint) < 0.0 {
+                    tri.swap(1, 2);
+                }
+                mesh.indices.extend(tri);
+            }
+        }
+    }
+    let mut sums = vec![[0.0; 3]; mesh.positions.len() - start as usize];
+    for tri in mesh.indices[first_index..].as_chunks::<3>().0 {
+        let area = face_normal(tri.map(|i| mesh.positions[i as usize].map(f64::from)));
+        for &i in tri {
+            sums[i as usize - start as usize] = offset(sums[i as usize - start as usize], area);
+        }
+    }
+    let mut split = vec![false; sums.len()];
+    for tri in mesh.indices[first_index..].as_chunks::<3>().0 {
+        let n = crate::lod::normalize(face_normal(
+            tri.map(|i| mesh.positions[i as usize].map(f64::from)),
+        ));
+        for &i in tri {
+            let j = i as usize - start as usize;
+            split[j] |= crate::lod::dot(n, crate::lod::normalize(sums[j])) < 0.87;
+        }
+    }
+    let mut reused = vec![false; sums.len()];
+    for index in &mut mesh.indices[first_index..] {
+        let j = *index as usize - start as usize;
+        if split[j] && reused[j] {
+            let old = *index as usize;
+            *index = mesh.positions.len() as u32;
+            mesh.positions.push(mesh.positions[old]);
+            mesh.normals.push(mesh.normals[old]);
+            mesh.uvs.push(mesh.uvs[old]);
+        }
+        reused[j] = true;
+    }
+}
+
 /// One arching crown frond: rises from the trunk, then droops outward. Broad
 /// enough to present a real silhouette from both above and eye level.
 #[allow(clippy::too_many_arguments)]
@@ -1832,7 +1923,7 @@ fn crown_frond(
     drop_m: f64,
     compound: bool,
     reduced: bool,
-) {
+) -> usize {
     let first_vertex = mesh.positions.len();
     let reach_m = reach_m * 0.99;
     let (radial, lateral) = azimuth_frame(angle);
@@ -1870,10 +1961,30 @@ fn crown_frond(
             ),
         )
     };
-    let nodes: [[f64; 3]; 9] = std::array::from_fn(|i| at(i as f64 / 8.0));
-    let widths =
-        std::array::from_fn::<_, 9, _>(|i| 0.024 * (1.0 - 0.85 * (i as f64 / 8.0)).powf(1.35));
-    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0], false);
+    let count = 9;
+    let nodes: Vec<_> = (0..count)
+        .map(|i| at(i as f64 / (count - 1) as f64))
+        .collect();
+    let radii: Vec<_> = (0..count)
+        .map(|i| {
+            if i + 1 == count {
+                0.0
+            } else {
+                0.024 * (1.0 - 0.85 * i as f64 / (count - 1) as f64).powf(1.35)
+            }
+        })
+        .collect();
+    crown_rachis(mesh, &nodes, &radii, lateral);
+    // Attach to the published piecewise axis, rather than its unsampled curve.
+    let along = |t: f64| {
+        let u = t.clamp(0.0, 1.0) * (count - 1) as f64;
+        let i = (u.floor() as usize).min(count - 2);
+        offset(
+            nodes[i],
+            scaled(crate::lod::sub(nodes[i + 1], nodes[i]), u - i as f64),
+        )
+    };
+    let first_pinna = mesh.positions.len();
     for pair in 0..if compound { 8 } else { 18 } {
         let t = 0.10 + pair as f64 * if compound { 0.816 / 7.0 } else { 0.048 };
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
@@ -1896,7 +2007,7 @@ fn crown_frond(
                     side * 0.025 * length * s * (t - 0.25).max(0.0)
                 };
                 offset(
-                    at(t),
+                    along(t),
                     offset(
                         scaled(lateral, side * length * s),
                         offset(
@@ -1906,7 +2017,8 @@ fn crown_frond(
                     ),
                 )
             });
-            let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
+            let tangent =
+                crate::lod::normalize(crate::lod::sub(along(t + 0.001), along(t - 0.001)));
             let fold_h = if is_emerging {
                 length * 0.020
             } else {
@@ -1948,6 +2060,7 @@ fn crown_frond(
             0
         },
     );
+    first_pinna
 }
 
 fn offset(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -2884,7 +2997,7 @@ mod tests {
                 .iter()
                 .filter(|triangle| triangle[0] >= dry.first_vertex)
                 .count(),
-            6 * (16 + 18 * 2 * 8)
+            6 * (45 + 18 * 2 * 8)
         );
         for start in [0, 1, mesh.positions.len() as u32, u32::MAX] {
             let mut broken = mesh.clone();
@@ -2997,6 +3110,114 @@ mod tests {
         let mut w = world();
         w.lats[1] = 0.0;
         assert!(w.validate().is_err());
+    }
+
+    #[test]
+    fn crown_pinna_roots_follow_the_published_rachis_axis() {
+        for reduced in [false, true] {
+            for angle in [0.0, 0.7, 2.1] {
+                let mut mesh = PlantMesh {
+                    kind: ScatterKind::LycopsidTree,
+                    positions: vec![],
+                    normals: vec![],
+                    uvs: vec![],
+                    foliage_tones: vec![],
+                    indices: vec![],
+                    albedo_srgb: [0.3; 3],
+                    stem: None,
+                    senescent: None,
+                    ambient_visibility: vec![],
+                };
+                let first_pinna =
+                    crown_frond(&mut mesh, angle, [0.0; 3], 4.5, 1.95, 1.05, false, reduced);
+                // Recover actual cross sections from emitted UV/vertex data,
+                // not the analytic curve used by the source recipe.
+                let mut sections =
+                    std::collections::BTreeMap::<u32, std::collections::BTreeSet<[u32; 3]>>::new();
+                for (p, uv) in mesh.positions[..first_pinna].iter().zip(&mesh.uvs) {
+                    sections
+                        .entry(uv[0].to_bits())
+                        .or_default()
+                        .insert(p.map(f32::to_bits));
+                }
+                let centers: Vec<_> = sections
+                    .values()
+                    .map(|points| {
+                        scaled(
+                            points.iter().fold([0.0; 3], |sum, p| {
+                                offset(sum, p.map(|v| f64::from(f32::from_bits(v))))
+                            }),
+                            1.0 / points.len() as f64,
+                        )
+                    })
+                    .collect();
+                let stride = if reduced { 4 } else { 9 };
+                let maximum_gap = (0..36)
+                    .map(|leaf| {
+                        let p = mesh.positions[first_pinna + leaf * stride].map(f64::from);
+                        centers
+                            .windows(2)
+                            .map(|edge| {
+                                let d = crate::lod::sub(edge[1], edge[0]);
+                                let t = (crate::lod::dot(crate::lod::sub(p, edge[0]), d)
+                                    / crate::lod::dot(d, d))
+                                .clamp(0.0, 1.0);
+                                let gap = crate::lod::sub(p, offset(edge[0], scaled(d, t)));
+                                crate::lod::dot(gap, gap).sqrt()
+                            })
+                            .fold(f64::INFINITY, f64::min)
+                    })
+                    .fold(0.0_f64, f64::max);
+                assert!(
+                    maximum_gap < 1e-5,
+                    "reduced={reduced} angle={angle} floating leaf roots: {maximum_gap} m"
+                );
+                for points in sections.values().take(sections.len() - 1) {
+                    let p: Vec<_> = points
+                        .iter()
+                        .map(|v| v.map(|v| f64::from(f32::from_bits(v))))
+                        .collect();
+                    assert!(p.len() >= 3, "rachis must retain a finite cross section");
+                    let area = face_normal([p[0], p[1], p[2]]);
+                    assert!(crate::lod::dot(area, area) > 1e-16);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crown_laminae_keep_their_upper_surface_winding() {
+        for reduced in [false, true] {
+            for (rise, reach, drop) in [(0.15, 2.3, 2.6), (1.95, 4.5, 1.05), (2.8, 2.5, 0.15)] {
+                for angle in [0.0, 0.7, 2.1] {
+                    let mut mesh = PlantMesh {
+                        kind: ScatterKind::LycopsidTree,
+                        positions: vec![],
+                        normals: vec![],
+                        uvs: vec![],
+                        foliage_tones: vec![],
+                        indices: vec![],
+                        albedo_srgb: [0.3; 3],
+                        stem: None,
+                        senescent: None,
+                        ambient_visibility: vec![],
+                    };
+                    let first_pinna = crown_frond(
+                        &mut mesh, angle, [0.0; 3], reach, rise, drop, false, reduced,
+                    );
+                    for (_, points, normal) in prototype_triangles(&mesh)
+                        .into_iter()
+                        .filter(|(first, _, _)| *first as usize >= first_pinna)
+                    {
+                        assert!(
+                            normal[1] > 0.0,
+                            "lamina faces down at {:?}: {normal:?}",
+                            centroid(points)
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -3116,8 +3337,16 @@ mod tests {
                 "{:?} projected area ratio {ratio}",
                 a.kind
             );
-            if a.kind != crate::scatter::ScatterKind::ReedClump {
-                assert!(b.indices.len() * 3 < a.indices.len());
+            match a.kind {
+                crate::scatter::ScatterKind::FernClump => {
+                    assert!(b.indices.len() * 3 < a.indices.len())
+                }
+                // Solid petioles retain their section in both levels; laminae
+                // still reduce 8:2, while the complete tree remains >2.5:1.
+                crate::scatter::ScatterKind::LycopsidTree => {
+                    assert!(b.indices.len() * 5 < a.indices.len() * 2)
+                }
+                _ => {}
             }
             eprintln!(
                 "plant_lod {:?}: full_tri={} reduced_tri={} max_error_m={error:.7} projected_area_ratio={ratio:.7}",
@@ -3356,7 +3585,7 @@ mod tests {
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
                 ScatterKind::ReedClump => (1200, 1350),
-                ScatterKind::LycopsidTree => (15550, 15700),
+                ScatterKind::LycopsidTree => (16900, 17150),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(
@@ -3413,7 +3642,7 @@ mod tests {
                     let stored = mesh.normals[index as usize].map(f64::from);
                     assert!(
                         crate::lod::dot(stored, normal) > if stem { 0.90 } else { 0.86 },
-                        "{:?} triangle={triangle_index} vertex={index} normal_dot={}",
+                        "{:?} triangle={triangle_index} vertex={index} points={points:?} stored={stored:?} geometric={normal:?} normal_dot={}",
                         mesh.kind,
                         crate::lod::dot(stored, normal)
                     );
@@ -3523,7 +3752,7 @@ mod tests {
             for (first, points, normal) in prototype_triangles(&mesh) {
                 let middle = centroid(points);
                 let stem = mesh.stem.as_ref().is_some_and(|s| first < s.vertex_count);
-                if middle[1] > 0.4 * max_y && !stem {
+                if mesh.kind != ScatterKind::LycopsidTree && middle[1] > 0.4 * max_y && !stem {
                     assert!(
                         normal[1] > -0.25,
                         "{:?} upper surface faces down at {middle:?}: {normal:?}",
@@ -3533,15 +3762,7 @@ mod tests {
                 if mesh.kind != ScatterKind::LycopsidTree {
                     continue;
                 }
-                if !stem {
-                    // Arching fronds rise before they droop, so their upper
-                    // surface may tilt inward near the trunk. What must never
-                    // happen is an upper-side triangle facing the ground.
-                    assert!(
-                        normal[1] > 0.0,
-                        "crown frond faces down at {middle:?}: {normal:?}"
-                    );
-                } else if middle[1] > 0.55 && middle[1] < 3.0 {
+                if stem && middle[1] > 0.55 && middle[1] < 3.0 {
                     let radial = radial_of(middle);
                     assert!(
                         crate::lod::dot(normal, radial) > 0.5,

@@ -35,6 +35,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD95 | Smooth upright rush arcs | 4,459 | 11,918 | 17,580,060 | 411.133 ms |
 | WORLD96 | Authored overcast profile | 4,459 | 11,918 | 17,580,060 | 410.710 ms |
 | WORLD97 | Geometry-derived crown normals | 4,459 | 11,918 | 17,580,060 | 411.052 ms |
+| WORLD98 | Connected solid crown petioles | 4,459 | 11,918 | 19,388,348 | 433.158 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -219,6 +220,18 @@ A new regression reproduced 0.2213 rad maximum disagreement between retained cro
 The stage passed 276 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,838,504 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD98 — Connected solid crown petioles
+
+An independent emitted-axis test first reproduced a 0.0407776 m detached leaf root. Both levels now attach to the published nine-node axis and retain a tapered solid three-sided petiole; the 24 mm source root radius is unchanged. Axial crease splitting preserves the face-normal bound. Reduced trunks remove nearly collinear rings to retain the 6 MB plant-only and 7 MB aggregate caps. Complete-tree reduction now exceeds 2.5:1 instead of 3:1; fern reduction and the original surface-distance, area and degeneracy bounds remain. Lamina-only winding replaces the invalid assumption that closed stalk sides all face upward. Same-view inspection still shows broad leaf plates; this is a connectivity checkpoint, not final visual acceptance.
+
+The stage passed 278 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,946,504 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
 This is authored scene development with the same camera/profile; population

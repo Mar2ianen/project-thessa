@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD97, doc 77): crown leaf normals and ambient visibility now follow emitted geometry; the overcast coastal scene retains mixed fern sizes, smooth rush arcs and connected moss relief.
+Current composition continuation (WORLD98, doc 77): crown pinnae attach to one published axis and finite petioles at both detail levels; broad leaf-plate appearance remains under review.
 The current standing scene submits 11,918 instances and
-17,580,060 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,838,504 B under the
+19,388,348 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,946,504 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
@@ -48,6 +48,27 @@ triangles now use the other small foliage double-area floor of `2e-6 m²` plus
 a dimensionless double-area / longest-edge-squared floor of `1e-5` for every
 prototype triangle. The former reed-only `2e-4 m²` broad-blade floor was not a
 scale-independent degeneracy check.
+
+WORLD98 fixes detached crown pinnae reported in a user frame. The old recipe
+attached pinnae to an analytic curve while publishing only eight straight
+rachis segments; an independent emitted-axis regression reproduced a
+0.0407776 m root gap. Both leaf representations now attach to the same published
+nine-node axis. A tapered, three-sided petiole replaces the edge-on vanishing
+sheet; its original 24 mm root radius is retained, without camera-dependent
+width inflation. Hard circumferential edges and selectively split tight axial
+bends preserve the existing face/normal alignment bound. Closed petiole sides
+may face downward; the upper-surface winding oracle now exercises laminae at
+the emitter boundary, while the all-crown geometric-normal oracle remains.
+
+Both tree levels retain the petiole cross section. This intentionally changes
+the complete-tree triangle reduction floor from 3:1 to 2.5:1; fern reduction
+still exceeds 3:1 and simple tree laminae still reduce 8:2. The existing sampled
+full-vertex distance (<0.057 m times form scale), projected-area error (<2.5%),
+minimum area/conditioning, 32,768 source-vertex ceiling and 6 MB plant-only /
+7 MB aggregate payload limits remain. Reduced trunks remove nearly collinear
+profile rings, with the same full/reduced geometric oracle covering their
+error. No plant IDs, population, draw groups, materials or exposure change.
+These are optical source-mesh repairs, not collision or simulated botany.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid

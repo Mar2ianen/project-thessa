@@ -1,6 +1,6 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD91, doc 77): connected moss cushions share soil relief and normals; the mixed-size, less crowded coastal understory and continuous wet niches remain.
+Current composition continuation (WORLD92, doc 77): plant ambient visibility now follows geometry without duplicate crown/root darkening; mixed understory cohorts and connected moss relief remain.
 The current standing scene submits 11,918 instances and
 15,921,260 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,790,024 B under the
@@ -15,8 +15,10 @@ cohort sequences and canonical instances. The source texture payload is
 Current bark factors are form-dependent `[0.36,0.32,0.25]`,
 `[0.38,0.34,0.27]`, `[0.34,0.31,0.24]`; living roughness is 0.60,
 fern transmission 0.22, tree transmission 0.18/0.20/0.16 and reed 0.18.
-The geometric visibility bake is followed by retained authored crown/base
-attenuation; this is not computed ground bounce or measured contact visibility.
+WORLD92 removes the extra radius/height crown and basal attenuation. Ambient
+visibility now contains only the existing 32 cosine-weighted geometric BVH
+queries per source vertex; shared direct shadows remain separate. This is not
+computed ground bounce or a measured contact-visibility solution.
 The shared image atlas adds no pass/draw and the disabled path remains empty.
 Historical checkpoints below describe previous geometry/materials, not the
 current calibration or reference acceptance. RT stability and independent visual
@@ -60,7 +62,7 @@ and primary specular filtering consumes the existing normal-map mip mean.
 Low and feature-off fallbacks remain explicit. Older WORLD13/14 counts and
 4–30 cm dimensions below are historical snapshots, not the current limits.
 
-WORLD22 reviews Gemini's WORLD16–21 calibration (doc 77). Current authored
+Historical WORLD22 reviewed Gemini's WORLD16–21 calibration (doc 77). Its authored
 fern/tree tint factors are [0.44, 0.48, 0.46] / [0.48, 0.52, 0.44], green-leaf
 roughness factor 0.50 and diffuse transmission 0.18; stem/dry roughness remains
 0.85. The showcase uses 48 m full-detail distance. Fuller crowns retain shared

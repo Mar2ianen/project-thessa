@@ -29,6 +29,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD90 | Populate middle-size colonies; fix wet prefilter | 4,608 | 12,067 | 17,426,682 | 423.684 ms |
 | WORLD90b | Continuous riparian niches | 4,459 | 11,918 | 15,920,770 | 407.392 ms |
 | WORLD91 | Connected moss cushions | 4,459 | 11,918 | 15,921,260 | 405.451 ms |
+| WORLD92 | Geometry-derived plant visibility | 4,459 | 11,918 | 15,921,260 | 405.589 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -139,6 +140,18 @@ changes are not a renderer-equivalent comparison or reference acceptance.
 Resolved moss cover now uses a smooth connected-cushion transfer instead of quadratic suppression. Moderate coverage contributes centimetres of real render-only relief, sharing the existing body-fixed phase with optical gradients and prop/pool placement. Independent cover tests retain the 0–60 mm envelope, dry/coarse zero and a resolved middle-cover height envelope. No extra shoots, source draws or authoritative collision displacement are added.
 
 The stage passed 273 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,790,024 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD92 — Geometry-derived plant visibility
+
+Remove the extra radius/height multipliers applied after the existing cosine-weighted Parry BVH visibility bake. Crown and root shading now follow the actual mesh visibility source and shared direct shadows, without an added artistic darkening pass or brightness boost. A source-fraction regression checks every full/reduced form retains only the possible outcomes of 32 binary geometric queries; independent open-plane and closed-cavity transport oracles remain. This does not implement ground bounce or exact resident-ground contact visibility.
+
+The stage passed 274 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,790,024 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /

@@ -1232,7 +1232,6 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
                             .map(|v| v as f32);
                         }
                         variant.ambient_visibility = super::plant_visibility::bake(&variant, 32);
-                        apply_crown_core_occlusion(&mut variant);
                     }
                     forms.push((variant, form));
                 }
@@ -1240,65 +1239,6 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
             forms
         })
         .clone()
-}
-
-fn apply_crown_core_occlusion(mesh: &mut PlantMesh) {
-    let stem_end = mesh.stem.as_ref().map_or(0, |s| s.vertex_count as usize);
-    if mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
-        // Deepen cavity occlusion inside the apical rosette core and basal trunk crevices.
-        for (idx, (p, ao)) in mesh
-            .positions
-            .iter()
-            .zip(&mut mesh.ambient_visibility)
-            .enumerate()
-        {
-            let y = f64::from(p[1]);
-            if y > 6.0 {
-                let r = f64::from(p[0]).hypot(f64::from(p[2]));
-                let core_factor = (r / 3.2).clamp(0.45, 1.0) as f32;
-                *ao = (*ao * core_factor).clamp(0.15, 1.0);
-            } else if idx < stem_end && y < 2.0 {
-                // Basal trunk ambient occlusion and root flare contact crevices.
-                let root_contact = if y < 0.35 {
-                    0.28 + 0.14 * (y / 0.35).clamp(0.0, 1.0)
-                } else {
-                    0.42 + 0.58 * ((y - 0.35) / 1.65).clamp(0.0, 1.0)
-                };
-                let basal_factor = root_contact as f32;
-                *ao = (*ao * basal_factor).clamp(0.10, 1.0);
-            }
-        }
-    } else if mesh.kind == crate::scatter::ScatterKind::FernClump {
-        for (p, ao) in mesh.positions.iter().zip(&mut mesh.ambient_visibility) {
-            let y = f64::from(p[1]);
-            let r = f64::from(p[0]).hypot(f64::from(p[2]));
-            // Deep basal crown cavity occlusion:
-            let core_ao = if r < 0.35 && y < 0.45 {
-                (0.25 + 0.75 * (r / 0.35).max(y / 0.45)).clamp(0.20, 1.0)
-            } else {
-                1.0
-            };
-            // Ground plane contact occlusion anchoring to the local soil:
-            let ground_ao = if y < 0.22 {
-                (0.28 + 0.72 * (y / 0.22).clamp(0.0, 1.0).powf(1.4)).clamp(0.22, 1.0)
-            } else {
-                1.0
-            };
-            *ao = (*ao * (core_ao * ground_ao) as f32).clamp(0.16, 1.0);
-        }
-    } else if mesh.kind == crate::scatter::ScatterKind::ReedClump {
-        for (p, ao) in mesh.positions.iter().zip(&mut mesh.ambient_visibility) {
-            let y = f64::from(p[1]);
-            let r = f64::from(p[0]).hypot(f64::from(p[2]));
-            let basal_ao = if y < 0.25 {
-                (0.32 + 0.68 * (y / 0.25)).clamp(0.30, 1.0)
-            } else {
-                1.0
-            };
-            let core_ao = if r < 0.12 && y < 0.60 { 0.55 } else { 1.0 };
-            *ao = (*ao * (basal_ao * core_ao) as f32).clamp(0.25, 1.0);
-        }
-    }
 }
 
 fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
@@ -1339,7 +1279,6 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
         }
         mesh.foliage_tones.resize(mesh.positions.len(), 0);
         mesh.ambient_visibility = super::plant_visibility::bake(&mesh, 32);
-        apply_crown_core_occlusion(&mut mesh);
         mesh
     })
     .collect()
@@ -3014,6 +2953,22 @@ mod tests {
         let mut w = world();
         w.lats[1] = 0.0;
         assert!(w.validate().is_err());
+    }
+
+    #[test]
+    fn plant_visibility_remains_a_geometric_sample_fraction() {
+        for reduced in [false, true] {
+            for (mesh, _) in plant_prototype_forms(reduced) {
+                assert_eq!(mesh.ambient_visibility.len(), mesh.positions.len());
+                assert!(mesh.ambient_visibility.iter().any(|&v| v > 0.0 && v < 1.0));
+                // Thirty-two binary geometric queries admit only integer counts;
+                // extra radial/height tinting would violate this optical contract.
+                for visibility in mesh.ambient_visibility {
+                    assert!((0.0..=1.0).contains(&visibility));
+                    assert_eq!((visibility * 32.0).fract(), 0.0);
+                }
+            }
+        }
     }
 
     #[test]

@@ -26,6 +26,12 @@ photograph, mesh, implementation or texture is copied in this continuation.
   leaf geometry must preserve bounded full/reduced error, rather than relying
   on screen-space noise to disguise a silhouette mismatch.
 
+- [PBRT, Roughness Using Microfacet Theory](https://www.pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory)
+  separates resolved geometry from unresolved microsurface orientation. The
+  existing shared GGX material consumes roughness; per-organ optical priors
+  belong in that material response, not an extra lighting multiplier. The
+  coastal cohort values are authored, not measurements of living fern cuticles.
+
 Authored centre spacings, relative plant sizes, clone proportions and leaf
 reflectance/roughness factors remain explicit scene-development priors. They
 must not be described as measured ecology or photometric convergence. Review

@@ -143,7 +143,7 @@ fn reduced_plant_ray_visibility_matches_actual_triangle_geometry() {
 
 fn check_plant_ray_visibility(reduced: bool) {
     // Resolve the divided crowns before measuring the unchanged 1/16 px edge band.
-    const SIZE: u32 = 513;
+    const SIZE: u32 = 1025;
     let mut request = RequestedGraphics::default();
     request.renderer.ray_tracing = RayTracingRequest::Local;
     request.renderer.specular_reflections = false;
@@ -476,7 +476,7 @@ fn check_plant_ray_visibility(reduced: bool) {
         primary_edge_samples * 4 < checked,
         "primary edge exclusions must remain a small minority"
     );
-    // WORLD108 fine feather geometry at 513px changes physical ray counts;
+    // WORLD112 fine pinnae need 1025px to keep primary-edge exclusions bounded;
     // retain exact diagnostic pins and the unchanged two-code RGB tolerance.
-    assert_eq!(bias_disagreements, if reduced { [11, 1] } else { [54, 0] });
+    assert_eq!(bias_disagreements, if reduced { [18, 0] } else { [65, 1] });
 }

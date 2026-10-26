@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD108, doc 77): six shallow crown lobes per edge; visible-first material refinement preserves the wider cover and all memory caps. Three actual raster views and 24 consecutive motion frames are recorded; reference and temporal acceptance remain open.
+Current composition continuation (WORLD112, doc 77): 28 rooted fronds per tree now carry 56 shorter attached pinnae each, with connected rounded divisions. Full/reduced geometry uses 13/5 vertices per pinna within prior error and source caps. Three native raster views and a 24-frame sequence are recorded; reference and temporal acceptance remain open.
 The current standing scene submits 11,918 instances and
-19,025,276 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,758,404 B under the
+18,686,588 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,447,940 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
@@ -208,6 +208,49 @@ aliases, and moving close ground retains soft patches. The tree is an authored
 pinnatifid approximation rather than a botanical three-level reconstruction;
 reference parity and full temporal acceptance remain open. Current verification
 and hashes are in `artifacts/native-fern-detail-2026-10-26.json`.
+
+### WORLD112 — Finer attached pinnate crown structure
+
+The crown retains 28 rooted primary fronds and its age/pigment tiers. Each
+frond now carries 28 opposed pinna pairs instead of 14: 56 real attached roots,
+checked independently through emitted UV/root geometry. Primary pinna length
+is 0.14 of reach (veteran 0.13) instead of 0.27/0.25, half-width 0.16 of length.
+The narrower units provide a finer branching scale rather than broad sheets.
+Two rounded connected divisions per pinna edge use paired shoulder samples
+and a 0.36 valley-width factor; the axial wing stays continuous. This is an
+authored pinnatifid approximation, not full three-level botanical branching.
+Morphology sources are [Flora of New Zealand](https://www.nzflora.info/factsheet/taxon/Cyathea.html)
+and [VicFlora](https://vicflora.rbg.vic.gov.au/flora/taxon/9c9ecf70-9027-490a-b26e-add18d163bf7).
+
+Full pinnae use 13 vertices/12 triangles, with three midrib nodes. Fans point
+toward the blade centre, avoiding near-collinear tip shoulders and preserving
+actual concave notches. The five-corner reduced contour uses three triangles;
+its extra shoulder bounds outer-lobe error and its width integrates the full
+outline. It is intentionally asymmetric at reduced detail. A 0.006-length
+midrib fold, geometric normals and the existing 32-query visibility bake
+remain. Ground, plant positions/population and pigment cohorts are unchanged.
+
+Whole-tree full/reduced counts are 21,180/6,460, 21,124/6,404 and 21,180/6,460
+(all >3:1). Unchanged guards retain sampled full-vertex displacement below
+0.057 m times form scale, projected-area error below 2.5%, geometric-normal
+agreement within 0.001 rad, triangle conditioning, wood/root attachment and
+32,768-vertex limits. Full foliage areas are 45.9362/51.8160/58.2044 m²;
+this is an intentional authored shape change, not conserved physical mass.
+Standing source payload is 6,447,940 B, within the unchanged 6 MB plant-only
+and 7 MB aggregate caps. Content changes do not establish renderer throughput.
+
+WORLD109 failed winding/LOD and source caps. WORLD110's pointed teeth were
+rejected during design review; WORLD111 rounded them but retained overly broad
+primary units. Their native frames and negative logs remain intermediate
+evidence. WORLD112 passes 451 final current-source cases, strict Clippy,
+formatting, architecture, feature-off and release checks. The final release
+matches three raster capture binaries after test-only ray calibration.
+A 24-frame native sequence retains default-off TAA. Frames 0/8/16/23 were
+inspected; full temporal stability is not accepted. The bounded Local RT probe exited 0, active=True, passed=True; it is unpaired, not general driver-stability acceptance.
+Commands, hashes and exact finite-bias counts are in
+`artifacts/native-fern-division-2026-10-26.json`. Distant foliage aliasing,
+soft moving ground, reference parity, full temporal and interactive-FPS
+acceptance remain open.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid

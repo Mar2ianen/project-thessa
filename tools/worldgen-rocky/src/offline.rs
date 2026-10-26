@@ -1988,11 +1988,11 @@ fn crown_frond(
         )
     };
     let first_pinna = mesh.positions.len();
-    let primary_pairs = 14;
+    let primary_pairs = 28;
     for pair in 0..primary_pairs {
         let t = 0.10 + pair as f64 * (0.816 / (primary_pairs - 1) as f64);
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
-        let length = reach_m * if veteran { 0.25 } else { 0.27 } * blade_profile;
+        let length = reach_m * if veteran { 0.13 } else { 0.14 } * blade_profile;
         for side in [-1.0, 1.0] {
             let t = t + side * 0.006 * (angle + pair as f64 * 1.3).sin();
             let length = length * (0.97 + 0.08 * (angle + pair as f64 * 2.1 + side).sin());
@@ -2023,12 +2023,12 @@ fn crown_frond(
             });
             let tangent =
                 crate::lod::normalize(crate::lod::sub(along(t + 0.001), along(t - 0.001)));
-            let fold_h = length * 0.012;
-            pinna::<25>(
+            let fold_h = length * 0.006;
+            pinna::<13>(
                 mesh,
                 nodes,
                 tangent,
-                length * 0.12 * pinna_width_scale,
+                length * 0.16 * pinna_width_scale,
                 fold_h,
                 reduced,
             );
@@ -2114,10 +2114,11 @@ fn pinna<const N: usize>(
         } else {
             0.0
         };
-        // Shallow connected lobes retain the feather outline, rather than
-        // separate oversized secondary spears. Ground pinnae keep their contour.
+        // Deep lobes retain a connected axial wing rather than detached spears.
+        // Ground pinnae keep their existing convex contour.
         let lobes = if N > 9 {
-            0.90 - 0.10 * (t * half as f64 * std::f64::consts::PI).cos()
+            0.36 + 0.64
+                * ((1.0 - (t * (half / 3 * 2) as f64 * std::f64::consts::PI).cos()) / 1.5).min(1.0)
         } else {
             1.0
         };
@@ -2141,30 +2142,22 @@ fn pinna<const N: usize>(
         if N > 9 {
             let uv = [
                 [0.0, 0.5],
-                [0.25, 0.0],
-                [0.5, 0.0],
-                [0.75, 0.0],
+                [1.0 / 3.0, 0.0],
+                [2.0 / 3.0, 0.0],
                 [1.0, 0.5],
-                [0.75, 1.0],
                 [0.5, 1.0],
-                [0.25, 1.0],
             ];
+            // Integrate this five-corner outline; the extra positive shoulder
+            // bounds the narrow pinna's outer-lobe error without a second mesh.
             let smooth = |t: f64| half_width * (std::f64::consts::PI * t).sin();
-            let gain = width / (0.5 * (smooth(0.25) + smooth(0.5) + smooth(0.75)));
+            let gain = width / (smooth(1.0 / 3.0) * 2.0 / 3.0 + smooth(0.5) * 0.5);
             let corners =
                 uv.map(|[t, v]| offset(at(t), scaled(lateral, (1.0 - 2.0 * v) * smooth(t) * gain)));
             let first = mesh.positions.len() as u32;
             mesh.positions.extend(corners.map(|p| p.map(|v| v as f32)));
-            mesh.normals.extend([normal.map(|v| v as f32); 8]);
+            mesh.normals.extend([normal.map(|v| v as f32); 5]);
             mesh.uvs.extend(uv.map(|uv| uv.map(|v| v as f32)));
-            for mut tri in [
-                [0, 1, 7],
-                [1, 2, 6],
-                [1, 6, 7],
-                [2, 3, 5],
-                [2, 5, 6],
-                [3, 4, 5],
-            ] {
+            for mut tri in [[0, 1, 4], [1, 2, 4], [2, 3, 4]] {
                 if crate::lod::dot(face_normal(tri.map(|i| corners[i])), normal) < 0.0 {
                     tri.swap(1, 2);
                 }
@@ -2196,20 +2189,17 @@ fn pinna<const N: usize>(
         return;
     }
     if N > 9 {
-        // Spend extra samples on the silhouette; one midrib row per two edge
-        // steps keeps each local fan inside its shallow concave strip.
+        // Paired shoulders round each division; axial nodes support its valleys
+        // with local strips inside the concave outline.
+        debug_assert_eq!(half % 3, 0);
         let first = mesh.positions.len() as u32;
-        debug_assert_eq!(half % 2, 0);
-        let sections = half / 2;
+        let sections = half / 3;
+        let midrib_steps: Vec<_> = (0..=sections).map(|i| i * 3).collect();
         let mut vertices = Vec::new();
         let mut coordinates = Vec::new();
-        for i in 0..=sections {
-            let t = i as f64 / sections as f64;
-            let fold = if i == 0 || i == sections {
-                0.0
-            } else {
-                fold_m * (std::f64::consts::PI * t).sin()
-            };
+        for &i in &midrib_steps {
+            let t = i as f64 / half as f64;
+            let fold = fold_m * (std::f64::consts::PI * t).sin();
             vertices.push(offset(at(t), scaled(normal, fold)));
             coordinates.push([t as f32, 0.5]);
         }
@@ -2231,18 +2221,26 @@ fn pinna<const N: usize>(
             }
         };
         let mut triangles = Vec::new();
+        // Fan toward the blade centre to avoid nearly collinear shoulders
+        // at either tapered tip.
         for section in 0..sections {
+            let toward_tip = section * 2 >= sections;
+            let anchor = if toward_tip { section } else { section + 1 };
             for side in 0..2 {
-                for i in 2 * section..2 * section + 2 {
+                for i in midrib_steps[section]..midrib_steps[section + 1] {
                     let a = edge(i, side);
                     let b = edge(i + 1, side);
-                    if a != section {
-                        triangles.push([section, a, b]);
+                    if a != anchor && b != anchor {
+                        triangles.push([anchor, a, b]);
                     }
                 }
-                let end = edge(2 * section + 2, side);
-                if end != section + 1 {
-                    triangles.push([section, end, section + 1]);
+                let (end, centre) = if toward_tip {
+                    (edge(midrib_steps[section + 1], side), section + 1)
+                } else {
+                    (edge(midrib_steps[section], side), section)
+                };
+                if end != centre {
+                    triangles.push([anchor, end, centre]);
                 }
             }
         }
@@ -2989,7 +2987,7 @@ mod tests {
                 .iter()
                 .filter(|triangle| triangle[0] >= dry.first_vertex)
                 .count(),
-            4 * (45 + 14 * 2 * 32)
+            4 * (45 + 28 * 2 * 12)
         );
         for start in [0, 1, mesh.positions.len() as u32, u32::MAX] {
             let mut broken = mesh.clone();
@@ -3212,8 +3210,8 @@ mod tests {
                         )
                     })
                     .collect();
-                let stride = if reduced { 8 } else { 29 };
-                let maximum_gap = (0..28)
+                let stride = if reduced { 5 } else { 13 };
+                let maximum_gap = (0..56)
                     .map(|leaf| {
                         let root = first_pinna + leaf * stride;
                         let p = mesh.positions[root].map(f64::from);
@@ -3521,7 +3519,7 @@ mod tests {
             mesh.uvs.clear();
             mesh.indices.clear();
             mesh.stem = None;
-            pinna::<25>(
+            pinna::<13>(
                 &mut mesh,
                 [[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
                 [0.0, 0.0, 1.0],
@@ -3547,18 +3545,31 @@ mod tests {
             }
             if !reduced {
                 assert!(
-                    !covered_from_above(&mesh, 0.5, 0.105),
-                    "the concave notch must remain air in actual triangles"
+                    !covered_from_above(&mesh, 0.5, 0.06),
+                    "the feather needs a deep open division, not a shallow scalloped oval"
                 );
                 assert!(
-                    covered_from_above(&mesh, 5.0 / 12.0, 0.105),
+                    covered_from_above(&mesh, 1.0 / 3.0, 0.06),
                     "the adjacent fine lobe must retain coverage"
                 );
+
+                for i in 1..6 {
+                    let t = i as f64 / 6.0;
+                    assert_eq!(
+                        covered_from_above(&mesh, t, 0.072 * (std::f64::consts::PI * t).sin()),
+                        i % 3 != 0,
+                        "every incised valley must remain air beside its covered lobe"
+                    );
+                    assert!(
+                        covered_from_above(&mesh, i as f64 / 6.0, 0.0),
+                        "incised lobes must retain a continuous attached axial wing"
+                    );
+                }
 
                 let mut edge: Vec<_> = mesh.positions.iter().filter(|p| p[2] > 0.01).collect();
                 edge.sort_by(|a, b| a[0].total_cmp(&b[0]));
                 assert!(
-                    edge.len() >= 10,
+                    edge.len() >= 4,
                     "the fine feather outline needs intermediate edge samples"
                 );
                 let peaks = edge
@@ -3566,8 +3577,8 @@ mod tests {
                     .filter(|p| p[1][2] > p[0][2] && p[1][2] > p[2][2])
                     .count();
                 assert!(
-                    peaks >= 3,
-                    "the published contour still resolves only the old four-lobe silhouette: {peaks} interior peaks"
+                    peaks >= 2,
+                    "the narrow feather must retain two rounded divisions: {peaks} interior peaks"
                 );
             }
         }
@@ -3583,9 +3594,17 @@ mod tests {
             mesh.indices.clear();
             mesh.stem = None;
             let first = crown_frond(&mut mesh, 0.0, [0.0; 3], 4.0, 1.0, 0.8, false, reduced);
-            let stride = if reduced { 8 } else { 29 };
-            assert_eq!(mesh.positions.len() - first, 28 * stride);
-            for leaf in 0..28 {
+            assert_eq!(
+                mesh.uvs[first..]
+                    .iter()
+                    .filter(|uv| uv[0] == 0.0 && uv[1] == 0.5)
+                    .count(),
+                56,
+                "every narrow primary feather must have an attached root"
+            );
+            let stride = if reduced { 5 } else { 13 };
+            assert_eq!(mesh.positions.len() - first, 56 * stride);
+            for leaf in 0..56 {
                 let points = &mesh.positions[first + leaf * stride..first + (leaf + 1) * stride];
                 let span = |axis: usize| {
                     points
@@ -3595,7 +3614,7 @@ mod tests {
                         - points.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min)
                 };
                 assert!(
-                    span(2) < 1.15,
+                    span(2) < 0.65,
                     "a pinna must be narrow relative to the four-metre frond"
                 );
                 assert!(
@@ -3704,7 +3723,7 @@ mod tests {
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
                 ScatterKind::ReedClump => (1200, 1350),
-                ScatterKind::LycopsidTree => (27300, 27600),
+                ScatterKind::LycopsidTree => (21000, 21300),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(

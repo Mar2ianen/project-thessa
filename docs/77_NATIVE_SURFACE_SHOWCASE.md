@@ -41,6 +41,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD105 | Cascading fern crown with rounded lobed pinnae | 4,459 | 11,918 | 18,855,932 | 382.723 ms |
 | WORLD107 | Finer feather contours within existing source budgets | 4,459 | 11,918 | 19,025,276 | 385.484 ms |
 | WORLD108 | Finer crowns and visible soil refinement | 4,459 | 11,918 | 19,025,276 | 389.287 ms |
+| WORLD112 | Finer attached pinnate crown structure | 4,459 | 11,918 | 18,686,588 | 376.957 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -396,6 +397,38 @@ Exact commands, source/binary/frame hashes, negative regressions and known
 limits are in `artifacts/native-fern-detail-2026-10-26.json`. The 450-case
 WORLD105 record above remains historical. WORLD96/97 blind pairs cover their
 shading revision only; they do not establish preference for WORLD107/108.
+
+### WORLD112 — Finer attached pinnate crown structure
+
+The crown retains 28 rooted fronds, but each now carries 28 opposed pinna pairs. Primary reach fractions are 0.14/0.13 instead of 0.27/0.25, with connected two-lobe secondary outlines. Full/reduced pinnae use 13/5 vertices and 12/3 triangles. Existing sampled displacement, projected-area, geometric normal, attachment and memory bounds remain; ground and population controls are unchanged.
+
+The stage passed 280 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,447,940 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD112 — Current geometry verification
+
+Eight stage gates pass: 280 worldgen, 131 native and 31 stream CPU tests,
+strict Clippy, formatting, architecture, feature-off compile and release.
+Final current-source batches pass 451 cases. The rebuilt release is byte-identical
+to the binary used for all three native raster views after test-only oracle updates;
+measured finite-bias counts are [65, 1] full / [18, 0] reduced.
+The 513² full fixture failed the unchanged primary-edge fraction guard:
+2,208 of 8,612 samples (25.64% >25%). At 1025², finer edges are resolved;
+colour tolerance, 1/16-pixel exclusion, quarter-edge limit, physical convergence
+and invented-blocker guards remain.
+A 24-frame native sequence retains terminal-PNG equivalence and TAA Off.
+The bounded Local RT probe exited 0, active=True, passed=True; it is unpaired, not general driver-stability acceptance.
+WORLD109 failed winding/LOD/source caps. WORLD110 pointed teeth and WORLD111
+rounded broad units remain intermediate native design evidence.
+Morphology and unchanged error envelopes are in [doc 75](75_NATIVE_SURFACE_PLANTS.md);
+commands and hashes are in `artifacts/native-fern-division-2026-10-26.json`.
+Historical WORLD108 verification is dated; no independent reference, full
+motion or interactive-FPS acceptance is claimed.
 
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 

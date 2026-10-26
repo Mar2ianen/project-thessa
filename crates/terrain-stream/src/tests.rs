@@ -418,3 +418,85 @@ fn material_frame_rejects_below_screen_prefetch_without_losing_cover() {
         }
     }
 }
+
+#[test]
+fn visible_material_error_precedes_offscreen_prefetch_under_the_same_cover_budget() {
+    let radius = 3_200_000.0;
+    let up = DVec3::Z;
+    let forward = DVec3::X;
+    let clip = glam::dcamera::rh::proj::directx::perspective(0.9, 16.0 / 9.0, 0.1, 100000.0)
+        * glam::dcamera::rh::view::look_at_mat4(DVec3::ZERO, forward, up);
+    let v = SelectionView {
+        eye: up * (radius + 2.0),
+        stream_origin: up * radius,
+        forward,
+        radius,
+        frustum: Some(lod::SelectionFrustum {
+            forward: forward.to_array(),
+            cos_limit: ((0.45_f64.tan() * 16.0 / 9.0).atan() + 0.6).cos(),
+        }),
+        material_clip_from_eye: Some(clip),
+    };
+    let bases: Vec<_> = [65535, 65536]
+        .into_iter()
+        .flat_map(|x| {
+            [65535, 65536].into_iter().map(move |y| TileKey {
+                face: 4,
+                level: 17,
+                x,
+                y,
+            })
+        })
+        .collect();
+    let worst_visible_error = |cover: &[TileKey]| {
+        cover
+            .iter()
+            .filter_map(|key| {
+                let delta = DVec3::from(key.direction(0.5, 0.5)) * radius - v.eye;
+                let q = clip * delta.extend(1.0);
+                if q.w <= 0.0 || q.x.abs() >= q.w * 0.9 || q.y.abs() >= q.w * 0.9 {
+                    return None;
+                }
+                let distance = (delta.length() - key.span_m(radius) * 0.75).max(1.0);
+                Some(key.span_m(radius) / 125.0 / (distance * 0.0007).max(0.001))
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let legacy = material_view_selection_at_height(
+        &bases,
+        SelectionView {
+            material_clip_from_eye: None,
+            ..v
+        },
+        0.0007,
+        24,
+        0.0,
+    );
+    let current = material_view_selection_at_height(&bases, v, 0.0007, 24, 0.0);
+    for cover in [&legacy, &current] {
+        assert!(cover.len() <= 2048);
+        assert_eq!(
+            cover
+                .iter()
+                .map(|k| 4f64.powi(17 - i32::from(k.level)))
+                .sum::<f64>(),
+            4.0,
+            "offscreen prefetch support must retain complete area"
+        );
+    }
+    let old = worst_visible_error(&legacy);
+    let new = worst_visible_error(&current);
+    eprintln!(
+        "visible_material_error legacy={old} current={new} leaves={}/{}",
+        legacy.len(),
+        current.len()
+    );
+    assert!(
+        old > 1.05,
+        "fixture must saturate the previous prefetch-first split order"
+    );
+    assert!(
+        new <= 1.0,
+        "offscreen refinement starves resolvable visible material: {new} px"
+    );
+}

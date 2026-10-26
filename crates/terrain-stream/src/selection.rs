@@ -257,8 +257,8 @@ pub(crate) fn material_view_selection_at_height(
         let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
         key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
     };
-    // This shared cover also feeds CBT soil-height prefetch. Preserve its
-    // wider cone; actual-frame clipping belongs to material admission priority.
+    // Keep complete soil-height prefetch coverage in the wider cone, but spend
+    // limited splits on unresolved actual-frame pages before offscreen pages.
     let prefetch_view = SelectionView {
         material_clip_from_eye: None,
         ..view
@@ -277,9 +277,17 @@ pub(crate) fn material_view_selection_at_height(
         let candidate = cover
             .iter()
             .copied()
-            .filter(split_candidate)
-            .max_by(|a, b| error(*a).total_cmp(&error(*b)));
-        let Some(key) = candidate.filter(|key| error(*key) > 1.0) else {
+            .filter(|key| split_candidate(key) && error(*key) > 1.0)
+            .max_by(|a, b| {
+                let in_frame = |key| {
+                    view.material_clip_from_eye.is_none()
+                        || material_page_in_view(key, view, surface_radius)
+                };
+                in_frame(*a)
+                    .cmp(&in_frame(*b))
+                    .then_with(|| error(*a).total_cmp(&error(*b)))
+            });
+        let Some(key) = candidate else {
             break;
         };
         cover.remove(&key);

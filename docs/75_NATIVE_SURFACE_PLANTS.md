@@ -1,61 +1,10 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD105, doc 77): crowns now use 28 cascading fronds with 14 paired tapered, shallowly lobed pinnae; shared ground/crown geometry replaces the rejected separate spears and square plates.
+Current composition continuation (WORLD108, doc 77): six shallow crown lobes per edge; visible-first material refinement preserves the wider cover and all memory caps. Three actual raster views and 24 consecutive motion frames are recorded; reference and temporal acceptance remain open.
 The current standing scene submits 11,918 instances and
-18,855,932 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,137,476 B under the
+19,025,276 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,758,404 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
-
-### WORLD105 — A coherent cascading fern crown after rejected spear trials
-
-The user rejected WORLD101's long secondary spears. WORLD102 was too sparse;
-WORLD103 recovered a connected feather but had smooth oval pinnae. WORLD104
-introduced shallow lobes but still lacked pendant crown volume. These trials
-remain local negative/intermediate evidence, not shipped acceptance stages.
-
-The current tree reuses the ground fern's rounded lamina emitter. Each of its
-28 fronds has 14 opposed pinna pairs along the published curved petiole.
-Dual-terminal forms carry 14 fronds per fork; the solitary crown carries 28.
-The five age tiers remain, with more descending/senescent fronds than the sparse
-trial. Primary length is 0.27 of profiled reach (veteran 0.25), half-width 0.12
-of pinna length, and fold height 0.012 of length. Four shallow connected lobes
-per edge sit inside the tapered feather envelope. Full pinnae publish 23
-vertices/28 triangles as a raised midrib strip; a single centre fan could cross
-concave outlines, so it is deliberately retained only for the ground's convex
-contour. Reduced crown pinnae use eight contour vertices/six triangles,
-with width obtained by integrating the published full outline.
-
-The old 5% area-preservation fixture encoded the rejected oversized art recipe,
-not physical conservation. It is replaced by emitted narrow/rounded/lobed
-contour checks. Current full foliage areas are 64.6383/73.1776/82.5218 m² for
-forms 0/1/2. Complete-tree full/reduced triangle counts are
-24,316/6,460, 24,260/6,404 and 24,316/6,460: all exceed 3:1 again.
-The unchanged sampled vertex-distance envelope, 2.5% projected-area error,
-triangle conditioning, 0.001 rad surface-normal agreement, geometric visibility,
-wood/root attachment tests, 32,768-vertex ceiling and 6/7 MB source limits remain.
-The measured projected-area ratios are 0.998404/0.998753/0.998712.
-
-The standing scene keeps 37 ranges, 11,918 instances and
-6,137,476 B aggregate vertex/index/AO payload. Tree positions, terrain,
-cohort materials, overcast/exposure and default-off TAA are unchanged. The
-reference is a design target, not a claimed reproduction. Morphology references
-are [VicFlora's Dicksonia description](https://vicflora.rbg.vic.gov.au/flora/taxon/9c9ecf70-9027-490a-b26e-add18d163bf7)
-and [Flora of New Zealand's Cyathea description](https://www.nzflora.info/factsheet/taxon/Cyathea.html):
-these motivate tapered, attached, incised feathers. This authored pinnatifid
-optical approximation does not reconstruct their full higher-order branching.
-
-Current-source verification passed 450 cases across the CPU terrain stack,
-native plant hardware fixtures, conforming L24 material coordinates, and
-material/environment GPU suites, plus strict affected Clippy, formatting,
-architecture, feature-off compile and release build. The rebuilt release is
-byte-identical to all three current raster captures after the test-only GPU
-fixture update. Current finite-bias diagnostics and commands, the failing
-smooth-outline ablation and rejected frames are retained in
-`artifacts/native-fern-crown-2026-10-26.json` and the local campaign. Historical
-WORLD100 calibration below remains a dated record, not current counts.
-The bounded current-scene Local RT capture completed with RT active (exit 0).
-It remains unpaired and does not establish general driver stability.
-No independent blind vote, reference parity or full motion acceptance is claimed.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
 dual-terminal crowns and 21-frond hero fern. Stable form identity now combines
@@ -172,6 +121,93 @@ finite receiver-exclusion disagreements versus the physical oracle are
 diagnostics replace WORLD40's stale counts; they do not claim bias-free physical
 visibility or establish full-scene RT driver stability. The fixture is cfg(test)
 only; the release binary is checked against the three WORLD100 captured views.
+
+### WORLD105 — A coherent cascading fern crown after rejected spear trials
+
+The user rejected WORLD101's long secondary spears. WORLD102 was too sparse;
+WORLD103 recovered a connected feather but had smooth oval pinnae. WORLD104
+introduced shallow lobes but still lacked pendant crown volume. These trials
+remain local negative/intermediate evidence, not shipped acceptance stages.
+
+At WORLD105, the tree reuses the ground fern's rounded lamina emitter. Each of its
+28 fronds has 14 opposed pinna pairs along the published curved petiole.
+Dual-terminal forms carry 14 fronds per fork; the solitary crown carries 28.
+The five age tiers remain, with more descending/senescent fronds than the sparse
+trial. Primary length is 0.27 of profiled reach (veteran 0.25), half-width 0.12
+of pinna length, and fold height 0.012 of length. Four shallow connected lobes
+per edge sit inside the tapered feather envelope. Full pinnae publish 23
+vertices/28 triangles as a raised midrib strip; a single centre fan could cross
+concave outlines, so it is deliberately retained only for the ground's convex
+contour. Reduced crown pinnae use eight contour vertices/six triangles,
+with width obtained by integrating the published full outline.
+
+The old 5% area-preservation fixture encoded the rejected oversized art recipe,
+not physical conservation. It is replaced by emitted narrow/rounded/lobed
+contour checks. WORLD105 full foliage areas are 64.6383/73.1776/82.5218 m² for
+forms 0/1/2. Complete-tree full/reduced triangle counts are
+24,316/6,460, 24,260/6,404 and 24,316/6,460: all exceed 3:1 again.
+The unchanged sampled vertex-distance envelope, 2.5% projected-area error,
+triangle conditioning, 0.001 rad surface-normal agreement, geometric visibility,
+wood/root attachment tests, 32,768-vertex ceiling and 6/7 MB source limits remain.
+The measured projected-area ratios are 0.998404/0.998753/0.998712.
+
+The standing scene keeps 37 ranges, 11,918 instances and
+6,137,476 B aggregate vertex/index/AO payload. Tree positions, terrain,
+cohort materials, overcast/exposure and default-off TAA are unchanged. The
+reference is a design target, not a claimed reproduction. Morphology references
+are [VicFlora's Dicksonia description](https://vicflora.rbg.vic.gov.au/flora/taxon/9c9ecf70-9027-490a-b26e-add18d163bf7)
+and [Flora of New Zealand's Cyathea description](https://www.nzflora.info/factsheet/taxon/Cyathea.html):
+these motivate tapered, attached, incised feathers. This authored pinnatifid
+optical approximation does not reconstruct their full higher-order branching.
+
+WORLD105 source verification passed 450 cases across the CPU terrain stack,
+native plant hardware fixtures, conforming L24 material coordinates, and
+material/environment GPU suites, plus strict affected Clippy, formatting,
+architecture, feature-off compile and release build. The rebuilt release is
+byte-identical to all three WORLD105 raster captures after the test-only GPU
+fixture update. WORLD105 finite-bias diagnostics and commands, the failing
+smooth-outline ablation and rejected frames are retained in
+`artifacts/native-fern-crown-2026-10-26.json` and the local campaign. Historical
+WORLD100 calibration above remains a dated record, not current counts.
+The bounded current-scene Local RT capture completed with RT active (exit 0).
+It remains unpaired and does not establish general driver stability.
+No independent blind vote, reference parity or full motion acceptance is claimed.
+
+### WORLD107–108 — Finer feathers and visible ground refinement
+
+WORLD107 keeps the rooted 28-frond crown and its opposed pinnae, but resolves
+six shallow lobes per feather edge instead of four. Twelve edge steps are
+supported by seven midrib nodes, including both tips. Each full feather now
+has 29 vertices/32 triangles; short local fans preserve the concave notches.
+Reduced feathers remain eight vertices/six triangles with integrated width.
+The ground fern's convex contour, petiole roots, wood support, age tiers and
+organ pigmentation are unchanged.
+
+The contour regression casts independent vertical rays through a real notch
+and its adjacent lobe, requires ten intermediate edge samples and at least
+three interior outline peaks. The old emitted contour fails this strengthened
+oracle. Complete full/reduced tree counts are 27,452/6,460, 27,396/6,404 and
+27,452/6,460, retaining a greater than 3:1 reduction. Full foliage areas are
+64.8788/73.4445/82.8392 m²; projected-area ratios are
+0.998410/0.998758/0.998717. The existing sampled distance envelope, 2.5% area
+error, geometric normal/visibility/attachment checks, triangle conditioning,
+32,768-vertex ceiling and 6/7 MB payload caps are unchanged. Standing source
+payload is 6,758,404 B, with 11,918 instances and 37 shared draws.
+
+WORLD108 changes the shared optical page splitter, not plant placement or CBT
+geometry: unresolved actual-frame material pages receive splits before
+unresolved offscreen prefetch. The wider cover remains complete and all cache,
+quality and memory limits remain. See [doc 69](69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)
+and [doc 77](77_NATIVE_SURFACE_SHOWCASE.md) for the ground regression and captures.
+This improves detail allocation; it does not introduce new soil microgeometry.
+
+The latest three raster views and 24-frame native sequence retain default-off
+TAA. They are authored scene evidence; the moving camera changes residency and
+cannot support a strict blind renderer comparison. Fine distant foliage still
+aliases, and moving close ground retains soft patches. The tree is an authored
+pinnatifid approximation rather than a botanical three-level reconstruction;
+reference parity and full temporal acceptance remain open. Current verification
+and hashes are in `artifacts/native-fern-detail-2026-10-26.json`.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid

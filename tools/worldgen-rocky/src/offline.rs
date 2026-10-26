@@ -2024,7 +2024,7 @@ fn crown_frond(
             let tangent =
                 crate::lod::normalize(crate::lod::sub(along(t + 0.001), along(t - 0.001)));
             let fold_h = length * 0.012;
-            pinna::<17>(
+            pinna::<25>(
                 mesh,
                 nodes,
                 tangent,
@@ -2117,7 +2117,7 @@ fn pinna<const N: usize>(
         // Shallow connected lobes retain the feather outline, rather than
         // separate oversized secondary spears. Ground pinnae keep their contour.
         let lobes = if N > 9 {
-            0.90 - 0.10 * (t * 8.0 * std::f64::consts::PI).cos()
+            0.90 - 0.10 * (t * half as f64 * std::f64::consts::PI).cos()
         } else {
             1.0
         };
@@ -2196,37 +2196,56 @@ fn pinna<const N: usize>(
         return;
     }
     if N > 9 {
-        // A midrib strip supports the indented outline without a triangle fan
-        // crossing its concave edges. Both tips remain single shared vertices.
+        // Spend extra samples on the silhouette; one midrib row per two edge
+        // steps keeps each local fan inside its shallow concave strip.
         let first = mesh.positions.len() as u32;
-        let mut vertices = vec![at(0.0)];
-        let mut coordinates = vec![[0.0, 0.5]];
+        debug_assert_eq!(half % 2, 0);
+        let sections = half / 2;
+        let mut vertices = Vec::new();
+        let mut coordinates = Vec::new();
+        for i in 0..=sections {
+            let t = i as f64 / sections as f64;
+            let fold = if i == 0 || i == sections {
+                0.0
+            } else {
+                fold_m * (std::f64::consts::PI * t).sin()
+            };
+            vertices.push(offset(at(t), scaled(normal, fold)));
+            coordinates.push([t as f32, 0.5]);
+        }
         for i in 1..half {
             let t = i as f64 / half as f64;
             vertices.extend([
                 offset(at(t), scaled(lateral, width_at(t))),
-                offset(
-                    at(t),
-                    scaled(normal, fold_m * (std::f64::consts::PI * t).sin()),
-                ),
                 offset(at(t), scaled(lateral, -width_at(t))),
             ]);
-            coordinates.extend([[t as f32, 0.0], [t as f32, 0.5], [t as f32, 1.0]]);
+            coordinates.extend([[t as f32, 0.0], [t as f32, 1.0]]);
         }
-        let tip = vertices.len();
-        vertices.push(at(1.0));
-        coordinates.push([1.0, 0.5]);
-        let mut triangles = vec![[0, 1, 2], [0, 2, 3]];
-        for i in 0..half - 2 {
-            let a = 1 + 3 * i;
-            triangles.extend([
-                [a, a + 3, a + 4],
-                [a, a + 4, a + 1],
-                [a + 1, a + 4, a + 5],
-                [a + 1, a + 5, a + 2],
-            ]);
+        let edge = |i: usize, side: usize| {
+            if i == 0 {
+                0
+            } else if i == half {
+                sections
+            } else {
+                sections + 1 + 2 * (i - 1) + side
+            }
+        };
+        let mut triangles = Vec::new();
+        for section in 0..sections {
+            for side in 0..2 {
+                for i in 2 * section..2 * section + 2 {
+                    let a = edge(i, side);
+                    let b = edge(i + 1, side);
+                    if a != section {
+                        triangles.push([section, a, b]);
+                    }
+                }
+                let end = edge(2 * section + 2, side);
+                if end != section + 1 {
+                    triangles.push([section, end, section + 1]);
+                }
+            }
         }
-        triangles.extend([[tip - 3, tip, tip - 2], [tip - 2, tip, tip - 1]]);
         let mut sums = vec![[0.0; 3]; vertices.len()];
         for mut tri in triangles {
             let mut cross = face_normal(tri.map(|i| vertices[i]));
@@ -2970,7 +2989,7 @@ mod tests {
                 .iter()
                 .filter(|triangle| triangle[0] >= dry.first_vertex)
                 .count(),
-            4 * (45 + 14 * 2 * 28)
+            4 * (45 + 14 * 2 * 32)
         );
         for start in [0, 1, mesh.positions.len() as u32, u32::MAX] {
             let mut broken = mesh.clone();
@@ -3193,7 +3212,7 @@ mod tests {
                         )
                     })
                     .collect();
-                let stride = if reduced { 8 } else { 23 };
+                let stride = if reduced { 8 } else { 29 };
                 let maximum_gap = (0..28)
                     .map(|leaf| {
                         let root = first_pinna + leaf * stride;
@@ -3502,7 +3521,7 @@ mod tests {
             mesh.uvs.clear();
             mesh.indices.clear();
             mesh.stem = None;
-            pinna::<17>(
+            pinna::<25>(
                 &mut mesh,
                 [[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
                 [0.0, 0.0, 1.0],
@@ -3527,26 +3546,28 @@ mod tests {
                 );
             }
             if !reduced {
-                let edge_width = |x: f32| {
-                    mesh.positions
-                        .iter()
-                        .filter(|p| p[0] == x)
-                        .map(|p| p[2].abs())
-                        .fold(0.0_f32, f32::max)
-                };
-                let shoulders = (edge_width(0.375) + edge_width(0.625)) * 0.5;
                 assert!(
-                    edge_width(0.5) < shoulders * 0.95 && edge_width(0.5) > shoulders * 0.75,
-                    "the pinna needs shallow connected lobes, not a smooth oval or deep spears"
+                    !covered_from_above(&mesh, 0.5, 0.105),
+                    "the concave notch must remain air in actual triangles"
                 );
                 assert!(
-                    mesh.positions.iter().filter(|p| p[2] > 0.01).count() >= 7,
-                    "a curved contour needs intermediate shoulders"
+                    covered_from_above(&mesh, 5.0 / 12.0, 0.105),
+                    "the adjacent fine lobe must retain coverage"
                 );
+
+                let mut edge: Vec<_> = mesh.positions.iter().filter(|p| p[2] > 0.01).collect();
+                edge.sort_by(|a, b| a[0].total_cmp(&b[0]));
                 assert!(
-                    mesh.positions
-                        .iter()
-                        .any(|p| p[0] == 0.25 && p[2] > 0.05 && p[2] < 0.075)
+                    edge.len() >= 10,
+                    "the fine feather outline needs intermediate edge samples"
+                );
+                let peaks = edge
+                    .windows(3)
+                    .filter(|p| p[1][2] > p[0][2] && p[1][2] > p[2][2])
+                    .count();
+                assert!(
+                    peaks >= 3,
+                    "the published contour still resolves only the old four-lobe silhouette: {peaks} interior peaks"
                 );
             }
         }
@@ -3562,7 +3583,7 @@ mod tests {
             mesh.indices.clear();
             mesh.stem = None;
             let first = crown_frond(&mut mesh, 0.0, [0.0; 3], 4.0, 1.0, 0.8, false, reduced);
-            let stride = if reduced { 8 } else { 23 };
+            let stride = if reduced { 8 } else { 29 };
             assert_eq!(mesh.positions.len() - first, 28 * stride);
             for leaf in 0..28 {
                 let points = &mesh.positions[first + leaf * stride..first + (leaf + 1) * stride];
@@ -3683,7 +3704,7 @@ mod tests {
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
                 ScatterKind::ReedClump => (1200, 1350),
-                ScatterKind::LycopsidTree => (24100, 24600),
+                ScatterKind::LycopsidTree => (27300, 27600),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(

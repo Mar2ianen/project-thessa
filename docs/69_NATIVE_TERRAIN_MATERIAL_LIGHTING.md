@@ -10,6 +10,17 @@ feeds render-only relief, optical gradients and prop/pool placement; canonical
 terrain/collision heights and the existing quality/footprint cutoffs remain.
 This is authored optical morphology, not a moss growth or drainage simulation.
 
+WORLD108 (doc 77) also uses actual-frame visibility to order unresolved material
+splits inside the complete wider prefetch cover. Visible pages above the error
+target are split before offscreen pages; solved visible pages cannot stop the
+remaining prefetch refinement. Missing projection matrices keep the former
+error-only order. The 2,048-leaf High cover, 512 admissions, 1,024 CPU pages,
+256 GPU layers and resolved quality ceilings are unchanged. A saturating
+four-root fixture improves visible error from 1.109 to 0.989 pixels with
+2,047 leaves and identical covered area. The standing capture has more L22/L23
+residents, but no resident L24 pages; this does not guarantee native close-up
+resolution, remove all motion blur, or change canonical terrain/CBT topology.
+
 WORLD43 (doc 77) separates optical material visibility from the geometry cone's
 0.6 rad prefetch margin. Shared material admission priority now uses the actual
 camera-relative projection and the existing conservative sphere/clip predicate;
@@ -86,7 +97,9 @@ both refinement distance/frustum and admission priority. This is a local optical
 reference, not exact per-tile relief, geometry displacement or collision state.
 Default-off selection retains the legacy datum. WORLD12 in doc 77 uses
 512/1,024/2,048 temporary refinement leaves for Low/Medium/High detail, then admits
-at most 512 pages using the same view-cone test as refinement. The 1,024-page
+at most 512 pages from the wider prefetch cone, ordered by actual-frame
+visibility and error. WORLD108 applies that visible-first ordering to unresolved
+refinement candidates as well. The 1,024-page
 CPU source, bounded worker jobs and 256 GPU layers are unchanged. Captures expose
 `native_material_reference_height_m` and its source/limitation string.
 

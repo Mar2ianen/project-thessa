@@ -39,6 +39,8 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD99 | Divided crown feathers and exact vertex sharing | 4,459 | 11,918 | 20,481,980 | 432.151 ms |
 | WORLD100 | Root fronds in actual woody forks | 4,459 | 11,918 | 20,481,980 | 440.993 ms |
 | WORLD105 | Cascading fern crown with rounded lobed pinnae | 4,459 | 11,918 | 18,855,932 | 382.723 ms |
+| WORLD107 | Finer feather contours within existing source budgets | 4,459 | 11,918 | 19,025,276 | 385.484 ms |
+| WORLD108 | Finer crowns and visible soil refinement | 4,459 | 11,918 | 19,025,276 | 389.287 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -333,6 +335,67 @@ first 180 rows, but the whole image differs from WORLD105 in 4,583 pixels
 height-level counts, CBT active slots and plant counts match; the cause is not
 assigned and whole-frame pixel identity is not claimed. Geometry/materials remain
 WORLD105. Evidence: `artifacts/native-frame-sequence-2026-10-26.json`.
+
+### WORLD107 — Finer feather contours within existing source budgets
+
+The full crown pinna now resolves six shallow edge lobes instead of four. Twelve outline steps and one midrib row per two edge steps retain actual concave notches without a long centre fan; independent vertical rays test an open notch and its adjacent lobe. Each full pinna uses 29 vertices/32 triangles; reduced leaves keep eight vertices/six triangles and integrate the new outline area. Frond counts, pose, organ pigments and source budget caps remain. This is geometry refinement, not reference acceptance.
+
+The stage passed 280 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,758,404 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD108 — Finer crowns and visible soil refinement
+
+WORLD107 refines crown feathers to six shallow lobes per edge with a locally supported midrib strip. WORLD108 spends unresolved optical splits on actual-frame pages before offscreen prefetch, preserving the complete wider cover and existing memory/quality limits. Standing material residency increases from 58/26 to 92/67 pages at L22/L23; no L24 page was resident in this capture. Neither change modifies authoritative terrain or CBT topology.
+
+The stage passed 280 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,758,404 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD108 — Current detail validation and motion evidence
+
+The saturating four-root material fixture keeps 2,047 leaves and covered area
+4.0 while improving visible error from 1.109 to 0.989 pixels. The prior splitter
+fails this regression. The unchanged wider cover still feeds soil-height
+prefetch; missing projections keep error-only ordering. High uses the same
+2,048 virtual leaves, 512 admissions, 1,024 CPU pages and 256 GPU layers.
+Standing L22/L23 residents rise from 58/26 to 92/67; no L24 page is resident in
+the actual standing capture. This is material selection, not new CBT topology,
+canonical displacement or a promise of full-resolution moving soil.
+
+Eight stage gates pass, including 280 worldgen, 131 native and 31 stream CPU
+tests. Current-source final batches pass 451 cases: 406 CPU terrain-stack,
+24 native plant (including hardware), one conforming L24 coordinate fixture
+and 20 material/environment GPU cases. Strict affected Clippy, formatting,
+architecture, feature-off compile and release build also pass. The rebuilt
+release is byte-identical to all three WORLD108 raster capture binaries;
+only cfg(test) visibility diagnostic expectations changed after capture.
+At 513², measured bias disagreements are [54, 0] full and [11, 1] reduced;
+the two-code RGB tolerance, edge limits and physical convergence remain.
+
+WORLD106 and WORLD108 each retain 24 consecutive native PNG frames after
+30 warmup frames, with a byte-identical final PNG and separate final capture.
+The 0.006 rad/frame sweep changes camera/residency. Readback/write time is
+outside recorded frame samples but perturbs streaming wall cadence. Videos
+present these frames at 6 FPS; that is not runtime performance. Selected frames
+0/8/16/23 were inspected; fine distant foliage and soft moving ground patches
+remain, so no full temporal-stability acceptance is recorded. WORLD106's
+static capture differs from WORLD105 in 4,583 pixels (top 180 rows identical);
+the cause is unassigned, and no whole-frame identity is claimed.
+
+The bounded current-scene Local RT probe exited 0; RT active=True, passed=True. It is an unpaired session, not general driver-stability acceptance.
+Exact commands, source/binary/frame hashes, negative regressions and known
+limits are in `artifacts/native-fern-detail-2026-10-26.json`. The 450-case
+WORLD105 record above remains historical. WORLD96/97 blind pairs cover their
+shading revision only; they do not establish preference for WORLD107/108.
 
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 

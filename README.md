@@ -152,7 +152,7 @@ The checked-in vertical slice currently contains:
   green/juvenile/olive/weathered pigment cohorts and asymmetric pinnae through
   shared padded leaf textures, without extra draws or a changed mesh budget.
   Matched captures use raster shadows after an original-baseline AMD RT device loss.
-  Coastal composition continuation (WORLD105): crowns now use 28 cascading fronds with 14 paired tapered, shallowly lobed pinnae; shared ground/crown geometry replaces the rejected separate spears and square plates.
+  Coastal composition continuation (WORLD108): six shallow crown lobes per edge; visible-first material refinement preserves the wider cover and all memory caps. Three actual raster views and 24 consecutive motion frames are recorded; reference and temporal acceptance remain open.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

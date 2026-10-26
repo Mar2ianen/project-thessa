@@ -178,7 +178,7 @@ canonical cells and no blue-noise claim.
 
 `ScatterPolicy` defaults to 16,777,216 candidate visits, 1,024,000 output items,
 density scale 1, minimum plant elevation 2 m, maximum plant slope 0.25,
-`understory_spacing_m = 1.25` (WORLD85) and understory clump scales 0.75–1.50. Candidate
+`understory_spacing_m = 1.25` (WORLD85) and understory clump scales 0.25–1.10 (WORLD86). Candidate
 work is exactly preflighted as
 `4^(candidate_level-query_level)` for coarser/equal windows, or one overlapping
 cell for finer windows; the latter may own no candidate.
@@ -506,3 +506,12 @@ pebbles do not consume this setting and remain unchanged. Six-face regressions
 check that boundary and the retained-count envelope. The standing coastal
 consumer retains 2,617 near clumps versus 6,546, before any later scale/shape
 iterations. See doc 77 for the evolving campaign and its non-acceptance limits.
+
+WORLD86 replaces the old near size interval with 0.25–1.10. Its bounded fraction
+is `(0.70 * world_id_random + 0.30 * smooth(-0.40,0.40,community24m))^0.90`;
+no camera/window/quality enters this morphology prior. Six-face tests require
+small plants, a majority in the two middle bins, and an uncommon upper bin;
+fixed-size caller intervals remain exact. Native preparation reports counts
+in scale bins <0.45 / 0.45–0.70 / 0.70–0.95 / >=0.95. These dimensionless
+scales are not physical height bins or simulated growth ages. The first lower-
+size-biased trial is retained separately in the campaign, not the final policy.

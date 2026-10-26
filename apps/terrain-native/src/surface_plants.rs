@@ -119,6 +119,7 @@ pub struct Diagnostics {
     pub understory_candidates: u64,
     pub understory_samples: u64,
     pub understory_accepted: usize,
+    pub understory_scale_bins: [usize; 4],
     pub replaced_coarse_clumps: usize,
     pub preparation_job_pending: bool,
     pub preparation_jobs_started: u64,
@@ -160,6 +161,7 @@ impl Diagnostics {
             ("native_surface_understory_candidate_visits", self.understory_candidates.to_string()),
             ("native_surface_understory_surface_samples", self.understory_samples.to_string()),
             ("native_surface_understory_accepted", self.understory_accepted.to_string()),
+            ("native_surface_understory_scale_bins_lt_045_070_095", format!("{:?}", self.understory_scale_bins)),
             ("native_surface_understory_replaced_coarse_clumps", self.replaced_coarse_clumps.to_string()),
             ("native_surface_plants_preparation_job_pending", self.preparation_job_pending.to_string()),
             ("native_surface_plants_preparation_jobs_started", self.preparation_jobs_started.to_string()),
@@ -447,6 +449,10 @@ pub fn prepare(
             diagnostics.understory_candidates += near_batch.candidates_visited;
             diagnostics.understory_samples += near_batch.surface_samples;
             diagnostics.understory_accepted += near_batch.items.len();
+            for item in &near_batch.items {
+                let bin = [0.45, 0.70, 0.95].partition_point(|&limit| item.scale >= limit);
+                diagnostics.understory_scale_bins[bin] += 1;
+            }
             batch
                 .items
                 .try_reserve(near_batch.items.len())
@@ -936,6 +942,11 @@ mod tests {
             assert_eq!(stats.understory_candidates, 200_704);
             assert_eq!(stats.candidates, 237_568);
             assert!(stats.understory_accepted > 0);
+            assert_eq!(
+                stats.understory_scale_bins.iter().sum::<usize>(),
+                stats.understory_accepted
+            );
+            assert!(stats.understory_scale_bins.iter().all(|&count| count > 0));
             assert_eq!(stats.retained, prepared.instances.len());
             assert_eq!(
                 stats.accepted - stats.replaced_coarse_clumps,

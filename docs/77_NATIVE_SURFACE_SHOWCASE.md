@@ -21,6 +21,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | --- | --- | ---: | ---: | ---: | ---: |
 | WORLD84 baseline | 0.8 m spacing, scales 0.75–1.50 | 6,546 | 14,005 | 28,246,314 | 592.716 ms |
 | WORLD85 | 1.25 m spacing | 2,617 | 10,076 | 16,081,890 | 457.692 ms |
+| WORLD86 | Continuous small/middle clumps | 2,617 | 10,076 | 14,009,106 | 412.008 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -41,6 +42,18 @@ benchmark. Population/size/shape changes are intentional **scene-content** chang
 these frames support composition review, not strict renderer-equivalence blind
 acceptance. Independent preference/reference acceptance and full motion-sequence
 stability remain open. Further stages are recorded below as they are verified.
+
+### WORLD86 — Continuous small/middle clumps
+
+The size range is now 0.25–1.10 rather than 0.75–1.50. A 70% independent world-ID / 30% continuous community mixture and 0.90 power provide a broad middle cohort while retaining small plants and uncommon largest clumps. An initial 1.35-power trial left excessive bare ground and is retained separately, not accepted as the final stage. Preparation-only scale bins expose the resulting composition without per-frame work. Six-face strata tests bound young/middle/large representation; exact fixed-size settings, nested quality and window unions remain.
+
+The stage passed 268 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,219,328 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
 
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 

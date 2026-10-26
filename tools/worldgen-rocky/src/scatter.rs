@@ -183,8 +183,8 @@ impl Default for ScatterPolicy {
             min_plant_height_m: 2.0,
             max_plant_slope_rise_run: 0.25,
             understory_spacing_m: 1.25,
-            understory_min_scale: 0.75,
-            understory_max_scale: 1.50,
+            understory_min_scale: 0.25,
+            understory_max_scale: 1.10,
         }
     }
 }
@@ -505,8 +505,9 @@ pub fn scatter_region(
                 let community = rng::value_noise3(planet_seed ^ 0x636f6d6d, 8192, p[0], p[1], p[2]);
                 // Authored spatial cohorts bias the size distribution within
                 // the caller's interval; a fixed scale must remain fixed.
-                let size_fraction =
-                    0.40 * random(404) + 0.60 * crate::appearance::smooth(-0.25, 0.25, community);
+                let size_fraction = (0.70 * random(404)
+                    + 0.30 * crate::appearance::smooth(-0.40, 0.40, community))
+                .powf(0.90);
                 policy.understory_min_scale
                     + size_fraction * (policy.understory_max_scale - policy.understory_min_scale)
             } else {

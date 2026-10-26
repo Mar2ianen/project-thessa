@@ -1,10 +1,10 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD85, doc 77) uses 1.25 m authored
-understory centre spacing. Existing candidates, canonical survivor transforms,
-canopy and pebbles remain; no representation-only camera thinning is introduced.
-The first standing stage retains 2,617 rather than 6,546 near clumps under the
-same 37-range/7 MB limits. Geometry/material history below is retained.
+Current composition continuation (WORLD86, doc 77): 1.25 m near-clump spacing and continuous 0.25–1.10 scales add small and middle plants; placement identities, trees, pebbles and shared 37-range/7 MB limits remain.
+The current standing scene submits 10,076 instances and
+14,009,106 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,219,328 B under the
+7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
 dual-terminal crowns and 21-frond hero fern. Stable form identity now combines

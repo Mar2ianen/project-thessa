@@ -199,6 +199,40 @@ fn wider_understory_spacing_thins_the_same_world_population() {
 }
 
 #[test]
+fn understory_size_strata_include_small_middle_and_sparse_large_clumps() {
+    let policy = ScatterPolicy::default();
+    let mut bins = [0_usize; 4];
+    for face in 0..6 {
+        let batch = query(
+            region(face, 18, 131_072, 131_072),
+            ScatterPopulation::Understory,
+            1.0,
+        );
+        for item in batch.items {
+            assert!(
+                (policy.understory_min_scale..=policy.understory_max_scale).contains(&item.scale)
+            );
+            let bin = [0.45, 0.70, 0.95].partition_point(|&limit| item.scale >= limit);
+            bins[bin] += 1;
+        }
+    }
+    let total: usize = bins.iter().sum();
+    assert!(
+        bins.iter().all(|&n| n > 0),
+        "all strata must occur: {bins:?}"
+    );
+    assert!(
+        bins[0] > total / 12,
+        "young plants must be present: {bins:?}"
+    );
+    assert!(
+        bins[1] + bins[2] > total / 2,
+        "middle strata must be present: {bins:?}"
+    );
+    assert!(bins[3] < total / 4, "largest clumps must be rare: {bins:?}");
+}
+
+#[test]
 fn understory_has_disjoint_ids_nested_density_and_exact_window_unions() {
     let tile = region(0, 18, 131_072, 131_072);
     let high = query(tile, ScatterPopulation::Understory, 1.0);

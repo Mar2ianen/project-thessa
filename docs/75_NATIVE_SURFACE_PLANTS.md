@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD90b, doc 77): continuous wet-to-dry plant niches retain the 0.95 m spacing, small and middle cohorts, rare hero rosettes, divided veteran crowns and slender reeds.
+Current composition continuation (WORLD91, doc 77): connected moss cushions share soil relief and normals; the mixed-size, less crowded coastal understory and continuous wet niches remain.
 The current standing scene submits 11,918 instances and
-15,920,770 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,769,456 B under the
+15,921,260 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,790,024 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,

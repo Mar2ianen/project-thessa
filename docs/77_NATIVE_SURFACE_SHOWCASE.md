@@ -28,6 +28,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD89 | Slender reed blades | 2,617 | 10,076 | 13,941,418 | 375.206 ms |
 | WORLD90 | Populate middle-size colonies; fix wet prefilter | 4,608 | 12,067 | 17,426,682 | 423.684 ms |
 | WORLD90b | Continuous riparian niches | 4,459 | 11,918 | 15,920,770 | 407.392 ms |
+| WORLD91 | Connected moss cushions | 4,459 | 11,918 | 15,921,260 | 405.451 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -128,6 +129,18 @@ Understory density now blends continuously from 1.35 at moist low elevations to 
 The stage passed 273 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,769,456 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD91 — Connected moss cushions
+
+Resolved moss cover now uses a smooth connected-cushion transfer instead of quadratic suppression. Moderate coverage contributes centimetres of real render-only relief, sharing the existing body-fixed phase with optical gradients and prop/pool placement. Independent cover tests retain the 0–60 mm envelope, dry/coarse zero and a resolved middle-cover height envelope. No extra shoots, source draws or authoritative collision displacement are added.
+
+The stage passed 273 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,790,024 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
 This is authored scene development with the same camera/profile; population

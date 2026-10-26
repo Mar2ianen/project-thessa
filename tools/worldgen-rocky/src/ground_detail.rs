@@ -354,7 +354,8 @@ pub fn cover(
         * band_weight(0.85, texel_m)
         * 0.85;
     // A connected cushion and smaller hummocks share the pigment's world phase.
-    let cushion = moss * moss * (0.035 + 0.025 * smooth(-0.25, 0.25, noise(6160, 0.18, true)));
+    let cushion = smooth(0.20, 0.80, moss)
+        * (0.035 + (0.060 - 0.035) * smooth(-0.25, 0.25, noise(6160, 0.18, true)));
     // Moisture availability is canonical; scan hollows and metre-scale retention
     // distribute that availability. This is not a rain/runoff integrator.
     let retention = smooth(-0.30, 0.25, noise(6161, 2.4, true));
@@ -470,6 +471,7 @@ mod tests {
         let high = cover(q, 77, 0.012, 0.9, 0.6, 0.025);
         assert!(low.wetness > high.wetness);
         let mut maximum = 0.0_f64;
+        let mut middle_cushions = 0;
         for i in 0..400 {
             let q = [
                 137.0 + (i % 20) as f64 * 0.13,
@@ -479,11 +481,16 @@ mod tests {
             let c = cover(q, 77, 0.012, 0.9, 0.6, 0.0);
             assert!((0.0..=0.06).contains(&c.moss_height_m));
             maximum = maximum.max(c.moss_height_m);
+            if (0.4..=0.6).contains(&c.moss) {
+                assert!((0.008..=0.045).contains(&c.moss_height_m));
+                middle_cushions += 1;
+            }
             let coarse = cover(q, 77, 2.0, 0.9, 0.6, 0.0);
             assert_eq!(coarse.moss_height_m, 0.0);
             assert_eq!(cover(q, 77, 0.012, 0.0, 0.6, 0.0).moss_height_m, 0.0);
         }
-        assert!(maximum > 0.015);
+        assert!(maximum > 0.045);
+        assert!(middle_cushions > 10);
     }
     #[test]
     fn imported_mud_litter_preserves_means_and_world_patch_continuity() {

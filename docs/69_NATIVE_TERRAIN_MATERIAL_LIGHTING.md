@@ -2,6 +2,14 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+WORLD91 (doc 77) gives resolved moss cover a connected cushion profile:
+`smoothstep(0.20, 0.80, moss) * hummock_height`, with the existing 35–60 mm
+hummock envelope. Moderate cover now contributes centimetres of geometric
+height instead of being suppressed quadratically. The same body-fixed field
+feeds render-only relief, optical gradients and prop/pool placement; canonical
+terrain/collision heights and the existing quality/footprint cutoffs remain.
+This is authored optical morphology, not a moss growth or drainage simulation.
+
 WORLD43 (doc 77) separates optical material visibility from the geometry cone's
 0.6 rad prefetch margin. Shared material admission priority now uses the actual
 camera-relative projection and the existing conservative sphere/clip predicate;

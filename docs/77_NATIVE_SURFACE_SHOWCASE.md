@@ -31,6 +31,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD91 | Connected moss cushions | 4,459 | 11,918 | 15,921,260 | 405.451 ms |
 | WORLD92 | Geometry-derived plant visibility | 4,459 | 11,918 | 15,921,260 | 405.589 ms |
 | WORLD93 | Organ roughness cohorts | 4,459 | 11,918 | 15,921,260 | 403.363 ms |
+| WORLD94 | Layered slender rush clumps | 4,459 | 11,918 | 16,092,860 | 406.549 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -167,6 +168,18 @@ The imported pinna MR image has uniform G=255. The existing four-band atlas now 
 The stage passed 274 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,790,024 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD94 — Layered slender rush clumps
+
+Each rush clump now has ten tall and ten shorter inner blades plus six basal leaves. The inner tier reuses the existing curved blade emitter at 62 percent height and 70 percent width. The independent leaf-area and height envelopes remain; the explicit source triangle budget changes from 144 to 264, while shared source/draw caps remain unchanged. All three fixed survey views, architecture checks and the native feature-off build passed alongside the stage CPU gates.
+
+The stage passed 274 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,804,424 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
 This is authored scene development with the same camera/profile; population

@@ -1345,8 +1345,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     const BASE_Y_M: [f64; FRONDS] = [
         0.0, 0.02, 0.003, 0.03, 0.015, 0.002, 0.025, 0.0, 0.018, 0.004, 0.022, 0.012, 0.006,
     ];
-    // Keep the same thirteen fronds and attachment angles; publish the three
-    // long, low outer fronds last so age owns a real material boundary.
+    // Publish the long, low outer fronds last so age owns a material boundary.
     let order: &[usize] = if form == 1 {
         &[0, 3, 4, 6, 8, 10, 2, 5]
     } else {
@@ -1382,8 +1381,8 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     }
 }
 
-/// Tapered reed bed: ten curved blades around a low tussock instead of
-/// six-sided needles. Blade bases stay on local Y = 0.
+/// Two height tiers of slender curved blades around a low tussock.
+/// Blade bases stay on local Y = 0.
 fn reed_clump(mesh: &mut PlantMesh) {
     const STEMS: usize = 10;
     const HEIGHT_M: [f64; STEMS] = [1.72, 1.95, 1.50, 1.85, 2.00, 1.62, 1.90, 1.40, 1.78, 1.66];
@@ -1400,6 +1399,15 @@ fn reed_clump(mesh: &mut PlantMesh) {
             LEAN_M[i],
             HEIGHT_M[i],
             WIDTH_M[i],
+        );
+        // Short inner growth fills the middle tier without widening tall blades.
+        reed_blade(
+            mesh,
+            1.37 + i as f64 * GOLDEN_ANGLE,
+            BASE_R_M[i] * 0.45,
+            LEAN_M[i] * 0.80,
+            HEIGHT_M[i] * 0.62,
+            WIDTH_M[i] * 0.70,
         );
     }
     // Six short outward blades close the base silhouette without bulk.
@@ -3114,7 +3122,7 @@ mod tests {
         );
         let height = mesh.positions.iter().map(|p| p[1]).fold(0.0_f32, f32::max);
         assert!((1.2..2.0).contains(&height));
-        assert_eq!(mesh.indices.len() / 3, 144);
+        assert_eq!(mesh.indices.len() / 3, 264);
     }
 
     #[test]
@@ -3242,7 +3250,7 @@ mod tests {
             let triangles = mesh.indices.len() / 3;
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
-                ScatterKind::ReedClump => (120, 170),
+                ScatterKind::ReedClump => (240, 300),
                 ScatterKind::LycopsidTree => (15550, 15700),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };

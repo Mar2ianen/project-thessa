@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD93, doc 77): leaf age now changes both pigment and roughness; mixed-size colonies, connected moss relief and geometry-derived plant visibility remain.
+Current composition continuation (WORLD94, doc 77): two-tier slender rushes accompany compact, middle and rare hero ferns; connected moss relief, organ pigment/roughness and geometry-derived visibility remain.
 The current standing scene submits 11,918 instances and
-15,921,260 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,790,024 B under the
+16,092,860 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,804,424 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,

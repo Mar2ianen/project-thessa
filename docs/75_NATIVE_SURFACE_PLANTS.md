@@ -1,8 +1,8 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD89, doc 77): Continuous small/middle fern strata, uncommon large rosettes, connected divided crowns and slender reeds retain the shared mesh/shadow pipeline and fixed source budgets.
-The current standing scene submits 10,076 instances and
-13,941,418 mesh triangles in 37 shared ranges;
+Current composition continuation (WORLD90, doc 77): 0.95 m near-clump spacing keeps 30% fewer centres than the original scene; continuous sizes, compact juveniles, rare large ferns, divided crowns and slender reeds retain the shared mesh pipeline.
+The current standing scene submits 12,067 instances and
+17,426,682 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,769,456 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 

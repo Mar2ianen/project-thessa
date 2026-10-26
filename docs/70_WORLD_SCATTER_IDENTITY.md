@@ -126,7 +126,7 @@ global level-20 density ceiling is **26,843.5456 instances/km²**. The
 conservative population envelopes are `640 * density_scale` for rocks,
 `3000 * density_scale` for plants, `1.85 * 2e6 * density_scale` for ground
 pebbles and, at the reference spacing, up to
-`1.85 * 1e6 / understory_spacing_m² * density_scale` for understory. The level-24
+`1.85 * 1.35 * 1e6 / understory_spacing_m² * density_scale` for understory. The level-24
 understory lattice has a much larger cell capacity; its requested density is
 still checked against that lattice rather than assumed safe. Requests above
 capacity return `DensityCapacityExceeded`, even if the eventual local mask would be empty;
@@ -178,7 +178,7 @@ canonical cells and no blue-noise claim.
 
 `ScatterPolicy` defaults to 16,777,216 candidate visits, 1,024,000 output items,
 density scale 1, minimum plant elevation 2 m, maximum plant slope 0.25,
-`understory_spacing_m = 1.25` (WORLD85) and understory clump scales 0.25–1.10 (WORLD86). Candidate
+`understory_spacing_m = 0.95` (WORLD90) and understory clump scales 0.25–1.10 (WORLD86). Candidate
 work is exactly preflighted as
 `4^(candidate_level-query_level)` for coarser/equal windows, or one overlapping
 cell for finer windows; the latter may own no candidate.
@@ -515,3 +515,14 @@ fixed-size caller intervals remain exact. Native preparation reports counts
 in scale bins <0.45 / 0.45–0.70 / 0.70–0.95 / >=0.95. These dimensionless
 scales are not physical height bins or simulated growth ages. The first lower-
 size-biased trial is retained separately in the campaign, not the final policy.
+
+WORLD90 refines the composition default to 0.95 m, after the wider first trial
+left too much bare ground once smaller growth forms were present. The fixed
+coastal scene keeps 4,608 rather than the original 6,546 near centres. The
+existing 1.35 wet-habitat density gain is now included in both the global
+candidate-capacity bound and the pre-surface filter. Previously the latter
+clipped a fully eligible wet habitat to the dry count (the red regression
+yielded 7,040 versus 7,040). A sixteen-seed oracle now checks the expected
+wet/dry count envelope, and six-face spacing checks use the inverse-square
+expectation with a six-sigma absolute count allowance. Other populations retain
+their original bounds; no candidate lattice, jitter or world ID is changed.

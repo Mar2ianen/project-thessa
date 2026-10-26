@@ -161,8 +161,9 @@ fn understory_cohorts_respect_requested_scale_bounds_and_fixed_scale() {
 
 #[test]
 fn wider_understory_spacing_thins_the_same_world_population() {
+    let spacings = [0.95_f64, 1.25, 2.0];
     let mut old_count = 0;
-    let mut new_count = 0;
+    let mut new_counts = [0_usize; 3];
     for face in 0..6 {
         let tile = region(face, 18, 131_072, 131_072);
         let run = |population, spacing| {
@@ -180,22 +181,23 @@ fn wider_understory_spacing_thins_the_same_world_population() {
             .unwrap()
         };
         let old = run(ScatterPopulation::Understory, 0.8);
-        let new = run(
-            ScatterPopulation::Understory,
-            ScatterPolicy::default().understory_spacing_m,
-        );
-        assert!(new.items.iter().all(|item| old.items.contains(item)));
         old_count += old.items.len();
-        new_count += new.items.len();
-        for population in [ScatterPopulation::Plants, ScatterPopulation::GroundPebbles] {
-            assert_eq!(run(population, 0.8), run(population, 1.25));
+        for (i, spacing) in spacings.into_iter().enumerate() {
+            let new = run(ScatterPopulation::Understory, spacing);
+            assert!(new.items.iter().all(|item| old.items.contains(item)));
+            new_counts[i] += new.items.len();
+            for population in [ScatterPopulation::Plants, ScatterPopulation::GroundPebbles] {
+                assert_eq!(run(population, 0.8), run(population, spacing));
+            }
         }
     }
-    let ratio = new_count as f64 / old_count as f64;
-    assert!(
-        (0.32..0.50).contains(&ratio),
-        "understory retained fraction {ratio}"
-    );
+    for (count, spacing) in new_counts.into_iter().zip(spacings) {
+        let expected = old_count as f64 * (0.8 / spacing).powi(2);
+        assert!(
+            (count as f64 - expected).abs() < 6.0 * expected.sqrt() + 1.0,
+            "spacing={spacing} retained={count} expected={expected}"
+        );
+    }
 }
 
 #[test]
@@ -230,6 +232,44 @@ fn understory_size_strata_include_small_middle_and_sparse_large_clumps() {
         "middle strata must be present: {bins:?}"
     );
     assert!(bins[3] < total / 4, "largest clumps must be rare: {bins:?}");
+}
+
+#[test]
+fn wet_understory_density_gain_survives_the_early_surface_prefilter() {
+    let mut dry = 0;
+    let mut wet = 0;
+    for seed in 0..16 {
+        let run = |water| {
+            scatter_region(
+                seed,
+                RADIUS_M,
+                region(0, 18, 131_072, 131_072),
+                ScatterPopulation::Understory,
+                ScatterPolicy::default(),
+                |dir| {
+                    let mut s = surface(dir);
+                    s.ground_height_m = 2.1;
+                    s.water_height_m = water;
+                    s.vegetation = VegetationCover {
+                        ground01: 1.0,
+                        canopy01: 0.0,
+                        reeds01: 0.0,
+                    };
+                    s
+                },
+            )
+            .unwrap()
+            .items
+            .len()
+        };
+        dry += run(None);
+        wet += run(Some(0.0));
+    }
+    let ratio = wet as f64 / dry as f64;
+    assert!(
+        (1.22..1.48).contains(&ratio),
+        "wet={wet} dry={dry} ratio={ratio}"
+    );
 }
 
 #[test]

@@ -22,6 +22,7 @@ pub const UNDERSTORY_CANDIDATE_LEVEL: u8 = 24;
 /// Authored colony occupancy prior, not simulated moisture or plant growth.
 pub const UNDERSTORY_PATCH_WAVELENGTH_M: f64 = 8.0;
 const UNDERSTORY_PATCH_MAX: f64 = 1.85;
+const UNDERSTORY_MOISTURE_DENSITY_MAX: f64 = 1.35;
 const JITTER_BITS: u8 = 24;
 const MAX_ROCK_DENSITY_PER_KM2: f64 = 640.0;
 pub const PLANT_DENSITY_PER_KM2: f64 = 3000.0;
@@ -182,7 +183,7 @@ impl Default for ScatterPolicy {
             max_items: 1_024_000,
             min_plant_height_m: 2.0,
             max_plant_slope_rise_run: 0.25,
-            understory_spacing_m: 1.25,
+            understory_spacing_m: 0.95,
             understory_min_scale: 0.25,
             understory_max_scale: 1.10,
         }
@@ -291,8 +292,14 @@ pub fn scatter_region(
         ScatterPopulation::GroundPebbles => 2_000_000.0,
         ScatterPopulation::Understory => 1e6 / policy.understory_spacing_m.powi(2),
     };
+    let habitat_ceiling = if population == ScatterPopulation::Understory {
+        UNDERSTORY_MOISTURE_DENSITY_MAX
+    } else {
+        1.0
+    };
     let ceiling = reference_density
         * policy.density_scale
+        * habitat_ceiling
         * if matches!(
             population,
             ScatterPopulation::Understory | ScatterPopulation::GroundPebbles
@@ -386,7 +393,13 @@ pub fn scatter_region(
                 };
                 let density = understory_patch_density(patch_seed, radius_m, direction);
                 // Reject colony gaps before the expensive canonical surface query.
-                if keep >= reference_density * policy.density_scale * density * area_km2 {
+                if keep
+                    >= reference_density
+                        * policy.density_scale
+                        * density
+                        * habitat_ceiling
+                        * area_km2
+                {
                     continue;
                 }
                 density
@@ -434,7 +447,7 @@ pub fn scatter_region(
                     let moisture_factor = if let Some(water_h) = surface.water_height_m {
                         let elev = (surface.ground_height_m - water_h).max(0.0);
                         if elev < 2.5 {
-                            1.35
+                            UNDERSTORY_MOISTURE_DENSITY_MAX
                         } else if elev < 8.0 {
                             1.0 + 0.35 * (1.0 - (elev - 2.5) / 5.5)
                         } else {

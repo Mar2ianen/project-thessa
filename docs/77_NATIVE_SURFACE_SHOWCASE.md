@@ -26,6 +26,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD88 | Divided veteran crown pinnules | 2,617 | 10,076 | 13,463,338 | 378.621 ms |
 | WORLD88b | Connected secondary rachises | 2,617 | 10,076 | 13,941,418 | 375.931 ms |
 | WORLD89 | Slender reed blades | 2,617 | 10,076 | 13,941,418 | 375.206 ms |
+| WORLD90 | Populate middle-size colonies; fix wet prefilter | 4,608 | 12,067 | 17,426,682 | 423.684 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -104,6 +105,18 @@ strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,769,456 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD90 — Populate middle-size colonies; fix wet prefilter
+
+After the initial spacing/size trials left excessive bare soil, the authored spacing is now 0.95 m: 4,608 near clumps rather than the original 6,546, with compact juveniles and rare large forms. A new regression reproduced wet and dry populations both yielding 7,040 items: the early filter capped the existing 1.35 wet-habitat gain at 1.0 before habitat evaluation. Both the early filter and candidate-capacity bound now include that maximum; the regression passes its 1.22–1.48 observed wet/dry envelope. Six-face spacing tests check exact descriptor subsets and an analytic inverse-square count envelope at 0.95, 1.25 and 2.0 m. Trees and pebbles remain unaffected. All three fixed cameras were captured; this is scene-composition development, not a renderer-equivalent speedup comparison.
+
+The stage passed 272 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,769,456 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [269, 1597, 1994, 748].
 This is authored scene development with the same camera/profile; population
 changes are not a renderer-equivalent comparison or reference acceptance.
 

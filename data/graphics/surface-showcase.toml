@@ -56,8 +56,9 @@ integrator = "march"
 ray_steps = 24
 cast_shadows = true
 layers = 2
-coverage = 0.46
-opacity = 0.45
+# Authored overcast: coverage is an inverse density threshold (0 = overcast).
+coverage = 0.18
+opacity = 0.72
 animate = true
 
 [night_lights]

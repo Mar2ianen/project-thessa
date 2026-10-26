@@ -1,6 +1,6 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD95, doc 77): smooth two-tier rush arcs accompany compact, middle and rare hero ferns; connected moss relief, organ pigment/roughness and geometry-derived visibility remain.
+Current composition continuation (WORLD96, doc 77): an authored overcast profile accompanies less crowded, mixed-size ferns, smooth two-tier rushes, connected moss relief and per-organ optical materials.
 The current standing scene submits 11,918 instances and
 17,580,060 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,838,504 B under the
@@ -28,6 +28,18 @@ The shared image atlas adds no pass/draw and the disabled path remains empty.
 Historical checkpoints below describe previous geometry/materials, not the
 current calibration or reference acceptance. RT stability and independent visual
 acceptance remain open; WORLD84 records an original-baseline AMD device loss.
+
+WORLD95 uses the existing quadratic leaf interpolant for rush axes instead
+of the seven-point bent-tip polyline. Full/reduced blades have 32/16 segments
+and share indexed strip vertices with area-weighted geometric normals; clumps
+have 1,304/664 triangles. The two height tiers and narrow blades remain, with
+gently outturned tips and approximately 1.65 m maximum source height. An
+independent emitted-axis oracle bounds full-detail turns below 0.25 rad; prior
+leaf-area and full/reduced surface-distance envelopes remain. Fine reed
+triangles now use the other small foliage double-area floor of `2e-6 m²` plus
+a dimensionless double-area / longest-edge-squared floor of `1e-5` for every
+prototype triangle. The former reed-only `2e-4 m²` broad-blade floor was not a
+scale-independent degeneracy check.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid

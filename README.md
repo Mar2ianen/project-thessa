@@ -152,7 +152,7 @@ The checked-in vertical slice currently contains:
   green/juvenile/olive/weathered pigment cohorts and asymmetric pinnae through
   shared padded leaf textures, without extra draws or a changed mesh budget.
   Matched captures use raster shadows after an original-baseline AMD RT device loss.
-  Coastal composition continuation (WORLD95): smooth two-tier rush arcs accompany compact, middle and rare hero ferns; connected moss relief, organ pigment/roughness and geometry-derived visibility remain.
+  Coastal composition continuation (WORLD96): an authored overcast profile accompanies less crowded, mixed-size ferns, smooth two-tier rushes, connected moss relief and per-organ optical materials.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

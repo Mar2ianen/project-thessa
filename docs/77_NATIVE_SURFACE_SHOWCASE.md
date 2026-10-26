@@ -32,6 +32,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD92 | Geometry-derived plant visibility | 4,459 | 11,918 | 15,921,260 | 405.589 ms |
 | WORLD93 | Organ roughness cohorts | 4,459 | 11,918 | 15,921,260 | 403.363 ms |
 | WORLD94 | Layered slender rush clumps | 4,459 | 11,918 | 16,092,860 | 406.549 ms |
+| WORLD95 | Smooth upright rush arcs | 4,459 | 11,918 | 17,580,060 | 411.133 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -180,6 +181,18 @@ Each rush clump now has ten tall and ten shorter inner blades plus six basal lea
 The stage passed 274 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,804,424 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD95 — Smooth upright rush arcs
+
+Rush axes now interpolate rooted quadratic knots with gently outturned tips, using 32/16 full/reduced segments. The existing ribbon emitter shares indexed vertices and area-weighted geometric normals for smooth rush strips; other strips retain their existing creases. An independent emitted-axis test bounds full-detail turns below 0.25 rad. Clumps have 1304/664 triangles, approximately 1.65 m source height, and retain the prior leaf-area and LOD error envelopes. Fine reed triangles use the other foliage double-area floor of 2e-6 square metres plus a new dimensionless shape-condition bound for all prototypes, rather than the old reed-only broad-blade minimum. An initial curve-knots trial failed the geometry tests and was retained as rejected evidence before correction. All three camera captures and seven stage gates passed.
+
+The stage passed 275 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,838,504 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
 This is authored scene development with the same camera/profile; population

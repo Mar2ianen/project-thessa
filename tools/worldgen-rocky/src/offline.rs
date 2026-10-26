@@ -1269,7 +1269,7 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
             }
             ScatterKind::ReedClump => {
                 mesh.albedo_srgb = [0.25, 0.30, 0.11];
-                reed_clump(&mut mesh);
+                reed_clump(&mut mesh, reduced);
             }
             ScatterKind::LycopsidTree => {
                 mesh.albedo_srgb = [0.22, 0.30, 0.12];
@@ -1383,7 +1383,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
 
 /// Two height tiers of slender curved blades around a low tussock.
 /// Blade bases stay on local Y = 0.
-fn reed_clump(mesh: &mut PlantMesh) {
+fn reed_clump(mesh: &mut PlantMesh, reduced: bool) {
     const STEMS: usize = 10;
     const HEIGHT_M: [f64; STEMS] = [1.72, 1.95, 1.50, 1.85, 2.00, 1.62, 1.90, 1.40, 1.78, 1.66];
     const LEAN_M: [f64; STEMS] = [0.24, 0.36, 0.18, 0.30, 0.42, 0.22, 0.34, 0.20, 0.28, 0.26];
@@ -1399,6 +1399,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
             LEAN_M[i],
             HEIGHT_M[i],
             WIDTH_M[i],
+            reduced,
         );
         // Short inner growth fills the middle tier without widening tall blades.
         reed_blade(
@@ -1408,6 +1409,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
             LEAN_M[i] * 0.80,
             HEIGHT_M[i] * 0.62,
             WIDTH_M[i] * 0.70,
+            reduced,
         );
     }
     // Six short outward blades close the base silhouette without bulk.
@@ -1423,6 +1425,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
             &[0.007, 0.018, 0.003],
             lateral,
             [0.0, 1.0, 0.0],
+            false,
         );
     }
 }
@@ -1729,7 +1732,7 @@ fn fern_frond(
     };
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));
     let widths = std::array::from_fn::<_, 13, _>(|i| 0.006 * (1.0 - 0.85 * i as f64 / 12.0));
-    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0], false);
     let width_scale = match form {
         2 => 1.35,
         1 => 0.85,
@@ -1804,24 +1807,31 @@ fn reed_blade(
     lean_m: f64,
     height_m: f64,
     width_m: f64,
+    reduced: bool,
 ) {
     let first_vertex = mesh.positions.len();
-    const T: [f64; 7] = [0.0, 0.17, 0.34, 0.51, 0.68, 0.84, 1.0];
-    const HEIGHT_T: [f64; 7] = [0.0, 0.22, 0.44, 0.64, 0.79, 0.84, 0.62];
-    const LEAN_T: [f64; 7] = [0.0, 0.04, 0.14, 0.33, 0.62, 0.96, 1.75];
+    let segments = if reduced { 16 } else { 32 };
     let (radial, lateral) = azimuth_frame(angle);
-    // Coastal wind deflection: subtle leeward maritime tilt
-    let wind_align = angle.cos();
-    let wind_lean = 1.0 + 0.10 * wind_align;
-    let nodes: [[f64; 3]; 7] = std::array::from_fn(|i| {
+    // Authored lean varies by azimuth; this is not a wind simulation.
+    let wind_lean = 1.0 + 0.10 * angle.cos();
+    let knots = [
+        scaled(radial, base_radius),
         offset(
-            scaled(radial, base_radius + LEAN_T[i] * lean_m * wind_lean),
-            [0.0, HEIGHT_T[i] * height_m, 0.0],
-        )
-    });
-    let widths = T.map(|t| width_m * (1.0 - 0.85 * t));
-    // Follow the upper side continuously across the arch and drooping tip.
-    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+            scaled(radial, base_radius + 0.3125 * lean_m * wind_lean),
+            [0.0, height_m * 0.655, 0.0],
+        ),
+        offset(
+            scaled(radial, base_radius + 1.25 * lean_m * wind_lean),
+            [0.0, height_m * 0.82, 0.0],
+        ),
+    ];
+    let nodes: Vec<_> = (0..=segments)
+        .map(|i| leaf_curve(knots, i as f64 / segments as f64))
+        .collect();
+    let widths: Vec<_> = (0..=segments)
+        .map(|i| width_m * (1.0 - 0.85 * i as f64 / segments as f64))
+        .collect();
+    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0], true);
     assign_foliage_tone(mesh, first_vertex, if angle.sin() > 0.4 { 2 } else { 0 });
 }
 
@@ -1878,7 +1888,7 @@ fn crown_frond(
     let nodes: [[f64; 3]; 9] = std::array::from_fn(|i| at(i as f64 / 8.0));
     let widths =
         std::array::from_fn::<_, 9, _>(|i| 0.024 * (1.0 - 0.85 * (i as f64 / 8.0)).powf(1.35));
-    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
+    ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0], false);
     for pair in 0..if compound { 8 } else { 18 } {
         let t = 0.10 + pair as f64 * if compound { 0.816 / 7.0 } else { 0.048 };
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
@@ -2210,8 +2220,48 @@ fn ribbon(
     half_widths: &[f64],
     lateral: [f64; 3],
     hint: [f64; 3],
+    smooth: bool,
 ) {
     debug_assert_eq!(nodes.len(), half_widths.len());
+    if smooth {
+        let points: Vec<_> = nodes
+            .iter()
+            .zip(half_widths)
+            .flat_map(|(&p, &w)| {
+                [
+                    offset(p, scaled(lateral, w)),
+                    offset(p, scaled(lateral, -w)),
+                ]
+            })
+            .collect();
+        let start = mesh.positions.len() as u32;
+        let mut normals = vec![[0.0; 3]; points.len()];
+        for i in 0..nodes.len() - 1 {
+            for mut tri in [[2 * i, 2 * i + 1, 2 * i + 3], [2 * i, 2 * i + 3, 2 * i + 2]] {
+                let mut area = face_normal(tri.map(|j| points[j]));
+                if crate::lod::dot(area, hint) < 0.0 {
+                    tri.swap(1, 2);
+                    area = scaled(area, -1.0);
+                }
+                for j in tri {
+                    normals[j] = offset(normals[j], area);
+                }
+                mesh.indices.extend(tri.map(|j| start + j as u32));
+            }
+        }
+        mesh.positions
+            .extend(points.into_iter().map(|p| p.map(|v| v as f32)));
+        mesh.normals.extend(
+            normals
+                .into_iter()
+                .map(|n| crate::lod::normalize(n).map(|v| v as f32)),
+        );
+        mesh.uvs.extend((0..nodes.len()).flat_map(|i| {
+            let t = i as f32 / (nodes.len() - 1) as f32;
+            [[t, 0.0], [t, 1.0]]
+        }));
+        return;
+    }
     for i in 0..nodes.len() - 1 {
         let left = offset(nodes[i], scaled(lateral, half_widths[i]));
         let right = offset(nodes[i], scaled(lateral, -half_widths[i]));
@@ -2924,6 +2974,7 @@ mod tests {
             &[0.01, 0.1, 0.01],
             [0.0, 0.0, 1.0],
             [0.0, 1.0, 0.0],
+            false,
         );
         for (p, uv) in mesh.positions.iter().zip(&mesh.uvs) {
             assert_eq!(uv[0], p[0]);
@@ -3122,7 +3173,38 @@ mod tests {
         );
         let height = mesh.positions.iter().map(|p| p[1]).fold(0.0_f32, f32::max);
         assert!((1.2..2.0).contains(&height));
-        assert_eq!(mesh.indices.len() / 3, 264);
+        assert_eq!(mesh.indices.len() / 3, 1304);
+    }
+
+    #[test]
+    fn upright_reed_blades_have_bounded_geometric_turns() {
+        let mesh = plant_prototypes().remove(1);
+        // Read actual emitted centre lines, independent of curve evaluation.
+        for blade in 0..20 {
+            let nodes: Vec<_> = (0..33)
+                .map(|i| {
+                    let start = blade * 66 + i * 2;
+                    scaled(
+                        offset(
+                            mesh.positions[start].map(f64::from),
+                            mesh.positions[start + 1].map(f64::from),
+                        ),
+                        0.5,
+                    )
+                })
+                .collect();
+            assert!(nodes[0][1].abs() < 1e-7);
+            let directions: Vec<_> = nodes
+                .windows(2)
+                .map(|p| crate::lod::normalize(crate::lod::sub(p[1], p[0])))
+                .collect();
+            for pair in directions.windows(2) {
+                assert!(
+                    crate::lod::dot(pair[0], pair[1]) > 0.25_f64.cos(),
+                    "leaf axis must not have an abrupt tip kink"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3250,7 +3332,7 @@ mod tests {
             let triangles = mesh.indices.len() / 3;
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
-                ScatterKind::ReedClump => (240, 300),
+                ScatterKind::ReedClump => (1200, 1350),
                 ScatterKind::LycopsidTree => (15550, 15700),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
@@ -3289,13 +3371,14 @@ mod tests {
                 // Twice the area in m²; centimetre twig caps and small pinnae
                 // are real geometry, but collapsed/duplicate vertices are not.
                 let double_area = crate::lod::dot(face_normal(points), normal);
-                let minimum = if mesh.kind == ScatterKind::ReedClump {
-                    2e-4
-                } else {
-                    2e-6
-                };
+                let maximum_edge_squared = (0..3)
+                    .map(|i| {
+                        let edge = crate::lod::sub(points[(i + 1) % 3], points[i]);
+                        crate::lod::dot(edge, edge)
+                    })
+                    .fold(0.0_f64, f64::max);
                 assert!(
-                    double_area > minimum,
+                    double_area > 2e-6 && double_area / maximum_edge_squared > 1e-5,
                     "{:?} has a degenerate triangle (area {:.3e})",
                     mesh.kind,
                     double_area * 0.5

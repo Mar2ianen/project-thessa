@@ -1932,8 +1932,8 @@ fn crown_frond(
     let widths =
         std::array::from_fn::<_, 9, _>(|i| 0.024 * (1.0 - 0.85 * (i as f64 / 8.0)).powf(1.35));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
-    for pair in 0..if compound { 9 } else { 18 } {
-        let t = 0.10 + pair as f64 * if compound { 0.102 } else { 0.048 };
+    for pair in 0..if compound { 8 } else { 18 } {
+        let t = 0.10 + pair as f64 * if compound { 0.816 / 7.0 } else { 0.048 };
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
         let length = reach_m * 0.23 * blade_profile;
         for side in [-1.0, 1.0] {
@@ -2046,25 +2046,55 @@ fn compound_pinna(
     if normal[1] < 0.0 {
         normal = scaled(normal, -1.0);
     }
+    let core_half = crate::lod::dot(
+        crate::lod::sub(nodes[2], nodes[0]),
+        crate::lod::sub(nodes[2], nodes[0]),
+    )
+    .sqrt()
+        * 0.003;
+    let mut coarse_core = [0_u32; 4];
     for (pair, width) in [0.6, 1.0, 0.6].into_iter().enumerate() {
         let a = pair as f64 / 3.0;
         let b = (pair + 1) as f64 / 3.0;
         let middle = (a + b) * 0.5;
         let tip_half_span = 0.015;
+        let start = mesh.positions.len() as u32;
+        let stride = if reduced { 3 } else { 5 };
+        let root_end = if reduced { 2 } else { 3 };
+        if pair == 0 {
+            coarse_core[..2].copy_from_slice(&[start, start + stride]);
+        }
+        if pair == 2 {
+            coarse_core[2..].copy_from_slice(&[start + stride + root_end, start + root_end]);
+        }
         for side in [-1.0, 1.0] {
             let wing = scaled(lateral, side * half_width * 1.3 * width);
-            let root = leaf_curve(nodes, a);
-            let end = leaf_curve(nodes, b);
+            let core = scaled(lateral, side * core_half);
+            let root = offset(leaf_curve(nodes, a), core);
+            let end = offset(leaf_curve(nodes, b), core);
             if reduced {
                 // Trapezoid area / triangle area for the same root span.
                 let area_gain = 1.0 + 2.0 * tip_half_span / (b - a);
-                let tip = offset(leaf_curve(nodes, middle), scaled(wing, area_gain));
-                textured_triangle(
-                    mesh,
-                    [root, tip, end],
-                    [[0.0, 0.0], [1.0, 0.5], [0.0, 1.0]],
-                    normal,
+                let tip = offset(
+                    leaf_curve(nodes, middle),
+                    offset(core, scaled(crate::lod::sub(wing, core), area_gain)),
                 );
+                // Preserve root slots for the secondary rachis; winding changes indices only.
+                let points = [root, tip, end];
+                let first = mesh.positions.len() as u32;
+                let cross = face_normal(points);
+                let mut triangle = [first, first + 1, first + 2];
+                let cross = if crate::lod::dot(cross, normal) < 0.0 {
+                    triangle.swap(1, 2);
+                    scaled(cross, -1.0)
+                } else {
+                    cross
+                };
+                mesh.positions.extend(points.map(|p| p.map(|v| v as f32)));
+                mesh.normals
+                    .extend([crate::lod::normalize(cross).map(|v| v as f32); 3]);
+                mesh.uvs.extend([[0.0, 0.0], [1.0, 0.5], [0.0, 1.0]]);
+                mesh.indices.extend(triangle);
             } else {
                 let corners = [
                     root,
@@ -2084,6 +2114,34 @@ fn compound_pinna(
                 );
             }
         }
+        if !reduced {
+            bridge_leaf_roots(
+                mesh,
+                [
+                    start,
+                    start + stride,
+                    start + stride + root_end,
+                    start + root_end,
+                ],
+                normal,
+            );
+        }
+    }
+    if reduced {
+        bridge_leaf_roots(mesh, coarse_core, normal);
+    }
+}
+
+fn bridge_leaf_roots(mesh: &mut PlantMesh, corners: [u32; 4], normal: [f64; 3]) {
+    for mut tri in [
+        [corners[0], corners[1], corners[2]],
+        [corners[0], corners[2], corners[3]],
+    ] {
+        let p = tri.map(|i| mesh.positions[i as usize].map(f64::from));
+        if crate::lod::dot(face_normal(p), normal) < 0.0 {
+            tri.swap(1, 2);
+        }
+        mesh.indices.extend(tri);
     }
 }
 
@@ -3106,6 +3164,10 @@ mod tests {
                 assert!(!covered_from_above(&mesh, 1.0 / 3.0, side * 0.05));
                 assert!(!covered_from_above(&mesh, 0.5, side * 0.30));
             }
+            assert!(
+                covered_from_above(&mesh, 1.0 / 3.0, 0.0),
+                "secondary rachis must remain connected"
+            );
         }
     }
 

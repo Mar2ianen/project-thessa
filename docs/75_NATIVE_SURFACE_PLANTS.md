@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD88, doc 77): Wider clump spacing, continuous sizes, juvenile/mature/rare-hero ferns and a divided veteran crown add vegetation hierarchy within the existing shared mesh pipeline.
+Current composition continuation (WORLD88b, doc 77): Continuous size strata, juvenile/mature/rare-hero ferns and connected divided veteran crowns retain canonical placement and the existing source/range budgets.
 The current standing scene submits 10,076 instances and
-13,463,338 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,896,176 B under the
+13,941,418 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,769,456 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,

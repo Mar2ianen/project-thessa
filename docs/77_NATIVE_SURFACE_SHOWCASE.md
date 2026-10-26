@@ -24,6 +24,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD86 | Continuous small/middle clumps | 2,617 | 10,076 | 14,009,106 | 412.008 ms |
 | WORLD87 | Juvenile / mature / rare hero forms | 2,617 | 10,076 | 12,547,498 | 376.970 ms |
 | WORLD88 | Divided veteran crown pinnules | 2,617 | 10,076 | 13,463,338 | 378.621 ms |
+| WORLD88b | Connected secondary rachises | 2,617 | 10,076 | 13,941,418 | 375.931 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -76,6 +77,18 @@ The veteran tree form now has nine primary pinna pairs with three secondary pair
 The stage passed 270 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,896,176 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD88b — Connected secondary rachises
+
+Add a finite-width secondary rachis between leaflets, sharing existing root vertices. The reduced emitter now preserves root slots when triangle winding flips; otherwise bridge indices could connect leaflet tips and fill the intended gaps. Independent gap and midrib-coverage rays plus the unchanged area/distance oracles pass. Eight primary pairs retain the earlier 6 MB plant-only and 7 MB aggregate budgets; a nine-pair bridge trial exceeded the plant-only guard and was rejected without increasing that guard.
+
+The stage passed 270 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,769,456 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
 This is authored scene development with the same camera/profile; population

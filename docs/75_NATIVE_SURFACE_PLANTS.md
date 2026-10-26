@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD98, doc 77): crown pinnae attach to one published axis and finite petioles at both detail levels; broad leaf-plate appearance remains under review.
+Current composition continuation (WORLD99, doc 77): all crown forms carry divided feathers; exact vertex sharing retains source attributes and source budgets.
 The current standing scene submits 11,918 instances and
-19,388,348 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,946,504 B under the
+20,481,980 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,770,068 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
@@ -69,6 +69,27 @@ minimum area/conditioning, 32,768 source-vertex ceiling and 6 MB plant-only /
 profile rings, with the same full/reduced geometric oracle covering their
 error. No plant IDs, population, draw groups, materials or exposure change.
 These are optical source-mesh repairs, not collision or simulated botany.
+
+WORLD99 addresses the remaining broad-plate appearance after the connectivity
+repair. All tree crowns now publish secondary pinnules: forms 0/1 use eight
+primary pairs with two secondary pairs, and the veteran retains its three-pair
+secondary pattern. The forms keep their distinct trunk/terminal architecture,
+48 fronds and organ pigment sequences. Longer primary axes (0.355 of the reach
+profile, rather than 0.23) keep the actual full foliage surface within 5% of the
+WORLD98 area; measured forms 0/1 are 197.2853/216.5175 m² versus
+201.5322/220.3740 m². This is authored optical morphology, not botanical growth.
+
+The existing adapter shares only bit-identical vertices within each organ
+primitive, including normals, atlas UVs and ambient visibility in the key.
+Every indexed triangle corner is checked against the producer attributes across
+all qualities, so material boundaries, winding, hard edges and shadow geometry
+remain exact. This removes redundant source storage without a density or
+lighting change. Independent vertical rays verify both secondary gaps and
+connected primary/secondary axes; the broad WORLD98 plate fails the new gap
+oracle. Full/reduced geometry retains its prior distance/area envelope and
+2.5:1 complete-tree / 3:1 fern reduction floors. The 6/7 MB source caps, texture
+count and 37 draw groups remain. The old silhouette fixture's lateral outline
+bound changes with the intentionally longer divided primary axes.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid

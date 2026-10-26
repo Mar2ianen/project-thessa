@@ -1985,10 +1985,10 @@ fn crown_frond(
         )
     };
     let first_pinna = mesh.positions.len();
-    for pair in 0..if compound { 8 } else { 18 } {
-        let t = 0.10 + pair as f64 * if compound { 0.816 / 7.0 } else { 0.048 };
+    for pair in 0..8 {
+        let t = 0.10 + pair as f64 * (0.816 / 7.0);
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
-        let length = reach_m * 0.23 * blade_profile;
+        let length = reach_m * if compound { 0.23 } else { 0.355 } * blade_profile;
         for side in [-1.0, 1.0] {
             let t = t + side * 0.006 * (angle + pair as f64 * 1.3).sin();
             let length = length * (0.97 + 0.08 * (angle + pair as f64 * 2.1 + side).sin());
@@ -2024,25 +2024,19 @@ fn crown_frond(
             } else {
                 length * 0.038
             };
-            if compound {
-                compound_pinna(
-                    mesh,
-                    nodes,
-                    tangent,
-                    length * 0.22 * pinna_width_scale,
-                    fold_h,
-                    reduced,
-                );
-            } else {
-                pinna(
-                    mesh,
-                    nodes,
-                    tangent,
-                    length * 0.22 * pinna_width_scale,
-                    fold_h,
-                    reduced,
-                );
-            }
+            divided_pinna(
+                mesh,
+                nodes,
+                tangent,
+                length * 0.22 * pinna_width_scale,
+                fold_h,
+                if compound {
+                    &[0.6, 1.0, 0.6]
+                } else {
+                    &[0.85, 0.85]
+                },
+                reduced,
+            );
         }
     }
     assign_foliage_tone(
@@ -2084,14 +2078,15 @@ fn leaf_curve(nodes: [[f64; 3]; 3], t: f64) -> [f64; 3] {
     })
 }
 
-/// Three pairs of divided pinnules replace a solid blade in the veteran form.
-/// Full folded quads and reduced triangles preserve each lobe's area and gap.
-fn compound_pinna(
+/// Divided pinnules and a finite secondary axis share the same leaf emitter.
+#[allow(clippy::too_many_arguments)]
+fn divided_pinna(
     mesh: &mut PlantMesh,
     nodes: [[f64; 3]; 3],
     lateral: [f64; 3],
     half_width: f64,
     fold_m: f64,
+    widths: &[f64],
     reduced: bool,
 ) {
     let mut normal = crate::lod::normalize(crate::lod::cross(
@@ -2108,9 +2103,9 @@ fn compound_pinna(
     .sqrt()
         * 0.003;
     let mut coarse_core = [0_u32; 4];
-    for (pair, width) in [0.6, 1.0, 0.6].into_iter().enumerate() {
-        let a = pair as f64 / 3.0;
-        let b = (pair + 1) as f64 / 3.0;
+    for (pair, &width) in widths.iter().enumerate() {
+        let a = pair as f64 / widths.len() as f64;
+        let b = (pair + 1) as f64 / widths.len() as f64;
         let middle = (a + b) * 0.5;
         let tip_half_span = 0.015;
         let start = mesh.positions.len() as u32;
@@ -2119,7 +2114,7 @@ fn compound_pinna(
         if pair == 0 {
             coarse_core[..2].copy_from_slice(&[start, start + stride]);
         }
-        if pair == 2 {
+        if pair + 1 == widths.len() {
             coarse_core[2..].copy_from_slice(&[start + stride + root_end, start + root_end]);
         }
         for side in [-1.0, 1.0] {
@@ -2997,7 +2992,7 @@ mod tests {
                 .iter()
                 .filter(|triangle| triangle[0] >= dry.first_vertex)
                 .count(),
-            6 * (45 + 18 * 2 * 8)
+            6 * (45 + 8 * 2 * 20)
         );
         for start in [0, 1, mesh.positions.len() as u32, u32::MAX] {
             let mut broken = mesh.clone();
@@ -3151,10 +3146,17 @@ mod tests {
                         )
                     })
                     .collect();
-                let stride = if reduced { 4 } else { 9 };
-                let maximum_gap = (0..36)
+                let stride = if reduced { 12 } else { 20 };
+                let maximum_gap = (0..16)
                     .map(|leaf| {
-                        let p = mesh.positions[first_pinna + leaf * stride].map(f64::from);
+                        let root = first_pinna + leaf * stride;
+                        let p = scaled(
+                            offset(
+                                mesh.positions[root].map(f64::from),
+                                mesh.positions[root + if reduced { 3 } else { 5 }].map(f64::from),
+                            ),
+                            0.5,
+                        );
                         centers
                             .windows(2)
                             .map(|edge| {
@@ -3394,17 +3396,17 @@ mod tests {
     }
 
     #[test]
-    fn broad_crown_leaf_has_a_readable_lamina_and_a_tapered_tip() {
+    fn divided_crown_frond_retains_a_bounded_outline_and_tapered_tip() {
         let mut mesh = plant_prototypes().remove(2);
         mesh.positions.clear();
         mesh.normals.clear();
         mesh.indices.clear();
         mesh.stem = None;
         crown_frond(&mut mesh, 0.0, [0.0; 3], 2.0, 0.68, 0.70, false, false);
-        // A 2 m pinnate frond has pinnae spreading to > 35 cm half-width in the mid-section:
+        // Preserve a real mid-frond silhouette and the narrow terminal axis.
         assert!(covered_from_above(&mesh, 0.9, 0.18));
         assert!(covered_from_above(&mesh, 0.9, -0.18));
-        assert!(!covered_from_above(&mesh, 0.9, 0.50));
+        assert!(!covered_from_above(&mesh, 0.9, 0.70));
         assert!(covered_from_above(&mesh, 1.95, 0.0));
         assert!(!covered_from_above(&mesh, 1.95, 0.04));
     }
@@ -3461,28 +3463,87 @@ mod tests {
 
     #[test]
     fn compound_pinna_keeps_secondary_gaps_in_both_representations() {
+        for widths in [&[0.85, 0.85][..], &[0.6, 1.0, 0.6][..]] {
+            for reduced in [false, true] {
+                let mut mesh = plant_prototypes().remove(0);
+                mesh.positions.clear();
+                mesh.normals.clear();
+                mesh.uvs.clear();
+                mesh.indices.clear();
+                divided_pinna(
+                    &mut mesh,
+                    [[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                    [0.0, 0.0, 1.0],
+                    0.2,
+                    0.02,
+                    widths,
+                    reduced,
+                );
+                for side in [-1.0, 1.0] {
+                    assert!(covered_from_above(
+                        &mesh,
+                        0.5 / widths.len() as f64,
+                        side * 0.10
+                    ));
+                    assert!(!covered_from_above(
+                        &mesh,
+                        1.0 / widths.len() as f64,
+                        side * 0.05
+                    ));
+                    assert!(!covered_from_above(&mesh, 0.5, side * 0.30));
+                }
+                assert!(
+                    covered_from_above(&mesh, 1.0 / widths.len() as f64, 0.0),
+                    "secondary rachis must remain connected"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crown_feather_gaps_are_air_beside_a_connected_axis() {
         for reduced in [false, true] {
-            let mut mesh = plant_prototypes().remove(0);
+            let mut mesh = plant_prototypes().remove(2);
             mesh.positions.clear();
             mesh.normals.clear();
             mesh.uvs.clear();
             mesh.indices.clear();
-            compound_pinna(
-                &mut mesh,
-                [[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
-                [0.0, 0.0, 1.0],
-                0.2,
-                0.02,
-                reduced,
-            );
-            for side in [-1.0, 1.0] {
-                assert!(covered_from_above(&mesh, 0.5, side * 0.15));
-                assert!(!covered_from_above(&mesh, 1.0 / 3.0, side * 0.05));
-                assert!(!covered_from_above(&mesh, 0.5, side * 0.30));
-            }
+            mesh.stem = None;
+            crown_frond(&mut mesh, 0.0, [0.0; 3], 4.5, 1.95, 1.05, false, reduced);
             assert!(
-                covered_from_above(&mesh, 1.0 / 3.0, 0.0),
-                "secondary rachis must remain connected"
+                !covered_from_above(&mesh, 0.60, 0.45),
+                "a broad solid plate fills the secondary feather gap"
+            );
+            assert!(
+                covered_from_above(&mesh, 0.60, 0.0),
+                "primary axis must remain connected"
+            );
+            assert!(
+                covered_from_above(&mesh, 0.60, 0.28),
+                "adjacent pinnule must retain a real silhouette"
+            );
+        }
+    }
+
+    #[test]
+    fn crown_division_preserves_the_prior_surface_area_budget() {
+        for (mesh, form) in plant_prototype_forms(false) {
+            if mesh.kind != ScatterKind::LycopsidTree || form == 2 {
+                continue;
+            }
+            let stem_end = mesh.stem.as_ref().unwrap().vertex_count;
+            let area: f64 = prototype_triangles(&mesh)
+                .iter()
+                .filter(|(first, _, _)| *first >= stem_end)
+                .map(|(_, p, _)| {
+                    let n = face_normal(*p);
+                    crate::lod::dot(n, n).sqrt() * 0.5
+                })
+                .sum();
+            let prior = [201.53222792496075, 220.37400608650742][form as usize];
+            assert!(
+                (area / prior - 1.0).abs() < 0.05,
+                "form={form} area={area} prior={prior}"
             );
         }
     }
@@ -3585,7 +3646,7 @@ mod tests {
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (3200, 3250),
                 ScatterKind::ReedClump => (1200, 1350),
-                ScatterKind::LycopsidTree => (16900, 17150),
+                ScatterKind::LycopsidTree => (18500, 18850),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
             assert!(

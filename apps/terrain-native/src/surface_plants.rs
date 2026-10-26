@@ -806,6 +806,9 @@ fn convert_with_detail(
             prepared.reduced_primitives.push(is_reduced);
         }
     }
+    for primitive in &mut prepared.asset.primitives {
+        compact_plant_vertices(primitive);
+    }
     ground::append(&mut prepared, &items, radius_m)?;
     if prepared.descriptors.len() != items.len() {
         return Err(
@@ -814,6 +817,38 @@ fn convert_with_detail(
     }
     prepared.asset.validate().map_err(str::to_owned)?;
     Ok(prepared)
+}
+
+/// Share only bit-identical attributes within one organ/material primitive.
+/// Triangle order, hard edges, atlas seams and baked visibility stay exact.
+fn compact_plant_vertices(primitive: &mut Primitive) {
+    let mut unique = BTreeMap::new();
+    let mut vertices = Vec::new();
+    let mut visibility = Vec::new();
+    let remap: Vec<_> = primitive
+        .vertices
+        .iter()
+        .zip(&primitive.ambient_visibility)
+        .map(|(&v, &ao)| {
+            let key = (
+                v.position.map(f32::to_bits),
+                v.normal.map(f32::to_bits),
+                v.uv.map(f32::to_bits),
+                ao.to_bits(),
+            );
+            *unique.entry(key).or_insert_with(|| {
+                let index = vertices.len() as u32;
+                vertices.push(v);
+                visibility.push(ao);
+                index
+            })
+        })
+        .collect();
+    for index in &mut primitive.indices {
+        *index = remap[*index as usize];
+    }
+    primitive.vertices = vertices;
+    primitive.ambient_visibility = visibility;
 }
 
 #[cfg(test)]
@@ -1103,7 +1138,19 @@ mod tests {
                 let offset = *seen
                     .entry((group[0].kind as u8, *reduced, form))
                     .or_insert(0usize);
-                let end = offset + primitive.vertices.len();
+                let end = [
+                    prototype.stem.as_ref().map(|v| v.vertex_count as usize),
+                    prototype
+                        .senescent
+                        .as_ref()
+                        .map(|v| v.first_vertex as usize),
+                    Some(prototype.positions.len()),
+                ]
+                .into_iter()
+                .flatten()
+                .filter(|&v| v > offset)
+                .min()
+                .unwrap();
                 let material = &prepared.asset.materials[primitive.material];
                 let stem = prototype
                     .stem
@@ -1155,38 +1202,39 @@ mod tests {
                         "green foliage must retain its source's spectral order: {reflectance:?}"
                     );
                 }
-                for (i, v) in primitive.vertices.iter().enumerate() {
-                    assert_eq!(v.position, prototype.positions[offset + i]);
-                    assert_eq!(v.normal, prototype.normals[offset + i]);
-                    assert_eq!(v.uv, {
-                        let uv = prototype.uvs.get(offset + i).copied().unwrap_or([0.0; 2]);
-                        if stem {
-                            uv
-                        } else {
-                            crate::surface_plant_materials::foliage_uv(
-                                uv,
-                                prototype
-                                    .foliage_tones
-                                    .get(offset + i)
-                                    .copied()
-                                    .unwrap_or(0),
-                            )
-                        }
-                    });
-                }
-                let indices: Vec<_> = prototype
+                let source_indices: Vec<_> = prototype
                     .indices
                     .as_chunks::<3>()
                     .0
                     .iter()
                     .filter(|t| (offset..end).contains(&(t[0] as usize)))
-                    .flat_map(|t| t.map(|i| i - offset as u32))
+                    .flatten()
+                    .copied()
                     .collect();
-                assert_eq!(indices, primitive.indices);
-                assert_eq!(
-                    primitive.ambient_visibility,
-                    prototype.ambient_visibility[offset..end]
-                );
+                assert_eq!(source_indices.len(), primitive.indices.len());
+                assert!(primitive.vertices.len() <= end - offset);
+                for (&source, &published) in source_indices.iter().zip(&primitive.indices) {
+                    let i = source as usize;
+                    let v = primitive.vertices[published as usize];
+                    assert_eq!(v.position, prototype.positions[i]);
+                    assert_eq!(v.normal, prototype.normals[i]);
+                    assert_eq!(
+                        primitive.ambient_visibility[published as usize],
+                        prototype.ambient_visibility[i]
+                    );
+                    let uv = prototype.uvs[i];
+                    assert_eq!(
+                        v.uv,
+                        if stem {
+                            uv
+                        } else {
+                            crate::surface_plant_materials::foliage_uv(
+                                uv,
+                                prototype.foliage_tones[i],
+                            )
+                        }
+                    );
+                }
                 seen.insert((group[0].kind as u8, *reduced, form), end);
                 prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
                     + primitive.indices.len() * std::mem::size_of::<u32>()
@@ -1262,9 +1310,18 @@ mod tests {
                     .asset
                     .primitives
                     .iter()
-                    .map(|p| p.vertices.len())
+                    .map(|p| p.indices.len())
                     .sum::<usize>(),
-                prototype.positions.len()
+                prototype.indices.len()
+            );
+            assert!(
+                prepared
+                    .asset
+                    .primitives
+                    .iter()
+                    .map(|p| p.vertices.len())
+                    .sum::<usize>()
+                    <= prototype.positions.len()
             );
             assert!(prototype.positions.iter().all(|p| p[1]
                 >= if prototype.kind == ScatterKind::LycopsidTree {

@@ -397,18 +397,22 @@ pub(crate) fn forest_floor(
     let fine_litter =
         smooth(0.12, 0.62, noise(6151, 0.45, true)) * (0.35 + 0.65 * smooth(0.02, 0.20, canopy));
     let litter = (coarse_litter * 0.50 + fine_litter * 0.45).clamp(0.0, 0.76);
+    let canopy_occlusion = 1.0 - 0.28 * smooth(0.10, 0.80, canopy);
     let albedo_linear = std::array::from_fn(|i| {
         let wet_darkening = [0.52, 0.52, 0.46][i];
         let mineral_factor = 1.0 + mineral_patch * 0.15 + fine_mineral * [0.15, 0.18, 0.28][i];
-        let substrate =
-            f64::from(ground.albedo_linear[i]) * mineral_factor * (1.0 - wet * wet_darkening);
+        let substrate = f64::from(ground.albedo_linear[i])
+            * mineral_factor
+            * (1.0 - wet * wet_darkening)
+            * canopy_occlusion;
         // Pigment coverage retains scan contrast instead of painting a flat swatch.
         let texture_detail = (f64::from(ground.albedo_linear[i])
             / f64::from(mean_sample().albedo_linear[i]))
         .clamp(0.5, 1.5);
-        let moss_albedo = [0.045, 0.058, 0.028][i] * texture_detail;
+        let moss_albedo =
+            [0.045, 0.058, 0.028][i] * texture_detail * (0.85 + 0.15 * canopy_occlusion);
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
-        let litter_albedo = [0.062, 0.049, 0.035][i] * texture_detail;
+        let litter_albedo = [0.054, 0.043, 0.029][i] * texture_detail * canopy_occlusion;
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);

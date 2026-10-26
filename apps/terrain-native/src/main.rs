@@ -848,6 +848,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                         height,
                         &pixels,
                     )?;
+                    eprintln!(
+                        "native_material_frame frame={} resident_levels={:?} height_jobs={} material_jobs={} cpu_pages={} upload_bytes={} reference_height_m={}",
+                        frame - 30,
+                        scene.material_resident_levels,
+                        scene.stream.pending_jobs().0,
+                        scene.stream.pending_jobs().1,
+                        scene.stream.cache_entries().1,
+                        scene.material_upload_bytes,
+                        scene.stream.material_reference_height_m(),
+                    );
                 }
             }
         }

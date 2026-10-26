@@ -22,7 +22,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 12.22
+exposure_ev100 = 12.06
 fleet_meshes = true
 fleet_quality = "high"
 
@@ -36,7 +36,7 @@ enabled = true
 quality = "high"
 aerial_perspective = true
 # Authored local sea-haze optical prior, shared by ground/water/meshes.
-local_haze_extinction_per_m = 0.00140
+local_haze_extinction_per_m = 0.00075
 local_haze_height_m = 480.0
 density_scale = 1.42
 multiple_scattering = true
@@ -53,11 +53,11 @@ enabled = true
 quality = "high"
 volumetric = true
 integrator = "march"
-ray_steps = 24
+ray_steps = 16
 cast_shadows = true
 layers = 2
 # Authored overcast: coverage is an inverse density threshold (0 = overcast).
-coverage = 0.18
+coverage = 0.12
 opacity = 0.72
 animate = true
 

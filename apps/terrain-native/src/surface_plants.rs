@@ -441,6 +441,8 @@ pub fn prepare(
                     density_scale: settings.surface_plants_density_scale,
                     max_candidates: remaining_candidates,
                     max_items: remaining_items,
+                    understory_spacing_m: 0.82,
+                    understory_max_scale: 1.25,
                     ..Default::default()
                 },
                 |dir| canonical_plant_surface(field, dir),
@@ -721,21 +723,21 @@ fn convert_with_detail(
                 [r, g, b, 1.0]
             } else if stem {
                 match form {
-                    1 => [0.38, 0.34, 0.27, 1.0],
-                    2 => [0.34, 0.31, 0.24, 1.0],
-                    _ => [0.36, 0.32, 0.25, 1.0],
+                    1 => [0.46, 0.39, 0.27, 1.0],
+                    2 => [0.44, 0.38, 0.25, 1.0],
+                    _ => [0.45, 0.39, 0.26, 1.0],
                 }
             } else {
                 match prototype.kind {
                     thessa_worldgen_rocky::scatter::ScatterKind::FernClump => match form {
-                        1 => [0.26, 0.36, 0.17, 1.0],
-                        2 => [0.34, 0.31, 0.13, 1.0],
-                        _ => [0.27, 0.31, 0.15, 1.0],
+                        1 => [0.28, 0.35, 0.16, 1.0],
+                        2 => [0.38, 0.32, 0.12, 1.0],
+                        _ => [0.32, 0.33, 0.14, 1.0],
                     },
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
-                        1 => [0.27, 0.36, 0.16, 1.0],
-                        2 => [0.34, 0.31, 0.13, 1.0],
-                        _ => [0.29, 0.33, 0.15, 1.0],
+                        1 => [0.38, 0.40, 0.22, 1.0],
+                        2 => [0.44, 0.38, 0.18, 1.0],
+                        _ => [0.40, 0.38, 0.20, 1.0],
                     },
                     _ => [0.48, 0.58, 0.30, 1.0],
                 }

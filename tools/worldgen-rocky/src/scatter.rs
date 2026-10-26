@@ -445,9 +445,11 @@ pub fn scatter_region(
                         continue;
                     }
                     let canopy_cover = surface.vegetation.canopy01.clamp(0.0, 1.0);
-                    // Dappled light niche: suppressed under dense canopy cores (canopy > 0.65)
-                    // and open barren ground, peaking in forest glades and canopy margins.
-                    let light_niche = (1.0 - canopy_cover * 0.62).clamp(0.12, 1.0);
+                    // Dappled light niche: sciophytes flourish under canopy shelter and in
+                    // forest glades, avoiding bare exposed soil and lightless overgrowth.
+                    let light_niche = (1.0 + 0.40 * canopy_cover
+                        - 0.50 * canopy_cover * canopy_cover)
+                        .clamp(0.40, 1.15);
                     reference_density
                         * if population == ScatterPopulation::Understory {
                             (surface.vegetation.ground01 + surface.vegetation.reeds01)

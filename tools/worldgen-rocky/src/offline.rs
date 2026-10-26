@@ -1459,27 +1459,27 @@ fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
 
 fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     const TRUNK_RINGS: [(f64, f64); 21] = [
-        (0.00, 0.48),
-        (0.18, 0.40),
-        (0.40, 0.35),
-        (0.70, 0.31),
-        (1.10, 0.28),
-        (1.60, 0.26),
-        (2.20, 0.245),
-        (2.80, 0.235),
-        (3.40, 0.23),
-        (4.00, 0.225),
-        (4.60, 0.22),
-        (5.20, 0.22),
-        (5.80, 0.225),
-        (6.40, 0.23),
-        (6.90, 0.24),
-        (7.30, 0.25),
-        (7.55, 0.26),
-        (7.75, 0.275),
-        (7.88, 0.26),
-        (7.94, 0.22),
-        (7.95, 0.16),
+        (0.00, 0.58),
+        (0.18, 0.49),
+        (0.40, 0.43),
+        (0.70, 0.38),
+        (1.10, 0.34),
+        (1.60, 0.31),
+        (2.20, 0.29),
+        (2.80, 0.28),
+        (3.40, 0.27),
+        (4.00, 0.265),
+        (4.60, 0.26),
+        (5.20, 0.26),
+        (5.80, 0.265),
+        (6.40, 0.27),
+        (6.90, 0.28),
+        (7.30, 0.29),
+        (7.55, 0.30),
+        (7.75, 0.31),
+        (7.88, 0.29),
+        (7.94, 0.25),
+        (7.95, 0.18),
     ];
     let trunk_scale = match form {
         1 => 1.05,
@@ -1516,7 +1516,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     );
     let terminals: &[[f64; 3]] = match form {
         1 => &[[0.12, 8.45, 0.08]],
-        2 => &[[-0.75, 9.15, 0.25], [2.45, 6.75, -0.55]],
+        2 => &[[-0.85, 9.35, 0.30], [2.65, 6.35, -0.60]],
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
     let fork_base_y = match form {
@@ -1530,9 +1530,9 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
         let fork_thickness = match form {
-            2 => (0.27, 0.21, 0.14, 0.07),
-            1 => (0.24, 0.20, 0.15, 0.10),
-            _ => (0.23, 0.18, 0.12, 0.06),
+            2 => (0.32, 0.25, 0.18, 0.12),
+            1 => (0.28, 0.24, 0.19, 0.14),
+            _ => (0.29, 0.23, 0.16, 0.10),
         };
         tapered_limb(
             mesh,
@@ -1553,23 +1553,28 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         let angle = i as f64 * GOLDEN_ANGLE + 0.2 + f64::from(form) * 0.73;
         let (radial, _) = azimuth_frame(angle);
         let flare_scale = match form {
-            1 => 0.98,
-            2 => 1.12,
-            _ => 0.94,
+            1 => 1.05,
+            2 => 1.25,
+            _ => 1.10,
         };
         let reach_jitter = 0.88 + 0.24 * (i as f64 * 2.3 + f64::from(form)).sin().powi(2);
         let flare_reach = flare_scale * reach_jitter;
-        let base_y = 0.22 + 0.03 * (i as f64 * 1.7).cos().powi(2);
-        let base = offset(scaled(radial, 0.14), [0.0, base_y, 0.0]);
+        let base_y = 0.26 + 0.04 * (i as f64 * 1.7).cos().powi(2);
+        let base = offset(scaled(radial, 0.18), [0.0, base_y, 0.0]);
+        let flare_r0 = match form {
+            1 => 0.19,
+            2 => 0.22,
+            _ => 0.19,
+        };
         tapered_limb(
             mesh,
             base,
             offset(scaled(radial, flare_reach), [0.0, -0.14 - base_y, 0.0]),
             if reduced { 4 } else { 8 },
             &[
-                (0.0, 0.19),
-                (flare_reach * 0.34, 0.13),
-                (flare_reach * 0.72, 0.065),
+                (0.0, flare_r0),
+                (flare_reach * 0.34, flare_r0 * 0.68),
+                (flare_reach * 0.72, flare_r0 * 0.34),
                 (flare_reach, 0.015),
             ],
         );
@@ -1584,24 +1589,24 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     // Form 1 is a solitary monopodial crown (28 fronds on 1 terminal);
     // Forms 0 and 2 have asymmetric dual-terminal crowns (14 fronds per terminal).
     let (spread_reach, outer_reach) = match form {
-        1 => (5.20, 4.50),
-        2 => (5.35, 4.85),
-        _ => (4.68, 4.20),
+        1 => (5.40, 4.60),
+        2 => (5.50, 4.90),
+        _ => (4.80, 4.30),
     };
     let tiers: [(usize, f64, f64, f64, f64, f64); 5] = match form {
         1 => [
-            (4, 8.55, 2.50, 2.80, 0.15, 0.10), // Emerging apical young fronds
-            (5, 8.35, 3.85, 2.40, 0.45, 0.30), // Ascending juvenile fronds
-            (9, 8.05, spread_reach, 1.90, 1.15, 0.60), // Spreading mature canopy umbrella
-            (6, 7.70, outer_reach, 1.05, 1.85, 0.90), // Descending cascading fronds
-            (4, 7.30, 2.30, 0.15, 2.60, 1.20), // Hanging senescent mantle skirt
+            (4, 8.55, 2.50, 2.20, 0.15, 0.10), // Emerging apical young fronds
+            (5, 8.35, 3.85, 1.80, 0.45, 0.30), // Ascending juvenile fronds
+            (9, 8.05, spread_reach, 1.45, 1.25, 0.60), // Spreading mature canopy umbrella
+            (6, 7.70, outer_reach, 0.85, 2.10, 0.90), // Descending cascading fronds
+            (4, 7.30, 3.20, 0.20, 2.80, 1.20), // Hanging senescent mantle skirt
         ],
         _ => [
-            (2, 8.28, 2.35, 2.60, 0.15, 0.12), // Emerging apical young fronds
-            (3, 8.10, 3.65, 2.30, 0.45, 0.35), // Ascending juvenile fronds
-            (4, 7.85, spread_reach, 1.95, 1.05, 0.62), // Spreading mature canopy umbrella
-            (3, 7.55, outer_reach, 1.10, 1.75, 0.95), // Descending cascading fronds
-            (2, 7.20, 2.05, 0.15, 2.55, 1.25), // Hanging senescent mantle skirt
+            (2, 8.28, 2.35, 2.10, 0.15, 0.12), // Emerging apical young fronds
+            (3, 8.10, 3.65, 1.75, 0.45, 0.35), // Ascending juvenile fronds
+            (4, 7.85, spread_reach, 1.50, 1.15, 0.62), // Spreading mature canopy umbrella
+            (3, 7.55, outer_reach, 0.90, 2.00, 0.95), // Descending cascading fronds
+            (2, 7.20, 2.80, 0.20, 2.60, 1.25), // Hanging senescent mantle skirt
         ],
     };
     for (tier, &(count, base_y, reach_base, rise, drop, phase_offset)) in tiers.iter().enumerate() {
@@ -1729,10 +1734,10 @@ fn fern_frond(
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));
     let widths = std::array::from_fn::<_, 13, _>(|i| 0.006 * (1.0 - 0.85 * i as f64 / 12.0));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0], false);
-    let width_scale = match form {
-        2 => 1.35,
-        1 => 0.85,
-        _ => 1.00,
+    let (width_scale, pinna_factor) = match form {
+        2 => (1.45, 0.120),
+        1 => (0.85, 0.085),
+        _ => (1.00, 0.085),
     };
     for pair in 0..14 {
         let t = 0.11 + pair as f64 * 0.063;
@@ -1770,7 +1775,7 @@ fn fern_frond(
                 mesh,
                 nodes,
                 tangent,
-                length * 0.085 * width_scale,
+                length * pinna_factor * width_scale,
                 length * 0.015,
                 reduced,
             );
@@ -1992,7 +1997,7 @@ fn crown_frond(
     for pair in 0..primary_pairs {
         let t = 0.10 + pair as f64 * (0.816 / (primary_pairs - 1) as f64);
         let blade_profile = (std::f64::consts::PI * t).sin().powf(0.58) * (1.12 - 0.32 * t);
-        let length = reach_m * if veteran { 0.13 } else { 0.14 } * blade_profile;
+        let length = reach_m * if veteran { 0.165 } else { 0.155 } * blade_profile;
         for side in [-1.0, 1.0] {
             let t = t + side * 0.006 * (angle + pair as f64 * 1.3).sin();
             let length = length * (0.97 + 0.08 * (angle + pair as f64 * 2.1 + side).sin());
@@ -2028,7 +2033,7 @@ fn crown_frond(
                 mesh,
                 nodes,
                 tangent,
-                length * 0.16 * pinna_width_scale,
+                length * 0.22 * pinna_width_scale,
                 fold_h,
                 reduced,
             );

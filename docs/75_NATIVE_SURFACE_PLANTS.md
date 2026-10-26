@@ -1,6 +1,6 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD99, doc 77): all crown forms carry divided feathers; exact vertex sharing retains source attributes and source budgets.
+Current composition continuation (WORLD100, doc 77): crown tiers now start inside their woody forks, pinnae share the published axis, and wider real secondary midribs retain visible connections.
 The current standing scene submits 11,918 instances and
 20,481,980 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,770,068 B under the
@@ -90,6 +90,23 @@ oracle. Full/reduced geometry retains its prior distance/area envelope and
 2.5:1 complete-tree / 3:1 fern reduction floors. The 6/7 MB source caps, texture
 count and 37 draw groups remain. The old silhouette fixture's lateral outline
 bound changes with the intentionally longer divided primary axes.
+
+WORLD100 also repairs the attachment of entire fronds. Tier roots previously
+kept the terminal's X/Z while only changing Y, so an ascending root could sit
+0.33 m above the wood and lower roots could miss a slanted fork. Roots now
+follow the actual woody fork axis, with the upper fraction clamped inside its
+terminal cap. A regression recovers all 48 primary root sections from each
+published full/reduced tree form and casts six oblique rays into the actual
+wood triangle BVH; WORLD99 fails this enclosure check. This is an optical
+attachment check, not a watertight collision/growth model.
+
+The secondary midrib's authored half-width is 0.008 times its axis length,
+up from 0.003; the real strip is wider in both levels, without a camera-space
+minimum-width rule. The main petiole keeps its solid section. Full foliage
+areas are now 200.8561/220.4492/122.8769 m² for forms 0/1/2; primary architecture,
+plant placement and material cohorts remain. Full/reduced sampled distance,
+projected area, minimum triangle conditioning and source payload caps remain.
+Subpixel foliage filtering and independent reference acceptance are still open.
 
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid

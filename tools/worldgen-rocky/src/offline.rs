@@ -1519,14 +1519,14 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
         2 => &[[-0.75, 9.15, 0.25], [2.45, 6.75, -0.55]],
         _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
     };
-    let base_y = match form {
+    let fork_base_y = match form {
         1 => 8.10,
         2 => 3.95,
         _ => 4.55,
     };
     for &terminal in terminals {
         // Forks overlap the actual tilted trunk, below its closed tip.
-        let base = scaled(trunk_axis, base_y);
+        let base = scaled(trunk_axis, fork_base_y);
         let axis = crate::lod::sub(terminal, base);
         let length = crate::lod::dot(axis, axis).sqrt();
         let fork_thickness = match form {
@@ -1652,10 +1652,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                         2 => 0.85,
                         _ => 1.0,
                     } * (0.92 + 0.16 * (i as f64 * 1.63).cos().powi(2));
-                let base = offset(
-                    offset(scaled(radial, 0.06), terminal),
-                    [0.0, base_y - 7.95, 0.0],
-                );
+                // Follow the actual slanted woody fork, rather than moving
+                // vertically from its tip. Keep upper roots inside its cap.
+                let fork_base = scaled(trunk_axis, fork_base_y);
+                let fork_axis = crate::lod::sub(terminal, fork_base);
+                let tier_y = terminal[1] + base_y - 7.95;
+                let fraction = ((tier_y - fork_base[1]) / fork_axis[1]).clamp(0.0, 0.98);
+                let base = offset(fork_base, scaled(fork_axis, fraction));
                 let drop_jitter =
                     0.90 + 0.20 * (i as f64 * 2.71 + term_idx as f64 * 1.7).cos().powi(2);
                 let drop = drop * if form == 2 { 1.42 } else { 1.0 } * drop_jitter;
@@ -2101,7 +2104,7 @@ fn divided_pinna(
         crate::lod::sub(nodes[2], nodes[0]),
     )
     .sqrt()
-        * 0.003;
+        * 0.008;
     let mut coarse_core = [0_u32; 4];
     for (pair, &width) in widths.iter().enumerate() {
         let a = pair as f64 / widths.len() as f64;
@@ -3105,6 +3108,75 @@ mod tests {
         let mut w = world();
         w.lats[1] = 0.0;
         assert!(w.validate().is_err());
+    }
+
+    #[test]
+    fn crown_petiole_roots_are_enclosed_by_published_wood() {
+        use parry3d_f64::{
+            math::Vector,
+            query::{Ray, RayCast},
+            shape::TriMesh,
+        };
+        for reduced in [false, true] {
+            for (mesh, form) in plant_prototype_forms(reduced) {
+                if mesh.kind != ScatterKind::LycopsidTree {
+                    continue;
+                }
+                let first = mesh.stem.as_ref().unwrap().vertex_count as usize;
+                let wood = TriMesh::new(
+                    mesh.positions[..first]
+                        .iter()
+                        .map(|p| Vector::from_array(p.map(f64::from)))
+                        .collect(),
+                    mesh.indices
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .filter(|t| (t[0] as usize) < first)
+                        .copied()
+                        .collect(),
+                )
+                .unwrap();
+                let mut roots = 0;
+                for i in first..mesh.positions.len() - 5 {
+                    let p = &mesh.positions[i..i + 6];
+                    if !mesh.uvs[i..i + 6].iter().all(|uv| uv[0] == 0.0)
+                        || p[0] != p[5]
+                        || p[1] != p[2]
+                        || p[3] != p[4]
+                    {
+                        continue;
+                    }
+                    roots += 1;
+                    let center = scaled(
+                        offset(
+                            offset(p[0].map(f64::from), p[1].map(f64::from)),
+                            p[3].map(f64::from),
+                        ),
+                        1.0 / 3.0,
+                    );
+                    for axis in 0..3 {
+                        for sign in [-1.0, 1.0] {
+                            let direction = Vector::from_array(
+                                [[1.0, 0.3, 0.2], [0.2, 1.0, 0.7], [0.3, 0.2, 1.0]][axis],
+                            )
+                            .normalize()
+                                * sign;
+                            assert!(
+                                wood.cast_local_ray(
+                                    &Ray::new(Vector::from_array(center), direction),
+                                    0.8,
+                                    false
+                                )
+                                .is_some(),
+                                "floating crown root form={form} reduced={reduced} at {center:?}, escaping axis={axis} sign={sign}"
+                            );
+                        }
+                    }
+                }
+                assert_eq!(roots, 48, "must inspect every emitted primary petiole root");
+            }
+        }
     }
 
     #[test]

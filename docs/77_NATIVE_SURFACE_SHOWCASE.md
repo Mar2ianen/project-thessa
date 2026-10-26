@@ -37,6 +37,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD97 | Geometry-derived crown normals | 4,459 | 11,918 | 17,580,060 | 411.052 ms |
 | WORLD98 | Connected solid crown petioles | 4,459 | 11,918 | 19,388,348 | 433.158 ms |
 | WORLD99 | Divided crown feathers and exact vertex sharing | 4,459 | 11,918 | 20,481,980 | 432.151 ms |
+| WORLD100 | Root fronds in actual woody forks | 4,459 | 11,918 | 20,481,980 | 440.993 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -243,6 +244,18 @@ changes are not a renderer-equivalent comparison or reference acceptance.
 Forms 0/1 now have eight primary pairs with two secondary pairs; the veteran retains three. Longer primary axes retain the measured foliage surface within 5% of WORLD98. Both quality levels preserve real secondary gaps, connected axes and the existing distance/area envelope. A new vertical-ray fixture fails on the old broad plate and passes on divided geometry. Exact per-organ vertex sharing keys position, normal, UV and ambient visibility; all-quality triangle-corner tests prove publication preserves source attributes and material boundaries. No new texture, draw group, plant descriptor or light coefficient is added.
 
 The stage passed 280 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,770,068 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD100 — Root fronds in actual woody forks
+
+Tier roots previously kept the terminal X/Z while changing only Y, leaving upper roots 0.33 m above the wood and lower roots beside slanted forks. Roots now lie on the actual fork axis, capped below its terminal. An independent BVH fixture recovers 48 root sections per form/quality and checks six oblique wood rays from each; it fails on WORLD99 and passes on the repaired source. Wider real secondary midribs improve continuity without screen-space rules. Surface area, full/reduced distance/area error, minimum triangle conditioning, source caps, materials and plant placement remain bounded. Three fixed raster views passed, while angular leaflet silhouettes, subpixel filtering and independent reference acceptance remain open.
+
+The stage passed 281 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,770,068 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /

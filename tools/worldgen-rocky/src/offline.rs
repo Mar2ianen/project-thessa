@@ -395,7 +395,7 @@ pub struct PlantMesh {
 }
 
 // Bounded optical source payload, not a planet-wide instance allocation.
-// The current forked crown has 25,344 split vertices; no runtime tessellation.
+// Each crown stays below the source cap; no runtime tessellation.
 const MAX_PLANT_PROTOTYPE_VERTICES: usize = 32768;
 
 /// The prototype emitter writes stems before foliage, with separate vertices.
@@ -1451,7 +1451,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
     const LEAN_M: [f64; STEMS] = [0.24, 0.36, 0.18, 0.30, 0.42, 0.22, 0.34, 0.20, 0.28, 0.26];
     const BASE_R_M: [f64; STEMS] = [0.10, 0.03, 0.15, 0.06, 0.11, 0.02, 0.14, 0.08, 0.05, 0.12];
     const WIDTH_M: [f64; STEMS] = [
-        0.058, 0.072, 0.052, 0.068, 0.075, 0.060, 0.070, 0.054, 0.064, 0.050,
+        0.009, 0.012, 0.008, 0.011, 0.013, 0.009, 0.012, 0.007, 0.010, 0.008,
     ];
     for i in 0..STEMS {
         reed_blade(
@@ -1473,7 +1473,7 @@ fn reed_clump(mesh: &mut PlantMesh) {
         ribbon(
             mesh,
             &nodes,
-            &[0.030, 0.075, 0.009],
+            &[0.007, 0.018, 0.003],
             lateral,
             [0.0, 1.0, 0.0],
         );
@@ -3141,6 +3141,25 @@ mod tests {
         assert!(!covered_from_above(&mesh, 0.9, 0.50));
         assert!(covered_from_above(&mesh, 1.95, 0.0));
         assert!(!covered_from_above(&mesh, 1.95, 0.04));
+    }
+
+    #[test]
+    fn reed_clump_has_slender_leaf_area_without_losing_its_height() {
+        let mesh = plant_prototypes().remove(1);
+        let area: f64 = prototype_triangles(&mesh)
+            .iter()
+            .map(|(_, points, _)| {
+                let cross = face_normal(*points);
+                crate::lod::dot(cross, cross).sqrt() * 0.5
+            })
+            .sum();
+        assert!(
+            (0.15..0.50).contains(&area),
+            "authored reed leaf area {area} m2"
+        );
+        let height = mesh.positions.iter().map(|p| p[1]).fold(0.0_f32, f32::max);
+        assert!((1.2..2.0).contains(&height));
+        assert_eq!(mesh.indices.len() / 3, 144);
     }
 
     #[test]

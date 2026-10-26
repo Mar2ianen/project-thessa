@@ -476,7 +476,7 @@ fn check_plant_ray_visibility(reduced: bool) {
         primary_edge_samples * 4 < checked,
         "primary edge exclusions must remain a small minority"
     );
-    // WORLD100 rooted/divided geometry at 513px changes physical ray counts;
+    // WORLD105 cascading fern geometry at 513px changes physical ray counts;
     // retain exact diagnostic pins and the unchanged two-code RGB tolerance.
-    assert_eq!(bias_disagreements, if reduced { [18, 1] } else { [43, 0] });
+    assert_eq!(bias_disagreements, if reduced { [11, 1] } else { [59, 1] });
 }

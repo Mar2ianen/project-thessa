@@ -38,6 +38,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD98 | Connected solid crown petioles | 4,459 | 11,918 | 19,388,348 | 433.158 ms |
 | WORLD99 | Divided crown feathers and exact vertex sharing | 4,459 | 11,918 | 20,481,980 | 432.151 ms |
 | WORLD100 | Root fronds in actual woody forks | 4,459 | 11,918 | 20,481,980 | 440.993 ms |
+| WORLD105 | Cascading fern crown with rounded lobed pinnae | 4,459 | 11,918 | 18,855,932 | 382.723 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -279,6 +280,34 @@ reference-parity acceptance is recorded. The checked-in showcase still requests
 local RT, while matched development images use RT Off/raster shadows after the
 original baseline AMD device loss. Any unpaired candidate RT success remains
 a bounded session, not general driver-stability evidence.
+
+### WORLD105 — Cascading fern crown with rounded lobed pinnae
+
+The rejected spear and diamond trials are replaced by twenty-eight arching age-tiered fronds per tree, each with fourteen opposed pairs of tapered pinnae. A shared ground/crown lamina emitter publishes curved, shallowly lobed midrib strips; reduced crown leaves retain eight contour vertices and integrate full-outline area. A larger pendant tier restores lower crown volume. Full/reduced fidelity and the 6/7 MB source caps remain; complete-tree reduction again exceeds 3:1. This is an authored silhouette approximation, not taxonomic reconstruction or reference acceptance.
+
+The stage passed 280 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,137,476 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+The crown geometry changes at unchanged canonical instance positions.
+These are labeled design-review views, without independent preference or
+reference acceptance.
+
+WORLD101's spear silhouette was rejected by the user; WORLD102–104 are retained
+as intermediate/negative design evidence. The current-source batches pass
+450 cases plus strict Clippy, architecture, feature-off compile, formatting
+and release build. The rebuilt release matches all three WORLD105 raster
+captures byte for byte after the test-only visibility-fixture update.
+The current morphology and full/reduced error bounds are documented in
+[doc 75](75_NATIVE_SURFACE_PLANTS.md); exact commands, hashes, physical-bias
+calibration, images and rejected trials are recorded in
+`artifacts/native-fern-crown-2026-10-26.json`.
+The bounded current-scene Local RT capture completed with RT active (exit 0).
+It remains unpaired and does not establish general driver stability.
+The prior WORLD100 sweep and WORLD96/97 blind pairs do not validate this new
+geometry. No independent preference, reference parity, full motion-sequence
+or interactive-FPS acceptance is recorded.
 
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 

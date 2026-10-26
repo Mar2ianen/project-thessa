@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD86, doc 77): 1.25 m near-clump spacing and continuous 0.25–1.10 scales add small and middle plants; placement identities, trees, pebbles and shared 37-range/7 MB limits remain.
+Current composition continuation (WORLD87, doc 77): 1.25 m clump spacing, 0.25–1.10 size strata and distinct juvenile/mature/rare-hero fern geometry provide a layered understory under unchanged shared budgets.
 The current standing scene submits 10,076 instances and
-14,009,106 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,219,328 B under the
+12,547,498 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,108,208 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,

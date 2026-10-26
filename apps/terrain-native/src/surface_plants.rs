@@ -1343,8 +1343,16 @@ mod tests {
 
     #[test]
     fn leaf_lod_keeps_identity_scale_and_ground_and_prevents_wrong_source_reuse() {
-        let make = |metres: f64, scale| ScatterItem {
-            id: thessa_worldgen_rocky::scatter::ScatterId(metres as u64),
+        // This is a same-form LOD oracle, independent of authored form weights.
+        let ids: Vec<_> = (1..1000)
+            .map(thessa_worldgen_rocky::scatter::ScatterId)
+            .filter(|&id| {
+                thessa_worldgen_rocky::offline::plant_form(id, ScatterKind::FernClump) == 0
+            })
+            .take(3)
+            .collect();
+        let make = |id, metres: f64, scale| ScatterItem {
+            id,
             kind: ScatterKind::FernClump,
             direction: DVec3::new(
                 (metres / 3_200_000.0).sin(),
@@ -1356,7 +1364,11 @@ mod tests {
             scale,
             yaw_rad: 0.4,
         };
-        let items = vec![make(20.0, 1.0), make(80.0, 1.0), make(80.0, 2.0)];
+        let items = vec![
+            make(ids[0], 20.0, 1.0),
+            make(ids[1], 80.0, 1.0),
+            make(ids[2], 80.0, 2.0),
+        ];
         let mixed = convert_with_detail(
             items.clone(),
             3_200_000.0,
@@ -1370,9 +1382,9 @@ mod tests {
         }
         let full = convert(items, 3_200_000.0).unwrap();
         assert!(!full.same_prototypes(&mixed));
-        let only_full = convert(vec![make(80.0, 1.0)], 3_200_000.0).unwrap();
+        let only_full = convert(vec![make(ids[1], 80.0, 1.0)], 3_200_000.0).unwrap();
         let only_reduced = convert_with_detail(
-            vec![make(80.0, 1.0)],
+            vec![make(ids[1], 80.0, 1.0)],
             3_200_000.0,
             Some((DVec3::Y * 3_200_000.0, 48.0, 0.0)),
         )

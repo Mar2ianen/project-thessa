@@ -22,6 +22,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD84 baseline | 0.8 m spacing, scales 0.75–1.50 | 6,546 | 14,005 | 28,246,314 | 592.716 ms |
 | WORLD85 | 1.25 m spacing | 2,617 | 10,076 | 16,081,890 | 457.692 ms |
 | WORLD86 | Continuous small/middle clumps | 2,617 | 10,076 | 14,009,106 | 412.008 ms |
+| WORLD87 | Juvenile / mature / rare hero forms | 2,617 | 10,076 | 12,547,498 | 376.970 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -50,6 +51,18 @@ The size range is now 0.25–1.10 rather than 0.75–1.50. A 70% independent wor
 The stage passed 268 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,219,328 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD87 — Juvenile / mature / rare hero forms
+
+Fern form 1 is now an eight-frond juvenile, with six living and two dry fronds, smaller geometry and a bounded terminal curl. Form 0 retains thirteen fronds; form 2 retains twenty-one. Stable optical form weights are 35% juvenile, 50% mature and 15% hero; tree form mapping, scatter identity, pose and quality subsets remain unchanged. The independent LOD/area/distance oracles pass. The LOD ownership fixture now selects distinct IDs of one form explicitly, removing its accidental coupling to old hash weights. Botanical inspiration and limits are in [coastal flora notes](reference/COASTAL_FLORA_NOTES.md); these are authored optical cohorts, not simulated growth or taxonomic reconstruction.
+
+The stage passed 269 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,108,208 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [158, 906, 1138, 415].
 This is authored scene development with the same camera/profile; population

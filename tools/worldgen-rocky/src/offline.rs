@@ -1157,13 +1157,19 @@ pub fn reduced_plant_prototypes() -> Vec<PlantMesh> {
 
 /// World-addressed authored form selection; density/quality never changes it.
 pub fn plant_form(id: crate::scatter::ScatterId, kind: crate::scatter::ScatterKind) -> u8 {
-    if matches!(
-        kind,
-        crate::scatter::ScatterKind::FernClump | crate::scatter::ScatterKind::LycopsidTree
-    ) {
-        ((crate::rng::hash01(0, 6182, id.0 as i64, 0) * 3.0) as u8).min(2)
-    } else {
-        0
+    let choice = crate::rng::hash01(0, 6182, id.0 as i64, 0);
+    match kind {
+        crate::scatter::ScatterKind::FernClump => {
+            if choice < 0.35 {
+                1
+            } else if choice < 0.85 {
+                0
+            } else {
+                2
+            }
+        }
+        crate::scatter::ScatterKind::LycopsidTree => ((choice * 3.0) as u8).min(2),
+        _ => 0,
     }
 }
 pub fn plant_form_scale(form: u8) -> [f32; 3] {
@@ -1387,7 +1393,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     }
     const FRONDS: usize = 13;
     let (length_scale, height_scale, arch_shift) = match form {
-        1 => (1.05, 1.15, 0.94), // Form 1: Upright tall shuttlecock rosette
+        1 => (0.50, 0.42, 0.94), // Compact juvenile with fewer, partly curled fronds.
         _ => (1.00, 1.00, 1.00), // Form 0: Balanced shuttlecock rosette
     };
     // Explicit non-random per-frond variation (length, arch height, base height).
@@ -1402,19 +1408,25 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
     ];
     // Keep the same thirteen fronds and attachment angles; publish the three
     // long, low outer fronds last so age owns a real material boundary.
-    for (order, i) in [0, 1, 3, 4, 6, 7, 8, 10, 11, 12, 2, 5, 9]
-        .into_iter()
-        .enumerate()
-    {
-        if order == 10 {
+    let order: &[usize] = if form == 1 {
+        &[0, 3, 4, 6, 8, 10, 2, 5]
+    } else {
+        &[0, 1, 3, 4, 6, 7, 8, 10, 11, 12, 2, 5, 9]
+    };
+    let living = if form == 1 { 6 } else { 10 };
+    for (order, &i) in order.iter().enumerate() {
+        if order == living {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
                 albedo_srgb: [0.18, 0.12, 0.06],
                 diffuse_transmission: 0.05,
             });
         }
-        let (len, hgt) = if order >= 10 {
-            (LENGTH_M[i] * length_scale, HEIGHT_M[i])
+        let (len, hgt) = if order >= living {
+            (
+                LENGTH_M[i] * length_scale,
+                HEIGHT_M[i] * if form == 1 { 0.5 } else { 1.0 },
+            )
         } else {
             (LENGTH_M[i] * length_scale, HEIGHT_M[i] * height_scale)
         };
@@ -1424,7 +1436,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             len,
             hgt,
             BASE_Y_M[i],
-            order >= 10,
+            order >= living,
             form,
             reduced,
         );
@@ -1749,12 +1761,23 @@ fn fern_frond(
         } else {
             0.0
         };
+        let (reach, curl_height) = if form == 1 && !senescent && t > 0.75 {
+            let angle = ((t - 0.75) / 0.25) * std::f64::consts::PI * 1.25;
+            let radius = length_m * 0.25 / (std::f64::consts::PI * 1.25);
+            (
+                length_m * 0.75 + radius * angle.sin(),
+                radius * (1.0 - angle.cos()),
+            )
+        } else {
+            (t * length_m, 0.0)
+        };
         offset(
-            offset(
-                scaled(radial, 0.04 + t * length_m),
-                scaled(lateral, bend * t * t),
-            ),
-            [0.0, base_y_m + arch * height_m + tip_lift, 0.0],
+            offset(scaled(radial, 0.04 + reach), scaled(lateral, bend * t * t)),
+            [
+                0.0,
+                base_y_m + arch * height_m + tip_lift + curl_height,
+                0.0,
+            ],
         )
     };
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));
@@ -1762,7 +1785,7 @@ fn fern_frond(
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0]);
     let width_scale = match form {
         2 => 1.35,
-        1 => 1.10,
+        1 => 0.85,
         _ => 1.00,
     };
     for pair in 0..14 {
@@ -2340,6 +2363,38 @@ fn oriented_triangle(mesh: &mut PlantMesh, mut points: [[f64; 3]; 3], hint: [f64
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fern_growth_forms_have_distinct_geometry_and_bounded_world_weights() {
+        let forms = super::plant_prototype_forms(false);
+        let fern = |form| {
+            &forms
+                .iter()
+                .find(|(mesh, f)| *f == form && mesh.kind == crate::scatter::ScatterKind::FernClump)
+                .unwrap()
+                .0
+        };
+        let juvenile = fern(1);
+        let mature = fern(0);
+        let hero = fern(2);
+        let height =
+            |m: &super::PlantMesh| m.positions.iter().map(|p| p[1]).fold(0.0_f32, f32::max);
+        assert!(height(juvenile) > 0.4 && height(juvenile) < height(mature) * 0.7);
+        assert!(juvenile.indices.len() < mature.indices.len());
+        assert!(mature.indices.len() < hero.indices.len());
+        let mut counts = [0_usize; 3];
+        for id in 1..8193 {
+            let id = crate::scatter::ScatterId(id);
+            counts[super::plant_form(id, crate::scatter::ScatterKind::FernClump) as usize] += 1;
+            assert_eq!(
+                super::plant_form(id, crate::scatter::ScatterKind::LycopsidTree),
+                ((crate::rng::hash01(0, 6182, id.0 as i64, 0) * 3.0) as u8).min(2)
+            );
+        }
+        for (count, target) in counts.into_iter().zip([0.50, 0.35, 0.15]) {
+            assert!((count as f64 / 8192.0 - target).abs() < 0.04);
+        }
+    }
+
     #[test]
     fn foliage_cohorts_are_organ_constant_validated_and_lod_stable() {
         let full = super::plant_prototype_forms(false);

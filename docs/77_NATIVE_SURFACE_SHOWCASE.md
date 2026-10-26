@@ -309,6 +309,31 @@ The prior WORLD100 sweep and WORLD96/97 blind pairs do not validate this new
 geometry. No independent preference, reference parity, full motion-sequence
 or interactive-FPS acceptance is recorded.
 
+### WORLD106 — Measured native PNG sequences
+
+The existing headless renderer now accepts `--frame-sequence NEW_DIR` with
+`--headless`. It creates a new directory (existing captures are not overwritten)
+and saves `frame-000000.png` onward for every measured frame after the 30-frame
+warmup. Disabled runs retain the existing final-screenshot-only path. The shared
+PNG writer has an exact RGBA/dimension round-trip test. Readback/writes occur
+after the recorded frame sample; their wall-clock cost still changes asynchronous
+streaming cadence, so sequence runs are visual evidence, not equivalent timings.
+
+The stage passes 280 worldgen / 131 native non-ignored tests, strict affected
+Clippy, architecture, feature-off compile, formatting and release build. One
+24-frame existing `--sweep` capture completed; its final sequence PNG is byte
+identical to the separately saved final screenshot. All source PNG hashes,
+commands, profile and performance counters are retained. The orbit changes
+camera/residency and remains ineligible for strict renderer-equivalence blind
+comparison. A sequence capture does not establish full temporal stability.
+
+A separate static default-off capture has identical crown/sky pixels in its
+first 180 rows, but the whole image differs from WORLD105 in 4,583 pixels
+(mean absolute RGBA difference 0.00748 codes), primarily ground. Reported camera,
+height-level counts, CBT active slots and plant counts match; the cause is not
+assigned and whole-frame pixel identity is not claimed. Geometry/materials remain
+WORLD105. Evidence: `artifacts/native-frame-sequence-2026-10-26.json`.
+
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 
 This continuation reviews and retains user commit `3d58502`: the solitary

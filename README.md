@@ -284,6 +284,11 @@ The checked-in vertical slice currently contains:
       spacing. Mesh and terrain shadow receivers use the triangle plane rather
       than smooth/material shading normals
       ([doc 69](docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md)).
+     Headless `--frame-sequence NEW_DIR` saves every measured frame as PNG,
+     excluding warmup, alongside the final `--headless` screenshot. It requires
+     a new directory, preserving prior captures. Readback/writes stay outside
+     frame timing samples but perturb streaming wall cadence; use it for visual
+     motion review, not a performance-equivalent replay.
      Headless `--perf-capture target/native-perf.json` exports the existing
      `thessa-perf` JSON/CSV format, including hardware GPU command intervals
      where supported (explicitly unavailable otherwise). Normal runs create no

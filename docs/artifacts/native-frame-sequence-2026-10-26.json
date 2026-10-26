@@ -1,0 +1,223 @@
+{
+  "stage": "106-native-frame-sequence",
+  "baseline_commit": "0bb44b9d715c6db0b390ce874e8fe3b176bf3882",
+  "source_sha256": "2ddaa8ca8a861bcc6f979d678f184a6af407c99f93c03e96138b7f906f66d7b2",
+  "binary_sha256": "f5d61e2898d0d408d6afca1110d0c4a1dded81681e9c9ce6e045864b5896912d",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.6051797359250486
+    },
+    {
+      "name": "worldgen-tests",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 3.915002346970141
+    },
+    {
+      "name": "native-tests",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 11.397867826977745
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-worldgen-rocky",
+        "-p",
+        "thessa-terrain-native",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 1.2075008630054072
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.049527044990099967
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 0.454878814984113
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 41.24218756798655
+    }
+  ],
+  "motion": {
+    "stage": "106-native-frame-sequence",
+    "command": [
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/native",
+      "--graphics",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/profile.toml",
+      "--survey-lat",
+      "23.565679258039204",
+      "--survey-lon",
+      "165.13881581863882",
+      "--survey-distance",
+      "80",
+      "--survey-eye-agl",
+      "2",
+      "--sim-time",
+      "0",
+      "--sim-step",
+      "0",
+      "--prestream-seconds",
+      "40",
+      "--frames",
+      "24",
+      "--mute",
+      "--no-hud",
+      "--headless",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/motion/final.png",
+      "--perf-capture",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/motion/perf.json",
+      "--sweep",
+      "--frame-sequence",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/motion/frames"
+    ],
+    "exit_code": 0,
+    "seconds": 74.60952286794782,
+    "source_sha256": "2ddaa8ca8a861bcc6f979d678f184a6af407c99f93c03e96138b7f906f66d7b2",
+    "binary_sha256": "f5d61e2898d0d408d6afca1110d0c4a1dded81681e9c9ce6e045864b5896912d",
+    "frames": {
+      "frame-000000.png": "344b1d58b97e73465b5ed922bd5af24a482f179112a52ce238f0eef7f211d5c5",
+      "frame-000001.png": "70edc1860ff7739e7dfb8e77b509186f83c2ca12cf7bee4633660d919ef05580",
+      "frame-000002.png": "2d03bf7de098dff2d37c8a300243ed2fd313e9f3f621d500c463933a0a6b717b",
+      "frame-000003.png": "6dbeca0ec6c9f138febd4ecd6a5d8ad27559f7e34608ac02f76852bad057e7da",
+      "frame-000004.png": "2f6e74a31e52f7a33bab2be40abafb515bae4ae9a5ed827e42da174aaafc3ce8",
+      "frame-000005.png": "8e01371412554707358a617c20a59092a817570a67bc7c8115d8053bf7f38071",
+      "frame-000006.png": "3bdc4a4a08979798ea021c18dcc8547a26bac1b40b59df759187f4fdb5886a42",
+      "frame-000007.png": "26fc9c656bb32eae8ba827876e14862b21c9c7afad44455556c0a84fd7a7859c",
+      "frame-000008.png": "5e0da9913369a161042f89bdba368395ccef53f86198e08fe19285ca8d481c66",
+      "frame-000009.png": "49bf756fa5ff31ce3bd1c5070d96cdc744eaa283a1bd227473fac88ab0e45bda",
+      "frame-000010.png": "bd6ced0541d2a18c67252b5c2c625bc1825cb94bf2450a577d49ee1b684499c5",
+      "frame-000011.png": "ccde2fe1a277cb803dba56980e6b7243e67400f4315e6526e4969e2e65a842d3",
+      "frame-000012.png": "e5a3eb2c786659d52efec45593fd729a43ed0ef0bdd415b083a2603a35323726",
+      "frame-000013.png": "4fcbb73ef865eabdbddb257b5f86d622ed2c3fe0804ea016bda12d3cd0ef47b3",
+      "frame-000014.png": "c6dfeeac22fd2f51f01ef3e7398d0a5e61c491f83561041f100f37ca0fb89b96",
+      "frame-000015.png": "e3a9becede75bf20bf886e47aef41d223e1e07c832100596123fd895176e9b8b",
+      "frame-000016.png": "4a4895dde2dba8bcddd3b11304a6383d9d3dc66ed79199ba182f6f93011e8d17",
+      "frame-000017.png": "bf87ff356bf88821b60bdfae5f71182dbd3a4b808c2993d8977bc604359a1b12",
+      "frame-000018.png": "f95b93b37fc87a549048f0f7517df4006e0f3cdfb2a1e5e9de54a221217a039b",
+      "frame-000019.png": "599cdc0e9640d9574d2dd584b69de0ebf152f64e31ab292cb40db65c501c15b6",
+      "frame-000020.png": "04b15ca9797cccb9161d57acef19ed3196d1ce68441b89de2e41efe72c242683",
+      "frame-000021.png": "9291e7ec212294f3f7727f40eb803c440205f4f8bb7d99fc8f40dd87d3411350",
+      "frame-000022.png": "1108feac69a65fcaba5340f2bd11734c36d00ef678c2120081a3fd4bfd9c132b",
+      "frame-000023.png": "8e9ecd05a51bc2f6dc5069aed36707eec646b5c946a991aa586227313ddd0d6a"
+    },
+    "last_frame_equals_final_png": true,
+    "scope": "24 consecutive measured native frames after 30 warmup frames. Existing 0.006-radian/frame survey sweep changes camera/residency; not a strict blind renderer comparison or a full temporal-stability acceptance. PNG readback/writes perturb streaming wall cadence and are excluded from frame timing samples."
+  },
+  "static_comparison": {
+    "byte_identical": false,
+    "changed_pixels": 4583,
+    "mean_absolute_rgba_codes": 0.0074793836805555555,
+    "max_code_difference": 44,
+    "changed_pixels_per_180px_row_band": [
+      0,
+      5,
+      4468,
+      110
+    ],
+    "scope": "Same unchanged scene geometry/camera and matching reported height-level/CBT counts. Whole images differ in 4583 pixels, chiefly ground. Cause not assigned; no whole-frame pixel-identity or strict blind eligibility claim."
+  },
+  "limitations": [
+    "PNG output changes wall-clock streaming cadence; not a performance-equivalent replay.",
+    "Existing sweep changes camera/residency; original orbit pairs remain ineligible for strict blind comparison.",
+    "Capturing a sequence is not an independent temporal-stability acceptance."
+  ],
+  "cli_negative_checks": [
+    {
+      "command": [
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/native",
+        "--frame-sequence",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/must-not-exist"
+      ],
+      "exit_code": 1,
+      "stderr": "Error: \"--frame-sequence requires --headless\"\n"
+    },
+    {
+      "command": [
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/native",
+        "--graphics",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/profile.toml",
+        "--survey-lat",
+        "23.565679258039204",
+        "--survey-lon",
+        "165.13881581863882",
+        "--survey-distance",
+        "80",
+        "--survey-eye-agl",
+        "2",
+        "--sim-time",
+        "0",
+        "--sim-step",
+        "0",
+        "--prestream-seconds",
+        "40",
+        "--frames",
+        "16",
+        "--mute",
+        "--no-hud",
+        "--headless",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/standing.png",
+        "--perf-capture",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/standing.json",
+        "--frame-sequence",
+        "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/106-native-frame-sequence/motion/frames"
+      ],
+      "exit_code": 1,
+      "stderr": "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; full physical aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported\ncanonical Thessa: 6 resident tiles; highlands=DVec3(-2493128.5944524375, 1972125.675498911, 394872.7770894474)\ncanonical CPU scene build: 1.35s (excluded from frame benchmark)\nError: Os { code: 17, kind: AlreadyExists, message: \"File exists\" }\n",
+      "old_sequence_unchanged": true
+    }
+  ]
+}

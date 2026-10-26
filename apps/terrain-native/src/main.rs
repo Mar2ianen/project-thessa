@@ -28,6 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut headless = None;
     let mut perf_capture = None;
+    let mut frame_sequence = None;
     let mut frame_limit = None;
     let mut graphics_path = "graphics.toml".to_string();
     let mut prestream_seconds = 3.0;
@@ -103,6 +104,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 height = args.next().ok_or("--height requires pixels")?.parse()?;
             }
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
+            "--frame-sequence" => {
+                frame_sequence = Some(std::path::PathBuf::from(
+                    args.next()
+                        .ok_or("--frame-sequence requires a new directory")?,
+                ))
+            }
             "--perf-capture" => {
                 perf_capture = Some(std::path::PathBuf::from(
                     args.next().ok_or("--perf-capture requires a JSON path")?,
@@ -203,7 +210,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--docking-demo runs the retained isolated vacuum two-craft Rapier/DockingSession fixture with actual solved poses and D1 CAD rest surfaces. Not flight/fleet authority. Headless --docking-time 0..30 seeks a deterministic fixed-step replay before warmup; --docking-step 0..0.05 advances per frame (default 1/60, zero freezes). Window uses elapsed admission capped at 0.05s. Incompatible with flight/map/site/preview/time controls. Cabin impact is a diagnostic structural cue; vacuum exterior stays silent."
                 );
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --frame-sequence NEW_DIR writes frame-000000.png onward for measured frames only; requires a new directory and --headless. PNG readback/writes are outside frame samples but perturb streaming wall cadence; this is visual evidence, not performance-equivalent replay. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -289,6 +296,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     let docking_step = docking_step.unwrap_or(1.0 / 60.0);
+    if frame_sequence.is_some() && headless.is_none() {
+        return Err("--frame-sequence requires --headless".into());
+    }
     if perf_capture.is_some() && headless.is_none() {
         return Err("--perf-capture requires --headless".into());
     }
@@ -524,6 +534,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         started.elapsed().as_secs_f64()
     );
     if let Some(path) = headless {
+        if let Some(directory) = &frame_sequence {
+            std::fs::create_dir(directory)?;
+            println!(
+                "native_frame_sequence={} measured_only=true readback_outside_samples=true; PNG output perturbs wall-clock streaming cadence, not a performance-equivalent replay",
+                directory.display()
+            );
+        }
         let backend = if perf_capture.is_some() {
             Backend::bring_up_for_graphics_profiled(&scene.requested)?
         } else {
@@ -823,6 +840,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                         stream_ms / 1000.0,
                     )?;
                 }
+                if let Some(directory) = &frame_sequence {
+                    let pixels = target.read_rgba8(&backend)?;
+                    write_rgba_png(
+                        &directory.join(format!("frame-{:06}.png", frame - 30)),
+                        width,
+                        height,
+                        &pixels,
+                    )?;
+                }
             }
         }
         timings.sort_by(f64::total_cmp);
@@ -833,14 +859,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let median = timings[timings.len() / 2];
         let p95 = timings[timings.len() * 95 / 100];
         let pixels = target.read_rgba8(&backend)?;
-        let mut png = png::Encoder::new(
-            std::io::BufWriter::new(std::fs::File::create(&path)?),
-            width,
-            height,
-        );
-        png.set_color(png::ColorType::Rgba);
-        png.set_depth(png::BitDepth::Eight);
-        png.write_header()?.write_image_data(&pixels)?;
+        write_rgba_png(std::path::Path::new(&path), width, height, &pixels)?;
         let topology_state = renderer.read_topology_state(&backend)?;
         let drawn_triangles = if let Some(state) = topology_state {
             state[8] / 3
@@ -1047,6 +1066,23 @@ fn manual_exposure(ev100: f32) -> f32 {
 }
 
 /// Validate presentation-only survey demands before loading assets or a GPU.
+fn write_rgba_png(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let mut png = png::Encoder::new(
+        std::io::BufWriter::new(std::fs::File::create(path)?),
+        width,
+        height,
+    );
+    png.set_color(png::ColorType::Rgba);
+    png.set_depth(png::BitDepth::Eight);
+    png.write_header()?.write_image_data(pixels)?;
+    Ok(())
+}
+
 fn validate_fixed_survey(
     lat: Option<f64>,
     lon: Option<f64>,
@@ -1084,6 +1120,29 @@ fn validate_fixed_survey(
 #[cfg(test)]
 mod survey_cli_tests {
     use super::validate_fixed_survey;
+
+    #[test]
+    fn captured_png_retains_dimensions_and_exact_display_pixels() {
+        let directory =
+            std::env::temp_dir().join(format!("thessa-frame-sequence-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        assert!(
+            std::fs::create_dir(&directory).is_err(),
+            "an old sequence must not be overwritten"
+        );
+        let path = directory.join("frame-000000.png");
+        let pixels = [12, 34, 56, 255, 98, 76, 54, 128];
+        super::write_rgba_png(&path, 2, 1, &pixels).unwrap();
+        let mut decoder =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()))
+                .read_info()
+                .unwrap();
+        let mut decoded = vec![0; decoder.output_buffer_size().unwrap()];
+        let info = decoder.next_frame(&mut decoded).unwrap();
+        assert_eq!((info.width, info.height), (2, 1));
+        assert_eq!(&decoded[..info.buffer_size()], &pixels);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn defaults_and_numeric_survey_bounds() {

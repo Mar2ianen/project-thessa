@@ -19,7 +19,7 @@ pub fn foliage_uv(uv: [f32; 2], tone: u8) -> [f32; 2] {
     ]
 }
 
-fn foliage_atlas(source: Image, color: bool) -> Image {
+fn foliage_atlas(source: Image, map: usize) -> Image {
     assert_eq!((source.width, source.height), (LEAF_WIDTH, LEAF_HEIGHT));
     let width = source.width + 2 * GUTTER;
     let tile_height = source.height + 2 * GUTTER;
@@ -31,30 +31,36 @@ fn foliage_atlas(source: Image, color: bool) -> Image {
         [1.22, 1.03, 0.67],
         [1.70, 0.65, 0.35],
     ];
-    for grade in grades {
+    // Authored cuticle roughness: mature, emerging, olive and weathered.
+    let roughness = [0.70, 0.50, 0.80, 0.90];
+    for (tone, grade) in grades.into_iter().enumerate() {
         for y in 0..tile_height {
             for x in 0..width {
                 let sx = x.saturating_sub(GUTTER).min(source.width - 1);
                 let sy = y.saturating_sub(GUTTER).min(source.height - 1);
                 let offset = ((sy * source.width + sx) * 4) as usize;
                 for (c, &gain) in grade.iter().enumerate() {
-                    let encoded = f32::from(source.rgba8[offset + c]) / 255.0;
-                    let linear = if encoded <= 0.04045 {
-                        encoded / 12.92
-                    } else {
-                        ((encoded + 0.055) / 1.055).powf(2.4)
-                    };
-                    let value = (linear * gain).clamp(0.0, 1.0);
-                    let encoded = if value <= 0.0031308 {
-                        value * 12.92
-                    } else {
-                        1.055 * value.powf(1.0 / 2.4) - 0.055
-                    };
-                    rgba8.push(if color {
+                    let source_value = source.rgba8[offset + c];
+                    let value = if map == 0 {
+                        let encoded = f32::from(source_value) / 255.0;
+                        let linear = if encoded <= 0.04045 {
+                            encoded / 12.92
+                        } else {
+                            ((encoded + 0.055) / 1.055).powf(2.4)
+                        };
+                        let value = (linear * gain).clamp(0.0, 1.0);
+                        let encoded = if value <= 0.0031308 {
+                            value * 12.92
+                        } else {
+                            1.055 * value.powf(1.0 / 2.4) - 0.055
+                        };
                         (encoded * 255.0).round() as u8
+                    } else if map == 2 && c == 1 {
+                        (f32::from(source_value) * roughness[tone]).round() as u8
                     } else {
-                        source.rgba8[offset + c]
-                    });
+                        source_value
+                    };
+                    rgba8.push(value);
                 }
                 rgba8.push(source.rgba8[offset + 3]);
             }
@@ -96,7 +102,7 @@ pub fn append(asset: &mut MeshAsset, stem: bool) -> [usize; 3] {
                 rgba8: data,
             };
             if index >= 3 {
-                foliage_atlas(image, index == 3)
+                foliage_atlas(image, index - 3)
             } else {
                 image
             }
@@ -145,7 +151,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pigment_atlas_preserves_data_maps_and_filters_bounded_cohorts() {
+    fn atlas_preserves_normals_and_filters_pigment_and_roughness_cohorts() {
         let mut asset = MeshAsset {
             primitives: vec![],
             materials: vec![],
@@ -171,8 +177,16 @@ mod tests {
                     .collect();
                 if map == 0 {
                     assert!(pixels.windows(2).all(|pair| pair[0] != pair[1]));
-                } else {
+                } else if map == 1 {
                     assert!(pixels.windows(2).all(|pair| pair[0] == pair[1]));
+                } else {
+                    for (pixel, expected) in pixels.iter().zip([179_i16, 128, 204, 230]) {
+                        assert!((i16::from(pixel[1]) - expected).abs() <= 1);
+                        assert_eq!([pixel[0], pixel[2], pixel[3]], [255, 0, 255]);
+                    }
+                    assert!(pixels[1][1] < pixels[0][1]);
+                    assert!(pixels[0][1] < pixels[2][1]);
+                    assert!(pixels[2][1] < pixels[3][1]);
                 }
             }
             for tone in 0..4 {

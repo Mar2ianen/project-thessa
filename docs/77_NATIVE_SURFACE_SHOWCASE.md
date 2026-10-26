@@ -30,6 +30,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD90b | Continuous riparian niches | 4,459 | 11,918 | 15,920,770 | 407.392 ms |
 | WORLD91 | Connected moss cushions | 4,459 | 11,918 | 15,921,260 | 405.451 ms |
 | WORLD92 | Geometry-derived plant visibility | 4,459 | 11,918 | 15,921,260 | 405.589 ms |
+| WORLD93 | Organ roughness cohorts | 4,459 | 11,918 | 15,921,260 | 403.363 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -150,6 +151,18 @@ changes are not a renderer-equivalent comparison or reference acceptance.
 ### WORLD92 — Geometry-derived plant visibility
 
 Remove the extra radius/height multipliers applied after the existing cosine-weighted Parry BVH visibility bake. Crown and root shading now follow the actual mesh visibility source and shared direct shadows, without an added artistic darkening pass or brightness boost. A source-fraction regression checks every full/reduced form retains only the possible outcomes of 32 binary geometric queries; independent open-plane and closed-cavity transport oracles remain. This does not implement ground bounce or exact resident-ground contact visibility.
+
+The stage passed 274 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,790,024 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD93 — Organ roughness cohorts
+
+The imported pinna MR image has uniform G=255. The existing four-band atlas now carries authored mature/emerging/olive/weathered roughness priors of 0.70/0.50/0.80/0.90, replacing the global living factor 0.60; leaf material factor is 1.0 and bark stays 0.85. Normal/metallic/alpha data, UV gutters, image dimensions and pass/draw counts remain. Tests check all four cohort centres through five mip levels, ordering, quantization bounds and preservation of the other data channels. These are authored cuticle priors, not measured botanical spectra.
 
 The stage passed 274 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps

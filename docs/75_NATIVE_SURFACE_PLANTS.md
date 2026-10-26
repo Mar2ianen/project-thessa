@@ -1,6 +1,6 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD92, doc 77): plant ambient visibility now follows geometry without duplicate crown/root darkening; mixed understory cohorts and connected moss relief remain.
+Current composition continuation (WORLD93, doc 77): leaf age now changes both pigment and roughness; mixed-size colonies, connected moss relief and geometry-derived plant visibility remain.
 The current standing scene submits 11,918 instances and
 15,921,260 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,790,024 B under the
@@ -13,8 +13,13 @@ asymmetric pinna/rachis geometry. Full/reduced representations retain identical
 cohort sequences and canonical instances. The source texture payload is
 3,760,128 B; 37 aggregate/plant ranges and the 7 MB vertex/index/AO limit remain.
 Current bark factors are form-dependent `[0.36,0.32,0.25]`,
-`[0.38,0.34,0.27]`, `[0.34,0.31,0.24]`; living roughness is 0.60,
-fern transmission 0.22, tree transmission 0.18/0.20/0.16 and reed 0.18.
+`[0.38,0.34,0.27]`, `[0.34,0.31,0.24]`. WORLD93 replaces the uniform
+living roughness factor with padded-atlas roughness priors 0.70/0.50/0.80/0.90
+for mature/emerging/olive/weathered organs (8-bit quantized); the leaf material
+factor is 1.0 and stem roughness remains 0.85. Source normal maps, metallic,
+alpha, image count and atlas gutters remain. These are authored optical priors,
+not measured cuticle data. Fern transmission is 0.22, tree transmission
+0.18/0.20/0.16 and reed 0.18.
 WORLD92 removes the extra radius/height crown and basal attenuation. Ambient
 visibility now contains only the existing 32 cosine-weighted geometric BVH
 queries per source vertex; shared direct shadows remain separate. This is not

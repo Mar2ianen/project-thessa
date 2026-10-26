@@ -397,26 +397,23 @@ pub(crate) fn forest_floor(
     let fine_litter =
         smooth(0.12, 0.62, noise(6151, 0.45, true)) * (0.35 + 0.65 * smooth(0.02, 0.20, canopy));
     let litter = (coarse_litter * 0.50 + fine_litter * 0.45).clamp(0.0, 0.76);
-    let canopy_occlusion = 1.0 - 0.28 * smooth(0.10, 0.80, canopy);
     let albedo_linear = std::array::from_fn(|i| {
         let wet_darkening = [0.52, 0.52, 0.46][i];
         let mineral_factor = 1.0 + mineral_patch * 0.15 + fine_mineral * [0.15, 0.18, 0.28][i];
-        let substrate = f64::from(ground.albedo_linear[i])
-            * mineral_factor
-            * (1.0 - wet * wet_darkening)
-            * canopy_occlusion;
+        let substrate =
+            f64::from(ground.albedo_linear[i]) * mineral_factor * (1.0 - wet * wet_darkening);
         // Pigment coverage retains scan contrast instead of painting a flat swatch.
         let texture_detail = (f64::from(ground.albedo_linear[i])
             / f64::from(mean_sample().albedo_linear[i]))
         .clamp(0.5, 1.5);
-        let moss_albedo =
-            [0.045, 0.058, 0.028][i] * texture_detail * (0.85 + 0.15 * canopy_occlusion);
+        let moss_albedo = [0.045, 0.058, 0.028][i] * texture_detail;
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
-        let litter_albedo = [0.054, 0.043, 0.029][i] * texture_detail * canopy_occlusion;
+        let litter_albedo = [0.054, 0.043, 0.029][i] * texture_detail;
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);
-    let wet_roughness = dry * (1.0 - wet) + (0.18 * (1.0 - fine_mineral * 0.20)) * wet;
+    // Authored porous-soil prior; moisture alone does not supply a smooth water film.
+    let wet_roughness = dry * (1.0 - wet) + (0.48 * (1.0 - fine_mineral * 0.20)) * wet;
     let moss_roughness = wet_roughness * (1.0 - moss) + 0.92 * moss;
     GroundSample {
         albedo_linear,
@@ -429,6 +426,17 @@ pub(crate) fn forest_floor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_dry_substrate_does_not_bake_canopy_illumination_into_reflectance() {
+        let ground = mean_sample();
+        // At this footprint, litter/moss bands are absent; only substrate remains.
+        let exposed = forest_floor(ground, [137.0, 29.0, -18.0], 77, 32.0, 0.0, 0.0);
+        let sheltered = forest_floor(ground, [137.0, 29.0, -18.0], 77, 32.0, 0.0, 1.0);
+        assert_eq!(exposed.albedo_linear, sheltered.albedo_linear);
+        assert_eq!(exposed.roughness, sheltered.roughness);
+        assert_eq!(exposed.height_m, sheltered.height_m);
+    }
 
     #[test]
     fn native_scan_footprint_does_not_add_an_extra_mip_of_blur() {

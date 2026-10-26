@@ -42,6 +42,9 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD107 | Finer feather contours within existing source budgets | 4,459 | 11,918 | 19,025,276 | 385.484 ms |
 | WORLD108 | Finer crowns and visible soil refinement | 4,459 | 11,918 | 19,025,276 | 389.287 ms |
 | WORLD112 | Finer attached pinnate crown structure | 4,459 | 11,918 | 18,686,588 | 376.957 ms |
+| WORLD114 | Gemini audit baseline | 11,011 | 18,470 | 31,708,948 | 481.118 ms |
+| WORLD115 | Connected divided ground pinnae and shared density | 8,149 | 15,608 | 30,170,756 | 445.060 ms |
+| WORLD116 | Rough damp soil alongside separate pools | 8,149 | 15,608 | 30,170,756 | 438.605 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -398,6 +401,29 @@ limits are in `artifacts/native-fern-detail-2026-10-26.json`. The 450-case
 WORLD105 record above remains historical. WORLD96/97 blind pairs cover their
 shading revision only; they do not establish preference for WORLD107/108.
 
+### WORLD114 — Audit baseline after Gemini
+
+Commits `2268ad4`, `267ddc9`, `e4fd75d` and `f7ce0a6` are retained as the
+review baseline. Three native views and a 24-frame moving sequence use the
+actual source at `f7ce0a6`, with the checked-in profile's sole RT Off override.
+The authored profile is EV100 12.06, local haze extinction 0.00075 /m,
+16 cloud march steps, coverage 0.12, MSAA 4 and TAA Off. These are local optical
+priors, not radiometric calibration or an additional effect. Standing submits
+18,470 instances / 31,708,948 triangles / 37 draws; 11,011 near clumps versus
+4,459 at WORLD112. Its CPU stage gates pass; this baseline is not promoted as
+reference acceptance. WORLD115 below addresses the reviewed defects while
+retaining the crown architecture and optical priors.
+
+The existing `--frame-sequence` capture also logs `native_material_frame` per
+saved frame: resident level histogram, pending height/material jobs, CPU page
+count, cumulative material upload bytes and cached optical height reference.
+This adds no readback or frame work when sequence capture is disabled. Across
+WORLD114's 24 frames, L22 residents range 15–40, L23 27–34, L24 remains zero,
+and four material jobs remain pending. CPU pages grow from 699 to 791. These
+counts demonstrate asynchronous churn, not its sole cause or a complete blur
+fix. The moving orbit changes residency and is ineligible for strict blind
+renderer comparison; video playback is 6 fps for review, not runtime FPS.
+
 ### WORLD112 — Finer attached pinnate crown structure
 
 The crown retains 28 rooted fronds, but each now carries 28 opposed pinna pairs. Primary reach fractions are 0.14/0.13 instead of 0.27/0.25, with connected two-lobe secondary outlines. Full/reduced pinnae use 13/5 vertices and 12/3 triangles. Existing sampled displacement, projected-area, geometric normal, attachment and memory bounds remain; ground and population controls are unchanged.
@@ -410,7 +436,7 @@ vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 This is authored scene development with the same camera/profile; population
 changes are not a renderer-equivalent comparison or reference acceptance.
 
-### WORLD112 — Current geometry verification
+### WORLD112 — Geometry verification at that checkpoint
 
 Eight stage gates pass: 280 worldgen, 131 native and 31 stream CPU tests,
 strict Clippy, formatting, architecture, feature-off compile and release.
@@ -429,6 +455,73 @@ Morphology and unchanged error envelopes are in [doc 75](75_NATIVE_SURFACE_PLANT
 commands and hashes are in `artifacts/native-fern-division-2026-10-26.json`.
 Historical WORLD108 verification is dated; no independent reference, full
 motion or interactive-FPS acceptance is claimed.
+
+### WORLD115/116 — Review scope and unchanged bounds
+
+The retained Gemini canopy uses 28 rooted fronds, 28 opposed pinna pairs per
+frond and wider primary reach/half-width priors (0.155/0.165 of frond reach,
+0.22 of pinna length). Ground leaves use the divided primitive while keeping
+fourteen pairs. Trunk/crown tiers, pigment cohorts, shared niche and authored
+profile changes are retained; native-only near spacing/scale is removed.
+The final standing scene has 8,149 near clumps / 15,608 submitted instances /
+30,170,756 mesh triangles in 37 shared draws. Source payload is 6,721,828 B;
+textures remain 3,760,128 B. More detailed ground leaves consume some of the
+population reduction; these figures are not a renderer-throughput claim.
+
+Existing source caps, sampled full/reduced distance (<0.057 m times form scale),
+projected-area error (<2.5%), minimum triangle conditioning, geometric winding,
+organ cohorts and root/crown attachment checks remain. Canonical ground-fern
+triangles intentionally change from 3,224 to 4,680; the old narrow count fixture
+is updated for divided leaves. The shape/aspect fixture follows their new
+thirteen-vertex layout. The former bare-substrate illumination and ground-root
+regressions are retained as negative logs before the production repair.
+
+### WORLD115 — Connected divided ground pinnae and shared density
+
+The Gemini review retains its trunk/crown architecture and authored profile. Native-only near-density/size overrides are removed in favor of shared ScatterPolicy defaults. Ground pinnae use the existing rounded divided 13/5-vertex lamina, retain fourteen opposed pairs, and attach to the emitted twelve-segment rachis. Independent regression reproduces a 6.538 mm root gap before repair and constrains all three full/reduced forms below 1 micrometre. Bare substrate no longer contains a canopy illumination multiplier; moss/litter coverage and geometric shadows remain separate. Both new regressions fail on the retained prior source.
+
+The stage passed 282 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,721,828 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [508, 2820, 3499, 1322].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD116 — Rough damp soil alongside separate pools
+
+Wet opaque soil now uses roughness endpoint 0.48 instead of 0.18 before the existing mineral/moss/litter mixture. Moisture darkening, relief, normals and pool water materials are unchanged. This is an authored porous-substrate optical prior, not measured calibration or a drainage/growth model. Native before/after crops show a modest highlight-response change. WORLD115 retains the reviewed Gemini crowns and repairs shared understory density, ground-leaf divisions/attachments and substrate reflectance.
+
+The stage passed 282 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,721,828 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [508, 2820, 3499, 1322].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD116 — Final verification and diagnostic captures
+
+The final current-source batches passed 453 cases: 408 terrain-stack CPU,
+24 native plant including GPU ray oracles, one conforming L24 coordinate GPU
+case and 20 material/environment GPU cases. Formatting, strict affected
+Clippy, architecture, feature-off compilation and release build also passed.
+The final release binary is byte-identical to the three raster views and the
+24-frame sequence after a test-only update to exact finite-bias counts. The
+1025² ray fixtures retain the existing colour, physical and edge guards; they
+checked 12,780 full and 4,344 reduced samples. Their finite-bias disagreements
+are [77, 0] full and [24, 0] reduced for 0.01/0.0001 m respectively.
+
+One bounded Local RT capture completed with an active TLAS (24,751 instances,
+254,028 traced triangles, 31,699,936 acceleration-structure bytes); it is not
+a paired baseline or general driver-stability result. A separate plants-off
+capture isolates ground with the existing pebble, moss and puddle consumers.
+The 24-frame moving capture keeps TAA off and its final frame matches the saved
+PNG; its orbit and residency change and PNG readback perturbs stream cadence.
+Source pins, commands, images, negative regressions and per-frame material
+counters are recorded in `artifacts/native-understory-review-2026-10-26.json`.
+Reference parity, ground sky visibility, moving soil detail and distant foliage
+filtering remain open; no independent visual votes were recorded.
 
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 

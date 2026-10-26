@@ -441,8 +441,6 @@ pub fn prepare(
                     density_scale: settings.surface_plants_density_scale,
                     max_candidates: remaining_candidates,
                     max_items: remaining_items,
-                    understory_spacing_m: 0.82,
-                    understory_max_scale: 1.25,
                     ..Default::default()
                 },
                 |dir| canonical_plant_surface(field, dir),

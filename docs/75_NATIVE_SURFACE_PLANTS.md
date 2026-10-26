@@ -1,9 +1,9 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD112, doc 77): 28 rooted fronds per tree now carry 56 shorter attached pinnae each, with connected rounded divisions. Full/reduced geometry uses 13/5 vertices per pinna within prior error and source caps. Three native raster views and a 24-frame sequence are recorded; reference and temporal acceptance remain open.
-The current standing scene submits 11,918 instances and
-18,686,588 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,447,940 B under the
+Current composition continuation (WORLD116, doc 77): Gemini crowns and optical priors are retained. Ground leaves use connected rounded divisions and rooted attachments; shared understory density replaces a native-only override. Bare substrate excludes baked canopy illumination; damp opaque soil retains more roughness while pools keep their water material. Reference and temporal acceptance remain open.
+The current standing scene submits 15,608 instances and
+30,170,756 mesh triangles in 37 shared ranges;
+vertex/index/AO source payload is 6,721,828 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
@@ -12,13 +12,13 @@ with four organ-level pigment cohorts, shared padded leaf atlases and bounded
 asymmetric pinna/rachis geometry. Full/reduced representations retain identical
 cohort sequences and canonical instances. The source texture payload is
 3,760,128 B; 37 aggregate/plant ranges and the 7 MB vertex/index/AO limit remain.
-Current bark factors are form-dependent `[0.36,0.32,0.25]`,
-`[0.38,0.34,0.27]`, `[0.34,0.31,0.24]`. WORLD93 replaces the uniform
+Current bark factors (forms 0/1/2) are `[0.45,0.39,0.26]`,
+`[0.46,0.39,0.27]`, `[0.44,0.38,0.25]`. WORLD93 replaces the uniform
 living roughness factor with padded-atlas roughness priors 0.70/0.50/0.80/0.90
 for mature/emerging/olive/weathered organs (8-bit quantized); the leaf material
 factor is 1.0 and stem roughness remains 0.85. Source normal maps, metallic,
 alpha, image count and atlas gutters remain. These are authored optical priors,
-not measured cuticle data. Fern transmission is 0.22, tree transmission
+not measured cuticle data. Fern transmission is 0.16, tree transmission
 0.18/0.20/0.16 and reed 0.18.
 WORLD92 removes the extra radius/height crown and basal attenuation. Ambient
 visibility now contains only the existing 32 cosine-weighted geometric BVH
@@ -36,6 +36,26 @@ The shared image atlas adds no pass/draw and the disabled path remains empty.
 Historical checkpoints below describe previous geometry/materials, not the
 current calibration or reference acceptance. RT stability and independent visual
 acceptance remain open; WORLD84 records an original-baseline AMD device loss.
+
+WORLD115 retains the broader trunk/fork/root and lower, spreading crown tiers
+from Gemini `f7ce0a6`, as well as its organ pigments, reduced fern transmission
+and shared canopy-density niche. It removes native-only spacing/scale overrides;
+the adapter again consumes shared ScatterPolicy defaults (0.95 m centre spacing,
+0.25–1.10 near-clump scale). This is an authored density prior, not measured
+light competition or growth.
+
+Ground fronds retain fourteen opposed pinna pairs, but use the existing divided
+13/5-vertex full/reduced lamina instead of the convex 9/4-vertex primitive. Each
+pinna has two connected rounded edge divisions, a folded midrib and true gaps
+between neighboring pinnae. Ground half-width/length priors are 0.12 (mature),
+0.0935 (juvenile) and 0.15 (hero); these are optical geometry, not taxonomic
+measurements. The canonical 13-frond ground prototype now has 4,680 triangles;
+the old narrow triangle-count fixture is updated for the intentional topology.
+The existing displacement, projected-area, minimum conditioning, reduction and
+6/7 MB source caps remain. Ground roots now follow the emitted twelve-segment
+rachis, including the juvenile curl. An independent point/triangle-distance
+oracle reproduced a 6.538 mm floating root on the prior source and requires
+<1 micrometre in all three full/reduced forms after repair.
 
 WORLD95 uses the existing quadratic leaf interpolant for rush axes instead
 of the seven-point bent-tip polyline. Full/reduced blades have 32/16 segments

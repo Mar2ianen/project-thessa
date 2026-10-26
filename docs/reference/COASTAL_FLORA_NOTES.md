@@ -37,3 +37,9 @@ reflectance/roughness factors remain explicit scene-development priors. They
 must not be described as measured ecology or photometric convergence. Review
 population/size changes as scene composition; strict same-content renderer blind
 comparisons are invalid when those populations intentionally differ.
+
+WORLD115 keeps intrinsic substrate reflectance separate from canopy illumination,
+following the distinction between material reflectance and incoming lighting in
+[PBRT, Diffuse Reflection](https://www.pbr-book.org/4ed/Reflection_Models/Diffuse_Reflection).
+The numerical soil/leaf priors used here remain authored; these sources do not
+measure Thessa's fictional pigments or certify reference-image parity.

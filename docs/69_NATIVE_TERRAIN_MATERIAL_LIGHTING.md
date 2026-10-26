@@ -2,6 +2,26 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+WORLD115 (doc 77) audits the subsequent Gemini forest-floor changes. Canopy
+coverage still selects authored moss/litter cover, but no longer multiplies
+bare substrate reflectance by an illumination factor. This removes the baked
+28% canopy darkening; shared geometric direct shadows remain the lighting
+consumer. A dry, cover-filtered fixture fails on the retained Gemini source
+and preserves identical substrate albedo, roughness and height after repair.
+This does not implement ground sky visibility or indirect illumination. Darker
+litter/pebble optical priors from the review are retained as authored materials.
+
+WORLD116 changes the authored wet-soil roughness endpoint from 0.18 to 0.48
+before the existing fine-mineral, moss and litter composition. Moisture still
+darkens intrinsic substrate reflectance; source heights, normals and canonical
+moisture remain. This models an optically rough damp substrate without assuming
+a continuous smooth water film from moisture alone. Bounded sampled puddle
+geometry retains its separate water material and dielectric response. The 0.48
+endpoint is a scene-development prior, not a measured soil calibration or a
+claim of resolved porous-water transport. Native before/after crops show a
+modest highlight-response change; moving blur and ground sky visibility remain
+open. No new pass, resource, setting or quality policy is introduced.
+
 WORLD91 (doc 77) gives resolved moss cover a connected cushion profile:
 `smoothstep(0.20, 0.80, moss) * hummock_height`, with the existing 35–60 mm
 hummock envelope. Moderate cover now contributes centimetres of geometric

@@ -476,7 +476,7 @@ fn check_plant_ray_visibility(reduced: bool) {
         primary_edge_samples * 4 < checked,
         "primary edge exclusions must remain a small minority"
     );
-    // WORLD112 fine pinnae need 1025px to keep primary-edge exclusions bounded;
-    // retain exact diagnostic pins and the unchanged two-code RGB tolerance.
-    assert_eq!(bias_disagreements, if reduced { [18, 0] } else { [65, 1] });
+    // WORLD115 geometry changes the exact finite-bias diagnostics; retain
+    // 1025px coverage and the unchanged colour, physical and edge guards.
+    assert_eq!(bias_disagreements, if reduced { [24, 0] } else { [77, 0] });
 }

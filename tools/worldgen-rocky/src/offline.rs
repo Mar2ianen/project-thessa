@@ -1734,10 +1734,19 @@ fn fern_frond(
     let nodes: [[f64; 3]; 13] = std::array::from_fn(|i| at(i as f64 / 12.0));
     let widths = std::array::from_fn::<_, 13, _>(|i| 0.006 * (1.0 - 0.85 * i as f64 / 12.0));
     ribbon(mesh, &nodes, &widths, lateral, [0.0, 1.0, 0.0], false);
+    // Attach to the emitted polyline, including the juvenile's terminal curl.
+    let along = |t: f64| {
+        let u = t.clamp(0.0, 1.0) * 12.0;
+        let i = (u.floor() as usize).min(11);
+        offset(
+            scaled(nodes[i], 1.0 - (u - i as f64)),
+            scaled(nodes[i + 1], u - i as f64),
+        )
+    };
     let (width_scale, pinna_factor) = match form {
-        2 => (1.45, 0.120),
-        1 => (0.85, 0.085),
-        _ => (1.00, 0.085),
+        2 => (1.25, 0.120),
+        1 => (0.85, 0.110),
+        _ => (1.00, 0.120),
     };
     for pair in 0..14 {
         let t = 0.11 + pair as f64 * 0.063;
@@ -1746,7 +1755,7 @@ fn fern_frond(
             let stagger = side * 0.008 * (pair as f64 * 1.7 + angle).sin();
             let t = t + stagger;
             let length = length * (1.0 + 0.13 * (pair as f64 * 2.1 + angle + side).sin());
-            let attachment = at(t);
+            let attachment = along(t);
             let nodes: [[f64; 3]; 3] = std::array::from_fn(|i| {
                 let s = [0.0, 0.5, 1.0][i];
                 let mut point = offset(
@@ -1770,8 +1779,9 @@ fn fern_frond(
                 }
                 point
             });
-            let tangent = crate::lod::normalize(crate::lod::sub(at(t + 0.001), at(t - 0.001)));
-            pinna::<9>(
+            let tangent =
+                crate::lod::normalize(crate::lod::sub(along(t + 0.001), along(t - 0.001)));
+            pinna::<13>(
                 mesh,
                 nodes,
                 tangent,
@@ -2079,7 +2089,7 @@ fn leaf_curve(nodes: [[f64; 3]; 3], t: f64) -> [f64; 3] {
 }
 
 /// Rounded lamina around a raised midrib, shared by ground and crown fronds.
-/// N selects outline sampling; crown strips also publish interior midrib rows.
+/// N selects outline sampling; divided strips also publish interior midrib rows.
 fn pinna<const N: usize>(
     mesh: &mut PlantMesh,
     nodes: [[f64; 3]; 3],
@@ -2120,7 +2130,7 @@ fn pinna<const N: usize>(
             0.0
         };
         // Deep lobes retain a connected axial wing rather than detached spears.
-        // Ground pinnae keep their existing convex contour.
+        // The legacy nine-point primitive keeps its convex contour.
         let lobes = if N > 9 {
             0.36 + 0.64
                 * ((1.0 - (t * (half / 3 * 2) as f64 * std::f64::consts::PI).cos()) / 1.5).min(1.0)
@@ -3005,21 +3015,68 @@ mod tests {
     }
 
     #[test]
+    fn ground_pinna_roots_intersect_the_published_rachis() {
+        use parry3d_f64::{math::Vector, query::PointQuery, shape::TriMesh};
+        for reduced in [false, true] {
+            for form in 0..3 {
+                let mut mesh = PlantMesh {
+                    positions: vec![],
+                    normals: vec![],
+                    uvs: vec![],
+                    indices: vec![],
+                    ambient_visibility: vec![],
+                    ..plant_prototypes().remove(0)
+                };
+                fern_frond(&mut mesh, 0.4, 2.0, 1.2, 0.0, false, form, reduced);
+                let axis = TriMesh::new(
+                    mesh.positions[..72]
+                        .iter()
+                        .map(|p| Vector::from_array(p.map(f64::from)))
+                        .collect(),
+                    mesh.indices
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .copied()
+                        .filter(|t| t.iter().all(|&i| i < 72))
+                        .collect(),
+                )
+                .unwrap();
+                let gaps: Vec<_> = mesh
+                    .positions
+                    .iter()
+                    .zip(&mesh.uvs)
+                    .filter(|(_, uv)| **uv == [0.0, 0.5])
+                    .map(|(p, _)| {
+                        axis.distance_to_local_point(Vector::from_array(p.map(f64::from)), false)
+                    })
+                    .collect();
+                assert_eq!(gaps.len(), 28);
+                let gap = gaps.into_iter().fold(0.0_f64, f64::max);
+                assert!(
+                    gap < 1e-6,
+                    "detached ground pinna form={form} reduced={reduced} gap={gap} m"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fern_pinnae_keep_a_slender_geometric_outline() {
         let mesh = plant_prototypes().remove(0);
         // Each frond starts with twelve rachis quads (72 split vertices),
-        // followed by fourteen pairs of nine-vertex laminae.
-        let (fronds, remainder) = mesh.positions.as_chunks::<324>();
+        // followed by fourteen pairs of thirteen-vertex divided laminae.
+        let (fronds, remainder) = mesh.positions.as_chunks::<436>();
         assert_eq!(fronds.len(), 13);
         assert!(remainder.is_empty());
         for frond in fronds {
-            for leaf in frond[72..].as_chunks::<9>().0 {
-                let length = crate::lod::sub(leaf[4].map(f64::from), leaf[0].map(f64::from));
-                let width = crate::lod::sub(leaf[2].map(f64::from), leaf[6].map(f64::from));
+            for leaf in frond[72..].as_chunks::<13>().0 {
+                let length = crate::lod::sub(leaf[2].map(f64::from), leaf[0].map(f64::from));
+                let width = crate::lod::sub(leaf[5].map(f64::from), leaf[6].map(f64::from));
                 let aspect =
                     (crate::lod::dot(length, length) / crate::lod::dot(width, width)).sqrt();
                 assert!(
-                    (5.5..6.5).contains(&aspect),
+                    (4.4..5.6).contains(&aspect),
                     "ground fern lamina aspect {aspect}"
                 );
             }
@@ -3726,7 +3783,7 @@ mod tests {
             assert!(mesh.positions.len() <= MAX_PLANT_PROTOTYPE_VERTICES);
             let triangles = mesh.indices.len() / 3;
             let (minimum, ceiling) = match mesh.kind {
-                ScatterKind::FernClump => (3200, 3250),
+                ScatterKind::FernClump => (4680, 4700),
                 ScatterKind::ReedClump => (1200, 1350),
                 ScatterKind::LycopsidTree => (21000, 21300),
                 kind => panic!("unexpected prototype kind {kind:?}"),

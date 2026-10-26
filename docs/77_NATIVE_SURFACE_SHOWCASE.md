@@ -263,6 +263,23 @@ vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 This is authored scene development with the same camera/profile; population
 changes are not a renderer-equivalent comparison or reference acceptance.
 
+### Final local verification for WORLD85–100
+
+The final source passed the terrain/render-core/graphics/worldgen CPU batch,
+strict affected Clippy, native plant hardware fixtures (including ignored
+cases), conforming L24 material-coordinate GPU checks, and material/environment
+GPU tests. Exact commands, counts, source and binary hashes, rejected trials,
+three-view captures and auxiliary session results are retained in
+`artifacts/native-coastal-night-2026-10-26.json` and the local campaign directory.
+The 96-frame sweep records one final image plus per-frame counters; it does not
+constitute motion-sequence image acceptance. Three unvoted WORLD96/WORLD97
+blind shading pairs have matched camera/profile/residency/mesh eligibility;
+they do not test WORLD98–100's altered geometry. No independent preference or
+reference-parity acceptance is recorded. The checked-in showcase still requests
+local RT, while matched development images use RT Off/raster shadows after the
+original baseline AMD device loss. Any unpaired candidate RT success remains
+a bounded session, not general driver-stability evidence.
+
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 
 This continuation reviews and retains user commit `3d58502`: the solitary

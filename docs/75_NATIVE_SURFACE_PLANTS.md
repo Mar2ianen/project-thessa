@@ -108,6 +108,20 @@ plant placement and material cohorts remain. Full/reduced sampled distance,
 projected area, minimum triangle conditioning and source payload caps remain.
 Subpixel foliage filtering and independent reference acceptance are still open.
 
+The final GPU visibility fixture uses 513×513 rather than 257×257 to resolve
+thin divided leaves before applying the unchanged 1/16-pixel primary-edge band.
+The 257-pixel run had no interior GPU/biased-oracle RGB disagreements but
+failed the existing edge-exclusion fraction limit; that failed run is retained.
+At 513 pixels, full/reduced calibration checks 11,496/4,256 samples, including
+10,536/3,826 shadow-interior samples, with 1,764/580 primary-edge exclusions.
+The same quarter-of-checked edge ceiling, two-RGB-code interior tolerance,
+physical offset-convergence check and zero invented blockers remain. Exact
+finite receiver-exclusion disagreements versus the physical oracle are
+[43, 0] / [18, 1] at 0.01/0.0001 m bias for full/reduced meshes. These measured
+diagnostics replace WORLD40's stale counts; they do not claim bias-free physical
+visibility or establish full-scene RT driver stability. The fixture is cfg(test)
+only; the release binary is checked against the three WORLD100 captured views.
+
 **Status:** bounded native survey consumer and graphics policy are recorded on
 `feat/native-surface-plants` (WORLD04). Grounded arching fern/reed/lycopsid
 prototypes, per-kind albedo and a second matched capture/blind-review stage are

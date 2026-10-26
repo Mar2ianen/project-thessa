@@ -273,6 +273,34 @@ fn wet_understory_density_gain_survives_the_early_surface_prefilter() {
 }
 
 #[test]
+fn understory_water_niches_are_continuous_bounded_and_datum_independent() {
+    let at = |elevation, datum| {
+        let mut s = surface([1.0, 0.0, 0.0]);
+        s.ground_height_m = elevation + datum;
+        s.water_height_m = Some(datum);
+        understory_habitat_weights(s)
+    };
+    let mut previous = (f64::INFINITY, f64::INFINITY);
+    for i in 0..1000 {
+        let elevation = 2.1 + i as f64 * 0.01;
+        let value = at(elevation, 0.0);
+        assert!((0.88..=1.35).contains(&value.0));
+        assert!((0.45..=1.75).contains(&value.1));
+        assert!(value.0 <= previous.0 && value.1 <= previous.1);
+        let shifted = at(elevation, 1000.0);
+        assert!((value.0 - shifted.0).abs() < 1e-12 && (value.1 - shifted.1).abs() < 1e-12);
+        previous = value;
+    }
+    for edge in [2.2, 2.5, 8.0] {
+        let a = at(edge - 1e-6, 0.0);
+        let b = at(edge + 1e-6, 0.0);
+        assert!((a.0 - b.0).abs() < 1e-5 && (a.1 - b.1).abs() < 1e-5);
+    }
+    assert_eq!(at(2.1, 0.0), (1.35, 1.75));
+    assert_eq!(at(12.0, 0.0), (0.88, 0.45));
+}
+
+#[test]
 fn understory_has_disjoint_ids_nested_density_and_exact_window_unions() {
     let tile = region(0, 18, 131_072, 131_072);
     let high = query(tile, ScatterPopulation::Understory, 1.0);

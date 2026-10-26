@@ -152,7 +152,7 @@ The checked-in vertical slice currently contains:
   green/juvenile/olive/weathered pigment cohorts and asymmetric pinnae through
   shared padded leaf textures, without extra draws or a changed mesh budget.
   Matched captures use raster shadows after an original-baseline AMD RT device loss.
-  Coastal composition continuation (WORLD90): 0.95 m near-clump spacing keeps 30% fewer centres than the original scene; continuous sizes, compact juveniles, rare large ferns, divided crowns and slender reeds retain the shared mesh pipeline.
+  Coastal composition continuation (WORLD90b): continuous wet-to-dry plant niches retain the 0.95 m spacing, small and middle cohorts, rare hero rosettes, divided veteran crowns and slender reeds.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in

@@ -27,6 +27,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD88b | Connected secondary rachises | 2,617 | 10,076 | 13,941,418 | 375.931 ms |
 | WORLD89 | Slender reed blades | 2,617 | 10,076 | 13,941,418 | 375.206 ms |
 | WORLD90 | Populate middle-size colonies; fix wet prefilter | 4,608 | 12,067 | 17,426,682 | 423.684 ms |
+| WORLD90b | Continuous riparian niches | 4,459 | 11,918 | 15,920,770 | 407.392 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -117,6 +118,18 @@ strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,769,456 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
 0.70–0.95 / >=0.95) are [269, 1597, 1994, 748].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD90b — Continuous riparian niches
+
+Understory density now blends continuously from 1.35 at moist low elevations to 0.88 above 8 m relative to local water. Reed selection blends from 1.75 to 0.45 over 2.2–8 m. This removes the former discontinuities at 2.2 and 8 m without changing candidate identity, plant quality resolution or the early 1.35 capacity bound. A regression checks continuity, monotonicity, bounds and invariance under a common vertical datum shift.
+
+The stage passed 273 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,769,456 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
 This is authored scene development with the same camera/profile; population
 changes are not a renderer-equivalent comparison or reference acceptance.
 

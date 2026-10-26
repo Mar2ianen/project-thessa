@@ -1,8 +1,8 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD90, doc 77): 0.95 m near-clump spacing keeps 30% fewer centres than the original scene; continuous sizes, compact juveniles, rare large ferns, divided crowns and slender reeds retain the shared mesh pipeline.
-The current standing scene submits 12,067 instances and
-17,426,682 mesh triangles in 37 shared ranges;
+Current composition continuation (WORLD90b, doc 77): continuous wet-to-dry plant niches retain the 0.95 m spacing, small and middle cohorts, rare hero rosettes, divided veteran crowns and slender reeds.
+The current standing scene submits 11,918 instances and
+15,920,770 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,769,456 B under the
 7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
 

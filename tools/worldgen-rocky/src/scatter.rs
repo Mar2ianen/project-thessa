@@ -421,6 +421,11 @@ pub fn scatter_region(
             {
                 continue;
             }
+            let (moisture_factor, reed_bias) = if population == ScatterPopulation::Understory {
+                understory_habitat_weights(surface)
+            } else {
+                (1.0, 1.0)
+            };
             let density = match population {
                 ScatterPopulation::Rocks => {
                     base_density_per_km2(surface.biome) * (1.0 + 3.0 * surface.rocky01)
@@ -443,19 +448,6 @@ pub fn scatter_region(
                     // Dappled light niche: suppressed under dense canopy cores (canopy > 0.65)
                     // and open barren ground, peaking in forest glades and canopy margins.
                     let light_niche = (1.0 - canopy_cover * 0.62).clamp(0.12, 1.0);
-                    // Moisture niche: understory thrives in moist hollows and near water
-                    let moisture_factor = if let Some(water_h) = surface.water_height_m {
-                        let elev = (surface.ground_height_m - water_h).max(0.0);
-                        if elev < 2.5 {
-                            UNDERSTORY_MOISTURE_DENSITY_MAX
-                        } else if elev < 8.0 {
-                            1.0 + 0.35 * (1.0 - (elev - 2.5) / 5.5)
-                        } else {
-                            0.88
-                        }
-                    } else {
-                        1.0
-                    };
                     reference_density
                         * if population == ScatterPopulation::Understory {
                             (surface.vegetation.ground01 + surface.vegetation.reeds01)
@@ -484,13 +476,7 @@ pub fn scatter_region(
                     }
                 }
                 ScatterPopulation::Understory => {
-                    let moisture_bias = if let Some(water_h) = surface.water_height_m {
-                        let elev = (surface.ground_height_m - water_h).max(0.0);
-                        if elev < 2.2 { 1.75 } else { 0.45 }
-                    } else {
-                        1.0
-                    };
-                    let reed_weight = surface.vegetation.reeds01 * moisture_bias;
+                    let reed_weight = surface.vegetation.reeds01 * reed_bias;
                     let ground_weight = surface.vegetation.ground01;
                     let choice = random(431) * (ground_weight + reed_weight);
                     if choice < reed_weight {
@@ -538,6 +524,20 @@ pub fn scatter_region(
     }
     batch.items.sort_unstable_by_key(|item| item.id);
     Ok(batch)
+}
+
+/// Authored relative-water niche, not a soil-water or plant growth solver.
+fn understory_habitat_weights(surface: ScatterSurface) -> (f64, f64) {
+    let Some(water_height) = surface.water_height_m else {
+        return (1.0, 1.0);
+    };
+    let elevation = (surface.ground_height_m - water_height).max(0.0);
+    let moist = 1.0 - crate::appearance::smooth(2.5, 8.0, elevation);
+    let riparian = 1.0 - crate::appearance::smooth(2.2, 8.0, elevation);
+    (
+        0.88 + (UNDERSTORY_MOISTURE_DENSITY_MAX - 0.88) * moist,
+        0.45 + 1.30 * riparian,
+    )
 }
 
 /// Shared by every query window and quality tier; no cube-face seed or camera.

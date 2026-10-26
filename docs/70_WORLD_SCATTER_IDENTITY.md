@@ -526,3 +526,11 @@ yielded 7,040 versus 7,040). A sixteen-seed oracle now checks the expected
 wet/dry count envelope, and six-face spacing checks use the inverse-square
 expectation with a six-sigma absolute count allowance. Other populations retain
 their original bounds; no candidate lattice, jitter or world ID is changed.
+
+WORLD90b makes the authored relative-water niche continuous. Density uses
+`0.88 + 0.47 * (1 - smoothstep(2.5, 8.0, elevation_m))`; reed selection uses
+`0.45 + 1.30 * (1 - smoothstep(2.2, 8.0, elevation_m))`. Elevation is ground
+minus local water, clamped at zero; missing water retains neutral weights.
+The 1.35 early-filter capacity bound remains conservative. Tests cover
+continuity at all former thresholds, monotonicity, bounds and vertical-datum
+invariance. This is an authored habitat prior, not a hydrological solver.

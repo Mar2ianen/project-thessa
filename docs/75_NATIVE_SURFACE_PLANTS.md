@@ -1,6 +1,6 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD96, doc 77): an authored overcast profile accompanies less crowded, mixed-size ferns, smooth two-tier rushes, connected moss relief and per-organ optical materials.
+Current composition continuation (WORLD97, doc 77): crown leaf normals and ambient visibility now follow emitted geometry; the overcast coastal scene retains mixed fern sizes, smooth rush arcs and connected moss relief.
 The current standing scene submits 11,918 instances and
 17,580,060 mesh triangles in 37 shared ranges;
 vertex/index/AO source payload is 6,838,504 B under the
@@ -24,6 +24,14 @@ WORLD92 removes the extra radius/height crown and basal attenuation. Ambient
 visibility now contains only the existing 32 cosine-weighted geometric BVH
 queries per source vertex; shared direct shadows remain separate. This is not
 computed ground bounce or a measured contact-visibility solution.
+WORLD97 also removes the crown-dome normal blend and forced upward component.
+Both canonical and scaled forms now derive foliage normals from area-weighted
+actual published triangles before the existing geometric visibility bake.
+Stem normals retain their analytic taper representation. A regression over
+all full/reduced tree forms constrains disagreement with the emitted surface
+to 0.001 rad; the retained prior failed at 0.2213 rad on the canonical crown.
+Positions, indices, populations, pigment/roughness maps and shared draw ranges
+are unchanged. This is a geometric shading correction, not additional GI.
 The shared image atlas adds no pass/draw and the disabled path remains empty.
 Historical checkpoints below describe previous geometry/materials, not the
 current calibration or reference acceptance. RT stability and independent visual

@@ -34,6 +34,7 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD94 | Layered slender rush clumps | 4,459 | 11,918 | 16,092,860 | 406.549 ms |
 | WORLD95 | Smooth upright rush arcs | 4,459 | 11,918 | 17,580,060 | 411.133 ms |
 | WORLD96 | Authored overcast profile | 4,459 | 11,918 | 17,580,060 | 410.710 ms |
+| WORLD97 | Geometry-derived crown normals | 4,459 | 11,918 | 17,580,060 | 411.052 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -204,6 +205,18 @@ changes are not a renderer-equivalent comparison or reference acceptance.
 The experimental showcase cloud profile now uses inverse coverage threshold 0.18 and opacity 0.72 instead of 0.46/0.45. The existing settings define zero threshold as overcast, not zero cloud cover. A separate same-binary trial preceded the profile edit. All three fixed cameras were recaptured; EV100 12.22, the plant population and geometry, shared cloud transport, TAA default-off and the checked-in local-RT request remain. This intentionally changes authored weather and is not a light-equivalent renderer comparison. Clear-sky diffuse SH9 and the existing thin-cloud liquid-water prior still limit overcast lighting fidelity; no global ambient multiplier or new transport pass is added.
 
 The stage passed 275 worldgen and 130 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,838,504 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [261, 1545, 1922, 731].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD97 — Geometry-derived crown normals
+
+A new regression reproduced 0.2213 rad maximum disagreement between retained crown normals and the area-weighted emitted surface. Remove the 18 percent ellipsoid blend and forced upward component. Shared prototype finishing now derives leaf normals from actual published triangles after form scaling, then runs the existing 32-query geometric visibility bake; analytic stem normals remain. Every full/reduced tree form passes a 0.001 rad source-normal envelope. Positions, indices, instances, pigment/roughness data and draw ranges are unchanged; all three fixed-weather camera captures and seven stage gates passed. The red test and production-base provenance are retained separately. This does not implement ground bounce or stochastic GI.
+
+The stage passed 276 worldgen and 130 native CPU tests, formatting,
 strict affected Clippy and release build. Its standing capture keeps
 37 shared draws and a 6,838,504 B
 vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /

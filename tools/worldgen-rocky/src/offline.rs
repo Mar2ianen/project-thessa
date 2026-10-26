@@ -1231,7 +1231,7 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
                             }))
                             .map(|v| v as f32);
                         }
-                        variant.ambient_visibility = super::plant_visibility::bake(&variant, 32);
+                        bake_plant_surface(&mut variant);
                     }
                     forms.push((variant, form));
                 }
@@ -1239,6 +1239,27 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
             forms
         })
         .clone()
+}
+
+fn bake_plant_surface(mesh: &mut PlantMesh) {
+    if mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
+        let start = mesh.stem.as_ref().map_or(0, |s| s.vertex_count as usize);
+        let mut areas = vec![[0.0; 3]; mesh.positions.len() - start];
+        for tri in mesh.indices.as_chunks::<3>().0 {
+            if (tri[0] as usize) < start {
+                continue;
+            }
+            let area = face_normal(tri.map(|i| mesh.positions[i as usize].map(f64::from)));
+            for &i in tri {
+                let index = i as usize - start;
+                areas[index] = offset(areas[index], area);
+            }
+        }
+        for (normal, area) in mesh.normals[start..].iter_mut().zip(areas) {
+            *normal = crate::lod::normalize(area).map(|v| v as f32);
+        }
+    }
+    mesh.ambient_visibility = super::plant_visibility::bake(mesh, 32);
 }
 
 fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
@@ -1278,7 +1299,7 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
             _ => unreachable!(),
         }
         mesh.foliage_tones.resize(mesh.positions.len(), 0);
-        mesh.ambient_visibility = super::plant_visibility::bake(&mesh, 32);
+        bake_plant_surface(&mut mesh);
         mesh
     })
     .collect()
@@ -1636,42 +1657,6 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     assign_foliage_tone(mesh, first, 1);
                 }
             }
-        }
-    }
-    // Volumetric canopy shading (SpeedTree / Crytek normal warping): blend leaf
-    // normals outward from the crown dome center so the canopy shades as a 3D organic volume.
-    let foliage_start = mesh.stem.as_ref().map_or(0, |s| s.vertex_count as usize);
-    for (p, n) in mesh.positions[foliage_start..]
-        .iter()
-        .zip(&mut mesh.normals[foliage_start..])
-    {
-        let pf = p.map(f64::from);
-        let center = if terminals.len() > 1
-            && crate::lod::dot(
-                crate::lod::sub(pf, terminals[0]),
-                crate::lod::sub(pf, terminals[0]),
-            ) > crate::lod::dot(
-                crate::lod::sub(pf, terminals[1]),
-                crate::lod::sub(pf, terminals[1]),
-            ) {
-            terminals[1]
-        } else {
-            terminals[0]
-        };
-        let dome_center = [center[0], center[1] + 0.35, center[2]];
-        let radial = crate::lod::sub(pf, dome_center);
-        let oblate = [radial[0], radial[1] * 1.85, radial[2]];
-        let oblate_len_sq = crate::lod::dot(oblate, oblate);
-        if oblate_len_sq > 1e-6 {
-            let ellipsoid = scaled(oblate, 1.0 / oblate_len_sq.sqrt());
-            let current = n.map(f64::from);
-            let mut blended =
-                crate::lod::normalize(offset(scaled(current, 0.82), scaled(ellipsoid, 0.18)));
-            if blended[1] < 0.03 {
-                blended[1] = 0.03;
-                blended = crate::lod::normalize(blended);
-            }
-            *n = blended.map(|v| v as f32);
         }
     }
 }
@@ -3012,6 +2997,44 @@ mod tests {
         let mut w = world();
         w.lats[1] = 0.0;
         assert!(w.validate().is_err());
+    }
+
+    #[test]
+    fn crown_foliage_normals_follow_the_emitted_triangle_surface() {
+        for reduced in [false, true] {
+            for (mesh, form) in plant_prototype_forms(reduced) {
+                if mesh.kind != ScatterKind::LycopsidTree {
+                    continue;
+                }
+                let start = mesh.stem.as_ref().unwrap().vertex_count as usize;
+                let mut sums = vec![[0.0_f64; 3]; mesh.positions.len()];
+                for tri in mesh.indices.as_chunks::<3>().0 {
+                    if (tri[0] as usize) < start {
+                        continue;
+                    }
+                    let points = tri.map(|i| mesh.positions[i as usize].map(f64::from));
+                    let area = face_normal(points);
+                    for &i in tri {
+                        sums[i as usize] = offset(sums[i as usize], area);
+                    }
+                }
+                let minimum_dot = sums[start..]
+                    .iter()
+                    .zip(&mesh.normals[start..])
+                    .map(|(surface, normal)| {
+                        crate::lod::dot(
+                            crate::lod::normalize(*surface),
+                            crate::lod::normalize(normal.map(f64::from)),
+                        )
+                    })
+                    .fold(1.0_f64, f64::min);
+                assert!(
+                    minimum_dot > 0.001_f64.cos(),
+                    "form={form} reduced={reduced} worst surface-normal angle={} rad",
+                    minimum_dot.clamp(-1.0, 1.0).acos()
+                );
+            }
+        }
     }
 
     #[test]

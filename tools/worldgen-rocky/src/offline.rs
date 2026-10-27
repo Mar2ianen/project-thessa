@@ -1179,66 +1179,89 @@ pub fn plant_form_scale(form: u8) -> [f32; 3] {
         _ => [1.0; 3],
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlantDetail {
+    Full,
+    Reduced,
+    Shadow,
+}
+impl From<bool> for PlantDetail {
+    fn from(reduced: bool) -> Self {
+        if reduced { Self::Reduced } else { Self::Full }
+    }
+}
+
 /// Shared organ/material groups; bounded morphology is baked into local
 /// geometry so the shared rigid instance/normal/RT ABI remains unchanged.
 pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
     static FULL: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
     static COARSE: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
     (if reduced { &COARSE } else { &FULL })
-        .get_or_init(|| {
-            let base = if reduced {
-                reduced_plant_prototypes()
-            } else {
-                plant_prototypes()
-            };
-            let mut forms = Vec::new();
-            for mesh in base {
-                let count = if mesh.kind == crate::scatter::ScatterKind::ReedClump {
-                    1
-                } else {
-                    3
-                };
-                for form in 0..count {
-                    let mut variant = mesh.clone();
-                    if form != 0 && mesh.kind == crate::scatter::ScatterKind::FernClump {
-                        variant.positions.clear();
-                        variant.normals.clear();
-                        variant.uvs.clear();
-                        variant.foliage_tones.clear();
-                        variant.indices.clear();
-                        variant.stem = None;
-                        variant.senescent = None;
-                        fern_clump_form(&mut variant, reduced, form);
-                    }
-                    if form != 0 && mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
-                        variant.positions.clear();
-                        variant.normals.clear();
-                        variant.uvs.clear();
-                        variant.foliage_tones.clear();
-                        variant.indices.clear();
-                        variant.stem = None;
-                        variant.senescent = None;
-                        lycopsid_tree_form(&mut variant, reduced, form);
-                    }
-                    if form != 0 {
-                        let scale = plant_form_scale(form);
-                        for p in &mut variant.positions {
-                            *p = std::array::from_fn(|i| p[i] * scale[i]);
-                        }
-                        for n in &mut variant.normals {
-                            *n = crate::lod::normalize(std::array::from_fn(|i| {
-                                f64::from(n[i] / scale[i])
-                            }))
-                            .map(|v| v as f32);
-                        }
-                        bake_plant_surface(&mut variant);
-                    }
-                    forms.push((variant, form));
+        .get_or_init(|| build_plant_forms(reduced.into()))
+        .clone()
+}
+
+/// Depth-only representation: every frond and primary pinna survives. A consumer
+/// must certify and project its geometric error before using it for a light.
+pub fn shadow_plant_prototype_forms() -> Vec<(PlantMesh, u8)> {
+    static SHADOW: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
+    SHADOW
+        .get_or_init(|| build_plant_forms(PlantDetail::Shadow))
+        .clone()
+}
+
+fn build_plant_forms(detail: PlantDetail) -> Vec<(PlantMesh, u8)> {
+    let base = match detail {
+        PlantDetail::Full => plant_prototypes(),
+        PlantDetail::Reduced => reduced_plant_prototypes(),
+        PlantDetail::Shadow => build_plant_prototypes(detail),
+    };
+    let mut forms = Vec::new();
+    for mesh in base {
+        let count = if mesh.kind == crate::scatter::ScatterKind::ReedClump {
+            1
+        } else {
+            3
+        };
+        for form in 0..count {
+            let mut variant = mesh.clone();
+            if form != 0 && mesh.kind == crate::scatter::ScatterKind::FernClump {
+                variant.positions.clear();
+                variant.normals.clear();
+                variant.uvs.clear();
+                variant.foliage_tones.clear();
+                variant.indices.clear();
+                variant.stem = None;
+                variant.senescent = None;
+                fern_clump_form(&mut variant, detail, form);
+            }
+            if form != 0 && mesh.kind == crate::scatter::ScatterKind::LycopsidTree {
+                variant.positions.clear();
+                variant.normals.clear();
+                variant.uvs.clear();
+                variant.foliage_tones.clear();
+                variant.indices.clear();
+                variant.stem = None;
+                variant.senescent = None;
+                lycopsid_tree_form(&mut variant, detail, form);
+            }
+            if form != 0 {
+                let scale = plant_form_scale(form);
+                for p in &mut variant.positions {
+                    *p = std::array::from_fn(|i| p[i] * scale[i]);
+                }
+                for n in &mut variant.normals {
+                    *n = crate::lod::normalize(std::array::from_fn(|i| f64::from(n[i] / scale[i])))
+                        .map(|v| v as f32);
+                }
+                if detail != PlantDetail::Shadow {
+                    bake_plant_surface(&mut variant);
                 }
             }
-            forms
-        })
-        .clone()
+            forms.push((variant, form));
+        }
+    }
+    forms
 }
 
 fn bake_plant_surface(mesh: &mut PlantMesh) {
@@ -1262,7 +1285,9 @@ fn bake_plant_surface(mesh: &mut PlantMesh) {
     mesh.ambient_visibility = super::plant_visibility::bake(mesh, 32);
 }
 
-fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
+fn build_plant_prototypes(detail: impl Into<PlantDetail>) -> Vec<PlantMesh> {
+    let detail = detail.into();
+    let reduced = detail != PlantDetail::Full;
     use crate::scatter::ScatterKind;
     [
         ScatterKind::FernClump,
@@ -1286,7 +1311,7 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
         match kind {
             ScatterKind::FernClump => {
                 mesh.albedo_srgb = [0.20, 0.28, 0.10];
-                fern_clump(&mut mesh, reduced);
+                fern_clump(&mut mesh, detail);
             }
             ScatterKind::ReedClump => {
                 mesh.albedo_srgb = [0.25, 0.30, 0.11];
@@ -1294,12 +1319,14 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
             }
             ScatterKind::LycopsidTree => {
                 mesh.albedo_srgb = [0.22, 0.30, 0.12];
-                lycopsid_tree(&mut mesh, reduced);
+                lycopsid_tree(&mut mesh, detail);
             }
             _ => unreachable!(),
         }
         mesh.foliage_tones.resize(mesh.positions.len(), 0);
-        bake_plant_surface(&mut mesh);
+        if detail != PlantDetail::Shadow {
+            bake_plant_surface(&mut mesh);
+        }
         mesh
     })
     .collect()
@@ -1308,11 +1335,13 @@ fn build_plant_prototypes(reduced: bool) -> Vec<PlantMesh> {
 const GOLDEN_ANGLE: f64 = 2.399_963_229_728_653;
 
 /// Grounded fern rosette with paired pinnae along thirteen arching rachises.
-fn fern_clump(mesh: &mut PlantMesh, reduced: bool) {
-    fern_clump_form(mesh, reduced, 0);
+fn fern_clump(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>) {
+    let detail = detail.into();
+    fern_clump_form(mesh, detail, 0);
 }
 
-fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
+fn fern_clump_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form: u8) {
+    let detail = detail.into();
     if form == 2 {
         // Form 2: Broad decumbent hero rosette with 21 layered fronds (4 juvenile upright,
         // 10 mature arching fountain fronds, 7 long ground-draping senescent skirts).
@@ -1346,7 +1375,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                 F2_BASE_Y[i],
                 i >= 14,
                 form,
-                reduced,
+                detail,
             );
         }
         return;
@@ -1397,7 +1426,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
             BASE_Y_M[i],
             order >= living,
             form,
-            reduced,
+            detail,
         );
     }
 }
@@ -1453,11 +1482,14 @@ fn reed_clump(mesh: &mut PlantMesh, reduced: bool) {
 
 /// Authored forked arborescent silhouette with tiered radial crowns; optical
 /// reference geometry, not a taxonomic reconstruction of Cyathea / Dicksonia.
-fn lycopsid_tree(mesh: &mut PlantMesh, reduced: bool) {
-    lycopsid_tree_form(mesh, reduced, 0);
+fn lycopsid_tree(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>) {
+    let detail = detail.into();
+    lycopsid_tree_form(mesh, detail, 0);
 }
 
-fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
+fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form: u8) {
+    let detail = detail.into();
+    let reduced = detail != PlantDetail::Full;
     const TRUNK_RINGS: [(f64, f64); 21] = [
         (0.00, 0.68),
         (0.18, 0.54),
@@ -1668,7 +1700,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, reduced: bool, form: u8) {
                     0.90 + 0.20 * (i as f64 * 2.71 + term_idx as f64 * 1.7).cos().powi(2);
                 let drop = drop * if form == 2 { 1.42 } else { 1.0 } * drop_jitter;
                 let first = mesh.positions.len();
-                crown_frond(mesh, angle, base, reach, rise, drop, form == 2, reduced);
+                crown_frond(mesh, angle, base, reach, rise, drop, form == 2, detail);
                 if tier == 0 {
                     assign_foliage_tone(mesh, first, 1);
                 }
@@ -1688,8 +1720,9 @@ fn fern_frond(
     base_y_m: f64,
     senescent: bool,
     form: u8,
-    reduced: bool,
+    detail: impl Into<PlantDetail>,
 ) {
+    let detail = detail.into();
     let first_vertex = mesh.positions.len();
     let (radial, lateral) = azimuth_frame(angle);
     let bend = 0.055 * length_m * (angle * 2.7).sin();
@@ -1790,7 +1823,7 @@ fn fern_frond(
                 0.55,
                 secondary_limit,
                 senescent.then_some(base_y_m),
-                reduced,
+                detail,
             );
         }
     }
@@ -1951,8 +1984,9 @@ fn crown_frond(
     rise_m: f64,
     drop_m: f64,
     veteran: bool,
-    reduced: bool,
+    detail: impl Into<PlantDetail>,
 ) -> usize {
+    let detail = detail.into();
     let first_vertex = mesh.positions.len();
     let reach_m = reach_m * 0.99;
     let (radial, lateral) = azimuth_frame(angle);
@@ -2056,7 +2090,7 @@ fn crown_frond(
                 0.34,
                 24,
                 None,
-                reduced,
+                detail,
             );
         }
     }
@@ -2101,8 +2135,10 @@ fn compound_pinna(
     pinnule_width_ratio: f64,
     secondary_limit: usize,
     floor: Option<f64>,
-    reduced: bool,
+    detail: impl Into<PlantDetail>,
 ) -> usize {
+    let detail = detail.into();
+    let reduced = detail != PlantDetail::Full;
     const MAX_WING_BINS: usize = 12;
     let first = mesh.positions.len();
     let first_index = mesh.indices.len();
@@ -2124,7 +2160,9 @@ fn compound_pinna(
     let pitch_reach = (length * 0.20).min(frond_pitch_m * 0.48).min(0.085);
     let count = (length * 0.91 / (pitch_reach * 0.34 * 0.82)).ceil() as usize;
     let count = count.clamp(6, secondary_limit);
-    let wing_bins = if length < 0.55 {
+    let wing_bins = if detail == PlantDetail::Shadow {
+        2
+    } else if length < 0.55 {
         ((count / 2) & !1).clamp(2, 8)
     } else {
         MAX_WING_BINS

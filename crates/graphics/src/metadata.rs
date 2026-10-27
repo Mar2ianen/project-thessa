@@ -1005,6 +1005,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Optional near cover radius. Remaining cascades span geometrically to the same far distance with unchanged map memory. One cascade still covers the far distance. Omission preserves each host's legacy distribution.",
         },
         SettingMeta {
+            path: "shadows.mesh_lod_error_texels",
+            label: "Shadow mesh geometric error",
+            kind: SettingKind::Float,
+            range: "0..=2",
+            step: "0.25",
+            unit: "texel",
+            advanced: true,
+            restart_required: true,
+            description: "Depth-only mesh accuracy: 0 uses full geometry, 0.25 is strict, 0.5 balanced, 1 cheaper. Supplied conservative surface error is projected through the actual light and instance matrices; missing or ineligible LODs use full geometry.",
+        },
+        SettingMeta {
             path: "shadows.normal_bias_m",
             label: "Shadow normal bias",
             kind: SettingKind::Float,

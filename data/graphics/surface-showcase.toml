@@ -118,6 +118,7 @@ reflection_bounces = 1
 ray_bias_m = 0.0001
 
 [shadows]
+mesh_lod_error_texels = 0.5
 first_cascade_distance_m = 25.0
 enabled = true
 quality = "high"

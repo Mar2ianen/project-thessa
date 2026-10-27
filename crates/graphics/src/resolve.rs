@@ -397,6 +397,8 @@ pub struct ResolvedGraphicsSettings {
     pub shadow_max_distance_m: f64,
     #[serde(default)]
     pub shadow_first_cascade_distance_m: Option<f64>,
+    #[serde(default)]
+    pub shadow_mesh_lod_error_texels: f64,
     pub shadow_map_size: u32,
     pub shadow_normal_bias_m: f64,
     /// Human-readable fallback notes, also stored in captures.
@@ -1055,6 +1057,13 @@ impl ResolvedGraphicsSettings {
             shadow_first_cascade_distance_m,
             shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
             shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
+            shadow_mesh_lod_error_texels: if requested.shadows.enabled
+                && requested.shadows.mesh_lod_error_texels.is_finite()
+            {
+                requested.shadows.mesh_lod_error_texels.clamp(0.0, 2.0)
+            } else {
+                0.0
+            },
             notes,
         }
     }
@@ -1387,6 +1396,10 @@ impl ResolvedGraphicsSettings {
             self.rt_reflection_bounces.to_string(),
         );
         map.insert("shadows".to_string(), self.shadow_enabled.to_string());
+        map.insert(
+            "shadow_mesh_lod_error_texels".into(),
+            self.shadow_mesh_lod_error_texels.to_string(),
+        );
         map.insert(
             "shadow_max_distance_m".into(),
             self.shadow_max_distance_m.to_string(),
@@ -1937,6 +1950,44 @@ mod tests {
             ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
         assert_eq!(resolved.backend.name, "auto");
         assert!(resolved.notes.iter().any(|n| n.contains("dx12")));
+    }
+
+    #[test]
+    fn shadow_mesh_error_is_explicit_bounded_serialized_and_free_when_disabled() {
+        let mut request = RequestedGraphics::from_toml("[shadows]\n").unwrap();
+        let resolve = |r: &RequestedGraphics| {
+            ResolvedGraphicsSettings::from_requested(r, &Capabilities::unknown())
+        };
+        assert_eq!(resolve(&request).shadow_mesh_lod_error_texels, 0.0);
+        for (value, expected) in [
+            (0.25, 0.25),
+            (0.5, 0.5),
+            (1.0, 1.0),
+            (-1.0, 0.0),
+            (3.0, 2.0),
+            (f64::NAN, 0.0),
+            (f64::INFINITY, 0.0),
+        ] {
+            request.shadows.mesh_lod_error_texels = value;
+            let resolved = resolve(&request);
+            assert_eq!(resolved.shadow_mesh_lod_error_texels, expected);
+            assert_eq!(
+                resolved.as_meta_map()["shadow_mesh_lod_error_texels"],
+                expected.to_string()
+            );
+            assert_eq!(
+                toml::from_str::<ResolvedGraphicsSettings>(&toml::to_string(&resolved).unwrap())
+                    .unwrap(),
+                resolved
+            );
+        }
+        request.shadows.mesh_lod_error_texels = 0.5;
+        request.shadows.enabled = false;
+        assert_eq!(resolve(&request).shadow_mesh_lod_error_texels, 0.0);
+        assert_eq!(
+            toml::from_str::<RequestedGraphics>(&toml::to_string(&request).unwrap()).unwrap(),
+            request
+        );
     }
 
     #[test]

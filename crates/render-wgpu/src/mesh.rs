@@ -8,8 +8,17 @@ use thessa_rcbt_core::lighting::SurfaceLighting;
 use thessa_render_core::mesh::{MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
+struct ShadowPrimitive {
+    bounds: crate::mesh_visibility::Bounds,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    count: u32,
+    max_error_m: f64,
+}
+
 struct Primitive {
     bounds: Option<crate::mesh_visibility::Bounds>,
+    shadow: Option<ShadowPrimitive>,
     ambient: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -739,6 +748,7 @@ impl MeshRenderer {
             .primitives
             .iter()
             .map(|p| Primitive {
+                shadow: None,
                 bounds: crate::mesh_visibility::Bounds::new(p.vertices.iter().map(|v| v.position)),
                 ambient: buffer(
                     &words(if p.ambient_visibility.is_empty() {
@@ -1109,6 +1119,89 @@ impl MeshRenderer {
         }
     }
 
+    /// Atomically replace optional depth-only geometry. The caller certifies
+    /// max_error_m against the original primitive, in both surface directions.
+    pub fn set_shadow_lods(
+        &mut self,
+        backend: &Backend,
+        lods: &[thessa_render_core::mesh::ShadowMeshLod],
+    ) -> Result<(), BackendError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for lod in lods {
+            let Some(p) = self.primitives.get(lod.primitive) else {
+                return Err(fail("shadow LOD primitive out of range"));
+            };
+            if !seen.insert(lod.primitive)
+                || !lod.max_error_m.is_finite()
+                || lod.max_error_m < 0.0
+                || lod.positions.len() as u64 * 12 > backend.device.limits().max_buffer_size
+                || lod.indices.len() as u64 * 4 > backend.device.limits().max_buffer_size
+                || lod.positions.len() > u32::MAX as usize
+                || lod.positions.is_empty()
+                || lod.positions.iter().flatten().any(|v| !v.is_finite())
+                || lod.indices.is_empty()
+                || !lod.indices.len().is_multiple_of(3)
+                || lod.indices.len() >= p.count as usize
+                || lod
+                    .indices
+                    .iter()
+                    .any(|&i| i as usize >= lod.positions.len())
+                || p.bounds.is_none()
+            {
+                return Err(fail("invalid depth-only mesh LOD"));
+            }
+        }
+        let mut replacements: Vec<Option<ShadowPrimitive>> =
+            (0..self.primitives.len()).map(|_| None).collect();
+        for (i, lod) in lods.iter().enumerate() {
+            let buffer = |contents: &[u8], usage| {
+                backend
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh-shadow-lod"),
+                        contents,
+                        usage,
+                    })
+            };
+            let shared = lods[..i]
+                .iter()
+                .find(|a| a.same_geometry(lod))
+                .and_then(|a| replacements[a.primitive].as_ref());
+            let (vertices, indices) = if let Some(shared) = shared {
+                (shared.vertices.clone(), shared.indices.clone())
+            } else {
+                (
+                    buffer(
+                        &words(lod.positions.iter().flatten().copied()),
+                        wgpu::BufferUsages::VERTEX,
+                    ),
+                    buffer(
+                        &lod.indices
+                            .iter()
+                            .flat_map(|i| i.to_le_bytes())
+                            .collect::<Vec<_>>(),
+                        wgpu::BufferUsages::INDEX,
+                    ),
+                )
+            };
+            replacements[lod.primitive] = Some(ShadowPrimitive {
+                bounds: self.primitives[lod.primitive]
+                    .bounds
+                    .unwrap()
+                    .expanded(lod.max_error_m),
+                vertices,
+                indices,
+                count: lod.indices.len() as u32,
+                max_error_m: lod.max_error_m,
+            });
+        }
+        for (p, shadow) in self.primitives.iter_mut().zip(replacements) {
+            p.shadow = shadow;
+        }
+        self.shadow_revision = self.shadow_revision.wrapping_add(1);
+        Ok(())
+    }
+
     pub(crate) fn cast_shadow(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -1125,28 +1218,84 @@ impl MeshRenderer {
             if range.is_empty() {
                 continue;
             }
-            pass.set_vertex_buffer(0, p.vertices.slice(..));
-            pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
             let triangles = u64::from(p.count) / 3;
             stats.mesh_candidate_instances += u64::from(range.end - range.start);
             stats.mesh_candidate_triangles += triangles * u64::from(range.end - range.start);
-            let visible = |i: u32| {
-                let Some((clip, bounds)) = clip.zip(p.bounds) else {
-                    return true;
-                };
-                let Some(bytes) = self
+            let selection = |i: u32| -> Option<(bool, f64)> {
+                let bytes = self
                     .uploaded_instances
-                    .get(i as usize * 64..i as usize * 64 + 64)
-                else {
-                    return true;
+                    .get(i as usize * 64..i as usize * 64 + 64);
+                let error =
+                    if atlas.mesh_lod_pipeline.is_some() && atlas.mesh_lod_error_texels > 0.0 {
+                        clip.zip(bytes).and_then(|(clip, bytes)| {
+                            p.shadow.as_ref().and_then(|lod| {
+                                lod.bounds.projected_error_texels(
+                                    clip,
+                                    bytes,
+                                    lod.max_error_m,
+                                    atlas.map_size(),
+                                )
+                            })
+                        })
+                    } else {
+                        None
+                    };
+                let lod = error.is_some_and(|e| e <= atlas.mesh_lod_error_texels);
+                let bounds = if lod {
+                    p.shadow.as_ref().map(|p| p.bounds)
+                } else {
+                    p.bounds
                 };
-                bounds.intersects_uploaded(clip, bytes)
+                if let Some(((clip, bounds), bytes)) = clip.zip(bounds).zip(bytes)
+                    && !bounds.intersects_uploaded(clip, bytes)
+                {
+                    return None;
+                }
+                Some((lod, if lod { error.unwrap() } else { 0.0 }))
             };
-            for run in crate::mesh_visibility::visible_runs(range.clone(), visible) {
-                stats.mesh_submitted_instances += u64::from(run.end - run.start);
-                stats.mesh_submitted_triangles += triangles * u64::from(run.end - run.start);
+            let mut run: Option<(u32, u32, bool)> = None;
+            let mut draw = |start, end, lod| {
+                let (vertices, indices, count) = if lod {
+                    let p = p.shadow.as_ref().unwrap();
+                    (&p.vertices, &p.indices, p.count)
+                } else {
+                    (&p.vertices, &p.indices, p.count)
+                };
+                pass.set_pipeline(if lod {
+                    atlas.mesh_lod_pipeline.as_ref().unwrap()
+                } else {
+                    &atlas.mesh_pipeline
+                });
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..count, 0, start..end);
                 stats.mesh_draw_calls += 1;
-                pass.draw_indexed(0..p.count, 0, run);
+                stats.mesh_submitted_instances += u64::from(end - start);
+                stats.mesh_submitted_triangles += u64::from(count / 3) * u64::from(end - start);
+                if lod {
+                    stats.mesh_lod_instances += u64::from(end - start);
+                    stats.mesh_lod_triangles_saved +=
+                        (triangles - u64::from(count / 3)) * u64::from(end - start);
+                }
+            };
+            for i in range.clone() {
+                let selected = selection(i);
+                if let Some((_, error)) = selected {
+                    stats.mesh_lod_max_error_microtexels = stats
+                        .mesh_lod_max_error_microtexels
+                        .max((error * 1_000_000.0).ceil() as u64);
+                }
+                match (run, selected) {
+                    (Some((start, _, a)), Some((b, _))) if a == b => run = Some((start, i + 1, a)),
+                    (Some((start, end, lod)), selected) => {
+                        draw(start, end, lod);
+                        run = selected.map(|(lod, _)| (i, i + 1, lod));
+                    }
+                    (None, selected) => run = selected.map(|(lod, _)| (i, i + 1, lod)),
+                }
+            }
+            if let Some((start, end, lod)) = run {
+                draw(start, end, lod);
             }
         }
         stats

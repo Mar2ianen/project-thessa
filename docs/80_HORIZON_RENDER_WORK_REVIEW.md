@@ -1,6 +1,7 @@
 # 80 — Horizon review and native render-work correction
 
-Status: implemented first renderer slice on the surface branch; full frame-time
+Status: implemented primary slice on the surface branch, followed by the
+[shadow representation slice](81_NATIVE_SHADOW_MESH_LOD.md); full frame-time
 and target-hardware acceptance remain open. Reviewed 2026-10-27 after the user
 rejected further cosmetic iterations as the primary workflow.
 
@@ -36,7 +37,7 @@ Relevant primary files at that pinned commit:
 | View selection before drawing | Every mesh range submitted in primary; conservative culling only for shadow light volumes | Primary per-primitive/instance frustum selection now reuses the existing numerical envelope |
 | Indexed indirect batches | Existing prototype instancing kept API calls low, but naively splitting visible runs produced 3,226 calls | Persistent indirect command buffer batches the runs per primitive; explicit direct fallback |
 | Stable publications | Frozen mesh matrices were reconstructed and uploaded on every successful update | Reuse validated bytes and draw plans when instances, origin, clip and ranges are unchanged |
-| Representation accuracy | Dense near geometry and one coarse fern tier also feed all shadow cascades | Independent shadow-footprint representation and a broader foliage hierarchy remain necessary |
+| Representation accuracy | Dense near geometry and one coarse fern tier also feed all shadow cascades | Texel-bounded depth-only plant representation now follows in doc 81; a broader primary foliage hierarchy remains necessary |
 | Work budgets | 47/48 MB source admission is not a bound on expanded instance/pass work | Candidate/submitted counters and diagnostic stage admission remain; normal full-scene work is still excessive |
 | Asynchronous occlusion | No equivalent whole-forest solution | Evaluate only after representation/shadow work; foliage holes may repay box tests poorly |
 
@@ -112,11 +113,15 @@ Physical Radeon replay remains blocked after WORLD142's desktop-session loss.
 No full-frame GPU timing, safe full-scene hardware acceptance or reference parity
 is claimed by this slice.
 
-## Required next architectural work
+The cold counters above record the primary-only baseline. The subsequent
+[shadow representation slice](81_NATIVE_SHADOW_MESH_LOD.md) reduces its 999.6M
+encoded shadow triangles to 283.2M; it still does not establish target-GPU FPS.
 
-1. Bound shadow representation by the light's texel footprint, rather than
-   reusing near-camera microgeometry in every cascade. Preserve projected area,
-   original world identities and a measured receiver error envelope.
+## Further architectural work
+
+1. Extend the geometric shadow-footprint work in doc 81 with moving-camera and
+   broader receiver/radiometric acceptance. The implemented surface-distance
+   certificate is not a global receiver-error or temporal-stability guarantee.
 2. Audit receiver-aware caster volumes and world-space cache keys together.
    Off-camera casters can shadow visible receivers. Camera-relative matrix
    changes alone must not be confused with physical motion, but reusing depth

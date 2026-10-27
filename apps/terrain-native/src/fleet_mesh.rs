@@ -317,7 +317,7 @@ impl SceneMeshes {
         if !plant_rt_admitted {
             mesh_settings.ray_tracing = thessa_graphics::ResolvedRayTracing::Off;
         }
-        let meshes = Self {
+        let mut meshes = Self {
             plant_context: scene.vehicle.is_none().then_some(context),
             shadows: shadows.cloned(),
             environment_revision: None,
@@ -368,6 +368,12 @@ impl SceneMeshes {
             plant_capacity: capacity,
             plant_epoch: 1,
         };
+        if let (Some(inner), Some(plants)) = (&mut meshes.inner, &meshes.plants)
+            && shadows.is_some()
+            && !plants.shadow_lods.is_empty()
+        {
+            inner.set_shadow_lods(backend, &plants.shadow_lods)?;
+        }
         diagnostics.publication_ms = started.elapsed().as_secs_f64() * 1000.0;
         *scene.surface_plants_diagnostics.borrow_mut() = diagnostics;
         Ok(meshes)
@@ -2082,6 +2088,29 @@ mod tests {
                 shadow_stats.mesh_submitted_triangles as i64,
             ),
             ("shadow_draw_calls", shadow_stats.mesh_draw_calls as i64),
+            (
+                "shadow_lod_instances",
+                shadow_stats.mesh_lod_instances as i64,
+            ),
+            (
+                "shadow_lod_triangles_saved",
+                shadow_stats.mesh_lod_triangles_saved as i64,
+            ),
+            (
+                "shadow_lod_max_error_microtexels",
+                shadow_stats.mesh_lod_max_error_microtexels as i64,
+            ),
+            (
+                "shadow_prototype_bytes",
+                scene
+                    .surface_plants_diagnostics
+                    .borrow()
+                    .shadow_prototype_bytes as i64,
+            ),
+            (
+                "prototype_bytes",
+                scene.surface_plants_diagnostics.borrow().prototype_bytes as i64,
+            ),
             ("frame_upload_bytes", stats.frame_upload_bytes as i64),
         ] {
             report.insert(key.into(), toml::Value::Integer(value));
@@ -2099,6 +2128,10 @@ mod tests {
         );
         report.insert("candidate_groups".into(), toml::Value::Array(groups));
         assert!(stats.triangles > 0 && stats.triangles < stats.candidate_triangles);
+        assert!(shadow_stats.mesh_lod_instances > 0);
+        assert!(shadow_stats.mesh_submitted_triangles < shadow_stats.mesh_candidate_triangles / 4);
+        assert!(shadow_stats.mesh_lod_max_error_microtexels <= 500_000);
+        assert!(scene.surface_plants_diagnostics.borrow().prototype_bytes <= 48_000_000);
         use std::io::Write;
         file.write_all(toml::to_string_pretty(&report).unwrap().as_bytes())
             .unwrap();

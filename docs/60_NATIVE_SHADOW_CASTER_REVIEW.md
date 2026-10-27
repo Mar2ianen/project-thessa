@@ -9,9 +9,9 @@ those old timings are not relabeled as measurements of this implementation.
 
 After WORLD142 reset the desktop GPU, the mesh caster now uses conservative
 per-primitive spheres and the existing homogeneous light-clip test. Bounds
-scan source positions once only when shadows exist. Instances retain their
-original indices; contiguous accepted runs share one indexed draw. No source
-geometry, material, plant identity, quality tier or GPU buffer changes.
+scan source positions once on mesh publication; primary visibility also uses them. Instances retain their
+original indices; contiguous accepted runs share one indexed draw. This visibility-only checkpoint changed no source
+geometry, material, plant identity, quality tier or GPU buffer.
 
 The test reads the exact cached f32 instance-matrix bytes already used for
 shadow publication. The local AABB sphere is transformed using a Gershgorin
@@ -146,3 +146,9 @@ acceptance is implied. Production ocean culling, tighter height bounds and
 mesh-caster culling are deliberately omitted.
 
 The [Horizon work review](80_HORIZON_RENDER_WORK_REVIEW.md) adds primary mesh frustum selection and indirect batching, while preserving complete shadow and RT source ranges. Its real coastal CPU command probe encodes 999,585,598 mesh triangles across twelve cold shadow layers after light-volume rejection; the encoder is discarded without raster submission. This is not steady cached-frame work or hardware timing. Primary visibility must not become caster eligibility. Shadow footprint representation and camera-origin/cache coupling need separate bounded corrections.
+
+## Texel-bounded mesh representation continuation (2026-10-27)
+
+[Doc 81](81_NATIVE_SHADOW_MESH_LOD.md) adds optional certified depth-only mesh LODs and `shadows.mesh_lod_error_texels` (legacy default 0, showcase 0.5). Selection includes actual uploaded instance scale/rotation, orthographic light projection and an f32 arithmetic envelope; unsupported or excessive-error choices retain full geometry. Source bounds expand to enclose replacements. Installation is atomic and invalidates the existing cache. The full-caster oracle disables both culling and LOD; its legacy-zero test now supplies an approximate mesh and still requires exact depth/final-colour equality.
+
+`mesh_lod_instances`, `mesh_lod_triangles_saved` and `mesh_lod_max_error_microtexels` augment the existing actual-layer counters. Identical caster sources share 12-byte position buffers. They join native prototype admission rather than bypassing it. The canonical 12-layer cold plan changes from 999,585,598 to 283,199,642 mesh triangles, with more API runs (5,518 to 6,918). This is a measured command reduction, not GPU timing, driver-stability proof or a universal radiometric error bound. The original dated measurements above remain historical.

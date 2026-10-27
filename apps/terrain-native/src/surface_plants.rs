@@ -98,6 +98,8 @@ pub struct Diagnostics {
     pub reduced_instances: usize,
     pub preparation_ms: f64,
     pub prototype_bytes: usize,
+    pub shadow_prototype_bytes: usize,
+    pub shadow_lod_budget_withheld: bool,
     pub prototype_texture_bytes: usize,
     pub instance_buffer_bytes: usize,
     pub submitted_instances: u32,
@@ -150,6 +152,8 @@ impl Diagnostics {
             ("native_surface_plants_reduced_instances", self.reduced_instances.to_string()),
             ("native_surface_plants_preparation_cpu_ms", self.preparation_ms.to_string()),
             ("native_surface_plants_prototype_payload_bytes", self.prototype_bytes.to_string()),
+            ("native_surface_plants_shadow_payload_bytes", self.shadow_prototype_bytes.to_string()),
+            ("native_surface_plants_shadow_lod_budget_withheld", self.shadow_lod_budget_withheld.to_string()),
             ("native_surface_plants_prototype_texture_bytes", self.prototype_texture_bytes.to_string()),
             ("native_surface_plants_instance_buffer_bytes", self.instance_buffer_bytes.to_string()),
             ("native_surface_plants_submitted_instances", self.submitted_instances.to_string()),
@@ -177,6 +181,7 @@ impl Diagnostics {
 
 pub struct Prepared {
     pub asset: MeshAsset,
+    pub shadow_lods: Vec<thessa_render_core::mesh::ShadowMeshLod>,
     /// Canonical instances grouped by kind; local cover aggregates append no fake scatter IDs.
     pub descriptors: Vec<ScatterItem>,
     pub instances: Vec<MeshInstance>,
@@ -201,6 +206,7 @@ impl Prepared {
             _ => false,
         };
         local_equal
+            && self.shadow_lods.is_empty() == other.shadow_lods.is_empty()
             && self.reduced_primitives == other.reduced_primitives
             && self.ranges.len() == other.ranges.len()
             && self
@@ -557,6 +563,9 @@ pub fn prepare(
     if let Some(near) = near_window.filter(|_| settings.terrain_ground_pebbles_max_items > 0) {
         wet_ground::append(&mut prepared, settings, field, near, &mut diagnostics)?;
     }
+    if settings.shadow_enabled && settings.shadow_mesh_lod_error_texels > 0.0 {
+        append_shadow_lods(&mut prepared);
+    }
     diagnostics.reduced_instances = prepared
         .ranges
         .iter()
@@ -580,6 +589,14 @@ pub fn prepare(
     if diagnostics.prototype_bytes > 48_000_000 {
         return Err("ground/plant prototype payload exceeds 48 MB admission budget".into());
     }
+    (
+        diagnostics.shadow_prototype_bytes,
+        diagnostics.shadow_lod_budget_withheld,
+    ) = admit_shadow_lods(
+        &mut prepared.shadow_lods,
+        48_000_000 - diagnostics.prototype_bytes,
+    );
+    diagnostics.prototype_bytes += diagnostics.shadow_prototype_bytes;
     diagnostics.prototype_texture_bytes = prepared
         .asset
         .images
@@ -620,6 +637,91 @@ fn convert(items: Vec<ScatterItem>, radius_m: f64) -> Result<Prepared, String> {
     convert_with_detail(items, radius_m, None)
 }
 
+fn admit_shadow_lods(
+    lods: &mut Vec<thessa_render_core::mesh::ShadowMeshLod>,
+    available: usize,
+) -> (usize, bool) {
+    let bytes = lods
+        .iter()
+        .enumerate()
+        .filter(|(i, lod)| !lods[..*i].iter().any(|a| a.same_geometry(lod)))
+        .map(|(_, lod)| lod.geometry_bytes())
+        .sum();
+    if bytes > available {
+        lods.clear();
+        (0, true)
+    } else {
+        (bytes, false)
+    }
+}
+
+fn append_shadow_lods(prepared: &mut Prepared) {
+    use thessa_worldgen_rocky::{offline::plant_form, plant_shadow, scatter::ScatterKind};
+    for (primitive, (p, range)) in prepared
+        .asset
+        .primitives
+        .iter()
+        .zip(&prepared.ranges)
+        .enumerate()
+    {
+        let Some(item) = prepared.descriptors.get(range.start as usize) else {
+            continue;
+        };
+        if !matches!(
+            item.kind,
+            ScatterKind::FernClump | ScatterKind::LycopsidTree
+        ) {
+            continue;
+        }
+        let form = plant_form(item.id, item.kind);
+        let Some(shadow) = plant_shadow::prototypes(prepared.reduced_primitives[primitive])
+            .iter()
+            .find(|p| p.form == form && p.mesh.kind == item.kind)
+        else {
+            continue;
+        };
+        let material = &prepared.asset.materials[p.material];
+        let organ = if material.diffuse_transmission == 0.0 {
+            0
+        } else if material.base_texture.is_none() {
+            2
+        } else {
+            1
+        };
+        let Some(max_error_m) = shadow.errors_m[organ] else {
+            continue;
+        };
+        let triangles = plant_shadow::organ_triangles(
+            &shadow.mesh,
+            plant_shadow::organ_ranges(&shadow.mesh)[organ].clone(),
+        );
+        if triangles.len() * 3 >= p.indices.len() {
+            continue;
+        }
+        let mut map = BTreeMap::new();
+        let mut positions = Vec::new();
+        let indices = triangles
+            .into_iter()
+            .flatten()
+            .map(|i| {
+                *map.entry(i).or_insert_with(|| {
+                    let id = positions.len() as u32;
+                    positions.push(shadow.mesh.positions[i as usize]);
+                    id
+                })
+            })
+            .collect();
+        prepared
+            .shadow_lods
+            .push(thessa_render_core::mesh::ShadowMeshLod {
+                primitive,
+                positions,
+                indices,
+                max_error_m,
+            });
+    }
+}
+
 fn convert_with_detail(
     mut items: Vec<ScatterItem>,
     radius_m: f64,
@@ -645,6 +747,7 @@ fn convert_with_detail(
             textures: vec![],
             images: vec![],
         },
+        shadow_lods: Vec::new(),
         descriptors: Vec::with_capacity(items.len()),
         instances: Vec::with_capacity(items.len()),
         ranges: vec![],
@@ -1617,3 +1720,32 @@ mod tests {
         assert_eq!(stats.prototype_bytes, 0);
     }
 }
+
+#[cfg(test)]
+mod shadow_budget_tests {
+    use super::*;
+    #[test]
+    fn shadow_budget_shares_geometry_and_falls_back_without_rejecting_primary() {
+        let first = thessa_render_core::mesh::ShadowMeshLod {
+            primitive: 0,
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            indices: vec![0, 1, 2],
+            max_error_m: 0.01,
+        };
+        let mut second = first.clone();
+        second.primitive = 1;
+        second.max_error_m = 0.02;
+        let mut lods = vec![first, second];
+        let original = lods.clone();
+        let bytes = lods[0].geometry_bytes();
+        assert_eq!(admit_shadow_lods(&mut lods, bytes), (bytes, false));
+        assert_eq!(lods, original);
+        assert_eq!(admit_shadow_lods(&mut lods, bytes - 1), (0, true));
+        assert!(lods.is_empty());
+        assert_eq!(admit_shadow_lods(&mut lods, 0), (0, false));
+    }
+}
+
+#[cfg(test)]
+#[path = "surface_plants_shadow_tests.rs"]
+mod shadow_tests;

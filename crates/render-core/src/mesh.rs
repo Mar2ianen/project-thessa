@@ -143,6 +143,26 @@ pub struct Primitive {
     pub indices: Vec<u32>,
     pub material: usize,
 }
+/// Optional depth-only replacement for one primitive. The producer certifies
+/// a two-sided continuous surface-distance bound in local metres. Primary and
+/// ray-query geometry continue to use the original MeshAsset.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShadowMeshLod {
+    pub primitive: usize,
+    pub positions: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    pub max_error_m: f64,
+}
+
+impl ShadowMeshLod {
+    pub fn same_geometry(&self, other: &Self) -> bool {
+        self.positions == other.positions && self.indices == other.indices
+    }
+    pub fn geometry_bytes(&self) -> usize {
+        self.positions.len() * 12 + self.indices.len() * 4
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MeshAsset {
     pub primitives: Vec<Primitive>,

@@ -86,6 +86,20 @@ fn shadow_culling_matches_full_casters_not_just_split_unified() {
         64,
         OffscreenTarget::FORMAT,
     );
+    // A supplied approximate caster must be completely inert at the legacy
+    // zero-error setting, including the full/reference comparison below.
+    scene
+        .mesh
+        .set_shadow_lods(
+            &backend,
+            &[ShadowMeshLod {
+                primitive: 0,
+                positions: vec![[-0.5, -0.5, -4.0], [0.5, -0.5, -4.0], [0.5, 0.5, -4.0]],
+                indices: vec![0, 1, 2],
+                max_error_m: 1.0,
+            }],
+        )
+        .unwrap();
     let mut witnessed_rejection = false;
     let mut witnessed_mesh_rejection = false;
     let mut witnessed_depth = false;
@@ -120,6 +134,10 @@ fn shadow_culling_matches_full_casters_not_just_split_unified() {
         scene.update(&backend);
         let a = capture_shadow_choice(&mut scene, &backend, &target, false);
         let b = capture_shadow_choice(&mut scene, &backend, &target, true);
+        assert_eq!(
+            b.2.mesh_lod_instances, 0,
+            "zero budget must disable supplied LODs"
+        );
         equal_bytes("full/culled depth", &a.0, &b.0);
         equal_bytes("full/culled color", &a.1, &b.1);
         assert_eq!(a.2.mesh_candidate_triangles, a.2.mesh_submitted_triangles);

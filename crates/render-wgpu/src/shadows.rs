@@ -20,11 +20,16 @@ pub struct ShadowDrawStats {
     pub mesh_candidate_triangles: u64,
     pub mesh_submitted_triangles: u64,
     pub mesh_draw_calls: u64,
+    pub mesh_lod_instances: u64,
+    pub mesh_lod_triangles_saved: u64,
+    /// Conservative projected surface error, rounded up to millionths of a texel.
+    pub mesh_lod_max_error_microtexels: u64,
 }
 
 #[derive(Clone)]
 pub struct ShadowAtlas {
     pub(crate) mesh_pipeline: wgpu::RenderPipeline,
+    pub(crate) mesh_lod_pipeline: Option<wgpu::RenderPipeline>,
     pub(crate) terrain_pipeline: wgpu::RenderPipeline,
     pub(crate) conforming_pipeline: wgpu::RenderPipeline,
     pub(crate) mesh_layout: wgpu::BindGroupLayout,
@@ -37,6 +42,7 @@ pub struct ShadowAtlas {
     layers: Vec<(wgpu::TextureView, wgpu::Buffer, wgpu::BindGroup)>,
     radii: Vec<f64>,
     size: u32,
+    pub(crate) mesh_lod_error_texels: f64,
     normal_bias_m: f64,
     filter: u32,
     active: [bool; 3],
@@ -52,6 +58,10 @@ pub const NO_SHADOWS: &str =
     "fn shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 { return 1.0; }";
 
 impl ShadowAtlas {
+    pub(crate) fn map_size(&self) -> u32 {
+        self.size
+    }
+
     pub fn new(
         backend: &Backend,
         settings: &ResolvedGraphicsSettings,
@@ -65,6 +75,8 @@ impl ShadowAtlas {
             .min(device.limits().max_texture_dimension_2d);
         if size < 64
             || !size.is_power_of_two()
+            || !settings.shadow_mesh_lod_error_texels.is_finite()
+            || !(0.0..=2.0).contains(&settings.shadow_mesh_lod_error_texels)
             || settings.shadow_filter_radius > 2
             || !settings.shadow_normal_bias_m.is_finite()
             || !(0.0..=50.0).contains(&settings.shadow_normal_bias_m)
@@ -140,7 +152,7 @@ impl ShadowAtlas {
         // The CBT caster reads one storage binding: the canonical surface
         // vertex stream. binding 0 is storage here (only binding 3 is uniform).
         let conforming_layout = storage_layout(2);
-        let pipeline = |code: String, layout: &wgpu::BindGroupLayout, mesh: bool, bias| {
+        let pipeline = |code: String, layout: &wgpu::BindGroupLayout, mesh_stride: u64, bias| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("shadow-caster"),
                 source: wgpu::ShaderSource::Wgsl(code.into()),
@@ -150,6 +162,11 @@ impl ShadowAtlas {
                 bind_group_layouts: &[Some(&matrix_layout), Some(layout)],
                 immediate_size: 0,
             });
+            let vertex_buffers = [Some(wgpu::VertexBufferLayout {
+                array_stride: mesh_stride,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0=>Float32x3],
+            })];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("shadow-caster"),
                 layout: Some(&layout),
@@ -157,12 +174,8 @@ impl ShadowAtlas {
                     module: &module,
                     entry_point: Some("vertex"),
                     compilation_options: Default::default(),
-                    buffers: if mesh {
-                        &[Some(wgpu::VertexBufferLayout {
-                            array_stride: 32,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0=>Float32x3],
-                        })]
+                    buffers: if mesh_stride > 0 {
+                        &vertex_buffers
                     } else {
                         &[]
                     },
@@ -192,9 +205,17 @@ impl ShadowAtlas {
         let mesh_pipeline = pipeline(
             include_str!("shadow_mesh.wgsl").into(),
             &mesh_layout,
-            true,
+            32,
             caster_bias,
         );
+        let mesh_lod_pipeline = (settings.shadow_mesh_lod_error_texels > 0.0).then(|| {
+            pipeline(
+                include_str!("shadow_mesh.wgsl").into(),
+                &mesh_layout,
+                12,
+                caster_bias,
+            )
+        });
         let terrain_pipeline = pipeline(
             format!(
                 "{}\n{}\n{}",
@@ -203,13 +224,13 @@ impl ShadowAtlas {
                 include_str!("shadow_terrain.wgsl")
             ),
             &terrain_layout,
-            false,
+            0,
             caster_bias,
         );
         let conforming_pipeline = pipeline(
             include_str!("shadow_conforming.wgsl").into(),
             &conforming_layout,
-            false,
+            0,
             // Keep geometric depth available to canonical metric oracles.
             // Receiver-plane filtering accounts for the comparison footprint.
             wgpu::DepthBiasState::default(),
@@ -240,6 +261,7 @@ impl ShadowAtlas {
             .collect();
         Ok(Some(Self {
             mesh_pipeline,
+            mesh_lod_pipeline,
             terrain_pipeline,
             conforming_pipeline,
             mesh_layout,
@@ -262,6 +284,7 @@ impl ShadowAtlas {
             layers,
             radii,
             size,
+            mesh_lod_error_texels: settings.shadow_mesh_lod_error_texels,
             normal_bias_m: settings.shadow_normal_bias_m,
             filter: settings.shadow_filter_radius,
             active: [false; 3],
@@ -470,6 +493,11 @@ impl ShadowAtlas {
                 total.mesh_candidate_triangles += stats.mesh_candidate_triangles;
                 total.mesh_submitted_triangles += stats.mesh_submitted_triangles;
                 total.mesh_draw_calls += stats.mesh_draw_calls;
+                total.mesh_lod_instances += stats.mesh_lod_instances;
+                total.mesh_lod_triangles_saved += stats.mesh_lod_triangles_saved;
+                total.mesh_lod_max_error_microtexels = total
+                    .mesh_lod_max_error_microtexels
+                    .max(stats.mesh_lod_max_error_microtexels);
             }
         }
         total

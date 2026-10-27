@@ -110,3 +110,5 @@ renderer/client replacement claim is made. The independent native flight-deck
 work is described in [doc 57](57_NATIVE_FLIGHT_DECK.md).
 
 The subsequent [Horizon renderer review](80_HORIZON_RENDER_WORK_REVIEW.md) extends the common mesh pass with conservative primary visibility, capability-checked indexed indirect batches and dirty-only instance/command publication. `MeshDrawStats` distinguishes candidate instances/triangles, actual primary instances/triangles, logical commands, API batches and latest actual update bytes. Shadow/RT source ownership and original indices are unchanged. Exact software colour/depth comparisons cover the original full-range pass and direct fallback, including large origins, jitter and invalidation; this does not establish target-hardware frame time.
+
+The next [shadow representation slice](81_NATIVE_SHADOW_MESH_LOD.md) selects certified depth-only plant geometry by actual light texels. It preserves the primary/RT source and changes geometry cost rather than reducing API calls. The canonical cold shadow count falls from 999.6M to 283.2M with the 0.5-texel showcase setting; no full-frame GPU timing or reference acceptance follows.

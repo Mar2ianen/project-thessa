@@ -18,6 +18,55 @@ impl Bounds {
         });
         self.intersects(clip, Mat4::from_cols_array(&words))
     }
+    pub fn expanded(self, error_m: f64) -> Self {
+        Self {
+            radius: self.radius + error_m,
+            ..self
+        }
+    }
+
+    /// Orthographic light error in radial texels, including an f32 arithmetic
+    /// envelope for the shader's separate instance and clip multiplications.
+    pub fn projected_error_texels(
+        self,
+        clip: Mat4,
+        bytes: &[u8],
+        error_m: f64,
+        size: u32,
+    ) -> Option<f64> {
+        if bytes.len() != 64 || !error_m.is_finite() || error_m < 0.0 || size == 0 {
+            return None;
+        }
+        let model = Mat4::from_cols_array(&std::array::from_fn(|i| {
+            f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+        }))
+        .as_dmat4();
+        let light = clip.as_dmat4();
+        if !model.is_finite()
+            || !light.is_finite()
+            || model.row(3) != glam::DVec4::W
+            || light.row(3) != glam::DVec4::W
+        {
+            return None;
+        }
+        let m = light * model;
+        let scale =
+            (m.row(0).truncate().length_squared() + m.row(1).truncate().length_squared()).sqrt();
+        let abs = |m: glam::DMat4| {
+            glam::DMat4::from_cols(
+                m.x_axis.abs(),
+                m.y_axis.abs(),
+                m.z_axis.abs(),
+                m.w_axis.abs(),
+            )
+        };
+        let magnitude =
+            abs(light) * (abs(model) * (self.center.abs() + DVec3::splat(self.radius)).extend(1.0));
+        let rounding = 32.0 * f64::from(f32::EPSILON) * magnitude.truncate().truncate().length();
+        let error = (scale * error_m + rounding) * f64::from(size) * 0.5;
+        error.is_finite().then_some(error)
+    }
+
     pub fn new(positions: impl Iterator<Item = [f32; 3]>) -> Option<Self> {
         let mut min = DVec3::splat(f64::INFINITY);
         let mut max = DVec3::splat(f64::NEG_INFINITY);
@@ -179,6 +228,61 @@ mod tests {
         assert!(
             b.intersects_uploaded(shadow, &bytes[..60]),
             "missing transform must fail open"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shadow_lod_tests {
+    use super::*;
+    fn bytes(m: Mat4) -> Vec<u8> {
+        m.to_cols_array()
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect()
+    }
+    #[test]
+    fn projected_error_follows_light_texels_scale_and_fails_closed() {
+        let bounds = Bounds::new([[-1.0; 3], [1.0; 3]].into_iter()).unwrap();
+        let light = Mat4::from_scale(glam::vec3(0.01, 0.01, 0.001));
+        let error = bounds
+            .projected_error_texels(light, &bytes(Mat4::IDENTITY), 0.1, 1024)
+            .unwrap();
+        assert!((0.724..0.725).contains(&error));
+        let scaled = bounds
+            .projected_error_texels(
+                light,
+                &bytes(Mat4::from_scale(glam::Vec3::splat(2.0))),
+                0.1,
+                1024,
+            )
+            .unwrap();
+        assert!((scaled / error - 2.0).abs() < 1e-10);
+        assert_eq!(
+            bounds
+                .projected_error_texels(light, &bytes(Mat4::IDENTITY), 0.1, 2048)
+                .unwrap(),
+            error * 2.0
+        );
+        assert!(
+            bounds
+                .projected_error_texels(
+                    glam::camera::rh::proj::directx::perspective(1.0, 1.0, 0.1, 100.0),
+                    &bytes(Mat4::IDENTITY),
+                    0.1,
+                    1024
+                )
+                .is_none()
+        );
+        assert!(
+            bounds
+                .projected_error_texels(light, &[], 0.1, 1024)
+                .is_none()
+        );
+        assert!(
+            bounds
+                .projected_error_texels(light, &bytes(Mat4::IDENTITY), f64::NAN, 1024)
+                .is_none()
         );
     }
 }

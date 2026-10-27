@@ -1,0 +1,831 @@
+{
+  "status": "Implemented and verified on clean feature-branch source; target-hardware/full-frame/reference acceptance open",
+  "baseline_commit": "685d0934163327fe879a2a0e3fc26c25874c3ce3",
+  "date": "2026-10-27",
+  "source_manifest_sha256": "3d71fecfb23688355b253d55e172c2d9ce6473e32cc4c4b2242439984b1706c3",
+  "release_sha256": "1cd5e8499e550a2a8ec3b220ba1662eeabd1f6e8ab645a4ff56695982d847737",
+  "horizon_reference": {
+    "repository": "https://github.com/ludovic111/horizon",
+    "commit": "cf62fe270b243780f9aa86c49b456d9dd9078b42",
+    "scope": "Source review from preceding primary slice; no copied code, game assets or Horizon benchmark."
+  },
+  "settings": {
+    "path": "shadows.mesh_lod_error_texels",
+    "default": 0.0,
+    "showcase": 0.5,
+    "resolved_range": [
+      0,
+      2
+    ],
+    "disabled": "No native proxy generation/buffers/pipeline; full original geometry",
+    "fallback": "Full original geometry on missing/invalid/too-expensive representation or optional 48 MB source-budget admission failure"
+  },
+  "cpu_tests": {
+    "native": 133,
+    "worldgen": 286,
+    "graphics": 48,
+    "render_core": 43,
+    "mesh_bounds_and_projection": 4,
+    "total": 514
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.661573417019099
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 114.9281817250885
+    },
+    {
+      "name": "graphics-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.15970580803696066
+    },
+    {
+      "name": "render-core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.21205172198824584
+    },
+    {
+      "name": "caster-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "mesh_visibility"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1385516719892621
+    },
+    {
+      "name": "worldgen-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--lib",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 65.50526894198265
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-core",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-terrain-native",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 1.2946242180187255
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 4.207930483971722
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.045817208010703325
+    },
+    {
+      "name": "shadow-integration-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "unified_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 4.738577533047646
+    },
+    {
+      "name": "primary-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.10021567204967141
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 106.32685105793644
+    }
+  ],
+  "software_cases": {
+    "primary-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27/primary-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_render_wgpu-c5288e1a8cf6cd2b",
+        "mesh::primary_tests::primary_frustum_matches_full_draws_at_large_origins_and_jitter",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 2.0683926889905706,
+      "binary_sha256": "30a77e5be7eed338d621f2119c5c14b8b36425c7e7169c5191617d724f5d6434",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "shadow-zero-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27/shadow-zero-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/unified_scene-43d5a5042352b65c",
+        "shadow_culling_matches_full_casters_not_just_split_unified",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 14.000830529024825,
+      "binary_sha256": "aaf16a89401579664bd0db19a058bf3b75e78c1eaf785e4de2953b7be21cd8ec",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "plant-ground-accepted": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27/plant-ground-accepted.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_terrain_native-5c4564ffb45f712d",
+        "surface_plants::shadow_tests::actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 53.209996594931,
+      "binary_sha256": "78ae8f088f1ad691e58dc49afc2cd1571d7d9ecebc90880b1d11e8af7d5a35da",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "coastal-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-lod-2026-10-27/coastal-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_terrain_native-5c4564ffb45f712d",
+        "scene::fleet_mesh::tests::report_coastal_primary_workload",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 48.62700248498004,
+      "binary_sha256": "78ae8f088f1ad691e58dc49afc2cd1571d7d9ecebc90880b1d11e8af7d5a35da",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    }
+  },
+  "coastal_baseline": {
+    "shadow_submitted_triangles": 999585598,
+    "shadow_draw_calls": 5518,
+    "primary_triangles": 17111160,
+    "shadow_layers": 12
+  },
+  "coastal_final": {
+    "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 23.1.3, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.2.5-arch1.1 (LLVM 23.1.3)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+    "candidate_instances": 17992,
+    "candidate_triangles": 112813834,
+    "draw_calls": 37,
+    "draw_commands": 3226,
+    "eye_agl_m": 2,
+    "frame_upload_bytes": 576,
+    "height": 720,
+    "native_update_cpu_max_ms": 0.8151280000000001,
+    "native_update_cpu_p50_ms": 0.25592699999999996,
+    "native_update_cpu_p95_ms": 0.360642,
+    "prototype_bytes": 45493332,
+    "scope": "Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.",
+    "shadow_candidate_triangles": 1353766008,
+    "shadow_draw_calls": 6918,
+    "shadow_encode_cpu_ms": 445.065082,
+    "shadow_lod_instances": 121364,
+    "shadow_lod_max_error_microtexels": 499859,
+    "shadow_lod_triangles_saved": 716391376,
+    "shadow_passes": 12,
+    "shadow_prototype_bytes": 991680,
+    "shadow_submitted_triangles": 283199642,
+    "submitted_triangles": 17111160,
+    "survey_distance_m": 80,
+    "visible_instances": 2510,
+    "width": 1280,
+    "candidate_groups": [
+      {
+        "candidate_triangles": 18394420,
+        "instances": 1382,
+        "material": 0,
+        "primitive": 0,
+        "source_triangles": 13310
+      },
+      {
+        "candidate_triangles": 18196444,
+        "instances": 526,
+        "material": 4,
+        "primitive": 4,
+        "source_triangles": 34594
+      },
+      {
+        "candidate_triangles": 9471156,
+        "instances": 526,
+        "material": 5,
+        "primitive": 5,
+        "source_triangles": 18006
+      },
+      {
+        "candidate_triangles": 9015300,
+        "instances": 450,
+        "material": 29,
+        "primitive": 29,
+        "source_triangles": 20034
+      },
+      {
+        "candidate_triangles": 8726732,
+        "instances": 458,
+        "material": 26,
+        "primitive": 26,
+        "source_triangles": 19054
+      },
+      {
+        "candidate_triangles": 8363392,
+        "instances": 446,
+        "material": 23,
+        "primitive": 23,
+        "source_triangles": 18752
+      },
+      {
+        "candidate_triangles": 6420772,
+        "instances": 1382,
+        "material": 1,
+        "primitive": 1,
+        "source_triangles": 4646
+      },
+      {
+        "candidate_triangles": 5518620,
+        "instances": 2139,
+        "material": 16,
+        "primitive": 16,
+        "source_triangles": 2580
+      },
+      {
+        "candidate_triangles": 3703360,
+        "instances": 2840,
+        "material": 6,
+        "primitive": 6,
+        "source_triangles": 1304
+      },
+      {
+        "candidate_triangles": 3212860,
+        "instances": 530,
+        "material": 20,
+        "primitive": 20,
+        "source_triangles": 6062
+      },
+      {
+        "candidate_triangles": 3073800,
+        "instances": 1175,
+        "material": 2,
+        "primitive": 2,
+        "source_triangles": 2616
+      },
+      {
+        "candidate_triangles": 2519720,
+        "instances": 20,
+        "material": 14,
+        "primitive": 14,
+        "source_triangles": 125986
+      },
+      {
+        "candidate_triangles": 2170620,
+        "instances": 18,
+        "material": 8,
+        "primitive": 8,
+        "source_triangles": 120590
+      },
+      {
+        "candidate_triangles": 1964096,
+        "instances": 16,
+        "material": 11,
+        "primitive": 11,
+        "source_triangles": 122756
+      },
+      {
+        "candidate_triangles": 1797750,
+        "instances": 1175,
+        "material": 3,
+        "primitive": 3,
+        "source_triangles": 1530
+      },
+      {
+        "candidate_triangles": 1732590,
+        "instances": 2139,
+        "material": 17,
+        "primitive": 17,
+        "source_triangles": 810
+      },
+      {
+        "candidate_triangles": 1669500,
+        "instances": 530,
+        "material": 21,
+        "primitive": 21,
+        "source_triangles": 3150
+      },
+      {
+        "candidate_triangles": 1289700,
+        "instances": 450,
+        "material": 30,
+        "primitive": 30,
+        "source_triangles": 2866
+      },
+      {
+        "candidate_triangles": 1284232,
+        "instances": 458,
+        "material": 27,
+        "primitive": 27,
+        "source_triangles": 2804
+      },
+      {
+        "candidate_triangles": 1175656,
+        "instances": 446,
+        "material": 24,
+        "primitive": 24,
+        "source_triangles": 2636
+      },
+      {
+        "candidate_triangles": 811922,
+        "instances": 1297,
+        "material": 18,
+        "primitive": 18,
+        "source_triangles": 626
+      },
+      {
+        "candidate_triangles": 400600,
+        "instances": 20,
+        "material": 15,
+        "primitive": 15,
+        "source_triangles": 20030
+      },
+      {
+        "candidate_triangles": 352440,
+        "instances": 18,
+        "material": 9,
+        "primitive": 9,
+        "source_triangles": 19580
+      },
+      {
+        "candidate_triangles": 314304,
+        "instances": 16,
+        "material": 12,
+        "primitive": 12,
+        "source_triangles": 19644
+      },
+      {
+        "candidate_triangles": 295716,
+        "instances": 1297,
+        "material": 19,
+        "primitive": 19,
+        "source_triangles": 228
+      },
+      {
+        "candidate_triangles": 223200,
+        "instances": 450,
+        "material": 28,
+        "primitive": 28,
+        "source_triangles": 496
+      },
+      {
+        "candidate_triangles": 221216,
+        "instances": 446,
+        "material": 22,
+        "primitive": 22,
+        "source_triangles": 496
+      },
+      {
+        "candidate_triangles": 201520,
+        "instances": 458,
+        "material": 25,
+        "primitive": 25,
+        "source_triangles": 440
+      },
+      {
+        "candidate_triangles": 73024,
+        "instances": 2282,
+        "material": 31,
+        "primitive": 31,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 71360,
+        "instances": 2230,
+        "material": 33,
+        "primitive": 33,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 69760,
+        "instances": 2180,
+        "material": 32,
+        "primitive": 32,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 22080,
+        "instances": 20,
+        "material": 13,
+        "primitive": 13,
+        "source_triangles": 1104
+      },
+      {
+        "candidate_triangles": 19872,
+        "instances": 18,
+        "material": 7,
+        "primitive": 7,
+        "source_triangles": 1104
+      },
+      {
+        "candidate_triangles": 16768,
+        "instances": 16,
+        "material": 10,
+        "primitive": 10,
+        "source_triangles": 1048
+      },
+      {
+        "candidate_triangles": 12288,
+        "instances": 1,
+        "material": 34,
+        "primitive": 34,
+        "source_triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "instances": 1,
+        "material": 35,
+        "primitive": 35,
+        "source_triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "instances": 1,
+        "material": 36,
+        "primitive": 36,
+        "source_triangles": 1960
+      }
+    ]
+  },
+  "shadow_triangle_reduction_percent": 71.66829508481973,
+  "cold_mesh_triangle_reduction_percent": 70.46210685369374,
+  "plant_render": {
+    "scope": "Actual native full/reduced six-form plants and a ground receiver; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.",
+    "cases": [
+      {
+        "colour_mae_u8": 0.03661216507731699,
+        "colour_max_u8": 6,
+        "different_coverage_texels": 148,
+        "max_error_microtexels": 472564,
+        "max_unmatched_component": 1,
+        "occupied_union": 17049,
+        "origin_case": 0,
+        "reduced": false,
+        "triangles_saved": 1490580,
+        "unmatched_after_one_texel": 14
+      },
+      {
+        "colour_mae_u8": 0.04262682876017285,
+        "colour_max_u8": 7,
+        "different_coverage_texels": 109,
+        "max_error_microtexels": 472565,
+        "max_unmatched_component": 2,
+        "occupied_union": 10967,
+        "origin_case": 1,
+        "reduced": false,
+        "triangles_saved": 993720,
+        "unmatched_after_one_texel": 6
+      },
+      {
+        "colour_mae_u8": 0.04452867213698648,
+        "colour_max_u8": 9,
+        "different_coverage_texels": 130,
+        "max_error_microtexels": 388410,
+        "max_unmatched_component": 2,
+        "occupied_union": 17125,
+        "origin_case": 0,
+        "reduced": true,
+        "triangles_saved": 173064,
+        "unmatched_after_one_texel": 8
+      },
+      {
+        "colour_mae_u8": 0.03929356262978569,
+        "colour_max_u8": 6,
+        "different_coverage_texels": 107,
+        "max_error_microtexels": 388411,
+        "max_unmatched_component": 1,
+        "occupied_union": 11033,
+        "origin_case": 1,
+        "reduced": true,
+        "triangles_saved": 115376,
+        "unmatched_after_one_texel": 5
+      }
+    ]
+  },
+  "image_evidence": {
+    "run": "plant-ground-accepted",
+    "scope": "Actual software-Vulkan first-case pixels/depth. Identical per-layer crop and nearest-neighbour enlargement for texel inspection. Difference image is multiplied by 32. Primary source and receivers identical.",
+    "first_case": {
+      "colour_max_u8": 6,
+      "colour_mae_u8": 0.03661216507731699,
+      "occupied_union": 17049,
+      "different_coverage_texels": 148,
+      "unmatched_after_one_texel": 14
+    },
+    "files": {
+      "plant-ground-accepted.full.depth": "27c09331f758215691a0f17b029bcb58dc10221a491a9d566dff7539027fed19",
+      "plant-ground-accepted.lod.depth": "1bcb7e8573a2bded70ee46b1aa536616462d2ef3d247f069ce6deaf2917fcb3c",
+      "plant-ground-accepted.full.rgba": "47eb3f51a982e22a2a26325c117f2b13ab0d8acc620e75715f434440734bd605",
+      "plant-ground-accepted.lod.rgba": "5f93e4a24c1f350a06865d979ddab6004a0d0df3430b3b30ccc3dc754ae65f0c",
+      "plant-ground-comparison.png": "39c381638f765245e35e0968fa739a976af8b58aa3eb8579b7336109299713da",
+      "shadow-mask-comparison.png": "2127f91621e3cd65cfba7475cde62cd9a53b622f20648961aae4afb6073e64a9"
+    }
+  },
+  "software_driver": {
+    "adapter": "llvmpipe LLVM 23.1.3, CPU, Mesa 26.2.5-arch1.1",
+    "package_sha256": "e14837dfe51c29d8bdb29422b40daaafc2291908c4a6349a0e63addd09fa546b",
+    "library_sha256": "08d49503422af25fe5d9d8aee217501d12710645755a859c2e32711f68fbfc75",
+    "containment": "Bubblewrap unshare-all, private CPU-only ICD, no /dev/dri, no display/network; dense caster command encoder dropped, never submitted."
+  },
+  "verification_notes": [
+    "A preliminary two-thread native suite hit the pre-existing embedded-server snapshot deadline. The final full one-thread suite passed; no deadline or production server code changed.",
+    "Initial exact one-texel occupancy and self-shadow-only colour assumptions were not used as universal radiometric guarantees: real thin laminae produce isolated raster sample changes, and adding a ground receiver increases edge differences. Final source asserts the independent half-texel geometric certificate and scoped image/coverage regression budgets.",
+    "Small already-minimal coarse juvenile/reed meshes retain their original geometry when an alternate source is not cheaper.",
+    "The original eight user/Gemini paths remain outside the verified clean-source commit and must be preserved during integration."
+  ],
+  "limitations": [
+    "No physical Radeon launch; existing GPU replay block retained.",
+    "No target-GPU FPS, whole-frame time, driver-stability, blind reference or moving-camera temporal acceptance.",
+    "The cold mesh plan remains 300310802 triangles; shadow encoding API runs increased.",
+    "The 0.5-texel certificate is a geometric surface bound, not a general receiver-radiance or discrete-coverage guarantee."
+  ],
+  "raw_files": {
+    "plant-ground-accepted.log": "b1c568e8092f6f09eb53344b10848dbe3e6cb96e0d59329a84d5b375ab9fd890",
+    "plant-ground-accepted.full.depth": "27c09331f758215691a0f17b029bcb58dc10221a491a9d566dff7539027fed19",
+    "plant-ground-accepted.lod.depth": "1bcb7e8573a2bded70ee46b1aa536616462d2ef3d247f069ce6deaf2917fcb3c",
+    "plant-ground-accepted.full.rgba": "47eb3f51a982e22a2a26325c117f2b13ab0d8acc620e75715f434440734bd605",
+    "plant-ground-accepted.lod.rgba": "5f93e4a24c1f350a06865d979ddab6004a0d0df3430b3b30ccc3dc754ae65f0c",
+    "plant-ground-accepted.toml": "06fcfea0a555db5daca7834547bb1afe3f5076d2552a46ec1936c2cc6c396005",
+    "plant-ground-accepted-command.json": "b47100cf3fcf688194c5024a87527000ce4e633b41e9a941ef6f012efb301456",
+    "shadow-zero-final.log": "b5d42f11157720334035fea49f82339ef888c3db135824046c0ed70dd116c2e5",
+    "primary-final.log": "ca9349afe3b794dbc1e525f1182cbef5ec1a19fb5649bb9035d32df32f40a597",
+    "primary-final-command.json": "6bf2b0d71af07482ffb637aa25c3d8615cbde3ea69bdd8c5a88f628f7cec1193",
+    "shadow-zero-final-command.json": "6ca9e72d283156d3d4e8a4a002ba88c0be69d0f5bc33f8f7572aba497028035e",
+    "plant-ground-comparison.png": "39c381638f765245e35e0968fa739a976af8b58aa3eb8579b7336109299713da",
+    "shadow-mask-comparison.png": "2127f91621e3cd65cfba7475cde62cd9a53b622f20648961aae4afb6073e64a9",
+    "image-evidence.json": "b454a2d1cf2aa0873239529e1cd7abb9411f0be1a8d2d601b07403e3b107d115",
+    "coastal-final.log": "239d4da2ed6b4e4cb846611aa3142f03c93f0f59614f6b84c08ad7fbc9404da8",
+    "coastal-final.toml": "b79dbbe0b2b77cbbcf279a859c3ce8bde7816811167a1346866179c4979dd108",
+    "coastal-final-command.json": "bf59fae678c46de3d5a0378f9c605c3eca020b09509a433bd5b0208ca34b12f6"
+  }
+}

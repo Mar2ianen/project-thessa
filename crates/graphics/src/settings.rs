@@ -672,6 +672,10 @@ pub struct ShadowSettings {
     /// to max_distance_m; omission preserves each host's legacy distribution.
     #[serde(default)]
     pub first_cascade_distance_m: Option<f64>,
+    /// Maximum projected geometric error for supplied depth-only mesh LODs.
+    /// Zero disables alternate geometry; full geometry is always the fallback.
+    #[serde(default)]
+    pub mesh_lod_error_texels: f64,
     /// Shadow texel grid per cascade (power of two, 512..=8192).
     #[serde(default = "default_shadow_map_size")]
     pub map_size: u32,
@@ -704,6 +708,7 @@ impl Default for ShadowSettings {
             cascades: default_shadow_cascades(),
             max_distance_m: default_shadow_distance(),
             first_cascade_distance_m: None,
+            mesh_lod_error_texels: 0.0,
             map_size: default_shadow_map_size(),
             normal_bias_m: default_shadow_normal_bias(),
         }

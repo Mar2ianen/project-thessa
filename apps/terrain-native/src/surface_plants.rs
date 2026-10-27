@@ -577,8 +577,8 @@ pub fn prepare(
                 + p.ambient_visibility.len() * std::mem::size_of::<f32>()
         })
         .sum();
-    if diagnostics.prototype_bytes > 7_000_000 {
-        return Err("ground/plant prototype payload exceeds 7 MB admission budget".into());
+    if diagnostics.prototype_bytes > 48_000_000 {
+        return Err("ground/plant prototype payload exceeds 48 MB admission budget".into());
     }
     diagnostics.prototype_texture_bytes = prepared
         .asset
@@ -721,9 +721,9 @@ fn convert_with_detail(
                 [r, g, b, 1.0]
             } else if stem {
                 match form {
-                    1 => [0.46, 0.39, 0.27, 1.0],
-                    2 => [0.44, 0.38, 0.25, 1.0],
-                    _ => [0.45, 0.39, 0.26, 1.0],
+                    1 => [0.22, 0.17, 0.11, 1.0],
+                    2 => [0.20, 0.15, 0.09, 1.0],
+                    _ => [0.21, 0.16, 0.10, 1.0],
                 }
             } else {
                 match prototype.kind {
@@ -733,11 +733,11 @@ fn convert_with_detail(
                         _ => [0.32, 0.33, 0.14, 1.0],
                     },
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
-                        1 => [0.38, 0.40, 0.22, 1.0],
-                        2 => [0.44, 0.38, 0.18, 1.0],
-                        _ => [0.40, 0.38, 0.20, 1.0],
+                        1 => [0.34, 0.35, 0.16, 1.0],
+                        2 => [0.36, 0.34, 0.14, 1.0],
+                        _ => [0.35, 0.35, 0.15, 1.0],
                     },
-                    _ => [0.48, 0.58, 0.30, 1.0],
+                    _ => [0.18, 0.25, 0.11, 1.0],
                 }
             };
             let diffuse_transmission = if dry {
@@ -746,13 +746,17 @@ fn convert_with_detail(
                 0.0
             } else {
                 match prototype.kind {
-                    thessa_worldgen_rocky::scatter::ScatterKind::FernClump => 0.16,
+                    thessa_worldgen_rocky::scatter::ScatterKind::FernClump => match form {
+                        2 => 0.18,
+                        1 => 0.15,
+                        _ => 0.16,
+                    },
                     thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
                         1 => 0.20,
                         2 => 0.16,
                         _ => 0.18,
                     },
-                    _ => 0.18,
+                    _ => 0.10,
                 }
             };
             prepared.asset.materials.push(Material {
@@ -853,6 +857,9 @@ fn compact_plant_vertices(primitive: &mut Primitive) {
 
 #[cfg(test)]
 mod ray_tests;
+
+#[cfg(test)]
+mod preview_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1023,7 +1030,7 @@ mod tests {
             }
             assert_eq!(prepared.ranges.len(), prepared.asset.primitives.len());
             assert!(prepared.ranges.len() <= 31);
-            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 6_000_000);
+            assert!(stats.prototype_bytes > 0 && stats.prototype_bytes <= 47_000_000);
             let (_, disabled) = prepare(Context::Disabled, &resolved, field).unwrap();
             assert_eq!(
                 (
@@ -1166,13 +1173,17 @@ mod tests {
                     0.0
                 } else {
                     match prototype.kind {
-                        thessa_worldgen_rocky::scatter::ScatterKind::FernClump => 0.16,
+                        thessa_worldgen_rocky::scatter::ScatterKind::FernClump => match form {
+                            2 => 0.18,
+                            1 => 0.15,
+                            _ => 0.16,
+                        },
                         thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree => match form {
                             1 => 0.20,
                             2 => 0.16,
                             _ => 0.18,
                         },
-                        _ => 0.18,
+                        _ => 0.10,
                     }
                 };
                 assert_eq!(material.diffuse_transmission, expected_transmission);

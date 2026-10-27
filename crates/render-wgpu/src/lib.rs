@@ -42,6 +42,7 @@ pub mod display;
 pub mod environment;
 pub mod material;
 pub mod mesh;
+mod mesh_visibility;
 pub mod motion;
 pub mod msaa;
 pub mod ocean;

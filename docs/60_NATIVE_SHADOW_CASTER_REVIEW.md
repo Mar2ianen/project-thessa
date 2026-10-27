@@ -5,6 +5,38 @@ Baseline: `12e70ad`, branch `feat/render-pipeline-optimizations`. This follows
 the dated pass-composition measurements in [doc 58](58_NATIVE_PIPELINE_REVIEW.md);
 those old timings are not relabeled as measurements of this implementation.
 
+## 2026-10-27 mesh-caster continuation
+
+After WORLD142 reset the desktop GPU, the mesh caster now uses conservative
+per-primitive spheres and the existing homogeneous light-clip test. Bounds
+scan source positions once only when shadows exist. Instances retain their
+original indices; contiguous accepted runs share one indexed draw. No source
+geometry, material, plant identity, quality tier or GPU buffer changes.
+
+The test reads the exact cached f32 instance-matrix bytes already used for
+shadow publication. The local AABB sphere is transformed using a Gershgorin
+upper bound on the narrowed linear transform's squared largest singular value,
+plus a 32×f32-epsilon transform envelope. The existing clip-plane envelope uses
+the actual f32 shadow matrix promoted to f64. Missing/invalid/unbounded data
+fails open. This is light-volume rejection, never camera visibility: an
+off-camera caster inside the light volume remains. The unculled reference
+entry point disables mesh rejection as well as terrain rejection.
+
+`ShadowDrawStats` adds `mesh_candidate_instances`, `mesh_submitted_instances`,
+`mesh_candidate_triangles`, `mesh_submitted_triangles` and `mesh_draw_calls`.
+These sum primitive/organ groups over actually encoded active layers, rather
+than counting unique world objects. Cache hits retain zero actual work. The
+existing terrain fields retain their meanings. Layers have distinct encoder
+labels; the native stage trace records these counters before shadow submission.
+
+CPU checks cover visible-run identity, invalid data, off-camera light casters,
+and 2,000 scaled/rotated transforms against f32 clip-space corners. The existing
+full-caster depth/final-color oracle now also requires mesh rejection and covers
+far outside, rotated/scaled and behind-camera mesh instances. It passed on
+isolated software Vulkan (Mesa 26.2.5 llvmpipe, CPU device, no `/dev/dri`). This
+is not Radeon validation, a measured GPU speedup, or desktop-stability proof.
+The original dated terrain review and measurements below remain historical.
+
 ## Imported finding and verification gap
 
 The useful finding is unnecessary vertex processing: the old depth encoder
@@ -47,7 +79,8 @@ not claim a demonstrated image failure in those supplied benchmark endpoints.
   off-camera geometry must still cast onto visible receivers.
 - **Ocean-enabled terrain deliberately submits the full resident caster set.**
   Its independently evolved/deformed vertices need their own integrated bound
-  lifecycle before enabling this optimization there. Mesh casters are unchanged.
+  lifecycle before enabling this optimization there. At this dated checkpoint mesh casters were unchanged; the 2026-10-27
+  continuation above extends rejection to meshes.
 - Height uploads and dirty partition publications refresh bounds in the existing
   validated success path; retired slots clear bounds. Contiguous accepted slots
   coalesce into draw ranges without allocating a temporary visible-list vector.

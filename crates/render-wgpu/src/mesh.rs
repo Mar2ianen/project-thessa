@@ -9,6 +9,7 @@ use thessa_render_core::mesh::{MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
 struct Primitive {
+    shadow_bounds: Option<crate::mesh_visibility::Bounds>,
     ambient: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -631,6 +632,9 @@ impl MeshRenderer {
             .primitives
             .iter()
             .map(|p| Primitive {
+                shadow_bounds: shadows.and_then(|_| {
+                    crate::mesh_visibility::Bounds::new(p.vertices.iter().map(|v| v.position))
+                }),
                 ambient: buffer(
                     &words(if p.ambient_visibility.is_empty() {
                         vec![1.0; if has_vertex_ao { p.vertices.len() } else { 1 }]
@@ -927,9 +931,11 @@ impl MeshRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         atlas: &crate::shadows::ShadowAtlas,
-    ) {
+        clip: Option<glam::Mat4>,
+    ) -> crate::shadows::ShadowDrawStats {
+        let mut stats = crate::shadows::ShadowDrawStats::default();
         let Some(bind) = &self.shadow_caster else {
-            return;
+            return stats;
         };
         pass.set_pipeline(&atlas.mesh_pipeline);
         pass.set_bind_group(1, bind, &[]);
@@ -939,7 +945,28 @@ impl MeshRenderer {
             }
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..p.count, 0, range.clone());
+            let triangles = u64::from(p.count) / 3;
+            stats.mesh_candidate_instances += u64::from(range.end - range.start);
+            stats.mesh_candidate_triangles += triangles * u64::from(range.end - range.start);
+            let visible = |i: u32| {
+                let Some((clip, bounds)) = clip.zip(p.shadow_bounds) else {
+                    return true;
+                };
+                let Some(bytes) = self
+                    .shadow_instances
+                    .get(i as usize * 64..i as usize * 64 + 64)
+                else {
+                    return true;
+                };
+                bounds.intersects_uploaded(clip, bytes)
+            };
+            for run in crate::mesh_visibility::visible_runs(range.clone(), visible) {
+                stats.mesh_submitted_instances += u64::from(run.end - run.start);
+                stats.mesh_submitted_triangles += triangles * u64::from(run.end - run.start);
+                stats.mesh_draw_calls += 1;
+                pass.draw_indexed(0..p.count, 0, run);
+            }
         }
+        stats
     }
 }

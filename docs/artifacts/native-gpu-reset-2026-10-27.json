@@ -1,0 +1,403 @@
+{
+  "incident_local": "2026-10-27T16:34:17+03:00",
+  "stage": "142-compound-fern",
+  "source_sha256": "ea47065fa0917cffd98785afff28b35b04d557da4ea45f43de9d8b70ca8480f2",
+  "binary_sha256": "b5e02d80aea6ac6aef8444989e69d1ae6ae81e36a0713177e1c3750ff27e9ffc",
+  "capture": {
+    "command": [
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/142-compound-fern/native",
+      "--graphics",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/142-compound-fern/profile.toml",
+      "--survey-lat",
+      "23.565679258039204",
+      "--survey-lon",
+      "165.13881581863882",
+      "--survey-distance",
+      "80",
+      "--survey-eye-agl",
+      "2",
+      "--sim-time",
+      "0",
+      "--sim-step",
+      "0",
+      "--prestream-seconds",
+      "40",
+      "--frames",
+      "16",
+      "--mute",
+      "--no-hud",
+      "--headless",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/142-compound-fern/standing.png",
+      "--perf-capture",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/surface-showcase/overnight-coastal-2026-10-26/142-compound-fern/standing.json"
+    ],
+    "exit_code": -6,
+    "binary_sha256": "b5e02d80aea6ac6aef8444989e69d1ae6ae81e36a0713177e1c3750ff27e9ffc",
+    "profile_sha256": "b83f911720725b64bf5f541b1a0bd516523797a43efbc6ef0e101f534e16447f",
+    "seconds": 85.91141298296861
+  },
+  "timeline": [
+    {
+      "time": "16:34:17",
+      "event": "amdgpu gfx_0.0.0 timeout; guilty process native pid3737704"
+    },
+    {
+      "time": "16:34:19",
+      "event": "MES RESET failed; local ring reset failed; full GPU reset started; native abort core timestamp is16:34:19 (journal records it at16:34:21)"
+    },
+    {
+      "time": "16:34:21",
+      "event": "MODE2 reset succeeded; capture reports guilty hard-recovery context and Device::poll device loss during the recovery"
+    },
+    {
+      "time": "16:34:22",
+      "event": "niri pid62819 reports innocent lost context and aborts; user desktop session is lost"
+    },
+    {
+      "time": "16:34:41",
+      "event": "new niri session starts"
+    }
+  ],
+  "platform": {
+    "gpu": "Radeon 880M",
+    "backend": "Vulkan/RADV",
+    "running_kernel": "7.2.8-arch1-2",
+    "mesa": "26.2.5-1",
+    "niri": "26.04-1"
+  },
+  "settings": {
+    "ray_tracing": "off",
+    "msaa_samples": 4,
+    "shadow_cascades_per_light": 4,
+    "cloud_ray_steps": 24
+  },
+  "cpu_workload": {
+    "scope": "CPU reconstruction only; no Backend/adapter/device/submission; does not identify hung command",
+    "context": "SurveyWithUnderstory { canopy: TileKey { face: 1, level: 14, x: 6018, y: 11888 }, understory: TileKey { face: 1, level: 18, x: 96291, y: 190216 } }",
+    "diagnostics": {
+      "native_surface_ground_candidates": "36864",
+      "native_surface_ground_litter_fragments": "1271",
+      "native_surface_ground_moss_clumps": "192",
+      "native_surface_ground_pebbles": "6692",
+      "native_surface_ground_puddles": "24",
+      "native_surface_ground_samples": "6692",
+      "native_surface_ground_water_basins": "99",
+      "native_surface_ground_water_samples": "6936",
+      "native_surface_ground_water_triangles": "1960",
+      "native_surface_ground_window": "1,18,96291,190216",
+      "native_surface_plants_accepted": "11320",
+      "native_surface_plants_candidate_visits": "237568",
+      "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path",
+      "native_surface_plants_draw_calls": "0",
+      "native_surface_plants_frame_upload_bytes": "0",
+      "native_surface_plants_instance_buffer_bytes": "1151488",
+      "native_surface_plants_preparation_cpu_ms": "38707.822436999995",
+      "native_surface_plants_preparation_job_pending": "false",
+      "native_surface_plants_preparation_jobs_discarded": "0",
+      "native_surface_plants_preparation_jobs_started": "0",
+      "native_surface_plants_prototype_payload_bytes": "44765568",
+      "native_surface_plants_prototype_texture_bytes": "3760128",
+      "native_surface_plants_publication_cpu_ms": "0",
+      "native_surface_plants_reduced_instances": "5320",
+      "native_surface_plants_renderer_reused": "false",
+      "native_surface_plants_retained": "11297",
+      "native_surface_plants_rt_policy": "shared_policy_mesh_rt_not_requested",
+      "native_surface_plants_status": "applied_survey_with_near_understory",
+      "native_surface_plants_submitted_instances": "0",
+      "native_surface_plants_surface_samples": "36769",
+      "native_surface_plants_window": "1,14,6018,11888",
+      "native_surface_understory_accepted": "9254",
+      "native_surface_understory_candidate_visits": "200704",
+      "native_surface_understory_replaced_coarse_clumps": "23",
+      "native_surface_understory_scale_bins_lt_045_070_095": "[582, 3226, 3966, 1480]",
+      "native_surface_understory_surface_samples": "33884",
+      "native_surface_understory_window": "1,18,96291,190216",
+      "native_surface_understory_windows": "49"
+    },
+    "instances": 17992,
+    "groups": [
+      {
+        "group": 0,
+        "source_triangles": 30318,
+        "instances": 1382,
+        "submitted_triangles": 41899476
+      },
+      {
+        "group": 1,
+        "source_triangles": 11468,
+        "instances": 1382,
+        "submitted_triangles": 15848776
+      },
+      {
+        "group": 2,
+        "source_triangles": 4830,
+        "instances": 1175,
+        "submitted_triangles": 5675250
+      },
+      {
+        "group": 3,
+        "source_triangles": 3400,
+        "instances": 1175,
+        "submitted_triangles": 3995000
+      },
+      {
+        "group": 4,
+        "source_triangles": 67006,
+        "instances": 526,
+        "submitted_triangles": 35245156
+      },
+      {
+        "group": 5,
+        "source_triangles": 35822,
+        "instances": 526,
+        "submitted_triangles": 18842372
+      },
+      {
+        "group": 6,
+        "source_triangles": 1304,
+        "instances": 2840,
+        "submitted_triangles": 3703360
+      },
+      {
+        "group": 7,
+        "source_triangles": 1104,
+        "instances": 18,
+        "submitted_triangles": 19872
+      },
+      {
+        "group": 8,
+        "source_triangles": 119586,
+        "instances": 18,
+        "submitted_triangles": 2152548
+      },
+      {
+        "group": 9,
+        "source_triangles": 19254,
+        "instances": 18,
+        "submitted_triangles": 346572
+      },
+      {
+        "group": 10,
+        "source_triangles": 1048,
+        "instances": 16,
+        "submitted_triangles": 16768
+      },
+      {
+        "group": 11,
+        "source_triangles": 121450,
+        "instances": 16,
+        "submitted_triangles": 1943200
+      },
+      {
+        "group": 12,
+        "source_triangles": 19364,
+        "instances": 16,
+        "submitted_triangles": 309824
+      },
+      {
+        "group": 13,
+        "source_triangles": 1104,
+        "instances": 20,
+        "submitted_triangles": 22080
+      },
+      {
+        "group": 14,
+        "source_triangles": 124942,
+        "instances": 20,
+        "submitted_triangles": 2498840
+      },
+      {
+        "group": 15,
+        "source_triangles": 19834,
+        "instances": 20,
+        "submitted_triangles": 396680
+      },
+      {
+        "group": 16,
+        "source_triangles": 1460,
+        "instances": 2139,
+        "submitted_triangles": 3122940
+      },
+      {
+        "group": 17,
+        "source_triangles": 450,
+        "instances": 2139,
+        "submitted_triangles": 962550
+      },
+      {
+        "group": 18,
+        "source_triangles": 626,
+        "instances": 1297,
+        "submitted_triangles": 811922
+      },
+      {
+        "group": 19,
+        "source_triangles": 228,
+        "instances": 1297,
+        "submitted_triangles": 295716
+      },
+      {
+        "group": 20,
+        "source_triangles": 2310,
+        "instances": 530,
+        "submitted_triangles": 1224300
+      },
+      {
+        "group": 21,
+        "source_triangles": 1162,
+        "instances": 530,
+        "submitted_triangles": 615860
+      },
+      {
+        "group": 22,
+        "source_triangles": 496,
+        "instances": 446,
+        "submitted_triangles": 221216
+      },
+      {
+        "group": 23,
+        "source_triangles": 4888,
+        "instances": 446,
+        "submitted_triangles": 2180048
+      },
+      {
+        "group": 24,
+        "source_triangles": 812,
+        "instances": 446,
+        "submitted_triangles": 362152
+      },
+      {
+        "group": 25,
+        "source_triangles": 440,
+        "instances": 458,
+        "submitted_triangles": 201520
+      },
+      {
+        "group": 26,
+        "source_triangles": 4906,
+        "instances": 458,
+        "submitted_triangles": 2246948
+      },
+      {
+        "group": 27,
+        "source_triangles": 812,
+        "instances": 458,
+        "submitted_triangles": 371896
+      },
+      {
+        "group": 28,
+        "source_triangles": 496,
+        "instances": 450,
+        "submitted_triangles": 223200
+      },
+      {
+        "group": 29,
+        "source_triangles": 4926,
+        "instances": 450,
+        "submitted_triangles": 2216700
+      },
+      {
+        "group": 30,
+        "source_triangles": 814,
+        "instances": 450,
+        "submitted_triangles": 366300
+      },
+      {
+        "group": 31,
+        "source_triangles": 32,
+        "instances": 2282,
+        "submitted_triangles": 73024
+      },
+      {
+        "group": 32,
+        "source_triangles": 32,
+        "instances": 2180,
+        "submitted_triangles": 69760
+      },
+      {
+        "group": 33,
+        "source_triangles": 32,
+        "instances": 2230,
+        "submitted_triangles": 71360
+      },
+      {
+        "group": 34,
+        "source_triangles": 12288,
+        "instances": 1,
+        "submitted_triangles": 12288
+      },
+      {
+        "group": 35,
+        "source_triangles": 5084,
+        "instances": 1,
+        "submitted_triangles": 5084
+      },
+      {
+        "group": 36,
+        "source_triangles": 1960,
+        "instances": 1,
+        "submitted_triangles": 1960
+      }
+    ],
+    "submitted_mesh_triangles_per_primary_pass": 148572518,
+    "per_active_shadow_cascade_mesh_triangles": 148572518
+  },
+  "workload_comparison": {
+    "baseline_stage": "136-incoming-review",
+    "baseline_captured_primary_mesh_triangles": 32954976,
+    "candidate_cpu_primary_mesh_triangles": 148572518,
+    "ratio": 4.508348541962222,
+    "candidate_cpu_instances": 17992,
+    "candidate_groups": 37,
+    "prototype_payload_bytes": 44765568,
+    "aggregate_admission_bytes": 48000000,
+    "baseline_aggregate_admission_bytes": 7000000,
+    "shadow_layers": 12,
+    "shadow_layer_scope": "Actual same-epoch WORLD136/WORLD139 raster logs; WORLD142 did not reach final statistics. Conditional frame total assumes these same 12 active layers.",
+    "conditional_primary_plus_shadow_submitted_triangles": 1931442734
+  },
+  "confirmed": [
+    "The kernel attributes the gfx timeout to this exact capture process.",
+    "Failed ring recovery escalated to full device reset; niri then lost an innocent context and aborted.",
+    "RT was disabled; no plant-ray calibration test had started.",
+    "Mesh primary and shadow loops submit every grouped instance range; no mesh-instance frustum culling is applied in those loops.",
+    "Prototype-byte admission does not bound expanded instanced triangle work or per-command GPU duration."
+  ],
+  "inference": "The 4.51x expanded mesh increase, multiplied across shadow layers inside one frame command buffer, is a strong workload-timeout candidate. This does not distinguish a long-running valid workload from a driver/firmware/shader deadlock.",
+  "unknown": [
+    "Exact draw/dispatch and shader program counter that stopped making progress.",
+    "Whether the watchdog was reached by excessive execution time or a driver/firmware/synchronization defect."
+  ],
+  "containment": [
+    "No GPU capture/test runners remain.",
+    "Automatic capture, motion, calibration and verification launchers fail closed while target/surface-showcase/GPU-RUNS-BLOCKED.json exists.",
+    "Only one CPU-only exact-filter scene reconstruction ran; its temporary source was restored byte-for-byte.",
+    "No watchdog, recovery, driver, compositor or system configuration was changed.",
+    "The candidate is not GPU validated and has not been committed/pushed."
+  ],
+  "device_dump": "Kernel produced /sys/class/drm/card1/device/devcoredump/data. Read denied without elevated access; not read or cleared. Application/native and niri CPU core metadata was preserved locally.",
+  "evidence": {
+    "kernel.log": "fdc75db139cb2d5c030cbdf25561ccce6990396e426dca91ea586b37d46c0897",
+    "user-session.log": "c4db4f123d021bdf4f74612b699f9ec9420599c7b806b80c60f59c5839f39c4a",
+    "native-core-info.txt": "72e922d764b9c0273694042512cf4257f3e4e83419bf0abd880a11d9d50e2a6d",
+    "niri-core-info.txt": "38dee272f2fc0e512ae09d25a6e028b577f0d7570ff26fa1a06d9e54005c77bf",
+    "standing.log": "305b737297b80dbb58b1c00e31b1184d588c03c66bdf9c7ec230d6ae0044ecc4",
+    "standing-command.json": "3d7a907e6e3fe029fd79936d6ba1a9deba74e368f348c395e99c61b7b0c0a25a",
+    "profile.toml": "b83f911720725b64bf5f541b1a0bd516523797a43efbc6ef0e101f534e16447f",
+    "pin.json": "7447cd4761cd902eb3c34e5956a2df608a2c1536885eaf24811eaaa78396a60c",
+    "checks.json": "536e7b884b707f2b542493f19d8b89c411ccf987ca2a6ccb2ee65558b3211997",
+    "containment.json": "bd81d52632edd4368d4e1107e11e2b2b2bb87a74c2fd2167fc5fc3375c8adaab",
+    "cpu-diagnostic.log": "7c82559d881ea7daf94666e95a9a1a358b9726f59404a965dbc120aee6d27b8c",
+    "scene-before-probe.rs": "36ef901e8994f16ff7cab8bdb5a344f9b0e81e59142c8a5d11093e9cb288741d",
+    "cpu-probe.rs": "a0c99c56005da2fc275fd5cc61bdbda59b5759e1ddd5c072fab17bbd7d43ed63",
+    "cpu-diagnostic-main.log": "11d1aedd50b16b7d531f67bad1e703e1d1e31f850beaf70117ff3015337cbae5",
+    "cpu-diagnostic-main-2.log": "f1615e0d396275b3bb872f26fcedb03a2262650aedb410d11d6b65a249331089",
+    "cpu-workload.json": "5954a725d57a66ae7e47e42bfc2ebe8fc2e63829cc62cdba9d578a5cb424d890",
+    "cpu-probe-provenance.json": "7f28c4a66906d260d455591aa1a51fbc238650232d2a52aea1f3495ad568bf98"
+  },
+  "sources": [
+    "https://docs.mesa3d.org/graphics-debugging/debugging-misrenderings-crashes.html",
+    "https://docs.mesa3d.org/drivers/amd/hang-debugging.html",
+    "https://kernel.org/doc/html/latest/gpu/amdgpu/module-parameters.html"
+  ]
+}

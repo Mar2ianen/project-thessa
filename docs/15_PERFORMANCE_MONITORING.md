@@ -12,6 +12,50 @@ The native migration viewer now has an **opt-in serial headless adapter**:
 cargo run --release -p thessa-terrain-native -- --headless target/frame.png --frames 120 --perf-capture target/native-perf.json
 ```
 
+### Crash-durable native stage trace (2026-10-27)
+
+`--gpu-trace NEW.toml` is a separate headless diagnostic after the WORLD142 GPU
+reset/session loss. It cannot be combined with `--perf-capture`. Without this
+flag, no trace file, serial stage fences or diagnostic admission checks exist.
+Normal performance capture retains its existing intervals and submission path.
+
+The trace uses exclusive file creation and synchronizes each complete TOML
+event to disk. Its header records the process ID and mesh-triangle limit; event
+fields are strings, including frame and elapsed host milliseconds. Frames 0–29
+are the ordinary warmup. Requested/resolved graphics and actual adapter details
+are recorded before rendering. `host_begin` / `host_ready` are CPU milestones,
+not GPU completion. `submit_intent` is durable before submission and does not
+prove execution; `gpu_completed` is written only after a queue fence completes.
+The final readback has separate host milestones. Screenshot/trace aliases and
+existing trace files are rejected rather than overwriting evidence.
+
+Stage fences cover pending uploads, surface/topology, shadow layers, RT builds,
+opaque/MSAA, motion, temporal resolve, plume/sky, display and UI/frame end. A
+missing completion narrows the failing group; it does not identify an exact
+shader instruction. Synchronization and file I/O change scheduling and can hide
+a race. Such traces and their printed wall timings are not ordinary throughput
+or stability measurements. [Mesa's hang guide](https://docs.mesa3d.org/drivers/amd/hang-debugging.html)
+describes the command/wave traces needed for deeper RADV diagnosis.
+
+The default trace admission limit is 1,000,000 submitted mesh triangles per
+stage. `--gpu-trace-mesh-triangle-limit N` accepts a positive explicit override.
+The first primary check runs before any frame-render submission; encoded shadow
+work is checked again against its actual mesh counter before that stage is
+submitted. Rejection records `admission_rejected` and exits; it never changes
+geometry, density, lighting or quality. Resource/device setup and queue uploads
+may already have occurred. This count does not bound terrain/compute/shader
+duration and cannot guarantee protection from a GPU/driver hang.
+
+The WORLD142 desktop-GPU replay remains blocked by the local incident marker.
+Validation uses CPU tests and a private software Vulkan driver inside a
+namespace with a fresh `/dev` lacking `/dev/dri`, no selected display socket and
+only the CPU ICD. No host driver was installed or reconfigured. Software results
+are distinct from Radeon and desktop-stability acceptance. See
+[the incident](artifacts/native-gpu-reset-2026-10-27.md) and
+[doc 60](60_NATIVE_SHADOW_CASTER_REVIEW.md) for caster counters and bounds.
+
+### Ordinary headless timing capture
+
 It reuses `thessa-perf` (last 1800 measured frames after 30 warmup), writes JSON
 and sibling CSV after rendering, and negotiates stable timestamp-query plus
 encoder-timestamp features only for this diagnostic. If either feature is

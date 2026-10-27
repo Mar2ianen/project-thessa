@@ -152,7 +152,7 @@ The checked-in vertical slice currently contains:
   green/juvenile/olive/weathered pigment cohorts and asymmetric pinnae through
   shared padded leaf textures, without extra draws or a changed mesh budget.
   Matched captures use raster shadows after an original-baseline AMD RT device loss.
-  Coastal composition continuation (WORLD116): Gemini crowns and optical priors are retained. Ground leaves use connected rounded divisions and rooted attachments; shared understory density replaces a native-only override. Bare substrate excludes baked canopy illumination; damp opaque soil retains more roughness while pools keep their water material. Reference and temporal acceptance remain open.
+  Coastal continuation: reviewed incoming soil/understory edits, scanned moss and connected shoots, and compound ground/crown fronds with attached secondary pinnules and preserved geometric error guards. WORLD139 single-blade contours were rejected; WORLD142 passed CPU checks but its first raster capture reset the GPU and desktop session; physical GPU replay remains blocked. Isolated software-Vulkan specimens now inspect actual native meshes/materials/shadows: ground pinnules are broader, dry organs subdued, and reduced crowns retain divided edges. The scene profile uses 24 cloud steps. Reference and temporal acceptance remain open.
   Reference acceptance, exact contact, collision and planetary prop streaming remain open.
   The remaining planet refactor is tracked in doc 13; a reproducible canonical
   coastal 2×2 km CPU audit site and its limitations are recorded in
@@ -289,6 +289,10 @@ The checked-in vertical slice currently contains:
      a new directory, preserving prior captures. Readback/writes stay outside
      frame timing samples but perturb streaming wall cadence; use it for visual
      motion review, not a performance-equivalent replay.
+     Headless `--gpu-trace NEW.toml` adds crash-durable stage intent/completion
+     records and explicit mesh-work admission, separate from performance capture
+     ([doc 15](docs/15_PERFORMANCE_MONITORING.md)). Mesh shadows conservatively
+     reject instances outside each light volume; Radeon stability remains open.
      Headless `--perf-capture target/native-perf.json` exports the existing
      `thessa-perf` JSON/CSV format, including hardware GPU command intervals
      where supported (explicitly unavailable otherwise). Normal runs create no

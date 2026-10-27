@@ -14,6 +14,12 @@ pub struct ShadowDrawStats {
     pub draw_calls: u64,
     /// Submitted slots are a capacity upper bound for indirect draws; no CPU wait.
     pub indirect: bool,
+    /// Mesh counts include organ groups and active layers, not unique objects.
+    pub mesh_candidate_instances: u64,
+    pub mesh_submitted_instances: u64,
+    pub mesh_candidate_triangles: u64,
+    pub mesh_submitted_triangles: u64,
+    pub mesh_draw_calls: u64,
 }
 
 #[derive(Clone)]
@@ -431,7 +437,7 @@ impl ShadowAtlas {
                 continue;
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shared-shadow-layer"),
+                label: Some(&format!("shared-shadow-layer-{i}")),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view,
@@ -454,7 +460,16 @@ impl ShadowAtlas {
             total.draw_calls += stats.draw_calls;
             total.indirect |= stats.indirect;
             if let Some(meshes) = meshes {
-                meshes.cast_shadow(&mut pass, self);
+                let stats = meshes.cast_shadow(
+                    &mut pass,
+                    self,
+                    if cull { self.layer_matrix(i) } else { None },
+                );
+                total.mesh_candidate_instances += stats.mesh_candidate_instances;
+                total.mesh_submitted_instances += stats.mesh_submitted_instances;
+                total.mesh_candidate_triangles += stats.mesh_candidate_triangles;
+                total.mesh_submitted_triangles += stats.mesh_submitted_triangles;
+                total.mesh_draw_calls += stats.mesh_draw_calls;
             }
         }
         total

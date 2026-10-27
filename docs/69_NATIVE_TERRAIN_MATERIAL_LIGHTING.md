@@ -22,6 +22,45 @@ claim of resolved porous-water transport. Native before/after crops show a
 modest highlight-response change; moving blur and ground sky visibility remain
 open. No new pass, resource, setting or quality policy is introduced.
 
+WORLD117 (doc 77) changes only allocation of the bounded native moss-shoot
+mesh. A stable world hash is weighted by distance to the active L18 cell centre,
+spending more of the existing geometry near the cell while preserving sampled
+neighboring-cell shoots. The optical moss pigment, physical height and shared
+habitat fields do not change; neither do puddle/litter ordering or budgets.
+This is a view-area representation policy, not moss growth. The ordering is
+constant within a cell but can change across cell boundaries. Additional CPU
+staging holds a copy of the pebble candidates and a cached sort key for each;
+there is no extra pass, draw or persistent GPU allocation.
+
+WORLD119 adds a distinct 1024² CC0 Forest Leaves 02 scan for moss-covered
+forest litter, rather than deriving moss pigment detail from the gravel scan.
+WORLD119 originally graded source RGB by [0.152, 0.325, 0.492]. The incoming
+WORLD135 calibration uses [0.180, 0.350, 0.220]; roughness is still blended by
+existing cover. Both grades are authored optical priors. The 3 m source width and 20 mm displacement range are authored rendering
+priors. Its filtered displacement is mean-centred and multiplied by half the
+moss coverage; the resulting cushion remains clamped to 0–60 mm. The same
+world-fixed sample feeds render-only relief, prop/pool placement and material
+normal generation. Existing triplanar stochastic mapping and source mip
+filtering keep phase independent of pages, camera, LOD and worker order.
+
+The packed asset adds 6,140,860 B to the binary and approximately 26.67 MiB
+of CPU float mips once fine moss is actually sampled, plus a transient decode
+buffer. Disabled ground detail and coarse/no-moss samples do not decode it.
+Existing material pages, GPU atlas sizes, passes, draw ranges, quality gates,
+canonical collision heights and CBT topology are unchanged. The source scan
+contains moss, leaves and twigs; it is an authored optical proxy, not calibrated
+Thessa biology or measured reflectance. [Source/license](../assets/textures/forest-moss-litter-02.LICENSE.txt),
+source hashes and the reproducible offline importer are checked in. Current
+source tests pin source mean, fine detail and world continuity; the prior
+substrate-contrast fixture is adjusted because moss now uses its own scan.
+The incoming WORLD135 review also increases vegetated-floor coverage through
+shared ground/reed habitat weights, wet darkening to [0.65, 0.65, 0.58], and
+changes authored pebble/litter/pool optical priors. Water roughness 0.02 applies
+to explicit pools; damp opaque soil retains its 0.48 endpoint. These changes
+are source-reviewed and captured separately in WORLD136; they do not implement
+runoff, indirect illumination or calibrated wet optics. Realistic ground
+illumination, moving residency and reference acceptance remain open.
+
 WORLD91 (doc 77) gives resolved moss cover a connected cushion profile:
 `smoothstep(0.20, 0.80, moss) * hummock_height`, with the existing 35–60 mm
 hummock envelope. Moderate cover now contributes centimetres of geometric

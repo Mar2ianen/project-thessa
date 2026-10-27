@@ -87,7 +87,15 @@ fn shadow_culling_matches_full_casters_not_just_split_unified() {
         OffscreenTarget::FORMAT,
     );
     let mut witnessed_rejection = false;
+    let mut witnessed_mesh_rejection = false;
     let mut witnessed_depth = false;
+    // Exercise wholly rejected mesh instances, narrowed rotated/scaled bounds,
+    // and a caster behind the primary camera but inside a light's cover.
+    let origin = scene.view.world_position_m;
+    scene.instances[63].position_m = origin + DVec3::splat(100_000.0);
+    scene.instances[62].position_m = origin + DVec3::new(0.0, 0.0, 10.0);
+    scene.instances[61].rotation = DQuat::from_rotation_y(0.4);
+    scene.instances[61].scale = 1.7;
     for (i, camera) in [
         DVec3::new(0.0, 0.0, 1010.0),
         DVec3::new(12.3, -7.2, 1010.0),
@@ -114,6 +122,10 @@ fn shadow_culling_matches_full_casters_not_just_split_unified() {
         let b = capture_shadow_choice(&mut scene, &backend, &target, true);
         equal_bytes("full/culled depth", &a.0, &b.0);
         equal_bytes("full/culled color", &a.1, &b.1);
+        assert_eq!(a.2.mesh_candidate_triangles, a.2.mesh_submitted_triangles);
+        assert_eq!(a.2.mesh_candidate_triangles, b.2.mesh_candidate_triangles);
+        assert!(b.2.mesh_submitted_triangles <= b.2.mesh_candidate_triangles);
+        witnessed_mesh_rejection |= b.2.mesh_submitted_triangles < b.2.mesh_candidate_triangles;
         witnessed_rejection |= b.2.submitted_slots < b.2.candidate_slots;
         witnessed_depth |= a.0.as_chunks::<4>().0.iter().any(|p| {
             let z = f32::from_le_bytes(*p);
@@ -127,8 +139,8 @@ fn shadow_culling_matches_full_casters_not_just_split_unified() {
         assert_eq!(scene.terrain.last_shadow_draws(), Default::default());
     }
     assert!(
-        witnessed_rejection && witnessed_depth,
-        "oracle must test real caster rejection and nonempty depth"
+        witnessed_rejection && witnessed_mesh_rejection && witnessed_depth,
+        "oracle must test terrain and mesh rejection with nonempty depth"
     );
     // This higher origin leaves the old flat tile's sphere outside the first
     // light's depth volume; the new tall page enters it. A stale bound must fail.

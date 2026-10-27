@@ -1,0 +1,284 @@
+{
+  "date": "2026-10-27",
+  "stage": "145-trace-caster-cpu",
+  "build_base_commit": "397adc6e312f7542112122a8a5d8fa567d5b5c7f",
+  "source_sha256": "5d71b8e8f3859cef1768e5261b6b1446c20e91081e0ec89cf20c4432e6f005ca",
+  "release_binary_sha256": "2c7c01e6a8825e57f6b27b50ce1ca07a91202077330fefeea51948407b7dfb83",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.5537882689386606
+    },
+    {
+      "name": "core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.25968183507211506
+    },
+    {
+      "name": "caster-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "mesh_visibility"
+      ],
+      "exit_code": 0,
+      "seconds": 0.13569419109262526
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 55.51661248598248
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-terrain-native",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 1.118438184959814
+    },
+    {
+      "name": "unified-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "unified_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.15100921608973294
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 0.6192620820365846
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.057667160988785326
+    },
+    {
+      "name": "debug-build",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 5.059459618059918
+    },
+    {
+      "name": "release-build",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 81.41325099300593
+    }
+  ],
+  "passed_cpu_cases": 178,
+  "cpu_counts": {
+    "core-cpu": 43,
+    "caster-cpu": 3,
+    "native-cpu": 132
+  },
+  "software_shadow_oracle": {
+    "command": [
+      "bwrap",
+      "--unshare-all",
+      "--die-with-parent",
+      "--ro-bind",
+      "/",
+      "/",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--tmpfs",
+      "/tmp",
+      "--tmpfs",
+      "/run",
+      "--unsetenv",
+      "DISPLAY",
+      "--unsetenv",
+      "WAYLAND_DISPLAY",
+      "--setenv",
+      "XDG_RUNTIME_DIR",
+      "/tmp",
+      "--setenv",
+      "XDG_CACHE_HOME",
+      "/tmp",
+      "--setenv",
+      "VK_DRIVER_FILES",
+      "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+      "--setenv",
+      "LP_NUM_THREADS",
+      "2",
+      "--setenv",
+      "VK_LOADER_LAYERS_DISABLE",
+      "*",
+      "--",
+      "/home/chechulin/Projects/project-thessa-surface-showcase/target/debug/deps/unified_scene-43d5a5042352b65c",
+      "shadow_culling_matches_full_casters_not_just_split_unified",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 14.587585225934163,
+    "binary_sha256": "4cccb47d29453e8f76a1ecdf2c329ecffb36cd880186fd269cb185b2e97a5dc1",
+    "source_verification_stage": "144-trace-caster-cpu",
+    "backend": "private Mesa26.2.5 lavapipe/llvmpipe CPU ICD",
+    "isolation": "new /dev without /dev/dri; PID/network/user namespaces; no display sockets selected; read-only host filesystem; no hardware GPU access",
+    "scope": "Actual full-versus-culled depth and color oracle on software Vulkan; not Radeon validation, performance or desktop-stability evidence."
+  },
+  "renderer_source_changes_after_oracle_build": [],
+  "non_renderer_changes_after_oracle_build": [
+    "apps/terrain-native/src/gpu_trace.rs",
+    "apps/terrain-native/src/main.rs"
+  ],
+  "software_cli": {
+    "source_sha256": "5d71b8e8f3859cef1768e5261b6b1446c20e91081e0ec89cf20c4432e6f005ca",
+    "binary_sha256": "2c7c01e6a8825e57f6b27b50ce1ca07a91202077330fefeea51948407b7dfb83",
+    "cases": 7,
+    "positive_frames": 31,
+    "completed_stages": [
+      "display",
+      "motion",
+      "opaque_and_msaa",
+      "plume_and_sky",
+      "rt_build",
+      "shadows",
+      "surface",
+      "temporal",
+      "ui_and_frame_end",
+      "uploads"
+    ],
+    "scope": "Actual CLI/stage-fence/readback and rejection tests on isolated software Vulkan. No /dev/dri access. Not Radeon, performance or desktop-stability acceptance.",
+    "files": {
+      "trace-positive.log": "f7c543dabbd9a251d10c453c82ecbb59208b65c1c6967666e72a53b23a77f882",
+      "stages.toml": "89ea82854ebed56729dc848724724a44c847db0f4ed71d9f53e9edad58ff4b79",
+      "small-scene.png": "e148b378c6e864fc946d354533ff9329dd1fd619af30fe5dbbc363556a340879",
+      "commands.json": "5245ff7a1a1a57141f5e7929231276e8cc4ece73992beaed9e8e49d268e02859",
+      "trace-rejected.log": "2e5b8b9f4fa61b65f4d92def4cafdb0c499a9f6a4f9054aca16681a411d0f228",
+      "rejected.toml": "5bc5a243b888014f8b0fc002efd1763e8451c17f5f3e4bc6d083fe9dab17613e",
+      "trace-no-headless.log": "bc42e8f6663ca9dea1a7fc08f7fb548de562c368f9efb09ec7135a42307944e1",
+      "trace-perf-conflict.log": "bc42e8f6663ca9dea1a7fc08f7fb548de562c368f9efb09ec7135a42307944e1",
+      "trace-zero-limit.log": "65e1199b3db0776283b0b689be9bc1514c5db4ecaac9e5d508f47f891d7b567b",
+      "trace-output-collision.log": "59f419712ed86895a463ace1635e2f08c8f9f11ce409f501e3d401da73dcfa4e",
+      "same.toml": "093e50a5d255c9793f7104ec2c88023de816ff734e4bc82898a2ebbcd3d149a5",
+      "alias.png": "f968bd6eb97a04822d1a1a506f78ceb698294b8be8fa2228d6e622c1edb91ece",
+      "trace-output-alias.log": "59f419712ed86895a463ace1635e2f08c8f9f11ce409f501e3d401da73dcfa4e",
+      "aliased.toml": "f968bd6eb97a04822d1a1a506f78ceb698294b8be8fa2228d6e622c1edb91ece"
+    }
+  },
+  "trace": {
+    "events": 693,
+    "gpu_completed_events": 310,
+    "frame_count": 31,
+    "header": {
+      "version": 1,
+      "mode": "serial-gpu-stage-diagnostic",
+      "process_id": 2,
+      "mesh_triangle_limit": 1000000,
+      "event": "omitted; see full stages.toml"
+    },
+    "completed_stages": [
+      "display",
+      "motion",
+      "opaque_and_msaa",
+      "plume_and_sky",
+      "rt_build",
+      "shadows",
+      "surface",
+      "temporal",
+      "ui_and_frame_end",
+      "uploads"
+    ]
+  },
+  "software_driver": {
+    "package": "vulkan-swrast",
+    "version": "1:26.2.5-1",
+    "url": "https://frankfurt.mirror.pkgbuild.com/extra/os/x86_64/vulkan-swrast-1:26.2.5-1-x86_64.pkg.tar.zst",
+    "expected_sha256": "e14837dfe51c29d8bdb29422b40daaafc2291908c4a6349a0e63addd09fa546b",
+    "actual_sha256": "e14837dfe51c29d8bdb29422b40daaafc2291908c4a6349a0e63addd09fa546b",
+    "verification": "Compared with the trusted local pacman sync database; no package installation or system-driver change.",
+    "private_icd": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+    "driver": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/root/usr/lib/libvulkan_lvp.so"
+  },
+  "isolation": {
+    "dev_dri_available": false,
+    "display_selected": false,
+    "driver": "Mesa26.2.5 lavapipe / llvmpipe (LLVM23.1.3), deviceType CPU",
+    "host_gpu_driver_changed": false,
+    "host_compositor_changed": false,
+    "hardware_gpu_runs_after_incident": 0
+  },
+  "limitations": [
+    "The software CLI scene is a96x64 X-15 preview with RT, clouds, persistent CBT, motion and temporal resolve disabled; completion records include empty stages, not acceptance of those features.",
+    "Radeon hardware, desktop stability and the original full coastal workload were not rerun. The incident replay marker remains in place.",
+    "A mesh-triangle admission threshold does not bound shader/compute duration and cannot guarantee protection from driver/GPU hangs.",
+    "Serial fences and fsync change scheduling and may mask a race. Trace timings are not performance measurements.",
+    "Primary mesh submission still contains the same geometry and density; this change adds light-volume shadow rejection, not a primary raster workload reduction.",
+    "Software full/cull equality is scoped to the extended synthetic oracle, not a visual/reference-parity acceptance for the forest.",
+    "The original failing draw/shader instruction remains unknown; no new RADV wave/command hang dump was captured."
+  ],
+  "independent_votes": 0,
+  "reference_parity": false
+}

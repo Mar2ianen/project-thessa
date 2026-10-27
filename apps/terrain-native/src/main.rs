@@ -7,6 +7,7 @@ mod contact_preview;
 mod docking;
 mod environment;
 mod flyby;
+mod gpu_trace;
 #[cfg(feature = "hud")]
 mod hud;
 #[cfg(feature = "hud")]
@@ -28,6 +29,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut headless = None;
     let mut perf_capture = None;
+    let mut gpu_trace_path = None;
+    let mut gpu_trace_mesh_limit = None;
     let mut frame_sequence = None;
     let mut frame_limit = None;
     let mut graphics_path = "graphics.toml".to_string();
@@ -114,6 +117,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 perf_capture = Some(std::path::PathBuf::from(
                     args.next().ok_or("--perf-capture requires a JSON path")?,
                 ))
+            }
+            "--gpu-trace" => {
+                gpu_trace_path = Some(std::path::PathBuf::from(
+                    args.next().ok_or("--gpu-trace requires a new TOML path")?,
+                ));
+            }
+            "--gpu-trace-mesh-triangle-limit" => {
+                gpu_trace_mesh_limit = Some(
+                    args.next()
+                        .ok_or("--gpu-trace-mesh-triangle-limit requires a positive count")?
+                        .parse::<u64>()?,
+                );
             }
             "--frames" => {
                 frame_limit = Some(
@@ -217,6 +232,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 println!(
                     "--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
+                );
+                println!(
+                    "--gpu-trace NEW.toml requires --headless and excludes --perf-capture. Crash-durable CPU submission-intent/GPU-completion records with serial stage fences; changes scheduling and is not a performance capture. --gpu-trace-mesh-triangle-limit N sets positive per-stage mesh admission (default1000000); rejection submits no stage. This count is not a GPU-duration bound."
                 );
                 println!(
                     "--flight runs the existing local FlightAuthority from canonical COAST launch with Navball attitude hold and tracking orbit camera. No complete controller-UI parity. Requires --sim-time 0 --sim-step 0, incompatible with --vehicle-preview.\nHeadless --flight-step SECONDS (default 1/60, finite 0<step<=0.1) requests simulation elapsed per frame, including 30 warmup frames; pre-stream stays frozen. Window uses elapsed wall demand clamped to 0.1s and the old local client's 8ms work budget; no new physics dt or warp."
@@ -427,6 +445,38 @@ fn main() -> Result<(), Box<dyn Error>> {
     if headless.is_none() && (sweep || prestream_seconds != 3.0 || sim_step != 0.0) {
         return Err("--sweep, --prestream-seconds and --sim-step require --headless".into());
     }
+    if gpu_trace_path.is_some() && (headless.is_none() || perf_capture.is_some()) {
+        return Err("--gpu-trace requires --headless and cannot be combined with --perf-capture; serial tracing changes scheduling".into());
+    }
+    if gpu_trace_mesh_limit.is_some()
+        && (gpu_trace_path.is_none() || gpu_trace_mesh_limit == Some(0))
+    {
+        return Err(
+            "--gpu-trace-mesh-triangle-limit requires --gpu-trace and a positive count".into(),
+        );
+    }
+    let mut gpu_trace = gpu_trace_path
+        .as_ref()
+        .map(|path| {
+            gpu_trace::GpuTrace::create(
+                path,
+                gpu_trace_mesh_limit.unwrap_or(gpu_trace::DEFAULT_MESH_TRIANGLE_LIMIT),
+            )
+        })
+        .transpose()?;
+    if let (Some(trace_path), Some(image)) = (&gpu_trace_path, &headless)
+        && std::fs::canonicalize(image).ok() == Some(trace_path.canonicalize()?)
+    {
+        if let Some(trace) = &mut gpu_trace {
+            trace.event(
+                0,
+                "startup",
+                "output_collision",
+                "screenshot resolves to the open trace file; no GPU setup",
+            )?;
+        }
+        return Err("--gpu-trace requires a path separate from the screenshot".into());
+    }
     let hud_enabled = hud_override.unwrap_or(cfg!(feature = "hud") && headless.is_none());
     if map_open && !hud_enabled {
         return Err("--map requires HUD; use --hud for headless map captures".into());
@@ -541,6 +591,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 directory.display()
             );
         }
+        if let Some(trace) = &mut gpu_trace {
+            eprintln!(
+                "native_gpu_trace=true serial_stage_fences=true performance_equivalent=false; mesh limit is not a GPU-duration guarantee"
+            );
+            trace.event(
+                0,
+                "backend_setup",
+                "host_begin",
+                "before GPU backend creation",
+            )?;
+        }
         let backend = if perf_capture.is_some() {
             Backend::bring_up_for_graphics_profiled(&scene.requested)?
         } else {
@@ -549,6 +610,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut perf = perf_capture
             .as_ref()
             .map(|_| perf::HeadlessPerf::new(&backend));
+        if let Some(trace) = &mut gpu_trace {
+            trace.event(
+                0,
+                "backend_setup",
+                "host_ready",
+                &format!("{:?}", backend.adapter.get_info()),
+            )?;
+            trace.event(
+                0,
+                "graphics",
+                "requested",
+                &toml::to_string(&scene.requested)?,
+            )?;
+            trace.event(
+                0,
+                "graphics",
+                "resolved",
+                &format!("{:?}", backend.resolve_graphics(&scene.requested)),
+            )?;
+            trace.event(
+                0,
+                "scene_setup",
+                "host_begin",
+                "creating targets, terrain, sky and mesh sources",
+            )?;
+        }
         let target = OffscreenTarget::new(&backend, width, height)?;
         let resolved = backend.resolve_graphics(&scene.requested);
         if scene.requested.renderer.hdr && !resolved.hdr {
@@ -609,6 +696,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "primary jitter diagnostics are enabled without a temporal resolve; visible subpixel trembling is expected, not antialiasing"
             );
         }
+        if let Some(trace) = &mut gpu_trace {
+            trace.event(
+                0,
+                "scene_setup",
+                "host_ready",
+                "resources constructed; GPU completion is not implied",
+            )?;
+            trace.event(
+                0,
+                "prestream",
+                "host_begin",
+                "queue uploads during terrain pre-stream",
+            )?;
+        }
         let stream_started = Instant::now();
         while stream_started.elapsed().as_secs_f64() < prestream_seconds {
             scene.tick(
@@ -620,6 +721,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 stream_started.elapsed().as_secs_f64(),
             )?;
             std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        if let Some(trace) = &mut gpu_trace {
+            trace.event(
+                0,
+                "prestream",
+                "host_ready",
+                "CPU pre-stream ended; pending queue work is fenced separately",
+            )?;
         }
         let mut timings = Vec::new();
         let mut streaming_timings = Vec::new();
@@ -710,20 +819,47 @@ fn main() -> Result<(), Box<dyn Error>> {
                 mesh.update_primary_jitter(&backend, &view, [width, height], jitter)?;
                 mesh.sync_rt_terrain(&backend, &renderer)?;
             }
+            if let Some(trace) = &mut gpu_trace {
+                trace.workload(
+                    frame,
+                    mesh_renderer.as_ref().map(|mesh| mesh.draw_stats()),
+                    renderer.shadows().map_or(0, |s| s.active_passes()),
+                )?;
+            }
             let mut encoder = backend.device.create_command_encoder(&Default::default());
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "uploads", 0)?;
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 0);
             }
             renderer.encode_surface(&mut encoder);
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "surface", 0)?;
+            }
             renderer.encode_shadows(
                 &mut encoder,
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
             );
+            if let Some(trace) = &mut gpu_trace {
+                let stats = renderer.last_shadow_draws();
+                trace.event(frame, "shadows", "encoded", &format!("{stats:?}"))?;
+                trace.checkpoint(
+                    &backend,
+                    &mut encoder,
+                    frame,
+                    "shadows",
+                    stats.mesh_submitted_triangles,
+                )?;
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 1);
             }
             if let Some(mesh) = &mut mesh_renderer {
                 mesh.encode_rt(&mut encoder);
+            }
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "rt_build", 0)?;
             }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 2);
@@ -740,6 +876,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(msaa) = &msaa {
                 msaa.resolve_depth(&mut encoder, &target.depth);
             }
+            if let Some(trace) = &mut gpu_trace {
+                let triangles = mesh_renderer
+                    .as_ref()
+                    .map_or(0, |m| m.draw_stats().triangles);
+                trace.checkpoint(&backend, &mut encoder, frame, "opaque_and_msaa", triangles)?;
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 3);
             }
@@ -751,6 +893,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     display.scene_color(&target.color),
                     &view,
                 )?;
+            }
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "motion", 0)?;
             }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 4);
@@ -768,6 +913,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     scene.temporal_epoch(&renderer, mesh_renderer.as_ref()),
                 )?;
             }
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "temporal", 0)?;
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 5);
             }
@@ -782,10 +930,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 display.scene_color(&target.color),
                 &target.depth,
             );
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "plume_and_sky", 0)?;
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 6);
             }
             display.encode(&mut encoder, &target.color);
+            if let Some(trace) = &mut gpu_trace {
+                trace.checkpoint(&backend, &mut encoder, frame, "display", 0)?;
+            }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 7);
             }
@@ -807,11 +961,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 perf.mark(&mut encoder, 8);
                 perf.resolve(&mut encoder);
             }
-            backend.queue.submit(
-                commands
-                    .into_iter()
-                    .chain(std::iter::once(encoder.finish())),
-            );
+            let commands = commands
+                .into_iter()
+                .chain(std::iter::once(encoder.finish()));
+            if let Some(trace) = &mut gpu_trace {
+                trace.submit(&backend, commands, frame, "ui_and_frame_end")?;
+            } else {
+                backend.queue.submit(commands);
+            }
             if let Some(motion) = &mut motion {
                 motion.commit(view);
             }
@@ -819,7 +976,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 temporal.commit();
             }
             let cpu_submit_s = perf.as_ref().map(|_| start.elapsed().as_secs_f64());
-            backend.device.poll(wgpu::PollType::wait_indefinitely())?;
+            if gpu_trace.is_none() {
+                backend.device.poll(wgpu::PollType::wait_indefinitely())?;
+            }
             let wall_s = start.elapsed().as_secs_f64();
             #[cfg(feature = "hud")]
             {
@@ -868,6 +1027,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         streaming_timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];
         let p95 = timings[timings.len() * 95 / 100];
+        if let Some(trace) = &mut gpu_trace {
+            trace.event(
+                u64::from(count) + 30,
+                "readback",
+                "host_begin",
+                "reading final image and GPU diagnostics",
+            )?;
+        }
         let pixels = target.read_rgba8(&backend)?;
         write_rgba_png(std::path::Path::new(&path), width, height, &pixels)?;
         let topology_state = renderer.read_topology_state(&backend)?;
@@ -876,6 +1043,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             renderer.read_draw(&backend)?[0] / 3
         };
+        if let Some(trace) = &mut gpu_trace {
+            trace.event(
+                u64::from(count) + 30,
+                "readback",
+                "host_ready",
+                "final image and GPU counters read successfully",
+            )?;
+        }
         println!(
             "adapter={} canonical_tiles={} drawn_triangles={} frames={count} median_ms={median:.3} p95_ms={p95:.3} p99_ms={:.3} max_ms={:.3} reciprocal_median_fps={:.1} screenshot={path}",
             backend.adapter_name,

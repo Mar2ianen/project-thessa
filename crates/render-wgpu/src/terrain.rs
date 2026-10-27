@@ -1289,6 +1289,7 @@ impl TerrainRenderer {
                     submitted_slots: u64::from(topology.surface.slot_count()),
                     draw_calls: 1,
                     indirect: true,
+                    ..Default::default()
                 };
             }
             return Default::default();

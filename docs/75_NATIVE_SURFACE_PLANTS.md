@@ -1,25 +1,78 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
-Current composition continuation (WORLD116, doc 77): Gemini crowns and optical priors are retained. Ground leaves use connected rounded divisions and rooted attachments; shared understory density replaces a native-only override. Bare substrate excludes baked canopy illumination; damp opaque soil retains more roughness while pools keep their water material. Reference and temporal acceptance remain open.
-The current standing scene submits 15,608 instances and
-30,170,756 mesh triangles in 37 shared ranges;
-vertex/index/AO source payload is 6,721,828 B under the
-7 MB cap. Figures are a local scene checkpoint, not visual/RT acceptance.
+The current compound-frond reconstruction follows the photographic morphology
+notes in `reference/COASTAL_FLORA_NOTES.md`. The incoming WORLD136 source was
+reviewed before continuation; WORLD139's scalloped single blades were rejected
+by the user and are not retained as the current geometry. WORLD141 found a
+test-only Clippy style error. WORLD142 passed seven CPU/build gates but its
+first raster capture caused an AMD GPU reset and loss of the Niri session.
+It is not GPU validated; see `artifacts/native-gpu-reset-2026-10-27.md`.
+No independent reference acceptance is recorded. The subsequent specimen
+iterations use isolated CPU Vulkan with no `/dev/dri` or display access, actual
+native materials/shadows, and a neutral QA support/light. They correct reduced
+plate silhouettes and excessively fine ground organs; see
+`artifacts/native-fern-specimens-2026-10-27.md`. They do not lift the physical-GPU
+replay block or establish a full coastal/hardware acceptance.
+
+The subsequent renderer continuation adds conservative mesh-caster light-volume
+rejection and diagnostic expanded-work counters (doc 60). It does not simplify
+these prototypes or reduce their primary-pass cost. The opt-in serial stage
+trace (doc 15) rejects oversized mesh stages rather than silently thinning plants;
+ordinary desktop GPU replay remains blocked.
+
+Full fronds now have a main rachis, paired three-node costas, and many smaller
+pinnules with broad attached bases and tapered oblong tips. Ground forms have
+12/16/18 primary pairs (juvenile/mature/hero), with adaptive secondary division
+up to 6/8/12 pairs. Crown fronds have 20 primary pairs and up to 24 secondary
+pairs per pinna. All attachments use the actual emitted piecewise axes. Tiny
+apical pinnae become simple undivided blades, avoiding redundant thin ribbons.
+Terminal blades close the main axis. These are authored fictional morphology
+priors, not species reconstruction or measured botanical dimensions.
+
+Ground pinnules use an authored width/reach ratio of 0.55, crown pinnules
+0.34, capped at 88% of the actual neighbouring root spacing to keep real gaps.
+The broader reach limit is the minimum of 25% of costa length, 60% of main-axis
+pitch and 100 mm; crown division cadence is retained. Short terminal laminae
+close the main axis without a long spear. Senescent sRGB priors are
+`[0.30,0.235,0.145]` for ground and `[0.29,0.23,0.15]` for crown organs.
+
+The reduced mesh retains every primary pinna, replacing its secondary blades
+with attached triangular divisions along each actual piecewise costa. Short
+pinnae have 2/4/6/8 divisions per side according to secondary cadence; pinnae
+at least 0.55 m long have twelve. Per-bin measured horizontal projected area,
+3D surface area and longitudinal first moment determine width, fold and tip
+position. Each side owns its geometric normals. This replaces the four-triangle
+flat wing rather than using alpha cards. The existing 0.057 m × form-scale
+full-vertex distance, 2.5% projected-area, 3:1 triangle-reduction and minimum
+area/conditioning bounds remain unchanged. The canonical tree has 141,274
+full / 21,884 reduced triangles; the canonical ground fern has 17,956 / 3,390.
+Primary and secondary attachment tests independently inspect emitted geometry,
+including sloping/curved costas. The ground organ-count fixture follows the
+intentional eight-pair cadence; numeric error tolerances are not relaxed.
+
+Prototype validation admits 262,144 vertices. Native source admission remains
+bounded at 47 MB in plant-only test scenarios and 48 MB aggregate, versus the
+historical 6/7 MB limits. The quality increase adds no material images, pass
+or draw group; source image payload remains 3,760,128 B. Disabled plants remain
+empty. The earlier WORLD136 raster baseline submitted 17,992 instances and
+32,954,976 triangles in 37 shared ranges, with 6,734,532 B source; these are
+historical counts, not measurements of the new mesh.
 
 Historical review (WORLD84, doc 77) retains the user's solitary umbrella,
 dual-terminal crowns and 21-frond hero fern. Stable form identity now combines
 with four organ-level pigment cohorts, shared padded leaf atlases and bounded
 asymmetric pinna/rachis geometry. Full/reduced representations retain identical
 cohort sequences and canonical instances. The source texture payload is
-3,760,128 B; 37 aggregate/plant ranges and the 7 MB vertex/index/AO limit remain.
-Current bark factors (forms 0/1/2) are `[0.45,0.39,0.26]`,
-`[0.46,0.39,0.27]`, `[0.44,0.38,0.25]`. WORLD93 replaces the uniform
+3,760,128 B at that checkpoint; current source admission is stated above.
+The aggregate range limit remains 37.
+Current authored bark factors (forms 0/1/2) are `[0.21,0.16,0.10]`,
+`[0.22,0.17,0.11]`, `[0.20,0.15,0.09]` after the incoming WORLD135 review. WORLD93 replaces the uniform
 living roughness factor with padded-atlas roughness priors 0.70/0.50/0.80/0.90
 for mature/emerging/olive/weathered organs (8-bit quantized); the leaf material
 factor is 1.0 and stem roughness remains 0.85. Source normal maps, metallic,
 alpha, image count and atlas gutters remain. These are authored optical priors,
-not measured cuticle data. Fern transmission is 0.16, tree transmission
-0.18/0.20/0.16 and reed 0.18.
+not measured cuticle data. Fern transmission is 0.16/0.15/0.18 by form, tree transmission
+0.18/0.20/0.16 and reed 0.10.
 WORLD92 removes the extra radius/height crown and basal attenuation. Ambient
 visibility now contains only the existing 32 cosine-weighted geometric BVH
 queries per source vertex; shared direct shadows remain separate. This is not
@@ -44,11 +97,12 @@ the adapter again consumes shared ScatterPolicy defaults (0.95 m centre spacing,
 0.25–1.10 near-clump scale). This is an authored density prior, not measured
 light competition or growth.
 
-Ground fronds retain fourteen opposed pinna pairs, but use the existing divided
+At the historical WORLD115 checkpoint, ground fronds retained fourteen opposed
+pinna pairs and used the existing divided
 13/5-vertex full/reduced lamina instead of the convex 9/4-vertex primitive. Each
 pinna has two connected rounded edge divisions, a folded midrib and true gaps
 between neighboring pinnae. Ground half-width/length priors are 0.12 (mature),
-0.0935 (juvenile) and 0.15 (hero); these are optical geometry, not taxonomic
+0.0935 (juvenile) and 0.15 (hero at that checkpoint); these are optical geometry, not taxonomic
 measurements. The canonical 13-frond ground prototype now has 4,680 triangles;
 the old narrow triangle-count fixture is updated for the intentional topology.
 The existing displacement, projected-area, minimum conditioning, reduction and
@@ -282,12 +336,12 @@ meshes; WORLD06f added separate fern pinnae, forked crowns and smooth stem
 normals. WORLD09 below replaces broad ribbons with hierarchical pinnate crowns;
 neither stage is a botanical reconstruction.
 
-WORLD23 (doc 77), extended by WORLD41, adds bounded near-eye moss shoots, fallen
+WORLD23 (doc 77), extended by WORLD41/118, adds bounded near-eye moss shoots, fallen
 leaf fragments and optional puddle meshes through this adapter's existing
-preparation and publication. Medium/High admit 128/384 moss clumps, 512/2,048
+preparation and publication. Medium/High admit 64/192 moss clumps, 512/2,048
 leaf fragments and 8/24 sampled puddle patches; Low keeps optical cover only.
-Moss shoots and fallen leaves use folded 5-vertex/4-triangle geometry with
-area-weighted normals. Fragment corners sample the shared optical soil source;
+Each moss shoot has two connected folded 5-vertex/4-triangle laminae; fallen
+leaves use one such folded lamina. Both have area-weighted normals. Fragment corners sample the shared optical soil source;
 dimensions/pigments are authored scenery, not simulated litter mass. The puddle
 setting is default-off and parent-gated by ground detail. At most three aggregate
 primitive ranges/instances are added, raising total admission to 37 ranges / 7 MB. These

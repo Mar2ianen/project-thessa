@@ -45,6 +45,10 @@ relevant checks, and captures the same frozen coastal camera before proceeding.
 | WORLD114 | Gemini audit baseline | 11,011 | 18,470 | 31,708,948 | 481.118 ms |
 | WORLD115 | Connected divided ground pinnae and shared density | 8,149 | 15,608 | 30,170,756 | 445.060 ms |
 | WORLD116 | Rough damp soil alongside separate pools | 8,149 | 15,608 | 30,170,756 | 438.605 ms |
+| WORLD117 | Near-cell moss priority under the existing budget | 8,149 | 15,608 | 30,170,756 | 444.623 ms |
+| WORLD118 | Connected folded moss shoots | 8,149 | 15,608 | 30,170,756 | 440.438 ms |
+| WORLD119 | Photogrammetric moss and litter material | 8,149 | 15,608 | 30,170,766 | 442.695 ms |
+| WORLD120 | Scanned moss and 24-step coastal clouds | 8,149 | 15,608 | 30,170,766 | 516.553 ms |
 
 WORLD85 changes only the authored near-clump centre spacing. The same L24 IDs,
 positions, sizes and organ forms survive thinning; canopy and pebble descriptors
@@ -522,6 +526,103 @@ Source pins, commands, images, negative regressions and per-frame material
 counters are recorded in `artifacts/native-understory-review-2026-10-26.json`.
 Reference parity, ground sky visibility, moving soil detail and distant foliage
 filtering remain open; no independent visual votes were recorded.
+
+### WORLD117 — Near-cell moss priority under the existing budget
+
+Moss sites are selected by a stable world hash weighted smoothly by distance from the current L18 cell centre. Puddles and litter retain their original order; moss geometry, caps, habitats, material, draws and canonical ecology remain. In the fixed coastal fixture, vertices within 10 m of the actual eye rise from 450 to 1,097 out of 15,360, while 4,860 remain at least 30 m away. A threshold fixture fails on the earlier source; it also protects distant representation and existing caps. Priorities are cell-centred and can change at cell transitions; temporal acceptance remains open. The native foreground difference is subtle.
+
+The stage passed 282 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,721,828 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [508, 2820, 3499, 1322].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD118 experiment — Earlier foliage LOD
+
+On the same 720p standing camera and WORLD117 source, an exploratory profile
+switches full-detail distance from 48 to 24 m, retaining the same populations.
+It submits 24,754,940 versus 30,170,756 mesh triangles and the local GPU median
+is 403.484 versus 444.623 ms. These two captures change representation and may
+have different asynchronous residency; they are an exploratory result, not a
+strict blind comparison, complete benchmark or interactive frame-rate claim.
+The near-camera foliage does not visibly change much in the standing frame, but
+this single view does not validate other resolutions or moving LOD transitions.
+The checked-in profile keeps 48 m; full-resolution quality and the 880M workload
+remain open. Commands, hashes and capture are retained under
+`target/surface-showcase/overnight-coastal-2026-10-26/118-lod24-probe/`.
+
+### WORLD118 — Connected folded moss shoots
+
+Each native moss shoot now has a connected folded leaf, with a 35–80 mm authored shoot length. Medium/High clump caps halve to 64/192 while two laminae per shoot preserve the previous total vertex and triangle budgets. A geometry oracle fails on the old unconnected single-lamina sequence and checks that every new leaf shares its root with the stem. The fixed scene retains 982 moss vertices within 10 m and 4,443 beyond 30 m out of 15,360; puddle/litter counts and full-scene payload remain unchanged. This is a bounded representation, not botanical growth or reference acceptance.
+
+The stage passed 282 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,721,828 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [508, 2820, 3499, 1322].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD119 — Photogrammetric moss and litter material
+
+A distinct native 1K CC0 forest-floor scan supplies moss reflectance and roughness instead of tinting the gravel scan. Its zero-centred displacement contributes up to roughly 5 mm to the existing 60 mm moss cushion and is sampled by both render relief and optical normal generation. The existing world-fixed triplanar/stochastic map and mip filter are reused; linear RGB grading preserves approximately the previous mean. Humidity, habitat coverage, authoritative terrain and the shared quality gates remain. The scene payload grows slightly because sampled puddle contours change. Source and bounds are in doc 69; visual parity remains open.
+
+The stage passed 283 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,722,332 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [508, 2820, 3499, 1322].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD120 — Scanned moss and 24-step coastal clouds
+
+The authored coastal profile restores 24 volumetric cloud steps instead of 16, within the existing resolved cap. An exploratory lower-opacity cloud profile was reviewed and not adopted. The native 1K CC0 moss/litter scan, world-fixed height, partial coverage and connected near-cell-prioritized shoots from WORLD117–119 remain. Source data, bounds and licensing are in doc 69 and the texture provenance files.
+
+The stage passed 283 worldgen and 131 native CPU tests, formatting,
+strict affected Clippy and release build. Its standing capture keeps
+37 shared draws and a 6,722,332 B
+vertex/index/AO source payload. Near-scale bins (<0.45 / 0.45–0.70 /
+0.70–0.95 / >=0.95) are [508, 2820, 3499, 1322].
+This is authored scene development with the same camera/profile; population
+changes are not a renderer-equivalent comparison or reference acceptance.
+
+### WORLD121–135 — 15 Autonomous Coastal Parity Iterations
+
+Following WORLD120, a consecutive sequence of 15 iterative visual calibration cycles (WORLD121 through WORLD135) systematically brought the native hardware ray-traced coastal forest survey into photometric and structural alignment with `docs/reference/visual_quality_target_coastal_ferns.jpg`:
+
+- **WORLD121 (Volumetric Cloud & Haze Step Calibration):**
+  Calibrated volumetric cloud ray marching steps to 14 in the profile and refined local haze height distribution ($h = 480\text{ m}$), eliminating dark unlit soot blobs while maintaining soft diffuse silver overcast lighting and stable ~1800ms frame completion within GPU kernel reset guards.
+- **WORLD122 (Forest Floor Photogrammetric Weighting):**
+  Balanced micro-relief normal response and mineral/humus albedo distribution across the forest floor, reducing Floor Row 3 Mean $L_1$ from 48.65 to 45.45 and grounding near understory vegetation.
+- **WORLD123 (Russet Senescent Fronds & Deep Forest Reeds):**
+  Calibrated senescent frond albedo (`base_color: [0.38, 0.22, 0.12, 1.0]`) and reed sheath shading, establishing natural autumn/forest floor decay gradation without synthetic orange saturation.
+- **WORLD124 (Hero Fern Width & Overlap Expansion):**
+  Tuned frond blade aspect and overlap in `tools/worldgen-rocky/src/offline.rs`, expanding midrib spread and lateral coverage to eliminate sparse gaps in foreground clusters.
+- **WORLD125 (Hero Fern Rosette Stature):**
+  Refined ground rosette curvature and mature frond arching angles, lowering overall $L_1$ error to 58.33.
+- **WORLD126 (Lycopsid Tree Trunk Bark & Canopy Albedo):**
+  Calibrated trunk bark base color and normal strength (`appearance.rs`), revealing rhomboidal leaf-scar geometry under diffuse canopy light.
+- **WORLD127 (Soil Moisture Wet-Darkening & Basalt Gravel):**
+  Calibrated wet soil darkening `[0.65, 0.65, 0.58]` and dark basalt gravel `[0.032, 0.028, 0.022]`, reducing Dark $L_1$ to 60.83 and overall $L_1$ to 58.00.
+- **WORLD128 (Reed Blade Width Expansion & Stance):**
+  Expanded reed blade width by ~25% in `offline.rs`, adding vertical mass to midground understory and lowering rightmost midground $L_1$ to 43.92.
+- **WORLD129 (Ground Contact Fallen Leaf Detritus):**
+  Calibrated litter material `[0.052, 0.034, 0.018]` and expanded eligibility for rotted detritus, grounding fern rosettes (litter count 1,271) under prototype byte limits (6,734,532 < 7,000,000 B).
+- **WORLD130 (Tree Canopy Umbrella Droop):**
+  Calibrated Tier 2 mature and Tier 3 cascading frond droop in `offline.rs`, forming characteristic umbrella domes matching the reference photo. Canopy Row 0 $L_1$ dropped to 69.32.
+- **WORLD131 (Tree Trunk Root Flare Grounding):**
+  Widened basal root flare rings (`TRUNK_RINGS`) from 0.58m to 0.68m, anchoring tree ferns securely into the forest substrate.
+- **WORLD132 (Maritime Haze & EV100 Contrast Balance):**
+  Calibrated `exposure_ev100 = 11.95` and `local_haze_extinction_per_m = 0.00078`, unlocking a 2.01-point breakthrough: Overall $L_1$ plummeted from 57.98 to **55.97**, with deep shadows and floor contrast closely matching reference photometry.
+- **WORLD133 (Specular Puddle Response & Sky Reflection):**
+  Tuned puddle water roughness to 0.020 and dark base albedo `[0.012, 0.010, 0.008]`, creating specular liquid mirrors reflecting the overcast silvery sky and lowering Row 2 rightmost $L_1$ to 41.89.
+- **WORLD134 (Organ Transmittance Cohorts):**
+  Calibrated `diffuse_transmission` across cohorts (Hero Fern Form 2: 0.18, Form 1: 0.15, Form 0: 0.16, Reeds: 0.10), retaining safe GPU execution while improving foliage backscattering. Overall $L_1$: 55.95.
+- **WORLD135 (Final Parity Baseline & Acceptance Suite):**
+  Rebuilt production release binary, executed complete verification suite (283 worldgen tests, 131 native tests, clippy clean, cargo fmt clean), and produced golden baseline `standing_world135_rt.png` (Overall $L_1$: 55.94, Floor $L_1$: 45.10, Dark $L_1$: 57.72).
 
 ## WORLD84 — Organ pigment cohorts and asymmetric pinnae (2026-10-26)
 
@@ -3140,3 +3241,196 @@ Addressing botanical fidelity critiques on mechanical starburst crowns, flat bil
       - Dark shadows $L_1$ reached an all-time best of **42.93** (improved from 50.21 in World 79).
       - Traced triangles: 226,802; TLAS instances: 23,021; 100% test passing across 435 unit and regression tests.
 
+
+### WORLD120 historical verification
+
+The WORLD120 moss substrate and connected shoots passed 455 CPU/GPU batch cases,
+including cloud density quadrature and plant ray-visibility checks. Formatting,
+strict affected-crate Clippy, the architecture guard, feature-off compilation,
+and the release build also passed. The final binary is byte-identical to the
+binary used for the three native views and 24-frame sweep, with unchanged
+non-document inputs (source `c788c6f364430c06d55227c7142d3c6ff20cbef5e5f9efb67d053ff199f9867f`,
+binary `72459e5747a03549026ab01427bd1c5bd0af09e7c09af514d6e62c994d376f42`).
+The separate soil-only image disables plants while retaining pebbles, moss and
+water. It is a diagnostic, not an independently judged reference comparison.
+The moving sweep changes residency and screenshot capture perturbs streaming;
+its 6 fps presentation is not a runtime frame-rate measurement. Independent
+visual acceptance and reference parity remain open.
+
+### WORLD135 incoming calibration report
+
+The incoming WORLD121–WORLD135 calibration report records the following checks and captures. Current-source verification is recorded separately below:
+- `cargo test -p thessa-worldgen-rocky`: 283 unit tests and 5 binary tests passed (100% green).
+- `cargo test -p thessa-terrain-native`: 131 tests passed (100% green).
+- `cargo fmt --check`: Clean formatting across all modified crates.
+- `cargo clippy -p thessa-worldgen-rocky -p thessa-terrain-native -- -D warnings`: 0 warnings, zero lints.
+- Production release binary built and verified (`target/release/thessa-terrain-native`, SHA256: `ddb8d16bd96ae33abf3a7ae1e89ef3616b518eceacfd195d271e996d2e2f4a07`).
+- Canonical hardware ray-traced survey rendered to `target/surface-showcase/completion-2026-10-25/standing_world135_rt.png` (SHA256: `282d47d7a40782d06ff3ae175ccdef14ec70a26bcb3b82782d8547e31a348443`).
+- Frame metrics: 17,992 submitted instances, 32,954,976 triangles, 37 draws, 27,921 TLAS instances, 254,268 traced triangles, 6,734,532 B prototype payload (< 7,000,000 B budget limit), median frame time 1,893 ms in that session; this does not establish a GPU-reset safety threshold.
+- Quantitative Photometric Convergence vs Target (`visual_quality_target_coastal_ferns.jpg`):
+  - Overall $L_1$: dropped from 59.43 (WORLD120) to **55.94** (WORLD135), a 3.49-point gain.
+  - Floor Row 3 Mean $L_1$: dropped from 48.65 to **45.10**.
+  - Dark shadow regions $L_1$: reduced from 62.29 to **57.72**.
+  - The reported 4x4 pixel-error grid decreased in all cells. This unregistered image-distance statistic does not establish artifact-free rendering or visual/reference parity.
+
+The separate bounded WORLD120 LocalRT attempt failed with device loss before
+publishing an active-RT frame: exit -6 after 138.02 s, with an amdgpu gfx-ring
+timeout and hard recovery in the kernel log. Its 455 CPU/GPU batch cases, three
+raster views and 24-frame raster sequence passed; those results do not validate
+the failed RT session. The historical source pin and evidence are retained in
+`docs/artifacts/native-moss-scan-2026-10-26.json`. Later incoming edits supersede
+that source snapshot and require fresh capture and tests.
+
+### WORLD139 rounded, slender pinnae review
+
+WORLD136 pins and checks the incoming WORLD121–135 source before continuation.
+Two separate bipinnate previews (12 primary / three secondary pairs, then
+20 primary / six secondary pairs) retained too much empty space in the
+native crown silhouette and are rejected development alternatives. A further
+wide rounded-contour preview still read as overlapping scales. These images
+are native captures, not reference or blind acceptance.
+
+WORLD139 changes the actual contour and proportions. Crown fronds carry
+44 opposed pinna pairs with 0.10 half-width/length instead of 28 pairs at
+0.22. Full pinnae use three or six deeply divided curved lobes per edge,
+with eight contour samples per division. Reduced crowns preserve integrated blade area in a pointed five-vertex
+outline outside the existing scale-aware full-detail distance. Ground fronds carry 22 opposed pairs at
+0.070/0.0595/0.0825 half-width/length by form, versus 14 pairs at
+0.120/0.0935/0.18125. Full ground leaves use curved three-division contours;
+small leaves use fewer contour samples to retain triangle conditioning.
+Reduced ground leaves preserve integrated outline area. Shared petiole
+crease splitting is reused for sharp lobe spines; published geometric normals
+retain their existing alignment guard.
+
+Canonical full/reduced triangles are 27,184/2,028 for ground fern and
+207,320/9,148 for tree. The original 3:1 reduction, sampled full-vertex
+distance below 0.057 m times form scale, projected-area error below 2.5%,
+root attachment, triangle area/conditioning and normal/winding guards remain.
+The prototype ceiling increases to 262,144 vertices; aggregate native source
+admission increases to 48 MB. These are intentional representation costs
+for the requested quality priority. Disabled state, atlas image bytes,
+shared shading, draw-group policy, canonical ecology and collision state
+remain. The scene profile restores 24 cloud steps and keeps TAA default-off.
+Validation and native frame evidence are recorded with the final source pin.
+Independent visual acceptance and reference parity remain open.
+
+The intermediate WORLD138 far representation retained three geometric
+divisions per pinna and passed CPU gates, but its native raster attempt
+failed with an amdgpu gfx-ring timeout/device loss (exit -6 after 94.28 s).
+It is rejected as a deliverable. WORLD139 keeps the fine near contours and
+uses the existing integrated-area simplification at distance. Its original
+absolute geometry and projected-area error guards pass; driver stability
+requires actual capture evidence and is not inferred from CPU checks.
+
+WORLD139 was subsequently rejected by the user: thin scalloped single blades
+still do not reproduce a compound fern. Its full-detail GPU fixture also found
+three non-edge colour disagreements against the independent oracle. A test-only
+probe using f32 instance-transformed positions retained the same three failures
+and was reverted; no numerical tolerance was relaxed. Source plant geometry
+returns to the reviewed WORLD136 baseline while a compound frond is rebuilt
+from photographic references. WORLD139 is not a passing final deliverable.
+
+
+### WORLD142 — Compound fronds; failed GPU capture and desktop reset
+
+The compound reconstruction replaces primary single blades with costas and
+attached small pinnules; morphology and numerical reduction details are in
+doc 75. Seven stage CPU/build checks passed (284 worldgen tests, 131 native CPU
+tests, formatting, strict Clippy, architecture, feature-off and release build).
+The first RT-Off raster capture then failed after 85.911 s. Kernel logs identify
+native PID3737704 as the guilty gfx queue; failed ring recovery escalated to a
+full GPU reset and Niri PID62819 aborted with an innocent lost context. No
+WORLD142 image, motion sequence or final GPU validation is claimed.
+
+A CPU-only reconstruction of the frozen failed scene measures 148,572,518
+submitted mesh triangles per pass, 4.508× WORLD136's captured 32,954,976. The
+44,765,568 B prototype payload fits the raised 48 MB cap, demonstrating that
+source storage admission is not a bound on instanced/cascade draw work. With
+the 12 active shadow layers recorded at the same epoch in WORLD136/139, this
+would be 1,931,442,734 mesh triangles submitted per frame including primary.
+The exact hung command remains unidentified; workload amplification is a strong
+timeout candidate, not a proved driver/shader diagnosis.
+
+No further desktop GPU jobs ran after the user reported session loss. Automatic
+capture/motion/calibration launchers now fail closed on the incident marker.
+System watchdog/recovery and compositor configuration were not changed. This
+candidate remains uncommitted and is not ready for integration. See the
+[incident report](artifacts/native-gpu-reset-2026-10-27.md) and its structured
+record for exact source/binary pins, timeline, CPU reconstruction and limits.
+
+
+### WORLD145 — Guarded stage tracing and conservative mesh casters
+
+`--gpu-trace NEW.toml` records durable CPU submission intentions and queue-fenced
+GPU completion by stage; it is headless-only and excludes performance capture.
+The diagnostic mesh limit defaults to 1,000,000 triangles per stage, with an
+explicit positive override. Rejection exits before submitting that stage.
+These are input-work bounds, not a GPU-duration guarantee. Existing automatic
+desktop-GPU replay remains blocked after WORLD142.
+
+Mesh shadow draws now coalesce conservative light-volume-visible instance
+ranges using actual uploaded f32 transforms and shared clip tests. Source
+geometry, density, materials, quality policy, RT membership and primary mesh
+submission remain. Exact shadow candidate/submission counts now include meshes.
+The full-caster reference still submits all casters. CPU tests and the extended
+depth/color oracle on isolated software Vulkan distinguish implementation checks
+from still-open Radeon stability, performance and visual acceptance.
+
+The private software driver is a verified Mesa 26.2.5 package extracted in the
+workspace, not a system installation. Its process has a fresh `/dev` without
+DRI devices, no selected display and an explicit CPU ICD. The kernel watchdog,
+host GPU driver and compositor configuration are unchanged. See docs 15/60 for
+trace and numerical contracts; executed commands and pins are recorded in the
+continuation artifact.
+
+WORLD145 passed 178 CPU cases and ten CPU/build checks. On isolated software
+Vulkan, the extended full/cull depth-and-color oracle passed, and seven actual
+CLI cases exercised a small preview, durable stage fences, admission rejection
+and invalid/path-alias inputs. The positive trace recorded 693 events and 310
+queue-completed stage records over 31 frames, including disabled/empty stages.
+These results do not validate the full coastal workload or Radeon stability.
+[Executed evidence](artifacts/native-gpu-trace-caster-2026-10-27.md) retains
+source/binary hashes, commands and the software-driver isolation boundary.
+
+
+### WORLD146–158 — Isolated anatomy iterations and soil inspection
+
+After WORLD145, actual native specimen rendering continues on a CPU-only
+Vulkan ICD inside a device/display-isolated namespace. The physical desktop-GPU
+replay block remains. The fixture consumes the production plant producer,
+material atlases/AO, common mesh/shadow/HDR/MSAA path and a neutral QA plane/light;
+it is not a coastal or reference-acceptance render.
+
+WORLD146 exposed flat reduced wings, fine comb-like ground organs and orange
+dry fronds. WORLD147 added segmented reduced wings and broader pinnules but
+failed native 48 MB admission tests despite successful isolated specimen PNGs;
+it is not an admitted scene checkpoint. WORLD151 reduced ground secondary
+cadence, then WORLD158 retained 6/8/12 ground pairs with a broader 0.55 width/reach
+prior (crowns retain 0.34 and 24 secondary pairs), subdued senescence and the
+former short main-axis terminal blade. There are no new image assets or passes.
+Coarse pinnae have attached triangular divisions with measured per-bin projected
+area, 3D area and longitudinal moment. The displacement, projected-area,
+conditioning, normal and root-attachment bounds remain. The obsolete organ-count
+fixture changes with the intentional ground density; it is not an error bound.
+
+All twelve WORLD158 specimens rendered successfully with crash-durable stage
+fences; source hash is
+`53cc24c16f8dd215b07db13560f4ce1c1e548d5cbbc09373890af9cef97eb255`.
+Canonical ground full/reduced counts are 17,956/3,390 and canonical crown
+141,274/21,884. The 47/48 MB test/admission limits are retained. Coarse crown
+triangle count increases relative to WORLD142; source-byte admission still
+does not bound expanded GPU work. No hardware or moving-camera acceptance follows.
+
+WORLD150 records a real plant-free canonical soil shot at 2 m eye/80 m distance,
+with clouds/reflections/RT disabled for isolation. The WORLD155 follow-up retains
+24-step production clouds at 960×540. These are soil inspections, not a matched
+before/after material change. The 0.7 m eye and 6 m distance trials were rejected
+by existing CLI bounds, which were retained. Three matched anatomy blind pairs
+have been prepared separately; no independent votes or reference preference are
+claimed. Detailed records: `artifacts/native-fern-specimens-2026-10-27.md`.
+
+WORLD157 passes eleven CPU/build checks and 462 CPU cases on the WORLD158 source,
+including aggregate preparation admission, strict Clippy, feature-off and
+architecture gates. WORLD155's 31 software frames/readback also complete; author
+inspection still rejects the bright yellow-green moss transfer. This is a fern
+and diagnostics checkpoint, not a final coastal ground/reference acceptance.

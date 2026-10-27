@@ -521,9 +521,11 @@ pub(crate) fn surface_appearance_with_ground_detail(
     });
     let mut ground_weight = 0.0;
     if let Some(floor) = floor {
-        ground_weight = (ecological_cover.canopy01 * 1.30 + ecological_cover.ground01 * 0.60)
-            .clamp(0.0, 1.0)
-            * (1.0 - exposed);
+        let vegetated_floor = (ecological_cover.canopy01 * 1.30
+            + ecological_cover.ground01 * 1.20
+            + ecological_cover.reeds01 * 1.00)
+            .clamp(0.0, 1.0);
+        ground_weight = vegetated_floor * (1.0 - exposed);
         color = std::array::from_fn(|i| {
             crate::ground_detail::encode_srgb(
                 crate::ground_detail::decode_srgb(color[i]) * (1.0 - ground_weight)

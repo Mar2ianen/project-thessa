@@ -1,0 +1,16 @@
+SPDX-License-Identifier: CC0-1.0
+
+Forest Leaves 02 — Rob Tuytel (Poly Haven).
+Source: https://polyhaven.com/a/forest_leaves_02
+License: https://polyhaven.com/license
+CC0 legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+Retrieved: 2026-10-26 via direct Poly Haven asset downloads.
+
+forest-moss-litter-02.bin.gz packs the native 1024x1024 RGB8 diffuse, R8
+roughness and R16 displacement maps. tools/worldgen-rocky/import_moss_detail.py
+reproduces it after verifying each source SHA-256. Pillow and NumPy are used
+only by the offline importer. Source maps and packed bytes are identified in
+forest-moss-litter-02.provenance.json.
+
+The 3 m swatch width, 20 mm displacement range and linear RGB grade are authored
+rendering priors for fictional terrain, not measured geology or moss biology.

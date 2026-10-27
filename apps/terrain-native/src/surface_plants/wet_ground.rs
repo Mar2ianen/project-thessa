@@ -109,7 +109,7 @@ pub(super) fn append(
         return Ok(());
     }
     let high = settings.surface_quality == thessa_graphics::Quality::High;
-    let moss_limit = if high { 384 } else { 128 };
+    let moss_limit = if high { 192 } else { 64 };
     let pool_limit = if high { 24 } else { 8 };
     let anchor = DVec3::from(window.direction(0.5, 0.5)) * field.params.radius_m;
     let mut sites: Vec<_> = prepared
@@ -136,7 +136,18 @@ pub(super) fn append(
         ..Default::default()
     });
     let mut moss = blank(moss_material);
-    for d in sites.iter().take(2048) {
+    // Spend the bounded shoot geometry near the active cell while leaving
+    // stochastic coverage in the neighboring prefetch cells.
+    let half_span = window.span_m(field.params.radius_m) * 0.5;
+    let mut moss_sites = sites.clone();
+    moss_sites.sort_by_cached_key(|item| {
+        let distance2 =
+            (DVec3::from(item.direction) * field.params.radius_m - anchor).length_squared();
+        let rank = rng::hash01(field.params.seed, 7291, item.id.0 as i64, 0)
+            * (1.0 + distance2 / half_span.powi(2));
+        (rank.to_bits(), item.id)
+    });
+    for d in moss_sites.iter().take(2048) {
         if stats.ground_moss_clumps >= moss_limit {
             break;
         }
@@ -158,14 +169,28 @@ pub(super) fn append(
             let height = field.height_m(dir.to_array(), 32.0).max(0.0)
                 + lod::ground_relief_height_m(field, dir.to_array(), 0.012);
             let base = dir * (field.params.radius_m + height - 0.002);
-            let length = 0.018 + hash(7080 + shoot) * 0.035;
-            let half = up.cross(radial) * 0.007;
-            let shoulder = base + up * (length * 0.55) + radial * 0.009;
+            let length = 0.035 + hash(7080 + shoot) * 0.045;
+            let half = up.cross(radial) * 0.0045;
+            let shoulder = base + up * (length * 0.55) + radial * 0.006;
             let ridge = shoulder - radial * 0.004;
-            let tip = base + up * length + radial * 0.018;
+            let tip = base + up * length + radial * 0.012;
             folded_leaf(
                 &mut moss,
                 [base, shoulder - half, tip, shoulder + half, ridge],
+                anchor,
+            );
+            let leaf_mid = ridge + radial * 0.006 + up * 0.004;
+            let leaf_tip = ridge + radial * 0.012 + up * 0.007;
+            let leaf_half = up.cross(radial) * 0.003;
+            folded_leaf(
+                &mut moss,
+                [
+                    ridge,
+                    leaf_mid - leaf_half,
+                    leaf_tip,
+                    leaf_mid + leaf_half,
+                    leaf_mid + up * 0.001,
+                ],
                 anchor,
             );
         }
@@ -174,15 +199,15 @@ pub(super) fn append(
     publish(prepared, moss, anchor);
     let litter_material = prepared.asset.materials.len();
     prepared.asset.materials.push(Material {
-        base_color: [0.042, 0.028, 0.015, 1.0],
-        roughness: 0.88,
+        base_color: [0.052, 0.034, 0.018, 1.0],
+        roughness: 0.85,
         double_sided: true,
         ..Default::default()
     });
     let mut litter = blank(litter_material);
     for d in sites.iter().take(if high { 2048 } else { 512 }) {
         let cover = lod::ground_cover_at(field, d.direction, 0.012);
-        if cover.wetness < 0.25 || cover.moss > 0.6 {
+        if cover.wetness < 0.20 || cover.moss > 0.70 {
             continue;
         }
         let hash = |c| rng::hash01(field.params.seed, c, d.id.0 as i64, 0);
@@ -207,9 +232,9 @@ pub(super) fn append(
         let material = prepared.asset.materials.len();
         let f0 = ((1.333_f32 - 1.0) / (1.333 + 1.0)).powi(2);
         prepared.asset.materials.push(Material {
-            base_color: [0.020, 0.018, 0.014, 1.0],
+            base_color: [0.012, 0.010, 0.008, 1.0],
             metallic: 0.0,
-            roughness: 0.065,
+            roughness: 0.020,
             dielectric_f0: f0,
             ..Default::default()
         });
@@ -316,7 +341,7 @@ mod tests {
                 && stats.ground_moss_clumps > 0
                 && stats.ground_puddles > 0
         );
-        assert!(stats.prototype_bytes < 7_000_000 && prepared.asset.primitives.len() <= 37);
+        assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 37);
         prepared.asset.validate().unwrap();
         eprintln!(
             "full_coastal_cover payload={} ranges={} litter={}",
@@ -378,12 +403,51 @@ mod tests {
             stats.prototype_bytes,
             prepared.asset.primitives.len()
         );
-        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 384);
+        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 192);
         assert!(stats.ground_litter_fragments > 0 && stats.ground_litter_fragments <= 2048);
         assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 24);
         assert!(stats.ground_water_samples <= 256 * 17 * 17);
-        assert!(stats.prototype_bytes < 7_000_000 && prepared.asset.primitives.len() <= 37);
+        assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 37);
         let local = &prepared.asset.primitives[prepared.local_ground_start.unwrap()..];
+        let moss_anchor = prepared.instances
+            [prepared.ranges[prepared.local_ground_start.unwrap()].start as usize]
+            .position_m;
+        let near_moss_vertices = local[0]
+            .vertices
+            .iter()
+            .filter(|v| (moss_anchor + DVec3::from(v.position.map(f64::from))).distance(eye) < 10.0)
+            .count();
+        let distant_moss_vertices = local[0]
+            .vertices
+            .iter()
+            .filter(|v| {
+                (moss_anchor + DVec3::from(v.position.map(f64::from))).distance(eye) >= 30.0
+            })
+            .count();
+        eprintln!(
+            "moss_near_eye vertices={near_moss_vertices} distant={distant_moss_vertices} total={}",
+            local[0].vertices.len()
+        );
+        assert!(
+            near_moss_vertices >= 900,
+            "the near floor needs resolved moss shoots"
+        );
+        assert!(
+            distant_moss_vertices >= 1000,
+            "bounded near priority must retain moss in neighboring cells"
+        );
+        let (shoots, rest) = local[0].indices.as_chunks::<24>();
+        assert!(rest.is_empty());
+        for shoot in shoots {
+            let stem = &shoot[..12];
+            let leaf = &shoot[12..];
+            assert!(
+                stem.iter().any(|&a| leaf.iter().any(|&b| {
+                    local[0].vertices[a as usize].position == local[0].vertices[b as usize].position
+                })),
+                "each moss leaf must share a geometric root with its shoot"
+            );
+        }
         let litter = &local[1];
         assert_eq!(litter.indices.len(), stats.ground_litter_fragments * 12);
         let litter_anchor = prepared.instances

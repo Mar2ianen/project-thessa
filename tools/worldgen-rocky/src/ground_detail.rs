@@ -1,11 +1,12 @@
 //! Optional body-fixed optical soil scans; no authoritative collision state.
-//! Source scales/licenses: assets/textures/{forest-ground-04,mud-litter-01}.LICENSE.txt.
+//! Source scales/licenses: assets/textures/{forest-ground-04,mud-litter-01,forest-moss-litter-02}.LICENSE.txt.
 use std::{io::Read, sync::OnceLock};
 
 pub const SWATCH_WIDTH_M: f64 = 3.15;
 pub const HEIGHT_RANGE_M: f32 = 0.060;
 const SOIL_SIDE: usize = 1024;
 const LITTER_SIDE: usize = 512;
+const MOSS_SIDE: usize = 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GroundSample {
@@ -23,8 +24,17 @@ struct Mip {
 struct Texture(Vec<Mip>);
 static TEXTURE: OnceLock<Texture> = OnceLock::new();
 static LITTER: OnceLock<Texture> = OnceLock::new();
+static MOSS: OnceLock<Texture> = OnceLock::new();
 const LITTER_WIDTH_M: f64 = 1.3;
 const LITTER_HEIGHT_RANGE_M: f32 = 0.025;
+const MOSS_WIDTH_M: f64 = 3.0;
+const MOSS_HEIGHT_RANGE_M: f32 = 0.020;
+const MOSS_GRADE: [f32; 3] = [0.180, 0.350, 0.220];
+const MOSS_MEAN: GroundSample = GroundSample {
+    albedo_linear: [0.2964123, 0.17819463, 0.056929342],
+    roughness: 0.9334981,
+    height_m: -0.001536484,
+};
 const LITTER_MEAN: GroundSample = GroundSample {
     albedo_linear: [0.13887769, 0.10027028, 0.03611909],
     roughness: 0.9196433,
@@ -83,6 +93,15 @@ impl Texture {
             include_bytes!("../../../assets/textures/mud-litter-01.bin.gz"),
             LITTER_SIDE,
             LITTER_HEIGHT_RANGE_M,
+            false,
+        )
+    }
+
+    fn decode_moss() -> Self {
+        Self::decode_source(
+            include_bytes!("../../../assets/textures/forest-moss-litter-02.bin.gz"),
+            MOSS_SIDE,
+            MOSS_HEIGHT_RANGE_M,
             false,
         )
     }
@@ -300,6 +319,26 @@ fn sample_texture(
     }
 }
 
+fn sample_moss(q: [f64; 3], seed: u64, texel_m: f64) -> GroundSample {
+    if texel_m >= MOSS_WIDTH_M {
+        return MOSS_MEAN;
+    }
+    let radius = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let dir = if radius > 0.0 {
+        q.map(|v| v / radius)
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    sample_texture(
+        MOSS.get_or_init(Texture::decode_moss),
+        dir,
+        radius,
+        seed ^ 0x6d6f_7373_3032,
+        texel_m,
+        MOSS_WIDTH_M,
+    )
+}
+
 // Transform intrinsic pigment/mineral response before filtering: applying a
 // nonlinear brightness mask to an already averaged texel changes its mean.
 fn forest_substrate(rgb: [f32; 3], roughness: f32) -> ([f32; 3], f32) {
@@ -337,6 +376,17 @@ pub fn cover(
     canopy: f64,
     source_height_m: f64,
 ) -> GroundCover {
+    cover_and_moss(q, seed, texel_m, damp, canopy, source_height_m).0
+}
+
+fn cover_and_moss(
+    q: [f64; 3],
+    seed: u64,
+    texel_m: f64,
+    damp: f64,
+    canopy: f64,
+    source_height_m: f64,
+) -> (GroundCover, GroundSample) {
     use crate::appearance::{band_weight, smooth};
     let noise = |channel, wavelength, perlin| {
         let p = q.map(|v| v / wavelength);
@@ -353,18 +403,28 @@ pub fn cover(
         * smooth(-0.12, 0.18, moss_field)
         * band_weight(0.85, texel_m)
         * 0.85;
-    // A connected cushion and smaller hummocks share the pigment's world phase.
-    let cushion = smooth(0.20, 0.80, moss)
-        * (0.035 + (0.060 - 0.035) * smooth(-0.25, 0.25, noise(6160, 0.18, true)));
+    let texture = if moss > 0.0 {
+        sample_moss(q, seed, texel_m)
+    } else {
+        MOSS_MEAN
+    };
+    // The same filtered scan contributes to geometry and optical gradients.
+    let cushion = (smooth(0.20, 0.80, moss)
+        * (0.035 + (0.060 - 0.035) * smooth(-0.25, 0.25, noise(6160, 0.18, true)))
+        + moss * 0.5 * f64::from(texture.height_m - MOSS_MEAN.height_m))
+    .clamp(0.0, 0.060);
     // Moisture availability is canonical; scan hollows and metre-scale retention
     // distribute that availability. This is not a rain/runoff integrator.
     let retention = smooth(-0.30, 0.25, noise(6161, 2.4, true));
     let hollows = 1.0 - smooth(-0.018, 0.012, source_height_m);
-    GroundCover {
-        wetness: (damp * (0.50 + 0.35 * retention + 0.35 * hollows)).clamp(0.0, 1.0),
-        moss,
-        moss_height_m: cushion,
-    }
+    (
+        GroundCover {
+            wetness: (damp * (0.50 + 0.35 * retention + 0.35 * hollows)).clamp(0.0, 1.0),
+            moss,
+            moss_height_m: cushion,
+        },
+        texture,
+    )
 }
 
 /// Authored forest-floor optical layers. Wetness is a material response to the
@@ -389,7 +449,8 @@ pub(crate) fn forest_floor(
     };
     let mineral_patch = smooth(0.05, 0.45, noise(6146, 3.2, true));
     let fine_mineral = smooth(0.52, 0.82, noise(6147, 0.22, false)) * 0.25;
-    let cover = cover(q, seed, texel_m, damp, canopy, f64::from(ground.height_m));
+    let (cover, moss_texture) =
+        cover_and_moss(q, seed, texel_m, damp, canopy, f64::from(ground.height_m));
     let wet = cover.wetness;
     let moss = cover.moss;
     let coarse_litter =
@@ -398,15 +459,15 @@ pub(crate) fn forest_floor(
         smooth(0.12, 0.62, noise(6151, 0.45, true)) * (0.35 + 0.65 * smooth(0.02, 0.20, canopy));
     let litter = (coarse_litter * 0.50 + fine_litter * 0.45).clamp(0.0, 0.76);
     let albedo_linear = std::array::from_fn(|i| {
-        let wet_darkening = [0.52, 0.52, 0.46][i];
-        let mineral_factor = 1.0 + mineral_patch * 0.15 + fine_mineral * [0.15, 0.18, 0.28][i];
+        let wet_darkening = [0.65, 0.65, 0.58][i];
+        let mineral_factor = 1.0 + mineral_patch * 0.10 + fine_mineral * [0.10, 0.12, 0.20][i];
         let substrate =
             f64::from(ground.albedo_linear[i]) * mineral_factor * (1.0 - wet * wet_darkening);
         // Pigment coverage retains scan contrast instead of painting a flat swatch.
         let texture_detail = (f64::from(ground.albedo_linear[i])
             / f64::from(mean_sample().albedo_linear[i]))
         .clamp(0.5, 1.5);
-        let moss_albedo = [0.045, 0.058, 0.028][i] * texture_detail;
+        let moss_albedo = f64::from(moss_texture.albedo_linear[i] * MOSS_GRADE[i]);
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
         let litter_albedo = [0.054, 0.043, 0.029][i] * texture_detail;
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
@@ -414,7 +475,7 @@ pub(crate) fn forest_floor(
     let dry = f64::from(ground.roughness);
     // Authored porous-soil prior; moisture alone does not supply a smooth water film.
     let wet_roughness = dry * (1.0 - wet) + (0.48 * (1.0 - fine_mineral * 0.20)) * wet;
-    let moss_roughness = wet_roughness * (1.0 - moss) + 0.92 * moss;
+    let moss_roughness = wet_roughness * (1.0 - moss) + f64::from(moss_texture.roughness) * moss;
     GroundSample {
         albedo_linear,
         roughness: (moss_roughness * (1.0 - litter) + 0.75 * litter).clamp(0.22, 0.98) as f32,
@@ -449,6 +510,7 @@ mod tests {
         for (texture, width_m) in [
             (Texture::decode(), SWATCH_WIDTH_M),
             (Texture::decode_litter(), LITTER_WIDTH_M),
+            (Texture::decode_moss(), MOSS_WIDTH_M),
         ] {
             for mip in [0, 1, 2, 4] {
                 let expected =
@@ -656,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn damp_moss_forms_resolved_patches_without_erasing_scan_detail() {
+    fn damp_moss_forms_resolved_patches_and_preserves_partial_substrate_contrast() {
         let mean = mean_sample();
         let mut green_ratio = [f32::INFINITY, 0.0_f32];
         let mut patch = [0.0; 3];
@@ -704,14 +766,81 @@ mod tests {
             0.9,
             0.6,
         );
+        // Covered colour comes from its own scan; only uncovered substrate
+        // carries the original gravel contrast through the mixture.
         assert!(
             bright
                 .albedo_linear
                 .into_iter()
                 .zip(dark.albedo_linear)
-                .all(|(a, b)| a > b * 1.1)
+                .all(|(a, b)| a > b * 1.05)
         );
         assert_eq!(bright.height_m, dark.height_m);
+    }
+
+    #[test]
+    fn moss_scan_preserves_native_mean_detail_and_world_continuity() {
+        let texture = Texture::decode_moss();
+        let mean = texture.0.last().unwrap().pixels[0];
+        let expected = [
+            MOSS_MEAN.albedo_linear[0],
+            MOSS_MEAN.albedo_linear[1],
+            MOSS_MEAN.albedo_linear[2],
+            MOSS_MEAN.roughness,
+            MOSS_MEAN.height_m,
+        ];
+        for (actual, expected) in mean.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+        let coarse = sample_moss([3_200_000.0, 137.0, -18.0], 77, MOSS_WIDTH_M);
+        assert_eq!(coarse.albedo_linear, MOSS_MEAN.albedo_linear);
+        assert_eq!(coarse.roughness, MOSS_MEAN.roughness);
+        assert_eq!(coarse.height_m, MOSS_MEAN.height_m);
+        let mut red = [f32::INFINITY, 0.0_f32];
+        let mut height = [f32::INFINITY, f32::NEG_INFINITY];
+        for i in 0..400 {
+            let q = [
+                3_200_000.0,
+                137.0 + (i % 20) as f64 * 0.025,
+                -18.0 + (i / 20) as f64 * 0.025,
+            ];
+            let a = sample_moss(q, 77, 0.012);
+            let b = sample_moss([q[0], q[1] + 1e-7, q[2]], 77, 0.012);
+            for (x, y) in a.albedo_linear.into_iter().zip(b.albedo_linear) {
+                assert!((x - y).abs() < 0.001, "world-space texture discontinuity");
+            }
+            assert!((a.height_m - b.height_m).abs() < 0.0001);
+            red[0] = red[0].min(a.albedo_linear[0]);
+            red[1] = red[1].max(a.albedo_linear[0]);
+            height[0] = height[0].min(a.height_m);
+            height[1] = height[1].max(a.height_m);
+        }
+        assert!(
+            red[1] - red[0] > 0.1,
+            "moss scan must retain real pigment detail"
+        );
+        assert!(
+            height[1] - height[0] > 0.003,
+            "moss scan must retain resolved relief"
+        );
+        for x_sign in [-1.0, 1.0] {
+            for z_sign in [-1.0, 1.0] {
+                let q = |epsilon: f64| {
+                    let d = [x_sign * (1.0 + epsilon), 0.23, z_sign * (1.0 - epsilon)];
+                    let scale = 3_200_000.0 / d.iter().map(|x| x * x).sum::<f64>().sqrt();
+                    d.map(|x| x * scale)
+                };
+                let a = sample_moss(q(-1e-12), 77, 0.003);
+                let b = sample_moss(q(1e-12), 77, 0.003);
+                for (x, y) in a.albedo_linear.into_iter().zip(b.albedo_linear) {
+                    assert!(
+                        (x - y).abs() < 0.005,
+                        "cube-face edge must not change scan phase"
+                    );
+                }
+                assert!((a.height_m - b.height_m).abs() < 0.0001);
+            }
+        }
     }
 
     #[test]

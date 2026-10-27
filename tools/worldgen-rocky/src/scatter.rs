@@ -547,7 +547,7 @@ fn understory_habitat_weights(surface: ScatterSurface) -> (f64, f64) {
 fn understory_patch_density(seed: u64, radius_m: f64, direction: [f64; 3]) -> f64 {
     let p = direction.map(|v| v * (radius_m / UNDERSTORY_PATCH_WAVELENGTH_M));
     let noise = rng::value_noise3(seed, 437, p[0], p[1], p[2]);
-    let occupancy = 0.08 + 0.92 * crate::appearance::smooth(-0.16, 0.25, noise);
+    let occupancy = 0.22 + 0.78 * crate::appearance::smooth(-0.16, 0.25, noise);
     UNDERSTORY_PATCH_MAX * occupancy
 }
 

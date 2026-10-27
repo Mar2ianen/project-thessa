@@ -816,7 +816,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
             if let Some(mesh) = &mut mesh_renderer {
                 scene.update_mesh(&backend, mesh, width, height, exposure)?;
-                mesh.update_primary_jitter(&backend, &view, [width, height], jitter)?;
+                mesh.update_primary_jitter(&scene, &backend, &view, [width, height], jitter)?;
                 mesh.sync_rt_terrain(&backend, &renderer)?;
             }
             if let Some(trace) = &mut gpu_trace {

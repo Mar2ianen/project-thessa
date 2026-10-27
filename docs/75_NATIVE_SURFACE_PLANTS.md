@@ -1476,3 +1476,5 @@ can create the shared mesh consumer without enabling plants.
 prepared ground representation. Resolved density/candidate/item limits are
 exported alongside them. The legacy `native_surface_plants_retained` remains a
 plant-only count; shared mesh bytes/submitted instances/draws include pebbles.
+
+The [Horizon renderer continuation](80_HORIZON_RENDER_WORK_REVIEW.md) preserves canonical descriptors, material cohorts and source LODs while selecting only conservatively visible primary primitive/instance runs. Original instance indices feed indirect batches or a direct fallback; complete ranges still feed shadow and RT consumers. Submitted primary counters now differ from retained candidates. Source-byte admission remains independent of expanded multi-pass work; no target-GPU or reference acceptance follows.

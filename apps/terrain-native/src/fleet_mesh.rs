@@ -374,16 +374,11 @@ impl SceneMeshes {
     }
 
     pub fn draw_stats(&self) -> MeshDrawStats {
-        self.inner.as_ref().map_or(
-            MeshDrawStats {
-                instances: 0,
-                draw_calls: 0,
-                triangles: 0,
-                frame_upload_bytes: 0,
-            },
-            MeshRenderer::draw_stats,
-        )
+        self.inner
+            .as_ref()
+            .map_or_else(MeshDrawStats::default, MeshRenderer::draw_stats)
     }
+
     pub fn opaque(&self) -> Option<&MeshRenderer> {
         self.inner.as_ref()
     }
@@ -431,6 +426,7 @@ impl SceneMeshes {
     /// early local/server branches share the same primary sampling contract.
     pub fn update_primary_jitter(
         &mut self,
+        scene: &Scene,
         backend: &Backend,
         view: &thessa_render_core::ViewParams,
         extent: [u32; 2],
@@ -439,6 +435,11 @@ impl SceneMeshes {
         if let Some(inner) = &mut self.inner {
             inner.update_primary_jitter(backend, view, extent, jitter)?;
         }
+        let stats = self.draw_stats();
+        let mut diagnostics = scene.surface_plants_diagnostics.borrow_mut();
+        diagnostics.submitted_instances = stats.instances;
+        diagnostics.draw_calls = stats.draw_calls;
+        diagnostics.frame_upload_bytes = stats.frame_upload_bytes;
         Ok(())
     }
 
@@ -523,7 +524,8 @@ impl SceneMeshes {
         let Some((primary, primary_instance)) = &scene.vehicle else {
             return if let Some(inner) = &mut self.inner {
                 if let Some(plants) = &self.plants {
-                    debug_assert_eq!(plants.descriptors.len(), plants.instances.len());
+                    // Aggregated moss/litter/water draws add instances without scatter descriptors.
+                    debug_assert!(plants.descriptors.len() <= plants.instances.len());
                     inner.update_selected(
                         backend,
                         &view,
@@ -1956,5 +1958,151 @@ mod tests {
         assert!(track.at(SimTime(a.0 - 0.01), &ephemeris, body).is_none());
         track.push(pose(a, origin, DQuat::IDENTITY));
         assert!(track.at(mid, &ephemeris, body).is_none());
+    }
+    #[test]
+    #[ignore = "software Vulkan: real coastal primary plan/counts, no raster submission"]
+    fn report_coastal_primary_workload() {
+        assert!(
+            !std::path::Path::new("/dev/dri").exists(),
+            "use isolated CPU-only ICD"
+        );
+        let output = std::path::PathBuf::from(
+            std::env::var_os("THESSA_WORKLOAD_OUTPUT").expect("set a NEW report path"),
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+            .unwrap();
+        let mut request = thessa_graphics::RequestedGraphics::from_toml(include_str!(
+            "../../../data/graphics/surface-showcase.toml"
+        ))
+        .unwrap();
+        request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+        let backend = Backend::bring_up_for_graphics(&request).unwrap();
+        assert_eq!(
+            backend.adapter.get_info().device_type,
+            wgpu::DeviceType::Cpu
+        );
+        let mut scene = Scene::load(request).unwrap();
+        scene.select_fixed_survey_site([23.565679258039204, 165.13881581863882]);
+        scene.survey.set_distance_m(80.0);
+        scene.survey_eye_agl_m = Some(2.0);
+        let mut terrain = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        let mut meshes = SceneMeshes::with_shadows(
+            &scene,
+            &backend,
+            &empty_asset(),
+            thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            terrain.shadows(),
+            None,
+        )
+        .unwrap();
+        let mut samples = Vec::new();
+        for sample in 0..35 {
+            let start = std::time::Instant::now();
+            scene
+                .update_mesh(&backend, &mut meshes, 1280, 720, 1.0)
+                .unwrap();
+            if sample >= 5 {
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            backend.queue.submit([]);
+        }
+        samples.sort_by(f64::total_cmp);
+        let stats = meshes.draw_stats();
+        let view = scene.view(1280, 720, 1.0);
+        terrain
+            .update_view_for_extent(&backend, &view, [1280, 720])
+            .unwrap();
+        terrain
+            .update_shadows(&backend, view.world_position_m, &scene.lighting())
+            .unwrap();
+        let shadow_started = std::time::Instant::now();
+        let mut shadow_encoder = backend.device.create_command_encoder(&Default::default());
+        terrain.encode_shadows(&mut shadow_encoder, meshes.opaque());
+        let shadow_encode_ms = shadow_started.elapsed().as_secs_f64() * 1000.0;
+        let shadow_stats = terrain.last_shadow_draws();
+        // Count real encoded caster commands, but never submit a raster pass.
+        drop(shadow_encoder);
+        let plants = meshes.plants.as_ref().unwrap();
+        let mut groups: Vec<_> = plants
+            .asset
+            .primitives
+            .iter()
+            .zip(&plants.ranges)
+            .enumerate()
+            .map(|(i, (p, r))| {
+                let table: toml::Table = [
+                    ("primitive", i as i64),
+                    ("material", p.material as i64),
+                    ("source_triangles", (p.indices.len() / 3) as i64),
+                    ("instances", i64::from(r.end - r.start)),
+                    (
+                        "candidate_triangles",
+                        (p.indices.len() / 3) as i64 * i64::from(r.end - r.start),
+                    ),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), toml::Value::Integer(v)))
+                .collect();
+                toml::Value::Table(table)
+            })
+            .collect();
+        groups.sort_by_key(|v| std::cmp::Reverse(v["candidate_triangles"].as_integer().unwrap()));
+        let mut report = toml::Table::new();
+        report.insert("scope".into(), toml::Value::String("Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.".into()));
+        report.insert(
+            "adapter".into(),
+            toml::Value::String(format!("{:?}", backend.adapter.get_info())),
+        );
+        for (key, value) in [
+            ("width", 1280),
+            ("height", 720),
+            ("eye_agl_m", 2),
+            ("survey_distance_m", 80),
+            ("candidate_instances", i64::from(stats.candidate_instances)),
+            ("visible_instances", i64::from(stats.instances)),
+            ("candidate_triangles", stats.candidate_triangles as i64),
+            ("submitted_triangles", stats.triangles as i64),
+            ("draw_calls", stats.draw_calls as i64),
+            ("draw_commands", stats.draw_commands as i64),
+            ("shadow_passes", terrain.last_shadow_passes() as i64),
+            (
+                "shadow_candidate_triangles",
+                shadow_stats.mesh_candidate_triangles as i64,
+            ),
+            (
+                "shadow_submitted_triangles",
+                shadow_stats.mesh_submitted_triangles as i64,
+            ),
+            ("shadow_draw_calls", shadow_stats.mesh_draw_calls as i64),
+            ("frame_upload_bytes", stats.frame_upload_bytes as i64),
+        ] {
+            report.insert(key.into(), toml::Value::Integer(value));
+        }
+        for (key, value) in [
+            ("native_update_cpu_p50_ms", samples[15]),
+            ("native_update_cpu_p95_ms", samples[28]),
+            ("native_update_cpu_max_ms", samples[29]),
+        ] {
+            report.insert(key.into(), toml::Value::Float(value));
+        }
+        report.insert(
+            "shadow_encode_cpu_ms".into(),
+            toml::Value::Float(shadow_encode_ms),
+        );
+        report.insert("candidate_groups".into(), toml::Value::Array(groups));
+        assert!(stats.triangles > 0 && stats.triangles < stats.candidate_triangles);
+        use std::io::Write;
+        file.write_all(toml::to_string_pretty(&report).unwrap().as_bytes())
+            .unwrap();
+        file.sync_all().unwrap();
+        eprintln!("{}", toml::to_string_pretty(&report).unwrap());
     }
 }

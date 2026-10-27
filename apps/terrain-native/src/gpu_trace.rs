@@ -149,7 +149,10 @@ mod tests {
                     0,
                     Some(MeshDrawStats {
                         instances: 17992,
+                        candidate_instances: 17992,
+                        candidate_triangles: 148572518,
                         draw_calls: 37,
+                        draw_commands: 37,
                         triangles: 148572518,
                         frame_upload_bytes: 1152064,
                     }),

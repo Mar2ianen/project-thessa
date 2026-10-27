@@ -9,20 +9,27 @@ use thessa_render_core::mesh::{MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
 struct Primitive {
-    shadow_bounds: Option<crate::mesh_visibility::Bounds>,
+    bounds: Option<crate::mesh_visibility::Bounds>,
     ambient: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
     material: usize,
 }
-/// Submitted workload, not visibility results or GPU timings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Primary submitted/candidate workload; not GPU timing or occlusion results.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MeshDrawStats {
+    /// Unique instance indices with at least one submitted primary primitive.
     pub instances: u32,
+    /// Retained instances before primary frustum rejection; shadow/RT sources remain.
+    pub candidate_instances: u32,
+    pub candidate_triangles: u64,
     pub draw_calls: usize,
+    /// Logical indexed commands; an indirect API call can batch several.
+    pub draw_commands: usize,
     pub triangles: u64,
-    /// Uniform + instance bytes written by one successful `update`.
+    /// Actual uniform/instance/indirect bytes written by the latest successful update,
+    /// plus any subsequent primary jitter upload. Reused instance data is zero.
     pub frame_upload_bytes: usize,
 }
 /// Surface/lighting configuration for a native mesh renderer. Bundling the
@@ -44,7 +51,8 @@ pub struct SurfaceSettings<'a> {
 pub struct MeshRenderer {
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
-    shadow_instances: Vec<u8>,
+    uploaded_instances: Vec<u8>,
+    uploaded_origin: Option<glam::DVec3>,
     last_instances: Vec<thessa_render_core::mesh::MeshInstance>,
     shadow_revision: u64,
     rt: Option<crate::ray_scene::RayScene>,
@@ -61,6 +69,16 @@ pub struct MeshRenderer {
     count: u32,
     staging: Vec<u8>,
     ranges: Vec<std::ops::Range<u32>>,
+    primary_runs: Vec<Vec<std::ops::Range<u32>>>,
+    primary_seen: Vec<bool>,
+    primary_stats: MeshDrawStats,
+    primary_view: Option<(glam::DVec3, glam::Mat4)>,
+    primary_indirect_supported: bool,
+    primary_indirect: Option<wgpu::Buffer>,
+    primary_indirect_capacity: usize,
+    primary_indirect_bytes: Vec<u8>,
+    primary_indirect_staging: Vec<u8>,
+    primary_indirect_ranges: Vec<std::ops::Range<u32>>,
 }
 fn fail(s: &str) -> BackendError {
     BackendError::Device(s.into())
@@ -296,18 +314,107 @@ impl MeshRenderer {
     }
 
     pub fn draw_stats(&self) -> MeshDrawStats {
-        MeshDrawStats {
-            instances: self.count,
-            draw_calls: self.ranges.iter().filter(|r| !r.is_empty()).count(),
-            triangles: self
-                .primitives
-                .iter()
-                .zip(&self.ranges)
-                .map(|(p, range)| u64::from(p.count) / 3 * u64::from(range.end - range.start))
-                .sum::<u64>(),
-            frame_upload_bytes: 464 + 112 + self.count as usize * 64,
+        self.primary_stats
+    }
+
+    fn prepare_primary(&mut self, backend: &Backend, clip: glam::Mat4) -> usize {
+        self.primary_seen.resize(self.count as usize, false);
+        self.primary_seen.fill(false);
+        let mut stats = MeshDrawStats {
+            candidate_instances: self.count,
+            frame_upload_bytes: self.primary_stats.frame_upload_bytes,
+            ..Default::default()
+        };
+        for ((primitive, range), runs) in self
+            .primitives
+            .iter()
+            .zip(&self.ranges)
+            .zip(&mut self.primary_runs)
+        {
+            runs.clear();
+            let triangles = u64::from(primitive.count) / 3;
+            stats.candidate_triangles += triangles * u64::from(range.end - range.start);
+            let visible = |i: u32| {
+                primitive.bounds.is_none_or(|bounds| {
+                    self.staging
+                        .get(i as usize * 64..i as usize * 64 + 64)
+                        .is_none_or(|bytes| bounds.intersects_uploaded(clip, bytes))
+                })
+            };
+            for run in crate::mesh_visibility::visible_runs(range.clone(), visible) {
+                self.primary_seen[run.start as usize..run.end as usize].fill(true);
+                stats.triangles += triangles * u64::from(run.end - run.start);
+                runs.push(run);
+            }
+            stats.draw_commands += runs.len();
+        }
+        stats.instances = self.primary_seen.iter().filter(|&&seen| seen).count() as u32;
+        let uploaded = self.prepare_primary_indirect(backend);
+        stats.draw_calls = if self.primary_indirect.is_some() {
+            self.primary_runs.iter().filter(|r| !r.is_empty()).count()
+        } else {
+            stats.draw_commands
+        };
+        self.primary_stats = stats;
+        uploaded
+    }
+
+    fn prepare_primary_indirect(&mut self, backend: &Backend) -> usize {
+        if !self.primary_indirect_supported {
+            return 0;
+        }
+        self.primary_indirect_staging.clear();
+        for ((primitive, runs), range) in self
+            .primitives
+            .iter()
+            .zip(&self.primary_runs)
+            .zip(&mut self.primary_indirect_ranges)
+        {
+            let first = (self.primary_indirect_staging.len() / 20) as u32;
+            for run in runs {
+                self.primary_indirect_staging.extend(
+                    [primitive.count, run.end - run.start, 0, 0, run.start]
+                        .into_iter()
+                        .flat_map(u32::to_le_bytes),
+                );
+            }
+            *range = first..(self.primary_indirect_staging.len() / 20) as u32;
+        }
+        let needed = self.primary_indirect_staging.len();
+        if needed == 0 {
+            return 0;
+        }
+        let limit = backend.device.limits().max_buffer_size;
+        if needed as u64 > limit || needed / 20 > u32::MAX as usize {
+            self.primary_indirect = None;
+            self.primary_indirect_capacity = 0;
+            return 0;
+        }
+        let grew = needed > self.primary_indirect_capacity || self.primary_indirect.is_none();
+        if grew {
+            self.primary_indirect_capacity =
+                (needed.next_power_of_two() as u64).min(limit) as usize;
+            self.primary_indirect = Some(backend.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mesh-primary-indirect"),
+                size: self.primary_indirect_capacity as u64,
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        if grew || self.primary_indirect_bytes != self.primary_indirect_staging {
+            backend.queue.write_buffer(
+                self.primary_indirect.as_ref().unwrap(),
+                0,
+                &self.primary_indirect_staging,
+            );
+            self.primary_indirect_bytes
+                .clone_from(&self.primary_indirect_staging);
+            needed
+        } else {
+            0
         }
     }
+
     pub fn new(
         backend: &Backend,
         source: &MeshAsset,
@@ -632,9 +739,7 @@ impl MeshRenderer {
             .primitives
             .iter()
             .map(|p| Primitive {
-                shadow_bounds: shadows.and_then(|_| {
-                    crate::mesh_visibility::Bounds::new(p.vertices.iter().map(|v| v.position))
-                }),
+                bounds: crate::mesh_visibility::Bounds::new(p.vertices.iter().map(|v| v.position)),
                 ambient: buffer(
                     &words(if p.ambient_visibility.is_empty() {
                         vec![1.0; if has_vertex_ao { p.vertices.len() } else { 1 }]
@@ -673,7 +778,8 @@ impl MeshRenderer {
             _ => None,
         };
         Ok(Self {
-            shadow_instances: Vec::new(),
+            uploaded_instances: Vec::new(),
+            uploaded_origin: None,
             last_instances: Vec::new(),
             shadow_revision: 0,
             rt,
@@ -693,6 +799,24 @@ impl MeshRenderer {
                         }],
                     })
             }),
+            primary_runs: vec![Vec::new(); primitives.len()],
+            primary_seen: Vec::with_capacity(capacity),
+            primary_stats: Default::default(),
+            primary_view: None,
+            primary_indirect_supported: backend
+                .device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+                && backend
+                    .adapter
+                    .get_downlevel_capabilities()
+                    .flags
+                    .contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION),
+            primary_indirect: None,
+            primary_indirect_capacity: 0,
+            primary_indirect_bytes: Vec::new(),
+            primary_indirect_staging: Vec::new(),
+            primary_indirect_ranges: vec![0..0; primitives.len()],
             ranges: vec![0..0; primitives.len()],
             pipeline,
             global,
@@ -743,17 +867,24 @@ impl MeshRenderer {
         let lights = lighting
             .records()
             .ok_or_else(|| fail("invalid mesh lighting"))?;
-        self.staging.clear();
-        for instance in instances {
-            let matrix = instance
-                .camera_relative_matrix(view.world_position_m)
-                .ok_or_else(|| fail("invalid rigid mesh instance"))?;
-            self.staging.extend(
-                matrix
-                    .to_cols_array()
-                    .into_iter()
-                    .flat_map(f32::to_le_bytes),
-            );
+        if self.uploaded_origin == Some(view.world_position_m)
+            && self.last_instances.as_slice() == instances
+        {
+            // A failed prior publication may have left partial scratch bytes.
+            self.staging.clone_from(&self.uploaded_instances);
+        } else {
+            self.staging.clear();
+            for instance in instances {
+                let matrix = instance
+                    .camera_relative_matrix(view.world_position_m)
+                    .ok_or_else(|| fail("invalid rigid mesh instance"))?;
+                self.staging.extend(
+                    matrix
+                        .to_cols_array()
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes),
+                );
+            }
         }
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
         let mut light_bytes = [0u8; 112];
@@ -766,11 +897,18 @@ impl MeshRenderer {
             out.copy_from_slice(&word.to_le_bytes());
         }
         backend.queue.write_buffer(&self.lighting, 0, &light_bytes);
-        if !self.staging.is_empty() {
+        let uploaded_changed = self.uploaded_instances != self.staging;
+        let upload_bytes = if uploaded_changed {
+            self.staging.len()
+        } else {
+            0
+        };
+        if uploaded_changed && !self.staging.is_empty() {
             backend
                 .queue
                 .write_buffer(&self.instances, 0, &self.staging);
         }
+        self.uploaded_origin = Some(view.world_position_m);
         self.count = instances.len() as u32;
         let mut shadow_changed = false;
         for (i, range) in self.ranges.iter_mut().enumerate() {
@@ -784,14 +922,23 @@ impl MeshRenderer {
             shadow_changed = true;
         }
         if self.shadow_caster.is_some() {
-            if self.shadow_instances != self.staging {
-                self.shadow_instances.clone_from(&self.staging);
-                shadow_changed = true;
-            }
+            shadow_changed |= uploaded_changed;
             if shadow_changed {
                 self.shadow_revision = self.shadow_revision.wrapping_add(1);
             }
         }
+        if uploaded_changed {
+            self.uploaded_instances.clone_from(&self.staging);
+        }
+        let primary_view = (view.world_position_m, block.clip_from_world);
+        let primary_upload = if shadow_changed || self.primary_view != Some(primary_view) {
+            let bytes = self.prepare_primary(backend, block.clip_from_world);
+            self.primary_view = Some(primary_view);
+            bytes
+        } else {
+            0
+        };
+        self.primary_stats.frame_upload_bytes = 464 + 112 + upload_bytes + primary_upload;
         if let Some(rt) = &mut self.rt {
             rt.update(
                 &backend.queue,
@@ -825,6 +972,15 @@ impl MeshRenderer {
         let block = ViewUniformBlock::new_jittered(view, view.world_position_m, jitter, extent)
             .ok_or_else(|| fail("invalid primary mesh camera"))?;
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
+        let primary_view = (view.world_position_m, block.clip_from_world);
+        let primary_upload = if self.primary_view != Some(primary_view) {
+            let bytes = self.prepare_primary(backend, block.clip_from_world);
+            self.primary_view = Some(primary_view);
+            bytes
+        } else {
+            0
+        };
+        self.primary_stats.frame_upload_bytes += 464 + primary_upload;
         Ok(())
     }
     /// Encode acceleration-structure builds (TLAS/BLAS) outside the render pass,
@@ -904,6 +1060,10 @@ impl MeshRenderer {
     /// Caller must first encode_rt() outside that pass. Attachments must match
     /// construction (color format, Depth32Float and single-sample raster).
     pub fn draw_into_pass<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        self.draw_with_visibility(pass, true);
+    }
+
+    fn draw_with_visibility<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, cull: bool) {
         if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
             return;
         }
@@ -915,15 +1075,37 @@ impl MeshRenderer {
         if let Some(rt) = &self.rt {
             pass.set_bind_group(3, rt.bind_group(), &[]);
         }
-        for (p, range) in self.primitives.iter().zip(&self.ranges) {
-            if range.is_empty() {
+        for (i, ((p, range), visible)) in self
+            .primitives
+            .iter()
+            .zip(&self.ranges)
+            .zip(&self.primary_runs)
+            .enumerate()
+        {
+            let runs = if cull {
+                visible.as_slice()
+            } else {
+                std::slice::from_ref(range)
+            };
+            if runs.is_empty() || range.is_empty() {
                 continue;
             }
             pass.set_bind_group(1, &self.materials[p.material], &[]);
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             pass.set_vertex_buffer(1, p.ambient.slice(..));
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..p.count, 0, range.clone());
+            if let Some(indirect) = self.primary_indirect.as_ref().filter(|_| cull) {
+                let range = &self.primary_indirect_ranges[i];
+                pass.multi_draw_indexed_indirect(
+                    indirect,
+                    u64::from(range.start) * 20,
+                    range.end - range.start,
+                );
+            } else {
+                for run in runs {
+                    pass.draw_indexed(0..p.count, 0, run.clone());
+                }
+            }
         }
     }
 
@@ -949,11 +1131,11 @@ impl MeshRenderer {
             stats.mesh_candidate_instances += u64::from(range.end - range.start);
             stats.mesh_candidate_triangles += triangles * u64::from(range.end - range.start);
             let visible = |i: u32| {
-                let Some((clip, bounds)) = clip.zip(p.shadow_bounds) else {
+                let Some((clip, bounds)) = clip.zip(p.bounds) else {
                     return true;
                 };
                 let Some(bytes) = self
-                    .shadow_instances
+                    .uploaded_instances
                     .get(i as usize * 64..i as usize * 64 + 64)
                 else {
                     return true;
@@ -970,3 +1152,7 @@ impl MeshRenderer {
         stats
     }
 }
+
+#[cfg(test)]
+#[path = "mesh_primary_tests.rs"]
+mod primary_tests;

@@ -108,3 +108,5 @@ lib/bin +90 integration tests**, workspace/no-default clippy, **24 Bevy-CBT GPU*
 No remote-green-CI, blind aesthetic, cross-platform runtime or complete native
 renderer/client replacement claim is made. The independent native flight-deck
 work is described in [doc 57](57_NATIVE_FLIGHT_DECK.md).
+
+The subsequent [Horizon renderer review](80_HORIZON_RENDER_WORK_REVIEW.md) extends the common mesh pass with conservative primary visibility, capability-checked indexed indirect batches and dirty-only instance/command publication. `MeshDrawStats` distinguishes candidate instances/triangles, actual primary instances/triangles, logical commands, API batches and latest actual update bytes. Shadow/RT source ownership and original indices are unchanged. Exact software colour/depth comparisons cover the original full-range pass and direct fallback, including large origins, jitter and invalidation; this does not establish target-hardware frame time.

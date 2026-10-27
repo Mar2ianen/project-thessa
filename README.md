@@ -773,3 +773,5 @@ architecture check and visual-arena tools live under
 [`tools/agent-qa/`](tools/agent-qa/README.md). The current arena works on
 supplied PNG frames; native headless capture and automated model judging are
 planned, not implemented.
+
+Native render-work continuation: [Horizon source review and work counters](docs/80_HORIZON_RENDER_WORK_REVIEW.md) records conservative primary mesh selection, persistent indexed indirect batches and dirty-only instance/command uploads. The fixed coastal primary plan drops from 112.8M to 17.1M triangles at 37 API batches; cold shadow encoding still approaches one billion mesh triangles. These are scoped work counts, not target-GPU frame-time acceptance.

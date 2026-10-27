@@ -217,6 +217,8 @@ impl Backend {
                 wgpu::ExperimentalFeatures::disabled(),
             ),
         };
+        // Preserve original instance indices in batched indirect mesh draws.
+        features |= adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE;
         let timing = timing::required_features();
         if profiling && adapter.features().contains(timing) {
             features |= timing;

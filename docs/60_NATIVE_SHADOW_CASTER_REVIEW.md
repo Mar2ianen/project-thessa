@@ -144,3 +144,5 @@ counted as executed merely because the normal workspace run passed.
 No blind preference, full-renderer replacement, remote CI or platform-runtime
 acceptance is implied. Production ocean culling, tighter height bounds and
 mesh-caster culling are deliberately omitted.
+
+The [Horizon work review](80_HORIZON_RENDER_WORK_REVIEW.md) adds primary mesh frustum selection and indirect batching, while preserving complete shadow and RT source ranges. Its real coastal CPU command probe encodes 999,585,598 mesh triangles across twelve cold shadow layers after light-volume rejection; the encoder is discarded without raster submission. This is not steady cached-frame work or hardware timing. Primary visibility must not become caster eligibility. Shadow footprint representation and camera-origin/cache coupling need separate bounded corrections.

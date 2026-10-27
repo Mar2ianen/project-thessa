@@ -106,7 +106,19 @@ fn textured_instances_move_rebase_keep_depth_and_reject_failed_updates_atomicall
         .unwrap();
     let pixels = render(&mut renderer, 1.0);
     assert_eq!(renderer.draw_stats().triangles, 1);
-    assert_eq!(renderer.draw_stats().frame_upload_bytes, 640);
+    let indirect = backend
+        .device
+        .features()
+        .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+        && backend
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION);
+    assert_eq!(
+        renderer.draw_stats().frame_upload_bytes,
+        640 + usize::from(indirect) * 20
+    );
     renderer
         .update(
             &backend,

@@ -387,6 +387,7 @@ impl State {
                 self.exposure,
             )?;
             mesh.update_primary_jitter(
+                scene,
                 &self.backend,
                 &view,
                 [self.config.width, self.config.height],

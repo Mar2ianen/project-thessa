@@ -166,3 +166,5 @@ The [empty shadow sample continuation](84_NATIVE_SHADOW_RASTER_SAMPLES.md) adds 
 The [depth vertex-stream continuation](85_NATIVE_DEPTH_VERTEX_STREAMS.md) preserves geometry and shader arithmetic while splitting shadow-enabled mesh sources into 12-byte positions and 20-byte shading attributes. Explicitly authorized physical-GPU checks include complete coastal depth equivalence and counterbalanced release measurements; rejected shader/box candidates are kept separate from acceptance.
 
 The [sidedness and demand continuation](86_NATIVE_OPAQUE_SIDEDNESS.md) profiles the ordinary full native frame, retains verified CBT convergence, specializes material culling and reuses repeated immutable selection inputs. It does not infer reference parity from a renderer optimization.
+
+The [cloud cost and Fresnel continuation](87_NATIVE_CLOUD_COST_AND_FRESNEL.md) records a normalized-dot NaN fix and rejects three measured optimizations. Counterfactual diagnostics locate repeated cloud transport as a major cost; a cached representation still requires its own error envelope and end-to-end validation.

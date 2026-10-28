@@ -204,7 +204,7 @@ fn rt_reflection(
         }
         let hit_f0 = mix(vec3(surface.dielectric), surface.albedo, surface.metallic);
         let hit_fresnel =
-            hit_f0 + select((vec3(1.0) - hit_f0) * pow(1.0 - max(dot(surface.normal, -direction), 0.0), 5.0),vec3(0.0),RT_LOW_QUALITY);
+            select(surface_schlick_fresnel(hit_f0,dot(surface.normal,-direction)),hit_f0,RT_LOW_QUALITY);
         // Diffuse light leaving the hit toward this ray, then the specular
         // continuation of the same weighted chain.
         radiance +=

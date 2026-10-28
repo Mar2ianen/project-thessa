@@ -1490,3 +1490,5 @@ The [empty shadow sample continuation](84_NATIVE_SHADOW_RASTER_SAMPLES.md) adds 
 The [depth vertex-stream continuation](85_NATIVE_DEPTH_VERTEX_STREAMS.md) preserves geometry and shader arithmetic while splitting shadow-enabled mesh sources into 12-byte positions and 20-byte shading attributes. Explicitly authorized physical-GPU checks include complete coastal depth equivalence and counterbalanced release measurements; rejected shader/box candidates are kept separate from acceptance.
 
 The [opaque sidedness continuation](86_NATIVE_OPAQUE_SIDEDNESS.md) separates single-sided ground details from double-sided foliage at raster state, preserving shader lighting and source geometry while removing the fragment discard from both variants.
+
+The [finite Fresnel continuation](87_NATIVE_CLOUD_COST_AND_FRESNEL.md) shares cosine-domain handling between primary foliage, direct stellar response, reflected ray hits and the environment. Normalized-dot roundoff no longer feeds a negative base to WGSL `pow`. Plant geometry, material cohorts, illumination and cloud quality remain unchanged.

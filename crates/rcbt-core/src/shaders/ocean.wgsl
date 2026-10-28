@@ -136,6 +136,12 @@ fn ocean_sky_radiance(
 // One bounded-cost GGX directional reflection.  `sun_illuminance` is the
 // directional illuminance of a sun disk, so the result is BRDF * NdotL * E
 // and remains compatible with the existing linear HDR lighting accumulator.
+// Normalized-dot roundoff may leave the physical cosine domain; WGSL
+// pow has an undefined result for a negative base, even with exponent five.
+fn surface_schlick_fresnel(f0:vec3<f32>,cosine:f32)->vec3<f32> {
+    return f0+(vec3(1.0)-f0)*pow(1.0-clamp(cosine,0.0,1.0),5.0);
+}
+
 fn surface_sun_reflection(
     normal: vec3<f32>,
     view: vec3<f32>,
@@ -164,7 +170,7 @@ fn surface_sun_reflection(
     let k = (perceptual_roughness + 1.0) * (perceptual_roughness + 1.0) * 0.125;
     let v_v = 1.0 / max(max(n_dot_v, 0.0) * (1.0 - k) + k, OCEAN_EPSILON);
     let v_l = 1.0 / max(max(n_dot_l, 0.0) * (1.0 - k) + k, OCEAN_EPSILON);
-    let fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - h_dot_v, 5.0);
+    let fresnel = surface_schlick_fresnel(f0, h_dot_v);
     let brdf_times_cosine = fresnel * distribution * (0.25 * v_v * v_l * n_dot_l);
     return sun_illuminance * brdf_times_cosine;
 }

@@ -135,7 +135,7 @@ fn env_specular_direction(normal:vec3<f32>,eye:vec3<f32>,roughness:f32,f0:vec3<f
     let vh=dot(eye,h);let l=reflect(-eye,h);let nl=dot(normal,l);
     if(vh<=0.0 || nl<=0.0){return EnvironmentDirection(l,vec3(0.0));}
     let gl=nl/max(nl*(1.0-k)+k,OCEAN_EPSILON);
-    let fresnel=f0+(vec3(1.0)-f0)*pow(1.0-vh,5.0);
+    let fresnel=surface_schlick_fresnel(f0,vh);
     // Correct the exact GGX G1 sampling PDF to the shared Schlick-Smith BRDF.
     return EnvironmentDirection(l,fresnel*visibility_ratio*gl);
 }

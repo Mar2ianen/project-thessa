@@ -641,6 +641,16 @@ fn probe() {
         count: u64,
         workgroups: [u32; 3],
     ) -> Vec<[f32; 4]> {
+        probe_entries(backend, &binding.entries(), source, count, workgroups)
+    }
+
+    fn probe_entries(
+        backend: &crate::Backend,
+        entries: &[wgpu::BindGroupEntry<'_>],
+        source: String,
+        count: u64,
+        workgroups: [u32; 3],
+    ) -> Vec<[f32; 4]> {
         let module = backend
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -662,7 +672,7 @@ fn probe() {
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("environment-grazing-probe-field"),
                 layout: &pipeline.get_bind_group_layout(0),
-                entries: &binding.entries(),
+                entries,
             });
         let output = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("environment-grazing-probe-output"),
@@ -935,5 +945,79 @@ probe_out[{i}]=vec4(a{i}.radiance.r,b{i}.radiance.r,a{i}.reflectance.r,b{i}.refl
             }
         }
         sum * std::f64::consts::TAU / (n * n) as f64
+    }
+    #[test]
+    #[ignore = "software Vulkan: normalized-dot roundoff must not poison Fresnel"]
+    fn fresnel_endpoint_roundoff_keeps_finite_physical_energy() {
+        compare_fresnel_endpoint(false);
+    }
+
+    #[test]
+    #[ignore = "physical GPU: finite Fresnel endpoint and no artificial reflectance floor"]
+    fn physical_fresnel_endpoint_roundoff_keeps_finite_physical_energy() {
+        compare_fresnel_endpoint(true);
+    }
+
+    fn compare_fresnel_endpoint(physical: bool) {
+        assert_eq!(
+            std::path::Path::new("/dev/dri/renderD128").exists(),
+            physical
+        );
+        let backend = crate::Backend::bring_up().unwrap();
+        assert_eq!(
+            backend.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
+            !physical
+        );
+        eprintln!("Fresnel endpoint adapter={:?}", backend.adapter.get_info());
+        let field = EnvironmentRadiance::new(8, 4, vec![[100.0; 3]; 32]).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        let code = format!(
+            "{}\n{}\n{}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0),
+            r#"
+@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;
+@compute @workgroup_size(64)
+fn probe(@builtin(global_invocation_id) gid:vec3<u32>) {
+ if(gid.x>=518u){return;}
+ if(gid.x>=513u){
+  let cosine=array<f32,5>(-0.00000011920929,0.0,0.5,1.0,1.00000011920929)[gid.x-513u];
+  probe_out[gid.x]=vec4(surface_schlick_fresnel(vec3(0.0,0.04,1.0),cosine),0.0);
+  return;
+ }
+ let mu=sqrt(0.125);
+ let r=0.50862426+(f32(gid.x)-256.0)*0.000001;
+ let value=env_specular_direction(vec3(0.0,0.0,1.0),vec3(sqrt(1.0-mu*mu),0.0,mu),r,vec3(0.0,0.04,1.0),3u,4u);
+ probe_out[gid.x]=vec4(value.weight,f32(env_meta.header.w)+env_texels[0].r);
+}
+"#
+        );
+        let values = probe_entries(&backend, &binding.base_entries(), code, 518, [9, 1, 1]);
+        assert!(values.iter().all(|x| x.iter().all(|v| v.is_finite())));
+        assert!(
+            values[..513]
+                .iter()
+                .all(|x| x[0] >= 0.0 && x[0] < 0.00000001)
+        );
+        assert!(
+            (0.01915..0.01917).contains(&values[256][1]),
+            "finite physical limit: {:?}",
+            values[256]
+        );
+        assert!(values[..513].iter().all(|x| x[1] > 0.0 && x[2] > 0.0));
+        for (value, cosine) in values[513..]
+            .iter()
+            .zip([-1e-7_f64, 0.0, 0.5, 1.0, 1.0 + 1e-7])
+        {
+            for (channel, f0) in [0.0_f64, 0.04, 1.0].into_iter().enumerate() {
+                let expected = f0 + (1.0 - f0) * (1.0 - cosine.clamp(0.0, 1.0)).powi(5);
+                assert!((f64::from(value[channel]) - expected).abs() < 1e-7);
+            }
+        }
+        eprintln!(
+            "Fresnel endpoint points=513 zero_f0_no_floor=true central={:?}",
+            values[256]
+        );
     }
 }

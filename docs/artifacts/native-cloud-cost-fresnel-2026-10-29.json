@@ -1,0 +1,266 @@
+{
+  "date": "2026-10-29",
+  "baseline": "a1b8e43722055241e51a3e41e23dba99d9e0d91b",
+  "retained": "Shared physical cosine-domain guard for Schlick Fresnel in environment, direct stellar, primary mesh and secondary ray-hit shading.",
+  "rejected": [
+    "Average-GGX-response LUT: accurate microbenchmark, no material native frame improvement",
+    "Cloud loop-invariant hoisting and zero-support branches: exact controls, target timing regression"
+  ],
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.5613698459928855
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 122.72480202908628
+    },
+    {
+      "name": "render-core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.5695873419754207
+    },
+    {
+      "name": "graphics-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.10296688589733094
+    },
+    {
+      "name": "renderer-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 1.300962019013241
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-core",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-rcbt-core",
+        "-p",
+        "thessa-terrain-native",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 5.906125357025303
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 1.7871375660179183
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.06756086309906095
+    },
+    {
+      "name": "terrain-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "terrain_environment",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 1.8106349459849298
+    },
+    {
+      "name": "ray-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "ray_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.888068808009848
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 108.69146235100925
+    }
+  ],
+  "cpu_passed": {
+    "native-cpu": 133,
+    "render-core-cpu": 47,
+    "graphics-cpu": 51,
+    "renderer-cpu": 40
+  },
+  "gpu": {
+    "software_cases": 6,
+    "physical_cases": 7,
+    "scope": "Retained shared cosine-domain fix, final shaders; CPU Vulkan plus physical Radeon raster/compute and tiny actual RT scenes."
+  },
+  "source_manifest": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-reflectance-2026-10-29/checks/inputs.json",
+    "sha256": "a8e6ff3e4c833b2e6c55836dd892c07845770f080b0e8ac16a60d0773c6973e6"
+  },
+  "binary": {
+    "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/frozen-gpu-baseline/native-finite-fresnel",
+    "sha256": "542968975dbdca2f414585301d37e6fc54d4689ff9532b87d1408115d9e7c68f",
+    "inputs_manifest_sha256": "a8e6ff3e4c833b2e6c55836dd892c07845770f080b0e8ac16a60d0773c6973e6"
+  },
+  "profiles": {
+    "table-static-long": {
+      "last_frames": 30,
+      "medians_ms": {
+        "frame_ms": 446.07525,
+        "cpu_ms": 4.1461500000000004,
+        "gpu_scope:render.scene_classify_and_raster_ms": 380.42545,
+        "gpu_scope:render.scene_overlays_ms": 60.6553,
+        "gpu_scope:render.surface_and_shadows_ms": 0.0064
+      },
+      "binary_sha256": "3870c25b7bca2b6e3bf02de04c08fe46433180dcac036215936b1927cdbea868",
+      "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+      "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+    },
+    "finite-fresnel-static-long": {
+      "last_frames": 30,
+      "medians_ms": {
+        "frame_ms": 449.89985,
+        "cpu_ms": 3.9594,
+        "gpu_scope:render.scene_classify_and_raster_ms": 382.69455000000005,
+        "gpu_scope:render.scene_overlays_ms": 61.1295,
+        "gpu_scope:render.surface_and_shadows_ms": 0.0064
+      },
+      "binary_sha256": "542968975dbdca2f414585301d37e6fc54d4689ff9532b87d1408115d9e7c68f",
+      "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+      "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+    },
+    "no-plants": {
+      "last_frames": 30,
+      "medians_ms": {
+        "frame_ms": 231.75385,
+        "cpu_ms": 8.98235,
+        "gpu_scope:render.scene_classify_and_raster_ms": 115.68005,
+        "gpu_scope:render.scene_overlays_ms": 86.5668,
+        "gpu_scope:render.surface_and_shadows_ms": 22.964399999999998
+      },
+      "binary_sha256": "3870c25b7bca2b6e3bf02de04c08fe46433180dcac036215936b1927cdbea868",
+      "config_sha256": "3c1c31e41f1d4dedecfa91c4acbd2542cf31b1416220394f5f9acb4377c28bc5",
+      "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+    },
+    "no-spec": {
+      "last_frames": 30,
+      "medians_ms": {
+        "frame_ms": 338.7445,
+        "cpu_ms": 17.042650000000002,
+        "gpu_scope:render.scene_classify_and_raster_ms": 172.74880000000002,
+        "gpu_scope:render.scene_overlays_ms": 60.480000000000004,
+        "gpu_scope:render.surface_and_shadows_ms": 86.75625
+      },
+      "binary_sha256": "3870c25b7bca2b6e3bf02de04c08fe46433180dcac036215936b1927cdbea868",
+      "config_sha256": "d85000c11b05633dd849b196576a89d7e6df7c3ab3a5d760c7ddd3a2f3b4b033",
+      "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+    },
+    "no-cloud": {
+      "last_frames": 30,
+      "medians_ms": {
+        "frame_ms": 190.28745,
+        "cpu_ms": 15.5683,
+        "gpu_scope:render.scene_classify_and_raster_ms": 90.9316,
+        "gpu_scope:render.scene_overlays_ms": 0.26395,
+        "gpu_scope:render.surface_and_shadows_ms": 81.0829
+      },
+      "binary_sha256": "3870c25b7bca2b6e3bf02de04c08fe46433180dcac036215936b1927cdbea868",
+      "config_sha256": "81499ac1c8b1edd55953c9fe2702e03535e502b2b2f8cbc2519927f2044d62ba",
+      "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+    },
+    "invariants-static-long": {
+      "last_frames": 30,
+      "medians_ms": {
+        "frame_ms": 455.6539,
+        "cpu_ms": 4.1859,
+        "gpu_scope:render.scene_classify_and_raster_ms": 380.0873,
+        "gpu_scope:render.scene_overlays_ms": 69.61175,
+        "gpu_scope:render.surface_and_shadows_ms": 0.0064
+      },
+      "binary_sha256": "2892ab7cbfd7f5c7964c43d17d62f61baee4f1d4aac55b74e129dcc637fdae79",
+      "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+      "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+    }
+  },
+  "scope": "No cloud quality downgrade. Diagnostic effect toggles are not accepted quality candidates. Streaming residency differs with wall cadence; full-frame profiles are not isolated causal A/B. No reference parity or blind preference result. No main merge. Eight preserved user/Gemini changes remain unstaged.",
+  "archive": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-cloud-cost-fresnel-evidence-2026-10-29.zip",
+    "sha256": "e7b9fe2bb847d8114dc5d1de9541869703966fe51d53b90a78eb970081acb413",
+    "bytes": 11081197,
+    "members": 168,
+    "crc_and_manifest_verified": true
+  }
+}

@@ -450,6 +450,57 @@ pub fn plan_with_terrain(
     result
 }
 
+impl Plan {
+    /// Explicit group-3 ABI shared by mesh sidedness pipeline variants.
+    pub(crate) fn layout_entries(&self) -> Vec<wgpu::BindGroupLayoutEntry> {
+        use crate::mesh::layout::{buffer, entry, sampler, texture};
+        use wgpu::{BindingType, ShaderStages, TextureViewDimension};
+        let mut entries = vec![entry(
+            0,
+            ShaderStages::FRAGMENT,
+            BindingType::AccelerationStructure {
+                vertex_return: false,
+            },
+        )];
+        if self.reflections {
+            entries.extend((1..=5).map(|binding| buffer(binding, ShaderStages::FRAGMENT, false)));
+            if self.terrain.is_some() {
+                entries.extend([
+                    buffer(6, ShaderStages::FRAGMENT, false),
+                    buffer(7, ShaderStages::FRAGMENT, false),
+                    texture(8, TextureViewDimension::D2Array),
+                    sampler(9),
+                ]);
+            }
+        }
+        let base = if self.reflections && self.terrain.is_some() {
+            10
+        } else {
+            6
+        };
+        for i in 0..self.textures.len() as u32 {
+            entries.extend([
+                texture(base + i * 2, TextureViewDimension::D2),
+                sampler(base + i * 2 + 1),
+            ]);
+        }
+        if self.reflections
+            && self
+                .terrain
+                .as_ref()
+                .is_some_and(|(terrain, _)| terrain.ocean.is_some())
+        {
+            let base = base + self.textures.len() as u32 * 2;
+            entries.extend([
+                buffer(base, ShaderStages::FRAGMENT, true),
+                texture(base + 1, TextureViewDimension::D2Array),
+                sampler(base + 2),
+            ]);
+        }
+        entries
+    }
+}
+
 /// Shader include for the RT build: `enable` directive, resolved constants,
 /// then the hook implementation. Must be composed before any other WGSL.
 pub fn shader(plan: &Plan) -> String {

@@ -143,3 +143,5 @@ depth and is not a valid fix. This transport change leaves that gate intact.
 
 Whole-frame moving-camera time, RT stability, independent reference preference,
 and full replacement acceptance remain open.
+
+The [sidedness/demand investigation](86_NATIVE_OPAQUE_SIDEDNESS.md) extends this checkpoint. A longer fixed-source coastal replay confirmed topology convergence after the earlier 30-warmup window. Publication invalidation remains; the next changes target opaque fragment execution and repeated identical CPU selection.

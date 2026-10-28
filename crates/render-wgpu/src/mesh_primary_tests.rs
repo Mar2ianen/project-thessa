@@ -11,6 +11,16 @@ fn capture(
     target: &OffscreenTarget,
     cull: bool,
 ) -> (Vec<u8>, Vec<u8>) {
+    capture_msaa(mesh, backend, target, cull, None)
+}
+
+fn capture_msaa(
+    mesh: &MeshRenderer,
+    backend: &Backend,
+    target: &OffscreenTarget,
+    cull: bool,
+    msaa: Option<&crate::msaa::SceneMsaa>,
+) -> (Vec<u8>, Vec<u8>) {
     let width = 257u32;
     let height = 193u32;
     let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
@@ -25,9 +35,9 @@ fn capture(
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("primary-oracle"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target.color,
+                view: msaa.map_or(&target.color, |m| &m.color),
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target: msaa.map(|_| &target.color),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.05,
@@ -39,7 +49,7 @@ fn capture(
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &target.depth,
+                view: msaa.map_or(&target.depth, |m| m.depth()),
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
@@ -51,6 +61,9 @@ fn capture(
             multiview_mask: None,
         });
         mesh.draw_with_visibility(&mut pass, cull);
+    }
+    if let Some(msaa) = msaa {
+        msaa.resolve_depth(&mut encoder, &target.depth);
     }
     encoder.copy_texture_to_buffer(
         target.depth_texture.as_image_copy(),
@@ -312,4 +325,176 @@ fn primary_frustum_matches_full_draws_at_large_origins_and_jitter() {
     eprintln!(
         "exact primary colour/depth: indirect_supported={batch_supported}, witnessed_batching={witnessed_batching}"
     );
+}
+
+#[test]
+#[ignore = "software Vulkan: fixed-function sidedness versus original fragment discard"]
+fn fixed_sidedness_matches_fragment_discard() {
+    compare_sidedness(false);
+}
+#[test]
+#[ignore = "physical GPU: fixed-function sidedness colour/depth with 1x/4x MSAA"]
+fn physical_fixed_sidedness_matches_fragment_discard() {
+    compare_sidedness(true);
+}
+fn compare_sidedness(physical: bool) {
+    assert_eq!(
+        std::path::Path::new("/dev/dri/renderD128").exists(),
+        physical
+    );
+    let backend = Backend::bring_up().unwrap();
+    assert_eq!(
+        backend.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
+        !physical
+    );
+    eprintln!("sidedness adapter={:?}", backend.adapter.get_info());
+    let target = OffscreenTarget::new(&backend, 257, 193).unwrap();
+    let lights = SurfaceLighting {
+        ambient_lux: [0.5, 0.6, 0.7, 0.0],
+        ..Default::default()
+    };
+    let mut comparisons = 0;
+    for sample_count in [1, 4] {
+        for shadows in [false, true] {
+            let settings = thessa_graphics::ResolvedGraphicsSettings {
+                raster_msaa_samples: sample_count,
+                shadow_enabled: shadows,
+                native_shadow_map_size: 64,
+                ..Default::default()
+            };
+            let atlas = crate::shadows::ShadowAtlas::new(&backend, &settings).unwrap();
+            let msaa = crate::msaa::SceneMsaa::new(
+                &backend,
+                &settings,
+                OffscreenTarget::FORMAT,
+                [257, 193],
+            )
+            .unwrap();
+            for sidedness in [[false, false], [true, true], [false, true]] {
+                let materials: Vec<_> = sidedness
+                    .into_iter()
+                    .map(|double_sided| Material {
+                        double_sided,
+                        base_texture: Some(0),
+                        normal_texture: Some(1),
+                        metallic: 0.0,
+                        roughness: 0.8,
+                        ..Default::default()
+                    })
+                    .collect();
+                let primitives = (0..8)
+                    .map(|i| {
+                        let x = -0.9 + (i % 4) as f32 * 0.46;
+                        let y = -0.8 + (i / 4) as f32 * 0.8;
+                        thessa_render_core::mesh::Primitive {
+                            vertices: [[x, y, 0.35], [x + 0.42, y, 0.35], [x + 0.2, y + 0.7, 0.35]]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(j, position)| Vertex {
+                                    position,
+                                    normal: [0.1, 0.2, 0.9746794],
+                                    uv: [[0.0, 0.0], [4.0, 0.0], [0.0, 4.0]][j],
+                                })
+                                .collect(),
+                            indices: if i % 2 == 0 {
+                                vec![0, 1, 2]
+                            } else {
+                                vec![2, 1, 0]
+                            },
+                            ambient_visibility: vec![0.6, 0.8, 0.9],
+                            material: (i / 2) % 2,
+                        }
+                    })
+                    .collect();
+                let source = MeshAsset {
+                    primitives,
+                    materials,
+                    images: vec![
+                        Image {
+                            width: 2,
+                            height: 2,
+                            rgba8: vec![
+                                45, 128, 60, 255, 210, 160, 80, 255, 60, 80, 150, 255, 140, 190,
+                                110, 255,
+                            ],
+                        },
+                        Image {
+                            width: 2,
+                            height: 2,
+                            rgba8: vec![
+                                120, 140, 250, 255, 180, 110, 245, 255, 90, 120, 240, 255, 160,
+                                140, 220, 255,
+                            ],
+                        },
+                    ],
+                    textures: vec![
+                        Texture {
+                            image: 0,
+                            wrap: [Wrap::Repeat; 2],
+                            linear: true,
+                            min_linear: true,
+                        },
+                        Texture {
+                            image: 1,
+                            wrap: [Wrap::Repeat; 2],
+                            linear: true,
+                            min_linear: true,
+                        },
+                    ],
+                };
+                let config = || SurfaceSettings {
+                    format: OffscreenTarget::FORMAT,
+                    capacity: 1,
+                    quality: thessa_graphics::Quality::High,
+                    reflections: true,
+                    shadows: atlas.as_ref(),
+                    ray_tracing: Some(&settings),
+                };
+                let mut fixed =
+                    MeshRenderer::build_surface(&backend, &source, config(), None, false, true)
+                        .unwrap();
+                let mut reference =
+                    MeshRenderer::build_surface(&backend, &source, config(), None, false, false)
+                        .unwrap();
+                assert_eq!(
+                    fixed.single_sided_pipeline.is_some(),
+                    sidedness == [false, true]
+                );
+                for origin in [DVec3::ZERO, DVec3::new(6.4e6, -8.2e8, 1.1e9)] {
+                    let view = ViewParams {
+                        world_position_m: origin,
+                        world_from_view: DMat4::from_translation(origin),
+                        clip_from_view: DMat4::IDENTITY,
+                        exposure: 1.0,
+                    };
+                    let instances = [MeshInstance {
+                        position_m: origin,
+                        rotation: DQuat::IDENTITY,
+                        scale: 1.0,
+                    }];
+                    fixed
+                        .update_selected(&backend, &view, &lights, &instances, None)
+                        .unwrap();
+                    reference
+                        .update_selected(&backend, &view, &lights, &instances, None)
+                        .unwrap();
+                    let a = capture_msaa(&fixed, &backend, &target, true, msaa.as_ref());
+                    let b = capture_msaa(&reference, &backend, &target, true, msaa.as_ref());
+                    assert_eq!(
+                        a, b,
+                        "fixed sidedness changed image: samples={sample_count} shadows={shadows} sidedness={sidedness:?}"
+                    );
+                    assert!(
+                        a.1.as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|x| f32::from_le_bytes(*x) < 1.0)
+                    );
+                    comparisons += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(comparisons, 24);
+    eprintln!("sidedness complete colour/depth comparisons={comparisons} exact=true");
 }

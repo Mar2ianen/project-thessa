@@ -1,6 +1,6 @@
 //! The existing client's selection, spawn and material dependency policies.
 use glam::{DMat4, DVec3};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use thessa_worldgen_rocky::{
     field::PlanetField,
     lod::{self, TileKey},
@@ -18,8 +18,29 @@ pub struct SelectionView {
     pub material_clip_from_eye: Option<DMat4>,
 }
 
+impl PartialEq for SelectionView {
+    fn eq(&self, other: &Self) -> bool {
+        self.eye == other.eye
+            && self.stream_origin == other.stream_origin
+            && self.forward == other.forward
+            && self.radius == other.radius
+            && self.material_clip_from_eye == other.material_clip_from_eye
+            && self.frustum.map(|f| (f.forward, f.cos_limit))
+                == other.frustum.map(|f| (f.forward, f.cos_limit))
+    }
+}
+
+struct SelectionMemo {
+    source: Arc<PlanetField>,
+    view: SelectionView,
+    policy: SelectionPolicy,
+    exact_cover: bool,
+    detail_bias: f64,
+    previous_fine: Vec<TileKey>,
+}
+
 /// Visual/cache budgets, not simulation laws. Defaults preserve the client.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct SelectionPolicy {
     pub coarse_level: u8,
     pub coarse_budget: usize,
@@ -44,6 +65,7 @@ pub struct SelectionHistory {
     stream_origin: DVec3,
     forward: DVec3,
     valid: bool,
+    memo: Option<SelectionMemo>,
     pub eye_speed_mps: f64,
 }
 
@@ -62,7 +84,7 @@ impl SelectionHistory {
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
-        field: &PlanetField,
+        field: &Arc<PlanetField>,
         view: SelectionView,
         now_s: f64,
         previous_fine: &[TileKey],
@@ -82,6 +104,26 @@ impl SelectionHistory {
             return None;
         }
         let detail_bias = self.detail_bias();
+        // Preserve the sampling/debounce clock even when immutable demand is
+        // reused, so future motion never averages over the whole idle period.
+        self.at = now_s;
+        self.eye = view.eye;
+        self.stream_origin = view.stream_origin;
+        self.forward = view.forward.normalize_or_zero();
+        self.valid = true;
+        if !empty
+            && self.memo.as_ref().is_some_and(|memo| {
+                Arc::ptr_eq(&memo.source, field)
+                    && memo.view == view
+                    && memo.policy == policy
+                    && memo.exact_cover == exact_cover
+                    && memo.detail_bias == detail_bias
+                    && memo.previous_fine == previous_fine
+            })
+        {
+            return None;
+        }
+
         let mut wanted = lod::select_tiles_with_height_and_frustum(
             view.eye.to_array(),
             view.radius,
@@ -107,11 +149,16 @@ impl SelectionHistory {
         if exact_cover {
             wanted = complete_terrain_cover(&wanted);
         }
-        self.at = now_s;
-        self.eye = view.eye;
-        self.stream_origin = view.stream_origin;
-        self.forward = view.forward.normalize_or_zero();
-        self.valid = true;
+        // Holding the Arc pins the immutable recipe, not an address that could
+        // be reused after source replacement. Hysteresis input is part of the key.
+        self.memo = Some(SelectionMemo {
+            source: field.clone(),
+            view,
+            policy,
+            exact_cover,
+            detail_bias,
+            previous_fine: previous_fine.to_vec(),
+        });
         Some(Demand { wanted, fine })
     }
 }
@@ -355,4 +402,104 @@ pub fn material_build_dependency(
         next = next.parent().expect("material ancestor");
     }
     next
+}
+
+#[cfg(test)]
+mod memo_tests {
+    use super::*;
+
+    #[test]
+    fn immutable_demand_reuse_matches_uncached_selection_and_all_input_changes() {
+        let source = crate::tests::field();
+        let replacement = Arc::new(
+            PlanetField::build(source.params.clone(), vec![], vec![], vec![], vec![]).unwrap(),
+        );
+        let mut cached = SelectionHistory::default();
+        let mut reference = SelectionHistory::default();
+        let mut view = crate::tests::view();
+        let mut policy = SelectionPolicy {
+            coarse_level: 2,
+            coarse_budget: 24,
+            fine_level: 4,
+            fine_budget: 48,
+        };
+        let mut fine = Vec::new();
+        let mut wanted = Vec::new();
+        let mut hits = 0;
+        for tick in 0..120 {
+            match tick {
+                24 => view.eye.x += 1.0,
+                36 => view.forward = DVec3::new(0.2, 0.0, -1.0).normalize(),
+                48 => {
+                    view.frustum = Some(lod::SelectionFrustum {
+                        forward: view.forward.to_array(),
+                        cos_limit: 0.6,
+                    })
+                }
+                60 => view.material_clip_from_eye = Some(DMat4::IDENTITY),
+                72 => policy.fine_budget = 60,
+                84 => view.stream_origin.x += 50.0,
+                _ => {}
+            }
+            let field = if tick < 96 { &source } else { &replacement };
+            let exact_cover = tick < 108;
+            let now = tick as f64 * 0.3;
+            reference.memo = None;
+            let a = cached.update(field, view, now, &fine, tick == 0, exact_cover, policy);
+            let b = reference.update(field, view, now, &fine, tick == 0, exact_cover, policy);
+            if let Some(b) = b {
+                if let Some(a) = a {
+                    assert_eq!((&a.fine, &a.wanted), (&b.fine, &b.wanted), "tick={tick}");
+                } else {
+                    assert_eq!(
+                        (&fine, &wanted),
+                        (&b.fine, &b.wanted),
+                        "cached demand went stale at tick={tick}"
+                    );
+                    hits += 1;
+                }
+                fine = b.fine;
+                wanted = b.wanted;
+            } else {
+                assert!(a.is_none(), "debounce changed at tick={tick}");
+            }
+            assert_eq!(cached.detail_bias(), reference.detail_bias());
+        }
+        assert!(
+            hits >= 8,
+            "must witness reuse, not just matching recomputations: {hits}"
+        );
+        assert!(cached.memo.as_ref().unwrap().previous_fine.len() <= 60);
+    }
+
+    #[test]
+    fn empty_demand_still_bootstraps_and_memo_pins_immutable_source() {
+        let mut field = crate::tests::field();
+        let mut history = SelectionHistory::default();
+        let policy = SelectionPolicy {
+            coarse_level: 1,
+            coarse_budget: 12,
+            fine_level: 2,
+            fine_budget: 24,
+        };
+        let view = crate::tests::view();
+        let a = history
+            .update(&field, view, 0.0, &[], true, true, policy)
+            .unwrap();
+        let b = history
+            .update(&field, view, 1.0, &a.fine, false, true, policy)
+            .unwrap();
+        assert_eq!(a.fine, b.fine);
+        assert!(
+            history
+                .update(&field, view, 2.0, &b.fine, false, true, policy)
+                .is_none()
+        );
+        assert!(
+            history
+                .update(&field, view, 3.0, &b.fine, true, true, policy)
+                .is_some()
+        );
+        assert!(Arc::get_mut(&mut field).is_none());
+    }
 }

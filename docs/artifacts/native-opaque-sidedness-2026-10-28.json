@@ -1,0 +1,2329 @@
+{
+  "baseline": "58dffc04af331ef4a418cd88a5aeb168a1e71969",
+  "scope": "Opaque fixed-function material sidedness and exact immutable selection memo. No terrain topology/quality, source geometry, lighting samples or graphics-profile reduction.",
+  "source_manifest_sha256": "587c9d5e7bcad54175ae596c9e3f6f5eaeb9c6c86ea0ed02ec475455a045a8cd",
+  "release_sha256": "0bd867dd5a780e8ebd4d1ae2b687ad9a89060cf662b6344404c7bddd0900da5a",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.6570621760329232
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-core",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-terrain-native",
+        "-p",
+        "thessa-worldgen-rocky",
+        "-p",
+        "thessa-terrain-stream",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 6.810831670998596
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 126.28712798201013
+    },
+    {
+      "name": "graphics-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.140493126004003
+    },
+    {
+      "name": "render-core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.21249177202116698
+    },
+    {
+      "name": "caster-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "mesh_visibility"
+      ],
+      "exit_code": 0,
+      "seconds": 1.771466507925652
+    },
+    {
+      "name": "worldgen-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--lib",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 67.12889221892692
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 1.545974100008607
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.05207942705601454
+    },
+    {
+      "name": "shadow-integration-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "unified_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 3.05297114897985
+    },
+    {
+      "name": "primary-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1042040289612487
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 95.40202171797864
+    },
+    {
+      "name": "stream-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-stream",
+        "--lib",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 7.696032208041288
+    },
+    {
+      "name": "ray-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "ray_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 1.4357755600940436
+    },
+    {
+      "name": "legacy-client-check",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-client"
+      ],
+      "exit_code": 0,
+      "seconds": 3.4363170459400862
+    },
+    {
+      "name": "mesh-fallback-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "mesh",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.6880615709815174
+    },
+    {
+      "name": "msaa-fallback-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "msaa",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.7419498160015792
+    },
+    {
+      "name": "physical-release-build",
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 101.4350587730296
+    }
+  ],
+  "cpu_cases": 557,
+  "software": {
+    "cases": [
+      "receiver-final",
+      "shadow-batch-final",
+      "primary-final",
+      "shadow-zero-final",
+      "plant-ground-final",
+      "reed-ground-final",
+      "combined-ground-final",
+      "coastal-final",
+      "sidedness-final"
+    ],
+    "scope": "Eight actual CPU-Vulkan render regressions and one dense command-only dropped-encoder probe. No physical GPU access."
+  },
+  "physical": {
+    "cases": [
+      "sidedness-final-physical",
+      "shadow-final-physical",
+      "plant-final-physical",
+      "coastal-final-physical",
+      "primary-final-physical",
+      "msaa-final-physical",
+      "ray-scene_ray_shadows_work_without_reflections_or_an_atlas",
+      "ray-shadow_only_terrain_blocks_primary_mesh_without_hit_tables",
+      "ray-reflected_ao_and_normal_maps_obey_the_existing_material_contract",
+      "ray-ocean_hits_use_shared_deformed_grid_and_spectral_normals_without_global_rebuilds",
+      "ray-miss_reproduces_the_raster_directional_field_exactly",
+      "ray-terrain_membership_is_independent_of_vehicle_participation_and_empty_tlas_is_safe"
+    ],
+    "scope": "Authorized physical Radeon Vulkan, tiny actual RT scenes and bounded coastal raster stages; not whole-coastal RT stability or game FPS."
+  },
+  "physical_sidedness": {
+    "comparisons": 24,
+    "equality": "Complete colour/depth, all single/all double/mixed, mapped normals and AO, 1x/4x MSAA, shadows on/off, two large origins. Same-build original fragment-discard reference."
+  },
+  "unchanged_images": [
+    {
+      "name": "coastal-final-physical.layer-0.depth",
+      "sha256": "b8a650e11d9ec4b0eb6f9affa4d7ebf29aa814c908dbf7d2d8f368c7c2b4dfb1",
+      "matches_previous_phase": "coastal-final-physical.layer-0.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-1.depth",
+      "sha256": "740ca33b5306218bfa4bbc248573647874b09031f6a07aad1bb604694d174367",
+      "matches_previous_phase": "coastal-final-physical.layer-1.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-2.depth",
+      "sha256": "f886ec29ce20a5effd8d88d94798a86fc4e62ee321d7c4cc5c0e5507619263af",
+      "matches_previous_phase": "coastal-final-physical.layer-2.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-3.depth",
+      "sha256": "bb46be0509c7c88d90f48fe564674ac6f1191e5edadb6b0f9ad9e28d341cbe7f",
+      "matches_previous_phase": "coastal-final-physical.layer-3.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-4.depth",
+      "sha256": "9a6f57e62c713ddbb02ed4f2f42ac40e0ad6340c49b5f8c94503f9e0868f10a5",
+      "matches_previous_phase": "coastal-final-physical.layer-4.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-5.depth",
+      "sha256": "a66af2d4d246022f3645e8f1d7bc0f6fc15bea6516f2fef3df151ddbfd589d8c",
+      "matches_previous_phase": "coastal-final-physical.layer-5.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-6.depth",
+      "sha256": "ecd0be3db9dd0c78345e500a8a9c625117d486c587c892cb04ed83865899ad50",
+      "matches_previous_phase": "coastal-final-physical.layer-6.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-7.depth",
+      "sha256": "01a21cf6ac46ad3bbaf3201edf2c3d48c69695994730db043c9f6010b80aec92",
+      "matches_previous_phase": "coastal-final-physical.layer-7.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-8.depth",
+      "sha256": "b0db80fbd62951d2be64ec477a6c1e6796f2a30c764288e6503c3c31c21192a2",
+      "matches_previous_phase": "coastal-final-physical.layer-8.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-9.depth",
+      "sha256": "f0669cb890e647ad832de17a82cf75d5f9794f1f8e6203e23a33697812ab96a7",
+      "matches_previous_phase": "coastal-final-physical.layer-9.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-10.depth",
+      "sha256": "a57da09189e35d56960d2137a844ba675fb82f53a3d267e60acd3515bc19781f",
+      "matches_previous_phase": "coastal-final-physical.layer-10.depth"
+    },
+    {
+      "name": "coastal-final-physical.layer-11.depth",
+      "sha256": "335a02179c324174a1646b2725f5e8f9ebe0753a746b37c1ae6868e5dab3a70e",
+      "matches_previous_phase": "coastal-final-physical.layer-11.depth"
+    },
+    {
+      "name": "plant-final-physical.full.depth",
+      "sha256": "bd40e1ed244fd64475df6def531c091bfcb4500dfe2b30f7fd91c324e9029b47",
+      "matches_previous_phase": "plant-final-physical.full.depth"
+    },
+    {
+      "name": "plant-final-physical.lod.depth",
+      "sha256": "ba9d2a2a82b94f4ebbfb140bffa66e9157c3f618c449bb95ef01c7b78873d090",
+      "matches_previous_phase": "plant-final-physical.lod.depth"
+    },
+    {
+      "name": "plant-final-physical.full.rgba",
+      "sha256": "3382c03367b3fa032dca157971a3035ac057043dd9d92c9fffe5a1f4a6b29971",
+      "matches_previous_phase": "plant-final-physical.full.rgba"
+    },
+    {
+      "name": "plant-final-physical.lod.rgba",
+      "sha256": "3382c03367b3fa032dca157971a3035ac057043dd9d92c9fffe5a1f4a6b29971",
+      "matches_previous_phase": "plant-final-physical.lod.rgba"
+    }
+  ],
+  "profiles": {
+    "baseline-static": {
+      "command": {
+        "command": [
+          "bwrap",
+          "--unshare-all",
+          "--die-with-parent",
+          "--ro-bind",
+          "/",
+          "/",
+          "--dev",
+          "/dev",
+          "--dir",
+          "/dev/dri",
+          "--dev-bind",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD128",
+          "--proc",
+          "/proc",
+          "--tmpfs",
+          "/tmp",
+          "--tmpfs",
+          "/run",
+          "--bind",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "--unsetenv",
+          "DISPLAY",
+          "--unsetenv",
+          "WAYLAND_DISPLAY",
+          "--setenv",
+          "XDG_RUNTIME_DIR",
+          "/tmp",
+          "--setenv",
+          "XDG_CACHE_HOME",
+          "/tmp",
+          "--setenv",
+          "VK_DRIVER_FILES",
+          "/usr/share/vulkan/icd.d/radeon_icd.json",
+          "--setenv",
+          "WGPU_BACKEND",
+          "vulkan",
+          "--setenv",
+          "VK_LOADER_LAYERS_DISABLE",
+          "*",
+          "--setenv",
+          "THESSA_WORKLOAD_OUTPUT",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/adapter.toml",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/frozen-gpu-baseline/native-depth-streams",
+          "--graphics",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/native-raster-vulkan.toml",
+          "--headless",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/baseline-static.png",
+          "--perf-capture",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/baseline-static.json",
+          "--width",
+          "1280",
+          "--height",
+          "720",
+          "--frames",
+          "30",
+          "--prestream-seconds",
+          "3",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--no-hud",
+          "--mute"
+        ],
+        "exit_code": 0,
+        "seconds": 87.4210015470162,
+        "binary_sha256": "2f94e5f997e34afdcce9e31a853f9841c1a6633eb594b6b8b1d245f1667ca965",
+        "binary_unchanged": true,
+        "kernel_gpu_fault_detected": false,
+        "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+        "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+      },
+      "summary": {
+        "all": {
+          "samples": 30,
+          "wall_p50_ms": 789.6315205,
+          "cpu_p50_ms": 88.11543350000001,
+          "stream_p50_ms": 67.675481,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.2285342178440094,
+            "render.motion_vectors": 0.007293858421325684,
+            "render.rt_as_build": 0.003887386081695557,
+            "render.scene_classify_and_raster": 553.8036337623024,
+            "render.scene_overlays": 61.25442416447068,
+            "render.surface_and_shadows": 89.01749434161759,
+            "render.temporal_resolve": 0.0013625889358520509,
+            "render.ui": 0.0059513075580596925
+          }
+        },
+        "last30": {
+          "samples": 30,
+          "wall_p50_ms": 789.6315205,
+          "cpu_p50_ms": 88.11543350000001,
+          "stream_p50_ms": 67.675481,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.2285342178440094,
+            "render.motion_vectors": 0.007293858421325684,
+            "render.rt_as_build": 0.003887386081695557,
+            "render.scene_classify_and_raster": 553.8036337623024,
+            "render.scene_overlays": 61.25442416447068,
+            "render.surface_and_shadows": 89.01749434161759,
+            "render.temporal_resolve": 0.0013625889358520509,
+            "render.ui": 0.0059513075580596925
+          }
+        }
+      },
+      "metadata": {
+        "format_version": 1,
+        "build": {
+          "commit": "unknown",
+          "version": "0.0.1",
+          "profile": "release"
+        },
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "display": {
+          "width": 1280,
+          "height": 720,
+          "resolution_scale": 1.0,
+          "vsync": false
+        },
+        "graphics": {
+          "preset": "High",
+          "ray_tracing": "Off",
+          "resolved": {
+            "active_cloud_representation": "volume_march",
+            "atmosphere_quality": "high",
+            "atmosphere_steps": "32",
+            "aurora": "true",
+            "aurora_intensity": "1.00",
+            "auto_exposure": "false",
+            "backend": "vulkan",
+            "bloom": "false",
+            "cloud_integrator": "march",
+            "cloud_layers": "2",
+            "cloud_shadows": "true",
+            "cloud_steps": "24",
+            "clouds": "true",
+            "clouds_volumetric": "true",
+            "eclipses": "true",
+            "exposure_ev100": "11.9",
+            "fleet_meshes": "true",
+            "fleet_min_pixels": "0.5",
+            "gas_giant": "true",
+            "gpu_scope_layout": "native-topology-v8-temporal",
+            "hdr": "true",
+            "instrument_layout": "aircraft",
+            "instruments": "true",
+            "local_haze_extinction_per_m": "0.00078",
+            "local_haze_height_m": "480",
+            "material_storage": "rgba_array",
+            "measurement_boundary": "Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained",
+            "multi_star": "true",
+            "native_aurora_depth_composition": "true",
+            "native_auto_exposure_applied": "false",
+            "native_background_star_count": "500",
+            "native_bloom_applied": "false",
+            "native_cloud_detail_inverse_mean": "16.987665",
+            "native_cloud_detail_period_m": "16384",
+            "native_cloud_extinction_per_m": "0.0006",
+            "native_cloud_ground_shadows": "true",
+            "native_cloud_layers": "2",
+            "native_cloud_mode": "deterministic_march",
+            "native_cloud_steps": "24",
+            "native_cloud_sun_steps": "4",
+            "native_diffuse_irradiance": "sh9",
+            "native_docking_clock": "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory",
+            "native_docking_fixture": "false",
+            "native_hdr": "true",
+            "native_hdr_target_bytes": "7372800",
+            "native_jitter_scope": "Halton primary terrain/meshes only; motion excludes sampling jitter; resolved only when native_taa=true; secondary view unchanged",
+            "native_jitter_submitted_frames": "0",
+            "native_map_open": "false",
+            "native_material_height_field_pages": "248",
+            "native_material_reference_height_m": "5.007671312155324",
+            "native_material_reference_height_source": "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height",
+            "native_material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 1, 5, 0, 26, 55, 92, 67, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_material_view_policy": "actual camera-relative clip planes for material priority; shared refinement and soil heights retain the wider prefetch cone; local reference-height sphere, not exact terrain occlusion",
+            "native_motion_scope": "render.motion_vectors; stored opaque depth + alpha mask, before temporal resolve and translucent overlays",
+            "native_motion_target_bytes": "0",
+            "native_motion_vectors": "false",
+            "native_night_lights_extent": "Some([256, 128])",
+            "native_night_lights_source": "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission",
+            "native_plume_enabled": "true",
+            "native_plume_light_applied": "false",
+            "native_plume_light_status": "unavailable",
+            "native_plume_quality": "Medium",
+            "native_plume_scope": "render.scene_overlays (includes depth-clipped plume color-load pass when active)",
+            "native_primary_jitter": "false",
+            "native_rt_reflection_estimator": "when admitted: one mirror ray per bounce; Medium/High pixel-cone texture mips, Low point sampling; resolved rt_reflection_samples is a requested policy value, not an active stochastic sample count",
+            "native_scene_format": "Rgba16Float",
+            "native_shadow_map_size": "1024",
+            "native_sky_layer_bytes": "10802286",
+            "native_stellar_transmission_steps": "32",
+            "native_surface_ground_candidates": "36864",
+            "native_surface_ground_litter_fragments": "1271",
+            "native_surface_ground_moss_clumps": "192",
+            "native_surface_ground_pebbles": "6692",
+            "native_surface_ground_puddles": "24",
+            "native_surface_ground_samples": "6692",
+            "native_surface_ground_water_basins": "99",
+            "native_surface_ground_water_samples": "6936",
+            "native_surface_ground_water_triangles": "1960",
+            "native_surface_ground_window": "1,18,96291,190216",
+            "native_surface_plants_accepted": "11320",
+            "native_surface_plants_candidate_visits": "237568",
+            "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path",
+            "native_surface_plants_draw_calls": "37",
+            "native_surface_plants_frame_upload_bytes": "576",
+            "native_surface_plants_instance_buffer_bytes": "1151488",
+            "native_surface_plants_preparation_cpu_ms": "36067.213782000006",
+            "native_surface_plants_preparation_job_pending": "false",
+            "native_surface_plants_preparation_jobs_discarded": "0",
+            "native_surface_plants_preparation_jobs_started": "0",
+            "native_surface_plants_prototype_payload_bytes": "46159116",
+            "native_surface_plants_prototype_texture_bytes": "3760128",
+            "native_surface_plants_publication_cpu_ms": "169.172836",
+            "native_surface_plants_reduced_instances": "5320",
+            "native_surface_plants_renderer_reused": "false",
+            "native_surface_plants_retained": "11297",
+            "native_surface_plants_rt_policy": "shared_policy_mesh_rt_not_requested",
+            "native_surface_plants_shadow_lod_budget_withheld": "false",
+            "native_surface_plants_shadow_payload_bytes": "1657464",
+            "native_surface_plants_status": "applied_survey_with_near_understory",
+            "native_surface_plants_submitted_instances": "2510",
+            "native_surface_plants_surface_samples": "36769",
+            "native_surface_plants_window": "1,14,6018,11888",
+            "native_surface_understory_accepted": "9254",
+            "native_surface_understory_candidate_visits": "200704",
+            "native_surface_understory_replaced_coarse_clumps": "23",
+            "native_surface_understory_scale_bins_lt_045_070_095": "[582, 3226, 3966, 1480]",
+            "native_surface_understory_surface_samples": "33884",
+            "native_surface_understory_window": "1,18,96291,190216",
+            "native_surface_understory_windows": "49",
+            "native_survey_actual_eye_agl_m": "1.9999999998080256",
+            "native_survey_analytic_source_signature": "{\"contract\":\"thessa-analytic-source-v1\",\"features\":[{\"depth_m\":2349.5093326841657,\"id\":\"impact-basin-0\",\"lat_deg\":-5.611596541472208,\"lon_deg\":-86.741608923232,\"radius_m\":670728.5139317274,\"rings\":3,\"rotation_rad\":1.365341254751748,\"seed\":4299262263303,\"type\":\"impact_basin\"},{\"branches\":5,\"height_m\":5679.889439148244,\"id\":\"mountain-arc-0\",\"lat_deg\":4.647510922061766,\"length_m\":1532864.9450967421,\"lon_deg\":139.81127503721996,\"rotation_rad\":2.5290233753316733,\"seed\":4307852197895,\"type\":\"mountain_range\",\"width_m\":222466.837886875},{\"depth_m\":3773.8667293768526,\"id\":\"rift-canyon-system-0\",\"lat_deg\":-34.934223816036635,\"length_m\":1211388.4332205707,\"lon_deg\":168.49336402903916,\"rotation_rad\":2.118791916227394,\"seed\":4316442132487,\"tributaries\":4,\"type\":\"canyon\",\"width_m\":48294.76911999528},{\"id\":\"volcanic-province-0\",\"lat_deg\":47.86630147148081,\"lon_deg\":100.11403583531336,\"radius_m\":368481.0400605489,\"rotation_rad\":1.989055179700376,\"seed\":4325032067079,\"shields\":5,\"swell_m\":1500.0,\"type\":\"volcanic_province\"},{\"caldera\":true,\"height_m\":6149.38330541827,\"id\":\"shield-volcano-caldera-complex-0\",\"lat_deg\":-7.032884310824679,\"lon_deg\":150.51871258236622,\"radius_m\":59608.420742161674,\"rotation_rad\":1.0101358774670681,\"seed\":4333622001671,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2494.939987870157,\"id\":\"shield-volcano-caldera-complex-1\",\"lat_deg\":54.81587954555761,\"lon_deg\":-18.58208950109981,\"radius_m\":108550.67808661085,\"rotation_rad\":2.801997445700702,\"seed\":4337916968966,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":3658.207481772792,\"id\":\"shield-volcano-caldera-complex-2\",\"lat_deg\":13.998006241326753,\"lon_deg\":-119.55929285521518,\"radius_m\":67158.90016444154,\"rotation_rad\":2.0138896552107335,\"seed\":4342211936261,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2192.9166327263783,\"id\":\"shield-volcano-caldera-complex-3\",\"lat_deg\":48.26829438100861,\"lon_deg\":163.69526988938696,\"radius_m\":104164.24214529483,\"rotation_rad\":0.16851277162734574,\"seed\":4346506903556,\"type\":\"shield_volcano\"},{\"central_peak\":true,\"depth_m\":3152.1822399979837,\"ejecta\":true,\"id\":\"large-crater-0\",\"lat_deg\":21.079552173077253,\"lon_deg\":154.262073452899,\"rim_radius_m\":166975.830902453,\"rotation_rad\":2.39530015317016,\"seed\":4355096838151,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1688.538019337118,\"ejecta\":true,\"id\":\"large-crater-1\",\"lat_deg\":-11.363366625036944,\"lon_deg\":97.69302333885284,\"rim_radius_m\":99796.9522167549,\"rotation_rad\":4.6197695405831105,\"seed\":4359391805446,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1097.57286807431,\"ejecta\":true,\"id\":\"large-crater-2\",\"lat_deg\":-54.642028082234326,\"lon_deg\":-129.56997834289052,\"rim_radius_m\":149480.05768304723,\"rotation_rad\":4.781017745878919,\"seed\":4363686772741,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":3797.2419500082224,\"ejecta\":true,\"id\":\"large-crater-3\",\"lat_deg\":-27.8627145167643,\"lon_deg\":-33.210530276221796,\"rim_radius_m\":85652.41770773251,\"rotation_rad\":2.9753754968536934,\"seed\":4367981740036,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3548.402636068368,\"ejecta\":true,\"id\":\"large-crater-4\",\"lat_deg\":8.475240252142132,\"lon_deg\":74.80912975072872,\"rim_radius_m\":80179.05934257718,\"rotation_rad\":2.715861788404917,\"seed\":4372276707331,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":2243.1701570914997,\"ejecta\":true,\"id\":\"large-crater-5\",\"lat_deg\":1.997874540204867,\"lon_deg\":1.7602131623214734,\"rim_radius_m\":222490.2183674398,\"rotation_rad\":0.4899131976719484,\"seed\":4376571674626,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3770.543728527618,\"ejecta\":true,\"id\":\"large-crater-6\",\"lat_deg\":34.55501627312763,\"lon_deg\":-165.83427844822586,\"rim_radius_m\":136588.42728659976,\"rotation_rad\":0.5137159009239954,\"seed\":4380866641921,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":2712.177871373579,\"ejecta\":true,\"id\":\"large-crater-7\",\"lat_deg\":37.185912516328514,\"lon_deg\":-151.44481496691077,\"rim_radius_m\":212499.3048996149,\"rotation_rad\":5.113250532254168,\"seed\":4385161609216,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1585.6021931919126,\"ejecta\":true,\"id\":\"large-crater-8\",\"lat_deg\":-9.107398211781671,\"lon_deg\":53.099146832342264,\"rim_radius_m\":50922.36067740218,\"rotation_rad\":3.41216311912966,\"seed\":4389456576527,\"type\":\"crater\"},{\"depth_m\":2914.3490762681154,\"id\":\"dry-plateau-salt-basin-complex-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":277048.2027214083,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"salt_basin\"},{\"height_m\":4980.204486880922,\"id\":\"dry-plateau-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":415572.3040821124,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"plateau\"},{\"branches\":5,\"height_m\":6500.0,\"id\":\"glaciated-mountain-coast-0\",\"lat_deg\":65.4462790807334,\"length_m\":775381.3699035968,\"lon_deg\":66.49874620724609,\"rotation_rad\":2.15302019854899,\"seed\":4406636445703,\"type\":\"mountain_range\",\"width_m\":200000.0},{\"chain_length_m\":792000.0625314456,\"id\":\"archipelago-0\",\"island_radius_m\":66000.00521095381,\"islands\":6,\"lat_deg\":5.023498070582697,\"lon_deg\":-111.45621074350521,\"rotation_rad\":5.066394269837036,\"seed\":4415226380295,\"type\":\"archipelago\"},{\"chain_length_m\":837730.918968984,\"id\":\"archipelago-1\",\"island_radius_m\":69810.909914082,\"islands\":6,\"lat_deg\":-48.581152830837034,\"lon_deg\":-95.36584812459955,\"rotation_rad\":1.4243915421658702,\"seed\":4419521347590,\"type\":\"archipelago\"},{\"chain_length_m\":784001.2544768354,\"id\":\"archipelago-2\",\"island_radius_m\":65333.43787306961,\"islands\":6,\"lat_deg\":-52.91079924315126,\"lon_deg\":-24.446332048461407,\"rotation_rad\":0.14037461842994395,\"seed\":4423816314885,\"type\":\"archipelago\"},{\"chain_length_m\":474055.97308147803,\"id\":\"archipelago-3\",\"island_radius_m\":39504.6644234565,\"islands\":6,\"lat_deg\":-10.742035717744578,\"lon_deg\":-85.90789468129934,\"rotation_rad\":2.9575526493107382,\"seed\":4428111282180,\"type\":\"archipelago\"},{\"chain_length_m\":301331.5471098434,\"id\":\"archipelago-4\",\"island_radius_m\":25110.962259153617,\"islands\":6,\"lat_deg\":-32.75091762701062,\"lon_deg\":107.6894988950521,\"rotation_rad\":3.2334339803195493,\"seed\":4432406249475,\"type\":\"archipelago\"}],\"landmarks\":[],\"params\":{\"anti_nereid_land_bias\":0.18,\"aridity\":0.45799999999999996,\"eclipse_strength\":0.28,\"glaciation\":0.2,\"height_max_m\":12000.0,\"height_min_m\":-8000.0,\"hydrology\":{\"allow_lakes\":true,\"closed_basin_salt_flats\":true,\"river_min_catchment_area_m2\":100000000000.0,\"route_rivers_downhill\":true},\"knobs\":{\"base_roughness_m\":176.0,\"canyon_strength\":0.16,\"crater_density\":0.22,\"erosion\":0.62,\"mountain_coverage\":0.18,\"volcanism\":0.18},\"macro_strength\":0.85,\"name\":\"thessa\",\"nereid_ocean_bias\":0.22,\"nominal_flux_w_m2\":0.146,\"ocean_target\":0.6000000000000001,\"polar_extent\":0.16,\"radius_m\":3200000.0,\"seed\":7,\"surface_climate\":{\"eclipse_cooling_strength\":0.28,\"elevation_cooling_strength\":0.65,\"evaporation_m_yr_at_278k\":0.6,\"geothermal_local_warming_strength\":0.25,\"high_cloud_wet_region_bias\":0.55,\"moisture_transport_m\":1200000.0,\"polar_cooling_strength\":0.7,\"precipitation_m_yr\":1.0,\"rainout_height_m\":1800.0,\"target_mean_temperature_k\":278.0},\"volcanism\":0.18},\"provinces\":[{\"flux_w_m2\":2.8538652437502945,\"lat_deg\":-27.508459281164882,\"lon_deg\":173.92937348485248,\"radius_m\":376033.021355505},{\"flux_w_m2\":4.682624323107745,\"lat_deg\":-13.733747765551328,\"lon_deg\":157.46270451988113,\"radius_m\":558965.7298969002},{\"flux_w_m2\":4.608210456189418,\"lat_deg\":-7.8042267717772145,\"lon_deg\":141.83153838350808,\"radius_m\":292148.6557443555},{\"flux_w_m2\":1.0395016202962264,\"lat_deg\":-16.399280184711078,\"lon_deg\":141.83037384020673,\"radius_m\":186224.0687637512},{\"flux_w_m2\":1.1321227508859957,\"lat_deg\":48.954248831567114,\"lon_deg\":116.51659157222068,\"radius_m\":98517.11661692621},{\"flux_w_m2\":0.8388875521068785,\"lat_deg\":-21.573105466111933,\"lon_deg\":-135.23230236359439,\"radius_m\":197708.46909618174},{\"flux_w_m2\":0.6006689583665864,\"lat_deg\":-2.5940765933032006,\"lon_deg\":59.27177267219415,\"radius_m\":185281.12300285388},{\"flux_w_m2\":1.0936508543162617,\"lat_deg\":-51.19427065925927,\"lon_deg\":-76.66499950986568,\"radius_m\":137460.76727166848},{\"flux_w_m2\":0.947811781757897,\"lat_deg\":-43.4448536439134,\"lon_deg\":-157.8643364528682,\"radius_m\":114628.32403567588},{\"flux_w_m2\":1.122013418540936,\"lat_deg\":13.310190671093075,\"lon_deg\":-8.499854759105485,\"radius_m\":181874.54427263595},{\"flux_w_m2\":0.6549438811602071,\"lat_deg\":22.708057310395247,\"lon_deg\":74.45584708457211,\"radius_m\":109103.9125539377}],\"sea_offset_m\":535.8754401220891,\"tectonics\":[],\"temperature_offset_k\":-5.190961895703083}",
+            "native_survey_distance_m": "80",
+            "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+            "native_survey_eye_ground_datum_m": "5.007671312155324",
+            "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+            "native_survey_fov_y_rad": "0.9",
+            "native_survey_frozen_erosion_attached": "true",
+            "native_survey_ground_min_wavelength_m": "1",
+            "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+            "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_near_m": "0.1",
+            "native_survey_requested_eye_agl_m": "2",
+            "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+            "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+            "native_taa": "false",
+            "native_taa_global_reset_frames": "0",
+            "native_taa_history_age_limit": "0",
+            "native_taa_neighborhood_width": "0",
+            "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+            "native_taa_submitted_frames": "0",
+            "native_taa_target_bytes": "0",
+            "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+            "native_terrain_environment_samples": "16",
+            "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections",
+            "native_terrain_resident_height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 37, 70, 96, 80, 85, 86, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_tonemapping": "pbr_neutral",
+            "navball_atlas_width": "0",
+            "navball_diameter_points": "320",
+            "navball_renderer": "analytic",
+            "night_lights": "true",
+            "note_0": "RT participation flags ignored while ray tracing is off",
+            "note_1": "native shadow atlas memory budget resolves map size to 1024",
+            "ocean": "true",
+            "ocean_geometry_distance_m": "300",
+            "ocean_geometry_patches": "32",
+            "ocean_size": "128",
+            "plume": "true",
+            "preset": "custom",
+            "raster_msaa_samples": "4",
+            "ray_tracing": "off",
+            "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 48\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nterrain_ground_puddles = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"vulkan\"\nray_tracing = \"off\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 11.95\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.00078\nlocal_haze_height_m = 480.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 32\ndensity_scale = 1.42\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.38\nopacity = 0.42\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 64\nmax_instances = 32768\nreflection_bounces = 1\nray_bias_m = 0.0001\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmesh_lod_error_texels = 0.5\nreceiver_culling = true\nraster_sample_culling = true\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+            "resolution_scale": "1.000",
+            "rt_max_distance_m": "500000",
+            "rt_max_instances": "32768",
+            "rt_reflection_bounces": "1",
+            "rt_scene_memory_bytes": "67108864",
+            "settings": "ResolvedGraphicsSettings { surface_plants_enabled: true, surface_plants_density_scale: 1.0, surface_plants_max_candidates: 36864, surface_plants_max_items: 36864, surface_plants_detail_distance_m: 48.0, surface_understory_enabled: true, surface_understory_max_candidates: 200704, surface_understory_max_items: 200704, terrain_ground_pebbles_density_scale: 1.0, terrain_ground_relief_max_level: 22, terrain_ground_pebbles_max_candidates: 36864, terrain_ground_pebbles_max_items: 36864, terrain_topology: ResolvedTerrainTopology { capacity: 131072, waves: 4, split_area_px: 64.0, merge_area_px: 8.0 }, instruments: ResolvedInstruments { enabled: true, layout: Aircraft, renderer: Analytic, diameter_points: 320, atlas_width: 0 }, ocean: OceanSettings { enabled: true, quality: High, wind_speed_m_s: 10.0, wind_direction_rad: 0.0, significant_height_m: 2.0, depth_m: 100.0, seed: 17, geometry_patches: 32, geometry_distance_m: 300.0 }, ocean_size: 128, rt_scene_memory_bytes: 67108864, rt_max_instances: 32768, rt_reflection_bounces: 1, rt_reflection_samples: 4, rt_ray_bias_m: 0.0001, surface_quality: High, terrain_normal_maps: true, terrain_ground_detail: true, terrain_ground_puddles: true, terrain_material_anisotropy: 16, specular_reflections: true, native_shadow_map_size: 1024, shadow_filter_radius: 2, shadow_mesh_command_budget_bytes: 16777216, fleet_meshes: true, fleet_min_pixels: 0.5, preset_label: \"custom\", backend: ResolvedBackend { name: \"vulkan\" }, terrain: GpuMesh, terrain_mesh_cells: 24, material_storage: RgbaArray, ray_tracing: Off, resolution_scale: 1.0, raster_msaa_samples: 4, tone_mapping: PbrNeutral, vsync: false, hdr: true, temporal_motion_vectors: false, temporal_jitter: false, temporal_taa: false, temporal_quality: High, bloom: false, exposure_ev100: 11.95, auto_exposure: false, atmosphere_enabled: true, atmosphere_quality: High, atmosphere_steps: 32, aerial_perspective: true, local_haze_extinction_per_m: 0.00078, local_haze_height_m: 480.0, multiple_scattering: true, eclipses: true, multi_star: true, limb_scattering: true, sky_dome: true, stars: true, stars_quality: High, atmosphere_density_scale: 1.42, airglow: true, aurora_shell: true, aurora_lighting: false, aurora_quality: Low, aurora_intensity: 1.0, aurora_animate: true, clouds_enabled: true, clouds_quality: High, cloud_integrator: March, clouds_volumetric: true, clouds_steps: 24, clouds_layers: 2, clouds_coverage: 0.38, clouds_opacity: 0.42, clouds_animate: true, clouds_cast_shadows: true, night_lights_enabled: true, night_lights_quality: Medium, night_lights_intensity: 1.0, gas_giant_enabled: true, gas_giant_quality: Medium, gas_giant_animate: true, gas_giant_limb: true, plume_enabled: true, plume_quality: Medium, plume_diamonds: true, plume_flicker: true, plume_light: true, rt_terrain: false, rt_vehicles: false, rt_landmarks: false, rt_atmosphere_queries: false, rt_clouds: false, rt_max_distance_m: 500000.0, shadow_enabled: true, shadow_cascades: 4, shadow_max_distance_m: 12000.0, shadow_first_cascade_distance_m: Some(25.0), shadow_mesh_lod_error_texels: 0.5, shadow_receiver_culling: true, shadow_raster_sample_guard_texels: Some(0.0625), shadow_map_size: 4096, shadow_normal_bias_m: 0.001, notes: [\"RT participation flags ignored while ray tracing is off\", \"native shadow atlas memory budget resolves map size to 1024\"] }",
+            "shadow_cascades": "4",
+            "shadow_filter_radius": "2",
+            "shadow_first_cascade_distance_m": "25",
+            "shadow_map_size": "4096",
+            "shadow_max_distance_m": "12000",
+            "shadow_mesh_command_budget_bytes": "16777216",
+            "shadow_mesh_lod_error_texels": "0.5",
+            "shadow_raster_sample_guard_texels": "0.0625",
+            "shadow_receiver_culling": "true",
+            "shadows": "true",
+            "specular_reflections": "true",
+            "stars": "true",
+            "stars_quality": "high",
+            "surface_plants_density_scale": "1",
+            "surface_plants_detail_distance_m": "48",
+            "surface_plants_enabled": "true",
+            "surface_plants_max_candidates": "36864",
+            "surface_plants_max_items": "36864",
+            "surface_quality": "high",
+            "surface_understory_enabled": "true",
+            "surface_understory_max_candidates": "200704",
+            "surface_understory_max_items": "200704",
+            "temporal_jitter": "false",
+            "temporal_motion_vectors": "false",
+            "temporal_quality": "High",
+            "temporal_taa": "false",
+            "terrain": "gpu_mesh",
+            "terrain_ground_detail": "true",
+            "terrain_ground_pebbles_density_scale": "1",
+            "terrain_ground_pebbles_max_candidates": "36864",
+            "terrain_ground_pebbles_max_items": "36864",
+            "terrain_ground_puddles": "true",
+            "terrain_ground_relief_max_level": "22",
+            "terrain_material_anisotropy": "16",
+            "terrain_material_max_level": "24",
+            "terrain_mesh_cells": "24",
+            "terrain_normal_maps": "true",
+            "terrain_normal_mip_bias": "0",
+            "terrain_topology_capacity": "131072",
+            "terrain_topology_merge_area_px": "8",
+            "terrain_topology_split_area_px": "64",
+            "terrain_topology_waves": "4",
+            "tone_mapping": "pbr_neutral",
+            "vsync": "false"
+          }
+        },
+        "scenario": "terrain-native vehicle_preview=false live_flight=false server_flight=false sweep=false hud=false prestream_s=3 sim_step_s=0 clock=None",
+        "window_frames": 30
+      },
+      "screenshot_sha256": "0bcb2c89e0af52927d3b38fe94f4dce8116422e3588e6ca133cf2ca2664bb80f"
+    },
+    "sidedness-static": {
+      "command": {
+        "command": [
+          "bwrap",
+          "--unshare-all",
+          "--die-with-parent",
+          "--ro-bind",
+          "/",
+          "/",
+          "--dev",
+          "/dev",
+          "--dir",
+          "/dev/dri",
+          "--dev-bind",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD128",
+          "--proc",
+          "/proc",
+          "--tmpfs",
+          "/tmp",
+          "--tmpfs",
+          "/run",
+          "--bind",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "--unsetenv",
+          "DISPLAY",
+          "--unsetenv",
+          "WAYLAND_DISPLAY",
+          "--setenv",
+          "XDG_RUNTIME_DIR",
+          "/tmp",
+          "--setenv",
+          "XDG_CACHE_HOME",
+          "/tmp",
+          "--setenv",
+          "VK_DRIVER_FILES",
+          "/usr/share/vulkan/icd.d/radeon_icd.json",
+          "--setenv",
+          "WGPU_BACKEND",
+          "vulkan",
+          "--setenv",
+          "VK_LOADER_LAYERS_DISABLE",
+          "*",
+          "--setenv",
+          "THESSA_WORKLOAD_OUTPUT",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/adapter.toml",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/frozen-gpu-baseline/native-fixed-sides",
+          "--graphics",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/native-raster-vulkan.toml",
+          "--headless",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/sidedness-static.png",
+          "--perf-capture",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/sidedness-static.json",
+          "--width",
+          "1280",
+          "--height",
+          "720",
+          "--frames",
+          "30",
+          "--prestream-seconds",
+          "3",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--no-hud",
+          "--mute"
+        ],
+        "exit_code": 0,
+        "seconds": 77.88364722603,
+        "binary_sha256": "1f7c1d2ffa147d4a018d0093418c064341f590be7759e6b1754431b8b66127f7",
+        "binary_unchanged": true,
+        "kernel_gpu_fault_detected": false,
+        "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+        "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+      },
+      "summary": {
+        "all": {
+          "samples": 30,
+          "wall_p50_ms": 549.9156155000001,
+          "cpu_p50_ms": 55.036823999999996,
+          "stream_p50_ms": 34.653402,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.2276926187953949,
+            "render.motion_vectors": 0.007293858421325684,
+            "render.rt_as_build": 0.004007614517211914,
+            "render.scene_classify_and_raster": 348.9638957233486,
+            "render.scene_overlays": 60.47947174527741,
+            "render.surface_and_shadows": 90.05131862055016,
+            "render.temporal_resolve": 0.0013625889358520509,
+            "render.ui": 0.006532411663055421
+          }
+        },
+        "last30": {
+          "samples": 30,
+          "wall_p50_ms": 549.9156155000001,
+          "cpu_p50_ms": 55.036823999999996,
+          "stream_p50_ms": 34.653402,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.2276926187953949,
+            "render.motion_vectors": 0.007293858421325684,
+            "render.rt_as_build": 0.004007614517211914,
+            "render.scene_classify_and_raster": 348.9638957233486,
+            "render.scene_overlays": 60.47947174527741,
+            "render.surface_and_shadows": 90.05131862055016,
+            "render.temporal_resolve": 0.0013625889358520509,
+            "render.ui": 0.006532411663055421
+          }
+        }
+      },
+      "metadata": {
+        "format_version": 1,
+        "build": {
+          "commit": "unknown",
+          "version": "0.0.1",
+          "profile": "release"
+        },
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "display": {
+          "width": 1280,
+          "height": 720,
+          "resolution_scale": 1.0,
+          "vsync": false
+        },
+        "graphics": {
+          "preset": "High",
+          "ray_tracing": "Off",
+          "resolved": {
+            "active_cloud_representation": "volume_march",
+            "atmosphere_quality": "high",
+            "atmosphere_steps": "32",
+            "aurora": "true",
+            "aurora_intensity": "1.00",
+            "auto_exposure": "false",
+            "backend": "vulkan",
+            "bloom": "false",
+            "cloud_integrator": "march",
+            "cloud_layers": "2",
+            "cloud_shadows": "true",
+            "cloud_steps": "24",
+            "clouds": "true",
+            "clouds_volumetric": "true",
+            "eclipses": "true",
+            "exposure_ev100": "11.9",
+            "fleet_meshes": "true",
+            "fleet_min_pixels": "0.5",
+            "gas_giant": "true",
+            "gpu_scope_layout": "native-topology-v8-temporal",
+            "hdr": "true",
+            "instrument_layout": "aircraft",
+            "instruments": "true",
+            "local_haze_extinction_per_m": "0.00078",
+            "local_haze_height_m": "480",
+            "material_storage": "rgba_array",
+            "measurement_boundary": "Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained",
+            "multi_star": "true",
+            "native_aurora_depth_composition": "true",
+            "native_auto_exposure_applied": "false",
+            "native_background_star_count": "500",
+            "native_bloom_applied": "false",
+            "native_cloud_detail_inverse_mean": "16.987665",
+            "native_cloud_detail_period_m": "16384",
+            "native_cloud_extinction_per_m": "0.0006",
+            "native_cloud_ground_shadows": "true",
+            "native_cloud_layers": "2",
+            "native_cloud_mode": "deterministic_march",
+            "native_cloud_steps": "24",
+            "native_cloud_sun_steps": "4",
+            "native_diffuse_irradiance": "sh9",
+            "native_docking_clock": "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory",
+            "native_docking_fixture": "false",
+            "native_hdr": "true",
+            "native_hdr_target_bytes": "7372800",
+            "native_jitter_scope": "Halton primary terrain/meshes only; motion excludes sampling jitter; resolved only when native_taa=true; secondary view unchanged",
+            "native_jitter_submitted_frames": "0",
+            "native_map_open": "false",
+            "native_material_height_field_pages": "248",
+            "native_material_reference_height_m": "5.007671312155324",
+            "native_material_reference_height_source": "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height",
+            "native_material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 1, 5, 1, 22, 58, 92, 67, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_material_view_policy": "actual camera-relative clip planes for material priority; shared refinement and soil heights retain the wider prefetch cone; local reference-height sphere, not exact terrain occlusion",
+            "native_motion_scope": "render.motion_vectors; stored opaque depth + alpha mask, before temporal resolve and translucent overlays",
+            "native_motion_target_bytes": "0",
+            "native_motion_vectors": "false",
+            "native_night_lights_extent": "Some([256, 128])",
+            "native_night_lights_source": "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission",
+            "native_plume_enabled": "true",
+            "native_plume_light_applied": "false",
+            "native_plume_light_status": "unavailable",
+            "native_plume_quality": "Medium",
+            "native_plume_scope": "render.scene_overlays (includes depth-clipped plume color-load pass when active)",
+            "native_primary_jitter": "false",
+            "native_rt_reflection_estimator": "when admitted: one mirror ray per bounce; Medium/High pixel-cone texture mips, Low point sampling; resolved rt_reflection_samples is a requested policy value, not an active stochastic sample count",
+            "native_scene_format": "Rgba16Float",
+            "native_shadow_map_size": "1024",
+            "native_sky_layer_bytes": "10802286",
+            "native_stellar_transmission_steps": "32",
+            "native_surface_ground_candidates": "36864",
+            "native_surface_ground_litter_fragments": "1271",
+            "native_surface_ground_moss_clumps": "192",
+            "native_surface_ground_pebbles": "6692",
+            "native_surface_ground_puddles": "24",
+            "native_surface_ground_samples": "6692",
+            "native_surface_ground_water_basins": "99",
+            "native_surface_ground_water_samples": "6936",
+            "native_surface_ground_water_triangles": "1960",
+            "native_surface_ground_window": "1,18,96291,190216",
+            "native_surface_plants_accepted": "11320",
+            "native_surface_plants_candidate_visits": "237568",
+            "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path",
+            "native_surface_plants_draw_calls": "37",
+            "native_surface_plants_frame_upload_bytes": "576",
+            "native_surface_plants_instance_buffer_bytes": "1151488",
+            "native_surface_plants_preparation_cpu_ms": "38936.295444999996",
+            "native_surface_plants_preparation_job_pending": "false",
+            "native_surface_plants_preparation_jobs_discarded": "0",
+            "native_surface_plants_preparation_jobs_started": "0",
+            "native_surface_plants_prototype_payload_bytes": "46159116",
+            "native_surface_plants_prototype_texture_bytes": "3760128",
+            "native_surface_plants_publication_cpu_ms": "327.34756300000004",
+            "native_surface_plants_reduced_instances": "5320",
+            "native_surface_plants_renderer_reused": "false",
+            "native_surface_plants_retained": "11297",
+            "native_surface_plants_rt_policy": "shared_policy_mesh_rt_not_requested",
+            "native_surface_plants_shadow_lod_budget_withheld": "false",
+            "native_surface_plants_shadow_payload_bytes": "1657464",
+            "native_surface_plants_status": "applied_survey_with_near_understory",
+            "native_surface_plants_submitted_instances": "2510",
+            "native_surface_plants_surface_samples": "36769",
+            "native_surface_plants_window": "1,14,6018,11888",
+            "native_surface_understory_accepted": "9254",
+            "native_surface_understory_candidate_visits": "200704",
+            "native_surface_understory_replaced_coarse_clumps": "23",
+            "native_surface_understory_scale_bins_lt_045_070_095": "[582, 3226, 3966, 1480]",
+            "native_surface_understory_surface_samples": "33884",
+            "native_surface_understory_window": "1,18,96291,190216",
+            "native_surface_understory_windows": "49",
+            "native_survey_actual_eye_agl_m": "1.9999999998080256",
+            "native_survey_analytic_source_signature": "{\"contract\":\"thessa-analytic-source-v1\",\"features\":[{\"depth_m\":2349.5093326841657,\"id\":\"impact-basin-0\",\"lat_deg\":-5.611596541472208,\"lon_deg\":-86.741608923232,\"radius_m\":670728.5139317274,\"rings\":3,\"rotation_rad\":1.365341254751748,\"seed\":4299262263303,\"type\":\"impact_basin\"},{\"branches\":5,\"height_m\":5679.889439148244,\"id\":\"mountain-arc-0\",\"lat_deg\":4.647510922061766,\"length_m\":1532864.9450967421,\"lon_deg\":139.81127503721996,\"rotation_rad\":2.5290233753316733,\"seed\":4307852197895,\"type\":\"mountain_range\",\"width_m\":222466.837886875},{\"depth_m\":3773.8667293768526,\"id\":\"rift-canyon-system-0\",\"lat_deg\":-34.934223816036635,\"length_m\":1211388.4332205707,\"lon_deg\":168.49336402903916,\"rotation_rad\":2.118791916227394,\"seed\":4316442132487,\"tributaries\":4,\"type\":\"canyon\",\"width_m\":48294.76911999528},{\"id\":\"volcanic-province-0\",\"lat_deg\":47.86630147148081,\"lon_deg\":100.11403583531336,\"radius_m\":368481.0400605489,\"rotation_rad\":1.989055179700376,\"seed\":4325032067079,\"shields\":5,\"swell_m\":1500.0,\"type\":\"volcanic_province\"},{\"caldera\":true,\"height_m\":6149.38330541827,\"id\":\"shield-volcano-caldera-complex-0\",\"lat_deg\":-7.032884310824679,\"lon_deg\":150.51871258236622,\"radius_m\":59608.420742161674,\"rotation_rad\":1.0101358774670681,\"seed\":4333622001671,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2494.939987870157,\"id\":\"shield-volcano-caldera-complex-1\",\"lat_deg\":54.81587954555761,\"lon_deg\":-18.58208950109981,\"radius_m\":108550.67808661085,\"rotation_rad\":2.801997445700702,\"seed\":4337916968966,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":3658.207481772792,\"id\":\"shield-volcano-caldera-complex-2\",\"lat_deg\":13.998006241326753,\"lon_deg\":-119.55929285521518,\"radius_m\":67158.90016444154,\"rotation_rad\":2.0138896552107335,\"seed\":4342211936261,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2192.9166327263783,\"id\":\"shield-volcano-caldera-complex-3\",\"lat_deg\":48.26829438100861,\"lon_deg\":163.69526988938696,\"radius_m\":104164.24214529483,\"rotation_rad\":0.16851277162734574,\"seed\":4346506903556,\"type\":\"shield_volcano\"},{\"central_peak\":true,\"depth_m\":3152.1822399979837,\"ejecta\":true,\"id\":\"large-crater-0\",\"lat_deg\":21.079552173077253,\"lon_deg\":154.262073452899,\"rim_radius_m\":166975.830902453,\"rotation_rad\":2.39530015317016,\"seed\":4355096838151,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1688.538019337118,\"ejecta\":true,\"id\":\"large-crater-1\",\"lat_deg\":-11.363366625036944,\"lon_deg\":97.69302333885284,\"rim_radius_m\":99796.9522167549,\"rotation_rad\":4.6197695405831105,\"seed\":4359391805446,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1097.57286807431,\"ejecta\":true,\"id\":\"large-crater-2\",\"lat_deg\":-54.642028082234326,\"lon_deg\":-129.56997834289052,\"rim_radius_m\":149480.05768304723,\"rotation_rad\":4.781017745878919,\"seed\":4363686772741,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":3797.2419500082224,\"ejecta\":true,\"id\":\"large-crater-3\",\"lat_deg\":-27.8627145167643,\"lon_deg\":-33.210530276221796,\"rim_radius_m\":85652.41770773251,\"rotation_rad\":2.9753754968536934,\"seed\":4367981740036,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3548.402636068368,\"ejecta\":true,\"id\":\"large-crater-4\",\"lat_deg\":8.475240252142132,\"lon_deg\":74.80912975072872,\"rim_radius_m\":80179.05934257718,\"rotation_rad\":2.715861788404917,\"seed\":4372276707331,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":2243.1701570914997,\"ejecta\":true,\"id\":\"large-crater-5\",\"lat_deg\":1.997874540204867,\"lon_deg\":1.7602131623214734,\"rim_radius_m\":222490.2183674398,\"rotation_rad\":0.4899131976719484,\"seed\":4376571674626,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3770.543728527618,\"ejecta\":true,\"id\":\"large-crater-6\",\"lat_deg\":34.55501627312763,\"lon_deg\":-165.83427844822586,\"rim_radius_m\":136588.42728659976,\"rotation_rad\":0.5137159009239954,\"seed\":4380866641921,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":2712.177871373579,\"ejecta\":true,\"id\":\"large-crater-7\",\"lat_deg\":37.185912516328514,\"lon_deg\":-151.44481496691077,\"rim_radius_m\":212499.3048996149,\"rotation_rad\":5.113250532254168,\"seed\":4385161609216,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1585.6021931919126,\"ejecta\":true,\"id\":\"large-crater-8\",\"lat_deg\":-9.107398211781671,\"lon_deg\":53.099146832342264,\"rim_radius_m\":50922.36067740218,\"rotation_rad\":3.41216311912966,\"seed\":4389456576527,\"type\":\"crater\"},{\"depth_m\":2914.3490762681154,\"id\":\"dry-plateau-salt-basin-complex-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":277048.2027214083,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"salt_basin\"},{\"height_m\":4980.204486880922,\"id\":\"dry-plateau-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":415572.3040821124,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"plateau\"},{\"branches\":5,\"height_m\":6500.0,\"id\":\"glaciated-mountain-coast-0\",\"lat_deg\":65.4462790807334,\"length_m\":775381.3699035968,\"lon_deg\":66.49874620724609,\"rotation_rad\":2.15302019854899,\"seed\":4406636445703,\"type\":\"mountain_range\",\"width_m\":200000.0},{\"chain_length_m\":792000.0625314456,\"id\":\"archipelago-0\",\"island_radius_m\":66000.00521095381,\"islands\":6,\"lat_deg\":5.023498070582697,\"lon_deg\":-111.45621074350521,\"rotation_rad\":5.066394269837036,\"seed\":4415226380295,\"type\":\"archipelago\"},{\"chain_length_m\":837730.918968984,\"id\":\"archipelago-1\",\"island_radius_m\":69810.909914082,\"islands\":6,\"lat_deg\":-48.581152830837034,\"lon_deg\":-95.36584812459955,\"rotation_rad\":1.4243915421658702,\"seed\":4419521347590,\"type\":\"archipelago\"},{\"chain_length_m\":784001.2544768354,\"id\":\"archipelago-2\",\"island_radius_m\":65333.43787306961,\"islands\":6,\"lat_deg\":-52.91079924315126,\"lon_deg\":-24.446332048461407,\"rotation_rad\":0.14037461842994395,\"seed\":4423816314885,\"type\":\"archipelago\"},{\"chain_length_m\":474055.97308147803,\"id\":\"archipelago-3\",\"island_radius_m\":39504.6644234565,\"islands\":6,\"lat_deg\":-10.742035717744578,\"lon_deg\":-85.90789468129934,\"rotation_rad\":2.9575526493107382,\"seed\":4428111282180,\"type\":\"archipelago\"},{\"chain_length_m\":301331.5471098434,\"id\":\"archipelago-4\",\"island_radius_m\":25110.962259153617,\"islands\":6,\"lat_deg\":-32.75091762701062,\"lon_deg\":107.6894988950521,\"rotation_rad\":3.2334339803195493,\"seed\":4432406249475,\"type\":\"archipelago\"}],\"landmarks\":[],\"params\":{\"anti_nereid_land_bias\":0.18,\"aridity\":0.45799999999999996,\"eclipse_strength\":0.28,\"glaciation\":0.2,\"height_max_m\":12000.0,\"height_min_m\":-8000.0,\"hydrology\":{\"allow_lakes\":true,\"closed_basin_salt_flats\":true,\"river_min_catchment_area_m2\":100000000000.0,\"route_rivers_downhill\":true},\"knobs\":{\"base_roughness_m\":176.0,\"canyon_strength\":0.16,\"crater_density\":0.22,\"erosion\":0.62,\"mountain_coverage\":0.18,\"volcanism\":0.18},\"macro_strength\":0.85,\"name\":\"thessa\",\"nereid_ocean_bias\":0.22,\"nominal_flux_w_m2\":0.146,\"ocean_target\":0.6000000000000001,\"polar_extent\":0.16,\"radius_m\":3200000.0,\"seed\":7,\"surface_climate\":{\"eclipse_cooling_strength\":0.28,\"elevation_cooling_strength\":0.65,\"evaporation_m_yr_at_278k\":0.6,\"geothermal_local_warming_strength\":0.25,\"high_cloud_wet_region_bias\":0.55,\"moisture_transport_m\":1200000.0,\"polar_cooling_strength\":0.7,\"precipitation_m_yr\":1.0,\"rainout_height_m\":1800.0,\"target_mean_temperature_k\":278.0},\"volcanism\":0.18},\"provinces\":[{\"flux_w_m2\":2.8538652437502945,\"lat_deg\":-27.508459281164882,\"lon_deg\":173.92937348485248,\"radius_m\":376033.021355505},{\"flux_w_m2\":4.682624323107745,\"lat_deg\":-13.733747765551328,\"lon_deg\":157.46270451988113,\"radius_m\":558965.7298969002},{\"flux_w_m2\":4.608210456189418,\"lat_deg\":-7.8042267717772145,\"lon_deg\":141.83153838350808,\"radius_m\":292148.6557443555},{\"flux_w_m2\":1.0395016202962264,\"lat_deg\":-16.399280184711078,\"lon_deg\":141.83037384020673,\"radius_m\":186224.0687637512},{\"flux_w_m2\":1.1321227508859957,\"lat_deg\":48.954248831567114,\"lon_deg\":116.51659157222068,\"radius_m\":98517.11661692621},{\"flux_w_m2\":0.8388875521068785,\"lat_deg\":-21.573105466111933,\"lon_deg\":-135.23230236359439,\"radius_m\":197708.46909618174},{\"flux_w_m2\":0.6006689583665864,\"lat_deg\":-2.5940765933032006,\"lon_deg\":59.27177267219415,\"radius_m\":185281.12300285388},{\"flux_w_m2\":1.0936508543162617,\"lat_deg\":-51.19427065925927,\"lon_deg\":-76.66499950986568,\"radius_m\":137460.76727166848},{\"flux_w_m2\":0.947811781757897,\"lat_deg\":-43.4448536439134,\"lon_deg\":-157.8643364528682,\"radius_m\":114628.32403567588},{\"flux_w_m2\":1.122013418540936,\"lat_deg\":13.310190671093075,\"lon_deg\":-8.499854759105485,\"radius_m\":181874.54427263595},{\"flux_w_m2\":0.6549438811602071,\"lat_deg\":22.708057310395247,\"lon_deg\":74.45584708457211,\"radius_m\":109103.9125539377}],\"sea_offset_m\":535.8754401220891,\"tectonics\":[],\"temperature_offset_k\":-5.190961895703083}",
+            "native_survey_distance_m": "80",
+            "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+            "native_survey_eye_ground_datum_m": "5.007671312155324",
+            "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+            "native_survey_fov_y_rad": "0.9",
+            "native_survey_frozen_erosion_attached": "true",
+            "native_survey_ground_min_wavelength_m": "1",
+            "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+            "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_near_m": "0.1",
+            "native_survey_requested_eye_agl_m": "2",
+            "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+            "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+            "native_taa": "false",
+            "native_taa_global_reset_frames": "0",
+            "native_taa_history_age_limit": "0",
+            "native_taa_neighborhood_width": "0",
+            "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+            "native_taa_submitted_frames": "0",
+            "native_taa_target_bytes": "0",
+            "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+            "native_terrain_environment_samples": "16",
+            "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections",
+            "native_terrain_resident_height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 37, 70, 96, 80, 85, 86, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_tonemapping": "pbr_neutral",
+            "navball_atlas_width": "0",
+            "navball_diameter_points": "320",
+            "navball_renderer": "analytic",
+            "night_lights": "true",
+            "note_0": "RT participation flags ignored while ray tracing is off",
+            "note_1": "native shadow atlas memory budget resolves map size to 1024",
+            "ocean": "true",
+            "ocean_geometry_distance_m": "300",
+            "ocean_geometry_patches": "32",
+            "ocean_size": "128",
+            "plume": "true",
+            "preset": "custom",
+            "raster_msaa_samples": "4",
+            "ray_tracing": "off",
+            "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 48\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nterrain_ground_puddles = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"vulkan\"\nray_tracing = \"off\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 11.95\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.00078\nlocal_haze_height_m = 480.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 32\ndensity_scale = 1.42\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.38\nopacity = 0.42\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 64\nmax_instances = 32768\nreflection_bounces = 1\nray_bias_m = 0.0001\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmesh_lod_error_texels = 0.5\nreceiver_culling = true\nraster_sample_culling = true\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+            "resolution_scale": "1.000",
+            "rt_max_distance_m": "500000",
+            "rt_max_instances": "32768",
+            "rt_reflection_bounces": "1",
+            "rt_scene_memory_bytes": "67108864",
+            "settings": "ResolvedGraphicsSettings { surface_plants_enabled: true, surface_plants_density_scale: 1.0, surface_plants_max_candidates: 36864, surface_plants_max_items: 36864, surface_plants_detail_distance_m: 48.0, surface_understory_enabled: true, surface_understory_max_candidates: 200704, surface_understory_max_items: 200704, terrain_ground_pebbles_density_scale: 1.0, terrain_ground_relief_max_level: 22, terrain_ground_pebbles_max_candidates: 36864, terrain_ground_pebbles_max_items: 36864, terrain_topology: ResolvedTerrainTopology { capacity: 131072, waves: 4, split_area_px: 64.0, merge_area_px: 8.0 }, instruments: ResolvedInstruments { enabled: true, layout: Aircraft, renderer: Analytic, diameter_points: 320, atlas_width: 0 }, ocean: OceanSettings { enabled: true, quality: High, wind_speed_m_s: 10.0, wind_direction_rad: 0.0, significant_height_m: 2.0, depth_m: 100.0, seed: 17, geometry_patches: 32, geometry_distance_m: 300.0 }, ocean_size: 128, rt_scene_memory_bytes: 67108864, rt_max_instances: 32768, rt_reflection_bounces: 1, rt_reflection_samples: 4, rt_ray_bias_m: 0.0001, surface_quality: High, terrain_normal_maps: true, terrain_ground_detail: true, terrain_ground_puddles: true, terrain_material_anisotropy: 16, specular_reflections: true, native_shadow_map_size: 1024, shadow_filter_radius: 2, shadow_mesh_command_budget_bytes: 16777216, fleet_meshes: true, fleet_min_pixels: 0.5, preset_label: \"custom\", backend: ResolvedBackend { name: \"vulkan\" }, terrain: GpuMesh, terrain_mesh_cells: 24, material_storage: RgbaArray, ray_tracing: Off, resolution_scale: 1.0, raster_msaa_samples: 4, tone_mapping: PbrNeutral, vsync: false, hdr: true, temporal_motion_vectors: false, temporal_jitter: false, temporal_taa: false, temporal_quality: High, bloom: false, exposure_ev100: 11.95, auto_exposure: false, atmosphere_enabled: true, atmosphere_quality: High, atmosphere_steps: 32, aerial_perspective: true, local_haze_extinction_per_m: 0.00078, local_haze_height_m: 480.0, multiple_scattering: true, eclipses: true, multi_star: true, limb_scattering: true, sky_dome: true, stars: true, stars_quality: High, atmosphere_density_scale: 1.42, airglow: true, aurora_shell: true, aurora_lighting: false, aurora_quality: Low, aurora_intensity: 1.0, aurora_animate: true, clouds_enabled: true, clouds_quality: High, cloud_integrator: March, clouds_volumetric: true, clouds_steps: 24, clouds_layers: 2, clouds_coverage: 0.38, clouds_opacity: 0.42, clouds_animate: true, clouds_cast_shadows: true, night_lights_enabled: true, night_lights_quality: Medium, night_lights_intensity: 1.0, gas_giant_enabled: true, gas_giant_quality: Medium, gas_giant_animate: true, gas_giant_limb: true, plume_enabled: true, plume_quality: Medium, plume_diamonds: true, plume_flicker: true, plume_light: true, rt_terrain: false, rt_vehicles: false, rt_landmarks: false, rt_atmosphere_queries: false, rt_clouds: false, rt_max_distance_m: 500000.0, shadow_enabled: true, shadow_cascades: 4, shadow_max_distance_m: 12000.0, shadow_first_cascade_distance_m: Some(25.0), shadow_mesh_lod_error_texels: 0.5, shadow_receiver_culling: true, shadow_raster_sample_guard_texels: Some(0.0625), shadow_map_size: 4096, shadow_normal_bias_m: 0.001, notes: [\"RT participation flags ignored while ray tracing is off\", \"native shadow atlas memory budget resolves map size to 1024\"] }",
+            "shadow_cascades": "4",
+            "shadow_filter_radius": "2",
+            "shadow_first_cascade_distance_m": "25",
+            "shadow_map_size": "4096",
+            "shadow_max_distance_m": "12000",
+            "shadow_mesh_command_budget_bytes": "16777216",
+            "shadow_mesh_lod_error_texels": "0.5",
+            "shadow_raster_sample_guard_texels": "0.0625",
+            "shadow_receiver_culling": "true",
+            "shadows": "true",
+            "specular_reflections": "true",
+            "stars": "true",
+            "stars_quality": "high",
+            "surface_plants_density_scale": "1",
+            "surface_plants_detail_distance_m": "48",
+            "surface_plants_enabled": "true",
+            "surface_plants_max_candidates": "36864",
+            "surface_plants_max_items": "36864",
+            "surface_quality": "high",
+            "surface_understory_enabled": "true",
+            "surface_understory_max_candidates": "200704",
+            "surface_understory_max_items": "200704",
+            "temporal_jitter": "false",
+            "temporal_motion_vectors": "false",
+            "temporal_quality": "High",
+            "temporal_taa": "false",
+            "terrain": "gpu_mesh",
+            "terrain_ground_detail": "true",
+            "terrain_ground_pebbles_density_scale": "1",
+            "terrain_ground_pebbles_max_candidates": "36864",
+            "terrain_ground_pebbles_max_items": "36864",
+            "terrain_ground_puddles": "true",
+            "terrain_ground_relief_max_level": "22",
+            "terrain_material_anisotropy": "16",
+            "terrain_material_max_level": "24",
+            "terrain_mesh_cells": "24",
+            "terrain_normal_maps": "true",
+            "terrain_normal_mip_bias": "0",
+            "terrain_topology_capacity": "131072",
+            "terrain_topology_merge_area_px": "8",
+            "terrain_topology_split_area_px": "64",
+            "terrain_topology_waves": "4",
+            "tone_mapping": "pbr_neutral",
+            "vsync": "false"
+          }
+        },
+        "scenario": "terrain-native vehicle_preview=false live_flight=false server_flight=false sweep=false hud=false prestream_s=3 sim_step_s=0 clock=None",
+        "window_frames": 30
+      },
+      "screenshot_sha256": "946bac8a5b4f15cc24d69ad5e661ef69a94c6e3f8f850ede765f47dd45b73955"
+    },
+    "final-static-long": {
+      "command": {
+        "command": [
+          "bwrap",
+          "--unshare-all",
+          "--die-with-parent",
+          "--ro-bind",
+          "/",
+          "/",
+          "--dev",
+          "/dev",
+          "--dir",
+          "/dev/dri",
+          "--dev-bind",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD128",
+          "--proc",
+          "/proc",
+          "--tmpfs",
+          "/tmp",
+          "--tmpfs",
+          "/run",
+          "--bind",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "--unsetenv",
+          "DISPLAY",
+          "--unsetenv",
+          "WAYLAND_DISPLAY",
+          "--setenv",
+          "XDG_RUNTIME_DIR",
+          "/tmp",
+          "--setenv",
+          "XDG_CACHE_HOME",
+          "/tmp",
+          "--setenv",
+          "VK_DRIVER_FILES",
+          "/usr/share/vulkan/icd.d/radeon_icd.json",
+          "--setenv",
+          "WGPU_BACKEND",
+          "vulkan",
+          "--setenv",
+          "VK_LOADER_LAYERS_DISABLE",
+          "*",
+          "--setenv",
+          "THESSA_WORKLOAD_OUTPUT",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/adapter.toml",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/frozen-gpu-baseline/native-fixed-sides-and-demand",
+          "--graphics",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/native-raster-vulkan.toml",
+          "--headless",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/final-static-long.png",
+          "--perf-capture",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/final-static-long.json",
+          "--width",
+          "1280",
+          "--height",
+          "720",
+          "--frames",
+          "90",
+          "--prestream-seconds",
+          "3",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--no-hud",
+          "--mute"
+        ],
+        "exit_code": 0,
+        "seconds": 99.84480032906868,
+        "binary_sha256": "0bd867dd5a780e8ebd4d1ae2b687ad9a89060cf662b6344404c7bddd0900da5a",
+        "binary_unchanged": true,
+        "kernel_gpu_fault_detected": false,
+        "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+        "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+      },
+      "summary": {
+        "all": {
+          "samples": 90,
+          "wall_p50_ms": 450.0765485,
+          "cpu_p50_ms": 4.4882265,
+          "stream_p50_ms": 2.434478,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.2238453088588715,
+            "render.motion_vectors": 0.007093477695465088,
+            "render.rt_as_build": 0.006332030937194825,
+            "render.scene_classify_and_raster": 381.22024819249395,
+            "render.scene_overlays": 59.87055479553223,
+            "render.surface_and_shadows": 0.006372107082366943,
+            "render.temporal_resolve": 0.0013225127906799318,
+            "render.ui": 0.0068530208244323735
+          }
+        },
+        "last30": {
+          "samples": 30,
+          "wall_p50_ms": 447.6450865,
+          "cpu_p50_ms": 3.9150395000000002,
+          "stream_p50_ms": 2.3097960000000004,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.22510770743179323,
+            "render.motion_vectors": 0.0072137061309814465,
+            "render.rt_as_build": 0.006372107082366943,
+            "render.scene_classify_and_raster": 382.2521838830853,
+            "render.scene_overlays": 59.87055479553223,
+            "render.surface_and_shadows": 0.006372107082366943,
+            "render.temporal_resolve": 0.0013225127906799318,
+            "render.ui": 0.006812944679260254
+          }
+        }
+      },
+      "metadata": {
+        "format_version": 1,
+        "build": {
+          "commit": "unknown",
+          "version": "0.0.1",
+          "profile": "release"
+        },
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "display": {
+          "width": 1280,
+          "height": 720,
+          "resolution_scale": 1.0,
+          "vsync": false
+        },
+        "graphics": {
+          "preset": "High",
+          "ray_tracing": "Off",
+          "resolved": {
+            "active_cloud_representation": "volume_march",
+            "atmosphere_quality": "high",
+            "atmosphere_steps": "32",
+            "aurora": "true",
+            "aurora_intensity": "1.00",
+            "auto_exposure": "false",
+            "backend": "vulkan",
+            "bloom": "false",
+            "cloud_integrator": "march",
+            "cloud_layers": "2",
+            "cloud_shadows": "true",
+            "cloud_steps": "24",
+            "clouds": "true",
+            "clouds_volumetric": "true",
+            "eclipses": "true",
+            "exposure_ev100": "11.9",
+            "fleet_meshes": "true",
+            "fleet_min_pixels": "0.5",
+            "gas_giant": "true",
+            "gpu_scope_layout": "native-topology-v8-temporal",
+            "hdr": "true",
+            "instrument_layout": "aircraft",
+            "instruments": "true",
+            "local_haze_extinction_per_m": "0.00078",
+            "local_haze_height_m": "480",
+            "material_storage": "rgba_array",
+            "measurement_boundary": "Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained",
+            "multi_star": "true",
+            "native_aurora_depth_composition": "true",
+            "native_auto_exposure_applied": "false",
+            "native_background_star_count": "500",
+            "native_bloom_applied": "false",
+            "native_cloud_detail_inverse_mean": "16.987665",
+            "native_cloud_detail_period_m": "16384",
+            "native_cloud_extinction_per_m": "0.0006",
+            "native_cloud_ground_shadows": "true",
+            "native_cloud_layers": "2",
+            "native_cloud_mode": "deterministic_march",
+            "native_cloud_steps": "24",
+            "native_cloud_sun_steps": "4",
+            "native_diffuse_irradiance": "sh9",
+            "native_docking_clock": "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory",
+            "native_docking_fixture": "false",
+            "native_hdr": "true",
+            "native_hdr_target_bytes": "7372800",
+            "native_jitter_scope": "Halton primary terrain/meshes only; motion excludes sampling jitter; resolved only when native_taa=true; secondary view unchanged",
+            "native_jitter_submitted_frames": "0",
+            "native_map_open": "false",
+            "native_material_height_field_pages": "248",
+            "native_material_reference_height_m": "5.007671312155324",
+            "native_material_reference_height_source": "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height",
+            "native_material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 3, 4, 1, 23, 56, 92, 67, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_material_view_policy": "actual camera-relative clip planes for material priority; shared refinement and soil heights retain the wider prefetch cone; local reference-height sphere, not exact terrain occlusion",
+            "native_motion_scope": "render.motion_vectors; stored opaque depth + alpha mask, before temporal resolve and translucent overlays",
+            "native_motion_target_bytes": "0",
+            "native_motion_vectors": "false",
+            "native_night_lights_extent": "Some([256, 128])",
+            "native_night_lights_source": "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission",
+            "native_plume_enabled": "true",
+            "native_plume_light_applied": "false",
+            "native_plume_light_status": "unavailable",
+            "native_plume_quality": "Medium",
+            "native_plume_scope": "render.scene_overlays (includes depth-clipped plume color-load pass when active)",
+            "native_primary_jitter": "false",
+            "native_rt_reflection_estimator": "when admitted: one mirror ray per bounce; Medium/High pixel-cone texture mips, Low point sampling; resolved rt_reflection_samples is a requested policy value, not an active stochastic sample count",
+            "native_scene_format": "Rgba16Float",
+            "native_shadow_map_size": "1024",
+            "native_sky_layer_bytes": "10802286",
+            "native_stellar_transmission_steps": "32",
+            "native_surface_ground_candidates": "36864",
+            "native_surface_ground_litter_fragments": "1271",
+            "native_surface_ground_moss_clumps": "192",
+            "native_surface_ground_pebbles": "6692",
+            "native_surface_ground_puddles": "24",
+            "native_surface_ground_samples": "6692",
+            "native_surface_ground_water_basins": "99",
+            "native_surface_ground_water_samples": "6936",
+            "native_surface_ground_water_triangles": "1960",
+            "native_surface_ground_window": "1,18,96291,190216",
+            "native_surface_plants_accepted": "11320",
+            "native_surface_plants_candidate_visits": "237568",
+            "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path",
+            "native_surface_plants_draw_calls": "37",
+            "native_surface_plants_frame_upload_bytes": "576",
+            "native_surface_plants_instance_buffer_bytes": "1151488",
+            "native_surface_plants_preparation_cpu_ms": "36162.81343",
+            "native_surface_plants_preparation_job_pending": "false",
+            "native_surface_plants_preparation_jobs_discarded": "0",
+            "native_surface_plants_preparation_jobs_started": "0",
+            "native_surface_plants_prototype_payload_bytes": "46159116",
+            "native_surface_plants_prototype_texture_bytes": "3760128",
+            "native_surface_plants_publication_cpu_ms": "261.704982",
+            "native_surface_plants_reduced_instances": "5320",
+            "native_surface_plants_renderer_reused": "false",
+            "native_surface_plants_retained": "11297",
+            "native_surface_plants_rt_policy": "shared_policy_mesh_rt_not_requested",
+            "native_surface_plants_shadow_lod_budget_withheld": "false",
+            "native_surface_plants_shadow_payload_bytes": "1657464",
+            "native_surface_plants_status": "applied_survey_with_near_understory",
+            "native_surface_plants_submitted_instances": "2510",
+            "native_surface_plants_surface_samples": "36769",
+            "native_surface_plants_window": "1,14,6018,11888",
+            "native_surface_understory_accepted": "9254",
+            "native_surface_understory_candidate_visits": "200704",
+            "native_surface_understory_replaced_coarse_clumps": "23",
+            "native_surface_understory_scale_bins_lt_045_070_095": "[582, 3226, 3966, 1480]",
+            "native_surface_understory_surface_samples": "33884",
+            "native_surface_understory_window": "1,18,96291,190216",
+            "native_surface_understory_windows": "49",
+            "native_survey_actual_eye_agl_m": "1.9999999998080256",
+            "native_survey_analytic_source_signature": "{\"contract\":\"thessa-analytic-source-v1\",\"features\":[{\"depth_m\":2349.5093326841657,\"id\":\"impact-basin-0\",\"lat_deg\":-5.611596541472208,\"lon_deg\":-86.741608923232,\"radius_m\":670728.5139317274,\"rings\":3,\"rotation_rad\":1.365341254751748,\"seed\":4299262263303,\"type\":\"impact_basin\"},{\"branches\":5,\"height_m\":5679.889439148244,\"id\":\"mountain-arc-0\",\"lat_deg\":4.647510922061766,\"length_m\":1532864.9450967421,\"lon_deg\":139.81127503721996,\"rotation_rad\":2.5290233753316733,\"seed\":4307852197895,\"type\":\"mountain_range\",\"width_m\":222466.837886875},{\"depth_m\":3773.8667293768526,\"id\":\"rift-canyon-system-0\",\"lat_deg\":-34.934223816036635,\"length_m\":1211388.4332205707,\"lon_deg\":168.49336402903916,\"rotation_rad\":2.118791916227394,\"seed\":4316442132487,\"tributaries\":4,\"type\":\"canyon\",\"width_m\":48294.76911999528},{\"id\":\"volcanic-province-0\",\"lat_deg\":47.86630147148081,\"lon_deg\":100.11403583531336,\"radius_m\":368481.0400605489,\"rotation_rad\":1.989055179700376,\"seed\":4325032067079,\"shields\":5,\"swell_m\":1500.0,\"type\":\"volcanic_province\"},{\"caldera\":true,\"height_m\":6149.38330541827,\"id\":\"shield-volcano-caldera-complex-0\",\"lat_deg\":-7.032884310824679,\"lon_deg\":150.51871258236622,\"radius_m\":59608.420742161674,\"rotation_rad\":1.0101358774670681,\"seed\":4333622001671,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2494.939987870157,\"id\":\"shield-volcano-caldera-complex-1\",\"lat_deg\":54.81587954555761,\"lon_deg\":-18.58208950109981,\"radius_m\":108550.67808661085,\"rotation_rad\":2.801997445700702,\"seed\":4337916968966,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":3658.207481772792,\"id\":\"shield-volcano-caldera-complex-2\",\"lat_deg\":13.998006241326753,\"lon_deg\":-119.55929285521518,\"radius_m\":67158.90016444154,\"rotation_rad\":2.0138896552107335,\"seed\":4342211936261,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2192.9166327263783,\"id\":\"shield-volcano-caldera-complex-3\",\"lat_deg\":48.26829438100861,\"lon_deg\":163.69526988938696,\"radius_m\":104164.24214529483,\"rotation_rad\":0.16851277162734574,\"seed\":4346506903556,\"type\":\"shield_volcano\"},{\"central_peak\":true,\"depth_m\":3152.1822399979837,\"ejecta\":true,\"id\":\"large-crater-0\",\"lat_deg\":21.079552173077253,\"lon_deg\":154.262073452899,\"rim_radius_m\":166975.830902453,\"rotation_rad\":2.39530015317016,\"seed\":4355096838151,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1688.538019337118,\"ejecta\":true,\"id\":\"large-crater-1\",\"lat_deg\":-11.363366625036944,\"lon_deg\":97.69302333885284,\"rim_radius_m\":99796.9522167549,\"rotation_rad\":4.6197695405831105,\"seed\":4359391805446,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1097.57286807431,\"ejecta\":true,\"id\":\"large-crater-2\",\"lat_deg\":-54.642028082234326,\"lon_deg\":-129.56997834289052,\"rim_radius_m\":149480.05768304723,\"rotation_rad\":4.781017745878919,\"seed\":4363686772741,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":3797.2419500082224,\"ejecta\":true,\"id\":\"large-crater-3\",\"lat_deg\":-27.8627145167643,\"lon_deg\":-33.210530276221796,\"rim_radius_m\":85652.41770773251,\"rotation_rad\":2.9753754968536934,\"seed\":4367981740036,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3548.402636068368,\"ejecta\":true,\"id\":\"large-crater-4\",\"lat_deg\":8.475240252142132,\"lon_deg\":74.80912975072872,\"rim_radius_m\":80179.05934257718,\"rotation_rad\":2.715861788404917,\"seed\":4372276707331,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":2243.1701570914997,\"ejecta\":true,\"id\":\"large-crater-5\",\"lat_deg\":1.997874540204867,\"lon_deg\":1.7602131623214734,\"rim_radius_m\":222490.2183674398,\"rotation_rad\":0.4899131976719484,\"seed\":4376571674626,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3770.543728527618,\"ejecta\":true,\"id\":\"large-crater-6\",\"lat_deg\":34.55501627312763,\"lon_deg\":-165.83427844822586,\"rim_radius_m\":136588.42728659976,\"rotation_rad\":0.5137159009239954,\"seed\":4380866641921,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":2712.177871373579,\"ejecta\":true,\"id\":\"large-crater-7\",\"lat_deg\":37.185912516328514,\"lon_deg\":-151.44481496691077,\"rim_radius_m\":212499.3048996149,\"rotation_rad\":5.113250532254168,\"seed\":4385161609216,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1585.6021931919126,\"ejecta\":true,\"id\":\"large-crater-8\",\"lat_deg\":-9.107398211781671,\"lon_deg\":53.099146832342264,\"rim_radius_m\":50922.36067740218,\"rotation_rad\":3.41216311912966,\"seed\":4389456576527,\"type\":\"crater\"},{\"depth_m\":2914.3490762681154,\"id\":\"dry-plateau-salt-basin-complex-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":277048.2027214083,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"salt_basin\"},{\"height_m\":4980.204486880922,\"id\":\"dry-plateau-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":415572.3040821124,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"plateau\"},{\"branches\":5,\"height_m\":6500.0,\"id\":\"glaciated-mountain-coast-0\",\"lat_deg\":65.4462790807334,\"length_m\":775381.3699035968,\"lon_deg\":66.49874620724609,\"rotation_rad\":2.15302019854899,\"seed\":4406636445703,\"type\":\"mountain_range\",\"width_m\":200000.0},{\"chain_length_m\":792000.0625314456,\"id\":\"archipelago-0\",\"island_radius_m\":66000.00521095381,\"islands\":6,\"lat_deg\":5.023498070582697,\"lon_deg\":-111.45621074350521,\"rotation_rad\":5.066394269837036,\"seed\":4415226380295,\"type\":\"archipelago\"},{\"chain_length_m\":837730.918968984,\"id\":\"archipelago-1\",\"island_radius_m\":69810.909914082,\"islands\":6,\"lat_deg\":-48.581152830837034,\"lon_deg\":-95.36584812459955,\"rotation_rad\":1.4243915421658702,\"seed\":4419521347590,\"type\":\"archipelago\"},{\"chain_length_m\":784001.2544768354,\"id\":\"archipelago-2\",\"island_radius_m\":65333.43787306961,\"islands\":6,\"lat_deg\":-52.91079924315126,\"lon_deg\":-24.446332048461407,\"rotation_rad\":0.14037461842994395,\"seed\":4423816314885,\"type\":\"archipelago\"},{\"chain_length_m\":474055.97308147803,\"id\":\"archipelago-3\",\"island_radius_m\":39504.6644234565,\"islands\":6,\"lat_deg\":-10.742035717744578,\"lon_deg\":-85.90789468129934,\"rotation_rad\":2.9575526493107382,\"seed\":4428111282180,\"type\":\"archipelago\"},{\"chain_length_m\":301331.5471098434,\"id\":\"archipelago-4\",\"island_radius_m\":25110.962259153617,\"islands\":6,\"lat_deg\":-32.75091762701062,\"lon_deg\":107.6894988950521,\"rotation_rad\":3.2334339803195493,\"seed\":4432406249475,\"type\":\"archipelago\"}],\"landmarks\":[],\"params\":{\"anti_nereid_land_bias\":0.18,\"aridity\":0.45799999999999996,\"eclipse_strength\":0.28,\"glaciation\":0.2,\"height_max_m\":12000.0,\"height_min_m\":-8000.0,\"hydrology\":{\"allow_lakes\":true,\"closed_basin_salt_flats\":true,\"river_min_catchment_area_m2\":100000000000.0,\"route_rivers_downhill\":true},\"knobs\":{\"base_roughness_m\":176.0,\"canyon_strength\":0.16,\"crater_density\":0.22,\"erosion\":0.62,\"mountain_coverage\":0.18,\"volcanism\":0.18},\"macro_strength\":0.85,\"name\":\"thessa\",\"nereid_ocean_bias\":0.22,\"nominal_flux_w_m2\":0.146,\"ocean_target\":0.6000000000000001,\"polar_extent\":0.16,\"radius_m\":3200000.0,\"seed\":7,\"surface_climate\":{\"eclipse_cooling_strength\":0.28,\"elevation_cooling_strength\":0.65,\"evaporation_m_yr_at_278k\":0.6,\"geothermal_local_warming_strength\":0.25,\"high_cloud_wet_region_bias\":0.55,\"moisture_transport_m\":1200000.0,\"polar_cooling_strength\":0.7,\"precipitation_m_yr\":1.0,\"rainout_height_m\":1800.0,\"target_mean_temperature_k\":278.0},\"volcanism\":0.18},\"provinces\":[{\"flux_w_m2\":2.8538652437502945,\"lat_deg\":-27.508459281164882,\"lon_deg\":173.92937348485248,\"radius_m\":376033.021355505},{\"flux_w_m2\":4.682624323107745,\"lat_deg\":-13.733747765551328,\"lon_deg\":157.46270451988113,\"radius_m\":558965.7298969002},{\"flux_w_m2\":4.608210456189418,\"lat_deg\":-7.8042267717772145,\"lon_deg\":141.83153838350808,\"radius_m\":292148.6557443555},{\"flux_w_m2\":1.0395016202962264,\"lat_deg\":-16.399280184711078,\"lon_deg\":141.83037384020673,\"radius_m\":186224.0687637512},{\"flux_w_m2\":1.1321227508859957,\"lat_deg\":48.954248831567114,\"lon_deg\":116.51659157222068,\"radius_m\":98517.11661692621},{\"flux_w_m2\":0.8388875521068785,\"lat_deg\":-21.573105466111933,\"lon_deg\":-135.23230236359439,\"radius_m\":197708.46909618174},{\"flux_w_m2\":0.6006689583665864,\"lat_deg\":-2.5940765933032006,\"lon_deg\":59.27177267219415,\"radius_m\":185281.12300285388},{\"flux_w_m2\":1.0936508543162617,\"lat_deg\":-51.19427065925927,\"lon_deg\":-76.66499950986568,\"radius_m\":137460.76727166848},{\"flux_w_m2\":0.947811781757897,\"lat_deg\":-43.4448536439134,\"lon_deg\":-157.8643364528682,\"radius_m\":114628.32403567588},{\"flux_w_m2\":1.122013418540936,\"lat_deg\":13.310190671093075,\"lon_deg\":-8.499854759105485,\"radius_m\":181874.54427263595},{\"flux_w_m2\":0.6549438811602071,\"lat_deg\":22.708057310395247,\"lon_deg\":74.45584708457211,\"radius_m\":109103.9125539377}],\"sea_offset_m\":535.8754401220891,\"tectonics\":[],\"temperature_offset_k\":-5.190961895703083}",
+            "native_survey_distance_m": "80",
+            "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+            "native_survey_eye_ground_datum_m": "5.007671312155324",
+            "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+            "native_survey_fov_y_rad": "0.9",
+            "native_survey_frozen_erosion_attached": "true",
+            "native_survey_ground_min_wavelength_m": "1",
+            "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+            "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_near_m": "0.1",
+            "native_survey_requested_eye_agl_m": "2",
+            "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+            "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+            "native_taa": "false",
+            "native_taa_global_reset_frames": "0",
+            "native_taa_history_age_limit": "0",
+            "native_taa_neighborhood_width": "0",
+            "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+            "native_taa_submitted_frames": "0",
+            "native_taa_target_bytes": "0",
+            "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+            "native_terrain_environment_samples": "16",
+            "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections",
+            "native_terrain_resident_height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 37, 70, 96, 80, 85, 86, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_tonemapping": "pbr_neutral",
+            "navball_atlas_width": "0",
+            "navball_diameter_points": "320",
+            "navball_renderer": "analytic",
+            "night_lights": "true",
+            "note_0": "RT participation flags ignored while ray tracing is off",
+            "note_1": "native shadow atlas memory budget resolves map size to 1024",
+            "ocean": "true",
+            "ocean_geometry_distance_m": "300",
+            "ocean_geometry_patches": "32",
+            "ocean_size": "128",
+            "plume": "true",
+            "preset": "custom",
+            "raster_msaa_samples": "4",
+            "ray_tracing": "off",
+            "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 48\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nterrain_ground_puddles = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"vulkan\"\nray_tracing = \"off\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 11.95\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.00078\nlocal_haze_height_m = 480.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 32\ndensity_scale = 1.42\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.38\nopacity = 0.42\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 64\nmax_instances = 32768\nreflection_bounces = 1\nray_bias_m = 0.0001\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmesh_lod_error_texels = 0.5\nreceiver_culling = true\nraster_sample_culling = true\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+            "resolution_scale": "1.000",
+            "rt_max_distance_m": "500000",
+            "rt_max_instances": "32768",
+            "rt_reflection_bounces": "1",
+            "rt_scene_memory_bytes": "67108864",
+            "settings": "ResolvedGraphicsSettings { surface_plants_enabled: true, surface_plants_density_scale: 1.0, surface_plants_max_candidates: 36864, surface_plants_max_items: 36864, surface_plants_detail_distance_m: 48.0, surface_understory_enabled: true, surface_understory_max_candidates: 200704, surface_understory_max_items: 200704, terrain_ground_pebbles_density_scale: 1.0, terrain_ground_relief_max_level: 22, terrain_ground_pebbles_max_candidates: 36864, terrain_ground_pebbles_max_items: 36864, terrain_topology: ResolvedTerrainTopology { capacity: 131072, waves: 4, split_area_px: 64.0, merge_area_px: 8.0 }, instruments: ResolvedInstruments { enabled: true, layout: Aircraft, renderer: Analytic, diameter_points: 320, atlas_width: 0 }, ocean: OceanSettings { enabled: true, quality: High, wind_speed_m_s: 10.0, wind_direction_rad: 0.0, significant_height_m: 2.0, depth_m: 100.0, seed: 17, geometry_patches: 32, geometry_distance_m: 300.0 }, ocean_size: 128, rt_scene_memory_bytes: 67108864, rt_max_instances: 32768, rt_reflection_bounces: 1, rt_reflection_samples: 4, rt_ray_bias_m: 0.0001, surface_quality: High, terrain_normal_maps: true, terrain_ground_detail: true, terrain_ground_puddles: true, terrain_material_anisotropy: 16, specular_reflections: true, native_shadow_map_size: 1024, shadow_filter_radius: 2, shadow_mesh_command_budget_bytes: 16777216, fleet_meshes: true, fleet_min_pixels: 0.5, preset_label: \"custom\", backend: ResolvedBackend { name: \"vulkan\" }, terrain: GpuMesh, terrain_mesh_cells: 24, material_storage: RgbaArray, ray_tracing: Off, resolution_scale: 1.0, raster_msaa_samples: 4, tone_mapping: PbrNeutral, vsync: false, hdr: true, temporal_motion_vectors: false, temporal_jitter: false, temporal_taa: false, temporal_quality: High, bloom: false, exposure_ev100: 11.95, auto_exposure: false, atmosphere_enabled: true, atmosphere_quality: High, atmosphere_steps: 32, aerial_perspective: true, local_haze_extinction_per_m: 0.00078, local_haze_height_m: 480.0, multiple_scattering: true, eclipses: true, multi_star: true, limb_scattering: true, sky_dome: true, stars: true, stars_quality: High, atmosphere_density_scale: 1.42, airglow: true, aurora_shell: true, aurora_lighting: false, aurora_quality: Low, aurora_intensity: 1.0, aurora_animate: true, clouds_enabled: true, clouds_quality: High, cloud_integrator: March, clouds_volumetric: true, clouds_steps: 24, clouds_layers: 2, clouds_coverage: 0.38, clouds_opacity: 0.42, clouds_animate: true, clouds_cast_shadows: true, night_lights_enabled: true, night_lights_quality: Medium, night_lights_intensity: 1.0, gas_giant_enabled: true, gas_giant_quality: Medium, gas_giant_animate: true, gas_giant_limb: true, plume_enabled: true, plume_quality: Medium, plume_diamonds: true, plume_flicker: true, plume_light: true, rt_terrain: false, rt_vehicles: false, rt_landmarks: false, rt_atmosphere_queries: false, rt_clouds: false, rt_max_distance_m: 500000.0, shadow_enabled: true, shadow_cascades: 4, shadow_max_distance_m: 12000.0, shadow_first_cascade_distance_m: Some(25.0), shadow_mesh_lod_error_texels: 0.5, shadow_receiver_culling: true, shadow_raster_sample_guard_texels: Some(0.0625), shadow_map_size: 4096, shadow_normal_bias_m: 0.001, notes: [\"RT participation flags ignored while ray tracing is off\", \"native shadow atlas memory budget resolves map size to 1024\"] }",
+            "shadow_cascades": "4",
+            "shadow_filter_radius": "2",
+            "shadow_first_cascade_distance_m": "25",
+            "shadow_map_size": "4096",
+            "shadow_max_distance_m": "12000",
+            "shadow_mesh_command_budget_bytes": "16777216",
+            "shadow_mesh_lod_error_texels": "0.5",
+            "shadow_raster_sample_guard_texels": "0.0625",
+            "shadow_receiver_culling": "true",
+            "shadows": "true",
+            "specular_reflections": "true",
+            "stars": "true",
+            "stars_quality": "high",
+            "surface_plants_density_scale": "1",
+            "surface_plants_detail_distance_m": "48",
+            "surface_plants_enabled": "true",
+            "surface_plants_max_candidates": "36864",
+            "surface_plants_max_items": "36864",
+            "surface_quality": "high",
+            "surface_understory_enabled": "true",
+            "surface_understory_max_candidates": "200704",
+            "surface_understory_max_items": "200704",
+            "temporal_jitter": "false",
+            "temporal_motion_vectors": "false",
+            "temporal_quality": "High",
+            "temporal_taa": "false",
+            "terrain": "gpu_mesh",
+            "terrain_ground_detail": "true",
+            "terrain_ground_pebbles_density_scale": "1",
+            "terrain_ground_pebbles_max_candidates": "36864",
+            "terrain_ground_pebbles_max_items": "36864",
+            "terrain_ground_puddles": "true",
+            "terrain_ground_relief_max_level": "22",
+            "terrain_material_anisotropy": "16",
+            "terrain_material_max_level": "24",
+            "terrain_mesh_cells": "24",
+            "terrain_normal_maps": "true",
+            "terrain_normal_mip_bias": "0",
+            "terrain_topology_capacity": "131072",
+            "terrain_topology_merge_area_px": "8",
+            "terrain_topology_split_area_px": "64",
+            "terrain_topology_waves": "4",
+            "tone_mapping": "pbr_neutral",
+            "vsync": "false"
+          }
+        },
+        "scenario": "terrain-native vehicle_preview=false live_flight=false server_flight=false sweep=false hud=false prestream_s=3 sim_step_s=0 clock=None",
+        "window_frames": 90
+      },
+      "screenshot_sha256": "d0a8991335673e6adf946fb08a64b87a144fb05ee2c1e38fc661bb3b3103b819"
+    },
+    "baseline-static-long": {
+      "command": {
+        "command": [
+          "bwrap",
+          "--unshare-all",
+          "--die-with-parent",
+          "--ro-bind",
+          "/",
+          "/",
+          "--dev",
+          "/dev",
+          "--dir",
+          "/dev/dri",
+          "--dev-bind",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD128",
+          "--proc",
+          "/proc",
+          "--tmpfs",
+          "/tmp",
+          "--tmpfs",
+          "/run",
+          "--bind",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28",
+          "--unsetenv",
+          "DISPLAY",
+          "--unsetenv",
+          "WAYLAND_DISPLAY",
+          "--setenv",
+          "XDG_RUNTIME_DIR",
+          "/tmp",
+          "--setenv",
+          "XDG_CACHE_HOME",
+          "/tmp",
+          "--setenv",
+          "VK_DRIVER_FILES",
+          "/usr/share/vulkan/icd.d/radeon_icd.json",
+          "--setenv",
+          "WGPU_BACKEND",
+          "vulkan",
+          "--setenv",
+          "VK_LOADER_LAYERS_DISABLE",
+          "*",
+          "--setenv",
+          "THESSA_WORKLOAD_OUTPUT",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/adapter.toml",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/frozen-gpu-baseline/native-depth-streams",
+          "--graphics",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/native-raster-vulkan.toml",
+          "--headless",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/baseline-static-long.png",
+          "--perf-capture",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-quiescence-2026-10-28/baseline-static-long.json",
+          "--width",
+          "1280",
+          "--height",
+          "720",
+          "--frames",
+          "90",
+          "--prestream-seconds",
+          "3",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--no-hud",
+          "--mute"
+        ],
+        "exit_code": 0,
+        "seconds": 130.1462370210793,
+        "binary_sha256": "2f94e5f997e34afdcce9e31a853f9841c1a6633eb594b6b8b1d245f1667ca965",
+        "binary_unchanged": true,
+        "kernel_gpu_fault_detected": false,
+        "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+        "scope": "Actual physical Radeon native headless performance capture; RT off; 30 warmup frames; no serial stage fences; not whole-game FPS. Fixed simulation time; optional existing sweep. Streaming residency may depend on wall cadence."
+      },
+      "summary": {
+        "all": {
+          "samples": 90,
+          "wall_p50_ms": 718.580475,
+          "cpu_p50_ms": 69.86792799999999,
+          "stream_p50_ms": 66.94378850000001,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.22657048673057556,
+            "render.motion_vectors": 0.006873058897018434,
+            "render.rt_as_build": 0.006372107082366943,
+            "render.scene_classify_and_raster": 583.9921523214113,
+            "render.scene_overlays": 60.051799162073145,
+            "render.surface_and_shadows": 0.006412183227539063,
+            "render.temporal_resolve": 0.0013625889358520509,
+            "render.ui": 0.006772868534088135
+          }
+        },
+        "last30": {
+          "samples": 30,
+          "wall_p50_ms": 684.5832700000001,
+          "cpu_p50_ms": 36.314595,
+          "stream_p50_ms": 34.8323395,
+          "gpu_scopes_p50_ms": {
+            "render.display_transform": 0.22707143854522707,
+            "render.motion_vectors": 0.006652640098571778,
+            "render.rt_as_build": 0.006372107082366943,
+            "render.scene_classify_and_raster": 584.2716633959142,
+            "render.scene_overlays": 59.94902388777924,
+            "render.surface_and_shadows": 0.006372107082366943,
+            "render.temporal_resolve": 0.0013625889358520509,
+            "render.ui": 0.0068530208244323735
+          }
+        }
+      },
+      "metadata": {
+        "format_version": 1,
+        "build": {
+          "commit": "unknown",
+          "version": "0.0.1",
+          "profile": "release"
+        },
+        "platform": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+          "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+        },
+        "display": {
+          "width": 1280,
+          "height": 720,
+          "resolution_scale": 1.0,
+          "vsync": false
+        },
+        "graphics": {
+          "preset": "High",
+          "ray_tracing": "Off",
+          "resolved": {
+            "active_cloud_representation": "volume_march",
+            "atmosphere_quality": "high",
+            "atmosphere_steps": "32",
+            "aurora": "true",
+            "aurora_intensity": "1.00",
+            "auto_exposure": "false",
+            "backend": "vulkan",
+            "bloom": "false",
+            "cloud_integrator": "march",
+            "cloud_layers": "2",
+            "cloud_shadows": "true",
+            "cloud_steps": "24",
+            "clouds": "true",
+            "clouds_volumetric": "true",
+            "eclipses": "true",
+            "exposure_ev100": "11.9",
+            "fleet_meshes": "true",
+            "fleet_min_pixels": "0.5",
+            "gas_giant": "true",
+            "gpu_scope_layout": "native-topology-v8-temporal",
+            "hdr": "true",
+            "instrument_layout": "aircraft",
+            "instruments": "true",
+            "local_haze_extinction_per_m": "0.00078",
+            "local_haze_height_m": "480",
+            "material_storage": "rgba_array",
+            "measurement_boundary": "Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained",
+            "multi_star": "true",
+            "native_aurora_depth_composition": "true",
+            "native_auto_exposure_applied": "false",
+            "native_background_star_count": "500",
+            "native_bloom_applied": "false",
+            "native_cloud_detail_inverse_mean": "16.987665",
+            "native_cloud_detail_period_m": "16384",
+            "native_cloud_extinction_per_m": "0.0006",
+            "native_cloud_ground_shadows": "true",
+            "native_cloud_layers": "2",
+            "native_cloud_mode": "deterministic_march",
+            "native_cloud_steps": "24",
+            "native_cloud_sun_steps": "4",
+            "native_diffuse_irradiance": "sh9",
+            "native_docking_clock": "isolated fixed 120 Hz replay; not flight authority or an ephemeris trajectory",
+            "native_docking_fixture": "false",
+            "native_hdr": "true",
+            "native_hdr_target_bytes": "7372800",
+            "native_jitter_scope": "Halton primary terrain/meshes only; motion excludes sampling jitter; resolved only when native_taa=true; secondary view unchanged",
+            "native_jitter_submitted_frames": "0",
+            "native_map_open": "false",
+            "native_material_height_field_pages": "248",
+            "native_material_reference_height_m": "5.007671312155324",
+            "native_material_reference_height_source": "detail enabled: canonical field at eye direction / fixed 32 m wavelength, cached per selection epoch; disabled: legacy datum; not exact per-tile or collision height",
+            "native_material_resident_levels": "[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2, 3, 5, 0, 26, 53, 92, 67, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_material_view_policy": "actual camera-relative clip planes for material priority; shared refinement and soil heights retain the wider prefetch cone; local reference-height sphere, not exact terrain occlusion",
+            "native_motion_scope": "render.motion_vectors; stored opaque depth + alpha mask, before temporal resolve and translucent overlays",
+            "native_motion_target_bytes": "0",
+            "native_motion_vectors": "false",
+            "native_night_lights_extent": "Some([256, 128])",
+            "native_night_lights_source": "static inhabited-land R8 optical proxy; primary terrain only, not activity/electric power or secondary-ray emission",
+            "native_plume_enabled": "true",
+            "native_plume_light_applied": "false",
+            "native_plume_light_status": "unavailable",
+            "native_plume_quality": "Medium",
+            "native_plume_scope": "render.scene_overlays (includes depth-clipped plume color-load pass when active)",
+            "native_primary_jitter": "false",
+            "native_rt_reflection_estimator": "when admitted: one mirror ray per bounce; Medium/High pixel-cone texture mips, Low point sampling; resolved rt_reflection_samples is a requested policy value, not an active stochastic sample count",
+            "native_scene_format": "Rgba16Float",
+            "native_shadow_map_size": "1024",
+            "native_sky_layer_bytes": "10802286",
+            "native_stellar_transmission_steps": "32",
+            "native_surface_ground_candidates": "36864",
+            "native_surface_ground_litter_fragments": "1271",
+            "native_surface_ground_moss_clumps": "192",
+            "native_surface_ground_pebbles": "6692",
+            "native_surface_ground_puddles": "24",
+            "native_surface_ground_samples": "6692",
+            "native_surface_ground_water_basins": "99",
+            "native_surface_ground_water_samples": "6936",
+            "native_surface_ground_water_triangles": "1960",
+            "native_surface_ground_window": "1,18,96291,190216",
+            "native_surface_plants_accepted": "11320",
+            "native_surface_plants_candidate_visits": "237568",
+            "native_surface_plants_contract": "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path",
+            "native_surface_plants_draw_calls": "37",
+            "native_surface_plants_frame_upload_bytes": "576",
+            "native_surface_plants_instance_buffer_bytes": "1151488",
+            "native_surface_plants_preparation_cpu_ms": "36924.22259899999",
+            "native_surface_plants_preparation_job_pending": "false",
+            "native_surface_plants_preparation_jobs_discarded": "0",
+            "native_surface_plants_preparation_jobs_started": "0",
+            "native_surface_plants_prototype_payload_bytes": "46159116",
+            "native_surface_plants_prototype_texture_bytes": "3760128",
+            "native_surface_plants_publication_cpu_ms": "172.220911",
+            "native_surface_plants_reduced_instances": "5320",
+            "native_surface_plants_renderer_reused": "false",
+            "native_surface_plants_retained": "11297",
+            "native_surface_plants_rt_policy": "shared_policy_mesh_rt_not_requested",
+            "native_surface_plants_shadow_lod_budget_withheld": "false",
+            "native_surface_plants_shadow_payload_bytes": "1657464",
+            "native_surface_plants_status": "applied_survey_with_near_understory",
+            "native_surface_plants_submitted_instances": "2510",
+            "native_surface_plants_surface_samples": "36769",
+            "native_surface_plants_window": "1,14,6018,11888",
+            "native_surface_understory_accepted": "9254",
+            "native_surface_understory_candidate_visits": "200704",
+            "native_surface_understory_replaced_coarse_clumps": "23",
+            "native_surface_understory_scale_bins_lt_045_070_095": "[582, 3226, 3966, 1480]",
+            "native_surface_understory_surface_samples": "33884",
+            "native_surface_understory_window": "1,18,96291,190216",
+            "native_surface_understory_windows": "49",
+            "native_survey_actual_eye_agl_m": "1.9999999998080256",
+            "native_survey_analytic_source_signature": "{\"contract\":\"thessa-analytic-source-v1\",\"features\":[{\"depth_m\":2349.5093326841657,\"id\":\"impact-basin-0\",\"lat_deg\":-5.611596541472208,\"lon_deg\":-86.741608923232,\"radius_m\":670728.5139317274,\"rings\":3,\"rotation_rad\":1.365341254751748,\"seed\":4299262263303,\"type\":\"impact_basin\"},{\"branches\":5,\"height_m\":5679.889439148244,\"id\":\"mountain-arc-0\",\"lat_deg\":4.647510922061766,\"length_m\":1532864.9450967421,\"lon_deg\":139.81127503721996,\"rotation_rad\":2.5290233753316733,\"seed\":4307852197895,\"type\":\"mountain_range\",\"width_m\":222466.837886875},{\"depth_m\":3773.8667293768526,\"id\":\"rift-canyon-system-0\",\"lat_deg\":-34.934223816036635,\"length_m\":1211388.4332205707,\"lon_deg\":168.49336402903916,\"rotation_rad\":2.118791916227394,\"seed\":4316442132487,\"tributaries\":4,\"type\":\"canyon\",\"width_m\":48294.76911999528},{\"id\":\"volcanic-province-0\",\"lat_deg\":47.86630147148081,\"lon_deg\":100.11403583531336,\"radius_m\":368481.0400605489,\"rotation_rad\":1.989055179700376,\"seed\":4325032067079,\"shields\":5,\"swell_m\":1500.0,\"type\":\"volcanic_province\"},{\"caldera\":true,\"height_m\":6149.38330541827,\"id\":\"shield-volcano-caldera-complex-0\",\"lat_deg\":-7.032884310824679,\"lon_deg\":150.51871258236622,\"radius_m\":59608.420742161674,\"rotation_rad\":1.0101358774670681,\"seed\":4333622001671,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2494.939987870157,\"id\":\"shield-volcano-caldera-complex-1\",\"lat_deg\":54.81587954555761,\"lon_deg\":-18.58208950109981,\"radius_m\":108550.67808661085,\"rotation_rad\":2.801997445700702,\"seed\":4337916968966,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":3658.207481772792,\"id\":\"shield-volcano-caldera-complex-2\",\"lat_deg\":13.998006241326753,\"lon_deg\":-119.55929285521518,\"radius_m\":67158.90016444154,\"rotation_rad\":2.0138896552107335,\"seed\":4342211936261,\"type\":\"shield_volcano\"},{\"caldera\":true,\"height_m\":2192.9166327263783,\"id\":\"shield-volcano-caldera-complex-3\",\"lat_deg\":48.26829438100861,\"lon_deg\":163.69526988938696,\"radius_m\":104164.24214529483,\"rotation_rad\":0.16851277162734574,\"seed\":4346506903556,\"type\":\"shield_volcano\"},{\"central_peak\":true,\"depth_m\":3152.1822399979837,\"ejecta\":true,\"id\":\"large-crater-0\",\"lat_deg\":21.079552173077253,\"lon_deg\":154.262073452899,\"rim_radius_m\":166975.830902453,\"rotation_rad\":2.39530015317016,\"seed\":4355096838151,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1688.538019337118,\"ejecta\":true,\"id\":\"large-crater-1\",\"lat_deg\":-11.363366625036944,\"lon_deg\":97.69302333885284,\"rim_radius_m\":99796.9522167549,\"rotation_rad\":4.6197695405831105,\"seed\":4359391805446,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1097.57286807431,\"ejecta\":true,\"id\":\"large-crater-2\",\"lat_deg\":-54.642028082234326,\"lon_deg\":-129.56997834289052,\"rim_radius_m\":149480.05768304723,\"rotation_rad\":4.781017745878919,\"seed\":4363686772741,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":3797.2419500082224,\"ejecta\":true,\"id\":\"large-crater-3\",\"lat_deg\":-27.8627145167643,\"lon_deg\":-33.210530276221796,\"rim_radius_m\":85652.41770773251,\"rotation_rad\":2.9753754968536934,\"seed\":4367981740036,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3548.402636068368,\"ejecta\":true,\"id\":\"large-crater-4\",\"lat_deg\":8.475240252142132,\"lon_deg\":74.80912975072872,\"rim_radius_m\":80179.05934257718,\"rotation_rad\":2.715861788404917,\"seed\":4372276707331,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":2243.1701570914997,\"ejecta\":true,\"id\":\"large-crater-5\",\"lat_deg\":1.997874540204867,\"lon_deg\":1.7602131623214734,\"rim_radius_m\":222490.2183674398,\"rotation_rad\":0.4899131976719484,\"seed\":4376571674626,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":3770.543728527618,\"ejecta\":true,\"id\":\"large-crater-6\",\"lat_deg\":34.55501627312763,\"lon_deg\":-165.83427844822586,\"rim_radius_m\":136588.42728659976,\"rotation_rad\":0.5137159009239954,\"seed\":4380866641921,\"type\":\"crater\"},{\"central_peak\":true,\"depth_m\":2712.177871373579,\"ejecta\":true,\"id\":\"large-crater-7\",\"lat_deg\":37.185912516328514,\"lon_deg\":-151.44481496691077,\"rim_radius_m\":212499.3048996149,\"rotation_rad\":5.113250532254168,\"seed\":4385161609216,\"type\":\"crater\"},{\"central_peak\":false,\"depth_m\":1585.6021931919126,\"ejecta\":true,\"id\":\"large-crater-8\",\"lat_deg\":-9.107398211781671,\"lon_deg\":53.099146832342264,\"rim_radius_m\":50922.36067740218,\"rotation_rad\":3.41216311912966,\"seed\":4389456576527,\"type\":\"crater\"},{\"depth_m\":2914.3490762681154,\"id\":\"dry-plateau-salt-basin-complex-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":277048.2027214083,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"salt_basin\"},{\"height_m\":4980.204486880922,\"id\":\"dry-plateau-0\",\"lat_deg\":42.4548883182154,\"lon_deg\":-175.38403479375478,\"radius_m\":415572.3040821124,\"rotation_rad\":0.8748667787885136,\"seed\":4398046511111,\"type\":\"plateau\"},{\"branches\":5,\"height_m\":6500.0,\"id\":\"glaciated-mountain-coast-0\",\"lat_deg\":65.4462790807334,\"length_m\":775381.3699035968,\"lon_deg\":66.49874620724609,\"rotation_rad\":2.15302019854899,\"seed\":4406636445703,\"type\":\"mountain_range\",\"width_m\":200000.0},{\"chain_length_m\":792000.0625314456,\"id\":\"archipelago-0\",\"island_radius_m\":66000.00521095381,\"islands\":6,\"lat_deg\":5.023498070582697,\"lon_deg\":-111.45621074350521,\"rotation_rad\":5.066394269837036,\"seed\":4415226380295,\"type\":\"archipelago\"},{\"chain_length_m\":837730.918968984,\"id\":\"archipelago-1\",\"island_radius_m\":69810.909914082,\"islands\":6,\"lat_deg\":-48.581152830837034,\"lon_deg\":-95.36584812459955,\"rotation_rad\":1.4243915421658702,\"seed\":4419521347590,\"type\":\"archipelago\"},{\"chain_length_m\":784001.2544768354,\"id\":\"archipelago-2\",\"island_radius_m\":65333.43787306961,\"islands\":6,\"lat_deg\":-52.91079924315126,\"lon_deg\":-24.446332048461407,\"rotation_rad\":0.14037461842994395,\"seed\":4423816314885,\"type\":\"archipelago\"},{\"chain_length_m\":474055.97308147803,\"id\":\"archipelago-3\",\"island_radius_m\":39504.6644234565,\"islands\":6,\"lat_deg\":-10.742035717744578,\"lon_deg\":-85.90789468129934,\"rotation_rad\":2.9575526493107382,\"seed\":4428111282180,\"type\":\"archipelago\"},{\"chain_length_m\":301331.5471098434,\"id\":\"archipelago-4\",\"island_radius_m\":25110.962259153617,\"islands\":6,\"lat_deg\":-32.75091762701062,\"lon_deg\":107.6894988950521,\"rotation_rad\":3.2334339803195493,\"seed\":4432406249475,\"type\":\"archipelago\"}],\"landmarks\":[],\"params\":{\"anti_nereid_land_bias\":0.18,\"aridity\":0.45799999999999996,\"eclipse_strength\":0.28,\"glaciation\":0.2,\"height_max_m\":12000.0,\"height_min_m\":-8000.0,\"hydrology\":{\"allow_lakes\":true,\"closed_basin_salt_flats\":true,\"river_min_catchment_area_m2\":100000000000.0,\"route_rivers_downhill\":true},\"knobs\":{\"base_roughness_m\":176.0,\"canyon_strength\":0.16,\"crater_density\":0.22,\"erosion\":0.62,\"mountain_coverage\":0.18,\"volcanism\":0.18},\"macro_strength\":0.85,\"name\":\"thessa\",\"nereid_ocean_bias\":0.22,\"nominal_flux_w_m2\":0.146,\"ocean_target\":0.6000000000000001,\"polar_extent\":0.16,\"radius_m\":3200000.0,\"seed\":7,\"surface_climate\":{\"eclipse_cooling_strength\":0.28,\"elevation_cooling_strength\":0.65,\"evaporation_m_yr_at_278k\":0.6,\"geothermal_local_warming_strength\":0.25,\"high_cloud_wet_region_bias\":0.55,\"moisture_transport_m\":1200000.0,\"polar_cooling_strength\":0.7,\"precipitation_m_yr\":1.0,\"rainout_height_m\":1800.0,\"target_mean_temperature_k\":278.0},\"volcanism\":0.18},\"provinces\":[{\"flux_w_m2\":2.8538652437502945,\"lat_deg\":-27.508459281164882,\"lon_deg\":173.92937348485248,\"radius_m\":376033.021355505},{\"flux_w_m2\":4.682624323107745,\"lat_deg\":-13.733747765551328,\"lon_deg\":157.46270451988113,\"radius_m\":558965.7298969002},{\"flux_w_m2\":4.608210456189418,\"lat_deg\":-7.8042267717772145,\"lon_deg\":141.83153838350808,\"radius_m\":292148.6557443555},{\"flux_w_m2\":1.0395016202962264,\"lat_deg\":-16.399280184711078,\"lon_deg\":141.83037384020673,\"radius_m\":186224.0687637512},{\"flux_w_m2\":1.1321227508859957,\"lat_deg\":48.954248831567114,\"lon_deg\":116.51659157222068,\"radius_m\":98517.11661692621},{\"flux_w_m2\":0.8388875521068785,\"lat_deg\":-21.573105466111933,\"lon_deg\":-135.23230236359439,\"radius_m\":197708.46909618174},{\"flux_w_m2\":0.6006689583665864,\"lat_deg\":-2.5940765933032006,\"lon_deg\":59.27177267219415,\"radius_m\":185281.12300285388},{\"flux_w_m2\":1.0936508543162617,\"lat_deg\":-51.19427065925927,\"lon_deg\":-76.66499950986568,\"radius_m\":137460.76727166848},{\"flux_w_m2\":0.947811781757897,\"lat_deg\":-43.4448536439134,\"lon_deg\":-157.8643364528682,\"radius_m\":114628.32403567588},{\"flux_w_m2\":1.122013418540936,\"lat_deg\":13.310190671093075,\"lon_deg\":-8.499854759105485,\"radius_m\":181874.54427263595},{\"flux_w_m2\":0.6549438811602071,\"lat_deg\":22.708057310395247,\"lon_deg\":74.45584708457211,\"radius_m\":109103.9125539377}],\"sea_offset_m\":535.8754401220891,\"tectonics\":[],\"temperature_offset_k\":-5.190961895703083}",
+            "native_survey_distance_m": "80",
+            "native_survey_eye_body_m": "[-2835051.776623983, 1279289.634545036, -752292.6983244818]",
+            "native_survey_eye_ground_datum_m": "5.007671312155324",
+            "native_survey_forward_body": "[0.4133582597898216, 0.9039379739103636, 0.10968631813657403]",
+            "native_survey_fov_y_rad": "0.9",
+            "native_survey_frozen_erosion_attached": "true",
+            "native_survey_ground_min_wavelength_m": "1",
+            "native_survey_ground_source": "canonical PlanetField::height_m(actual eye direction), max(height, sea datum 0); radial AGL, not waves/canopy or resident-mesh clearance",
+            "native_survey_look_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_near_m": "0.1",
+            "native_survey_requested_eye_agl_m": "2",
+            "native_survey_site": "fixed:23.565679258039204,165.13881581863882",
+            "native_survey_target_body_m": "[-2835018.692591346, 1279361.9831983468, -752283.9193400461]",
+            "native_survey_target_lat_lon_deg": "23.565679258039207,165.13881581863882",
+            "native_taa": "false",
+            "native_taa_global_reset_frames": "0",
+            "native_taa_history_age_limit": "0",
+            "native_taa_neighborhood_width": "0",
+            "native_taa_scope": "render.temporal_resolve; opaque history and depth snapshot before overlays, including copy-back; no upscaling or generated frames",
+            "native_taa_submitted_frames": "0",
+            "native_taa_target_bytes": "0",
+            "native_terrain_environment_cloud_budget": "[4, 4, 1]",
+            "native_terrain_environment_samples": "16",
+            "native_terrain_environment_scope": "render.scene_classify_and_raster; shared sky GGX visible-normal quadrature, including reflected cloud transport; no scene-object terrain reflections",
+            "native_terrain_resident_height_levels": "[6, 3, 2, 7, 7, 22, 36, 36, 18, 16, 24, 22, 30, 32, 23, 25, 37, 70, 96, 80, 85, 86, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+            "native_tonemapping": "pbr_neutral",
+            "navball_atlas_width": "0",
+            "navball_diameter_points": "320",
+            "navball_renderer": "analytic",
+            "night_lights": "true",
+            "note_0": "RT participation flags ignored while ray tracing is off",
+            "note_1": "native shadow atlas memory budget resolves map size to 1024",
+            "ocean": "true",
+            "ocean_geometry_distance_m": "300",
+            "ocean_geometry_patches": "32",
+            "ocean_size": "128",
+            "plume": "true",
+            "preset": "custom",
+            "raster_msaa_samples": "4",
+            "ray_tracing": "off",
+            "requested_toml": "version = 1\npreset = \"high\"\n\n[surface_plants]\nenabled = true\nquality = \"high\"\nunderstory = true\ndetail_distance_m = 48\n\n[terrain_topology]\nenabled = true\nquality = \"high\"\n\n[instruments]\nenabled = true\nquality = \"high\"\nlayout = \"aircraft\"\nnavball_renderer = \"auto\"\n\n[ocean]\nenabled = true\nquality = \"high\"\nwind_speed_m_s = 10.0\nwind_direction_rad = 0.0\nsignificant_height_m = 2.0\ndepth_m = 100.0\nseed = 17\ngeometry_patches = 32\ngeometry_distance_m = 300.0\n\n[renderer]\ntone_mapping = \"pbr_neutral\"\nmsaa_samples = 4\nsurface_quality = \"high\"\nterrain_normal_maps = true\nterrain_ground_detail = true\nterrain_ground_puddles = true\nspecular_reflections = true\nshadow_memory_mib = 64\nfleet_meshes = true\nfleet_quality = \"high\"\nbackend = \"vulkan\"\nray_tracing = \"off\"\nterrain = \"gpu_auto\"\nmaterial_storage = \"rgba_array\"\nterrain_mesh_cells = 24\nresolution_scale = 1.0\nvsync = false\nhdr = true\nbloom = false\nauto_exposure = false\nexposure_ev100 = 11.95\n\n[temporal]\ntaa = false\nquality = \"high\"\nmotion_vectors = false\njitter = false\n\n[atmosphere]\nenabled = true\nquality = \"high\"\naerial_perspective = true\nlocal_haze_extinction_per_m = 0.00078\nlocal_haze_height_m = 480.0\nmultiple_scattering = true\neclipses = true\nmulti_star = true\nlimb_scattering = true\nsky_dome = true\nstars = true\nstars_quality = \"high\"\nray_steps = 32\ndensity_scale = 1.42\n\n[clouds]\nenabled = true\nquality = \"high\"\nintegrator = \"march\"\nvolumetric = true\nray_steps = 24\ncast_shadows = true\nlayers = 2\ncoverage = 0.38\nopacity = 0.42\nanimate = true\n\n[night_lights]\nenabled = true\nquality = \"medium\"\nintensity = 1.0\n\n[upper_atmosphere]\nairglow = true\naurora = true\naurora_quality = \"low\"\naurora_lighting = false\naurora_intensity = 1.0\naurora_animate = true\n\n[raytracing]\nscene_memory_mib = 64\nmax_instances = 32768\nreflection_bounces = 1\nray_bias_m = 0.0001\nterrain = true\nvehicles = true\nlandmarks = false\natmosphere = true\nclouds = false\nmax_distance_m = 500000.0\n\n[shadows]\nenabled = true\nquality = \"high\"\ncascades = 4\nmax_distance_m = 12000.0\nfirst_cascade_distance_m = 25.0\nmesh_lod_error_texels = 0.5\nreceiver_culling = true\nraster_sample_culling = true\nmap_size = 4096\nnormal_bias_m = 0.001\n\n[gas_giant]\nenabled = true\nquality = \"medium\"\nanimate_bands = true\nlimb_darkening = true\n\n[engine_plume]\nenabled = true\nquality = \"medium\"\nmach_diamonds = true\nflicker = true\nlight = true\n\n[debug]\nshow_atmosphere_bounds = false\nshow_rt_proxies = false\n",
+            "resolution_scale": "1.000",
+            "rt_max_distance_m": "500000",
+            "rt_max_instances": "32768",
+            "rt_reflection_bounces": "1",
+            "rt_scene_memory_bytes": "67108864",
+            "settings": "ResolvedGraphicsSettings { surface_plants_enabled: true, surface_plants_density_scale: 1.0, surface_plants_max_candidates: 36864, surface_plants_max_items: 36864, surface_plants_detail_distance_m: 48.0, surface_understory_enabled: true, surface_understory_max_candidates: 200704, surface_understory_max_items: 200704, terrain_ground_pebbles_density_scale: 1.0, terrain_ground_relief_max_level: 22, terrain_ground_pebbles_max_candidates: 36864, terrain_ground_pebbles_max_items: 36864, terrain_topology: ResolvedTerrainTopology { capacity: 131072, waves: 4, split_area_px: 64.0, merge_area_px: 8.0 }, instruments: ResolvedInstruments { enabled: true, layout: Aircraft, renderer: Analytic, diameter_points: 320, atlas_width: 0 }, ocean: OceanSettings { enabled: true, quality: High, wind_speed_m_s: 10.0, wind_direction_rad: 0.0, significant_height_m: 2.0, depth_m: 100.0, seed: 17, geometry_patches: 32, geometry_distance_m: 300.0 }, ocean_size: 128, rt_scene_memory_bytes: 67108864, rt_max_instances: 32768, rt_reflection_bounces: 1, rt_reflection_samples: 4, rt_ray_bias_m: 0.0001, surface_quality: High, terrain_normal_maps: true, terrain_ground_detail: true, terrain_ground_puddles: true, terrain_material_anisotropy: 16, specular_reflections: true, native_shadow_map_size: 1024, shadow_filter_radius: 2, shadow_mesh_command_budget_bytes: 16777216, fleet_meshes: true, fleet_min_pixels: 0.5, preset_label: \"custom\", backend: ResolvedBackend { name: \"vulkan\" }, terrain: GpuMesh, terrain_mesh_cells: 24, material_storage: RgbaArray, ray_tracing: Off, resolution_scale: 1.0, raster_msaa_samples: 4, tone_mapping: PbrNeutral, vsync: false, hdr: true, temporal_motion_vectors: false, temporal_jitter: false, temporal_taa: false, temporal_quality: High, bloom: false, exposure_ev100: 11.95, auto_exposure: false, atmosphere_enabled: true, atmosphere_quality: High, atmosphere_steps: 32, aerial_perspective: true, local_haze_extinction_per_m: 0.00078, local_haze_height_m: 480.0, multiple_scattering: true, eclipses: true, multi_star: true, limb_scattering: true, sky_dome: true, stars: true, stars_quality: High, atmosphere_density_scale: 1.42, airglow: true, aurora_shell: true, aurora_lighting: false, aurora_quality: Low, aurora_intensity: 1.0, aurora_animate: true, clouds_enabled: true, clouds_quality: High, cloud_integrator: March, clouds_volumetric: true, clouds_steps: 24, clouds_layers: 2, clouds_coverage: 0.38, clouds_opacity: 0.42, clouds_animate: true, clouds_cast_shadows: true, night_lights_enabled: true, night_lights_quality: Medium, night_lights_intensity: 1.0, gas_giant_enabled: true, gas_giant_quality: Medium, gas_giant_animate: true, gas_giant_limb: true, plume_enabled: true, plume_quality: Medium, plume_diamonds: true, plume_flicker: true, plume_light: true, rt_terrain: false, rt_vehicles: false, rt_landmarks: false, rt_atmosphere_queries: false, rt_clouds: false, rt_max_distance_m: 500000.0, shadow_enabled: true, shadow_cascades: 4, shadow_max_distance_m: 12000.0, shadow_first_cascade_distance_m: Some(25.0), shadow_mesh_lod_error_texels: 0.5, shadow_receiver_culling: true, shadow_raster_sample_guard_texels: Some(0.0625), shadow_map_size: 4096, shadow_normal_bias_m: 0.001, notes: [\"RT participation flags ignored while ray tracing is off\", \"native shadow atlas memory budget resolves map size to 1024\"] }",
+            "shadow_cascades": "4",
+            "shadow_filter_radius": "2",
+            "shadow_first_cascade_distance_m": "25",
+            "shadow_map_size": "4096",
+            "shadow_max_distance_m": "12000",
+            "shadow_mesh_command_budget_bytes": "16777216",
+            "shadow_mesh_lod_error_texels": "0.5",
+            "shadow_raster_sample_guard_texels": "0.0625",
+            "shadow_receiver_culling": "true",
+            "shadows": "true",
+            "specular_reflections": "true",
+            "stars": "true",
+            "stars_quality": "high",
+            "surface_plants_density_scale": "1",
+            "surface_plants_detail_distance_m": "48",
+            "surface_plants_enabled": "true",
+            "surface_plants_max_candidates": "36864",
+            "surface_plants_max_items": "36864",
+            "surface_quality": "high",
+            "surface_understory_enabled": "true",
+            "surface_understory_max_candidates": "200704",
+            "surface_understory_max_items": "200704",
+            "temporal_jitter": "false",
+            "temporal_motion_vectors": "false",
+            "temporal_quality": "High",
+            "temporal_taa": "false",
+            "terrain": "gpu_mesh",
+            "terrain_ground_detail": "true",
+            "terrain_ground_pebbles_density_scale": "1",
+            "terrain_ground_pebbles_max_candidates": "36864",
+            "terrain_ground_pebbles_max_items": "36864",
+            "terrain_ground_puddles": "true",
+            "terrain_ground_relief_max_level": "22",
+            "terrain_material_anisotropy": "16",
+            "terrain_material_max_level": "24",
+            "terrain_mesh_cells": "24",
+            "terrain_normal_maps": "true",
+            "terrain_normal_mip_bias": "0",
+            "terrain_topology_capacity": "131072",
+            "terrain_topology_merge_area_px": "8",
+            "terrain_topology_split_area_px": "64",
+            "terrain_topology_waves": "4",
+            "tone_mapping": "pbr_neutral",
+            "vsync": "false"
+          }
+        },
+        "scenario": "terrain-native vehicle_preview=false live_flight=false server_flight=false sweep=false hud=false prestream_s=3 sim_step_s=0 clock=None",
+        "window_frames": 90
+      },
+      "screenshot_sha256": "7f5eebaeccbfade7102a443704a4d291c317b28f9311cfbafb5839fd59013cab"
+    }
+  },
+  "profile_limit": "Live source/material residency depends on wall cadence. Full profile observations are not an isolated causal speedup or a game-FPS acceptance. First captures have 30 measured frames; long captures have 90, with a last-30 summary after topology convergence. Identical profile/scene and vegetation do not imply identical material pages.",
+  "topology": {
+    "investigation": "Fixed source reached zero requests and commits by publication revision59 with53008live slots. Original native long replay also converged. No topology change or removed invalidation.",
+    "record": "topology-investigation.toml",
+    "source": "topology-investigation-source.rs"
+  },
+  "coastal_counts": {
+    "candidate_instances": 17992,
+    "submitted_triangles": 17111160,
+    "prototype_bytes": 46159116,
+    "shadow_submitted_triangles": 208101356,
+    "shadow_prototype_bytes": 1657464,
+    "frame_upload_bytes": 576
+  },
+  "authorization": {
+    "user_instruction": "\u0438 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u0439 \u0433\u043f\u0443 \u043d\u0435 \u0431\u043e\u0439\u0441\u044f",
+    "recorded_utc": "2026-10-28T17:32:03.275475+00:00",
+    "scope": "Explicit authorization for physical GPU diagnostics, superseding the prior automatic-replay block for this continuation. Preserve incident record. Start with bounded headless raster-only work, inspect new kernel events between runs. No driver/watchdog changes. Process/device namespaces do not protect the desktop from a GPU reset."
+  },
+  "gaps": [
+    "High-cost primary material/cloud shading remains",
+    "No whole-game FPS or independent reference parity",
+    "RT checked only in small representative scenes; not dense coastal RT stability",
+    "No main merge"
+  ],
+  "files": {
+    "baseline-static-command.json": {
+      "bytes": 2488,
+      "sha256": "1a66457b4ac73d7446be27cb12fbd75a09e9b764983aff1b8e48ef65da5563c1"
+    },
+    "baseline-static-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "baseline-static-long-command.json": {
+      "bytes": 2499,
+      "sha256": "4571a7b55dfb20ecbce5d10a2e8f20d9c87e2eade9272f70da3306e91584a019"
+    },
+    "baseline-static-long-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "baseline-static-long.csv": {
+      "bytes": 26079,
+      "sha256": "cbbcdbb1c5733e7ca5d95b32a40ee05e7e1aa581f5abc6bde334bf67165a2ebf"
+    },
+    "baseline-static-long.json": {
+      "bytes": 264689,
+      "sha256": "d10ab622910c0c6e61e9bbd0f169b93aea8ca61985a7385aa1b692927225eb01"
+    },
+    "baseline-static-long.log": {
+      "bytes": 7662,
+      "sha256": "242085d50e862e376a9448b868c7b04cfa0f6779d0af305732eb73f8a3eadccf"
+    },
+    "baseline-static-long.png": {
+      "bytes": 1938738,
+      "sha256": "7f5eebaeccbfade7102a443704a4d291c317b28f9311cfbafb5839fd59013cab"
+    },
+    "baseline-static.csv": {
+      "bytes": 9318,
+      "sha256": "f3c516be194307298b527875291acf3ba73eaba5b270a6cb344e8e599e726dee"
+    },
+    "baseline-static.json": {
+      "bytes": 107370,
+      "sha256": "dd6f8ed994ea714753ee8bb1ab51122a2430662c2bf05b4fc6803ec89a4c2ca4"
+    },
+    "baseline-static.log": {
+      "bytes": 7651,
+      "sha256": "1b5fe66227821e5f7c55a999e659e8674b5375b003a07fc0d92c8458c9cda86a"
+    },
+    "baseline-static.png": {
+      "bytes": 1938756,
+      "sha256": "0bcb2c89e0af52927d3b38fe94f4dce8116422e3588e6ca133cf2ca2664bb80f"
+    },
+    "baseline.json": {
+      "bytes": 253,
+      "sha256": "393e0be6a6d690560c9bb989282cd33f59f43de07d8533dbe1788c8e8dd9aa2d"
+    },
+    "coastal-final-command.json": {
+      "bytes": 1754,
+      "sha256": "d13fcf272d0bc23ace39a597c0a5e225efa518fce6140d3edc56e96b74069bb3"
+    },
+    "coastal-final-physical-command.json": {
+      "bytes": 1698,
+      "sha256": "11d87e2be033c6c605fd6b2c689e77888f79dda4a2ac170d125f09ce778609d0"
+    },
+    "coastal-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "coastal-final-physical.log": {
+      "bytes": 122798,
+      "sha256": "edd83cf64a028c12184e8bdadb6d6c5f1e15e1a307d273422aa30359ad419843"
+    },
+    "coastal-final-physical.stages.toml": {
+      "bytes": 351781,
+      "sha256": "983ae4a8db9ad3427081a4c133afed895d277c89864514d380f0c5c510950715"
+    },
+    "coastal-final-physical.toml": {
+      "bytes": 109526,
+      "sha256": "f341cb5a8debbd594541c4df4f1f65f532984c8204db45dc985e1950dcad4e76"
+    },
+    "coastal-final.log": {
+      "bytes": 94967,
+      "sha256": "ad0a9cefc9d3f1ea5c0b67b38e11b61c76668ead88cbe2fe40f35e56fd8c52ba"
+    },
+    "coastal-final.toml": {
+      "bytes": 94498,
+      "sha256": "cfcb129d4d37f42e7c6e466c0a787c89d9f0cd27dd39548c14b0ca83b8900a8c"
+    },
+    "combined-ground-final-command.json": {
+      "bytes": 1787,
+      "sha256": "c0e76e4cff8f0a3a28b3c2c72fa8406f01b18c86fe2988fd41d44938bc11c6b9"
+    },
+    "combined-ground-final.log": {
+      "bytes": 4345,
+      "sha256": "cadff06e72307c64b91cf54f386d567d6f4a986a0725ca22f625c35db6d02b88"
+    },
+    "combined-ground-final.toml": {
+      "bytes": 2563,
+      "sha256": "df717e61fe0437df79111fa2159513c2952a6e24b5f663adc714200dd17a43b0"
+    },
+    "final-binary.json": {
+      "bytes": 206,
+      "sha256": "e19d20962783b517d3cb79ea76bb1ce86c81dfa6fa6b0493a0474faafdf2fe5c"
+    },
+    "final-checks/architecture.log": {
+      "bytes": 50,
+      "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"
+    },
+    "final-checks/caster-cpu.log": {
+      "bytes": 1090,
+      "sha256": "596b1b3fea36718192b26956aa5620a58096aa84111d4a4195ea60a294ab249e"
+    },
+    "final-checks/checks.json": {
+      "bytes": 4274,
+      "sha256": "b594a8871cb0c8644a268cc0e1a1ead0d9181eb2411d9d8c4e444989ff9bbb7d"
+    },
+    "final-checks/complete.json": {
+      "bytes": 338,
+      "sha256": "0a32fef0c58e55d2b42c3b9fc366ac4d33123ba3fb0c13063bc25b621dd4c08c"
+    },
+    "final-checks/feature-off.log": {
+      "bytes": 511,
+      "sha256": "f77de1a33d00bdc1c05b8be8e9c4f106103f1a4910467338ceaae4ce25340001"
+    },
+    "final-checks/fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "final-checks/graphics-cpu.log": {
+      "bytes": 4645,
+      "sha256": "427d7c3d4c7dfde3d74d812af267ec6e7032c17c2756c06068dd1c8c29c8dfed"
+    },
+    "final-checks/inputs.json": {
+      "bytes": 95650,
+      "sha256": "5580cf47d3b8e72badf7e488da94ff42937dcc91af572cb104c8665f8d00d433"
+    },
+    "final-checks/legacy-client-check.log": {
+      "bytes": 352,
+      "sha256": "f4cc3051c9fd2d80bf7f0b9251b9ede5820e8608f95b31f3beaf6125a9781e0f"
+    },
+    "final-checks/mesh-fallback-build.log": {
+      "bytes": 357,
+      "sha256": "5d210f84c0394a44de1306f858f8c506a92b32a0f94b4c9ec78dff3f4182f49e"
+    },
+    "final-checks/msaa-fallback-build.log": {
+      "bytes": 357,
+      "sha256": "23dbb45a97cd1dd8c3b7dc00a1caa33bf9c7d794cd3f1acaa5b4ef4932d37c6c"
+    },
+    "final-checks/native-cpu.log": {
+      "bytes": 20198,
+      "sha256": "12b4de52b2bab7b15ab5f14db010a518f212f375b09d6672b36aa2d372eef0ae"
+    },
+    "final-checks/physical-release-build.log": {
+      "bytes": 670,
+      "sha256": "7fbe433af51643a7d56d6d30c018e57d5701cb4b70a1c0c1cbc3f48cb474034e"
+    },
+    "final-checks/primary-oracle-build.log": {
+      "bytes": 235,
+      "sha256": "df7adf4a62001d09d5e5644de2aecbf262d220efdbc7d7d4d30651cf65e6c5c4"
+    },
+    "final-checks/ray-oracle-build.log": {
+      "bytes": 367,
+      "sha256": "40608db5e2f87dd5384332d0ea8e2338d91cbbf5ff68388eb932b61d5b4827e2"
+    },
+    "final-checks/release.log": {
+      "bytes": 359,
+      "sha256": "f52b3b00e0f2b989a5d2ad3ed88101e5c52fa03dc7595eebf4580c09e0e14512"
+    },
+    "final-checks/render-core-cpu.log": {
+      "bytes": 4301,
+      "sha256": "ac1c3af6a7a56ad2efb8d92264d0be5270972198068f9801ff2276367a767817"
+    },
+    "final-checks/shadow-integration-build.log": {
+      "bytes": 375,
+      "sha256": "f19492b28a383c16b0120aa268567150522283af24c8385f4fec06ba1cf52cfe"
+    },
+    "final-checks/stream-cpu.log": {
+      "bytes": 3642,
+      "sha256": "385d330e4b8e217ff678e0e3ddbbd092c52b30159eb9992d8d437475164ae9c9"
+    },
+    "final-checks/strict-clippy.log": {
+      "bytes": 511,
+      "sha256": "8adf679521addd232b0284f797d6acc1b5451a44bf8ccf0fd468088705aaac76"
+    },
+    "final-checks/worldgen-cpu.log": {
+      "bytes": 28072,
+      "sha256": "0480537aa11428386732b15917e57f387fe581daf6f3b04d36ddd6caa90ab85f"
+    },
+    "final-static-long-command.json": {
+      "bytes": 2502,
+      "sha256": "3835fd5a708a9ab0396ca8a9fb396ff2367f75ad295f816fbe394fc8eac03a09"
+    },
+    "final-static-long-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "final-static-long.csv": {
+      "bytes": 25900,
+      "sha256": "da1921785cb5c23a2708bd9389665b7253c7027884baaf3a4a5b44f22e2028b6"
+    },
+    "final-static-long.json": {
+      "bytes": 264760,
+      "sha256": "8622069f11f664f9616f28c7526f0d3d07a36a2baec8905746857053fb8a1ed0"
+    },
+    "final-static-long.log": {
+      "bytes": 7644,
+      "sha256": "2209b63106a54f761efe09fdf49d05aa46ce26653523bae3a64a4a1ea509b810"
+    },
+    "final-static-long.png": {
+      "bytes": 1938854,
+      "sha256": "d0a8991335673e6adf946fb08a64b87a144fb05ee2c1e38fc661bb3b3103b819"
+    },
+    "format.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "msaa-final-physical-command.json": {
+      "bytes": 1686,
+      "sha256": "0013605d479849ba7f53b5ae165e5646b4ce6cedbf9f7d3db77652d9a10a729b"
+    },
+    "msaa-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "msaa-final-physical.log": {
+      "bytes": 191,
+      "sha256": "d8dfc006b06609aafc33a99fbef361b8059eb05c00db16a51d8af98d9d21579f"
+    },
+    "native-raster-vulkan.toml": {
+      "bytes": 2874,
+      "sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f"
+    },
+    "physical-complete.json": {
+      "bytes": 806,
+      "sha256": "b961ac4bc38e36c156058cf4f7c917b74ca23fadaedf79bab891a9797c7e59f4"
+    },
+    "plant-final-physical-command.json": {
+      "bytes": 1713,
+      "sha256": "dc3a89acc35f640cfd49fba8344fc05bbe9d6d6f4026222d7cef1d3774546382"
+    },
+    "plant-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "plant-final-physical.log": {
+      "bytes": 8825,
+      "sha256": "8006f13643ad3feabb0013cddb0ad7933f404621a1067b5ddb5ca4ea95b54add"
+    },
+    "plant-final-physical.toml": {
+      "bytes": 5166,
+      "sha256": "3789947cbaccec45f00e1a3c6eb5cac5f164d7dff8905a77a9253c5678af2ae4"
+    },
+    "plant-ground-final-command.json": {
+      "bytes": 1807,
+      "sha256": "328b919de7f709959745c2b618015eb5d72eaec8226a1e07ddd264a510b81b67"
+    },
+    "plant-ground-final.log": {
+      "bytes": 4184,
+      "sha256": "e67acc7dab468bef93d949611cf7f1375624726f4bc5ec290af72fcd28caed17"
+    },
+    "plant-ground-final.toml": {
+      "bytes": 2624,
+      "sha256": "b967c6fceb6f3b6ae5ef5ebc3c65749dbadf5fb21f95b456e1e148395ed14a4b"
+    },
+    "primary-final-command.json": {
+      "bytes": 1777,
+      "sha256": "f2fe4715dcd517885154fa3d16da574fb9ac306de167f47f4b0a87f9c285d8f8"
+    },
+    "primary-final-physical-command.json": {
+      "bytes": 1701,
+      "sha256": "a7bd2640b58ad29209ca3577abbf0dd3e14cd1e8c45316f5148142fd2218a2cc"
+    },
+    "primary-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "primary-final-physical.log": {
+      "bytes": 203,
+      "sha256": "d88406be12f20a9039bc47fb55b3e011c0dad62e9d7c762354651bec9ca2a275"
+    },
+    "primary-final.log": {
+      "bytes": 286,
+      "sha256": "0bf37ac884be201076ed964eadab53f83ec0d47901795dd7794b5adc96b13e65"
+    },
+    "ray-miss_reproduces_the_raster_directional_field_exactly-command.json": {
+      "bytes": 1714,
+      "sha256": "c1d6c7864917d8851de60075241b0897bb3d3534ae1a1b976ec815ebce7f4eaf"
+    },
+    "ray-miss_reproduces_the_raster_directional_field_exactly-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "ray-miss_reproduces_the_raster_directional_field_exactly.log": {
+      "bytes": 178,
+      "sha256": "3f799609f0c4fb5a1ab608d93defa45f445630c910ed2cee2c90ad85885d8a68"
+    },
+    "ray-ocean_hits_use_shared_deformed_grid_and_spectral_normals_without_global_rebuilds-command.json": {
+      "bytes": 1769,
+      "sha256": "48d59b0e7b2ec80ad6e760821a33993a1c5a31128d389649b754985b91587497"
+    },
+    "ray-ocean_hits_use_shared_deformed_grid_and_spectral_normals_without_global_rebuilds-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "ray-ocean_hits_use_shared_deformed_grid_and_spectral_normals_without_global_rebuilds.log": {
+      "bytes": 206,
+      "sha256": "ac1275149bc1ecf401f91b913c4b80ef81c17c97b3427808bc9212c1e4a11eea"
+    },
+    "ray-reflected_ao_and_normal_maps_obey_the_existing_material_contract-command.json": {
+      "bytes": 1738,
+      "sha256": "1436e567ff648016a1a9ef10cac18bca5f04e579fefd2674d87eba40c9bc2b62"
+    },
+    "ray-reflected_ao_and_normal_maps_obey_the_existing_material_contract-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "ray-reflected_ao_and_normal_maps_obey_the_existing_material_contract.log": {
+      "bytes": 190,
+      "sha256": "db07ea2c37232a8ad80f7f647f07c2f4594eb4dcd4325410eaa538e0f525d741"
+    },
+    "ray-scene_ray_shadows_work_without_reflections_or_an_atlas-command.json": {
+      "bytes": 1718,
+      "sha256": "1372986dc8c352ea772fe93111a8e5a72797df6806b8cb4b715f972c8b0a6ccd"
+    },
+    "ray-scene_ray_shadows_work_without_reflections_or_an_atlas-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "ray-scene_ray_shadows_work_without_reflections_or_an_atlas.log": {
+      "bytes": 180,
+      "sha256": "9f88c60f2a6e235674f011a3c8646e09be00806e7ef8e29c29263b2cd276ef03"
+    },
+    "ray-shadow_only_terrain_blocks_primary_mesh_without_hit_tables-command.json": {
+      "bytes": 1726,
+      "sha256": "e13112c3382658439d5adb193e709879c8b4c92eacb11fd2a4948a5567b7ec8d"
+    },
+    "ray-shadow_only_terrain_blocks_primary_mesh_without_hit_tables-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "ray-shadow_only_terrain_blocks_primary_mesh_without_hit_tables.log": {
+      "bytes": 184,
+      "sha256": "2c696ad3616d3cd6f1a96cf78e73843cf431a3ffedf63f56fcb38cc06c83ae7d"
+    },
+    "ray-terrain_membership_is_independent_of_vehicle_participation_and_empty_tlas_is_safe-command.json": {
+      "bytes": 1772,
+      "sha256": "d57ad8c84de6b59e1b64f85f402a244415878a458b486ba9042b3f2ac43223ba"
+    },
+    "ray-terrain_membership_is_independent_of_vehicle_participation_and_empty_tlas_is_safe-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "ray-terrain_membership_is_independent_of_vehicle_participation_and_empty_tlas_is_safe.log": {
+      "bytes": 207,
+      "sha256": "03aaccb49db27bd4ff5c6d629fb3cfb339f2fe951d5254291802392fc70b061b"
+    },
+    "receiver-final-command.json": {
+      "bytes": 1762,
+      "sha256": "075886d4e73ec417e9283cf9fe40cc5651bddb63514cf9e325993760febe1f12"
+    },
+    "receiver-final.csv": {
+      "bytes": 181,
+      "sha256": "24b4b2cd06668d48d8f4ce5fabac87a0ac9875f452455276d4e2256011a676e3"
+    },
+    "receiver-final.log": {
+      "bytes": 379,
+      "sha256": "e93141afc9436f3b460fa1ee0ac2ecb420b9543331a7e8016991faf923613d36"
+    },
+    "reed-ground-final-command.json": {
+      "bytes": 1784,
+      "sha256": "ebc6c40411541dcbc48d7478794a85cf4ee412c84f477b33acb7a33d442dceb3"
+    },
+    "reed-ground-final.log": {
+      "bytes": 4025,
+      "sha256": "00196e61f9e183a3305035edf0ffd1c1158b97e6e8a35bca54364f2033fce62d"
+    },
+    "reed-ground-final.toml": {
+      "bytes": 2500,
+      "sha256": "9d44f95bcc18a84ab7f643e6d1a06f43179c55447a6dedda6c6e344c19197358"
+    },
+    "release-trial-build.log": {
+      "bytes": 353,
+      "sha256": "07f1035039b1aed1224913e7e08219f7ec5df43208904d71e916c80783e85658"
+    },
+    "shadow-batch-final-command.json": {
+      "bytes": 1785,
+      "sha256": "ba2dfdffc16e199be3adeecb3c416771332efacb07db3a5383d877d12afca735"
+    },
+    "shadow-batch-final.log": {
+      "bytes": 839,
+      "sha256": "61a2bfdceffaae86296092a95e721bfaac1e2bea621872accec360b3bfafa17f"
+    },
+    "shadow-final-physical-command.json": {
+      "bytes": 1709,
+      "sha256": "f6b9f42fd883cf9864a1cfcaceb32f626deb01d6e56f3ef9cf92f9a8dbe32112"
+    },
+    "shadow-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "shadow-final-physical.log": {
+      "bytes": 841,
+      "sha256": "09aba4bd1ac336f7096c53413965e43e2811fe693e57d48f1cc3a7b9db07abc0"
+    },
+    "shadow-zero-final-command.json": {
+      "bytes": 1752,
+      "sha256": "cc3fd71cbca5439e1cee8790dd4a9cf8bcc89177a1bd23c619e97172c006d589"
+    },
+    "shadow-zero-final.log": {
+      "bytes": 271,
+      "sha256": "49bd670d6c4c137a46114e69d29d633532475afb2f964c4e7d33c955bb6f1fda"
+    },
+    "sidedness-final-command.json": {
+      "bytes": 1758,
+      "sha256": "d61b1c9202ffbd7a35199b6ba00f32ebce3c86413dc417beffcb06a9ee95dd50"
+    },
+    "sidedness-final-physical-command.json": {
+      "bytes": 1708,
+      "sha256": "c9f37709f848d2d91b289ffb5a3d0ed393d0b74f64411d23774ae22343cf6a08"
+    },
+    "sidedness-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "sidedness-final-physical.log": {
+      "bytes": 598,
+      "sha256": "700c34a19563bab3045810fbfb67ddaf7bc956a541bca845febea1e5624277e0"
+    },
+    "sidedness-final.log": {
+      "bytes": 576,
+      "sha256": "5797e119aacc3acc3a9c9c4f6af0c0f0466778408c9fe02a2c7f74b854e0d960"
+    },
+    "sidedness-layout-source.rs": {
+      "bytes": 3783,
+      "sha256": "f2ce47dd07c9559d2517b093c9044ea0f7b7b234c2bb3c75c1d85b15329eb24a"
+    },
+    "sidedness-static-command.json": {
+      "bytes": 2486,
+      "sha256": "c68ae90549adc1566edb7bc93188ce1adeaba54bab04f8631dbaca322cdcf8c5"
+    },
+    "sidedness-static-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "sidedness-static.csv": {
+      "bytes": 9299,
+      "sha256": "21c24e7fcf707b0286cb70e96ba9b9384494e0784f4b3226ee574abc328eb991"
+    },
+    "sidedness-static.json": {
+      "bytes": 107390,
+      "sha256": "43f3ac128de41517f8771fac1834dccd34bbbdc660f5e3fdd0dc53506878ed38"
+    },
+    "sidedness-static.log": {
+      "bytes": 7728,
+      "sha256": "3decb66d828727e1376a94cc328f2a1e5b1d2662e0692dd641e7f09ade335430"
+    },
+    "sidedness-static.png": {
+      "bytes": 1938894,
+      "sha256": "946bac8a5b4f15cc24d69ad5e661ef69a94c6e3f8f850ede765f47dd45b73955"
+    },
+    "sidedness-trial-binary.json": {
+      "bytes": 195,
+      "sha256": "82d5e38f175d57a57a8eabe57a9686dc2470e9d9c06f63f7d01406b70910fcd6"
+    },
+    "sidedness-trial-command.json": {
+      "bytes": 1757,
+      "sha256": "e73bdb5ab088ea55dc5a212146bd35e0eceb80699431a60aed3c852c6997079c"
+    },
+    "sidedness-trial-inputs.json": {
+      "bytes": 444,
+      "sha256": "a4d92f37cb69f7571f6073505fabb60efbcdc57c06fcd4bf0901385347517471"
+    },
+    "sidedness-trial-physical-command.json": {
+      "bytes": 1709,
+      "sha256": "5acacbe54eaa1350248e8043e865f5ea4f751b141a9cb0f20b495f9f942b0b91"
+    },
+    "sidedness-trial-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "sidedness-trial-physical.log": {
+      "bytes": 598,
+      "sha256": "25c3718de11451678ea75ea93199c04beb0f478939436078852158bfaaac56c5"
+    },
+    "sidedness-trial.log": {
+      "bytes": 575,
+      "sha256": "bb1b638976f36e75c80fd149d9a9e049777340ed352b1340f693142a0e767730"
+    },
+    "sidedness-trial.patch": {
+      "bytes": 22392,
+      "sha256": "e1ae49f16a973a9b4f140a7aaba2acb7800d95b0997e75478a1a77e9eccf633a"
+    },
+    "software-complete.json": {
+      "bytes": 368,
+      "sha256": "67fa9a69ae521567edf815f5412802845857aae813f32f197f2087203e28302a"
+    },
+    "topology-investigation-command.json": {
+      "bytes": 1705,
+      "sha256": "e624dd29a1ee42057d9924a341a762cdb33e622deaa9d8aebf082b02d2d9ccc8"
+    },
+    "topology-investigation-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "topology-investigation-source.rs": {
+      "bytes": 3681,
+      "sha256": "5e2b74879753f6c70b9bdf84d9abe01c2d0aadd523eab1f88b68a1894713bf20"
+    },
+    "topology-investigation.log": {
+      "bytes": 2233,
+      "sha256": "0cb19f86f16567af6f278e41153fbc66f4c257c0a975c8bed568535437cf9482"
+    },
+    "topology-investigation.toml": {
+      "bytes": 2848,
+      "sha256": "ceb5a86bbf945ca49c39b8db4d253c85ce6a2cd18ea05839cd7e4956cf794c15"
+    },
+    "trial-build.json": {
+      "bytes": 296,
+      "sha256": "120e9e0b38d6ae92e89533420326a8dcea2354282664aa205176ff5c80ad103e"
+    },
+    "user-authorization.json": {
+      "bytes": 470,
+      "sha256": "5036bded24ce26950a2c9060c611b975ea20ae3f6e17ab58a6730a505ff6bce6"
+    }
+  }
+}

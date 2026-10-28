@@ -1,5 +1,7 @@
 //! Persistent opaque textured mesh consumer. Loads the caller's existing
 //! color/depth targets after terrain; no scene copy, readback or extra device.
+#[path = "mesh_layout.rs"]
+pub(crate) mod layout;
 use crate::{
     Backend, BackendError,
     view::{ViewParams, ViewUniformBlock},
@@ -27,6 +29,7 @@ struct Primitive {
     shadow: Vec<ShadowPrimitive>,
     ambient: wgpu::Buffer,
     attributes: Option<wgpu::Buffer>,
+    double_sided: bool,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
@@ -89,6 +92,7 @@ pub struct MeshRenderer {
     rt_reason: Option<String>,
     environment: crate::environment::EnvironmentBinding,
     pipeline: wgpu::RenderPipeline,
+    single_sided_pipeline: Option<wgpu::RenderPipeline>,
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
     primitives: Vec<Primitive>,
@@ -487,7 +491,7 @@ impl MeshRenderer {
         settings: SurfaceSettings<'_>,
         terrain: Option<&crate::terrain_ray::TerrainRaySource>,
     ) -> Result<Self, BackendError> {
-        Self::build_surface(backend, source, settings, terrain, false)
+        Self::build_surface(backend, source, settings, terrain, false, true)
     }
 
     /// Camera-only reprojection for immutable body-fixed geometry. The caller
@@ -499,7 +503,7 @@ impl MeshRenderer {
         settings: SurfaceSettings<'_>,
         terrain: Option<&crate::terrain_ray::TerrainRaySource>,
     ) -> Result<Self, BackendError> {
-        Self::build_surface(backend, source, settings, terrain, true)
+        Self::build_surface(backend, source, settings, terrain, true, true)
     }
 
     fn build_surface(
@@ -508,6 +512,7 @@ impl MeshRenderer {
         settings: SurfaceSettings<'_>,
         terrain: Option<&crate::terrain_ray::TerrainRaySource>,
         static_geometry: bool,
+        fixed_sidedness: bool,
     ) -> Result<Self, BackendError> {
         let SurfaceSettings {
             format,
@@ -637,69 +642,90 @@ impl MeshRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &ambient_attributes,
         }));
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("owned-mesh"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vertex"),
-                compilation_options: Default::default(),
-                buffers: &vertex_buffers,
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: ray_tracing.map_or(1, |settings| settings.raster_msaa_samples),
-                ..Default::default()
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fragment"),
-                // Opaque two-sided populations need no discard. Specialization
-                // lets the driver reject hidden foliage before expensive shading.
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[
-                        (
-                            "MESH_ALL_DOUBLE_SIDED",
-                            f64::from(source.materials.iter().all(|m| m.double_sided)),
-                        ),
-                        (
-                            "MESH_ENV_SAMPLES",
-                            match quality {
-                                thessa_graphics::Quality::Low => 4.0,
-                                thessa_graphics::Quality::Medium => 8.0,
-                                thessa_graphics::Quality::High => 16.0,
-                            },
-                        ),
-                        (
-                            "MESH_CLOUD_DIRECTIONS",
-                            match quality {
-                                thessa_graphics::Quality::Low => 1.0,
-                                thessa_graphics::Quality::Medium => 2.0,
-                                thessa_graphics::Quality::High => 4.0,
-                            },
-                        ),
-                    ],
+        let shared_layout = fixed_sidedness.then(|| {
+            layout::pipeline_layout(
+                device,
+                shadows.is_some(),
+                match &rt {
+                    crate::ray_scene::Enable::Ready(plan) => Some(plan),
+                    _ => None,
+                },
+            )
+        });
+        let make_pipeline = |cull_mode| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("owned-mesh"),
+                layout: shared_layout.as_ref(),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &vertex_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode,
                     ..Default::default()
                 },
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: ray_tracing.map_or(1, |settings| settings.raster_msaa_samples),
+                    ..Default::default()
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fragment"),
+                    // Opaque two-sided populations need no discard. Specialization
+                    // lets the driver reject hidden foliage before expensive shading.
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[
+                            (
+                                "MESH_ALL_DOUBLE_SIDED",
+                                f64::from(
+                                    fixed_sidedness
+                                        || source.materials.iter().all(|m| m.double_sided),
+                                ),
+                            ),
+                            (
+                                "MESH_ENV_SAMPLES",
+                                match quality {
+                                    thessa_graphics::Quality::Low => 4.0,
+                                    thessa_graphics::Quality::Medium => 8.0,
+                                    thessa_graphics::Quality::High => 16.0,
+                                },
+                            ),
+                            (
+                                "MESH_CLOUD_DIRECTIONS",
+                                match quality {
+                                    thessa_graphics::Quality::Low => 1.0,
+                                    thessa_graphics::Quality::Medium => 2.0,
+                                    thessa_graphics::Quality::High => 4.0,
+                                },
+                            ),
+                        ],
+                        ..Default::default()
+                    },
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let double_sided = source.materials.iter().any(|m| m.double_sided);
+        let single_sided = source.materials.iter().any(|m| !m.double_sided);
+        let pipeline =
+            make_pipeline((fixed_sidedness && !double_sided).then_some(wgpu::Face::Back));
+        let single_sided_pipeline = (fixed_sidedness && double_sided && single_sided)
+            .then(|| make_pipeline(Some(wgpu::Face::Back)));
         let environment = crate::environment::EnvironmentBinding::new(device);
         let global = frame_bind_group(
             device,
@@ -841,6 +867,7 @@ impl MeshRenderer {
                     },
                     wgpu::BufferUsages::VERTEX,
                 ),
+                double_sided: source.materials[p.material].double_sided,
                 attributes: shadows.map(|_| {
                     buffer(
                         &words(
@@ -926,6 +953,7 @@ impl MeshRenderer {
             primary_indirect_ranges: vec![0..0; primitives.len()],
             ranges: vec![0..0; primitives.len()],
             pipeline,
+            single_sided_pipeline,
             global,
             materials,
             primitives,
@@ -1306,6 +1334,13 @@ impl MeshRenderer {
             if runs.is_empty() || range.is_empty() {
                 continue;
             }
+            pass.set_pipeline(if !p.double_sided {
+                self.single_sided_pipeline
+                    .as_ref()
+                    .unwrap_or(&self.pipeline)
+            } else {
+                &self.pipeline
+            });
             pass.set_bind_group(1, &self.materials[p.material], &[]);
             pass.set_vertex_buffer(0, p.vertices.slice(..));
             if let Some(attributes) = &p.attributes {

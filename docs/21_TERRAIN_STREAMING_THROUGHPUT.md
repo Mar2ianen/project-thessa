@@ -889,3 +889,5 @@ Acceptance criteria:
 - RSS/peak memory no worse, expected lower on UMA;
 - p95 `request_to_visible` does not regress;
 - no vendor lock-in and no GPU requirement for authoritative terrain.
+
+The [immutable-demand continuation](86_NATIVE_OPAQUE_SIDEDNESS.md) reuses exact geometry-selection input from a pinned Arc source, including hysteresis input and source identity. Timed motion sampling, mailbox polling, material refinement and publication remain separate from demand recomputation.

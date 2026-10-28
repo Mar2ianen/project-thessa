@@ -7,12 +7,26 @@ use thessa_render_core::mesh::*;
 #[test]
 #[ignore = "software Vulkan: shadow indirect/direct depth and colour across layers, mixed geometry and budget fallback"]
 fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
-    assert!(!std::path::Path::new("/dev/dri").exists());
+    compare_shadow_submission(false);
+}
+
+#[test]
+#[ignore = "physical GPU: bounded 64-instance shadow/sample/direct/indirect regression; explicit authorization required"]
+fn physical_shadow_submission_preserves_depth_and_colour() {
+    compare_shadow_submission(true);
+}
+
+fn compare_shadow_submission(physical: bool) {
+    assert_eq!(
+        std::path::Path::new("/dev/dri/renderD128").exists(),
+        physical
+    );
     let backend = Backend::bring_up().unwrap();
     assert_eq!(
-        backend.adapter.get_info().device_type,
-        wgpu::DeviceType::Cpu
+        backend.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
+        !physical
     );
+    eprintln!("shadow submission adapter={:?}", backend.adapter.get_info());
     let mut request = thessa_graphics::RequestedGraphics::default();
     request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
     request.shadows.map_size = 512;
@@ -83,9 +97,16 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         MeshRenderer::with_surface_and_terrain(&backend, &source, settings(), None).unwrap();
     let mut direct =
         MeshRenderer::with_surface_and_terrain(&backend, &source, settings(), None).unwrap();
+    for (gpu, primitive) in batched.primitives.iter().zip(&source.primitives) {
+        assert_eq!(gpu.vertices.size(), primitive.vertices.len() as u64 * 12);
+        assert_eq!(
+            gpu.attributes.as_ref().unwrap().size(),
+            primitive.vertices.len() as u64 * 20
+        );
+    }
     assert!(
         batched.primary_indirect_supported,
-        "pinned software adapter must exercise indexed indirect first_instance"
+        "adapter must exercise indexed indirect first_instance"
     );
     direct.primary_indirect_supported = false;
     let mut lods: Vec<_> = (0..2)
@@ -202,6 +223,37 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         );
         assert!(a.2.mesh_submitted_triangles < unculled.2.mesh_submitted_triangles);
         witnessed_samples |= a.2.mesh_sample_rejected_instances > 0;
+        {
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            let mut stats = crate::shadows::ShadowDrawStats::default();
+            for layer in 0..12 {
+                stats.accumulate(terrain.shadows().unwrap().encode_layer_for_diagnostics(
+                    &mut encoder,
+                    &terrain,
+                    Some(&batched),
+                    layer,
+                    true,
+                ));
+            }
+            terrain.encode_scene(&mut encoder, &target.color, &target.depth, Some(&batched));
+            backend.queue.submit([encoder.finish()]);
+            let atlas = terrain.shadows().unwrap();
+            assert_eq!(
+                a.0,
+                atlas.read_depth(&backend).unwrap(),
+                "single-layer path changed atlas"
+            );
+            assert_eq!(a.1, target.read_rgba8(&backend).unwrap());
+            let mut concatenated = Vec::new();
+            for layer in 0..12 {
+                concatenated.extend(atlas.read_layer_depth(&backend, layer).unwrap());
+            }
+            assert_eq!(a.0, concatenated, "single-layer readback differs");
+            assert!(atlas.read_layer_depth(&backend, 12).is_err());
+            let mut expected = a.2;
+            expected.mesh_indirect_upload_bytes = 0;
+            assert_eq!(expected, stats);
+        }
         {
             let commands = batched.shadow_commands.lock().unwrap();
             for data in &commands.uploaded {

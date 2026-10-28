@@ -1968,9 +1968,19 @@ mod tests {
     #[test]
     #[ignore = "software Vulkan: real coastal primary plan/counts, no raster submission"]
     fn report_coastal_primary_workload() {
-        assert!(
-            !std::path::Path::new("/dev/dri").exists(),
-            "use isolated CPU-only ICD"
+        report_coastal_workload(false);
+    }
+
+    #[test]
+    #[ignore = "physical GPU: bounded per-layer coastal shadow profile; explicit authorization required"]
+    fn physical_coastal_shadow_layers() {
+        report_coastal_workload(true);
+    }
+
+    fn report_coastal_workload(physical: bool) {
+        assert_eq!(
+            std::path::Path::new("/dev/dri/renderD128").exists(),
+            physical
         );
         let output = std::path::PathBuf::from(
             std::env::var_os("THESSA_WORKLOAD_OUTPUT").expect("set a NEW report path"),
@@ -1978,17 +1988,21 @@ mod tests {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(output)
+            .open(&output)
             .unwrap();
         let mut request = thessa_graphics::RequestedGraphics::from_toml(include_str!(
             "../../../data/graphics/surface-showcase.toml"
         ))
         .unwrap();
         request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
-        let backend = Backend::bring_up_for_graphics(&request).unwrap();
+        let backend = if physical {
+            Backend::bring_up_for_graphics_profiled(&request).unwrap()
+        } else {
+            Backend::bring_up_for_graphics(&request).unwrap()
+        };
         assert_eq!(
-            backend.adapter.get_info().device_type,
-            wgpu::DeviceType::Cpu
+            backend.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
+            !physical
         );
         let mut scene = Scene::load(request).unwrap();
         scene.select_fixed_survey_site([23.565679258039204, 165.13881581863882]);
@@ -2073,6 +2087,10 @@ mod tests {
         let mut expected_observed = shadow_stats;
         expected_observed.mesh_indirect_upload_bytes = 0;
         assert_eq!(observed, expected_observed);
+        assert_eq!(
+            shadow_stats.mesh_submitted_triangles, 208_101_356,
+            "same-build plan must reproduce doc 84"
+        );
         let mut no_samples_encoder = backend.device.create_command_encoder(&Default::default());
         terrain.encode_shadows_without_sample_culling(&mut no_samples_encoder, meshes.opaque());
         let no_samples_stats = terrain.last_shadow_draws();
@@ -2132,7 +2150,9 @@ mod tests {
             .collect();
         groups.sort_by_key(|v| std::cmp::Reverse(v["candidate_triangles"].as_integer().unwrap()));
         let mut report = toml::Table::new();
-        report.insert("scope".into(), toml::Value::String("Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.".into()));
+        report.insert("scope".into(), toml::Value::String(if physical {
+            "Actual retained coastal producer with explicit physical GPU authorization. Per-layer depth encoding, admission, durable fences and GPU timestamps; no primary/AS draw and no whole-frame/FPS claim."
+        } else {"Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time."}.into()));
         report.insert(
             "adapter".into(),
             toml::Value::String(format!("{:?}", backend.adapter.get_info())),
@@ -2242,6 +2262,114 @@ mod tests {
         assert!(shadow_stats.mesh_submitted_triangles < shadow_stats.mesh_candidate_triangles / 4);
         assert!(shadow_stats.mesh_lod_max_error_microtexels <= 500_000);
         assert!(scene.surface_plants_diagnostics.borrow().prototype_bytes <= 48_000_000);
+        if physical {
+            let mut trace = crate::gpu_trace::GpuTrace::create(
+                &output.with_extension("stages.toml"),
+                30_000_000,
+            )
+            .unwrap();
+            let gpu = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 2)
+                .expect("coastal diagnostic requires GPU timestamps");
+            backend.queue.submit([]);
+            backend
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            let mut surface_encoder = backend.device.create_command_encoder(&Default::default());
+            terrain.encode_surface(&mut surface_encoder);
+            trace
+                .checkpoint(&backend, &mut surface_encoder, 0, "surface", 0)
+                .unwrap();
+            let atlas = terrain.shadows().unwrap();
+            let mut stages = Vec::new();
+            let mut sequence = 0;
+            for layer in 0..12 {
+                let mut reference = None;
+                for (block, sample_culling) in [false, true, false, true, true, false, true, false]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut times = Vec::new();
+                    let mut walls = Vec::new();
+                    let mut triangles = 0;
+                    for sample in 0..4 {
+                        let start = std::time::Instant::now();
+                        let mut encoder =
+                            backend.device.create_command_encoder(&Default::default());
+                        gpu.mark(&mut encoder, 0);
+                        let stats = atlas.encode_layer_for_diagnostics(
+                            &mut encoder,
+                            &terrain,
+                            meshes.opaque(),
+                            layer,
+                            sample_culling,
+                        );
+                        triangles = stats.mesh_submitted_triangles;
+                        gpu.mark(&mut encoder, 1);
+                        gpu.resolve(&mut encoder);
+                        trace
+                            .event(
+                                sequence,
+                                "shadow-layer",
+                                "encoded",
+                                &format!("layer={layer} sample_culling={sample_culling} {stats:?}"),
+                            )
+                            .unwrap();
+                        trace
+                            .checkpoint(&backend, &mut encoder, sequence, "shadow-layer", triangles)
+                            .unwrap();
+                        sequence += 1;
+                        let wall = start.elapsed().as_secs_f64() * 1000.0;
+                        let time = gpu.read(&backend).unwrap()[0] * 1000.0;
+                        assert!(
+                            time < 250.0,
+                            "stop staged replay on unexpected long GPU interval"
+                        );
+                        if sample > 0 {
+                            times.push(time);
+                            walls.push(wall);
+                        }
+                    }
+                    let depth = atlas.read_layer_depth(&backend, layer).unwrap();
+                    if let Some(ref a) = reference {
+                        assert_eq!(
+                            a, &depth,
+                            "coastal sample/no-sample depth differs at layer {layer}"
+                        );
+                    } else {
+                        reference = Some(depth);
+                    }
+                    times.sort_by(f64::total_cmp);
+                    walls.sort_by(f64::total_cmp);
+                    let table: toml::Table = [
+                        ("layer", toml::Value::Integer(layer as i64)),
+                        ("block", toml::Value::Integer(block as i64)),
+                        ("sample_culling", toml::Value::Boolean(sample_culling)),
+                        ("triangles", toml::Value::Integer(triangles as i64)),
+                        ("samples", toml::Value::Integer(3)),
+                        ("gpu_p50_ms", toml::Value::Float(times[1])),
+                        ("wall_p50_ms", toml::Value::Float(walls[1])),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), v))
+                    .collect();
+                    eprintln!(
+                        "coastal physical layer={layer} sample_culling={sample_culling} block={block} triangles={triangles} gpu_p50_ms={} serial_wall_p50_ms={}",
+                        times[1], walls[1]
+                    );
+                    stages.push(toml::Value::Table(table));
+                }
+            }
+            for layer in 0..12 {
+                std::fs::write(
+                    output.with_extension(format!("layer-{layer}.depth")),
+                    atlas.read_layer_depth(&backend, layer).unwrap(),
+                )
+                .unwrap();
+            }
+            report.insert("physical_layers".into(), toml::Value::Array(stages));
+            report.insert("physical_scope".into(),toml::Value::String("Serial per-layer shadow profile with 30M triangle admission, durable fences and no primary/cloud/AS draw. Exact sample/no-sample depth each block. Not a whole-frame benchmark.".into()));
+        }
         use std::io::Write;
         file.write_all(toml::to_string_pretty(&report).unwrap().as_bytes())
             .unwrap();

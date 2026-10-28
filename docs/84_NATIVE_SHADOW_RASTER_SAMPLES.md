@@ -124,3 +124,5 @@ The [artifact](artifacts/native-shadow-raster-samples-2026-10-28.json) records
 commands, hashes, driver/containment, full per-case results, counts and omissions.
 Source manifest: `de80d052c217096f05875a0216089fd899ed1cfe93689949d08251bd2c99496f`.
 Release binary: `2d5a875012cb0f233c96a9d0842cbd3c651c03a8b7bca9b6d97661e18884379f`.
+
+The [depth vertex-stream continuation](85_NATIVE_DEPTH_VERTEX_STREAMS.md) preserves geometry and shader arithmetic while splitting shadow-enabled mesh sources into 12-byte positions and 20-byte shading attributes. Explicitly authorized physical-GPU checks include complete coastal depth equivalence and counterbalanced release measurements; rejected shader/box candidates are kept separate from acceptance.

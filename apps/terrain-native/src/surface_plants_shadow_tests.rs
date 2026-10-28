@@ -11,25 +11,48 @@ use thessa_render_wgpu::{
 #[test]
 #[ignore = "software Vulkan: actual authored plant shadow silhouettes versus full geometry"]
 fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() {
-    compare_plant_shadows(false, false);
+    compare_plant_shadows(false, false, false);
 }
 #[test]
 #[ignore = "software Vulkan: actual reed caster and all plant organs versus full geometry"]
 fn actual_reed_shadow_lods_preserve_receiver_and_coverage() {
-    compare_plant_shadows(true, true);
+    compare_plant_shadows(true, true, false);
 }
 #[test]
 #[ignore = "software Vulkan: combined actual fern/tree/reed hierarchy over twelve shadow layers"]
 fn actual_combined_plant_hierarchy_preserves_receivers() {
-    compare_plant_shadows(true, false);
+    compare_plant_shadows(true, false, false);
 }
-fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
-    assert!(!std::path::Path::new("/dev/dri").exists());
-    let backend = Backend::bring_up().unwrap();
+#[test]
+#[ignore = "physical GPU: bounded authored fern/tree/reed hierarchy; explicit authorization required"]
+fn physical_plant_hierarchy_preserves_receivers() {
+    compare_plant_shadows(true, false, true);
+}
+
+#[derive(Clone, Copy)]
+enum CaptureMode {
+    Selected,
+    Full,
+    NoSamples,
+}
+
+fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool, physical: bool) {
     assert_eq!(
-        backend.adapter.get_info().device_type,
-        wgpu::DeviceType::Cpu
+        std::path::Path::new("/dev/dri/renderD128").exists(),
+        physical
     );
+    let backend = if physical {
+        let mut request = thessa_graphics::RequestedGraphics::default();
+        request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+        Backend::bring_up_for_graphics_profiled(&request).unwrap()
+    } else {
+        Backend::bring_up().unwrap()
+    };
+    assert_eq!(
+        backend.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
+        !physical
+    );
+    eprintln!("plant shadows adapter={:?}", backend.adapter.get_info());
     let output = std::path::PathBuf::from(std::env::var_os("THESSA_WORKLOAD_OUTPUT").unwrap());
     let mut request = thessa_graphics::RequestedGraphics::default();
     request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
@@ -114,6 +137,7 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
     }
     let target = OffscreenTarget::new(&backend, 257, 193).unwrap();
     let mut cases = Vec::new();
+    let mut timings = Vec::new();
     let mut changed = 0_usize;
     let mut saved = 0_u64;
     for reduced in [false, true] {
@@ -243,34 +267,35 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
                     }],
                 )
                 .unwrap();
-            let mut capture =
-                |terrain: &mut TerrainRenderer, mesh: &MeshRenderer, full: bool, samples: bool| {
-                    terrain.invalidate_shadows();
-                    let mut encoder = backend.device.create_command_encoder(&Default::default());
-                    if full {
-                        terrain.encode_shadows_reference(&mut encoder, Some(mesh));
-                    } else if !samples {
-                        terrain.encode_shadows_without_sample_culling(&mut encoder, Some(mesh));
-                    } else {
-                        terrain.encode_shadows(&mut encoder, Some(mesh));
+            let mut capture = |terrain: &mut TerrainRenderer,
+                               mesh: &MeshRenderer,
+                               mode: CaptureMode| {
+                terrain.invalidate_shadows();
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                match mode {
+                    CaptureMode::Full => terrain.encode_shadows_reference(&mut encoder, Some(mesh)),
+                    CaptureMode::NoSamples => {
+                        terrain.encode_shadows_without_sample_culling(&mut encoder, Some(mesh))
                     }
-                    let stats = terrain.last_shadow_draws();
-                    terrain.encode_scene(&mut encoder, &target.color, &target.depth, Some(mesh));
-                    // The receiver is absent from the plant-only depth oracle, so
-                    // its coverage cannot hide missing foliage in the mask check.
-                    ground.encode(&mut encoder, &target.color, &target.depth);
-                    backend.queue.submit([encoder.finish()]);
-                    (
-                        terrain.shadows().unwrap().read_depth(&backend).unwrap(),
-                        target.read_rgba8(&backend).unwrap(),
-                        stats,
-                    )
-                };
+                    CaptureMode::Selected => terrain.encode_shadows(&mut encoder, Some(mesh)),
+                }
+                let stats = terrain.last_shadow_draws();
+                terrain.encode_scene(&mut encoder, &target.color, &target.depth, Some(mesh));
+                // The receiver is absent from the plant-only depth oracle, so
+                // its coverage cannot hide missing foliage in the mask check.
+                ground.encode(&mut encoder, &target.color, &target.depth);
+                backend.queue.submit([encoder.finish()]);
+                (
+                    terrain.shadows().unwrap().read_depth(&backend).unwrap(),
+                    target.read_rgba8(&backend).unwrap(),
+                    stats,
+                )
+            };
             mesh.set_shadow_lods(&backend, &[]).unwrap();
-            let full = capture(&mut terrain, &mesh, false, true);
+            let full = capture(&mut terrain, &mesh, CaptureMode::Selected);
             mesh.set_shadow_lods(&backend, &prepared.shadow_lods)
                 .unwrap();
-            let reference = capture(&mut terrain, &mesh, true, false);
+            let reference = capture(&mut terrain, &mesh, CaptureMode::Full);
             assert_eq!(
                 full.0, reference.0,
                 "LOD installation changed full shadow oracle"
@@ -282,7 +307,7 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             let baseline = if include_reeds && !isolate_reeds {
                 mesh.set_shadow_lods(&backend, &original_shadow_lods(&prepared))
                     .unwrap();
-                let previous = capture(&mut terrain, &mesh, false, true);
+                let previous = capture(&mut terrain, &mesh, CaptureMode::Selected);
                 let changed_from_full = full
                     .0
                     .as_chunks::<4>()
@@ -302,8 +327,8 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             } else {
                 full
             };
-            let no_samples = capture(&mut terrain, &mesh, false, false);
-            let lod = capture(&mut terrain, &mesh, false, true);
+            let no_samples = capture(&mut terrain, &mesh, CaptureMode::NoSamples);
+            let lod = capture(&mut terrain, &mesh, CaptureMode::Selected);
             assert_eq!(no_samples.0, lod.0, "sample culling changed plant atlas");
             assert_eq!(no_samples.1, lod.1, "sample culling changed plant colour");
             eprintln!(
@@ -450,7 +475,7 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             let mut invalid = prepared.shadow_lods.clone();
             invalid.last_mut().unwrap().max_error_m = f64::NAN;
             assert!(mesh.set_shadow_lods(&backend, &invalid).is_err());
-            let after_failure = capture(&mut terrain, &mesh, false, true);
+            let after_failure = capture(&mut terrain, &mesh, CaptureMode::Selected);
             assert_eq!(lod.0, after_failure.0);
             let mut expected_stats = lod.2;
             expected_stats.mesh_indirect_upload_bytes = 0;
@@ -517,6 +542,70 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             .map(|(k, v)| (k.into(), v))
             .collect();
             cases.push(toml::Value::Table(table));
+            if physical && case == 0 {
+                let gpu = thessa_render_wgpu::timing::GpuIntervals::new(&backend, 2)
+                    .expect("physical timing capability");
+                for (block, sample_culling) in [false, true, false, true, true, false, true, false]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut gpu_ms = Vec::new();
+                    let mut wall_ms = Vec::new();
+                    for sample in 0..30 {
+                        let start = std::time::Instant::now();
+                        let mut encoder =
+                            backend.device.create_command_encoder(&Default::default());
+                        gpu.mark(&mut encoder, 0);
+                        if sample_culling {
+                            terrain.invalidate_shadows();
+                            terrain.encode_shadows(&mut encoder, Some(&mesh));
+                        } else {
+                            terrain
+                                .encode_shadows_without_sample_culling(&mut encoder, Some(&mesh));
+                        }
+                        assert!(
+                            terrain.last_shadow_draws().mesh_submitted_triangles <= 4_000_000,
+                            "reject oversized diagnostic before submission"
+                        );
+                        gpu.mark(&mut encoder, 1);
+                        gpu.resolve(&mut encoder);
+                        backend.queue.submit([encoder.finish()]);
+                        backend
+                            .device
+                            .poll(wgpu::PollType::wait_indefinitely())
+                            .unwrap();
+                        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                        let time = gpu.read(&backend).unwrap()[0] * 1000.0;
+                        if sample >= 5 {
+                            assert!(
+                                time < 50.0,
+                                "stop diagnostic on unexpected long GPU interval"
+                            );
+                            gpu_ms.push(time);
+                            wall_ms.push(elapsed);
+                        }
+                    }
+                    gpu_ms.sort_by(f64::total_cmp);
+                    wall_ms.sort_by(f64::total_cmp);
+                    let table: toml::Table = [
+                        ("reduced", toml::Value::Boolean(reduced)),
+                        ("sample_culling", toml::Value::Boolean(sample_culling)),
+                        ("block", toml::Value::Integer(block as i64)),
+                        ("samples", toml::Value::Integer(25)),
+                        ("gpu_p50_ms", toml::Value::Float(gpu_ms[12])),
+                        ("gpu_p95_ms", toml::Value::Float(gpu_ms[23])),
+                        ("wall_p50_ms", toml::Value::Float(wall_ms[12])),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), v))
+                    .collect();
+                    eprintln!(
+                        "physical shadow cost reduced={reduced} sample_culling={sample_culling} block={block} gpu_p50_ms={} wall_p50_ms={}",
+                        gpu_ms[12], wall_ms[12]
+                    );
+                    timings.push(toml::Value::Table(table));
+                }
+            }
             lights.colors_lux[1] = [1.0; 4];
         }
     }
@@ -524,7 +613,9 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
         saved > 0 && (include_reeds || changed > 0),
         "must witness an actual approximation"
     );
-    let mut report: toml::Table = [("scope".into(),toml::Value::String("Actual native plant forms and a ground receiver; separate reed case isolates reed proxy with other sources full; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.".into())), ("cases".into(),toml::Value::Array(cases))].into_iter().collect();
+    let mut report: toml::Table = [("scope".into(),toml::Value::String("Actual native plant forms and a ground receiver; separate reed case isolates reed proxy with other sources full; CPU-only or explicitly authorized physical Vulkan, as recorded. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No whole-frame or general radiometric acceptance.".into())), ("cases".into(),toml::Value::Array(cases))].into_iter().collect();
+    report.insert("timings".into(), toml::Value::Array(timings));
+    report.insert("physical_gpu".into(), toml::Value::Boolean(physical));
     report.insert(
         "reference".into(),
         toml::Value::String(

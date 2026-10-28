@@ -1,0 +1,2542 @@
+{
+  "status": "Verified clean feature-branch implementation; no main merge or visual reference acceptance.",
+  "baseline": "c23498bc7b3729969e78aee70ba34229769cd77e",
+  "change": "Separate 12-byte position and 20-byte shading streams when raster shadows exist; reuse one depth pipeline. Original interleaved no-shadow fallback retained. No source, geometry, shader arithmetic, index order or material change.",
+  "source_manifest_sha256": "66e9cf8fc6f782244307c30766b7b3986d92241a6801953312eb578a354d12db",
+  "release_sha256": "2f94e5f997e34afdcce9e31a853f9841c1a6633eb594b6b8b1d245f1667ca965",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.6907845750683919
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-core",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-terrain-native",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 1.1235273410566151
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 128.8190085159149
+    },
+    {
+      "name": "graphics-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1073988969437778
+    },
+    {
+      "name": "render-core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.5637871739454567
+    },
+    {
+      "name": "caster-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "mesh_visibility"
+      ],
+      "exit_code": 0,
+      "seconds": 5.375957358977757
+    },
+    {
+      "name": "worldgen-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--lib",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 65.54589639801998
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 1.2265133019536734
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.0427881779614836
+    },
+    {
+      "name": "shadow-integration-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "unified_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 2.6550322209950536
+    },
+    {
+      "name": "primary-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1134124550735578
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 89.62138081307057
+    },
+    {
+      "name": "legacy-client-check",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-client"
+      ],
+      "exit_code": 0,
+      "seconds": 1.0717899299925193
+    },
+    {
+      "name": "mesh-fallback-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "mesh",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.6787504350068048
+    },
+    {
+      "name": "msaa-fallback-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "msaa",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.6526164759416133
+    },
+    {
+      "name": "physical-release-build",
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 100.65428427793086
+    }
+  ],
+  "cpu_tests": 524,
+  "software": {
+    "cases": [
+      "receiver-final",
+      "shadow-batch-final",
+      "primary-final",
+      "shadow-zero-final",
+      "plant-ground-final",
+      "reed-ground-final",
+      "combined-ground-final",
+      "coastal-final"
+    ],
+    "scope": "Seven actual CPU-Vulkan render regressions and one dense command-only dropped-encoder probe. No physical GPU access."
+  },
+  "physical_final": [
+    "shadow-final-physical",
+    "plant-final-physical",
+    "coastal-final-physical",
+    "primary-final-physical",
+    "msaa-final-physical"
+  ],
+  "authorization": {
+    "user_instruction": "\u0438 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u0439 \u0433\u043f\u0443 \u043d\u0435 \u0431\u043e\u0439\u0441\u044f",
+    "recorded_utc": "2026-10-28T17:32:03.275475+00:00",
+    "scope": "Explicit authorization for physical GPU diagnostics, superseding the prior automatic-replay block for this continuation. Preserve incident record. Start with bounded headless raster-only work, inspect new kernel events between runs. No driver/watchdog changes. Process/device namespaces do not protect the desktop from a GPU reset."
+  },
+  "adapter": "AdapterInfo { name: \"AMD Radeon 880M Graphics (RADV STRIX1)\", vendor: 4098, device: 5390, device_type: IntegratedGpu, device_pci_bus_id: \"0000:64:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.5-arch1.1\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: Some(false), limit_bucket: None }",
+  "format_abba": {
+    "order": [
+      "coastal-interleaved-a",
+      "coastal-split-b",
+      "coastal-split-b-repeat",
+      "coastal-interleaved-a-repeat"
+    ],
+    "selection": "tight=false ONLY in the frozen experimental reports means retained production sphere sample culling, 208101356 triangles; tight=true affine-box results are excluded. Legacy scope strings mentioning CPU-only in those physical reports are stale: adapter, command and physical_layers identify real GPU execution.",
+    "aggregation": "Median of eight block medians per layer across two processes per format, then sum 12 layer centrals. Each block has three steady GPU timestamp samples after one warmup.",
+    "metrics": {
+      "interleaved": {
+        "processes": [
+          "coastal-interleaved-a",
+          "coastal-interleaved-a-repeat"
+        ],
+        "layers": [
+          {
+            "layer": 0,
+            "block_medians_ms": [
+              13.356337206092835,
+              13.040937943588258,
+              13.246047654579163,
+              15.096042668014528,
+              13.16088584608841,
+              12.701933831577302,
+              12.869331889961243,
+              13.759302845798492
+            ],
+            "central_ms": 13.203466750333787
+          },
+          {
+            "layer": 1,
+            "block_medians_ms": [
+              16.74517604184723,
+              13.093317465328218,
+              13.631139333538057,
+              13.532752397140506,
+              13.178960187561037,
+              12.96306999351883,
+              13.015609819839478,
+              13.65410296472168
+            ],
+            "central_ms": 13.355856292350772
+          },
+          {
+            "layer": 2,
+            "block_medians_ms": [
+              5.29201489383316,
+              5.416611629173279,
+              5.163330391685486,
+              5.447309956375122,
+              5.461737368637086,
+              5.661677256900788,
+              5.382186220470429,
+              5.404949470928193
+            ],
+            "central_ms": 5.410780550050736
+          },
+          {
+            "layer": 3,
+            "block_medians_ms": [
+              2.2007815121269227,
+              2.484721000671387,
+              2.508926992355347,
+              2.3542330719909668,
+              2.478228665153504,
+              2.139705466884613,
+              2.0039274870414734,
+              2.140627218223572
+            ],
+            "central_ms": 2.277507292058945
+          },
+          {
+            "layer": 4,
+            "block_medians_ms": [
+              13.012564032806397,
+              13.414928530334473,
+              13.214868413635255,
+              13.350045251300813,
+              13.393768325683595,
+              13.40711368202591,
+              12.793187214134216,
+              13.099449115539551
+            ],
+            "central_ms": 13.282456832468034
+          },
+          {
+            "layer": 5,
+            "block_medians_ms": [
+              14.400240635536194,
+              13.285763114444734,
+              13.80819574290848,
+              13.760184520992281,
+              13.351367764091492,
+              16.00613184872818,
+              13.206492499294281,
+              13.36699746070862
+            ],
+            "central_ms": 13.56359099085045
+          },
+          {
+            "layer": 6,
+            "block_medians_ms": [
+              5.251578063354493,
+              5.183448616561891,
+              5.223845370895386,
+              5.10137267124939,
+              5.1793608497543335,
+              5.18380930186844,
+              5.259112378646851,
+              5.394168987876893
+            ],
+            "central_ms": 5.203827336381913
+          },
+          {
+            "layer": 7,
+            "block_medians_ms": [
+              2.3188057596588134,
+              2.2598537501106266,
+              2.3509368090505602,
+              2.265825095741272,
+              2.0328223877105716,
+              2.287105528827668,
+              1.9422502996215822,
+              2.459833714519501
+            ],
+            "central_ms": 2.2764653122844702
+          },
+          {
+            "layer": 8,
+            "block_medians_ms": [
+              17.701913855541232,
+              13.155154957328797,
+              12.862759402153015,
+              16.017232940940858,
+              13.193668132839203,
+              13.636950374588013,
+              12.953291414096833,
+              13.20701348918152
+            ],
+            "central_ms": 13.200340811010362
+          },
+          {
+            "layer": 9,
+            "block_medians_ms": [
+              13.48125455059433,
+              13.41657165228653,
+              13.991383802490235,
+              14.816110793987276,
+              13.001022102996828,
+              13.296583673641207,
+              13.08806749031067,
+              13.369522257854463
+            ],
+            "central_ms": 13.393046955070496
+          },
+          {
+            "layer": 10,
+            "block_medians_ms": [
+              5.311932737983704,
+              5.424386401336671,
+              5.197194734355927,
+              5.261396718921661,
+              5.6345056304740915,
+              5.433363457855225,
+              5.213345420860291,
+              5.013645989467621
+            ],
+            "central_ms": 5.286664728452683
+          },
+          {
+            "layer": 11,
+            "block_medians_ms": [
+              2.2108005484199524,
+              2.301021970238686,
+              2.276605578792572,
+              2.0783889647712708,
+              2.4400761749496462,
+              2.3554353563461303,
+              2.5401062332992557,
+              2.394589750179291
+            ],
+            "central_ms": 2.328228663292408
+          }
+        ],
+        "sum_layer_central_ms": 102.78223251460506
+      },
+      "split": {
+        "processes": [
+          "coastal-split-b",
+          "coastal-split-b-repeat"
+        ],
+        "layers": [
+          {
+            "layer": 0,
+            "block_medians_ms": [
+              5.687045456794739,
+              5.291694284671784,
+              5.461617140201569,
+              5.489309756515503,
+              5.128143536224366,
+              5.382667134212494,
+              5.4433824941482545,
+              5.530508033752442
+            ],
+            "central_ms": 5.452499817174912
+          },
+          {
+            "layer": 1,
+            "block_medians_ms": [
+              9.784390463047028,
+              9.742871576648714,
+              9.586093696735384,
+              9.488668587821962,
+              9.297785908367157,
+              9.191423819080352,
+              9.084059826164246,
+              10.377236878578188
+            ],
+            "central_ms": 9.537381142278672
+          },
+          {
+            "layer": 2,
+            "block_medians_ms": [
+              5.5285843787841795,
+              5.020579162582398,
+              5.039294722377777,
+              5.431239422161103,
+              5.290772533332825,
+              5.2077748366813665,
+              5.205370267971039,
+              5.309608321563721
+            ],
+            "central_ms": 5.249273685007095
+          },
+          {
+            "layer": 3,
+            "block_medians_ms": [
+              2.28582309218216,
+              2.2746819238243106,
+              2.2514778357696534,
+              2.432622011947632,
+              2.2432121308279043,
+              2.0012824614601135,
+              1.9224526839065554,
+              2.3331930957756044
+            ],
+            "central_ms": 2.263079879796982
+          },
+          {
+            "layer": 4,
+            "block_medians_ms": [
+              5.176675748027802,
+              5.480252547706605,
+              4.971285504020691,
+              5.455325185409547,
+              5.364272183578492,
+              5.438853889743805,
+              5.2200381371040345,
+              5.3946499016189575
+            ],
+            "central_ms": 5.379461042598725
+          },
+          {
+            "layer": 5,
+            "block_medians_ms": [
+              9.757298988910676,
+              9.450716478343965,
+              11.170704476840973,
+              10.291514004055024,
+              9.568099507553102,
+              9.72120040114689,
+              10.227873085521699,
+              10.416511500846864
+            ],
+            "central_ms": 9.992586037216189
+          },
+          {
+            "layer": 6,
+            "block_medians_ms": [
+              5.659352840480805,
+              5.040577159023285,
+              5.53255191715622,
+              5.433123000984192,
+              5.064382389255524,
+              5.119927926464081,
+              5.074281197113038,
+              5.352369568462372
+            ],
+            "central_ms": 5.2361487474632264
+          },
+          {
+            "layer": 7,
+            "block_medians_ms": [
+              2.1633503925361635,
+              2.548081386188507,
+              2.4570684605026245,
+              2.180422830379486,
+              1.949263625026703,
+              2.356597564556122,
+              2.464602775794983,
+              2.2881875847473143
+            ],
+            "central_ms": 2.322392574651718
+          },
+          {
+            "layer": 8,
+            "block_medians_ms": [
+              5.596433292560578,
+              5.448752697601319,
+              5.606051567401886,
+              5.347079517299652,
+              5.161286508281709,
+              5.6934977161674505,
+              5.06165721138382,
+              5.458070401353837
+            ],
+            "central_ms": 5.453411549477577
+          },
+          {
+            "layer": 9,
+            "block_medians_ms": [
+              9.37970154909897,
+              9.198036383033754,
+              9.564572806777955,
+              9.503456685390473,
+              9.445025665729522,
+              9.696824085845948,
+              9.476485439689636,
+              9.264402479438782
+            ],
+            "central_ms": 9.460755552709578
+          },
+          {
+            "layer": 10,
+            "block_medians_ms": [
+              4.9567378633232115,
+              5.064582769981385,
+              5.324997561309815,
+              5.250175398273468,
+              5.324356342987061,
+              5.331770429843903,
+              5.379861804050446,
+              5.3561768022537235
+            ],
+            "central_ms": 5.3246769521484385
+          },
+          {
+            "layer": 11,
+            "block_medians_ms": [
+              2.5020338953857424,
+              2.0872858689994813,
+              1.46526401978302,
+              1.8857028587837221,
+              2.383168048805237,
+              2.4912934884796143,
+              2.4224025949287418,
+              1.9227332169227602
+            ],
+            "central_ms": 2.2352269589023592
+          }
+        ],
+        "sum_layer_central_ms": 67.90689393942547
+      }
+    },
+    "lower_percent": 33.931291159903445,
+    "scope": "Serial fenced shadow stages only; layout and depth-pipeline reuse measured together. Not whole-frame time, FPS, overlapped throughput or game preference."
+  },
+  "coastal_depth_identity": [
+    {
+      "layer": 0,
+      "sha256": "b8a650e11d9ec4b0eb6f9affa4d7ebf29aa814c908dbf7d2d8f368c7c2b4dfb1",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-0.depth",
+        "coastal-split-b.layer-0.depth",
+        "coastal-split-b-repeat.layer-0.depth",
+        "coastal-interleaved-a-repeat.layer-0.depth",
+        "coastal-final-physical.layer-0.depth"
+      ]
+    },
+    {
+      "layer": 1,
+      "sha256": "740ca33b5306218bfa4bbc248573647874b09031f6a07aad1bb604694d174367",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-1.depth",
+        "coastal-split-b.layer-1.depth",
+        "coastal-split-b-repeat.layer-1.depth",
+        "coastal-interleaved-a-repeat.layer-1.depth",
+        "coastal-final-physical.layer-1.depth"
+      ]
+    },
+    {
+      "layer": 2,
+      "sha256": "f886ec29ce20a5effd8d88d94798a86fc4e62ee321d7c4cc5c0e5507619263af",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-2.depth",
+        "coastal-split-b.layer-2.depth",
+        "coastal-split-b-repeat.layer-2.depth",
+        "coastal-interleaved-a-repeat.layer-2.depth",
+        "coastal-final-physical.layer-2.depth"
+      ]
+    },
+    {
+      "layer": 3,
+      "sha256": "bb46be0509c7c88d90f48fe564674ac6f1191e5edadb6b0f9ad9e28d341cbe7f",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-3.depth",
+        "coastal-split-b.layer-3.depth",
+        "coastal-split-b-repeat.layer-3.depth",
+        "coastal-interleaved-a-repeat.layer-3.depth",
+        "coastal-final-physical.layer-3.depth"
+      ]
+    },
+    {
+      "layer": 4,
+      "sha256": "9a6f57e62c713ddbb02ed4f2f42ac40e0ad6340c49b5f8c94503f9e0868f10a5",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-4.depth",
+        "coastal-split-b.layer-4.depth",
+        "coastal-split-b-repeat.layer-4.depth",
+        "coastal-interleaved-a-repeat.layer-4.depth",
+        "coastal-final-physical.layer-4.depth"
+      ]
+    },
+    {
+      "layer": 5,
+      "sha256": "a66af2d4d246022f3645e8f1d7bc0f6fc15bea6516f2fef3df151ddbfd589d8c",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-5.depth",
+        "coastal-split-b.layer-5.depth",
+        "coastal-split-b-repeat.layer-5.depth",
+        "coastal-interleaved-a-repeat.layer-5.depth",
+        "coastal-final-physical.layer-5.depth"
+      ]
+    },
+    {
+      "layer": 6,
+      "sha256": "ecd0be3db9dd0c78345e500a8a9c625117d486c587c892cb04ed83865899ad50",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-6.depth",
+        "coastal-split-b.layer-6.depth",
+        "coastal-split-b-repeat.layer-6.depth",
+        "coastal-interleaved-a-repeat.layer-6.depth",
+        "coastal-final-physical.layer-6.depth"
+      ]
+    },
+    {
+      "layer": 7,
+      "sha256": "01a21cf6ac46ad3bbaf3201edf2c3d48c69695994730db043c9f6010b80aec92",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-7.depth",
+        "coastal-split-b.layer-7.depth",
+        "coastal-split-b-repeat.layer-7.depth",
+        "coastal-interleaved-a-repeat.layer-7.depth",
+        "coastal-final-physical.layer-7.depth"
+      ]
+    },
+    {
+      "layer": 8,
+      "sha256": "b0db80fbd62951d2be64ec477a6c1e6796f2a30c764288e6503c3c31c21192a2",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-8.depth",
+        "coastal-split-b.layer-8.depth",
+        "coastal-split-b-repeat.layer-8.depth",
+        "coastal-interleaved-a-repeat.layer-8.depth",
+        "coastal-final-physical.layer-8.depth"
+      ]
+    },
+    {
+      "layer": 9,
+      "sha256": "f0669cb890e647ad832de17a82cf75d5f9794f1f8e6203e23a33697812ab96a7",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-9.depth",
+        "coastal-split-b.layer-9.depth",
+        "coastal-split-b-repeat.layer-9.depth",
+        "coastal-interleaved-a-repeat.layer-9.depth",
+        "coastal-final-physical.layer-9.depth"
+      ]
+    },
+    {
+      "layer": 10,
+      "sha256": "a57da09189e35d56960d2137a844ba675fb82f53a3d267e60acd3515bc19781f",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-10.depth",
+        "coastal-split-b.layer-10.depth",
+        "coastal-split-b-repeat.layer-10.depth",
+        "coastal-interleaved-a-repeat.layer-10.depth",
+        "coastal-final-physical.layer-10.depth"
+      ]
+    },
+    {
+      "layer": 11,
+      "sha256": "335a02179c324174a1646b2725f5e8f9ebe0753a746b37c1ae6868e5dab3a70e",
+      "bytes": 4194304,
+      "identical_files": [
+        "coastal-interleaved-a.layer-11.depth",
+        "coastal-split-b.layer-11.depth",
+        "coastal-split-b-repeat.layer-11.depth",
+        "coastal-interleaved-a-repeat.layer-11.depth",
+        "coastal-final-physical.layer-11.depth"
+      ]
+    }
+  ],
+  "plant_image_identity": [
+    {
+      "suffix": "full.depth",
+      "sha256": "bd40e1ed244fd64475df6def531c091bfcb4500dfe2b30f7fd91c324e9029b47",
+      "identical_files": [
+        "plant-interleaved.full.depth",
+        "plant-split.full.depth",
+        "plant-final-physical.full.depth"
+      ]
+    },
+    {
+      "suffix": "lod.depth",
+      "sha256": "ba9d2a2a82b94f4ebbfb140bffa66e9157c3f618c449bb95ef01c7b78873d090",
+      "identical_files": [
+        "plant-interleaved.lod.depth",
+        "plant-split.lod.depth",
+        "plant-final-physical.lod.depth"
+      ]
+    },
+    {
+      "suffix": "full.rgba",
+      "sha256": "3382c03367b3fa032dca157971a3035ac057043dd9d92c9fffe5a1f4a6b29971",
+      "identical_files": [
+        "plant-interleaved.full.rgba",
+        "plant-split.full.rgba",
+        "plant-final-physical.full.rgba"
+      ]
+    },
+    {
+      "suffix": "lod.rgba",
+      "sha256": "3382c03367b3fa032dca157971a3035ac057043dd9d92c9fffe5a1f4a6b29971",
+      "identical_files": [
+        "plant-interleaved.lod.rgba",
+        "plant-split.lod.rgba",
+        "plant-final-physical.lod.rgba"
+      ]
+    }
+  ],
+  "coastal_final": {
+    "adapter": "AdapterInfo { name: \"AMD Radeon 880M Graphics (RADV STRIX1)\", vendor: 4098, device: 5390, device_type: IntegratedGpu, device_pci_bus_id: \"0000:64:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.5-arch1.1\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: Some(false), limit_bucket: None }",
+    "candidate_instances": 17992,
+    "candidate_triangles": 112813834,
+    "draw_calls": 37,
+    "draw_commands": 3226,
+    "eye_agl_m": 2,
+    "frame_upload_bytes": 576,
+    "height": 720,
+    "native_update_cpu_max_ms": 0.653477,
+    "native_update_cpu_p50_ms": 0.10255,
+    "native_update_cpu_p95_ms": 0.453915,
+    "physical_scope": "Serial per-layer shadow profile with 30M triangle admission, durable fences and no primary/cloud/AS draw. Exact sample/no-sample depth each block. Not a whole-frame benchmark.",
+    "prototype_bytes": 46159116,
+    "scope": "Actual retained coastal producer with explicit physical GPU authorization. Per-layer depth encoding, admission, durable fences and GPU timestamps; no primary/AS draw and no whole-frame/FPS claim.",
+    "shadow_bounds_cpu_storage_bytes": 1784312,
+    "shadow_candidate_triangles": 1353766008,
+    "shadow_draw_calls": 540,
+    "shadow_draw_commands": 26925,
+    "shadow_encode_cpu_ms": 11.092103000000002,
+    "shadow_indirect": 1,
+    "shadow_indirect_storage_bytes": 7864320,
+    "shadow_indirect_upload_bytes": 538500,
+    "shadow_lod_instances": 82234,
+    "shadow_lod_max_error_microtexels": 499913,
+    "shadow_lod_triangles_saved": 520683424,
+    "shadow_no_sample_triangles": 252050732,
+    "shadow_passes": 12,
+    "shadow_previous_draw_calls": 453,
+    "shadow_previous_triangles": 283223492,
+    "shadow_prototype_bytes": 1657464,
+    "shadow_sample_rejected_instances": 130587,
+    "shadow_submitted_triangles": 208101356,
+    "submitted_triangles": 17111160,
+    "survey_distance_m": 80,
+    "visible_instances": 2510,
+    "width": 1280,
+    "shadow_layers": [
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 27,
+        "instances": 6382,
+        "layer": 0,
+        "lod_instances": 235,
+        "sample_rejected_instances": 1220,
+        "saved_triangles": 587588,
+        "triangles": 19799658
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 19081,
+        "layer": 1,
+        "lod_instances": 11466,
+        "sample_rejected_instances": 4638,
+        "saved_triangles": 62902414,
+        "triangles": 24133952
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 14614,
+        "layer": 2,
+        "lod_instances": 12735,
+        "sample_rejected_instances": 13243,
+        "saved_triangles": 82447388,
+        "triangles": 19223674
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 54,
+        "instances": 3315,
+        "layer": 3,
+        "lod_instances": 2838,
+        "sample_rejected_instances": 24542,
+        "saved_triangles": 27367926,
+        "triangles": 6124358
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 27,
+        "instances": 6394,
+        "layer": 4,
+        "lod_instances": 234,
+        "sample_rejected_instances": 1204,
+        "saved_triangles": 585598,
+        "triangles": 19789512
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 19085,
+        "layer": 5,
+        "lod_instances": 11467,
+        "sample_rejected_instances": 4633,
+        "saved_triangles": 62903026,
+        "triangles": 24135278
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 14854,
+        "layer": 6,
+        "lod_instances": 12972,
+        "sample_rejected_instances": 13003,
+        "saved_triangles": 82966224,
+        "triangles": 19349786
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 53,
+        "instances": 3268,
+        "layer": 7,
+        "lod_instances": 2831,
+        "sample_rejected_instances": 24589,
+        "saved_triangles": 27190322,
+        "triangles": 6151176
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 27,
+        "instances": 6394,
+        "layer": 8,
+        "lod_instances": 234,
+        "sample_rejected_instances": 1204,
+        "saved_triangles": 585598,
+        "triangles": 19789512
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 19044,
+        "layer": 9,
+        "lod_instances": 11466,
+        "sample_rejected_instances": 4674,
+        "saved_triangles": 62901724,
+        "triangles": 24133966
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 49,
+        "instances": 14790,
+        "layer": 10,
+        "lod_instances": 12908,
+        "sample_rejected_instances": 13067,
+        "saved_triangles": 83009908,
+        "triangles": 19308648
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 53,
+        "instances": 3287,
+        "layer": 11,
+        "lod_instances": 2848,
+        "sample_rejected_instances": 24570,
+        "saved_triangles": 27235708,
+        "triangles": 6161836
+      }
+    ]
+  },
+  "final_physical_layers": [
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.129506125160218,
+      "layer": 0,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19801098,
+      "wall_p50_ms": 18.234430999999997
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 5.25646735306549,
+      "layer": 0,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19799658,
+      "wall_p50_ms": 18.173658
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 5.518405037910462,
+      "layer": 0,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19801098,
+      "wall_p50_ms": 18.374101
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 5.618274791679383,
+      "layer": 0,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19799658,
+      "wall_p50_ms": 18.748779
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 5.050235510009767,
+      "layer": 0,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19799658,
+      "wall_p50_ms": 18.115159
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.562889559051514,
+      "layer": 0,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19801098,
+      "wall_p50_ms": 18.504774
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 5.547059481708527,
+      "layer": 0,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19799658,
+      "wall_p50_ms": 18.778223999999998
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.520168388298035,
+      "layer": 0,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19801098,
+      "wall_p50_ms": 19.316837
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 9.543452678272248,
+      "layer": 1,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285914,
+      "wall_p50_ms": 22.541228999999998
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 9.537681713367464,
+      "layer": 1,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133952,
+      "wall_p50_ms": 23.08959
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 9.336299083877563,
+      "layer": 1,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285914,
+      "wall_p50_ms": 22.183532999999997
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 9.239475117141724,
+      "layer": 1,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133952,
+      "wall_p50_ms": 22.8263
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 9.329446063053132,
+      "layer": 1,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133952,
+      "wall_p50_ms": 22.39086
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 9.225528618621828,
+      "layer": 1,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285914,
+      "wall_p50_ms": 21.996606
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 9.609097404064178,
+      "layer": 1,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133952,
+      "wall_p50_ms": 23.652509
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 9.471756454559328,
+      "layer": 1,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285914,
+      "wall_p50_ms": 22.982081
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.68856835031128,
+      "layer": 2,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.280137999999997
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 5.3570985535926825,
+      "layer": 2,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19223674,
+      "wall_p50_ms": 18.836441999999998
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 6.139825744949341,
+      "layer": 2,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.099121
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 5.241599103206634,
+      "layer": 2,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19223674,
+      "wall_p50_ms": 19.06134
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 5.313415555355073,
+      "layer": 2,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19223674,
+      "wall_p50_ms": 19.085946999999997
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.711572057640076,
+      "layer": 2,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.019743
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 5.391964799892426,
+      "layer": 2,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19223674,
+      "wall_p50_ms": 19.355679000000002
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.825628766799928,
+      "layer": 2,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.839869999999998
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.2966236505279545,
+      "layer": 3,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 19.020294
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 2.1142571147003175,
+      "layer": 3,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6124358,
+      "wall_p50_ms": 16.597784
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 4.908846869842529,
+      "layer": 3,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 18.426649
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 2.056707770233155,
+      "layer": 3,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6124358,
+      "wall_p50_ms": 16.09604
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 2.0199579451103213,
+      "layer": 3,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6124358,
+      "wall_p50_ms": 15.954836
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.33946504971695,
+      "layer": 3,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 18.909438
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 2.070133278865814,
+      "layer": 3,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6124358,
+      "wall_p50_ms": 16.043823
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.297184716560364,
+      "layer": 3,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 19.491201
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.024506624809265,
+      "layer": 4,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 19.883491
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 5.40130254171753,
+      "layer": 4,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 19.93666
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 5.173790265575409,
+      "layer": 4,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 19.479349
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 5.5128344537315375,
+      "layer": 4,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 19.832807000000003
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 5.595070703624726,
+      "layer": 4,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 20.506081
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.462498815395356,
+      "layer": 4,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 20.218956
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 5.4298367570800785,
+      "layer": 4,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 20.330562999999998
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.335697892070771,
+      "layer": 4,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 22.358209
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 9.540767576545717,
+      "layer": 5,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.717350000000003
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 9.246969356288911,
+      "layer": 5,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24135278,
+      "wall_p50_ms": 23.142369
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 9.255786108226777,
+      "layer": 5,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.369582
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 9.671495962097168,
+      "layer": 5,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24135278,
+      "wall_p50_ms": 23.720986999999997
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 9.739344875873567,
+      "layer": 5,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24135278,
+      "wall_p50_ms": 23.561149
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 10.416832110008242,
+      "layer": 5,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.752756
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 9.258230753082277,
+      "layer": 5,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24135278,
+      "wall_p50_ms": 22.927349
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 9.703316421363832,
+      "layer": 5,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.200657
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.913796286178589,
+      "layer": 6,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.208635
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 5.349724542881012,
+      "layer": 6,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19349786,
+      "wall_p50_ms": 20.074317
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 6.304618853897095,
+      "layer": 6,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 20.479041
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 5.3501253043327335,
+      "layer": 6,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19349786,
+      "wall_p50_ms": 20.001690999999997
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 5.249975017547608,
+      "layer": 6,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19349786,
+      "wall_p50_ms": 19.821266
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.913876438468933,
+      "layer": 6,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.320232999999998
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 5.3449955577507025,
+      "layer": 6,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19349786,
+      "wall_p50_ms": 18.928984
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 6.137040452859879,
+      "layer": 6,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.178248
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.032000863956451,
+      "layer": 7,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 19.142270999999997
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 1.6561867753829957,
+      "layer": 7,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6151176,
+      "wall_p50_ms": 15.169805
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 5.560044152744294,
+      "layer": 7,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 19.368452
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 2.3303076133232117,
+      "layer": 7,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6151176,
+      "wall_p50_ms": 15.846995999999999
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 2.5118525509529115,
+      "layer": 7,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6151176,
+      "wall_p50_ms": 16.273930999999997
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.48754640612793,
+      "layer": 7,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 19.268005000000002
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 2.3029356061706543,
+      "layer": 7,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6151176,
+      "wall_p50_ms": 16.711506
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.249093342353821,
+      "layer": 7,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 18.449251
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.44442447392273,
+      "layer": 8,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 19.988236
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 4.973088930553437,
+      "layer": 8,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 19.565279
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 5.513515748199463,
+      "layer": 8,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 19.374023
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 5.513355443618774,
+      "layer": 8,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 20.047667
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 5.417853989673615,
+      "layer": 8,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 20.073465
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.512193235408783,
+      "layer": 8,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 26.500752
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 5.410239522090912,
+      "layer": 8,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19789512,
+      "wall_p50_ms": 21.567347
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.533273287769318,
+      "layer": 8,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 19790472,
+      "wall_p50_ms": 19.298632
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 9.510870772247316,
+      "layer": 9,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.41133
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 9.694860354732514,
+      "layer": 9,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133966,
+      "wall_p50_ms": 23.977914
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 9.649053320800782,
+      "layer": 9,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.984887999999998
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 9.789079372032166,
+      "layer": 9,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133966,
+      "wall_p50_ms": 25.508254
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 9.513175150594712,
+      "layer": 9,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133966,
+      "wall_p50_ms": 24.389301
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 9.79669383961487,
+      "layer": 9,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.92174
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 9.688408095359803,
+      "layer": 9,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 24133966,
+      "wall_p50_ms": 24.745124
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 9.544494658046723,
+      "layer": 9,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 24285102,
+      "wall_p50_ms": 23.890853
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.716501423496246,
+      "layer": 10,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 21.335855000000002
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 5.443262265712738,
+      "layer": 10,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19308648,
+      "wall_p50_ms": 46.725639
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 6.150165390403749,
+      "layer": 10,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 20.546004999999997
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 5.3407875625076295,
+      "layer": 10,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19308648,
+      "wall_p50_ms": 20.121485
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 5.427231807643891,
+      "layer": 10,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19308648,
+      "wall_p50_ms": 20.270311999999997
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.70844611831665,
+      "layer": 10,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 19.664043
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 5.139164476146698,
+      "layer": 10,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 19308648,
+      "wall_p50_ms": 20.982829000000002
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.975433397453308,
+      "layer": 10,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 22634602,
+      "wall_p50_ms": 21.027351
+    },
+    {
+      "block": 0,
+      "gpu_p50_ms": 5.364672945030213,
+      "layer": 11,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 20.325114
+    },
+    {
+      "block": 1,
+      "gpu_p50_ms": 2.32497748601532,
+      "layer": 11,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6161836,
+      "wall_p50_ms": 16.613332
+    },
+    {
+      "block": 2,
+      "gpu_p50_ms": 5.197876028823853,
+      "layer": 11,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 18.944813
+    },
+    {
+      "block": 3,
+      "gpu_p50_ms": 2.0980262759056094,
+      "layer": 11,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6161836,
+      "wall_p50_ms": 16.09129
+    },
+    {
+      "block": 4,
+      "gpu_p50_ms": 1.9558361128349304,
+      "layer": 11,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6161836,
+      "wall_p50_ms": 16.218217
+    },
+    {
+      "block": 5,
+      "gpu_p50_ms": 5.241919712368012,
+      "layer": 11,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 19.055149
+    },
+    {
+      "block": 6,
+      "gpu_p50_ms": 2.0026450503959654,
+      "layer": 11,
+      "sample_culling": true,
+      "samples": 3,
+      "triangles": 6161836,
+      "wall_p50_ms": 17.989124
+    },
+    {
+      "block": 7,
+      "gpu_p50_ms": 5.435768026565553,
+      "layer": 11,
+      "sample_culling": false,
+      "samples": 3,
+      "triangles": 17302922,
+      "wall_p50_ms": 18.963799
+    }
+  ],
+  "headless": [
+    {
+      "name": "native-1280x720",
+      "execution": {
+        "command": [
+          "bwrap",
+          "--unshare-all",
+          "--die-with-parent",
+          "--ro-bind",
+          "/",
+          "/",
+          "--dev",
+          "/dev",
+          "--dir",
+          "/dev/dri",
+          "--dev-bind",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD128",
+          "--proc",
+          "/proc",
+          "--tmpfs",
+          "/tmp",
+          "--tmpfs",
+          "/run",
+          "--bind",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28",
+          "--unsetenv",
+          "DISPLAY",
+          "--unsetenv",
+          "WAYLAND_DISPLAY",
+          "--setenv",
+          "XDG_RUNTIME_DIR",
+          "/tmp",
+          "--setenv",
+          "XDG_CACHE_HOME",
+          "/tmp",
+          "--setenv",
+          "VK_DRIVER_FILES",
+          "/usr/share/vulkan/icd.d/radeon_icd.json",
+          "--setenv",
+          "WGPU_BACKEND",
+          "vulkan",
+          "--setenv",
+          "VK_LOADER_LAYERS_DISABLE",
+          "*",
+          "--setenv",
+          "THESSA_WORKLOAD_OUTPUT",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/adapter.toml",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/native-raster-vulkan.toml",
+          "--headless",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/native-1280x720.png",
+          "--gpu-trace",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/native-1280x720-trace.toml",
+          "--gpu-trace-mesh-triangle-limit",
+          "220000000",
+          "--width",
+          "1280",
+          "--height",
+          "720",
+          "--frames",
+          "1",
+          "--prestream-seconds",
+          "3",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--no-hud",
+          "--mute"
+        ],
+        "exit_code": 0,
+        "seconds": 69.65659596491605,
+        "binary_sha256": "2f94e5f997e34afdcce9e31a853f9841c1a6633eb594b6b8b1d245f1667ca965",
+        "binary_unchanged": true,
+        "kernel_gpu_fault_detected": false,
+        "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+        "scope": "Authorized physical Vulkan native headless with RT off and existing serial GpuTrace; one measured frame after 30 warmup frames; 220M per-stage mesh triangle admission; not a normal performance capture."
+      },
+      "image_sha256": "0df9bf03db65610421422f3326f4fb62b9a1f35052b91978be432e1c08efccb8"
+    },
+    {
+      "name": "native-320x180",
+      "execution": {
+        "command": [
+          "bwrap",
+          "--unshare-all",
+          "--die-with-parent",
+          "--ro-bind",
+          "/",
+          "/",
+          "--dev",
+          "/dev",
+          "--dir",
+          "/dev/dri",
+          "--dev-bind",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD128",
+          "--proc",
+          "/proc",
+          "--tmpfs",
+          "/tmp",
+          "--tmpfs",
+          "/run",
+          "--bind",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28",
+          "--unsetenv",
+          "DISPLAY",
+          "--unsetenv",
+          "WAYLAND_DISPLAY",
+          "--setenv",
+          "XDG_RUNTIME_DIR",
+          "/tmp",
+          "--setenv",
+          "XDG_CACHE_HOME",
+          "/tmp",
+          "--setenv",
+          "VK_DRIVER_FILES",
+          "/usr/share/vulkan/icd.d/radeon_icd.json",
+          "--setenv",
+          "WGPU_BACKEND",
+          "vulkan",
+          "--setenv",
+          "VK_LOADER_LAYERS_DISABLE",
+          "*",
+          "--setenv",
+          "THESSA_WORKLOAD_OUTPUT",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/adapter.toml",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/release/thessa-terrain-native",
+          "--graphics",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/native-raster-vulkan.toml",
+          "--headless",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/native-320x180.png",
+          "--gpu-trace",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-shadow-gpu-2026-10-28/native-320x180-trace.toml",
+          "--gpu-trace-mesh-triangle-limit",
+          "220000000",
+          "--width",
+          "320",
+          "--height",
+          "180",
+          "--frames",
+          "1",
+          "--prestream-seconds",
+          "3",
+          "--survey-lat",
+          "23.565679258039204",
+          "--survey-lon",
+          "165.13881581863882",
+          "--survey-distance",
+          "80",
+          "--survey-eye-agl",
+          "2",
+          "--sim-time",
+          "0",
+          "--sim-step",
+          "0",
+          "--no-hud",
+          "--mute"
+        ],
+        "exit_code": 0,
+        "seconds": 61.550761451013386,
+        "binary_sha256": "2f94e5f997e34afdcce9e31a853f9841c1a6633eb594b6b8b1d245f1667ca965",
+        "binary_unchanged": true,
+        "kernel_gpu_fault_detected": false,
+        "config_sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f",
+        "scope": "Authorized physical Vulkan native headless with RT off and existing serial GpuTrace; one measured frame after 30 warmup frames; 220M per-stage mesh triangle admission; not a normal performance capture."
+      },
+      "image_sha256": "a9ee60a6568780637ea0440dbbdc4f09b6c4ade22a95ed6d48103f877213b024"
+    }
+  ],
+  "rejected": {
+    "matrix_reassociation": "Rejected: two coverage samples and 187 colour bytes changed, maximum common-depth error 0.000020563602. Production WGSL unchanged.",
+    "affine_box": "Rejected: 205517378 versus 208101356 triangles, insufficient consistent GPU improvement to justify extra CPU selection. No affine-box code retained. Frozen A/B harnesses contain the experiment, excluded from accepted format comparison."
+  },
+  "gaps": [
+    "No normal whole-frame moving-camera FPS acceptance",
+    "RT off in physical diagnostics; no RT stability acceptance",
+    "No blind reference preference/parity claim",
+    "No main merge"
+  ],
+  "files": {
+    "adapter-command.json": {
+      "bytes": 1668,
+      "sha256": "eddef8231201f11379b8549a7b427130ce1e5242a303902352986e7f87b94800"
+    },
+    "adapter-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "adapter.log": {
+      "bytes": 283,
+      "sha256": "25382b35e687c4af8052d681545b359367229d693ea57764381482db14f465b9"
+    },
+    "clear-command.json": {
+      "bytes": 1665,
+      "sha256": "405fc4a717177ac9add46c25fc0079eaa39778eb5841f14560f3bddd2ac74851"
+    },
+    "clear-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "clear.log": {
+      "bytes": 170,
+      "sha256": "41d3e51b683995448657642c697f6c008df8c978198ed3470f4d926e44c4d75f"
+    },
+    "coastal-box-trial-command.json": {
+      "bytes": 1759,
+      "sha256": "2712823d08e005341ea4d358e656fce17f226c49896504a319c60a2325587fc2"
+    },
+    "coastal-box-trial.log": {
+      "bytes": 95006,
+      "sha256": "c1c8d041b3446b30bc80814abb0ede0d9e4cabd594fe8970b6a68c95b5fc11ee"
+    },
+    "coastal-box-trial.toml": {
+      "bytes": 94537,
+      "sha256": "f52fa25e85818f8cfb0e7f1bf86a95db6c0e47350e1fa4d0df18645e99e435d4"
+    },
+    "coastal-final-command.json": {
+      "bytes": 1754,
+      "sha256": "170902dc0b9a531a200950e0b4db4e98fdc35b46acb24a7592dd8badcc594881"
+    },
+    "coastal-final-physical-command.json": {
+      "bytes": 1697,
+      "sha256": "f14ea21ca6123e598a8ef300a0b46624501adfaaa07e2b21cae782762ea5f8ad"
+    },
+    "coastal-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "coastal-final-physical.log": {
+      "bytes": 122672,
+      "sha256": "c23129c50ae94b3e5307d1999f417e2ffe99fa43bacb55d057f5c009255a3b0d"
+    },
+    "coastal-final-physical.stages.toml": {
+      "bytes": 351594,
+      "sha256": "c619c7ebebb128f8e92613ee8c56b9bc7d6c8e47bc9ff020cc8ae829d64ae49c"
+    },
+    "coastal-final-physical.toml": {
+      "bytes": 109458,
+      "sha256": "616a8be570154a8f2ba7fd59b477757c7683d5092ed6e1976bb9141745f3e53d"
+    },
+    "coastal-final.log": {
+      "bytes": 94975,
+      "sha256": "6322c59170ac37f71dadff9ccbe3159df3590020b0f26b95374584e0b8917c11"
+    },
+    "coastal-final.toml": {
+      "bytes": 94506,
+      "sha256": "ab86f69cf986bead25e4c106b9e235ab375975224883dbb473a475e67e525b35"
+    },
+    "coastal-interleaved-a-command.json": {
+      "bytes": 1664,
+      "sha256": "9838b393055495d873313ab38aff22cb00274bac991e070c817e36c4710eb09a"
+    },
+    "coastal-interleaved-a-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "coastal-interleaved-a-repeat-command.json": {
+      "bytes": 1670,
+      "sha256": "38628425b6178400c7ad5f3bd5a71dc5e013a1fe5c8c36f5cacf8a4d786b760c"
+    },
+    "coastal-interleaved-a-repeat-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "coastal-interleaved-a-repeat.log": {
+      "bytes": 120972,
+      "sha256": "634479487f6dbba0c95023a82029b1920e31464b93bb5337ec613ed3602a2f19"
+    },
+    "coastal-interleaved-a-repeat.stages.toml": {
+      "bytes": 364164,
+      "sha256": "d878bffbc3166a13a358c5ce89c793216947d351a8659cbdce667ca364657dc6"
+    },
+    "coastal-interleaved-a-repeat.toml": {
+      "bytes": 108633,
+      "sha256": "ed40632c1f085087fc6e9acbd765a90438ca0bc2d5ba1cf38706198af6fd7042"
+    },
+    "coastal-interleaved-a.log": {
+      "bytes": 121186,
+      "sha256": "7addc9992b0d916db87c40afbd7e431529d5bd84f53c4cb72764c601298d74d5"
+    },
+    "coastal-interleaved-a.stages.toml": {
+      "bytes": 364062,
+      "sha256": "b8cf91510d1bde442e8a32eca6b16570d3a43a5408524954bd423cb220282933"
+    },
+    "coastal-interleaved-a.toml": {
+      "bytes": 108745,
+      "sha256": "63b5250492b7f6b2518db8865be81f2d47b9c6c36052633630eff942cfcab4b5"
+    },
+    "coastal-split-b-command.json": {
+      "bytes": 1651,
+      "sha256": "bd5771e93e1904e7fe49aebc7920e50ad6b1052fe7a1cfa48ed169e5e1f1df9e"
+    },
+    "coastal-split-b-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "coastal-split-b-repeat-command.json": {
+      "bytes": 1656,
+      "sha256": "cb6cbc9861b7fd21d3461977e344e0327b9bad156b5f6771b0653b6099e6f9af"
+    },
+    "coastal-split-b-repeat-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "coastal-split-b-repeat.log": {
+      "bytes": 120919,
+      "sha256": "09877c4723b2896cc700d33a5245910c5572f9f07d14a0a71034c90a91b84df3"
+    },
+    "coastal-split-b-repeat.stages.toml": {
+      "bytes": 363903,
+      "sha256": "ab46c5a4e779f6caed1b0bf4a773f7bb558705d076e609544b422e86f01ca797"
+    },
+    "coastal-split-b-repeat.toml": {
+      "bytes": 108612,
+      "sha256": "a9850c23106f9e11317229809826478c4aef525154bd708fed797feb1b06eff8"
+    },
+    "coastal-split-b.log": {
+      "bytes": 120924,
+      "sha256": "c75ce736378c294604b84fc0891bcc973199cdb6dad2d3e1ffffb71765b10fbb"
+    },
+    "coastal-split-b.stages.toml": {
+      "bytes": 363995,
+      "sha256": "b5628b7a9914872bba9253764161abc3d2bffd5c556fad2b1a7a146ea812c8d9"
+    },
+    "coastal-split-b.toml": {
+      "bytes": 108619,
+      "sha256": "7e1800f9411f6c3ed8033c67c19e3ea552780585b4650d1f3a1a58a042ba19a2"
+    },
+    "combined-ground-final-command.json": {
+      "bytes": 1786,
+      "sha256": "db7307190f32d8c568abb05a53f48f5849bf03af96ad56726282ebae074e8a8c"
+    },
+    "combined-ground-final.log": {
+      "bytes": 4345,
+      "sha256": "b620adff512d5ca84d2784ce71c926dab11d0b739c2f7facc3bc62c3d0b03f7d"
+    },
+    "combined-ground-final.toml": {
+      "bytes": 2563,
+      "sha256": "df717e61fe0437df79111fa2159513c2952a6e24b5f663adc714200dd17a43b0"
+    },
+    "comparison-summary.json": {
+      "bytes": 15773,
+      "sha256": "e368a4da7dd3ae5a5a0dd2338f868e30d681fce037ae641619c2cdd9a27c7be6"
+    },
+    "final-checks/architecture.log": {
+      "bytes": 50,
+      "sha256": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac"
+    },
+    "final-checks/caster-cpu.log": {
+      "bytes": 1380,
+      "sha256": "f97ba7fce8e735b76c91bb40b685623df6d8fe64b4b63479be05c1cd7d874866"
+    },
+    "final-checks/checks.json": {
+      "bytes": 3758,
+      "sha256": "7747eba6ea54d119fc0d323bdc28a7b91d0788fe9a8e453d966d92e5b6145a4b"
+    },
+    "final-checks/complete.json": {
+      "bytes": 338,
+      "sha256": "2f0e0f04253bd8763bba70cf90f4ace0f7d67e21e690df0a8000908f2cd39639"
+    },
+    "final-checks/feature-off.log": {
+      "bytes": 658,
+      "sha256": "c8fe82c4868d8ba027e892ab7aa82728c5de9e2889a134216e44064d0a308c30"
+    },
+    "final-checks/fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "final-checks/graphics-cpu.log": {
+      "bytes": 4645,
+      "sha256": "08dfe996d0287b10c7cf9373353383aca19bb3cea07c103a798b6be0e42ee54b"
+    },
+    "final-checks/inputs.json": {
+      "bytes": 95539,
+      "sha256": "974b5f7d20ac4a43d023ae3b61ff6cc59879d119b67d376c954c4f53cf1ed0ca"
+    },
+    "final-checks/legacy-client-check.log": {
+      "bytes": 642,
+      "sha256": "a69943b9f0b8b953795dd046f8ca9f45fda75efe09c731bd684e051faa16e0b7"
+    },
+    "final-checks/mesh-fallback-build.log": {
+      "bytes": 357,
+      "sha256": "55d34c2912104467e3c7d21be1979477f2e6459532c8f921b6d8332c54c0db3a"
+    },
+    "final-checks/msaa-fallback-build.log": {
+      "bytes": 357,
+      "sha256": "7d54ed26f54df638b7f5f86500e58fb97c4d7fcccc0b375bb5a4e985831f76ec"
+    },
+    "final-checks/native-cpu.log": {
+      "bytes": 20488,
+      "sha256": "cb18be972b0be0a6b95c8f5105631e63ec6c3436d94a5dbbd9eb7600fbb7268a"
+    },
+    "final-checks/physical-release-build.log": {
+      "bytes": 960,
+      "sha256": "9ba697866f961942c145a18e9919bc74fe332391a108c48baab960a1092380fb"
+    },
+    "final-checks/primary-oracle-build.log": {
+      "bytes": 235,
+      "sha256": "b59121541cb6cae913d483972fa596f8de33e7f75d1e7decec046144600f3b13"
+    },
+    "final-checks/release.log": {
+      "bytes": 792,
+      "sha256": "bc86cec652eb59c51fa0e8c7518d3306f7b33de4d2e05107f59892de319ef8fc"
+    },
+    "final-checks/render-core-cpu.log": {
+      "bytes": 4444,
+      "sha256": "7651baa8878660b3e4bf02e75e15f972021c8d2f08f084232c35b1b1a72a8aea"
+    },
+    "final-checks/shadow-integration-build.log": {
+      "bytes": 375,
+      "sha256": "905c186cb09e593f1144f6cfe71e1951ea4ed086086feb0e8fc5c666acf8446b"
+    },
+    "final-checks/strict-clippy.log": {
+      "bytes": 362,
+      "sha256": "db651f74fbf1efa0faa104951e3d4d34a14eb649c69cc4674e045d9706eb27f2"
+    },
+    "final-checks/worldgen-cpu.log": {
+      "bytes": 28072,
+      "sha256": "a6d6d990734ebe35cd0a0465cdd52a00bec320520b01192e8d590ac2d40ba3c0"
+    },
+    "interleaved-build.json": {
+      "bytes": 440,
+      "sha256": "38e3b7f8f55494f31d3f054cf2f0e5d5c8b5df2cd6a3d9a67396e3c1303145f5"
+    },
+    "interleaved-inputs.json": {
+      "bytes": 95539,
+      "sha256": "b3377f0e53d98fc5b149467a0da58ae2d076e265697e1087706ec3b84a2807f6"
+    },
+    "interleaved-source.patch": {
+      "bytes": 54786,
+      "sha256": "fad0c3192049750c8de938a936940a63dd8ac79027aaa8bd3e1d91fb18e1bdf7"
+    },
+    "msaa-final-physical-command.json": {
+      "bytes": 1686,
+      "sha256": "33c049ddf2c86e87f53de89e3aa967f5184c6a410a73cf3c09d93d3c30c4a9e9"
+    },
+    "msaa-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "msaa-final-physical.log": {
+      "bytes": 191,
+      "sha256": "ef9f6605abb5d66f7be41859212cc0ceeaf63dc1d08d439ce0ba5caf03e51d01"
+    },
+    "native-1280x720-command.json": {
+      "bytes": 2532,
+      "sha256": "ca9e5f883397e0a628c617cd634d0a55c95f1dba1aea33132986c6748524eb88"
+    },
+    "native-1280x720-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "native-1280x720-trace.toml": {
+      "bytes": 129176,
+      "sha256": "4247ce90557ca1ddaa6b11482f76387daf26f22a3d98d8ddebf8a72d4e855e7c"
+    },
+    "native-1280x720.log": {
+      "bytes": 7629,
+      "sha256": "72e59bde0bc4caa965b99c311019016f6468c1b5e4afe15e4a6f79261b6065e4"
+    },
+    "native-1280x720.png": {
+      "bytes": 1908676,
+      "sha256": "0df9bf03db65610421422f3326f4fb62b9a1f35052b91978be432e1c08efccb8"
+    },
+    "native-320x180-command.json": {
+      "bytes": 2530,
+      "sha256": "099870d6379afe00158ff124d0298364591fd0d7772dd05b9c07f9e3ffe7ea0b"
+    },
+    "native-320x180-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "native-320x180-trace.toml": {
+      "bytes": 129120,
+      "sha256": "5572c7cd3f5cb9c9ea9e2b6c9db7dd7989843428d6ea42c8153cce3ee703b81b"
+    },
+    "native-320x180.log": {
+      "bytes": 7633,
+      "sha256": "728cfd0aab8f1a851e57996fdc79cf4d5d0251c0970dc5cfe8e1ce898df47ea4"
+    },
+    "native-320x180.png": {
+      "bytes": 136461,
+      "sha256": "a9ee60a6568780637ea0440dbbdc4f09b6c4ade22a95ed6d48103f877213b024"
+    },
+    "native-raster-vulkan.toml": {
+      "bytes": 2874,
+      "sha256": "e707da985b179d4d0ab1f724cfe117b4dcd463d0723e92e64406e213b9434f0f"
+    },
+    "plant-final-physical-command.json": {
+      "bytes": 1713,
+      "sha256": "64bff7f819bdb52c11e3e26c0f8ceef5cb730304ad94d7a2ba5378cfdb98aa62"
+    },
+    "plant-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "plant-final-physical.log": {
+      "bytes": 8780,
+      "sha256": "16f38830961fda4bae27d2210c65c71863dfdb52c1240bdc5fc630e830c950af"
+    },
+    "plant-final-physical.toml": {
+      "bytes": 5143,
+      "sha256": "e0a056e826c788f7fe4769070e65a7df8be08ca370d2fdfe3c1fa7834f96c970"
+    },
+    "plant-ground-final-command.json": {
+      "bytes": 1806,
+      "sha256": "bb78aab0fbf8fa4279fe7bb76eee4627fdd7c7050ae8cf01bf2445db71030a0b"
+    },
+    "plant-ground-final.log": {
+      "bytes": 4184,
+      "sha256": "bdf6ecf8aeae6f4d1ee870424fc84c4db7e4ec49b898ef79226e01d731cd5c90"
+    },
+    "plant-ground-final.toml": {
+      "bytes": 2624,
+      "sha256": "b967c6fceb6f3b6ae5ef5ebc3c65749dbadf5fb21f95b456e1e148395ed14a4b"
+    },
+    "plant-interleaved-command.json": {
+      "bytes": 1677,
+      "sha256": "aa6aed7fa6811d1bd0c8323171fe9f02edd81068e834644c8be75add6f8442de"
+    },
+    "plant-interleaved-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "plant-interleaved.log": {
+      "bytes": 8788,
+      "sha256": "1de7261982dd0b2f15ea7e29cec362bbc852f8d67646c85937299a2fa9560502"
+    },
+    "plant-interleaved.toml": {
+      "bytes": 5286,
+      "sha256": "9799626ce55ca4145b9f4d94c7d1bb04842cf175e4d65a6c6dbecf8c496ebac9"
+    },
+    "plant-split-command.json": {
+      "bytes": 1666,
+      "sha256": "583b19c69f2ec784938c3790aee9981ccf4c106568aa5e60c77395e27e72b26a"
+    },
+    "plant-split-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "plant-split.log": {
+      "bytes": 8778,
+      "sha256": "b9e5159c3469d9a100e389546cf90d01a5b2d0179d79dbec09f7576a3998a2e6"
+    },
+    "plant-split.toml": {
+      "bytes": 5283,
+      "sha256": "5c53c41502e9336caae94287bbc97bd5988540bbaeb89d608210318a2c0cc342"
+    },
+    "primary-final-command.json": {
+      "bytes": 1778,
+      "sha256": "1f93a9ce85780053a10e3830ea496216edbf05ace2988d4ea0d368a1a3881171"
+    },
+    "primary-final-physical-command.json": {
+      "bytes": 1701,
+      "sha256": "8d31d042adc8c556f62e3716e6f21dde6734381a4c246a6c54c7b8558a9a150e"
+    },
+    "primary-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "primary-final-physical.log": {
+      "bytes": 203,
+      "sha256": "865cfd2ab733e510509c182ae6ff6e13853797ec2974db0251837fd88e9c4318"
+    },
+    "primary-final.log": {
+      "bytes": 286,
+      "sha256": "5c282c076d402444896f40666a2b9edf603b697e3433f334073535e956342fe0"
+    },
+    "receiver-final-command.json": {
+      "bytes": 1762,
+      "sha256": "146816ce455726ad3f93cd71cd52e43813d9dbe14a2c7eea9ea3cf8a42354570"
+    },
+    "receiver-final.csv": {
+      "bytes": 181,
+      "sha256": "24b4b2cd06668d48d8f4ce5fabac87a0ac9875f452455276d4e2256011a676e3"
+    },
+    "receiver-final.log": {
+      "bytes": 379,
+      "sha256": "0ddc7347ae840e0aeeedece300ae0484b2097231810fa0d20a95d6d1be0f8b9c"
+    },
+    "reed-ground-final-command.json": {
+      "bytes": 1785,
+      "sha256": "f823d9023347803500d7d7ff83493b63dc1cc3c9b7d140abd86661aed9d52d9e"
+    },
+    "reed-ground-final.log": {
+      "bytes": 4025,
+      "sha256": "0b54c3c374e9f3d715275fc696b4adc8286be754d4e549682128ed0514bad209"
+    },
+    "reed-ground-final.toml": {
+      "bytes": 2500,
+      "sha256": "9d44f95bcc18a84ab7f643e6d1a06f43179c55447a6dedda6c6e344c19197358"
+    },
+    "rejected-transform-counterfactual.rs": {
+      "bytes": 11953,
+      "sha256": "ff15de539d70e34538e6456125100fd607720d761bfccc2aadcbcffc79e67dab"
+    },
+    "rejected-transform-factory.patch": {
+      "bytes": 1761,
+      "sha256": "1addda9054e0dbe855148d4b39a82605b55229ba85f7995739ddcdbd7040cc06"
+    },
+    "rejected-transform.txt": {
+      "bytes": 399,
+      "sha256": "41cc7c72d39970f7dfe1e2a8613d8071ee49ea239634ba4fb744e143c3f5711c"
+    },
+    "shadow-batch-final-command.json": {
+      "bytes": 1785,
+      "sha256": "c0591f37fadac946d3113ce6acc20b4526b92fb58ecd65d3506ec8063480f9d4"
+    },
+    "shadow-batch-final.log": {
+      "bytes": 839,
+      "sha256": "f6d5ce0121b5b68d68ba6902f7cc275cdb374bdce58b60a5f11bf6e429331e42"
+    },
+    "shadow-box-trial-command.json": {
+      "bytes": 1704,
+      "sha256": "6460548a9e256f4e9c28f12764031209568f3c1d8c2c7f157dd7e90e7b9fb46e"
+    },
+    "shadow-box-trial-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "shadow-box-trial.log": {
+      "bytes": 841,
+      "sha256": "b8a42e8545c2ea50d874d903fc7d1d658439335cf276a3123c8ca5f6f4f6fd96"
+    },
+    "shadow-final-physical-command.json": {
+      "bytes": 1709,
+      "sha256": "7ca004f8afc0c433687f8b7d077f2f56e38f5594b86dbd7d2dedf02d3bbedfb1"
+    },
+    "shadow-final-physical-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "shadow-final-physical.log": {
+      "bytes": 841,
+      "sha256": "6550635aada5e03707adea5d13d775557c033d81eb4c3cf1850db20c4a99635e"
+    },
+    "shadow-submission-command.json": {
+      "bytes": 1705,
+      "sha256": "f3eac05ed3393dafea3963f9d03d9a3dbac139c179c545f0885bb71cf0ab4eba"
+    },
+    "shadow-submission-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "shadow-submission.log": {
+      "bytes": 841,
+      "sha256": "332ce0364227b7fd497e05a1fb6c7a93de993ba474fe4ad7e062fbc0dcf0f1a7"
+    },
+    "shadow-zero-final-command.json": {
+      "bytes": 1751,
+      "sha256": "1752dcbb077215b936483b209346fb9c1793b8f20c1ec48eddc10b77447ceeec"
+    },
+    "shadow-zero-final.log": {
+      "bytes": 270,
+      "sha256": "95765d5f7dccaa463577b07a68a8ee06699fdf52f7a14510a82cb574b4bdf72e"
+    },
+    "software-complete.json": {
+      "bytes": 345,
+      "sha256": "8be68dfadc41a8932f31ba3f9aaee08e96305c1804903bb67649b2f4fddb5fca"
+    },
+    "split-build.json": {
+      "bytes": 480,
+      "sha256": "399f28624ae8f615422077de1bd12195718fbf8a094b56edd5840d4cbe1c375d"
+    },
+    "split-inputs.json": {
+      "bytes": 95539,
+      "sha256": "40d8576abc1d5da1622e25193c2290ab661f0e6861cdce3276c26506ef1030b5"
+    },
+    "split-source.patch": {
+      "bytes": 62820,
+      "sha256": "b9107505388da277c4672dd88524668a091ddc0980104e88d53320bbc3c4df96"
+    },
+    "toolchain.json": {
+      "bytes": 378,
+      "sha256": "d8d7554a0f3f170038246a66cce0ee31da6838be1aa7f4d19a3f0b8b73b459f2"
+    },
+    "transform-trial-command.json": {
+      "bytes": 1701,
+      "sha256": "2b17beb2621f40b9a0432c120a6d801a08d1415cd02bfb7d7a3d80bd431ba29d"
+    },
+    "transform-trial-kernel.log": {
+      "bytes": 17,
+      "sha256": "19c4e28b2f54ea8f217db4e622b0a5c758efa7b77ce2dc0394b6d159568c0b2e"
+    },
+    "transform-trial.log": {
+      "bytes": 1108,
+      "sha256": "fa9ffdf24ca166d1e88cb958674295f317890fe8007ea4190ef68335a48c5604"
+    },
+    "transform-trial.toml": {
+      "bytes": 581,
+      "sha256": "b2f650f0b43143027d602a125349e86663082731cc5f831f6c86634b44f9daf3"
+    },
+    "user-authorization.json": {
+      "bytes": 470,
+      "sha256": "5036bded24ce26950a2c9060c611b975ea20ae3f6e17ab58a6730a505ff6bce6"
+    }
+  }
+}

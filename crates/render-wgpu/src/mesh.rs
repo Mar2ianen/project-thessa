@@ -26,6 +26,7 @@ struct Primitive {
     bounds: Option<crate::mesh_visibility::Bounds>,
     shadow: Vec<ShadowPrimitive>,
     ambient: wgpu::Buffer,
+    attributes: Option<wgpu::Buffer>,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
@@ -606,6 +607,36 @@ impl MeshRenderer {
             .primitives
             .iter()
             .any(|p| !p.ambient_visibility.is_empty());
+        let position_attributes = wgpu::vertex_attr_array![0=>Float32x3];
+        let shading_attributes = wgpu::vertex_attr_array![1=>Float32x3,2=>Float32x2];
+        let interleaved_attributes =
+            wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2];
+        let ambient_attributes = wgpu::vertex_attr_array![3=>Float32];
+        let mut vertex_buffers = if shadows.is_some() {
+            vec![
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 12,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &position_attributes,
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 20,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &shading_attributes,
+                }),
+            ]
+        } else {
+            vec![Some(wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &interleaved_attributes,
+            })]
+        };
+        vertex_buffers.push(Some(wgpu::VertexBufferLayout {
+            array_stride: if has_vertex_ao { 4 } else { 0 },
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ambient_attributes,
+        }));
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("owned-mesh"),
             layout: None,
@@ -613,15 +644,7 @@ impl MeshRenderer {
                 module: &module,
                 entry_point: Some("vertex"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 32,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2],
-                }), Some(wgpu::VertexBufferLayout {
-                    array_stride: if has_vertex_ao { 4 } else { 0 },
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![3=>Float32],
-                })],
+                buffers: &vertex_buffers,
             },
             primitive: wgpu::PrimitiveState {
                 cull_mode: None,
@@ -634,7 +657,10 @@ impl MeshRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState { count: ray_tracing.map_or(1,|settings| settings.raster_msaa_samples), ..Default::default() },
+            multisample: wgpu::MultisampleState {
+                count: ray_tracing.map_or(1, |settings| settings.raster_msaa_samples),
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fragment"),
@@ -642,9 +668,26 @@ impl MeshRenderer {
                 // lets the driver reject hidden foliage before expensive shading.
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &[
-                        ("MESH_ALL_DOUBLE_SIDED", f64::from(source.materials.iter().all(|m| m.double_sided))),
-                        ("MESH_ENV_SAMPLES", match quality { thessa_graphics::Quality::Low => 4.0, thessa_graphics::Quality::Medium => 8.0, thessa_graphics::Quality::High => 16.0 }),
-                        ("MESH_CLOUD_DIRECTIONS", match quality { thessa_graphics::Quality::Low => 1.0, thessa_graphics::Quality::Medium => 2.0, thessa_graphics::Quality::High => 4.0 }),
+                        (
+                            "MESH_ALL_DOUBLE_SIDED",
+                            f64::from(source.materials.iter().all(|m| m.double_sided)),
+                        ),
+                        (
+                            "MESH_ENV_SAMPLES",
+                            match quality {
+                                thessa_graphics::Quality::Low => 4.0,
+                                thessa_graphics::Quality::Medium => 8.0,
+                                thessa_graphics::Quality::High => 16.0,
+                            },
+                        ),
+                        (
+                            "MESH_CLOUD_DIRECTIONS",
+                            match quality {
+                                thessa_graphics::Quality::Low => 1.0,
+                                thessa_graphics::Quality::Medium => 2.0,
+                                thessa_graphics::Quality::High => 4.0,
+                            },
+                        ),
                     ],
                     ..Default::default()
                 },
@@ -787,13 +830,27 @@ impl MeshRenderer {
                     wgpu::BufferUsages::VERTEX,
                 ),
                 vertices: buffer(
-                    &words(
-                        p.vertices
-                            .iter()
-                            .flat_map(|v| v.position.into_iter().chain(v.normal).chain(v.uv)),
-                    ),
+                    &if shadows.is_some() {
+                        words(p.vertices.iter().flat_map(|v| v.position))
+                    } else {
+                        words(
+                            p.vertices
+                                .iter()
+                                .flat_map(|v| v.position.into_iter().chain(v.normal).chain(v.uv)),
+                        )
+                    },
                     wgpu::BufferUsages::VERTEX,
                 ),
+                attributes: shadows.map(|_| {
+                    buffer(
+                        &words(
+                            p.vertices
+                                .iter()
+                                .flat_map(|v| v.normal.into_iter().chain(v.uv)),
+                        ),
+                        wgpu::BufferUsages::VERTEX,
+                    )
+                }),
                 indices: buffer(
                     &p.indices
                         .iter()
@@ -1251,7 +1308,12 @@ impl MeshRenderer {
             }
             pass.set_bind_group(1, &self.materials[p.material], &[]);
             pass.set_vertex_buffer(0, p.vertices.slice(..));
-            pass.set_vertex_buffer(1, p.ambient.slice(..));
+            if let Some(attributes) = &p.attributes {
+                pass.set_vertex_buffer(1, attributes.slice(..));
+                pass.set_vertex_buffer(2, p.ambient.slice(..));
+            } else {
+                pass.set_vertex_buffer(1, p.ambient.slice(..));
+            }
             pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
             if let Some(indirect) = self.primary_indirect.as_ref().filter(|_| cull) {
                 let range = &self.primary_indirect_ranges[i];

@@ -64,6 +64,12 @@ impl Drop for MeshCommandStorage {
     }
 }
 
+struct CasterQuery {
+    cull: bool,
+    samples: bool,
+    layer: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct ShadowAtlas {
     pub(crate) command_available: std::sync::Arc<std::sync::Mutex<u64>>,
@@ -246,17 +252,11 @@ impl ShadowAtlas {
         let mesh_pipeline = pipeline(
             include_str!("shadow_mesh.wgsl").into(),
             &mesh_layout,
-            32,
+            12,
             caster_bias,
         );
-        let mesh_lod_pipeline = (settings.shadow_mesh_lod_error_texels > 0.0).then(|| {
-            pipeline(
-                include_str!("shadow_mesh.wgsl").into(),
-                &mesh_layout,
-                12,
-                caster_bias,
-            )
-        });
+        let mesh_lod_pipeline =
+            (settings.shadow_mesh_lod_error_texels > 0.0).then(|| mesh_pipeline.clone());
         let terrain_pipeline = pipeline(
             format!(
                 "{}\n{}\n{}",
@@ -361,7 +361,27 @@ impl ShadowAtlas {
     /// Explicit diagnostic readback of all Depth32Float atlas layers, little-
     /// endian raw f32 bytes. Never called by ordinary window/headless frames.
     pub fn read_depth(&self, backend: &Backend) -> Result<Vec<u8>, BackendError> {
-        let bytes = u64::from(self.size) * u64::from(self.size) * self.layers.len() as u64 * 4;
+        self.read_depth_layers(backend, 0..self.layers.len())
+    }
+
+    /// Diagnostic readback of one layer, avoiding a whole-atlas transfer.
+    pub fn read_layer_depth(
+        &self,
+        backend: &Backend,
+        layer: usize,
+    ) -> Result<Vec<u8>, BackendError> {
+        if layer >= self.layers.len() {
+            return Err(BackendError::Device("shadow layer out of range".into()));
+        }
+        self.read_depth_layers(backend, layer..layer + 1)
+    }
+
+    fn read_depth_layers(
+        &self,
+        backend: &Backend,
+        layers: std::ops::Range<usize>,
+    ) -> Result<Vec<u8>, BackendError> {
+        let bytes = u64::from(self.size) * u64::from(self.size) * layers.len() as u64 * 4;
         let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shadow-depth-oracle"),
             size: bytes,
@@ -374,7 +394,11 @@ impl ShadowAtlas {
             wgpu::TexelCopyTextureInfo {
                 texture: &self.depth_texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layers.start as u32,
+                },
                 aspect: wgpu::TextureAspect::DepthOnly,
             },
             wgpu::TexelCopyBufferInfo {
@@ -388,7 +412,7 @@ impl ShadowAtlas {
             wgpu::Extent3d {
                 width: self.size,
                 height: self.size,
-                depth_or_array_layers: self.layers.len() as u32,
+                depth_or_array_layers: layers.len() as u32,
             },
         );
         backend.queue.submit([encoder.finish()]);
@@ -500,7 +524,17 @@ impl ShadowAtlas {
         meshes: Option<&MeshRenderer>,
         cull: bool,
     ) -> ShadowDrawStats {
-        self.encode_casters_impl(encoder, terrain, meshes, cull, true, |_, _, _| {})
+        self.encode_casters_impl(
+            encoder,
+            terrain,
+            meshes,
+            CasterQuery {
+                cull,
+                samples: true,
+                layer: None,
+            },
+            |_, _, _| {},
+        )
     }
 
     pub(crate) fn encode_without_sample_culling(
@@ -509,7 +543,17 @@ impl ShadowAtlas {
         terrain: &TerrainRenderer,
         meshes: Option<&MeshRenderer>,
     ) -> ShadowDrawStats {
-        self.encode_casters_impl(encoder, terrain, meshes, true, false, |_, _, _| {})
+        self.encode_casters_impl(
+            encoder,
+            terrain,
+            meshes,
+            CasterQuery {
+                cull: true,
+                samples: false,
+                layer: None,
+            },
+            |_, _, _| {},
+        )
     }
 
     /// Diagnostic observer of the production caster path. `Some(primitive)`
@@ -523,7 +567,41 @@ impl ShadowAtlas {
         cull: bool,
         observe: impl FnMut(usize, Option<usize>, ShadowDrawStats),
     ) -> ShadowDrawStats {
-        self.encode_casters_impl(encoder, terrain, meshes, cull, true, observe)
+        self.encode_casters_impl(
+            encoder,
+            terrain,
+            meshes,
+            CasterQuery {
+                cull,
+                samples: true,
+                layer: None,
+            },
+            observe,
+        )
+    }
+
+    /// Diagnostic single-layer submission using the production source/selection
+    /// path. The caller can admit and fence each bounded stage independently.
+    /// `sample_culling = false` retains the no-sample oracle's geometry.
+    pub fn encode_layer_for_diagnostics(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        terrain: &TerrainRenderer,
+        meshes: Option<&MeshRenderer>,
+        layer: usize,
+        sample_culling: bool,
+    ) -> ShadowDrawStats {
+        self.encode_casters_impl(
+            encoder,
+            terrain,
+            meshes,
+            CasterQuery {
+                cull: true,
+                samples: sample_culling,
+                layer: Some(layer),
+            },
+            |_, _, _| {},
+        )
     }
 
     fn encode_casters_impl(
@@ -531,10 +609,14 @@ impl ShadowAtlas {
         encoder: &mut wgpu::CommandEncoder,
         terrain: &TerrainRenderer,
         meshes: Option<&MeshRenderer>,
-        cull: bool,
-        sample_culling: bool,
+        query: CasterQuery,
         mut observe: impl FnMut(usize, Option<usize>, ShadowDrawStats),
     ) -> ShadowDrawStats {
+        let CasterQuery {
+            cull,
+            samples: sample_culling,
+            layer: only_layer,
+        } = query;
         let receiver_frame = if cull && self.receiver_culling {
             terrain.shadow_receiver_frame(meshes)
         } else {
@@ -542,7 +624,7 @@ impl ShadowAtlas {
         };
         let mut total = ShadowDrawStats::default();
         for (i, (view, _, bind)) in self.layers.iter().enumerate() {
-            if !self.active[i / self.radii.len()] {
+            if only_layer.is_some_and(|layer| layer != i) || !self.active[i / self.radii.len()] {
                 continue;
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

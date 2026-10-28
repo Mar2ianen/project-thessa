@@ -158,3 +158,5 @@ Hashes, commands and counter data are in
 `artifacts/native-horizon-render-work-2026-10-27.json`. The source manifest and
 raw logs are retained with the reproducible output bundle. Physical-GPU,
 whole-frame, moving-camera and blind reference acceptance remain open.
+
+The [shadow geometry hierarchy continuation](83_NATIVE_SHADOW_HIERARCHY.md) keeps the existing depth tier, adds an unresolved-organ tier and a sub-texel reed caster, and records the same-build original-producer comparison separately from full-geometry quality evidence.

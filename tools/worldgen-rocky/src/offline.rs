@@ -1184,6 +1184,12 @@ enum PlantDetail {
     Full,
     Reduced,
     Shadow,
+    ShadowFar,
+}
+impl PlantDetail {
+    fn shadow(self) -> bool {
+        matches!(self, Self::Shadow | Self::ShadowFar)
+    }
 }
 impl From<bool> for PlantDetail {
     fn from(reduced: bool) -> Self {
@@ -1210,11 +1216,18 @@ pub fn shadow_plant_prototype_forms() -> Vec<(PlantMesh, u8)> {
         .clone()
 }
 
+/// Additional depth-only tier; consumers certify its error before selection.
+pub fn far_shadow_plant_prototype_forms() -> Vec<(PlantMesh, u8)> {
+    static FAR: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
+    FAR.get_or_init(|| build_plant_forms(PlantDetail::ShadowFar))
+        .clone()
+}
+
 fn build_plant_forms(detail: PlantDetail) -> Vec<(PlantMesh, u8)> {
     let base = match detail {
         PlantDetail::Full => plant_prototypes(),
         PlantDetail::Reduced => reduced_plant_prototypes(),
-        PlantDetail::Shadow => build_plant_prototypes(detail),
+        PlantDetail::Shadow | PlantDetail::ShadowFar => build_plant_prototypes(detail),
     };
     let mut forms = Vec::new();
     for mesh in base {
@@ -1254,7 +1267,7 @@ fn build_plant_forms(detail: PlantDetail) -> Vec<(PlantMesh, u8)> {
                     *n = crate::lod::normalize(std::array::from_fn(|i| f64::from(n[i] / scale[i])))
                         .map(|v| v as f32);
                 }
-                if detail != PlantDetail::Shadow {
+                if !detail.shadow() {
                     bake_plant_surface(&mut variant);
                 }
             }
@@ -1324,7 +1337,7 @@ fn build_plant_prototypes(detail: impl Into<PlantDetail>) -> Vec<PlantMesh> {
             _ => unreachable!(),
         }
         mesh.foliage_tones.resize(mesh.positions.len(), 0);
-        if detail != PlantDetail::Shadow {
+        if !detail.shadow() {
             bake_plant_surface(&mut mesh);
         }
         mesh
@@ -1539,7 +1552,13 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form
         mesh,
         [0.0; 3],
         trunk_axis,
-        if reduced { 8 } else { 16 },
+        if detail == PlantDetail::ShadowFar {
+            4
+        } else if reduced {
+            8
+        } else {
+            16
+        },
         if reduced {
             &coarse_trunk_rings[..]
         } else {
@@ -1570,7 +1589,11 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form
             mesh,
             base,
             axis,
-            8,
+            if detail == PlantDetail::ShadowFar {
+                4
+            } else {
+                8
+            },
             &[
                 (0.0, fork_thickness.0),
                 (length * 0.35, fork_thickness.1),
@@ -2160,7 +2183,9 @@ fn compound_pinna(
     let pitch_reach = (length * 0.20).min(frond_pitch_m * 0.48).min(0.085);
     let count = (length * 0.91 / (pitch_reach * 0.34 * 0.82)).ceil() as usize;
     let count = count.clamp(6, secondary_limit);
-    let wing_bins = if detail == PlantDetail::Shadow {
+    let wing_bins = if detail == PlantDetail::ShadowFar {
+        1
+    } else if detail == PlantDetail::Shadow {
         2
     } else if length < 0.55 {
         ((count / 2) & !1).clamp(2, 8)

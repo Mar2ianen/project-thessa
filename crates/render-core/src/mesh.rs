@@ -145,7 +145,9 @@ pub struct Primitive {
 }
 /// Optional depth-only replacement for one primitive. The producer certifies
 /// a two-sided continuous surface-distance bound in local metres. Primary and
-/// ray-query geometry continue to use the original MeshAsset.
+/// ray-query geometry continue to use the original MeshAsset. Consumers may
+/// supply several distinct triangle counts for one primitive and select the
+/// smallest representation satisfying the projected error budget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShadowMeshLod {
     pub primitive: usize,

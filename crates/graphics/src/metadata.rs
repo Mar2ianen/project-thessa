@@ -1024,7 +1024,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "texel",
             advanced: true,
             restart_required: true,
-            description: "Depth-only mesh accuracy: 0 uses full geometry, 0.25 is strict, 0.5 balanced, 1 cheaper. Supplied conservative surface error is projected through the actual light and instance matrices; missing or ineligible LODs use full geometry.",
+            description: "Depth-only mesh accuracy: 0 uses full geometry, 0.25 is strict, 0.5 balanced, 1 cheaper. The smallest supplied certified level fitting the actual light and instance projection is selected; missing or ineligible levels use full geometry.",
         },
         SettingMeta {
             path: "shadows.normal_bias_m",

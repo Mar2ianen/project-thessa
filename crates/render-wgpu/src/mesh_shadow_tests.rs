@@ -56,7 +56,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
             uv: [0.0; 2],
         })
         .to_vec(),
-        indices: vec![0, 1, 2, 0, 2, 3],
+        indices: vec![0, 1, 2, 0, 2, 3, 0, 1, 2, 0, 2, 3],
         material: 0,
     };
     let source = MeshAsset {
@@ -87,7 +87,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         "pinned software adapter must exercise indexed indirect first_instance"
     );
     direct.primary_indirect_supported = false;
-    let lods: Vec<_> = (0..2)
+    let mut lods: Vec<_> = (0..2)
         .map(|primitive| ShadowMeshLod {
             primitive,
             positions: vec![[-0.5, -0.5, -4.0], [0.5, -0.5, -4.0], [0.5, 0.5, -4.0]],
@@ -95,6 +95,19 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
             max_error_m: 0.71,
         })
         .collect();
+    {
+        let primitive = 0;
+        lods.push(ShadowMeshLod {
+            primitive,
+            positions: source.primitives[primitive]
+                .vertices
+                .iter()
+                .map(|v| v.position)
+                .collect(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+            max_error_m: 0.0,
+        });
+    }
     batched.set_shadow_lods(&backend, &lods).unwrap();
     direct.set_shadow_lods(&backend, &lods).unwrap();
     let target = OffscreenTarget::new(&backend, 257, 193).unwrap();
@@ -123,6 +136,9 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
     };
     let mut witnessed_lod = false;
     let mut witnessed_batch = false;
+    let mut witnessed_full = false;
+    let mut witnessed_fine = false;
+    let mut witnessed_coarse = false;
     for (case, origin) in [DVec3::ZERO, DVec3::new(3e12, -2e12, 1e12)]
         .into_iter()
         .enumerate()
@@ -168,6 +184,17 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         );
         assert_eq!(direct.shadow_indirect_storage_bytes(), 0);
         let a = capture(&mut terrain, &batched);
+        {
+            let commands = batched.shadow_commands.lock().unwrap();
+            for data in &commands.uploaded {
+                for command in data.as_chunks::<20>().0 {
+                    let count = u32::from_le_bytes(command[..4].try_into().unwrap());
+                    witnessed_full |= count == 12;
+                    witnessed_fine |= count == 6;
+                    witnessed_coarse |= count == 3;
+                }
+            }
+        }
         let b = capture(&mut terrain, &direct);
         assert_eq!(a.0, b.0, "direct/indirect atlas differs at case {case}");
         assert_eq!(
@@ -216,7 +243,9 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
             batched.shadow_indirect_storage_bytes()
         );
     }
-    assert!(witnessed_lod && witnessed_batch);
+    assert!(
+        witnessed_lod && witnessed_batch && witnessed_full && witnessed_fine && witnessed_coarse
+    );
     let budget = terrain.shadows().unwrap().command_available.clone();
     drop(batched);
     drop(direct);

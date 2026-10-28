@@ -128,3 +128,5 @@ Release binary: `1cd5e8499e550a2a8ec3b220ba1662eeabd1f6e8ab645a4ff56695982d84773
 Physical-GPU, whole-frame, moving-camera and blind reference acceptance remain open.
 
 The [2026-10-28 shadow submission continuation](82_NATIVE_SHADOW_SUBMISSION.md) adds opt-in primary-receiver selection with full-volume fallbacks, shared-budget indexed indirect shadow batches, dirty command uploads and cached uploaded-world bounds. Its current evidence and limitations are separate from the dated measurements above.
+
+The [shadow geometry hierarchy continuation](83_NATIVE_SHADOW_HIERARCHY.md) keeps the existing depth tier, adds an unresolved-organ tier and a sub-texel reed caster, and records the same-build original-producer comparison separately from full-geometry quality evidence.

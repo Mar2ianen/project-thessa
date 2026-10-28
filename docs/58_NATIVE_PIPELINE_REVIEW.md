@@ -114,3 +114,5 @@ The subsequent [Horizon renderer review](80_HORIZON_RENDER_WORK_REVIEW.md) exten
 The next [shadow representation slice](81_NATIVE_SHADOW_MESH_LOD.md) selects certified depth-only plant geometry by actual light texels. It preserves the primary/RT source and changes geometry cost rather than reducing API calls. The canonical cold shadow count falls from 999.6M to 283.2M with the 0.5-texel showcase setting; no full-frame GPU timing or reference acceptance follows.
 
 The [2026-10-28 shadow submission continuation](82_NATIVE_SHADOW_SUBMISSION.md) adds opt-in primary-receiver selection with full-volume fallbacks, shared-budget indexed indirect shadow batches, dirty command uploads and cached uploaded-world bounds. Its current evidence and limitations are separate from the dated measurements above.
+
+The [shadow geometry hierarchy continuation](83_NATIVE_SHADOW_HIERARCHY.md) keeps the existing depth tier, adds an unresolved-organ tier and a sub-texel reed caster, and records the same-build original-producer comparison separately from full-geometry quality evidence.

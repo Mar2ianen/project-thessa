@@ -140,3 +140,5 @@ radiometric/temporal error and independent blind reference acceptance remain ope
 TAA remains default-off. The large retained primary workload and remaining shadow
 work still require further representation work; this slice does not fix them by
 thinning the world population.
+
+The [shadow geometry hierarchy continuation](83_NATIVE_SHADOW_HIERARCHY.md) keeps the existing depth tier, adds an unresolved-organ tier and a sub-texel reed caster, and records the same-build original-producer comparison separately from full-geometry quality evidence.

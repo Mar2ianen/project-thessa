@@ -11,6 +11,19 @@ use thessa_render_wgpu::{
 #[test]
 #[ignore = "software Vulkan: actual authored plant shadow silhouettes versus full geometry"]
 fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() {
+    compare_plant_shadows(false, false);
+}
+#[test]
+#[ignore = "software Vulkan: actual reed caster and all plant organs versus full geometry"]
+fn actual_reed_shadow_lods_preserve_receiver_and_coverage() {
+    compare_plant_shadows(true, true);
+}
+#[test]
+#[ignore = "software Vulkan: combined actual fern/tree/reed hierarchy over twelve shadow layers"]
+fn actual_combined_plant_hierarchy_preserves_receivers() {
+    compare_plant_shadows(true, false);
+}
+fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
     assert!(!std::path::Path::new("/dev/dri").exists());
     let backend = Backend::bring_up().unwrap();
     assert_eq!(
@@ -21,9 +34,20 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
     let mut request = thessa_graphics::RequestedGraphics::default();
     request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
     request.shadows.mesh_lod_error_texels = 0.5;
-    request.shadows.cascades = 2;
+    request.shadows.cascades = if include_reeds && !isolate_reeds {
+        4
+    } else {
+        2
+    };
+    let cascades = request.shadows.cascades as usize;
     request.shadows.map_size = 512;
-    request.shadows.max_distance_m = 256.0;
+    request.shadows.max_distance_m = if isolate_reeds {
+        4096.0
+    } else if include_reeds {
+        12000.0
+    } else {
+        256.0
+    };
     request.shadows.first_cascade_distance_m = Some(25.0);
     let settings = backend.resolve_graphics(&request);
     assert_eq!(settings.native_shadow_map_size, 512);
@@ -63,8 +87,16 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
     for kind in [
         thessa_worldgen_rocky::scatter::ScatterKind::FernClump,
         thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree,
+        thessa_worldgen_rocky::scatter::ScatterKind::ReedClump,
     ] {
-        for form in 0..3 {
+        if kind == thessa_worldgen_rocky::scatter::ScatterKind::ReedClump && !include_reeds {
+            continue;
+        }
+        for form in 0..if kind == thessa_worldgen_rocky::scatter::ScatterKind::ReedClump {
+            1
+        } else {
+            3
+        } {
             let id = (0..10_000)
                 .map(thessa_worldgen_rocky::scatter::ScatterId)
                 .find(|&id| thessa_worldgen_rocky::offline::plant_form(id, kind) == form)
@@ -93,6 +125,18 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
         .unwrap();
         append_shadow_lods(&mut prepared);
         assert!(!prepared.shadow_lods.is_empty());
+        if isolate_reeds {
+            // Isolate the reed approximation; the six-form fixture independently
+            // checks all fern/tree levels at its unchanged layout and distance.
+            prepared.shadow_lods.retain(|lod| {
+                prepared.descriptors[prepared.ranges[lod.primitive].start as usize].kind
+                    == thessa_worldgen_rocky::scatter::ScatterKind::ReedClump
+            });
+            assert!(prepared.shadow_lods.iter().any(|lod| {
+                prepared.descriptors[prepared.ranges[lod.primitive].start as usize].kind
+                    == thessa_worldgen_rocky::scatter::ScatterKind::ReedClump
+            }));
+        }
         let ground_asset = MeshAsset {
             primitives: vec![Primitive {
                 ambient_visibility: vec![],
@@ -231,6 +275,29 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
                 full.1, reference.1,
                 "LOD installation changed primary geometry"
             );
+            let baseline = if include_reeds && !isolate_reeds {
+                mesh.set_shadow_lods(&backend, &original_shadow_lods(&prepared))
+                    .unwrap();
+                let previous = capture(&mut terrain, &mesh, false);
+                let changed_from_full = full
+                    .0
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(previous.0.as_chunks::<4>().0)
+                    .filter(|(a, b)| {
+                        (f32::from_le_bytes(**a) < 1.0) != (f32::from_le_bytes(**b) < 1.0)
+                    })
+                    .count();
+                eprintln!(
+                    "combined original-tier coverage changes from full geometry: {changed_from_full}"
+                );
+                mesh.set_shadow_lods(&backend, &prepared.shadow_lods)
+                    .unwrap();
+                previous
+            } else {
+                full
+            };
             let lod = capture(&mut terrain, &mesh, false);
             assert!(lod.2.mesh_lod_instances > 0);
             assert!(lod.2.mesh_lod_triangles_saved > 0);
@@ -246,13 +313,16 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
                     .map(|p| f32::from_le_bytes(*p) < 1.0)
                     .collect::<Vec<_>>()
             };
-            let a = mask(&full.0);
+            let a = mask(&baseline.0);
             let b = mask(&lod.0);
             let mut unmatched_indices = std::collections::BTreeSet::new();
             let mut differences = 0;
             let mut occupied_union = 0;
-            for layer in 0..6 {
-                if lights.colors_lux[layer / 2][..3].iter().all(|&v| v == 0.0) {
+            for layer in 0..3 * cascades {
+                if lights.colors_lux[layer / cascades][..3]
+                    .iter()
+                    .all(|&v| v == 0.0)
+                {
                     continue;
                 }
                 for y in 0..512_i32 {
@@ -306,6 +376,9 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
             }
             // Subpixel laminae can miss all pixel centres after a bounded shift.
             // Reject larger missing regions and measure final filtered radiance too.
+            eprintln!(
+                "plant_shadow_fixture reeds={include_reeds} isolated={isolate_reeds} cascades={cascades} reduced={reduced} case={case} differences={differences} occupied={occupied_union} unmatched={unmatched} max_component={max_component}"
+            );
             assert!(
                 max_component <= 2,
                 "missing component {max_component}, reduced={reduced}, origin={case}"
@@ -316,11 +389,11 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
             );
             assert!(
                 differences * 100 <= occupied_union,
-                "coverage changes exceed 1% of this fixture"
+                "coverage changes exceed 1%: differences={differences} union={occupied_union} reeds={include_reeds} reduced={reduced} case={case}"
             );
             let mut colour_max = 0_u8;
             let mut colour_sum = 0_u64;
-            for (a, b) in full
+            for (a, b) in baseline
                 .1
                 .as_chunks::<4>()
                 .0
@@ -342,9 +415,9 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
             );
             if !reduced && case == 0 {
                 for (extension, bytes) in [
-                    ("full.depth", &full.0),
+                    ("full.depth", &baseline.0),
                     ("lod.depth", &lod.0),
-                    ("full.rgba", &full.1),
+                    ("full.rgba", &baseline.1),
                     ("lod.rgba", &lod.1),
                 ] {
                     let mut f = std::fs::OpenOptions::new()
@@ -407,10 +480,28 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
         }
     }
     assert!(
-        changed > 0 && saved > 0,
+        saved > 0 && (include_reeds || changed > 0),
         "must witness an actual approximation"
     );
-    let report: toml::Table = [("scope".into(),toml::Value::String("Actual native full/reduced six-form plants and a ground receiver; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.".into())), ("cases".into(),toml::Value::Array(cases))].into_iter().collect();
+    let mut report: toml::Table = [("scope".into(),toml::Value::String("Actual native plant forms and a ground receiver; separate reed case isolates reed proxy with other sources full; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.".into())), ("cases".into(),toml::Value::Array(cases))].into_iter().collect();
+    report.insert(
+        "reference".into(),
+        toml::Value::String(
+            if include_reeds && !isolate_reeds {
+                "original-one-tier"
+            } else {
+                "full-geometry"
+            }
+            .into(),
+        ),
+    );
+    report.insert("includes_reeds".into(), toml::Value::Boolean(include_reeds));
+    report.insert("isolated_reeds".into(), toml::Value::Boolean(isolate_reeds));
+    report.insert("cascades".into(), toml::Value::Integer(cascades as i64));
+    report.insert(
+        "shadow_distance_m".into(),
+        toml::Value::Float(request.shadows.max_distance_m),
+    );
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .write(true)

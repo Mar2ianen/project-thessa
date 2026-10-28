@@ -1,0 +1,680 @@
+{
+  "status": "Implemented and verified on the surface branch; physical-GPU/frame-time and general radiometric/temporal/reference acceptance open.",
+  "date": "2026-10-28",
+  "baseline_commit": "538aeb6f1169d65e34780825573191c10ac90f77",
+  "source_manifest_sha256": "427158e73e5c5a4c919c5fd0c7381014fc900f799560f7bbc1b8264e81a840bc",
+  "release_sha256": "1d4473af0096c58b20bde3c6203511a48ebc8d7775c5ebd6750a61db6d23c090",
+  "cpu_tests": {
+    "native-cpu": 133,
+    "graphics-cpu": 50,
+    "render-core-cpu": 45,
+    "caster-cpu": 5,
+    "worldgen-cpu": 287
+  },
+  "cpu_total": 520,
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.6053782559465617
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-core",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-terrain-native",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 4.196272777975537
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 113.7602731899824
+    },
+    {
+      "name": "graphics-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.6506695109419525
+    },
+    {
+      "name": "render-core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.4685676919762045
+    },
+    {
+      "name": "caster-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "mesh_visibility"
+      ],
+      "exit_code": 0,
+      "seconds": 3.999389588017948
+    },
+    {
+      "name": "worldgen-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--lib",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 107.17281729495153
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 3.371805600938387
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.059711677953600883
+    },
+    {
+      "name": "shadow-integration-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "unified_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 3.571583279990591
+    },
+    {
+      "name": "primary-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.09996885398868471
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 104.8298058800865
+    }
+  ],
+  "software_cases": {
+    "receiver-final": {
+      "exit_code": 0,
+      "seconds": 6.826688154949807,
+      "binary_sha256": "457560920d3730b04d1678a7b972632bd71814292a0e796bae2b961bae7b9b9b",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "receiver-final-command.json"
+    },
+    "shadow-batch-final": {
+      "exit_code": 0,
+      "seconds": 2.268009988940321,
+      "binary_sha256": "dad26ca8d3a9d7d81a94cd97b75e55e824a5a9de92cb1b47be4b7673e2ad9235",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "shadow-batch-final-command.json"
+    },
+    "primary-final": {
+      "exit_code": 0,
+      "seconds": 1.6674149530008435,
+      "binary_sha256": "dad26ca8d3a9d7d81a94cd97b75e55e824a5a9de92cb1b47be4b7673e2ad9235",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "primary-final-command.json"
+    },
+    "shadow-zero-final": {
+      "exit_code": 0,
+      "seconds": 10.483039606013335,
+      "binary_sha256": "457560920d3730b04d1678a7b972632bd71814292a0e796bae2b961bae7b9b9b",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "shadow-zero-final-command.json"
+    },
+    "plant-ground-final": {
+      "exit_code": 0,
+      "seconds": 45.84821334993467,
+      "binary_sha256": "c46ad5872f6ef805960178f9972a0adbe1f408fbe3f51cc9950e468f501a3228",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "plant-ground-final-command.json"
+    },
+    "reed-ground-final": {
+      "exit_code": 0,
+      "seconds": 45.99870340898633,
+      "binary_sha256": "c46ad5872f6ef805960178f9972a0adbe1f408fbe3f51cc9950e468f501a3228",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "reed-ground-final-command.json"
+    },
+    "combined-ground-final": {
+      "exit_code": 0,
+      "seconds": 50.308406905969605,
+      "binary_sha256": "c46ad5872f6ef805960178f9972a0adbe1f408fbe3f51cc9950e468f501a3228",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "combined-ground-final-command.json"
+    },
+    "coastal-final": {
+      "exit_code": 0,
+      "seconds": 47.604896291974,
+      "binary_sha256": "c46ad5872f6ef805960178f9972a0adbe1f408fbe3f51cc9950e468f501a3228",
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display.",
+      "command_file": "coastal-final-command.json"
+    }
+  },
+  "software_driver": {
+    "adapter": "llvmpipe LLVM 23.1.3, CPU, Mesa 26.2.5-arch1.1",
+    "package_sha256": "e14837dfe51c29d8bdb29422b40daaafc2291908c4a6349a0e63addd09fa546b",
+    "library_sha256": "08d49503422af25fe5d9d8aee217501d12710645755a859c2e32711f68fbfc75",
+    "containment": "Bubblewrap unshare-all, private CPU-only ICD, no /dev/dri, no display/network; dense caster command encoder dropped, never submitted."
+  },
+  "coastal_baseline": {
+    "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 23.1.3, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.2.5-arch1.1 (LLVM 23.1.3)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+    "candidate_instances": 17992,
+    "candidate_triangles": 112813834,
+    "draw_calls": 37,
+    "draw_commands": 3226,
+    "eye_agl_m": 2,
+    "frame_upload_bytes": 576,
+    "height": 720,
+    "native_update_cpu_max_ms": 0.293877,
+    "native_update_cpu_p50_ms": 0.267728,
+    "native_update_cpu_p95_ms": 0.292534,
+    "prototype_bytes": 45493332,
+    "scope": "Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.",
+    "shadow_bounds_cpu_storage_bytes": 1784312,
+    "shadow_candidate_triangles": 1353766008,
+    "shadow_draw_calls": 453,
+    "shadow_draw_commands": 6930,
+    "shadow_encode_cpu_ms": 96.77678,
+    "shadow_indirect": 1,
+    "shadow_indirect_storage_bytes": 7864320,
+    "shadow_indirect_upload_bytes": 138600,
+    "shadow_lod_instances": 121349,
+    "shadow_lod_max_error_microtexels": 499761,
+    "shadow_lod_triangles_saved": 716367526,
+    "shadow_passes": 12,
+    "shadow_prototype_bytes": 991680,
+    "shadow_submitted_triangles": 283223492,
+    "submitted_triangles": 17111160,
+    "survey_distance_m": 80,
+    "visible_instances": 2510,
+    "width": 1280
+  },
+  "coastal_final": {
+    "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 23.1.3, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.2.5-arch1.1 (LLVM 23.1.3)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+    "candidate_instances": 17992,
+    "candidate_triangles": 112813834,
+    "draw_calls": 37,
+    "draw_commands": 3226,
+    "eye_agl_m": 2,
+    "frame_upload_bytes": 576,
+    "height": 720,
+    "native_update_cpu_max_ms": 0.304156,
+    "native_update_cpu_p50_ms": 0.26876,
+    "native_update_cpu_p95_ms": 0.294238,
+    "prototype_bytes": 46159116,
+    "scope": "Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.",
+    "shadow_bounds_cpu_storage_bytes": 1784312,
+    "shadow_candidate_triangles": 1353766008,
+    "shadow_draw_calls": 543,
+    "shadow_draw_commands": 16755,
+    "shadow_encode_cpu_ms": 110.870271,
+    "shadow_indirect": 1,
+    "shadow_indirect_storage_bytes": 7864320,
+    "shadow_indirect_upload_bytes": 335100,
+    "shadow_lod_instances": 155492,
+    "shadow_lod_max_error_microtexels": 499913,
+    "shadow_lod_triangles_saved": 747540286,
+    "shadow_passes": 12,
+    "shadow_previous_draw_calls": 453,
+    "shadow_previous_triangles": 283223492,
+    "shadow_prototype_bytes": 1657464,
+    "shadow_submitted_triangles": 252050732,
+    "submitted_triangles": 17111160,
+    "survey_distance_m": 80,
+    "visible_instances": 2510,
+    "width": 1280
+  },
+  "shadow_layers": [
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 27,
+      "instances": 6427,
+      "layer": 0,
+      "lod_instances": 235,
+      "saved_triangles": 587588,
+      "triangles": 19801098
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 50,
+      "instances": 23719,
+      "layer": 1,
+      "lod_instances": 11468,
+      "saved_triangles": 62905018,
+      "triangles": 24285914
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 50,
+      "instances": 27857,
+      "layer": 2,
+      "lod_instances": 19425,
+      "saved_triangles": 90179232,
+      "triangles": 22634602
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 54,
+      "instances": 27857,
+      "layer": 3,
+      "lod_instances": 20704,
+      "saved_triangles": 95510912,
+      "triangles": 17302922
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 27,
+      "instances": 6424,
+      "layer": 4,
+      "lod_instances": 234,
+      "saved_triangles": 585598,
+      "triangles": 19790472
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 50,
+      "instances": 23718,
+      "layer": 5,
+      "lod_instances": 11467,
+      "saved_triangles": 62903026,
+      "triangles": 24285102
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 50,
+      "instances": 27857,
+      "layer": 6,
+      "lod_instances": 19425,
+      "saved_triangles": 90179232,
+      "triangles": 22634602
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 54,
+      "instances": 27857,
+      "layer": 7,
+      "lod_instances": 20704,
+      "saved_triangles": 95510912,
+      "triangles": 17302922
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 27,
+      "instances": 6424,
+      "layer": 8,
+      "lod_instances": 234,
+      "saved_triangles": 585598,
+      "triangles": 19790472
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 50,
+      "instances": 23718,
+      "layer": 9,
+      "lod_instances": 11467,
+      "saved_triangles": 62903026,
+      "triangles": 24285102
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 50,
+      "instances": 27857,
+      "layer": 10,
+      "lod_instances": 19425,
+      "saved_triangles": 90179232,
+      "triangles": 22634602
+    },
+    {
+      "candidate_triangles": 112813834,
+      "draw_calls": 54,
+      "instances": 27857,
+      "layer": 11,
+      "lod_instances": 20704,
+      "saved_triangles": 95510912,
+      "triangles": 17302922
+    }
+  ],
+  "reduction_percent": 11.006417504378485,
+  "plant_render": {
+    "plant-ground-final": {
+      "cascades": 2,
+      "includes_reeds": false,
+      "isolated_reeds": false,
+      "reference": "full-geometry",
+      "scope": "Actual native plant forms and a ground receiver; separate reed case isolates reed proxy with other sources full; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.",
+      "shadow_distance_m": 256.0,
+      "cases": [
+        {
+          "colour_mae_u8": 0.03661216507731699,
+          "colour_max_u8": 6,
+          "different_coverage_texels": 148,
+          "max_error_microtexels": 472647,
+          "max_unmatched_component": 1,
+          "occupied_union": 17049,
+          "origin_case": 0,
+          "reduced": false,
+          "triangles_saved": 1490580,
+          "unmatched_after_one_texel": 14
+        },
+        {
+          "colour_mae_u8": 0.04262682876017285,
+          "colour_max_u8": 7,
+          "different_coverage_texels": 109,
+          "max_error_microtexels": 472649,
+          "max_unmatched_component": 2,
+          "occupied_union": 10967,
+          "origin_case": 1,
+          "reduced": false,
+          "triangles_saved": 993720,
+          "unmatched_after_one_texel": 6
+        },
+        {
+          "colour_mae_u8": 0.04452867213698648,
+          "colour_max_u8": 9,
+          "different_coverage_texels": 130,
+          "max_error_microtexels": 388491,
+          "max_unmatched_component": 2,
+          "occupied_union": 17125,
+          "origin_case": 0,
+          "reduced": true,
+          "triangles_saved": 173064,
+          "unmatched_after_one_texel": 8
+        },
+        {
+          "colour_mae_u8": 0.03929356262978569,
+          "colour_max_u8": 6,
+          "different_coverage_texels": 107,
+          "max_error_microtexels": 388493,
+          "max_unmatched_component": 1,
+          "occupied_union": 11033,
+          "origin_case": 1,
+          "reduced": true,
+          "triangles_saved": 115376,
+          "unmatched_after_one_texel": 5
+        }
+      ]
+    },
+    "reed-ground-final": {
+      "cascades": 2,
+      "includes_reeds": true,
+      "isolated_reeds": true,
+      "reference": "full-geometry",
+      "scope": "Actual native plant forms and a ground receiver; separate reed case isolates reed proxy with other sources full; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.",
+      "shadow_distance_m": 4096.0,
+      "cases": [
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 72740,
+          "max_unmatched_component": 0,
+          "occupied_union": 13582,
+          "origin_case": 0,
+          "reduced": false,
+          "triangles_saved": 1920,
+          "unmatched_after_one_texel": 0
+        },
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 72741,
+          "max_unmatched_component": 0,
+          "occupied_union": 9045,
+          "origin_case": 1,
+          "reduced": false,
+          "triangles_saved": 1280,
+          "unmatched_after_one_texel": 0
+        },
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 72737,
+          "max_unmatched_component": 0,
+          "occupied_union": 12979,
+          "origin_case": 0,
+          "reduced": true,
+          "triangles_saved": 1920,
+          "unmatched_after_one_texel": 0
+        },
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 72738,
+          "max_unmatched_component": 0,
+          "occupied_union": 8724,
+          "origin_case": 1,
+          "reduced": true,
+          "triangles_saved": 1280,
+          "unmatched_after_one_texel": 0
+        }
+      ]
+    },
+    "combined-ground-final": {
+      "cascades": 4,
+      "includes_reeds": true,
+      "isolated_reeds": false,
+      "reference": "original-one-tier",
+      "scope": "Actual native plant forms and a ground receiver; separate reed case isolates reed proxy with other sources full; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.",
+      "shadow_distance_m": 12000.0,
+      "cases": [
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 472647,
+          "max_unmatched_component": 0,
+          "occupied_union": 13925,
+          "origin_case": 0,
+          "reduced": false,
+          "triangles_saved": 4415844,
+          "unmatched_after_one_texel": 0
+        },
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 472649,
+          "max_unmatched_component": 0,
+          "occupied_union": 9291,
+          "origin_case": 1,
+          "reduced": false,
+          "triangles_saved": 2943896,
+          "unmatched_after_one_texel": 0
+        },
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 489875,
+          "max_unmatched_component": 0,
+          "occupied_union": 13292,
+          "origin_case": 0,
+          "reduced": true,
+          "triangles_saved": 545268,
+          "unmatched_after_one_texel": 0
+        },
+        {
+          "colour_mae_u8": 0.0,
+          "colour_max_u8": 0,
+          "different_coverage_texels": 0,
+          "max_error_microtexels": 489876,
+          "max_unmatched_component": 0,
+          "occupied_union": 8950,
+          "origin_case": 1,
+          "reduced": true,
+          "triangles_saved": 363512,
+          "unmatched_after_one_texel": 0
+        }
+      ]
+    }
+  },
+  "image_evidence": {
+    "run": "plant-ground-final",
+    "scope": "Actual software-Vulkan first-case pixels/depth. Identical per-layer crop and nearest-neighbour enlargement for texel inspection. Difference image is multiplied by 32. Primary source and receivers identical.",
+    "first_case": {
+      "colour_max_u8": 6,
+      "colour_mae_u8": 0.03661216507731699,
+      "occupied_union": 17049,
+      "different_coverage_texels": 148,
+      "unmatched_after_one_texel": 14
+    },
+    "files": {
+      "plant-ground-final.full.depth": "27c09331f758215691a0f17b029bcb58dc10221a491a9d566dff7539027fed19",
+      "plant-ground-final.lod.depth": "1bcb7e8573a2bded70ee46b1aa536616462d2ef3d247f069ce6deaf2917fcb3c",
+      "plant-ground-final.full.rgba": "47eb3f51a982e22a2a26325c117f2b13ab0d8acc620e75715f434440734bd605",
+      "plant-ground-final.lod.rgba": "5f93e4a24c1f350a06865d979ddab6004a0d0df3430b3b30ccc3dc754ae65f0c",
+      "plant-ground-comparison.png": "39c381638f765245e35e0968fa739a976af8b58aa3eb8579b7336109299713da",
+      "shadow-mask-comparison.png": "2127f91621e3cd65cfba7475cde62cd9a53b622f20648961aae4afb6073e64a9"
+    }
+  },
+  "limits": [
+    "All dense native encoders, including the same-build original-producer oracle, are dropped. No physical Radeon/display/device access.",
+    "Original six-form and isolated-reed quality cases compare full geometry; combined twelve-layer case compares the original one-tier producer. Its previous full-geometry discrepancy is retained in the raw log.",
+    "Exploratory 199.6M and 243.2M plans failed unchanged coverage checks and are not shipped; finer four-bin representation is absent.",
+    "Geometric certificates and unresolved-organ support do not establish universal radiometric/temporal fidelity.",
+    "No GPU FPS, calibrated encoder latency gain, whole-frame moving-camera or independent blind reference acceptance. TAA default off and physical-GPU block retained."
+  ],
+  "raw_files": {
+    "coastal-finalist.log": "341d484d8f60640f0ee219fd424d6d0587c92803a1a491d37bfc330975466410",
+    "coastal-finalist.toml": "c1da82a3213c5db5673693c3b57e1aea5bd0b32105b3a3f152024d5234c844d0",
+    "coastal-finalist-command.json": "ccc3d5e97b169ac4e710c6f1ae996b5db9661af729e20d7dde1f725677badddf",
+    "receiver-final.log": "bdb4eaf84d986bd8338100ebc83a314f044d54776535b9865d9074ba79c9c96b",
+    "receiver-final.csv": "24b4b2cd06668d48d8f4ce5fabac87a0ac9875f452455276d4e2256011a676e3",
+    "receiver-final-command.json": "e2c27755efe578336836f5cded5b597755595b29fea366efe28c61e55e9976cb",
+    "shadow-batch-final.log": "c1d7660a8a597d6bcc87c4a01599bc01f5afca71759a25b008ef34c6943d432b",
+    "shadow-batch-final-command.json": "cf423b0507d0b5fcce1532d0f5d00d55904c6f455ebc47b89937076e5e82a0e0",
+    "primary-final.log": "08520dcb10f63dcc62ad6db00a98051019b9070c86bb05c4d17b008cdb183942",
+    "primary-final-command.json": "0b1eee8f73a8c4b4a9ded631da51d4b8f628368c678f3ab4948cc1eef7012509",
+    "shadow-zero-final.log": "b2a3640f54d47b134425d8aa8bcd09ea0cd5d513624283e8b478ef63e78ce33e",
+    "shadow-zero-final-command.json": "9586fd8bb45b4889660cd0065b481ca644d7701d935513835b677fa527b8c083",
+    "plant-ground-final.log": "86bd08b696b8ce0c2b78054836f654a673837aad2135c94598fbb67fbf371458",
+    "plant-ground-final.full.depth": "27c09331f758215691a0f17b029bcb58dc10221a491a9d566dff7539027fed19",
+    "plant-ground-final.lod.depth": "1bcb7e8573a2bded70ee46b1aa536616462d2ef3d247f069ce6deaf2917fcb3c",
+    "plant-ground-final.full.rgba": "47eb3f51a982e22a2a26325c117f2b13ab0d8acc620e75715f434440734bd605",
+    "plant-ground-final.lod.rgba": "5f93e4a24c1f350a06865d979ddab6004a0d0df3430b3b30ccc3dc754ae65f0c",
+    "plant-ground-final.toml": "046123b809d690037aff64b828f7ef2f4d475ffc235353be755e4cd15ddb0eaf",
+    "plant-ground-final-command.json": "3e25c25f655e45aa72c2910231f409e75ceb3c9695d07d74131905870afca7cf",
+    "reed-ground-final.log": "780472eee78edcf616c4143adea437e411a434cc9cbf1e2b73ef6319fe2cd8d8",
+    "reed-ground-final.full.depth": "2fde06355e8862950ab481c34d433a5e01643e736c0bd3a04e5e0c3631685e8e",
+    "reed-ground-final.lod.depth": "2fde06355e8862950ab481c34d433a5e01643e736c0bd3a04e5e0c3631685e8e",
+    "reed-ground-final.full.rgba": "0d15bc5d900399dddf3f1b5a9eeb5c496e4473cd4177b719f1a93e1ff43af541",
+    "reed-ground-final.lod.rgba": "0d15bc5d900399dddf3f1b5a9eeb5c496e4473cd4177b719f1a93e1ff43af541",
+    "reed-ground-final.toml": "c02a747759f0e7f68ea92b4204f9c090d6b8b52bc0b74863e7cf3c5f30fe0306",
+    "reed-ground-final-command.json": "5a912304be519854aa56918f1509d8a1cf0e67d4973884e8e91c712baa36902a",
+    "combined-ground-final.log": "c4438628248f0b189350de18e42f328ab19556cddb2edad90f2ae756dbf9df9f",
+    "combined-ground-final.full.depth": "5f730d5a730cf81ea0fb8c8fb44022a0b3dfd2cffa741958961067488d56293e",
+    "combined-ground-final.lod.depth": "34585230dc7c9fb60f3fd62e7565e3cbb659f2c0c45f05e2d195853c59942d2a",
+    "combined-ground-final.full.rgba": "8ff40ff2405747102caaa837c5630a35c3514c6bd85e4651c8c51e85faee1416",
+    "combined-ground-final.lod.rgba": "8ff40ff2405747102caaa837c5630a35c3514c6bd85e4651c8c51e85faee1416",
+    "combined-ground-final.toml": "b5fdd455c1ef10a440a6f83ede81084b70cb00abefd6a0428a6e45ebf0df2451",
+    "combined-ground-final-command.json": "a9eda6148863d25221bcbba908e136593292d88fcdaa32ae5a47e073be282fc3",
+    "coastal-final.log": "daa1ee9a5dc3ec821265d6fde0c3ae5f7e3813e56109b3aaf0d2aec186765abb",
+    "coastal-final.toml": "106c10a8e180906b2929a559167c25d442912ece374cc83463420b32db0f36a3",
+    "coastal-final-command.json": "112c0d23f2dfbf1a42aa45a0a02588f219a676811b8cb9070b6949b1afd38d97",
+    "plant-ground-comparison.png": "39c381638f765245e35e0968fa739a976af8b58aa3eb8579b7336109299713da",
+    "shadow-mask-comparison.png": "2127f91621e3cd65cfba7475cde62cd9a53b622f20648961aae4afb6073e64a9",
+    "image-evidence.json": "b3b3bdb1806e37fb858de2d59b3d6b0d125e2e061d1b3f2b04a70acb93180696",
+    "final-checks/inputs.json": "f8f8ef3006554039b917977c787b4a7fa348c5798e796e097f2c7f909274bd03",
+    "final-checks/fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "final-checks/checks.json": "967d3697fc9d30d7cb272461f922e9d59ffdd46dbf3bd563f2061c3e88054732",
+    "final-checks/strict-clippy.log": "cb91bed5f9ed436e46caaa20b36ba23c1ca62d498b48d9b6807d5827f3e045ec",
+    "final-checks/native-cpu.log": "46d504cdf799df2f795945cec6d7c69fa29d98f427a59e71717f10ffe8ff8a27",
+    "final-checks/graphics-cpu.log": "67b0e30fa809a697335f27cd45ffa4ee130e347a1aebe1d8add5f8e61af58951",
+    "final-checks/render-core-cpu.log": "bbdcd4e4d5bb32a7d6297b9643a28ad7c2811f751de74d37922c6918749b6639",
+    "final-checks/caster-cpu.log": "740e5a0b239e30f22e274f408f56c4925808d7eb7329da1604b35de235b3d59e",
+    "final-checks/worldgen-cpu.log": "53f9962496223de1ca41052334c82a2013dd38e26417cbc573255469d684b7cb",
+    "final-checks/feature-off.log": "5af8d0667fc9bb2035a5dc3ed4f917187d7198879235a50a7695524ded986a11",
+    "final-checks/architecture.log": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+    "final-checks/shadow-integration-build.log": "84b543b0d2ace328606bed1c0bef346ffa31a9e369a7685e9ec5ed1889eb0117",
+    "final-checks/primary-oracle-build.log": "df7adf4a62001d09d5e5644de2aecbf262d220efdbc7d7d4d30651cf65e6c5c4",
+    "final-checks/release.log": "2ceec2954abae329ecd8ee872ead2ce88cd5075b25873309bd467caa72d0e990",
+    "final-checks/complete.json": "acd31fcc58766096d05d4f4969c421434db46fb757ecaf52b9494133bc381280"
+  }
+}

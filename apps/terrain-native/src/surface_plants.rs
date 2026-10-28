@@ -656,6 +656,22 @@ fn admit_shadow_lods(
 }
 
 fn append_shadow_lods(prepared: &mut Prepared) {
+    prepared.shadow_lods = collect_shadow_lods(prepared, false);
+}
+
+/// Diagnostic producer oracle for the original one-level, non-reed path.
+#[cfg(test)]
+pub(crate) fn original_shadow_lods(
+    prepared: &Prepared,
+) -> Vec<thessa_render_core::mesh::ShadowMeshLod> {
+    collect_shadow_lods(prepared, true)
+}
+
+fn collect_shadow_lods(
+    prepared: &Prepared,
+    original: bool,
+) -> Vec<thessa_render_core::mesh::ShadowMeshLod> {
+    let mut lods: Vec<thessa_render_core::mesh::ShadowMeshLod> = Vec::new();
     use thessa_worldgen_rocky::{offline::plant_form, plant_shadow, scatter::ScatterKind};
     for (primitive, (p, range)) in prepared
         .asset
@@ -669,57 +685,84 @@ fn append_shadow_lods(prepared: &mut Prepared) {
         };
         if !matches!(
             item.kind,
-            ScatterKind::FernClump | ScatterKind::LycopsidTree
+            ScatterKind::FernClump | ScatterKind::LycopsidTree | ScatterKind::ReedClump
         ) {
             continue;
         }
-        let form = plant_form(item.id, item.kind);
-        let Some(shadow) = plant_shadow::prototypes(prepared.reduced_primitives[primitive])
-            .iter()
-            .find(|p| p.form == form && p.mesh.kind == item.kind)
-        else {
-            continue;
-        };
-        let material = &prepared.asset.materials[p.material];
-        let organ = if material.diffuse_transmission == 0.0 {
-            0
-        } else if material.base_texture.is_none() {
-            2
-        } else {
-            1
-        };
-        let Some(max_error_m) = shadow.errors_m[organ] else {
-            continue;
-        };
-        let triangles = plant_shadow::organ_triangles(
-            &shadow.mesh,
-            plant_shadow::organ_ranges(&shadow.mesh)[organ].clone(),
-        );
-        if triangles.len() * 3 >= p.indices.len() {
+        if original && item.kind == ScatterKind::ReedClump {
             continue;
         }
-        let mut map = BTreeMap::new();
-        let mut positions = Vec::new();
-        let indices = triangles
-            .into_iter()
-            .flatten()
-            .map(|i| {
-                *map.entry(i).or_insert_with(|| {
-                    let id = positions.len() as u32;
-                    positions.push(shadow.mesh.positions[i as usize]);
-                    id
+        let form = plant_form(item.id, item.kind);
+        for (unresolved, candidates) in [
+            (
+                false,
+                plant_shadow::prototypes(prepared.reduced_primitives[primitive]),
+            ),
+            (
+                true,
+                if original {
+                    &[]
+                } else {
+                    plant_shadow::far_prototypes(prepared.reduced_primitives[primitive])
+                },
+            ),
+        ] {
+            if item.kind == ScatterKind::ReedClump && !unresolved {
+                continue;
+            }
+            let Some(shadow) = candidates
+                .iter()
+                .find(|p| p.form == form && p.mesh.kind == item.kind)
+            else {
+                continue;
+            };
+            let material = &prepared.asset.materials[p.material];
+            let organ = if material.diffuse_transmission == 0.0 {
+                0
+            } else if material.base_texture.is_none() {
+                2
+            } else {
+                1
+            };
+            let Some(max_error_m) = shadow.errors_m[organ] else {
+                continue;
+            };
+            let triangles = plant_shadow::organ_triangles(
+                &shadow.mesh,
+                plant_shadow::organ_ranges(&shadow.mesh)[organ].clone(),
+            );
+            if triangles.len() * 3 >= p.indices.len() {
+                continue;
+            }
+            let mut map = BTreeMap::new();
+            let mut positions = Vec::new();
+            let indices: Vec<u32> = triangles
+                .into_iter()
+                .flatten()
+                .map(|i| {
+                    *map.entry(i).or_insert_with(|| {
+                        let id = positions.len() as u32;
+                        positions.push(shadow.mesh.positions[i as usize]);
+                        id
+                    })
                 })
-            })
-            .collect();
-        prepared
-            .shadow_lods
-            .push(thessa_render_core::mesh::ShadowMeshLod {
+                .collect();
+            if lods.iter().any(|a| {
+                a.primitive == primitive
+                    && (a.indices.len() == indices.len()
+                        || (a.indices.len() < indices.len() && a.max_error_m <= max_error_m))
+            }) {
+                continue;
+            }
+            lods.push(thessa_render_core::mesh::ShadowMeshLod {
                 primitive,
                 positions,
                 indices,
                 max_error_m,
             });
+        }
     }
+    lods
 }
 
 fn convert_with_detail(

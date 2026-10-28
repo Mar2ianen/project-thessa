@@ -17,7 +17,7 @@ struct ShadowPrimitive {
 
 struct Primitive {
     bounds: Option<crate::mesh_visibility::Bounds>,
-    shadow: Option<ShadowPrimitive>,
+    shadow: Vec<ShadowPrimitive>,
     ambient: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -59,8 +59,8 @@ pub struct SurfaceSettings<'a> {
 #[derive(Default)]
 struct ShadowCommands {
     commands: Vec<u8>,
-    alternate: Vec<u8>,
-    batches: Vec<(usize, bool, std::ops::Range<u32>)>,
+    alternate: Vec<Vec<u8>>,
+    batches: Vec<(usize, usize, std::ops::Range<u32>)>,
     uploaded: Vec<Vec<u8>>,
 }
 
@@ -769,7 +769,7 @@ impl MeshRenderer {
             .primitives
             .iter()
             .map(|p| Primitive {
-                shadow: None,
+                shadow: Vec::new(),
                 bounds: crate::mesh_visibility::Bounds::new(p.vertices.iter().map(|v| v.position)),
                 ambient: buffer(
                     &words(if p.ambient_visibility.is_empty() {
@@ -1263,6 +1263,8 @@ impl MeshRenderer {
 
     /// Atomically replace optional depth-only geometry. The caller certifies
     /// max_error_m against the original primitive, in both surface directions.
+    /// Multiple distinct triangle counts may target one primitive; selection
+    /// uses the smallest certified representation fitting the light texel budget.
     pub fn set_shadow_lods(
         &mut self,
         backend: &Backend,
@@ -1273,7 +1275,7 @@ impl MeshRenderer {
             let Some(p) = self.primitives.get(lod.primitive) else {
                 return Err(fail("shadow LOD primitive out of range"));
             };
-            if !seen.insert(lod.primitive)
+            if !seen.insert((lod.primitive, lod.indices.len()))
                 || !lod.max_error_m.is_finite()
                 || lod.max_error_m < 0.0
                 || lod.positions.len() as u64 * 12 > backend.device.limits().max_buffer_size
@@ -1293,8 +1295,8 @@ impl MeshRenderer {
                 return Err(fail("invalid depth-only mesh LOD"));
             }
         }
-        let mut replacements: Vec<Option<ShadowPrimitive>> =
-            (0..self.primitives.len()).map(|_| None).collect();
+        let mut replacements: Vec<Vec<ShadowPrimitive>> =
+            (0..self.primitives.len()).map(|_| Vec::new()).collect();
         for (i, lod) in lods.iter().enumerate() {
             let buffer = |contents: &[u8], usage| {
                 backend
@@ -1308,7 +1310,11 @@ impl MeshRenderer {
             let shared = lods[..i]
                 .iter()
                 .find(|a| a.same_geometry(lod))
-                .and_then(|a| replacements[a.primitive].as_ref());
+                .and_then(|a| {
+                    replacements[a.primitive]
+                        .iter()
+                        .find(|p| p.count as usize == a.indices.len())
+                });
             let (vertices, indices) = if let Some(shared) = shared {
                 (shared.vertices.clone(), shared.indices.clone())
             } else {
@@ -1326,14 +1332,15 @@ impl MeshRenderer {
                     ),
                 )
             };
-            replacements[lod.primitive] = Some(ShadowPrimitive {
+            replacements[lod.primitive].push(ShadowPrimitive {
                 vertices,
                 indices,
                 count: lod.indices.len() as u32,
                 max_error_m: lod.max_error_m,
             });
         }
-        for (p, shadow) in self.primitives.iter_mut().zip(replacements) {
+        for (p, mut shadow) in self.primitives.iter_mut().zip(replacements) {
+            shadow.sort_by_key(|p| p.count);
             p.shadow = shadow;
         }
         self.shadow_revision = self.shadow_revision.wrapping_add(1);
@@ -1377,49 +1384,64 @@ impl MeshRenderer {
             }
             let first_command = commands.as_ref().map_or(0, |s| s.commands.len() / 20) as u32;
             if let Some(s) = commands.as_mut() {
-                s.alternate.clear();
+                if s.alternate.len() < p.shadow.len() {
+                    s.alternate.resize_with(p.shadow.len(), Vec::new);
+                }
+                for commands in &mut s.alternate {
+                    commands.clear();
+                }
             }
             stats.mesh_indirect = indirect;
             let triangles = u64::from(p.count) / 3;
             stats.mesh_candidate_instances += u64::from(range.end - range.start);
             stats.mesh_candidate_triangles += triangles * u64::from(range.end - range.start);
-            let selection = |i: u32| -> Option<(bool, f64)> {
+            let max_error = p
+                .shadow
+                .iter()
+                .map(|p| p.max_error_m)
+                .fold(0.0_f64, f64::max);
+            let selection = |i: u32| -> Option<(usize, f64)> {
                 let Some(Some(world)) =
                     self.world_bounds[primitive].get((i - range.start) as usize)
                 else {
-                    return Some((false, 0.0)); // Missing/unbounded data keeps full geometry.
+                    return Some((0, 0.0)); // Missing/unbounded data keeps full geometry.
                 };
-                let max_error = p.shadow.as_ref().map_or(0.0, |p| p.max_error_m);
                 if let Some(volume) = visibility_clip
                     && !world.intersects_receivers(volume, max_error)
                 {
                     return None;
                 }
-                let error = projection.and_then(|projection| {
-                    p.shadow
-                        .as_ref()
-                        .and_then(|lod| world.projected_error(projection, lod.max_error_m))
+                let selected = projection.and_then(|projection| {
+                    p.shadow.iter().enumerate().find_map(|(i, lod)| {
+                        let error = world.projected_error(projection, lod.max_error_m)?;
+                        (error <= atlas.mesh_lod_error_texels).then_some((i + 1, error, lod.count))
+                    })
                 });
-                let lod = error.is_some_and(|e| e <= atlas.mesh_lod_error_texels);
+                let (level, error, _) = selected.unwrap_or((0, 0.0, p.count));
+                let source_error = if level == 0 {
+                    0.0
+                } else {
+                    p.shadow[level - 1].max_error_m
+                };
                 if visibility_clip.is_none()
                     && let Some(clip) = clip
-                    && !world.intersects(clip, if lod { max_error } else { 0.0 })
+                    && !world.intersects(clip, source_error)
                 {
                     return None;
                 }
-                Some((lod, if lod { error.unwrap() } else { 0.0 }))
+                Some((level, error))
             };
-            let mut run: Option<(u32, u32, bool)> = None;
-            let mut draw = |start, end, lod| {
-                let (vertices, indices, count) = if lod {
-                    let p = p.shadow.as_ref().unwrap();
+            let mut run: Option<(u32, u32, usize)> = None;
+            let mut draw = |start, end, lod: usize| {
+                let (vertices, indices, count) = if lod > 0 {
+                    let p = &p.shadow[lod - 1];
                     (&p.vertices, &p.indices, p.count)
                 } else {
                     (&p.vertices, &p.indices, p.count)
                 };
                 if let Some(s) = commands.as_mut() {
-                    let target = if lod {
-                        &mut s.alternate
+                    let target = if lod > 0 {
+                        &mut s.alternate[lod - 1]
                     } else {
                         &mut s.commands
                     };
@@ -1429,7 +1451,7 @@ impl MeshRenderer {
                             .flat_map(u32::to_le_bytes),
                     );
                 } else {
-                    pass.set_pipeline(if lod {
+                    pass.set_pipeline(if lod > 0 {
                         atlas.mesh_lod_pipeline.as_ref().unwrap()
                     } else {
                         &atlas.mesh_pipeline
@@ -1442,7 +1464,7 @@ impl MeshRenderer {
                 stats.mesh_draw_commands += 1;
                 stats.mesh_submitted_instances += u64::from(end - start);
                 stats.mesh_submitted_triangles += u64::from(count / 3) * u64::from(end - start);
-                if lod {
+                if lod > 0 {
                     stats.mesh_lod_instances += u64::from(end - start);
                     stats.mesh_lod_triangles_saved +=
                         (triangles - u64::from(count / 3)) * u64::from(end - start);
@@ -1471,14 +1493,17 @@ impl MeshRenderer {
                 let s = &mut **s;
                 let full_end = (s.commands.len() / 20) as u32;
                 if first_command < full_end {
-                    s.batches.push((primitive, false, first_command..full_end));
+                    s.batches.push((primitive, 0, first_command..full_end));
                     stats.mesh_draw_calls += 1;
                 }
-                s.commands.append(&mut s.alternate);
-                let end = (s.commands.len() / 20) as u32;
-                if full_end < end {
-                    s.batches.push((primitive, true, full_end..end));
-                    stats.mesh_draw_calls += 1;
+                for (level, alternate) in s.alternate.iter_mut().enumerate() {
+                    let start = (s.commands.len() / 20) as u32;
+                    s.commands.append(alternate);
+                    let end = (s.commands.len() / 20) as u32;
+                    if start < end {
+                        s.batches.push((primitive, level + 1, start..end));
+                        stats.mesh_draw_calls += 1;
+                    }
                 }
             }
             observe(primitive, stats);
@@ -1506,13 +1531,13 @@ impl MeshRenderer {
             }
             for (primitive, lod, range) in batches {
                 let p = &self.primitives[*primitive];
-                let (vertices, indices) = if *lod {
-                    let p = p.shadow.as_ref().unwrap();
+                let (vertices, indices) = if *lod > 0 {
+                    let p = &p.shadow[*lod - 1];
                     (&p.vertices, &p.indices)
                 } else {
                     (&p.vertices, &p.indices)
                 };
-                pass.set_pipeline(if *lod {
+                pass.set_pipeline(if *lod > 0 {
                     atlas.mesh_lod_pipeline.as_ref().unwrap()
                 } else {
                     &atlas.mesh_pipeline

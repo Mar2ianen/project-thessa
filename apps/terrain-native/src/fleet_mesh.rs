@@ -2069,6 +2069,29 @@ mod tests {
         let mut expected_observed = shadow_stats;
         expected_observed.mesh_indirect_upload_bytes = 0;
         assert_eq!(observed, expected_observed);
+        let previous_lods =
+            crate::surface_plants::original_shadow_lods(meshes.plants.as_ref().unwrap());
+        meshes
+            .inner
+            .as_mut()
+            .unwrap()
+            .set_shadow_lods(&backend, &previous_lods)
+            .unwrap();
+        terrain.invalidate_shadows();
+        let mut previous_encoder = backend.device.create_command_encoder(&Default::default());
+        terrain.encode_shadows(&mut previous_encoder, meshes.opaque());
+        let previous_stats = terrain.last_shadow_draws();
+        drop(previous_encoder);
+        assert_eq!(
+            previous_stats.mesh_submitted_triangles, 283_223_492,
+            "same-build original shadow plan must reproduce doc 82"
+        );
+        meshes
+            .inner
+            .as_mut()
+            .unwrap()
+            .set_shadow_lods(&backend, &meshes.plants.as_ref().unwrap().shadow_lods)
+            .unwrap();
         let plants = meshes.plants.as_ref().unwrap();
         let mut groups: Vec<_> = plants
             .asset
@@ -2119,6 +2142,14 @@ mod tests {
             (
                 "shadow_submitted_triangles",
                 shadow_stats.mesh_submitted_triangles as i64,
+            ),
+            (
+                "shadow_previous_triangles",
+                previous_stats.mesh_submitted_triangles as i64,
+            ),
+            (
+                "shadow_previous_draw_calls",
+                previous_stats.mesh_draw_calls as i64,
             ),
             ("shadow_draw_calls", shadow_stats.mesh_draw_calls as i64),
             (

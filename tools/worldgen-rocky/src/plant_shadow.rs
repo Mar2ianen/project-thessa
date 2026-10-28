@@ -23,26 +23,67 @@ pub fn organ_ranges(mesh: &PlantMesh) -> [Range<usize>; 3] {
 pub fn prototypes(reduced: bool) -> &'static [CertifiedPlant] {
     static FULL: OnceLock<Vec<CertifiedPlant>> = OnceLock::new();
     static REDUCED: OnceLock<Vec<CertifiedPlant>> = OnceLock::new();
+    (if reduced { &REDUCED } else { &FULL })
+        .get_or_init(|| certify_forms(reduced, shadow_plant_prototype_forms(), false))
+}
+
+/// Additional coarse surfaces use the same continuous surface certificate.
+pub fn far_prototypes(reduced: bool) -> &'static [CertifiedPlant] {
+    static FULL: OnceLock<Vec<CertifiedPlant>> = OnceLock::new();
+    static REDUCED: OnceLock<Vec<CertifiedPlant>> = OnceLock::new();
     (if reduced { &REDUCED } else { &FULL }).get_or_init(|| {
-        plant_prototype_forms(reduced)
-            .iter()
-            .zip(shadow_plant_prototype_forms())
-            .map(|((source, form), (mesh, shadow_form))| {
-                assert_eq!(*form, shadow_form);
-                assert_eq!(source.kind, mesh.kind);
-                let errors_m = std::array::from_fn(|i| {
-                    let a = organ_triangles(source, organ_ranges(source)[i].clone());
-                    let b = organ_triangles(&mesh, organ_ranges(&mesh)[i].clone());
-                    surface_error_bound(&source.positions, &a, &mesh.positions, &b)
-                });
-                CertifiedPlant {
-                    mesh,
-                    form: *form,
-                    errors_m,
-                }
-            })
-            .collect()
+        certify_forms(
+            reduced,
+            crate::offline::far_shadow_plant_prototype_forms(),
+            true,
+        )
     })
+}
+
+fn certify_forms(
+    reduced: bool,
+    forms: Vec<(PlantMesh, u8)>,
+    unresolved_only: bool,
+) -> Vec<CertifiedPlant> {
+    plant_prototype_forms(reduced)
+        .iter()
+        .zip(forms)
+        .map(|((source, form), (mesh, shadow_form))| {
+            assert_eq!(*form, shadow_form);
+            assert_eq!(source.kind, mesh.kind);
+            let errors_m = std::array::from_fn(|i| {
+                let a = organ_triangles(source, organ_ranges(source)[i].clone());
+                let b = organ_triangles(&mesh, organ_ranges(&mesh)[i].clone());
+                let error = surface_error_bound(&source.positions, &a, &mesh.positions, &b)?;
+                if !unresolved_only {
+                    return Some(error);
+                }
+                // Charge the complete organ's enclosing sphere as well as its
+                // surface error: the far tier requires sub-texel support.
+                let mut lo = [f64::INFINITY; 3];
+                let mut hi = [f64::NEG_INFINITY; 3];
+                for p in source.positions[organ_ranges(source)[i].clone()]
+                    .iter()
+                    .chain(&mesh.positions[organ_ranges(&mesh)[i].clone()])
+                {
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(f64::from(p[k]));
+                        hi[k] = hi[k].max(f64::from(p[k]));
+                    }
+                }
+                let radius = 0.5 * (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt();
+                let rounding = 128.0
+                    * f64::EPSILON
+                    * hi.into_iter().chain(lo).map(f64::abs).fold(1.0, f64::max);
+                Some(error.max(radius + rounding))
+            });
+            CertifiedPlant {
+                mesh,
+                form: *form,
+                errors_m,
+            }
+        })
+        .collect()
 }
 
 pub fn organ_triangles(mesh: &PlantMesh, range: Range<usize>) -> Vec<[u32; 3]> {
@@ -168,6 +209,69 @@ mod tests {
             .unwrap()
                 > 0.4
         );
+    }
+    #[test]
+    fn far_tiers_bound_entire_organ_surfaces_and_preserve_all_forms() {
+        for reduced in [false, true] {
+            let sources = plant_prototype_forms(reduced);
+            for (((a, form), near), far) in sources
+                .iter()
+                .zip(prototypes(reduced))
+                .zip(far_prototypes(reduced))
+            {
+                assert_eq!(*form, far.form);
+                assert_eq!(a.kind, far.mesh.kind);
+                assert!(far.mesh.indices.len() <= near.mesh.indices.len());
+                for organ in 0..3 {
+                    let ai = organ_triangles(a, organ_ranges(a)[organ].clone());
+                    let bi = organ_triangles(&far.mesh, organ_ranges(&far.mesh)[organ].clone());
+                    if ai.is_empty() {
+                        assert!(bi.is_empty() && far.errors_m[organ].is_none());
+                        continue;
+                    }
+                    assert!(!bi.is_empty());
+                    let bound = far.errors_m[organ].unwrap();
+                    assert!(bound.is_finite() && bound > 0.0);
+                    let anchor = a.positions[ai[0][0] as usize];
+                    for &i in ai.iter().flatten() {
+                        let diameter = (0..3)
+                            .map(|k| {
+                                (f64::from(a.positions[i as usize][k]) - f64::from(anchor[k]))
+                                    .powi(2)
+                            })
+                            .sum::<f64>()
+                            .sqrt();
+                        assert!(
+                            diameter <= 2.0 * bound,
+                            "far tier lost whole-organ support charge"
+                        );
+                    }
+                    for (points, triangles, target, ti) in [
+                        (&a.positions, &ai, &far.mesh.positions, &bi),
+                        (&far.mesh.positions, &bi, &a.positions, &ai),
+                    ] {
+                        let target = TriMesh::new(
+                            target
+                                .iter()
+                                .map(|p| Vector::from_array(p.map(f64::from)))
+                                .collect(),
+                            ti.clone(),
+                        )
+                        .unwrap();
+                        for triangle in triangles {
+                            let p = triangle
+                                .map(|i| Vector::from_array(points[i as usize].map(f64::from)));
+                            for v in [p[0], p[1], p[2], (p[0] + p[1] + p[2]) / 3.0] {
+                                assert!(
+                                    target.distance_to_local_point(v, false) <= bound,
+                                    "{form} {organ} {reduced}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn certified_shadow_forms_keep_organs_and_reduce_geometry() {

@@ -156,3 +156,5 @@ The [Horizon work review](80_HORIZON_RENDER_WORK_REVIEW.md) adds primary mesh fr
 The [2026-10-28 shadow submission continuation](82_NATIVE_SHADOW_SUBMISSION.md) adds opt-in primary-receiver selection with full-volume fallbacks, shared-budget indexed indirect shadow batches, dirty command uploads and cached uploaded-world bounds. Its current evidence and limitations are separate from the dated measurements above.
 
 The [shadow geometry hierarchy continuation](83_NATIVE_SHADOW_HIERARCHY.md) keeps the existing depth tier, adds an unresolved-organ tier and a sub-texel reed caster, and records the same-build original-producer comparison separately from full-geometry quality evidence.
+
+The [empty shadow sample continuation](84_NATIVE_SHADOW_RASTER_SAMPLES.md) adds capability-gated rejection of mesh bounds that contain no centered shadow sample, with actual proxy enclosure, exact same-LOD depth/colour oracles and ordinary caster fallback when raster precision is unknown. It leaves the geometry hierarchy and ocean receiver fallback intact.

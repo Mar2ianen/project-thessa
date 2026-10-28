@@ -38,6 +38,13 @@ impl LightProjection {
     }
 }
 impl WorldBounds {
+    pub fn intersects_samples(
+        self,
+        grid: &thessa_render_core::shadow::RasterFootprint,
+        extra: f64,
+    ) -> bool {
+        grid.intersects_sphere(self.center, self.radius_with_error(extra))
+    }
     pub fn receiver_error_m(self) -> f64 {
         128.0 * f64::from(f32::EPSILON) * self.magnitude
     }
@@ -74,6 +81,14 @@ impl WorldBounds {
 }
 
 impl Bounds {
+    /// Enclose actual proxy positions independently of its approximation error.
+    pub fn expansion_for_positions(self, positions: &[[f32; 3]]) -> f64 {
+        let radius = positions
+            .iter()
+            .map(|p| (DVec3::from_array(p.map(f64::from)) - self.center).length())
+            .fold(self.radius, f64::max);
+        (radius * (1.0 + 128.0 * f64::EPSILON) - self.radius).max(0.0)
+    }
     pub fn intersects_uploaded(self, clip: Mat4, bytes: &[u8]) -> bool {
         if bytes.len() != 64 {
             return true;
@@ -231,6 +246,33 @@ pub(crate) fn visible_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn proxy_enclosure_covers_uploaded_vertices_with_nonuniform_scale_and_shear() {
+        let b = Bounds::new([[-0.1; 3], [0.1; 3]].into_iter()).unwrap();
+        let positions = [[-1.5, 0.2, 0.1], [0.1, 2.5, 0.3], [0.4, 0.2, -0.8]];
+        let extra = b.expansion_for_positions(&positions);
+        assert!(extra > 2.0);
+        for i in 0..1000 {
+            let t = i as f32;
+            let mut model = Mat4::from_scale_rotation_translation(
+                glam::vec3(0.01 + t * 0.001, 1.7, 0.31),
+                glam::Quat::from_rotation_y(t * 0.13),
+                glam::vec3(t * 7.0, -t * 3.0, t * 0.3),
+            );
+            model.y_axis += model.x_axis * 0.3;
+            let bytes: Vec<_> = model
+                .to_cols_array()
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            let world = b.uploaded_world(&bytes).unwrap();
+            for p in positions {
+                let actual = model.transform_point3(glam::Vec3::from_array(p)).as_dvec3();
+                assert!((actual - world.center).length() <= world.radius_with_error(extra));
+            }
+        }
+    }
+
     #[test]
     fn caster_clip_preserves_intersections_and_original_indices() {
         let b = Bounds::new([[-0.1; 3], [0.1; 3]].into_iter()).unwrap();

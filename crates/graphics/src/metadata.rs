@@ -1005,6 +1005,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Optional near cover radius. Remaining cascades span geometrically to the same far distance with unchanged map memory. One cascade still covers the far distance. Omission preserves each host's legacy distribution.",
         },
         SettingMeta {
+            path: "shadows.raster_sample_culling",
+            label: "Empty shadow sample selection",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Skip mesh casters only when their conservative projection misses every shadow texel sample. Requires known centered single-sample raster precision; otherwise retains the ordinary caster path. Does not reduce map resolution or geometric accuracy.",
+        },
+        SettingMeta {
             path: "shadows.receiver_culling",
             label: "Primary shadow receiver selection",
             kind: SettingKind::Bool,

@@ -13,6 +13,13 @@ struct ShadowPrimitive {
     indices: wgpu::Buffer,
     count: u32,
     max_error_m: f64,
+    enclosure_extra_m: f64,
+}
+
+pub(crate) struct CasterSelection<'a> {
+    pub clip: Option<glam::Mat4>,
+    pub receivers: Option<&'a thessa_render_core::shadow::ReceiverVolume>,
+    pub samples: Option<&'a thessa_render_core::shadow::RasterFootprint>,
 }
 
 struct Primitive {
@@ -1337,6 +1344,10 @@ impl MeshRenderer {
                 indices,
                 count: lod.indices.len() as u32,
                 max_error_m: lod.max_error_m,
+                enclosure_extra_m: self.primitives[lod.primitive]
+                    .bounds
+                    .unwrap()
+                    .expansion_for_positions(&lod.positions),
             });
         }
         for (p, mut shadow) in self.primitives.iter_mut().zip(replacements) {
@@ -1351,8 +1362,7 @@ impl MeshRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         atlas: &crate::shadows::ShadowAtlas,
-        clip: Option<glam::Mat4>,
-        visibility_clip: Option<&thessa_render_core::shadow::ReceiverVolume>,
+        selection: CasterSelection<'_>,
         layer: usize,
         mut observe: impl FnMut(usize, crate::shadows::ShadowDrawStats),
     ) -> crate::shadows::ShadowDrawStats {
@@ -1360,6 +1370,11 @@ impl MeshRenderer {
         let Some(bind) = &self.shadow_caster else {
             return total;
         };
+        let CasterSelection {
+            clip,
+            receivers: visibility_clip,
+            samples,
+        } = selection;
         let projection = if atlas.mesh_lod_pipeline.is_some() && atlas.mesh_lod_error_texels > 0.0 {
             clip.and_then(|c| crate::mesh_visibility::LightProjection::new(c, atlas.map_size()))
         } else {
@@ -1400,12 +1415,27 @@ impl MeshRenderer {
                 .iter()
                 .map(|p| p.max_error_m)
                 .fold(0.0_f64, f64::max);
-            let selection = |i: u32| -> Option<(usize, f64)> {
+            let enclosure_extra = if samples.is_some() {
+                p.shadow
+                    .iter()
+                    .map(|p| p.enclosure_extra_m)
+                    .fold(0.0_f64, f64::max)
+            } else {
+                0.0
+            };
+            let mut sample_rejections = 0;
+            let mut selection = |i: u32| -> Option<(usize, f64)> {
                 let Some(Some(world)) =
                     self.world_bounds[primitive].get((i - range.start) as usize)
                 else {
                     return Some((0, 0.0)); // Missing/unbounded data keeps full geometry.
                 };
+                if let Some(grid) = samples
+                    && !world.intersects_samples(grid, enclosure_extra)
+                {
+                    sample_rejections += 1;
+                    return None;
+                }
                 if let Some(volume) = visibility_clip
                     && !world.intersects_receivers(volume, max_error)
                 {
@@ -1506,6 +1536,7 @@ impl MeshRenderer {
                     }
                 }
             }
+            stats.mesh_sample_rejected_instances = sample_rejections;
             observe(primitive, stats);
             total.accumulate(stats);
         }

@@ -249,6 +249,139 @@ mod tests {
     }
 }
 
+/// Conservative footprint for filled affine triangles in a centered, single-sample
+/// raster grid. The consumer supplies the actual narrowed shader matrix and a
+/// guaranteed per-axis raster vertex snapping envelope. Unknown precision must
+/// disable this optimization; invalid geometry always fails open.
+#[derive(Debug, Clone, Copy)]
+pub struct RasterFootprint {
+    rows: [glam::DVec4; 2],
+    row_norms: glam::DVec2,
+    scale: f64,
+    pixels: f64,
+    size: u32,
+    snap_guard: f64,
+}
+impl RasterFootprint {
+    pub fn new(light: DMat4, size: u32, snap_guard: f64) -> Option<Self> {
+        if !light.is_finite()
+            || light.row(3) != glam::DVec4::W
+            || size == 0
+            || !snap_guard.is_finite()
+            || !(0.0..0.5).contains(&snap_guard)
+        {
+            return None;
+        }
+        let rows = [light.row(0), light.row(1)];
+        let x = rows[0].truncate();
+        let y = rows[1].truncate();
+        // Gershgorin bounds the largest singular value of the XY projection.
+        let scale = (x.length_squared().max(y.length_squared()) + x.dot(y).abs()).sqrt()
+            * (1.0 + 128.0 * f64::EPSILON);
+        Some(Self {
+            rows,
+            row_norms: glam::DVec2::new(x.length(), y.length()),
+            scale,
+            pixels: f64::from(size) * 0.5,
+            size,
+            snap_guard,
+        })
+    }
+
+    pub fn intersects_sphere(&self, center: DVec3, radius: f64) -> bool {
+        if !center.is_finite() || !radius.is_finite() || radius < 0.0 {
+            return true;
+        }
+        let radius_px = radius * self.scale * self.pixels;
+        // Every point inside a grid cell is within this radius of a sample.
+        // Outside the atlas this is merely a conservative early accept.
+        if !radius_px.is_finite() || radius_px >= std::f64::consts::FRAC_1_SQRT_2 {
+            return true;
+        }
+        let mut distance_squared = 0.0;
+        for axis in 0..2 {
+            let row = self.rows[axis];
+            let pixel = (row.truncate().dot(center) + row.w + 1.0) * self.pixels;
+            let arithmetic = 32.0
+                * f64::from(f32::EPSILON)
+                * (row.truncate().abs().dot(center.abs())
+                    + row.w.abs()
+                    + self.row_norms[axis] * radius
+                    + 1.0)
+                * self.pixels;
+            if !pixel.is_finite() || !arithmetic.is_finite() {
+                return true;
+            }
+            let nearest = (pixel - 0.5).round().clamp(0.0, f64::from(self.size - 1)) + 0.5;
+            let distance = (nearest - pixel).abs() - self.snap_guard - arithmetic;
+            distance_squared += distance.max(0.0).powi(2);
+        }
+        distance_squared <= radius_px * radius_px
+    }
+}
+
+#[cfg(test)]
+mod raster_sample_tests {
+    use super::*;
+
+    #[test]
+    fn footprint_retains_contacts_and_invalid_inputs_but_rejects_empty_cells() {
+        let grid = RasterFootprint::new(DMat4::IDENTITY, 64, 1.0 / 16.0).unwrap();
+        let point = |x, y| DVec3::new(x / 32.0 - 1.0, y / 32.0 - 1.0, 0.5);
+        assert!(grid.intersects_sphere(point(10.5, 20.5), 0.0));
+        assert!(!grid.intersects_sphere(point(10.0, 20.0), 0.0));
+        assert!(!grid.intersects_sphere(point(10.0, 20.0), 0.1 / 32.0));
+        assert!(grid.intersects_sphere(point(10.0, 20.0), 0.7 / 32.0));
+        assert!(grid.intersects_sphere(point(10.5 - 1.0 / 16.0, 20.5), 0.0));
+        assert!(grid.intersects_sphere(point(0.5, 63.5), 0.0));
+        assert!(!grid.intersects_sphere(point(-1.0, 65.0), 0.0));
+        assert!(grid.intersects_sphere(DVec3::NAN, 0.0));
+        assert!(grid.intersects_sphere(DVec3::ZERO, f64::NAN));
+        assert!(grid.intersects_sphere(DVec3::ZERO, -1.0));
+        for bad in [DMat4::NAN, DMat4::ZERO, DMat4::from_cols_array(&[1.0; 16])] {
+            assert!(RasterFootprint::new(bad, 64, 0.0625).is_none());
+        }
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 0.5] {
+            assert!(RasterFootprint::new(DMat4::IDENTITY, 64, bad).is_none());
+        }
+        assert!(RasterFootprint::new(DMat4::IDENTITY, 0, 0.0625).is_none());
+    }
+
+    #[test]
+    fn footprint_never_loses_projected_samples_within_enclosed_spheres() {
+        let mut checked = 0;
+        for size in [512, 1024, 8192] {
+            for radius in [25.0, 12000.0] {
+                for origin in [DVec3::ZERO, DVec3::new(3e12, -2e12, 1e12)] {
+                    for sun in [DVec3::Z, DVec3::Y, DVec3::new(0.2, 0.7, 0.4).normalize()] {
+                        let clip = directional_clip(origin, sun, radius, 12000.0, size)
+                            .unwrap()
+                            .as_mat4()
+                            .as_dmat4();
+                        let grid = RasterFootprint::new(clip, size, 0.0625).unwrap();
+                        for i in 0..100 {
+                            let x = (i * 37 % size) as f64 + 0.5;
+                            let y = (i * 59 % size) as f64 + 0.5;
+                            let point = clip.inverse().project_point3(DVec3::new(
+                                2.0 * x / f64::from(size) - 1.0,
+                                2.0 * y / f64::from(size) - 1.0,
+                                0.5,
+                            ));
+                            for r in [0.0, radius / f64::from(size) * 0.1] {
+                                for axis in [DVec3::X, DVec3::Y, DVec3::Z, sun] {
+                                    assert!(grid.intersects_sphere(point + axis * r, r));
+                                    checked += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 28800);
+    }
+}
+
 /// A primary-receiver footprint extruded through the full light depth range.
 /// Fixed-size planes keep per-frame construction allocation-free.
 #[derive(Debug, Clone)]

@@ -34,6 +34,7 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
     let mut request = thessa_graphics::RequestedGraphics::default();
     request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
     request.shadows.mesh_lod_error_texels = 0.5;
+    request.shadows.raster_sample_culling = true;
     request.shadows.cascades = if include_reeds && !isolate_reeds {
         4
     } else {
@@ -242,31 +243,34 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
                     }],
                 )
                 .unwrap();
-            let mut capture = |terrain: &mut TerrainRenderer, mesh: &MeshRenderer, full: bool| {
-                terrain.invalidate_shadows();
-                let mut encoder = backend.device.create_command_encoder(&Default::default());
-                if full {
-                    terrain.encode_shadows_reference(&mut encoder, Some(mesh));
-                } else {
-                    terrain.encode_shadows(&mut encoder, Some(mesh));
-                }
-                let stats = terrain.last_shadow_draws();
-                terrain.encode_scene(&mut encoder, &target.color, &target.depth, Some(mesh));
-                // The receiver is absent from the plant-only depth oracle, so
-                // its coverage cannot hide missing foliage in the mask check.
-                ground.encode(&mut encoder, &target.color, &target.depth);
-                backend.queue.submit([encoder.finish()]);
-                (
-                    terrain.shadows().unwrap().read_depth(&backend).unwrap(),
-                    target.read_rgba8(&backend).unwrap(),
-                    stats,
-                )
-            };
+            let mut capture =
+                |terrain: &mut TerrainRenderer, mesh: &MeshRenderer, full: bool, samples: bool| {
+                    terrain.invalidate_shadows();
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    if full {
+                        terrain.encode_shadows_reference(&mut encoder, Some(mesh));
+                    } else if !samples {
+                        terrain.encode_shadows_without_sample_culling(&mut encoder, Some(mesh));
+                    } else {
+                        terrain.encode_shadows(&mut encoder, Some(mesh));
+                    }
+                    let stats = terrain.last_shadow_draws();
+                    terrain.encode_scene(&mut encoder, &target.color, &target.depth, Some(mesh));
+                    // The receiver is absent from the plant-only depth oracle, so
+                    // its coverage cannot hide missing foliage in the mask check.
+                    ground.encode(&mut encoder, &target.color, &target.depth);
+                    backend.queue.submit([encoder.finish()]);
+                    (
+                        terrain.shadows().unwrap().read_depth(&backend).unwrap(),
+                        target.read_rgba8(&backend).unwrap(),
+                        stats,
+                    )
+                };
             mesh.set_shadow_lods(&backend, &[]).unwrap();
-            let full = capture(&mut terrain, &mesh, false);
+            let full = capture(&mut terrain, &mesh, false, true);
             mesh.set_shadow_lods(&backend, &prepared.shadow_lods)
                 .unwrap();
-            let reference = capture(&mut terrain, &mesh, true);
+            let reference = capture(&mut terrain, &mesh, true, false);
             assert_eq!(
                 full.0, reference.0,
                 "LOD installation changed full shadow oracle"
@@ -278,7 +282,7 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             let baseline = if include_reeds && !isolate_reeds {
                 mesh.set_shadow_lods(&backend, &original_shadow_lods(&prepared))
                     .unwrap();
-                let previous = capture(&mut terrain, &mesh, false);
+                let previous = capture(&mut terrain, &mesh, false, true);
                 let changed_from_full = full
                     .0
                     .as_chunks::<4>()
@@ -298,11 +302,23 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             } else {
                 full
             };
-            let lod = capture(&mut terrain, &mesh, false);
-            assert!(lod.2.mesh_lod_instances > 0);
-            assert!(lod.2.mesh_lod_triangles_saved > 0);
+            let no_samples = capture(&mut terrain, &mesh, false, false);
+            let lod = capture(&mut terrain, &mesh, false, true);
+            assert_eq!(no_samples.0, lod.0, "sample culling changed plant atlas");
+            assert_eq!(no_samples.1, lod.1, "sample culling changed plant colour");
+            eprintln!(
+                "plant sample culling exact: reduced={reduced} origin={case} rejected={} before_triangles={} after_triangles={}",
+                lod.2.mesh_sample_rejected_instances,
+                no_samples.2.mesh_submitted_triangles,
+                lod.2.mesh_submitted_triangles
+            );
+            // Sample selection can remove every eligible proxy draw exactly;
+            // retain the geometry-selection witness in the no-sample oracle.
+            assert!(no_samples.2.mesh_lod_instances > 0);
+            assert!(no_samples.2.mesh_lod_triangles_saved > 0);
+            assert!(no_samples.2.mesh_lod_max_error_microtexels <= 500_000);
             assert!(lod.2.mesh_lod_max_error_microtexels <= 500_000);
-            saved += lod.2.mesh_lod_triangles_saved;
+            saved += no_samples.2.mesh_lod_triangles_saved;
             // A one-texel raster neighbourhood checks coverage in both directions;
             // this is measured sample coverage, not a general radiometric bound.
             let mask = |bytes: &[u8]| {
@@ -434,7 +450,7 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             let mut invalid = prepared.shadow_lods.clone();
             invalid.last_mut().unwrap().max_error_m = f64::NAN;
             assert!(mesh.set_shadow_lods(&backend, &invalid).is_err());
-            let after_failure = capture(&mut terrain, &mesh, false);
+            let after_failure = capture(&mut terrain, &mesh, false, true);
             assert_eq!(lod.0, after_failure.0);
             let mut expected_stats = lod.2;
             expected_stats.mesh_indirect_upload_bytes = 0;
@@ -444,6 +460,31 @@ fn compare_plant_shadows(include_reeds: bool, isolate_reeds: bool) {
             assert_eq!(terrain.last_shadow_passes(), 0);
             let table: toml::Table = [
                 ("reduced", toml::Value::Boolean(reduced)),
+                ("sample_culling_exact", toml::Value::Boolean(true)),
+                (
+                    "no_sample_lod_instances",
+                    toml::Value::Integer(no_samples.2.mesh_lod_instances as i64),
+                ),
+                (
+                    "no_sample_lod_triangles_saved",
+                    toml::Value::Integer(no_samples.2.mesh_lod_triangles_saved as i64),
+                ),
+                (
+                    "no_sample_max_error_microtexels",
+                    toml::Value::Integer(no_samples.2.mesh_lod_max_error_microtexels as i64),
+                ),
+                (
+                    "sample_rejected_instances",
+                    toml::Value::Integer(lod.2.mesh_sample_rejected_instances as i64),
+                ),
+                (
+                    "no_sample_triangles",
+                    toml::Value::Integer(no_samples.2.mesh_submitted_triangles as i64),
+                ),
+                (
+                    "sample_triangles",
+                    toml::Value::Integer(lod.2.mesh_submitted_triangles as i64),
+                ),
                 ("origin_case", toml::Value::Integer(case as i64)),
                 (
                     "different_coverage_texels",

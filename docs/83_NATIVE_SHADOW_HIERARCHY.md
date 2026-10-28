@@ -95,3 +95,5 @@ All 12 final CPU/build gates pass, including 520 CPU tests (133 native, 287 worl
 
 Source manifest: `427158e73e5c5a4c919c5fd0c7381014fc900f799560f7bbc1b8264e81a840bc`.
 Release binary: `1d4473af0096c58b20bde3c6203511a48ebc8d7775c5ebd6750a61db6d23c090`.
+
+The [empty shadow sample continuation](84_NATIVE_SHADOW_RASTER_SAMPLES.md) adds capability-gated rejection of mesh bounds that contain no centered shadow sample, with actual proxy enclosure, exact same-LOD depth/colour oracles and ordinary caster fallback when raster precision is unknown. It leaves the geometry hierarchy and ocean receiver fallback intact.

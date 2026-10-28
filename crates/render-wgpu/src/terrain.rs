@@ -1249,7 +1249,7 @@ impl TerrainRenderer {
         encoder: &mut wgpu::CommandEncoder,
         meshes: Option<&crate::mesh::MeshRenderer>,
     ) {
-        self.encode_shadows_impl(encoder, meshes, true);
+        self.encode_shadows_impl(encoder, meshes, true, true);
     }
 
     /// Diagnostic oracle: force the original full resident caster draw. This
@@ -1260,7 +1260,19 @@ impl TerrainRenderer {
         meshes: Option<&crate::mesh::MeshRenderer>,
     ) {
         self.invalidate_shadows();
-        self.encode_shadows_impl(encoder, meshes, false);
+        self.encode_shadows_impl(encoder, meshes, false, false);
+        self.invalidate_shadows();
+    }
+
+    /// Diagnostic oracle preserving clip/receiver/LOD selection but retaining
+    /// bounds that contain no raster sample. Never used by production callers.
+    pub fn encode_shadows_without_sample_culling(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        meshes: Option<&crate::mesh::MeshRenderer>,
+    ) {
+        self.invalidate_shadows();
+        self.encode_shadows_impl(encoder, meshes, true, false);
         self.invalidate_shadows();
     }
 
@@ -1269,6 +1281,7 @@ impl TerrainRenderer {
         encoder: &mut wgpu::CommandEncoder,
         meshes: Option<&crate::mesh::MeshRenderer>,
         cull: bool,
+        sample_culling: bool,
     ) {
         self.last_shadow_passes = 0;
         self.last_shadow_draws = Default::default();
@@ -1290,7 +1303,11 @@ impl TerrainRenderer {
             if self.shadow_cache.as_ref() == Some(&key) {
                 return;
             }
-            self.last_shadow_draws = shadows.encode_casters(encoder, self, meshes, cull);
+            self.last_shadow_draws = if cull && !sample_culling {
+                shadows.encode_without_sample_culling(encoder, self, meshes)
+            } else {
+                shadows.encode_casters(encoder, self, meshes, cull)
+            };
             self.last_shadow_passes = shadows.active_passes();
             self.shadow_cache = Some(key);
         }

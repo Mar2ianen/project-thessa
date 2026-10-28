@@ -379,6 +379,7 @@ impl Scene {
         let mut requested = RequestedGraphics::default();
         requested.renderer.ray_tracing = mode;
         requested.shadows.receiver_culling = receiver_culling;
+        requested.shadows.raster_sample_culling = true;
         requested.shadows.map_size = 256;
         requested.shadows.max_distance_m = 100.0;
         requested.ocean.enabled = ocean;

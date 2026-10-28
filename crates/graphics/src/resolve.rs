@@ -176,6 +176,9 @@ impl ActiveCloudRepresentation {
 /// requests are kept and fail fast at device creation with a clear note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Capabilities {
+    /// Centered single-sample triangle rasterization with this many fractional
+    /// framebuffer bits. Unknown retains all potentially clipped casters.
+    pub shadow_raster_subpixel_bits: Option<u8>,
     /// All native scene colour/depth formats support 4x coverage and colour resolve.
     pub raster_msaa4_supported: Option<bool>,
     /// Host implements compact material residency (not merely the GPU codec).
@@ -201,6 +204,7 @@ pub struct Capabilities {
 impl Capabilities {
     pub fn unknown() -> Self {
         Self {
+            shadow_raster_subpixel_bits: None,
             raster_msaa4_supported: None,
             material_compact_supported: None,
             terrain_conforming_supported: None,
@@ -404,6 +408,9 @@ pub struct ResolvedGraphicsSettings {
     pub shadow_mesh_lod_error_texels: f64,
     #[serde(default)]
     pub shadow_receiver_culling: bool,
+    /// Conservative per-axis vertex snapping envelope in shadow texels.
+    #[serde(default)]
+    pub shadow_raster_sample_guard_texels: Option<f64>,
     pub shadow_map_size: u32,
     pub shadow_normal_bias_m: f64,
     /// Human-readable fallback notes, also stored in captures.
@@ -757,6 +764,19 @@ impl ResolvedGraphicsSettings {
         // Participation flags only matter when RT is active; clear them
         // otherwise so captures never claim RT work on a raster run.
         let rt_on = ray_tracing.is_active();
+        let shadow_raster_sample_guard_texels = if requested.shadows.enabled
+            && requested.shadows.raster_sample_culling
+        {
+            match caps.shadow_raster_subpixel_bits {
+                Some(bits @ 2..) => Some(2.0_f64.powi(-i32::from(bits.min(16)))),
+                _ => {
+                    notes.push("shadow raster sample precision unknown; retaining potentially clipped casters".into());
+                    None
+                }
+            }
+        } else {
+            None
+        };
         if requested.shadows.enabled && requested.shadows.receiver_culling && rt_on {
             notes.push("primary receiver shadow culling withheld for off-screen ray-hit receivers; using full light volumes".into());
         }
@@ -1072,6 +1092,7 @@ impl ResolvedGraphicsSettings {
             shadow_first_cascade_distance_m,
             shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
             shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
+            shadow_raster_sample_guard_texels,
             shadow_receiver_culling: requested.shadows.enabled
                 && requested.shadows.receiver_culling
                 && !rt_on,
@@ -1419,6 +1440,11 @@ impl ResolvedGraphicsSettings {
             self.shadow_mesh_command_budget_bytes.to_string(),
         );
         map.insert(
+            "shadow_raster_sample_guard_texels".into(),
+            self.shadow_raster_sample_guard_texels
+                .map_or_else(|| "off".into(), |v| v.to_string()),
+        );
+        map.insert(
             "shadow_receiver_culling".into(),
             self.shadow_receiver_culling.to_string(),
         );
@@ -1514,6 +1540,7 @@ mod tests {
     fn surface_plants_tiers_disable_metadata_and_isolation() {
         for supported in [None, Some(false), Some(true)] {
             let caps = Capabilities {
+                shadow_raster_subpixel_bits: None,
                 raster_msaa4_supported: supported,
                 material_compact_supported: supported,
                 terrain_conforming_supported: supported,
@@ -2003,6 +2030,85 @@ mod tests {
     }
 
     #[test]
+    fn shadow_sample_selection_requires_known_precision_and_is_free_when_disabled() {
+        let mut request = RequestedGraphics::default();
+        let caps = Capabilities {
+            shadow_raster_subpixel_bits: Some(4),
+            ..Capabilities::unknown()
+        };
+        let resolve = |r: &RequestedGraphics, c: &Capabilities| {
+            ResolvedGraphicsSettings::from_requested(r, c)
+        };
+        assert_eq!(
+            resolve(&request, &caps).shadow_raster_sample_guard_texels,
+            None
+        );
+        request.shadows.raster_sample_culling = true;
+        assert_eq!(
+            resolve(&request, &caps).shadow_raster_sample_guard_texels,
+            Some(0.0625)
+        );
+        let unknown = resolve(&request, &Capabilities::unknown());
+        assert_eq!(unknown.shadow_raster_sample_guard_texels, None);
+        assert!(
+            unknown
+                .notes
+                .iter()
+                .any(|n| n.contains("sample precision unknown"))
+        );
+        for (bits, expected) in [
+            (0, None),
+            (1, None),
+            (2, Some(0.25)),
+            (8, Some(1.0 / 256.0)),
+            (255, Some(1.0 / 65536.0)),
+        ] {
+            let caps = Capabilities {
+                shadow_raster_subpixel_bits: Some(bits),
+                ..caps
+            };
+            assert_eq!(
+                resolve(&request, &caps).shadow_raster_sample_guard_texels,
+                expected
+            );
+        }
+        request.renderer.ray_tracing = RayTracingRequest::Local;
+        let rt = resolve(&request, &caps);
+        assert_eq!(rt.shadow_raster_sample_guard_texels, Some(0.0625));
+        assert_eq!(
+            rt.as_meta_map()["shadow_raster_sample_guard_texels"],
+            "0.0625"
+        );
+        assert_eq!(
+            toml::from_str::<RequestedGraphics>(&toml::to_string(&request).unwrap()).unwrap(),
+            request
+        );
+        let encoded = toml::to_string(&rt).unwrap();
+        let legacy: String = encoded
+            .lines()
+            .filter(|line| !line.starts_with("shadow_raster_sample_guard_texels ="))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert_eq!(
+            toml::from_str::<ResolvedGraphicsSettings>(&legacy)
+                .unwrap()
+                .shadow_raster_sample_guard_texels,
+            None
+        );
+        request.shadows.enabled = false;
+        assert_eq!(
+            resolve(&request, &caps).shadow_raster_sample_guard_texels,
+            None
+        );
+        assert!(
+            !RequestedGraphics::from_toml("[shadows]\n")
+                .unwrap()
+                .shadows
+                .raster_sample_culling
+        );
+    }
+
+    #[test]
     fn primary_receiver_shadow_policy_preserves_full_volume_for_rt_and_disabled() {
         let mut request = RequestedGraphics::default();
         let resolve = |r: &RequestedGraphics| {
@@ -2290,6 +2396,7 @@ mod storage_tests {
         requested.renderer.material_storage = MaterialStorageRequest::MicrostoreCompact;
         for supported in [Some(false), Some(true), None] {
             let caps = Capabilities {
+                shadow_raster_subpixel_bits: None,
                 raster_msaa4_supported: supported,
                 material_compact_supported: supported,
                 ..Default::default()

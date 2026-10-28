@@ -679,6 +679,9 @@ pub struct ShadowSettings {
     /// Conservative mesh-caster selection for primary raster receivers.
     #[serde(default)]
     pub receiver_culling: bool,
+    /// Skip mesh casters whose conservative projection covers no shadow sample.
+    #[serde(default)]
+    pub raster_sample_culling: bool,
     /// Shadow texel grid per cascade (power of two, 512..=8192).
     #[serde(default = "default_shadow_map_size")]
     pub map_size: u32,
@@ -713,6 +716,7 @@ impl Default for ShadowSettings {
             first_cascade_distance_m: None,
             mesh_lod_error_texels: 0.0,
             receiver_culling: false,
+            raster_sample_culling: false,
             map_size: default_shadow_map_size(),
             normal_bias_m: default_shadow_normal_bias(),
         }

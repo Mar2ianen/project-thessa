@@ -503,6 +503,12 @@ The proxy must never become the physical source of truth.
 
 Graphics settings should be represented by TOML first. The future GUI is a typed editor/view of that TOML, not a second independent settings system.
 
+The native [empty shadow sample selection](84_NATIVE_SHADOW_RASTER_SAMPLES.md)
+uses `shadows.raster_sample_culling` (default false, showcase true). Resolution
+requires known centered single-sample triangle precision; unknown backends retain
+the ordinary caster path and report the fallback. This changes submitted work,
+not shadow resolution, geometry accuracy or authoritative state.
+
 The checked-in implementation currently uses this structure (archival snapshot —
 normative values live in `graphics.toml` + `crates/graphics`; since this was
 written, `[clouds]` shipped enabled with layers/coverage/opacity/animate,

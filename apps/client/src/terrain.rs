@@ -350,6 +350,7 @@ fn resolve_terrain_capabilities(
             .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
     );
     let caps = Capabilities {
+        shadow_raster_subpixel_bits: None, // Legacy shadow pipeline does not consume sample culling.
         raster_msaa4_supported: None,
         material_compact_supported: Some(true), // Legacy CPU predecode residency.
         terrain_conforming_supported: Some(false), // Native renderer integration only.

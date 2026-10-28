@@ -23,6 +23,8 @@ pub struct ShadowDrawStats {
     pub mesh_draw_commands: u64,
     pub mesh_indirect: bool,
     pub mesh_indirect_upload_bytes: u64,
+    /// Instance/primitive/layer uses whose bound contains no raster sample.
+    pub mesh_sample_rejected_instances: u64,
     pub mesh_lod_instances: u64,
     pub mesh_lod_triangles_saved: u64,
     /// Conservative projected surface error, rounded up to millionths of a texel.
@@ -42,6 +44,7 @@ impl ShadowDrawStats {
         self.mesh_draw_commands += other.mesh_draw_commands;
         self.mesh_indirect |= other.mesh_indirect;
         self.mesh_indirect_upload_bytes += other.mesh_indirect_upload_bytes;
+        self.mesh_sample_rejected_instances += other.mesh_sample_rejected_instances;
         self.mesh_lod_instances += other.mesh_lod_instances;
         self.mesh_lod_triangles_saved += other.mesh_lod_triangles_saved;
         self.indirect |= other.indirect;
@@ -80,6 +83,7 @@ pub struct ShadowAtlas {
     size: u32,
     pub(crate) mesh_lod_error_texels: f64,
     pub(crate) receiver_culling: bool,
+    sample_guard: Option<f64>,
     normal_bias_m: f64,
     filter: u32,
     active: [bool; 3],
@@ -326,6 +330,7 @@ impl ShadowAtlas {
             )),
             mesh_lod_error_texels: settings.shadow_mesh_lod_error_texels,
             receiver_culling: settings.shadow_receiver_culling,
+            sample_guard: settings.shadow_raster_sample_guard_texels,
             normal_bias_m: settings.shadow_normal_bias_m,
             filter: settings.shadow_filter_radius,
             active: [false; 3],
@@ -495,7 +500,16 @@ impl ShadowAtlas {
         meshes: Option<&MeshRenderer>,
         cull: bool,
     ) -> ShadowDrawStats {
-        self.encode_casters_observed(encoder, terrain, meshes, cull, |_, _, _| {})
+        self.encode_casters_impl(encoder, terrain, meshes, cull, true, |_, _, _| {})
+    }
+
+    pub(crate) fn encode_without_sample_culling(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        terrain: &TerrainRenderer,
+        meshes: Option<&MeshRenderer>,
+    ) -> ShadowDrawStats {
+        self.encode_casters_impl(encoder, terrain, meshes, true, false, |_, _, _| {})
     }
 
     /// Diagnostic observer of the production caster path. `Some(primitive)`
@@ -507,6 +521,18 @@ impl ShadowAtlas {
         terrain: &TerrainRenderer,
         meshes: Option<&MeshRenderer>,
         cull: bool,
+        observe: impl FnMut(usize, Option<usize>, ShadowDrawStats),
+    ) -> ShadowDrawStats {
+        self.encode_casters_impl(encoder, terrain, meshes, cull, true, observe)
+    }
+
+    fn encode_casters_impl(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        terrain: &TerrainRenderer,
+        meshes: Option<&MeshRenderer>,
+        cull: bool,
+        sample_culling: bool,
         mut observe: impl FnMut(usize, Option<usize>, ShadowDrawStats),
     ) -> ShadowDrawStats {
         let receiver_frame = if cull && self.receiver_culling {
@@ -553,12 +579,25 @@ impl ShadowAtlas {
                 self,
                 if cull { self.layer_matrix(i) } else { None },
             );
+            let sample_grid = light_clip
+                .zip(self.sample_guard)
+                .filter(|_| sample_culling)
+                .and_then(|(light, guard)| {
+                    thessa_render_core::shadow::RasterFootprint::new(
+                        light.as_dmat4(),
+                        self.size,
+                        guard,
+                    )
+                });
             if let Some(meshes) = meshes {
                 layer.accumulate(meshes.cast_shadow(
                     &mut pass,
                     self,
-                    light_clip,
-                    receiver_clip.as_ref(),
+                    crate::mesh::CasterSelection {
+                        clip: light_clip,
+                        receivers: receiver_clip.as_ref(),
+                        samples: sample_grid.as_ref(),
+                    },
                     i,
                     |primitive, stats| observe(i, Some(primitive), stats),
                 ));

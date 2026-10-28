@@ -2051,6 +2051,10 @@ mod tests {
                     ("candidate_triangles", stats.mesh_candidate_triangles as i64),
                     ("instances", stats.mesh_submitted_instances as i64),
                     ("lod_instances", stats.mesh_lod_instances as i64),
+                    (
+                        "sample_rejected_instances",
+                        stats.mesh_sample_rejected_instances as i64,
+                    ),
                     ("saved_triangles", stats.mesh_lod_triangles_saved as i64),
                     ("draw_calls", stats.mesh_draw_calls as i64),
                 ]
@@ -2069,6 +2073,16 @@ mod tests {
         let mut expected_observed = shadow_stats;
         expected_observed.mesh_indirect_upload_bytes = 0;
         assert_eq!(observed, expected_observed);
+        let mut no_samples_encoder = backend.device.create_command_encoder(&Default::default());
+        terrain.encode_shadows_without_sample_culling(&mut no_samples_encoder, meshes.opaque());
+        let no_samples_stats = terrain.last_shadow_draws();
+        drop(no_samples_encoder);
+        assert_eq!(
+            no_samples_stats.mesh_submitted_triangles, 252_050_732,
+            "same-build hierarchy without sample culling must reproduce doc 83"
+        );
+        assert!(shadow_stats.mesh_sample_rejected_instances > 0);
+        assert!(shadow_stats.mesh_submitted_triangles < no_samples_stats.mesh_submitted_triangles);
         let previous_lods =
             crate::surface_plants::original_shadow_lods(meshes.plants.as_ref().unwrap());
         meshes
@@ -2079,7 +2093,7 @@ mod tests {
             .unwrap();
         terrain.invalidate_shadows();
         let mut previous_encoder = backend.device.create_command_encoder(&Default::default());
-        terrain.encode_shadows(&mut previous_encoder, meshes.opaque());
+        terrain.encode_shadows_without_sample_culling(&mut previous_encoder, meshes.opaque());
         let previous_stats = terrain.last_shadow_draws();
         drop(previous_encoder);
         assert_eq!(
@@ -2150,6 +2164,14 @@ mod tests {
             (
                 "shadow_previous_draw_calls",
                 previous_stats.mesh_draw_calls as i64,
+            ),
+            (
+                "shadow_no_sample_triangles",
+                no_samples_stats.mesh_submitted_triangles as i64,
+            ),
+            (
+                "shadow_sample_rejected_instances",
+                shadow_stats.mesh_sample_rejected_instances as i64,
             ),
             ("shadow_draw_calls", shadow_stats.mesh_draw_calls as i64),
             (

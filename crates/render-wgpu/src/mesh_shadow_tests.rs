@@ -20,6 +20,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
     request.shadows.first_cascade_distance_m = Some(25.0);
     request.shadows.mesh_lod_error_texels = 0.5;
     request.shadows.receiver_culling = true;
+    request.shadows.raster_sample_culling = true;
     let resolved = backend.resolve_graphics(&request);
     let page = thessa_rcbt_core::HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
     let mut terrain = TerrainRenderer::with_capacity_and_lighting(
@@ -121,10 +122,14 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         colors_lux: [[3.0; 4]; 3],
         ambient_lux: [0.2; 4],
     };
-    let capture = |terrain: &mut TerrainRenderer, mesh: &MeshRenderer| {
+    let capture = |terrain: &mut TerrainRenderer, mesh: &MeshRenderer, samples: bool| {
         terrain.invalidate_shadows();
         let mut encoder = backend.device.create_command_encoder(&Default::default());
-        terrain.encode_shadows(&mut encoder, Some(mesh));
+        if samples {
+            terrain.encode_shadows(&mut encoder, Some(mesh));
+        } else {
+            terrain.encode_shadows_without_sample_culling(&mut encoder, Some(mesh));
+        }
         let stats = terrain.last_shadow_draws();
         terrain.encode_scene(&mut encoder, &target.color, &target.depth, Some(mesh));
         backend.queue.submit([encoder.finish()]);
@@ -134,6 +139,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
             stats,
         )
     };
+    let mut witnessed_samples = false;
     let mut witnessed_lod = false;
     let mut witnessed_batch = false;
     let mut witnessed_full = false;
@@ -183,7 +189,19 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
             batched.shadow_indirect_storage_bytes() <= resolved.shadow_mesh_command_budget_bytes
         );
         assert_eq!(direct.shadow_indirect_storage_bytes(), 0);
-        let a = capture(&mut terrain, &batched);
+        let unculled = capture(&mut terrain, &batched, false);
+        assert_eq!(unculled.2.mesh_sample_rejected_instances, 0);
+        let a = capture(&mut terrain, &batched, true);
+        assert_eq!(
+            unculled.0, a.0,
+            "sample culling changed depth at case {case}"
+        );
+        assert_eq!(
+            unculled.1, a.1,
+            "sample culling changed colour at case {case}"
+        );
+        assert!(a.2.mesh_submitted_triangles < unculled.2.mesh_submitted_triangles);
+        witnessed_samples |= a.2.mesh_sample_rejected_instances > 0;
         {
             let commands = batched.shadow_commands.lock().unwrap();
             for data in &commands.uploaded {
@@ -195,7 +213,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
                 }
             }
         }
-        let b = capture(&mut terrain, &direct);
+        let b = capture(&mut terrain, &direct, true);
         assert_eq!(a.0, b.0, "direct/indirect atlas differs at case {case}");
         assert_eq!(
             a.1, b.1,
@@ -210,7 +228,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         if case == 0 {
             assert!(a.2.mesh_indirect_upload_bytes > 0);
         }
-        let reused = capture(&mut terrain, &batched);
+        let reused = capture(&mut terrain, &batched, true);
         assert_eq!(a.0, reused.0);
         assert_eq!(a.1, reused.1);
         assert_eq!(reused.2.mesh_indirect_upload_bytes, 0);
@@ -220,7 +238,7 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         direct.shadow_command_budget = 1;
         direct.update(&backend, &view, &lights, &instances).unwrap();
         assert_eq!(direct.shadow_indirect_storage_bytes(), 0);
-        let fallback = capture(&mut terrain, &direct);
+        let fallback = capture(&mut terrain, &direct, true);
         assert_eq!(a.0, fallback.0);
         assert_eq!(a.1, fallback.1);
         let budget = terrain.shadows().unwrap().command_available.clone();
@@ -235,16 +253,23 @@ fn shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads() {
         assert_eq!(direct.shadow_indirect_storage_bytes(), 0);
         *budget.lock().unwrap() = unused;
         eprintln!(
-            "shadow_indirect case={case} triangles={} commands={} batches={} upload_bytes={} storage_bytes={}",
+            "shadow_indirect case={case} triangles={} commands={} batches={} upload_bytes={} storage_bytes={} sample_rejected={} no_sample_triangles={}",
             a.2.mesh_submitted_triangles,
             a.2.mesh_draw_commands,
             a.2.mesh_draw_calls,
             a.2.mesh_indirect_upload_bytes,
-            batched.shadow_indirect_storage_bytes()
+            batched.shadow_indirect_storage_bytes(),
+            a.2.mesh_sample_rejected_instances,
+            unculled.2.mesh_submitted_triangles
         );
     }
     assert!(
-        witnessed_lod && witnessed_batch && witnessed_full && witnessed_fine && witnessed_coarse
+        witnessed_samples
+            && witnessed_lod
+            && witnessed_batch
+            && witnessed_full
+            && witnessed_fine
+            && witnessed_coarse
     );
     let budget = terrain.shadows().unwrap().command_available.clone();
     drop(batched);

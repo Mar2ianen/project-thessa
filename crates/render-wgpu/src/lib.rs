@@ -455,6 +455,10 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
         && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
     Capabilities {
+        // Vulkan guarantees centered 1x samples and at least four subpixel bits.
+        // Other APIs retain the ordinary caster path until their contract is proved.
+        shadow_raster_subpixel_bits: (adapter.get_info().backend == wgpu::Backend::Vulkan)
+            .then_some(4),
         raster_msaa4_supported: Some(
             [
                 wgpu::TextureFormat::Rgba16Float,

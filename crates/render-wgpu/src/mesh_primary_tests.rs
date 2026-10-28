@@ -115,6 +115,9 @@ fn primary_frustum_matches_full_draws_at_large_origins_and_jitter() {
     let mut mesh = MeshRenderer::new(&backend, &source, OffscreenTarget::FORMAT, 192).unwrap();
     let mut direct = MeshRenderer::new(&backend, &source, OffscreenTarget::FORMAT, 192).unwrap();
     direct.primary_indirect_supported = false;
+    // Exercise cached uploaded-model bounds while the independent direct/full
+    // oracle retains the original transform-per-test path and same shader.
+    mesh.cache_bounds = true;
     let batch_supported = mesh.primary_indirect_supported;
     let mut witnessed_batching = false;
     let lights = SurfaceLighting {

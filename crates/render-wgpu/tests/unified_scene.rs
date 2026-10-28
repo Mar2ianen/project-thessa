@@ -365,8 +365,20 @@ impl Scene {
         mesh_count: u32,
         format: wgpu::TextureFormat,
     ) -> Self {
+        Self::with_receiver_culling(backend, mode, ocean, patch_count, mesh_count, format, false)
+    }
+    fn with_receiver_culling(
+        backend: &Backend,
+        mode: RayTracingRequest,
+        ocean: bool,
+        patch_count: u32,
+        mesh_count: u32,
+        format: wgpu::TextureFormat,
+        receiver_culling: bool,
+    ) -> Self {
         let mut requested = RequestedGraphics::default();
         requested.renderer.ray_tracing = mode;
+        requested.shadows.receiver_culling = receiver_culling;
         requested.shadows.map_size = 256;
         requested.shadows.max_distance_m = 100.0;
         requested.ocean.enabled = ocean;
@@ -740,4 +752,226 @@ fn hdr_scene_preserves_pass_equivalence_and_exposure() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "software Vulkan: primary receiver caster selection versus full-volume actual colour and cache lifetime"]
+fn receiver_culling_matches_full_volume_colour_and_tracks_view_only_changes() {
+    assert!(!std::path::Path::new("/dev/dri").exists());
+    let backend = Backend::bring_up().unwrap();
+    assert_eq!(
+        backend.adapter.get_info().device_type,
+        wgpu::DeviceType::Cpu
+    );
+    let target = OffscreenTarget::new(&backend, 257, 193).unwrap();
+    let mut selected = Scene::with_receiver_culling(
+        &backend,
+        RayTracingRequest::Off,
+        false,
+        1,
+        64,
+        OffscreenTarget::FORMAT,
+        true,
+    );
+    let mut reference = Scene::new(
+        &backend,
+        RayTracingRequest::Off,
+        false,
+        1,
+        64,
+        OffscreenTarget::FORMAT,
+    );
+    let base = selected.view.world_position_m;
+    let mut relative: Vec<_> = selected
+        .instances
+        .iter()
+        .map(|i| i.position_m - base)
+        .collect();
+    relative[0] = DVec3::new(80.0, 0.0, 0.0);
+    relative[1] = DVec3::new(2.0, 0.0, 10.0); // Behind the primary camera, toward the light.
+    relative[2] = DVec3::new(2.0, 0.0, 0.0); // Its visible shadow receiver.
+    let mut witnessed_rejection = false;
+    let mut witnessed_unused_depth = false;
+    let mut cases = String::from("case,full_volume_triangles,receiver_selected_triangles\n");
+    for (case, (origin, rotation, fov, skew)) in [
+        (base, DQuat::IDENTITY, 1.1, 0.0),
+        (base, DQuat::from_rotation_y(-1.2), 1.1, 0.0),
+        (base, DQuat::IDENTITY, 0.6, 0.0007),
+        (
+            DVec3::new(3e12, -2e12, 1e12),
+            DQuat::from_rotation_y(0.2),
+            1.1,
+            -0.0009,
+        ),
+        (base, DQuat::IDENTITY, 1.1, 0.0), // Giant receiver crosses every frustum side.
+        (base, DQuat::IDENTITY, 1.1, 0.0), // Independent mesh view must fail open.
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for scene in [&mut selected, &mut reference] {
+            scene.view.world_position_m = origin;
+            scene.view.world_from_view = DMat4::from_rotation_translation(rotation, origin);
+            scene.view.clip_from_view =
+                glam::dcamera::rh::proj::directx::perspective(fov, 1.0, 0.1, 100.0);
+            scene.view.clip_from_view.z_axis.x += skew;
+            for (instance, p) in scene.instances.iter_mut().zip(&relative) {
+                instance.position_m = origin + *p;
+            }
+            scene.instances[2].scale = if case == 4 { 100_000.0 } else { 1.0 };
+            if case == 4 {
+                scene.instances[2].position_m = origin + DVec3::new(0.0, 0.0, 399_995.0);
+            }
+            scene.update(&backend);
+            if case == 5 {
+                let mut independent_view = scene.view;
+                independent_view.clip_from_view =
+                    glam::dcamera::rh::proj::directx::perspective(0.8, 1.0, 0.1, 100.0);
+                scene
+                    .mesh
+                    .update(&backend, &independent_view, &scene.lights, &scene.instances)
+                    .unwrap();
+            }
+        }
+        // The second/third frames change only primary rotation/projection, not
+        // the light matrices, instance bytes or camera origin.
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        selected
+            .terrain
+            .encode_shadows(&mut encoder, Some(&selected.mesh));
+        assert!(
+            selected.terrain.last_shadow_passes() > 0,
+            "view-only change reused stale caster depth at case {case}"
+        );
+        drop(encoder);
+        let full = capture_shadow_choice(&mut reference, &backend, &target, true);
+        let culled = capture_shadow_choice(&mut selected, &backend, &target, true);
+        equal_bytes("receiver-culling final colour", &full.1, &culled.1);
+        assert!(culled.2.mesh_submitted_triangles <= full.2.mesh_submitted_triangles);
+        if case == 5 {
+            assert_eq!(
+                culled.2.mesh_submitted_triangles,
+                full.2.mesh_submitted_triangles
+            );
+        }
+        witnessed_rejection |= culled.2.mesh_submitted_triangles < full.2.mesh_submitted_triangles;
+        witnessed_unused_depth |= full.0 != culled.0;
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        selected
+            .terrain
+            .encode_shadows(&mut encoder, Some(&selected.mesh));
+        assert_eq!(selected.terrain.last_shadow_passes(), 0);
+        let mut invalid = selected.view;
+        invalid.clip_from_view = DMat4::ZERO;
+        assert!(selected.terrain.update_view(&backend, &invalid).is_err());
+        selected
+            .terrain
+            .encode_shadows(&mut encoder, Some(&selected.mesh));
+        assert_eq!(selected.terrain.last_shadow_passes(), 0);
+        drop(encoder);
+        cases.push_str(&format!(
+            "{case},{},{}\n",
+            full.2.mesh_submitted_triangles, culled.2.mesh_submitted_triangles
+        ));
+    }
+    assert!(witnessed_rejection && witnessed_unused_depth);
+    // Restore only the mesh projection: the effective receiver key changes
+    // from full-volume fallback to selection, without changing any instance.
+    selected
+        .mesh
+        .update(
+            &backend,
+            &selected.view,
+            &selected.lights,
+            &selected.instances,
+        )
+        .unwrap();
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    selected
+        .terrain
+        .encode_shadows(&mut encoder, Some(&selected.mesh));
+    assert!(selected.terrain.last_shadow_passes() > 0);
+    drop(encoder);
+    // Removing this off-camera caster must change visible lighting. Thus exact
+    // equality above cannot pass merely because the fixture never receives it.
+    selected.view.world_position_m = base;
+    selected.view.world_from_view = DMat4::from_translation(base);
+    selected.view.clip_from_view =
+        glam::dcamera::rh::proj::directx::perspective(1.1, 1.0, 0.1, 100.0);
+    for (i, p) in selected.instances.iter_mut().zip(&relative) {
+        i.position_m = base + *p;
+    }
+    selected.instances[2].scale = 1.0;
+    selected.update(&backend);
+    let with_caster = capture_shadow_choice(&mut selected, &backend, &target, true);
+    selected.instances[1].position_m = base + DVec3::splat(100_000.0);
+    selected.update(&backend);
+    let without_caster = capture_shadow_choice(&mut selected, &backend, &target, true);
+    assert_ne!(
+        with_caster.1, without_caster.1,
+        "off-camera occluder fixture did not affect visible lighting"
+    );
+    // Spectral-ocean fallback must preserve both pixels and stationary shadow
+    // reuse when only the primary view turns. No receiver hull is active here.
+    let mut ocean = Scene::with_receiver_culling(
+        &backend,
+        RayTracingRequest::Off,
+        true,
+        1,
+        64,
+        OffscreenTarget::FORMAT,
+        true,
+    );
+    let mut ocean_reference = Scene::new(
+        &backend,
+        RayTracingRequest::Off,
+        true,
+        1,
+        64,
+        OffscreenTarget::FORMAT,
+    );
+    assert!(ocean.terrain.ocean_stats().storage_bytes > 0);
+    for frame in 0..3 {
+        for scene in [&mut ocean, &mut ocean_reference] {
+            scene.view.world_from_view = DMat4::from_rotation_translation(
+                DQuat::from_rotation_y(frame as f64 * 0.3),
+                scene.view.world_position_m,
+            );
+            scene.update(&backend);
+        }
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        ocean
+            .terrain
+            .encode_shadows(&mut encoder, Some(&ocean.mesh));
+        if frame > 0 {
+            assert_eq!(
+                ocean.terrain.last_shadow_passes(),
+                0,
+                "ocean fallback rotation must reuse depth"
+            );
+        }
+        drop(encoder);
+        let full = capture_shadow_choice(&mut ocean_reference, &backend, &target, true);
+        let fallback = capture_shadow_choice(&mut ocean, &backend, &target, true);
+        equal_bytes("ocean fallback depth", &full.0, &fallback.0);
+        equal_bytes("ocean fallback colour", &full.1, &fallback.1);
+        assert_eq!(
+            full.2.mesh_submitted_triangles,
+            fallback.2.mesh_submitted_triangles
+        );
+        cases.push_str(&format!(
+            "ocean-{frame},{},{}\n",
+            full.2.mesh_submitted_triangles, fallback.2.mesh_submitted_triangles
+        ));
+    }
+    use std::io::Write;
+    let output = std::path::PathBuf::from(std::env::var_os("THESSA_WORKLOAD_OUTPUT").unwrap())
+        .with_extension("csv");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .unwrap();
+    file.write_all(cases.as_bytes()).unwrap();
+    eprintln!("{cases}");
 }

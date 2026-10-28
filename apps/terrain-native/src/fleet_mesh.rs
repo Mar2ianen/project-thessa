@@ -2036,6 +2036,39 @@ mod tests {
         let shadow_stats = terrain.last_shadow_draws();
         // Count real encoded caster commands, but never submit a raster pass.
         drop(shadow_encoder);
+        let mut layers = Vec::new();
+        let mut caster_groups = Vec::new();
+        let mut observed_encoder = backend.device.create_command_encoder(&Default::default());
+        let observed = terrain.shadows().unwrap().encode_casters_observed(
+            &mut observed_encoder,
+            &terrain,
+            meshes.opaque(),
+            true,
+            |layer, primitive, stats| {
+                let mut entry: toml::Table = [
+                    ("layer", layer as i64),
+                    ("triangles", stats.mesh_submitted_triangles as i64),
+                    ("candidate_triangles", stats.mesh_candidate_triangles as i64),
+                    ("instances", stats.mesh_submitted_instances as i64),
+                    ("lod_instances", stats.mesh_lod_instances as i64),
+                    ("saved_triangles", stats.mesh_lod_triangles_saved as i64),
+                    ("draw_calls", stats.mesh_draw_calls as i64),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), toml::Value::Integer(v)))
+                .collect();
+                if let Some(p) = primitive {
+                    entry.insert("primitive".into(), toml::Value::Integer(p as i64));
+                    caster_groups.push(toml::Value::Table(entry));
+                } else {
+                    layers.push(toml::Value::Table(entry));
+                }
+            },
+        );
+        drop(observed_encoder);
+        let mut expected_observed = shadow_stats;
+        expected_observed.mesh_indirect_upload_bytes = 0;
+        assert_eq!(observed, expected_observed);
         let plants = meshes.plants.as_ref().unwrap();
         let mut groups: Vec<_> = plants
             .asset
@@ -2089,6 +2122,28 @@ mod tests {
             ),
             ("shadow_draw_calls", shadow_stats.mesh_draw_calls as i64),
             (
+                "shadow_draw_commands",
+                shadow_stats.mesh_draw_commands as i64,
+            ),
+            (
+                "shadow_bounds_cpu_storage_bytes",
+                meshes
+                    .opaque()
+                    .map_or(0, MeshRenderer::shadow_bounds_cpu_storage_bytes)
+                    as i64,
+            ),
+            ("shadow_indirect", i64::from(shadow_stats.mesh_indirect)),
+            (
+                "shadow_indirect_upload_bytes",
+                shadow_stats.mesh_indirect_upload_bytes as i64,
+            ),
+            (
+                "shadow_indirect_storage_bytes",
+                meshes
+                    .opaque()
+                    .map_or(0, MeshRenderer::shadow_indirect_storage_bytes) as i64,
+            ),
+            (
                 "shadow_lod_instances",
                 shadow_stats.mesh_lod_instances as i64,
             ),
@@ -2127,6 +2182,8 @@ mod tests {
             toml::Value::Float(shadow_encode_ms),
         );
         report.insert("candidate_groups".into(), toml::Value::Array(groups));
+        report.insert("shadow_layers".into(), toml::Value::Array(layers));
+        report.insert("shadow_groups".into(), toml::Value::Array(caster_groups));
         assert!(stats.triangles > 0 && stats.triangles < stats.candidate_triangles);
         assert!(shadow_stats.mesh_lod_instances > 0);
         assert!(shadow_stats.mesh_submitted_triangles < shadow_stats.mesh_candidate_triangles / 4);

@@ -363,7 +363,9 @@ fn actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes() 
             assert!(mesh.set_shadow_lods(&backend, &invalid).is_err());
             let after_failure = capture(&mut terrain, &mesh, false);
             assert_eq!(lod.0, after_failure.0);
-            assert_eq!(lod.2, after_failure.2);
+            let mut expected_stats = lod.2;
+            expected_stats.mesh_indirect_upload_bytes = 0;
+            assert_eq!(expected_stats, after_failure.2);
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             terrain.encode_shadows(&mut encoder, Some(&mesh));
             assert_eq!(terrain.last_shadow_passes(), 0);

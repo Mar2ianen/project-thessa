@@ -775,3 +775,5 @@ supplied PNG frames; native headless capture and automated model judging are
 planned, not implemented.
 
 Native render-work continuation: [Horizon source review and work counters](docs/80_HORIZON_RENDER_WORK_REVIEW.md) records conservative primary mesh selection, persistent indexed indirect batches and dirty-only instance/command uploads. The fixed coastal primary plan drops from 112.8M to 17.1M triangles at 37 API batches. [Texel-bounded depth-only plant geometry](docs/81_NATIVE_SHADOW_MESH_LOD.md) reduces the subsequent cold shadow plan from 999.6M to 283.2M triangles within the existing source-byte budget. These are scoped work counts, not target-GPU frame-time acceptance.
+
+The [shadow submission continuation](docs/82_NATIVE_SHADOW_SUBMISSION.md) adds receiver-aware caster selection, shared-budget indirect batches and cached world bounds. The current ocean profile retains full-volume shadow selection; 6,930 logical shadow commands use 453 API batches. Physical-GPU/full-frame and reference acceptance remain open.

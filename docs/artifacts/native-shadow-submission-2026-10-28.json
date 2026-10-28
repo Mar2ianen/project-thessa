@@ -1,0 +1,5844 @@
+{
+  "status": "Implemented and CPU/software verified on the surface feature branch; physical-GPU/full-frame/reference acceptance open.",
+  "date": "2026-10-28",
+  "baseline_commit": "8b3e393cded5f413e3dd90380d95e7f6a5877ecb",
+  "source_manifest_sha256": "8d831d68bbe312c5f6b222370f9640ce1d757bf71f085d451f879530df6a2801",
+  "release_sha256": "a2011bcb296be7cdaf87ebe43f77589588f16361ad4646f5b1ed01a548a197c0",
+  "cpu_tests": {
+    "native-cpu": 133,
+    "graphics-cpu": 50,
+    "render-core-cpu": 45,
+    "caster-cpu": 5,
+    "worldgen-cpu": 286
+  },
+  "cpu_total": 519,
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.663625257089734
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "thessa-render-core",
+        "-p",
+        "thessa-graphics",
+        "-p",
+        "thessa-render-wgpu",
+        "-p",
+        "thessa-terrain-native",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 3.4258166250074282
+    },
+    {
+      "name": "native-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-terrain-native",
+        "--bin",
+        "thessa-terrain-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 116.19507667399012
+    },
+    {
+      "name": "graphics-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-graphics",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.09714173001702875
+    },
+    {
+      "name": "render-core-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 0.2306235310388729
+    },
+    {
+      "name": "caster-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "mesh_visibility"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1332137930439785
+    },
+    {
+      "name": "worldgen-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-worldgen-rocky",
+        "--lib",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 66.8293082889868
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "thessa-terrain-native",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 1.8922619780059904
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "python3",
+        "tools/agent-qa/check_architecture.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.06046417902689427
+    },
+    {
+      "name": "shadow-integration-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--test",
+        "unified_scene",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1878044360782951
+    },
+    {
+      "name": "primary-oracle-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "thessa-render-wgpu",
+        "--lib",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1156447899993509
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "thessa-terrain-native"
+      ],
+      "exit_code": 0,
+      "seconds": 93.71866973198485
+    }
+  ],
+  "software_cases": {
+    "receiver-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28/receiver-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/unified_scene-43d5a5042352b65c",
+        "receiver_culling_matches_full_volume_colour_and_tracks_view_only_changes",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 7.829087525955401,
+      "binary_sha256": "38b95200f8cef7f1779c4bc0e482fe1e14940629840b8e8cee2c948dafd228a5",
+      "binary_unchanged": true,
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "shadow-batch-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28/shadow-batch-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_render_wgpu-c5288e1a8cf6cd2b",
+        "mesh::shadow_tests::shadow_indirect_matches_direct_for_every_layer_and_reuses_uploads",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.9682712909998372,
+      "binary_sha256": "24f1adea7efdc5e7b3d0071f5d6b0e6cf15188abf46792395d8eccb8822171f6",
+      "binary_unchanged": true,
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "primary-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28/primary-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_render_wgpu-c5288e1a8cf6cd2b",
+        "mesh::primary_tests::primary_frustum_matches_full_draws_at_large_origins_and_jitter",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.667788507998921,
+      "binary_sha256": "24f1adea7efdc5e7b3d0071f5d6b0e6cf15188abf46792395d8eccb8822171f6",
+      "binary_unchanged": true,
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "shadow-zero-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28/shadow-zero-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/unified_scene-43d5a5042352b65c",
+        "shadow_culling_matches_full_casters_not_just_split_unified",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 10.184915233985521,
+      "binary_sha256": "38b95200f8cef7f1779c4bc0e482fe1e14940629840b8e8cee2c948dafd228a5",
+      "binary_unchanged": true,
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "plant-ground-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28/plant-ground-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_terrain_native-5c4564ffb45f712d",
+        "surface_plants::shadow_tests::actual_plant_shadow_lods_preserve_near_detail_and_bound_silhouette_changes",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 43.89473650499713,
+      "binary_sha256": "f7323fbeb2395aff13dea59685bb616c72d1b805da57cebc0ee58fdef543afb9",
+      "binary_unchanged": true,
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    },
+    "coastal-final": {
+      "command": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--bind",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28",
+        "--unsetenv",
+        "DISPLAY",
+        "--unsetenv",
+        "WAYLAND_DISPLAY",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp",
+        "--setenv",
+        "VK_DRIVER_FILES",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/software-vulkan/cpu-only-icd.json",
+        "--setenv",
+        "LP_NUM_THREADS",
+        "2",
+        "--setenv",
+        "VK_LOADER_LAYERS_DISABLE",
+        "*",
+        "--setenv",
+        "THESSA_WORKLOAD_OUTPUT",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/horizon-receiver-culling-2026-10-28/coastal-final.toml",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        "import os,sys; assert not os.path.exists(\"/dev/dri\"); assert not os.environ.get(\"DISPLAY\") and not os.environ.get(\"WAYLAND_DISPLAY\"); os.execv(sys.argv[1],sys.argv[1:])",
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_terrain_native-5c4564ffb45f712d",
+        "scene::fleet_mesh::tests::report_coastal_primary_workload",
+        "--include-ignored",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 44.7899822749896,
+      "binary_sha256": "f7323fbeb2395aff13dea59685bb616c72d1b805da57cebc0ee58fdef543afb9",
+      "binary_unchanged": true,
+      "scope": "Isolated CPU Vulkan only, no /dev/dri or display."
+    }
+  },
+  "receiver_cases": [
+    {
+      "case": "0",
+      "full_volume_triangles": "1518",
+      "receiver_selected_triangles": "1512"
+    },
+    {
+      "case": "1",
+      "full_volume_triangles": "1518",
+      "receiver_selected_triangles": "1164"
+    },
+    {
+      "case": "2",
+      "full_volume_triangles": "1518",
+      "receiver_selected_triangles": "1512"
+    },
+    {
+      "case": "3",
+      "full_volume_triangles": "1518",
+      "receiver_selected_triangles": "1518"
+    },
+    {
+      "case": "4",
+      "full_volume_triangles": "1518",
+      "receiver_selected_triangles": "1518"
+    },
+    {
+      "case": "5",
+      "full_volume_triangles": "1518",
+      "receiver_selected_triangles": "1518"
+    },
+    {
+      "case": "ocean-0",
+      "full_volume_triangles": "1536",
+      "receiver_selected_triangles": "1536"
+    },
+    {
+      "case": "ocean-1",
+      "full_volume_triangles": "1536",
+      "receiver_selected_triangles": "1536"
+    },
+    {
+      "case": "ocean-2",
+      "full_volume_triangles": "1536",
+      "receiver_selected_triangles": "1536"
+    }
+  ],
+  "coastal_baseline": {
+    "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 23.1.3, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.2.5-arch1.1 (LLVM 23.1.3)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+    "candidate_instances": 17992,
+    "candidate_triangles": 112813834,
+    "draw_calls": 37,
+    "draw_commands": 3226,
+    "eye_agl_m": 2,
+    "frame_upload_bytes": 576,
+    "height": 720,
+    "native_update_cpu_max_ms": 0.8151280000000001,
+    "native_update_cpu_p50_ms": 0.25592699999999996,
+    "native_update_cpu_p95_ms": 0.360642,
+    "prototype_bytes": 45493332,
+    "scope": "Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.",
+    "shadow_candidate_triangles": 1353766008,
+    "shadow_draw_calls": 6918,
+    "shadow_encode_cpu_ms": 445.065082,
+    "shadow_lod_instances": 121364,
+    "shadow_lod_max_error_microtexels": 499859,
+    "shadow_lod_triangles_saved": 716391376,
+    "shadow_passes": 12,
+    "shadow_prototype_bytes": 991680,
+    "shadow_submitted_triangles": 283199642,
+    "submitted_triangles": 17111160,
+    "survey_distance_m": 80,
+    "visible_instances": 2510,
+    "width": 1280,
+    "candidate_groups": [
+      {
+        "candidate_triangles": 18394420,
+        "instances": 1382,
+        "material": 0,
+        "primitive": 0,
+        "source_triangles": 13310
+      },
+      {
+        "candidate_triangles": 18196444,
+        "instances": 526,
+        "material": 4,
+        "primitive": 4,
+        "source_triangles": 34594
+      },
+      {
+        "candidate_triangles": 9471156,
+        "instances": 526,
+        "material": 5,
+        "primitive": 5,
+        "source_triangles": 18006
+      },
+      {
+        "candidate_triangles": 9015300,
+        "instances": 450,
+        "material": 29,
+        "primitive": 29,
+        "source_triangles": 20034
+      },
+      {
+        "candidate_triangles": 8726732,
+        "instances": 458,
+        "material": 26,
+        "primitive": 26,
+        "source_triangles": 19054
+      },
+      {
+        "candidate_triangles": 8363392,
+        "instances": 446,
+        "material": 23,
+        "primitive": 23,
+        "source_triangles": 18752
+      },
+      {
+        "candidate_triangles": 6420772,
+        "instances": 1382,
+        "material": 1,
+        "primitive": 1,
+        "source_triangles": 4646
+      },
+      {
+        "candidate_triangles": 5518620,
+        "instances": 2139,
+        "material": 16,
+        "primitive": 16,
+        "source_triangles": 2580
+      },
+      {
+        "candidate_triangles": 3703360,
+        "instances": 2840,
+        "material": 6,
+        "primitive": 6,
+        "source_triangles": 1304
+      },
+      {
+        "candidate_triangles": 3212860,
+        "instances": 530,
+        "material": 20,
+        "primitive": 20,
+        "source_triangles": 6062
+      },
+      {
+        "candidate_triangles": 3073800,
+        "instances": 1175,
+        "material": 2,
+        "primitive": 2,
+        "source_triangles": 2616
+      },
+      {
+        "candidate_triangles": 2519720,
+        "instances": 20,
+        "material": 14,
+        "primitive": 14,
+        "source_triangles": 125986
+      },
+      {
+        "candidate_triangles": 2170620,
+        "instances": 18,
+        "material": 8,
+        "primitive": 8,
+        "source_triangles": 120590
+      },
+      {
+        "candidate_triangles": 1964096,
+        "instances": 16,
+        "material": 11,
+        "primitive": 11,
+        "source_triangles": 122756
+      },
+      {
+        "candidate_triangles": 1797750,
+        "instances": 1175,
+        "material": 3,
+        "primitive": 3,
+        "source_triangles": 1530
+      },
+      {
+        "candidate_triangles": 1732590,
+        "instances": 2139,
+        "material": 17,
+        "primitive": 17,
+        "source_triangles": 810
+      },
+      {
+        "candidate_triangles": 1669500,
+        "instances": 530,
+        "material": 21,
+        "primitive": 21,
+        "source_triangles": 3150
+      },
+      {
+        "candidate_triangles": 1289700,
+        "instances": 450,
+        "material": 30,
+        "primitive": 30,
+        "source_triangles": 2866
+      },
+      {
+        "candidate_triangles": 1284232,
+        "instances": 458,
+        "material": 27,
+        "primitive": 27,
+        "source_triangles": 2804
+      },
+      {
+        "candidate_triangles": 1175656,
+        "instances": 446,
+        "material": 24,
+        "primitive": 24,
+        "source_triangles": 2636
+      },
+      {
+        "candidate_triangles": 811922,
+        "instances": 1297,
+        "material": 18,
+        "primitive": 18,
+        "source_triangles": 626
+      },
+      {
+        "candidate_triangles": 400600,
+        "instances": 20,
+        "material": 15,
+        "primitive": 15,
+        "source_triangles": 20030
+      },
+      {
+        "candidate_triangles": 352440,
+        "instances": 18,
+        "material": 9,
+        "primitive": 9,
+        "source_triangles": 19580
+      },
+      {
+        "candidate_triangles": 314304,
+        "instances": 16,
+        "material": 12,
+        "primitive": 12,
+        "source_triangles": 19644
+      },
+      {
+        "candidate_triangles": 295716,
+        "instances": 1297,
+        "material": 19,
+        "primitive": 19,
+        "source_triangles": 228
+      },
+      {
+        "candidate_triangles": 223200,
+        "instances": 450,
+        "material": 28,
+        "primitive": 28,
+        "source_triangles": 496
+      },
+      {
+        "candidate_triangles": 221216,
+        "instances": 446,
+        "material": 22,
+        "primitive": 22,
+        "source_triangles": 496
+      },
+      {
+        "candidate_triangles": 201520,
+        "instances": 458,
+        "material": 25,
+        "primitive": 25,
+        "source_triangles": 440
+      },
+      {
+        "candidate_triangles": 73024,
+        "instances": 2282,
+        "material": 31,
+        "primitive": 31,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 71360,
+        "instances": 2230,
+        "material": 33,
+        "primitive": 33,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 69760,
+        "instances": 2180,
+        "material": 32,
+        "primitive": 32,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 22080,
+        "instances": 20,
+        "material": 13,
+        "primitive": 13,
+        "source_triangles": 1104
+      },
+      {
+        "candidate_triangles": 19872,
+        "instances": 18,
+        "material": 7,
+        "primitive": 7,
+        "source_triangles": 1104
+      },
+      {
+        "candidate_triangles": 16768,
+        "instances": 16,
+        "material": 10,
+        "primitive": 10,
+        "source_triangles": 1048
+      },
+      {
+        "candidate_triangles": 12288,
+        "instances": 1,
+        "material": 34,
+        "primitive": 34,
+        "source_triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "instances": 1,
+        "material": 35,
+        "primitive": 35,
+        "source_triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "instances": 1,
+        "material": 36,
+        "primitive": 36,
+        "source_triangles": 1960
+      }
+    ]
+  },
+  "coastal_final": {
+    "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 23.1.3, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.2.5-arch1.1 (LLVM 23.1.3)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+    "candidate_instances": 17992,
+    "candidate_triangles": 112813834,
+    "draw_calls": 37,
+    "draw_commands": 3226,
+    "eye_agl_m": 2,
+    "frame_upload_bytes": 576,
+    "height": 720,
+    "native_update_cpu_max_ms": 0.293877,
+    "native_update_cpu_p50_ms": 0.267728,
+    "native_update_cpu_p95_ms": 0.292534,
+    "prototype_bytes": 45493332,
+    "scope": "Actual retained coastal producer/serialized GPU matrices and primary plan on isolated software Vulkan. No raster/AS pass. CPU update includes extraction/serialization/culling/uploads, not GPU frame time.",
+    "shadow_bounds_cpu_storage_bytes": 1784312,
+    "shadow_candidate_triangles": 1353766008,
+    "shadow_draw_calls": 453,
+    "shadow_draw_commands": 6930,
+    "shadow_encode_cpu_ms": 96.77678,
+    "shadow_indirect": 1,
+    "shadow_indirect_storage_bytes": 7864320,
+    "shadow_indirect_upload_bytes": 138600,
+    "shadow_lod_instances": 121349,
+    "shadow_lod_max_error_microtexels": 499761,
+    "shadow_lod_triangles_saved": 716367526,
+    "shadow_passes": 12,
+    "shadow_prototype_bytes": 991680,
+    "shadow_submitted_triangles": 283223492,
+    "submitted_triangles": 17111160,
+    "survey_distance_m": 80,
+    "visible_instances": 2510,
+    "width": 1280,
+    "candidate_groups": [
+      {
+        "candidate_triangles": 18394420,
+        "instances": 1382,
+        "material": 0,
+        "primitive": 0,
+        "source_triangles": 13310
+      },
+      {
+        "candidate_triangles": 18196444,
+        "instances": 526,
+        "material": 4,
+        "primitive": 4,
+        "source_triangles": 34594
+      },
+      {
+        "candidate_triangles": 9471156,
+        "instances": 526,
+        "material": 5,
+        "primitive": 5,
+        "source_triangles": 18006
+      },
+      {
+        "candidate_triangles": 9015300,
+        "instances": 450,
+        "material": 29,
+        "primitive": 29,
+        "source_triangles": 20034
+      },
+      {
+        "candidate_triangles": 8726732,
+        "instances": 458,
+        "material": 26,
+        "primitive": 26,
+        "source_triangles": 19054
+      },
+      {
+        "candidate_triangles": 8363392,
+        "instances": 446,
+        "material": 23,
+        "primitive": 23,
+        "source_triangles": 18752
+      },
+      {
+        "candidate_triangles": 6420772,
+        "instances": 1382,
+        "material": 1,
+        "primitive": 1,
+        "source_triangles": 4646
+      },
+      {
+        "candidate_triangles": 5518620,
+        "instances": 2139,
+        "material": 16,
+        "primitive": 16,
+        "source_triangles": 2580
+      },
+      {
+        "candidate_triangles": 3703360,
+        "instances": 2840,
+        "material": 6,
+        "primitive": 6,
+        "source_triangles": 1304
+      },
+      {
+        "candidate_triangles": 3212860,
+        "instances": 530,
+        "material": 20,
+        "primitive": 20,
+        "source_triangles": 6062
+      },
+      {
+        "candidate_triangles": 3073800,
+        "instances": 1175,
+        "material": 2,
+        "primitive": 2,
+        "source_triangles": 2616
+      },
+      {
+        "candidate_triangles": 2519720,
+        "instances": 20,
+        "material": 14,
+        "primitive": 14,
+        "source_triangles": 125986
+      },
+      {
+        "candidate_triangles": 2170620,
+        "instances": 18,
+        "material": 8,
+        "primitive": 8,
+        "source_triangles": 120590
+      },
+      {
+        "candidate_triangles": 1964096,
+        "instances": 16,
+        "material": 11,
+        "primitive": 11,
+        "source_triangles": 122756
+      },
+      {
+        "candidate_triangles": 1797750,
+        "instances": 1175,
+        "material": 3,
+        "primitive": 3,
+        "source_triangles": 1530
+      },
+      {
+        "candidate_triangles": 1732590,
+        "instances": 2139,
+        "material": 17,
+        "primitive": 17,
+        "source_triangles": 810
+      },
+      {
+        "candidate_triangles": 1669500,
+        "instances": 530,
+        "material": 21,
+        "primitive": 21,
+        "source_triangles": 3150
+      },
+      {
+        "candidate_triangles": 1289700,
+        "instances": 450,
+        "material": 30,
+        "primitive": 30,
+        "source_triangles": 2866
+      },
+      {
+        "candidate_triangles": 1284232,
+        "instances": 458,
+        "material": 27,
+        "primitive": 27,
+        "source_triangles": 2804
+      },
+      {
+        "candidate_triangles": 1175656,
+        "instances": 446,
+        "material": 24,
+        "primitive": 24,
+        "source_triangles": 2636
+      },
+      {
+        "candidate_triangles": 811922,
+        "instances": 1297,
+        "material": 18,
+        "primitive": 18,
+        "source_triangles": 626
+      },
+      {
+        "candidate_triangles": 400600,
+        "instances": 20,
+        "material": 15,
+        "primitive": 15,
+        "source_triangles": 20030
+      },
+      {
+        "candidate_triangles": 352440,
+        "instances": 18,
+        "material": 9,
+        "primitive": 9,
+        "source_triangles": 19580
+      },
+      {
+        "candidate_triangles": 314304,
+        "instances": 16,
+        "material": 12,
+        "primitive": 12,
+        "source_triangles": 19644
+      },
+      {
+        "candidate_triangles": 295716,
+        "instances": 1297,
+        "material": 19,
+        "primitive": 19,
+        "source_triangles": 228
+      },
+      {
+        "candidate_triangles": 223200,
+        "instances": 450,
+        "material": 28,
+        "primitive": 28,
+        "source_triangles": 496
+      },
+      {
+        "candidate_triangles": 221216,
+        "instances": 446,
+        "material": 22,
+        "primitive": 22,
+        "source_triangles": 496
+      },
+      {
+        "candidate_triangles": 201520,
+        "instances": 458,
+        "material": 25,
+        "primitive": 25,
+        "source_triangles": 440
+      },
+      {
+        "candidate_triangles": 73024,
+        "instances": 2282,
+        "material": 31,
+        "primitive": 31,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 71360,
+        "instances": 2230,
+        "material": 33,
+        "primitive": 33,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 69760,
+        "instances": 2180,
+        "material": 32,
+        "primitive": 32,
+        "source_triangles": 32
+      },
+      {
+        "candidate_triangles": 22080,
+        "instances": 20,
+        "material": 13,
+        "primitive": 13,
+        "source_triangles": 1104
+      },
+      {
+        "candidate_triangles": 19872,
+        "instances": 18,
+        "material": 7,
+        "primitive": 7,
+        "source_triangles": 1104
+      },
+      {
+        "candidate_triangles": 16768,
+        "instances": 16,
+        "material": 10,
+        "primitive": 10,
+        "source_triangles": 1048
+      },
+      {
+        "candidate_triangles": 12288,
+        "instances": 1,
+        "material": 34,
+        "primitive": 34,
+        "source_triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "instances": 1,
+        "material": 35,
+        "primitive": 35,
+        "source_triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "instances": 1,
+        "material": 36,
+        "primitive": 36,
+        "source_triangles": 1960
+      }
+    ],
+    "shadow_groups": [
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 2,
+        "instances": 526,
+        "layer": 0,
+        "lod_instances": 11,
+        "primitive": 0,
+        "saved_triangles": 130350,
+        "triangles": 6870710
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 2,
+        "instances": 523,
+        "layer": 0,
+        "lod_instances": 3,
+        "primitive": 1,
+        "saved_triangles": 12588,
+        "triangles": 2417270
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 2,
+        "instances": 333,
+        "layer": 0,
+        "lod_instances": 138,
+        "primitive": 2,
+        "saved_triangles": 274620,
+        "triangles": 596508
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 2,
+        "instances": 331,
+        "layer": 0,
+        "lod_instances": 81,
+        "primitive": 3,
+        "saved_triangles": 105462,
+        "triangles": 400968
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 2,
+        "instances": 150,
+        "layer": 0,
+        "lod_instances": 2,
+        "primitive": 4,
+        "saved_triangles": 64568,
+        "triangles": 5124532
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 152,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 5,
+        "saved_triangles": 0,
+        "triangles": 2736912
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 413,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 538552
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 7,
+        "saved_triangles": 0,
+        "triangles": 1104
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 8,
+        "saved_triangles": 0,
+        "triangles": 241180
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 9,
+        "saved_triangles": 0,
+        "triangles": 19580
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 10,
+        "saved_triangles": 0,
+        "triangles": 2096
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 11,
+        "saved_triangles": 0,
+        "triangles": 245512
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 12,
+        "saved_triangles": 0,
+        "triangles": 39288
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 13,
+        "saved_triangles": 0,
+        "triangles": 2208
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 3,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 14,
+        "saved_triangles": 0,
+        "triangles": 377958
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 15,
+        "saved_triangles": 0,
+        "triangles": 40060
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 16,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 17,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 20,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 21,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 23,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 24,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 26,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 27,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 29,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 30,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 1350,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 43200
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 1315,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 42080
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 1314,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 42048
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 0,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 1,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 1,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 1,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 1,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 1,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 1,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2709,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3532536
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 2,
+        "instances": 18,
+        "layer": 1,
+        "lod_instances": 17,
+        "primitive": 7,
+        "saved_triangles": 10336,
+        "triangles": 9536
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 2,
+        "instances": 18,
+        "layer": 1,
+        "lod_instances": 9,
+        "primitive": 8,
+        "saved_triangles": 1041318,
+        "triangles": 1129302
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 1,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 1,
+        "lod_instances": 9,
+        "primitive": 10,
+        "saved_triangles": 5472,
+        "triangles": 11296
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 1,
+        "lod_instances": 4,
+        "primitive": 11,
+        "saved_triangles": 471400,
+        "triangles": 1492696
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 1,
+        "lod_instances": 8,
+        "primitive": 12,
+        "saved_triangles": 150656,
+        "triangles": 163648
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 1,
+        "lod_instances": 7,
+        "primitive": 13,
+        "saved_triangles": 4256,
+        "triangles": 17824
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 1,
+        "lod_instances": 4,
+        "primitive": 14,
+        "saved_triangles": 484240,
+        "triangles": 2035480
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 1,
+        "lod_instances": 6,
+        "primitive": 15,
+        "saved_triangles": 115296,
+        "triangles": 285304
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 1940,
+        "layer": 1,
+        "lod_instances": 1940,
+        "primitive": 16,
+        "saved_triangles": 2172800,
+        "triangles": 2832400
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 1940,
+        "layer": 1,
+        "lod_instances": 1940,
+        "primitive": 17,
+        "saved_triangles": 698400,
+        "triangles": 873000
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1165,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 729290
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1165,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 265620
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 482,
+        "layer": 1,
+        "lod_instances": 482,
+        "primitive": 20,
+        "saved_triangles": 1808464,
+        "triangles": 1113420
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 482,
+        "layer": 1,
+        "lod_instances": 482,
+        "primitive": 21,
+        "saved_triangles": 958216,
+        "triangles": 560084
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 74,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 36704
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 2,
+        "instances": 77,
+        "layer": 1,
+        "lod_instances": 56,
+        "primitive": 23,
+        "saved_triangles": 776384,
+        "triangles": 667520
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 74,
+        "layer": 1,
+        "lod_instances": 74,
+        "primitive": 24,
+        "saved_triangles": 134976,
+        "triangles": 60088
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 99,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 43560
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 2,
+        "instances": 103,
+        "layer": 1,
+        "lod_instances": 63,
+        "primitive": 26,
+        "saved_triangles": 891324,
+        "triangles": 1071238
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 2,
+        "instances": 98,
+        "layer": 1,
+        "lod_instances": 73,
+        "primitive": 27,
+        "saved_triangles": 145416,
+        "triangles": 129376
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 93,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 46128
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 2,
+        "instances": 100,
+        "layer": 1,
+        "lod_instances": 45,
+        "primitive": 29,
+        "saved_triangles": 679860,
+        "triangles": 1323540
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 2,
+        "instances": 95,
+        "layer": 1,
+        "lod_instances": 65,
+        "primitive": 30,
+        "saved_triangles": 133380,
+        "triangles": 138890
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 1,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 2,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 2,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 2,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 2,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 2,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 2,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2840,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3703360
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 2,
+        "lod_instances": 18,
+        "primitive": 7,
+        "saved_triangles": 10944,
+        "triangles": 8928
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 2,
+        "lod_instances": 18,
+        "primitive": 8,
+        "saved_triangles": 2082636,
+        "triangles": 87984
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 2,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 2,
+        "lod_instances": 16,
+        "primitive": 10,
+        "saved_triangles": 9728,
+        "triangles": 7040
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 2,
+        "lod_instances": 16,
+        "primitive": 11,
+        "saved_triangles": 1885600,
+        "triangles": 78496
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 2,
+        "lod_instances": 16,
+        "primitive": 12,
+        "saved_triangles": 301312,
+        "triangles": 12992
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 2,
+        "lod_instances": 20,
+        "primitive": 13,
+        "saved_triangles": 12160,
+        "triangles": 9920
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 2,
+        "lod_instances": 20,
+        "primitive": 14,
+        "saved_triangles": 2421200,
+        "triangles": 98520
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 2,
+        "lod_instances": 20,
+        "primitive": 15,
+        "saved_triangles": 384320,
+        "triangles": 16280
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 2,
+        "lod_instances": 2139,
+        "primitive": 16,
+        "saved_triangles": 2395680,
+        "triangles": 3122940
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 2,
+        "lod_instances": 2139,
+        "primitive": 17,
+        "saved_triangles": 770040,
+        "triangles": 962550
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 811922
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 295716
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 2,
+        "lod_instances": 530,
+        "primitive": 20,
+        "saved_triangles": 1988560,
+        "triangles": 1224300
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 2,
+        "lod_instances": 530,
+        "primitive": 21,
+        "saved_triangles": 1053640,
+        "triangles": 615860
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 221216
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 2,
+        "lod_instances": 446,
+        "primitive": 23,
+        "saved_triangles": 6183344,
+        "triangles": 2180048
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 2,
+        "lod_instances": 446,
+        "primitive": 24,
+        "saved_triangles": 813504,
+        "triangles": 362152
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 201520
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 2,
+        "lod_instances": 458,
+        "primitive": 26,
+        "saved_triangles": 6479784,
+        "triangles": 2246948
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 2,
+        "lod_instances": 458,
+        "primitive": 27,
+        "saved_triangles": 912336,
+        "triangles": 371896
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 223200
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 2,
+        "lod_instances": 450,
+        "primitive": 29,
+        "saved_triangles": 6798600,
+        "triangles": 2216700
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 2,
+        "lod_instances": 450,
+        "primitive": 30,
+        "saved_triangles": 923400,
+        "triangles": 366300
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 2,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 3,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 3,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 3,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 3,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 3,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 3,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2840,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3703360
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 3,
+        "lod_instances": 18,
+        "primitive": 7,
+        "saved_triangles": 10944,
+        "triangles": 8928
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 3,
+        "lod_instances": 18,
+        "primitive": 8,
+        "saved_triangles": 2082636,
+        "triangles": 87984
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 3,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 3,
+        "lod_instances": 16,
+        "primitive": 10,
+        "saved_triangles": 9728,
+        "triangles": 7040
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 3,
+        "lod_instances": 16,
+        "primitive": 11,
+        "saved_triangles": 1885600,
+        "triangles": 78496
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 3,
+        "lod_instances": 16,
+        "primitive": 12,
+        "saved_triangles": 301312,
+        "triangles": 12992
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 3,
+        "lod_instances": 20,
+        "primitive": 13,
+        "saved_triangles": 12160,
+        "triangles": 9920
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 3,
+        "lod_instances": 20,
+        "primitive": 14,
+        "saved_triangles": 2421200,
+        "triangles": 98520
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 3,
+        "lod_instances": 20,
+        "primitive": 15,
+        "saved_triangles": 384320,
+        "triangles": 16280
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 3,
+        "lod_instances": 2139,
+        "primitive": 16,
+        "saved_triangles": 2395680,
+        "triangles": 3122940
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 3,
+        "lod_instances": 2139,
+        "primitive": 17,
+        "saved_triangles": 770040,
+        "triangles": 962550
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 811922
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 295716
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 3,
+        "lod_instances": 530,
+        "primitive": 20,
+        "saved_triangles": 1988560,
+        "triangles": 1224300
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 3,
+        "lod_instances": 530,
+        "primitive": 21,
+        "saved_triangles": 1053640,
+        "triangles": 615860
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 221216
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 3,
+        "lod_instances": 446,
+        "primitive": 23,
+        "saved_triangles": 6183344,
+        "triangles": 2180048
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 3,
+        "lod_instances": 446,
+        "primitive": 24,
+        "saved_triangles": 813504,
+        "triangles": 362152
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 201520
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 3,
+        "lod_instances": 458,
+        "primitive": 26,
+        "saved_triangles": 6479784,
+        "triangles": 2246948
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 3,
+        "lod_instances": 458,
+        "primitive": 27,
+        "saved_triangles": 912336,
+        "triangles": 371896
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 223200
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 3,
+        "lod_instances": 450,
+        "primitive": 29,
+        "saved_triangles": 6798600,
+        "triangles": 2216700
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 3,
+        "lod_instances": 450,
+        "primitive": 30,
+        "saved_triangles": 923400,
+        "triangles": 366300
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 3,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 2,
+        "instances": 525,
+        "layer": 4,
+        "lod_instances": 11,
+        "primitive": 0,
+        "saved_triangles": 130350,
+        "triangles": 6857400
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 2,
+        "instances": 524,
+        "layer": 4,
+        "lod_instances": 3,
+        "primitive": 1,
+        "saved_triangles": 12588,
+        "triangles": 2421916
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 2,
+        "instances": 332,
+        "layer": 4,
+        "lod_instances": 137,
+        "primitive": 2,
+        "saved_triangles": 272630,
+        "triangles": 595882
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 2,
+        "instances": 331,
+        "layer": 4,
+        "lod_instances": 81,
+        "primitive": 3,
+        "saved_triangles": 105462,
+        "triangles": 400968
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 2,
+        "instances": 150,
+        "layer": 4,
+        "lod_instances": 2,
+        "primitive": 4,
+        "saved_triangles": 64568,
+        "triangles": 5124532
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 152,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 5,
+        "saved_triangles": 0,
+        "triangles": 2736912
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 412,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 537248
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 7,
+        "saved_triangles": 0,
+        "triangles": 1104
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 8,
+        "saved_triangles": 0,
+        "triangles": 241180
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 9,
+        "saved_triangles": 0,
+        "triangles": 19580
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 10,
+        "saved_triangles": 0,
+        "triangles": 2096
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 11,
+        "saved_triangles": 0,
+        "triangles": 245512
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 12,
+        "saved_triangles": 0,
+        "triangles": 39288
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 13,
+        "saved_triangles": 0,
+        "triangles": 2208
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 3,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 14,
+        "saved_triangles": 0,
+        "triangles": 377958
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 15,
+        "saved_triangles": 0,
+        "triangles": 40060
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 16,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 17,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 20,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 21,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 23,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 24,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 26,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 27,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 29,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 30,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 1349,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 43168
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 1314,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 42048
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 1315,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 42080
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 4,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 5,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 5,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 5,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 5,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 5,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 5,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2709,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3532536
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 2,
+        "instances": 18,
+        "layer": 5,
+        "lod_instances": 17,
+        "primitive": 7,
+        "saved_triangles": 10336,
+        "triangles": 9536
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 2,
+        "instances": 18,
+        "layer": 5,
+        "lod_instances": 9,
+        "primitive": 8,
+        "saved_triangles": 1041318,
+        "triangles": 1129302
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 5,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 5,
+        "lod_instances": 9,
+        "primitive": 10,
+        "saved_triangles": 5472,
+        "triangles": 11296
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 5,
+        "lod_instances": 4,
+        "primitive": 11,
+        "saved_triangles": 471400,
+        "triangles": 1492696
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 5,
+        "lod_instances": 8,
+        "primitive": 12,
+        "saved_triangles": 150656,
+        "triangles": 163648
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 5,
+        "lod_instances": 7,
+        "primitive": 13,
+        "saved_triangles": 4256,
+        "triangles": 17824
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 5,
+        "lod_instances": 4,
+        "primitive": 14,
+        "saved_triangles": 484240,
+        "triangles": 2035480
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 5,
+        "lod_instances": 6,
+        "primitive": 15,
+        "saved_triangles": 115296,
+        "triangles": 285304
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 1940,
+        "layer": 5,
+        "lod_instances": 1940,
+        "primitive": 16,
+        "saved_triangles": 2172800,
+        "triangles": 2832400
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 1940,
+        "layer": 5,
+        "lod_instances": 1940,
+        "primitive": 17,
+        "saved_triangles": 698400,
+        "triangles": 873000
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1165,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 729290
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1165,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 265620
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 482,
+        "layer": 5,
+        "lod_instances": 482,
+        "primitive": 20,
+        "saved_triangles": 1808464,
+        "triangles": 1113420
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 482,
+        "layer": 5,
+        "lod_instances": 482,
+        "primitive": 21,
+        "saved_triangles": 958216,
+        "triangles": 560084
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 74,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 36704
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 2,
+        "instances": 77,
+        "layer": 5,
+        "lod_instances": 56,
+        "primitive": 23,
+        "saved_triangles": 776384,
+        "triangles": 667520
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 74,
+        "layer": 5,
+        "lod_instances": 74,
+        "primitive": 24,
+        "saved_triangles": 134976,
+        "triangles": 60088
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 99,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 43560
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 2,
+        "instances": 103,
+        "layer": 5,
+        "lod_instances": 63,
+        "primitive": 26,
+        "saved_triangles": 891324,
+        "triangles": 1071238
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 2,
+        "instances": 97,
+        "layer": 5,
+        "lod_instances": 72,
+        "primitive": 27,
+        "saved_triangles": 143424,
+        "triangles": 128564
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 93,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 46128
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 2,
+        "instances": 100,
+        "layer": 5,
+        "lod_instances": 45,
+        "primitive": 29,
+        "saved_triangles": 679860,
+        "triangles": 1323540
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 2,
+        "instances": 95,
+        "layer": 5,
+        "lod_instances": 65,
+        "primitive": 30,
+        "saved_triangles": 133380,
+        "triangles": 138890
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 5,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 6,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 6,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 6,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 6,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 6,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 6,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2840,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3703360
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 6,
+        "lod_instances": 18,
+        "primitive": 7,
+        "saved_triangles": 10944,
+        "triangles": 8928
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 6,
+        "lod_instances": 18,
+        "primitive": 8,
+        "saved_triangles": 2082636,
+        "triangles": 87984
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 6,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 6,
+        "lod_instances": 16,
+        "primitive": 10,
+        "saved_triangles": 9728,
+        "triangles": 7040
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 6,
+        "lod_instances": 16,
+        "primitive": 11,
+        "saved_triangles": 1885600,
+        "triangles": 78496
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 6,
+        "lod_instances": 16,
+        "primitive": 12,
+        "saved_triangles": 301312,
+        "triangles": 12992
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 6,
+        "lod_instances": 20,
+        "primitive": 13,
+        "saved_triangles": 12160,
+        "triangles": 9920
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 6,
+        "lod_instances": 20,
+        "primitive": 14,
+        "saved_triangles": 2421200,
+        "triangles": 98520
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 6,
+        "lod_instances": 20,
+        "primitive": 15,
+        "saved_triangles": 384320,
+        "triangles": 16280
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 6,
+        "lod_instances": 2139,
+        "primitive": 16,
+        "saved_triangles": 2395680,
+        "triangles": 3122940
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 6,
+        "lod_instances": 2139,
+        "primitive": 17,
+        "saved_triangles": 770040,
+        "triangles": 962550
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 811922
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 295716
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 6,
+        "lod_instances": 530,
+        "primitive": 20,
+        "saved_triangles": 1988560,
+        "triangles": 1224300
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 6,
+        "lod_instances": 530,
+        "primitive": 21,
+        "saved_triangles": 1053640,
+        "triangles": 615860
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 221216
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 6,
+        "lod_instances": 446,
+        "primitive": 23,
+        "saved_triangles": 6183344,
+        "triangles": 2180048
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 6,
+        "lod_instances": 446,
+        "primitive": 24,
+        "saved_triangles": 813504,
+        "triangles": 362152
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 201520
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 6,
+        "lod_instances": 458,
+        "primitive": 26,
+        "saved_triangles": 6479784,
+        "triangles": 2246948
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 6,
+        "lod_instances": 458,
+        "primitive": 27,
+        "saved_triangles": 912336,
+        "triangles": 371896
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 223200
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 6,
+        "lod_instances": 450,
+        "primitive": 29,
+        "saved_triangles": 6798600,
+        "triangles": 2216700
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 6,
+        "lod_instances": 450,
+        "primitive": 30,
+        "saved_triangles": 923400,
+        "triangles": 366300
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 6,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 7,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 7,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 7,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 7,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 7,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 7,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2840,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3703360
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 7,
+        "lod_instances": 18,
+        "primitive": 7,
+        "saved_triangles": 10944,
+        "triangles": 8928
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 7,
+        "lod_instances": 18,
+        "primitive": 8,
+        "saved_triangles": 2082636,
+        "triangles": 87984
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 7,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 7,
+        "lod_instances": 16,
+        "primitive": 10,
+        "saved_triangles": 9728,
+        "triangles": 7040
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 7,
+        "lod_instances": 16,
+        "primitive": 11,
+        "saved_triangles": 1885600,
+        "triangles": 78496
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 7,
+        "lod_instances": 16,
+        "primitive": 12,
+        "saved_triangles": 301312,
+        "triangles": 12992
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 7,
+        "lod_instances": 20,
+        "primitive": 13,
+        "saved_triangles": 12160,
+        "triangles": 9920
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 7,
+        "lod_instances": 20,
+        "primitive": 14,
+        "saved_triangles": 2421200,
+        "triangles": 98520
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 7,
+        "lod_instances": 20,
+        "primitive": 15,
+        "saved_triangles": 384320,
+        "triangles": 16280
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 7,
+        "lod_instances": 2139,
+        "primitive": 16,
+        "saved_triangles": 2395680,
+        "triangles": 3122940
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 7,
+        "lod_instances": 2139,
+        "primitive": 17,
+        "saved_triangles": 770040,
+        "triangles": 962550
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 811922
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 295716
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 7,
+        "lod_instances": 530,
+        "primitive": 20,
+        "saved_triangles": 1988560,
+        "triangles": 1224300
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 7,
+        "lod_instances": 530,
+        "primitive": 21,
+        "saved_triangles": 1053640,
+        "triangles": 615860
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 221216
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 7,
+        "lod_instances": 446,
+        "primitive": 23,
+        "saved_triangles": 6183344,
+        "triangles": 2180048
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 7,
+        "lod_instances": 446,
+        "primitive": 24,
+        "saved_triangles": 813504,
+        "triangles": 362152
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 201520
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 7,
+        "lod_instances": 458,
+        "primitive": 26,
+        "saved_triangles": 6479784,
+        "triangles": 2246948
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 7,
+        "lod_instances": 458,
+        "primitive": 27,
+        "saved_triangles": 912336,
+        "triangles": 371896
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 223200
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 7,
+        "lod_instances": 450,
+        "primitive": 29,
+        "saved_triangles": 6798600,
+        "triangles": 2216700
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 7,
+        "lod_instances": 450,
+        "primitive": 30,
+        "saved_triangles": 923400,
+        "triangles": 366300
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 7,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 2,
+        "instances": 525,
+        "layer": 8,
+        "lod_instances": 11,
+        "primitive": 0,
+        "saved_triangles": 130350,
+        "triangles": 6857400
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 2,
+        "instances": 524,
+        "layer": 8,
+        "lod_instances": 3,
+        "primitive": 1,
+        "saved_triangles": 12588,
+        "triangles": 2421916
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 2,
+        "instances": 332,
+        "layer": 8,
+        "lod_instances": 137,
+        "primitive": 2,
+        "saved_triangles": 272630,
+        "triangles": 595882
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 2,
+        "instances": 331,
+        "layer": 8,
+        "lod_instances": 81,
+        "primitive": 3,
+        "saved_triangles": 105462,
+        "triangles": 400968
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 2,
+        "instances": 150,
+        "layer": 8,
+        "lod_instances": 2,
+        "primitive": 4,
+        "saved_triangles": 64568,
+        "triangles": 5124532
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 152,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 5,
+        "saved_triangles": 0,
+        "triangles": 2736912
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 412,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 537248
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 7,
+        "saved_triangles": 0,
+        "triangles": 1104
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 8,
+        "saved_triangles": 0,
+        "triangles": 241180
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 9,
+        "saved_triangles": 0,
+        "triangles": 19580
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 10,
+        "saved_triangles": 0,
+        "triangles": 2096
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 11,
+        "saved_triangles": 0,
+        "triangles": 245512
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 12,
+        "saved_triangles": 0,
+        "triangles": 39288
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 13,
+        "saved_triangles": 0,
+        "triangles": 2208
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 3,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 14,
+        "saved_triangles": 0,
+        "triangles": 377958
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 2,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 15,
+        "saved_triangles": 0,
+        "triangles": 40060
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 16,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 17,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 20,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 21,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 23,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 24,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 26,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 27,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 29,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 0,
+        "instances": 0,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 30,
+        "saved_triangles": 0,
+        "triangles": 0
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 1349,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 43168
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 1314,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 42048
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 1315,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 42080
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 8,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 9,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 9,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 9,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 9,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 9,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 9,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2709,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3532536
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 2,
+        "instances": 18,
+        "layer": 9,
+        "lod_instances": 17,
+        "primitive": 7,
+        "saved_triangles": 10336,
+        "triangles": 9536
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 2,
+        "instances": 18,
+        "layer": 9,
+        "lod_instances": 9,
+        "primitive": 8,
+        "saved_triangles": 1041318,
+        "triangles": 1129302
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 9,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 9,
+        "lod_instances": 9,
+        "primitive": 10,
+        "saved_triangles": 5472,
+        "triangles": 11296
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 9,
+        "lod_instances": 4,
+        "primitive": 11,
+        "saved_triangles": 471400,
+        "triangles": 1492696
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 2,
+        "instances": 16,
+        "layer": 9,
+        "lod_instances": 8,
+        "primitive": 12,
+        "saved_triangles": 150656,
+        "triangles": 163648
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 9,
+        "lod_instances": 7,
+        "primitive": 13,
+        "saved_triangles": 4256,
+        "triangles": 17824
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 9,
+        "lod_instances": 4,
+        "primitive": 14,
+        "saved_triangles": 484240,
+        "triangles": 2035480
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 2,
+        "instances": 20,
+        "layer": 9,
+        "lod_instances": 6,
+        "primitive": 15,
+        "saved_triangles": 115296,
+        "triangles": 285304
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 1940,
+        "layer": 9,
+        "lod_instances": 1940,
+        "primitive": 16,
+        "saved_triangles": 2172800,
+        "triangles": 2832400
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 1940,
+        "layer": 9,
+        "lod_instances": 1940,
+        "primitive": 17,
+        "saved_triangles": 698400,
+        "triangles": 873000
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1165,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 729290
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1165,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 265620
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 482,
+        "layer": 9,
+        "lod_instances": 482,
+        "primitive": 20,
+        "saved_triangles": 1808464,
+        "triangles": 1113420
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 482,
+        "layer": 9,
+        "lod_instances": 482,
+        "primitive": 21,
+        "saved_triangles": 958216,
+        "triangles": 560084
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 74,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 36704
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 2,
+        "instances": 77,
+        "layer": 9,
+        "lod_instances": 56,
+        "primitive": 23,
+        "saved_triangles": 776384,
+        "triangles": 667520
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 74,
+        "layer": 9,
+        "lod_instances": 74,
+        "primitive": 24,
+        "saved_triangles": 134976,
+        "triangles": 60088
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 99,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 43560
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 2,
+        "instances": 103,
+        "layer": 9,
+        "lod_instances": 63,
+        "primitive": 26,
+        "saved_triangles": 891324,
+        "triangles": 1071238
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 2,
+        "instances": 97,
+        "layer": 9,
+        "lod_instances": 72,
+        "primitive": 27,
+        "saved_triangles": 143424,
+        "triangles": 128564
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 93,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 46128
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 2,
+        "instances": 100,
+        "layer": 9,
+        "lod_instances": 45,
+        "primitive": 29,
+        "saved_triangles": 679860,
+        "triangles": 1323540
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 2,
+        "instances": 95,
+        "layer": 9,
+        "lod_instances": 65,
+        "primitive": 30,
+        "saved_triangles": 133380,
+        "triangles": 138890
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 9,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 10,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 10,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 10,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 10,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 10,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 10,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2840,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3703360
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 10,
+        "lod_instances": 18,
+        "primitive": 7,
+        "saved_triangles": 10944,
+        "triangles": 8928
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 10,
+        "lod_instances": 18,
+        "primitive": 8,
+        "saved_triangles": 2082636,
+        "triangles": 87984
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 10,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 10,
+        "lod_instances": 16,
+        "primitive": 10,
+        "saved_triangles": 9728,
+        "triangles": 7040
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 10,
+        "lod_instances": 16,
+        "primitive": 11,
+        "saved_triangles": 1885600,
+        "triangles": 78496
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 10,
+        "lod_instances": 16,
+        "primitive": 12,
+        "saved_triangles": 301312,
+        "triangles": 12992
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 10,
+        "lod_instances": 20,
+        "primitive": 13,
+        "saved_triangles": 12160,
+        "triangles": 9920
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 10,
+        "lod_instances": 20,
+        "primitive": 14,
+        "saved_triangles": 2421200,
+        "triangles": 98520
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 10,
+        "lod_instances": 20,
+        "primitive": 15,
+        "saved_triangles": 384320,
+        "triangles": 16280
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 10,
+        "lod_instances": 2139,
+        "primitive": 16,
+        "saved_triangles": 2395680,
+        "triangles": 3122940
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 10,
+        "lod_instances": 2139,
+        "primitive": 17,
+        "saved_triangles": 770040,
+        "triangles": 962550
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 811922
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 295716
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 10,
+        "lod_instances": 530,
+        "primitive": 20,
+        "saved_triangles": 1988560,
+        "triangles": 1224300
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 10,
+        "lod_instances": 530,
+        "primitive": 21,
+        "saved_triangles": 1053640,
+        "triangles": 615860
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 221216
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 10,
+        "lod_instances": 446,
+        "primitive": 23,
+        "saved_triangles": 6183344,
+        "triangles": 2180048
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 10,
+        "lod_instances": 446,
+        "primitive": 24,
+        "saved_triangles": 813504,
+        "triangles": 362152
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 201520
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 10,
+        "lod_instances": 458,
+        "primitive": 26,
+        "saved_triangles": 6479784,
+        "triangles": 2246948
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 10,
+        "lod_instances": 458,
+        "primitive": 27,
+        "saved_triangles": 912336,
+        "triangles": 371896
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 223200
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 10,
+        "lod_instances": 450,
+        "primitive": 29,
+        "saved_triangles": 6798600,
+        "triangles": 2216700
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 10,
+        "lod_instances": 450,
+        "primitive": 30,
+        "saved_triangles": 923400,
+        "triangles": 366300
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 10,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      },
+      {
+        "candidate_triangles": 18394420,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 11,
+        "lod_instances": 1382,
+        "primitive": 0,
+        "saved_triangles": 16376700,
+        "triangles": 2017720
+      },
+      {
+        "candidate_triangles": 6420772,
+        "draw_calls": 1,
+        "instances": 1382,
+        "layer": 11,
+        "lod_instances": 1382,
+        "primitive": 1,
+        "saved_triangles": 5798872,
+        "triangles": 621900
+      },
+      {
+        "candidate_triangles": 3073800,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 11,
+        "lod_instances": 1175,
+        "primitive": 2,
+        "saved_triangles": 2338250,
+        "triangles": 735550
+      },
+      {
+        "candidate_triangles": 1797750,
+        "draw_calls": 1,
+        "instances": 1175,
+        "layer": 11,
+        "lod_instances": 1175,
+        "primitive": 3,
+        "saved_triangles": 1529850,
+        "triangles": 267900
+      },
+      {
+        "candidate_triangles": 18196444,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 11,
+        "lod_instances": 526,
+        "primitive": 4,
+        "saved_triangles": 16981384,
+        "triangles": 1215060
+      },
+      {
+        "candidate_triangles": 9471156,
+        "draw_calls": 1,
+        "instances": 526,
+        "layer": 11,
+        "lod_instances": 526,
+        "primitive": 5,
+        "saved_triangles": 8859944,
+        "triangles": 611212
+      },
+      {
+        "candidate_triangles": 3703360,
+        "draw_calls": 1,
+        "instances": 2840,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 6,
+        "saved_triangles": 0,
+        "triangles": 3703360
+      },
+      {
+        "candidate_triangles": 19872,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 11,
+        "lod_instances": 18,
+        "primitive": 7,
+        "saved_triangles": 10944,
+        "triangles": 8928
+      },
+      {
+        "candidate_triangles": 2170620,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 11,
+        "lod_instances": 18,
+        "primitive": 8,
+        "saved_triangles": 2082636,
+        "triangles": 87984
+      },
+      {
+        "candidate_triangles": 352440,
+        "draw_calls": 1,
+        "instances": 18,
+        "layer": 11,
+        "lod_instances": 18,
+        "primitive": 9,
+        "saved_triangles": 337824,
+        "triangles": 14616
+      },
+      {
+        "candidate_triangles": 16768,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 11,
+        "lod_instances": 16,
+        "primitive": 10,
+        "saved_triangles": 9728,
+        "triangles": 7040
+      },
+      {
+        "candidate_triangles": 1964096,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 11,
+        "lod_instances": 16,
+        "primitive": 11,
+        "saved_triangles": 1885600,
+        "triangles": 78496
+      },
+      {
+        "candidate_triangles": 314304,
+        "draw_calls": 1,
+        "instances": 16,
+        "layer": 11,
+        "lod_instances": 16,
+        "primitive": 12,
+        "saved_triangles": 301312,
+        "triangles": 12992
+      },
+      {
+        "candidate_triangles": 22080,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 11,
+        "lod_instances": 20,
+        "primitive": 13,
+        "saved_triangles": 12160,
+        "triangles": 9920
+      },
+      {
+        "candidate_triangles": 2519720,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 11,
+        "lod_instances": 20,
+        "primitive": 14,
+        "saved_triangles": 2421200,
+        "triangles": 98520
+      },
+      {
+        "candidate_triangles": 400600,
+        "draw_calls": 1,
+        "instances": 20,
+        "layer": 11,
+        "lod_instances": 20,
+        "primitive": 15,
+        "saved_triangles": 384320,
+        "triangles": 16280
+      },
+      {
+        "candidate_triangles": 5518620,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 11,
+        "lod_instances": 2139,
+        "primitive": 16,
+        "saved_triangles": 2395680,
+        "triangles": 3122940
+      },
+      {
+        "candidate_triangles": 1732590,
+        "draw_calls": 1,
+        "instances": 2139,
+        "layer": 11,
+        "lod_instances": 2139,
+        "primitive": 17,
+        "saved_triangles": 770040,
+        "triangles": 962550
+      },
+      {
+        "candidate_triangles": 811922,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 18,
+        "saved_triangles": 0,
+        "triangles": 811922
+      },
+      {
+        "candidate_triangles": 295716,
+        "draw_calls": 1,
+        "instances": 1297,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 19,
+        "saved_triangles": 0,
+        "triangles": 295716
+      },
+      {
+        "candidate_triangles": 3212860,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 11,
+        "lod_instances": 530,
+        "primitive": 20,
+        "saved_triangles": 1988560,
+        "triangles": 1224300
+      },
+      {
+        "candidate_triangles": 1669500,
+        "draw_calls": 1,
+        "instances": 530,
+        "layer": 11,
+        "lod_instances": 530,
+        "primitive": 21,
+        "saved_triangles": 1053640,
+        "triangles": 615860
+      },
+      {
+        "candidate_triangles": 221216,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 22,
+        "saved_triangles": 0,
+        "triangles": 221216
+      },
+      {
+        "candidate_triangles": 8363392,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 11,
+        "lod_instances": 446,
+        "primitive": 23,
+        "saved_triangles": 6183344,
+        "triangles": 2180048
+      },
+      {
+        "candidate_triangles": 1175656,
+        "draw_calls": 1,
+        "instances": 446,
+        "layer": 11,
+        "lod_instances": 446,
+        "primitive": 24,
+        "saved_triangles": 813504,
+        "triangles": 362152
+      },
+      {
+        "candidate_triangles": 201520,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 25,
+        "saved_triangles": 0,
+        "triangles": 201520
+      },
+      {
+        "candidate_triangles": 8726732,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 11,
+        "lod_instances": 458,
+        "primitive": 26,
+        "saved_triangles": 6479784,
+        "triangles": 2246948
+      },
+      {
+        "candidate_triangles": 1284232,
+        "draw_calls": 1,
+        "instances": 458,
+        "layer": 11,
+        "lod_instances": 458,
+        "primitive": 27,
+        "saved_triangles": 912336,
+        "triangles": 371896
+      },
+      {
+        "candidate_triangles": 223200,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 28,
+        "saved_triangles": 0,
+        "triangles": 223200
+      },
+      {
+        "candidate_triangles": 9015300,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 11,
+        "lod_instances": 450,
+        "primitive": 29,
+        "saved_triangles": 6798600,
+        "triangles": 2216700
+      },
+      {
+        "candidate_triangles": 1289700,
+        "draw_calls": 1,
+        "instances": 450,
+        "layer": 11,
+        "lod_instances": 450,
+        "primitive": 30,
+        "saved_triangles": 923400,
+        "triangles": 366300
+      },
+      {
+        "candidate_triangles": 73024,
+        "draw_calls": 1,
+        "instances": 2282,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 31,
+        "saved_triangles": 0,
+        "triangles": 73024
+      },
+      {
+        "candidate_triangles": 69760,
+        "draw_calls": 1,
+        "instances": 2180,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 32,
+        "saved_triangles": 0,
+        "triangles": 69760
+      },
+      {
+        "candidate_triangles": 71360,
+        "draw_calls": 1,
+        "instances": 2230,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 33,
+        "saved_triangles": 0,
+        "triangles": 71360
+      },
+      {
+        "candidate_triangles": 12288,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 34,
+        "saved_triangles": 0,
+        "triangles": 12288
+      },
+      {
+        "candidate_triangles": 5084,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 35,
+        "saved_triangles": 0,
+        "triangles": 5084
+      },
+      {
+        "candidate_triangles": 1960,
+        "draw_calls": 1,
+        "instances": 1,
+        "layer": 11,
+        "lod_instances": 0,
+        "primitive": 36,
+        "saved_triangles": 0,
+        "triangles": 1960
+      }
+    ],
+    "shadow_layers": [
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 27,
+        "instances": 6427,
+        "layer": 0,
+        "lod_instances": 235,
+        "saved_triangles": 587588,
+        "triangles": 19801098
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 23719,
+        "layer": 1,
+        "lod_instances": 11468,
+        "saved_triangles": 62905018,
+        "triangles": 24285914
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 37,
+        "instances": 27857,
+        "layer": 2,
+        "lod_instances": 14374,
+        "saved_triangles": 87649612,
+        "triangles": 25164222
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 37,
+        "instances": 27857,
+        "layer": 3,
+        "lod_instances": 14374,
+        "saved_triangles": 87649612,
+        "triangles": 25164222
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 27,
+        "instances": 6424,
+        "layer": 4,
+        "lod_instances": 234,
+        "saved_triangles": 585598,
+        "triangles": 19790472
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 23718,
+        "layer": 5,
+        "lod_instances": 11467,
+        "saved_triangles": 62903026,
+        "triangles": 24285102
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 37,
+        "instances": 27857,
+        "layer": 6,
+        "lod_instances": 14374,
+        "saved_triangles": 87649612,
+        "triangles": 25164222
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 37,
+        "instances": 27857,
+        "layer": 7,
+        "lod_instances": 14374,
+        "saved_triangles": 87649612,
+        "triangles": 25164222
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 27,
+        "instances": 6424,
+        "layer": 8,
+        "lod_instances": 234,
+        "saved_triangles": 585598,
+        "triangles": 19790472
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 50,
+        "instances": 23718,
+        "layer": 9,
+        "lod_instances": 11467,
+        "saved_triangles": 62903026,
+        "triangles": 24285102
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 37,
+        "instances": 27857,
+        "layer": 10,
+        "lod_instances": 14374,
+        "saved_triangles": 87649612,
+        "triangles": 25164222
+      },
+      {
+        "candidate_triangles": 112813834,
+        "draw_calls": 37,
+        "instances": 27857,
+        "layer": 11,
+        "lod_instances": 14374,
+        "saved_triangles": 87649612,
+        "triangles": 25164222
+      }
+    ]
+  },
+  "software_driver": {
+    "adapter": "llvmpipe LLVM 23.1.3, CPU, Mesa 26.2.5-arch1.1",
+    "package_sha256": "e14837dfe51c29d8bdb29422b40daaafc2291908c4a6349a0e63addd09fa546b",
+    "library_sha256": "08d49503422af25fe5d9d8aee217501d12710645755a859c2e32711f68fbfc75",
+    "containment": "Bubblewrap unshare-all, private CPU-only ICD, no /dev/dri, no display/network; dense caster command encoder dropped, never submitted."
+  },
+  "image_evidence": {
+    "run": "plant-ground-final",
+    "scope": "Actual software-Vulkan first-case pixels/depth. Identical per-layer crop and nearest-neighbour enlargement for texel inspection. Difference image is multiplied by 32. Primary source and receivers identical.",
+    "first_case": {
+      "colour_max_u8": 6,
+      "colour_mae_u8": 0.03661216507731699,
+      "occupied_union": 17049,
+      "different_coverage_texels": 148,
+      "unmatched_after_one_texel": 14
+    },
+    "files": {
+      "plant-ground-final.full.depth": "27c09331f758215691a0f17b029bcb58dc10221a491a9d566dff7539027fed19",
+      "plant-ground-final.lod.depth": "1bcb7e8573a2bded70ee46b1aa536616462d2ef3d247f069ce6deaf2917fcb3c",
+      "plant-ground-final.full.rgba": "47eb3f51a982e22a2a26325c117f2b13ab0d8acc620e75715f434440734bd605",
+      "plant-ground-final.lod.rgba": "5f93e4a24c1f350a06865d979ddab6004a0d0df3430b3b30ccc3dc754ae65f0c",
+      "plant-ground-comparison.png": "39c381638f765245e35e0968fa739a976af8b58aa3eb8579b7336109299713da",
+      "shadow-mask-comparison.png": "2127f91621e3cd65cfba7475cde62cd9a53b622f20648961aae4afb6073e64a9"
+    }
+  },
+  "plant_render": {
+    "scope": "Actual native full/reduced six-form plants and a ground receiver; software Vulkan only. Two-sided raster sample comparison with at most two connected unmatched texels, <0.1% unmatched and <1% changed coverage; final colour including the ground receiver max<=16/255 and mean<=0.1/255 in this fixture. Full oracle exact, primary unchanged, invalid update and cache checks. No target-GPU timing or general radiometric acceptance.",
+    "cases": [
+      {
+        "colour_mae_u8": 0.03661216507731699,
+        "colour_max_u8": 6,
+        "different_coverage_texels": 148,
+        "max_error_microtexels": 472647,
+        "max_unmatched_component": 1,
+        "occupied_union": 17049,
+        "origin_case": 0,
+        "reduced": false,
+        "triangles_saved": 1490580,
+        "unmatched_after_one_texel": 14
+      },
+      {
+        "colour_mae_u8": 0.04262682876017285,
+        "colour_max_u8": 7,
+        "different_coverage_texels": 109,
+        "max_error_microtexels": 472649,
+        "max_unmatched_component": 2,
+        "occupied_union": 10967,
+        "origin_case": 1,
+        "reduced": false,
+        "triangles_saved": 993720,
+        "unmatched_after_one_texel": 6
+      },
+      {
+        "colour_mae_u8": 0.04452867213698648,
+        "colour_max_u8": 9,
+        "different_coverage_texels": 130,
+        "max_error_microtexels": 388491,
+        "max_unmatched_component": 2,
+        "occupied_union": 17125,
+        "origin_case": 0,
+        "reduced": true,
+        "triangles_saved": 173064,
+        "unmatched_after_one_texel": 8
+      },
+      {
+        "colour_mae_u8": 0.03929356262978569,
+        "colour_max_u8": 6,
+        "different_coverage_texels": 107,
+        "max_error_microtexels": 388493,
+        "max_unmatched_component": 1,
+        "occupied_union": 11033,
+        "origin_case": 1,
+        "reduced": true,
+        "triangles_saved": 115376,
+        "unmatched_after_one_texel": 5
+      }
+    ]
+  },
+  "settings": {
+    "receiver_culling_default": false,
+    "showcase_receiver_culling": true,
+    "active_rt_receiver_culling": false,
+    "shadow_command_budget": "Unused resolved atlas budget, shared across that atlas consumers; unsupported/exhausted falls back to direct draws.",
+    "taa_default_off": true
+  },
+  "limitations": [
+    "Physical Radeon replay remains blocked; no display/device access and no dense raster or AS submission in the native probe.",
+    "The showcase enables spectral ocean, so its conservative receiver-bound fallback retains full light volumes. Initial 155.7M rectangle-selection counts are superseded and are not the final canonical plan.",
+    "Cached scalar LOD error may retain slightly more full geometry; compare submitted triangles directly rather than claiming an unchanged count.",
+    "CPU debug encoder observations are not calibrated same-build A/B latency or GPU frame time.",
+    "API batches are distinct from logical commands and driver-native calls.",
+    "Source memory, atlas/command GPU reservations, bounds/scratch CPU storage and driver in-flight memory are distinct.",
+    "World-space moving-origin atlas reuse, broad radiometric/temporal quality and blind reference acceptance remain open."
+  ],
+  "raw_files": {
+    "receiver-final.log": "f6152e98f1b5494bc0295507bc6cc94ac863ed8418f02c3ed9f467883611b83d",
+    "receiver-final.csv": "24b4b2cd06668d48d8f4ce5fabac87a0ac9875f452455276d4e2256011a676e3",
+    "receiver-final-command.json": "4c2db742f5e59ca94e74d25836e87ee562e27b28d361d8cdc861729b3de407fc",
+    "shadow-batch-final.log": "b42148af1ee77cf124b0e98bdd39221a89146cba237f706fe3659e1806b73c2d",
+    "shadow-batch-final-command.json": "a5aa931d4218a7c37fb8a6afe7e7cc985fa9d110fa2da1d85b1d30c73f03e444",
+    "primary-final.log": "f1749077082678f5c7c616d0618d139bfcf8ccd5b06aa697a4b3c0be87fa0ee7",
+    "primary-final-command.json": "518e6336e4a5254872bb58bc038994f64a08a4785b39e390b608cdce14819689",
+    "shadow-zero-final.log": "6ed44200a9abcdc157db1f3044c710efe9ff9ae280c45d53dbf3a81180e8d84c",
+    "shadow-zero-final-command.json": "d69f7a8e1779654e23f83ba8b5170e38811311b91b24c3fc83485d851982418f",
+    "plant-ground-final.log": "9c1e9039e5dd714d302cd914d1607bec58006e5b3f5a105ebf1cd061c11b2b2c",
+    "plant-ground-final.full.depth": "27c09331f758215691a0f17b029bcb58dc10221a491a9d566dff7539027fed19",
+    "plant-ground-final.lod.depth": "1bcb7e8573a2bded70ee46b1aa536616462d2ef3d247f069ce6deaf2917fcb3c",
+    "plant-ground-final.full.rgba": "47eb3f51a982e22a2a26325c117f2b13ab0d8acc620e75715f434440734bd605",
+    "plant-ground-final.lod.rgba": "5f93e4a24c1f350a06865d979ddab6004a0d0df3430b3b30ccc3dc754ae65f0c",
+    "plant-ground-final.toml": "f93d93e80c17891c2f78f920979464f10f2877718b5b67a69752a328f2f96c9d",
+    "plant-ground-final-command.json": "90cdffad9631675758e8e04105fad710249be3c6844a3740c5bb4166d8f7ae01",
+    "coastal-final.log": "b790907dee4eda43fe6ee794a850ee13e132ffdb3eedf7aaf0e20458bc381481",
+    "coastal-final.toml": "1af23b79f81c5e7b31289a3a56e3d109871c3d600c376e0a75ab52ee43de0eae",
+    "coastal-final-command.json": "b47760dc580af1b7d61f8011921a187be56e950cfdddcc1790afe87d7e086c1d",
+    "plant-ground-comparison.png": "39c381638f765245e35e0968fa739a976af8b58aa3eb8579b7336109299713da",
+    "shadow-mask-comparison.png": "2127f91621e3cd65cfba7475cde62cd9a53b622f20648961aae4afb6073e64a9",
+    "image-evidence.json": "b3b3bdb1806e37fb858de2d59b3d6b0d125e2e061d1b3f2b04a70acb93180696",
+    "final-checks-5/inputs.json": "0f8ac9587065e7eab011d8e8796262e4f355eea07b5f0b5657536aee9fe70035",
+    "final-checks-5/fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "final-checks-5/checks.json": "6fe68bd9af2e19aa17ba50c52e3ac3c70dd751e5a01a1a94da1fce06cb60040f",
+    "final-checks-5/strict-clippy.log": "aaddd45d50aaf4f81404ec4c225d116c48f470176d3a69c3c0365bbdb91a4a68",
+    "final-checks-5/native-cpu.log": "e3b18d8104e20ee1813f45136ad64198e35ed4ae2e3ac1ce64bb7785431864e7",
+    "final-checks-5/graphics-cpu.log": "3b9f35039afb0de7cf25c66170d1a63418b0bcac8095c6e81d08b295719482e2",
+    "final-checks-5/render-core-cpu.log": "bd47fd3c890609d2b6f029d40d9695a85aa4522d02ba27f113d969ebab507214",
+    "final-checks-5/caster-cpu.log": "0c16e18809a694991ed5af7f0efe8ae4197fc7652ff73cca988d19a61dd38225",
+    "final-checks-5/worldgen-cpu.log": "badbcb08789c70a4a977ef315b5dec8b727f3378f6c4dd7ebd8207b53f01d2e2",
+    "final-checks-5/feature-off.log": "3aea2069439e9cf54b44fc699b753f796c2ad477c3e0fb1d5caee375f8c68b9e",
+    "final-checks-5/architecture.log": "f070794333e9e7408b261eab5f5a4f1423c2035d53357a1f2dc19aeed2dfc2ac",
+    "final-checks-5/shadow-integration-build.log": "93d71320823edbabde2837e947270b4c1e3ba69cd3eb3af3a90cefe6ed43109b",
+    "final-checks-5/primary-oracle-build.log": "b59121541cb6cae913d483972fa596f8de33e7f75d1e7decec046144600f3b13",
+    "final-checks-5/release.log": "8fc1b156952438018eea9df978d1e98352e4716fce7dcfe2486c3961795ed669",
+    "final-checks-5/complete.json": "7e30ce4108bb95449964ca26bd4e6fb989d381e93798a1efd01e11d34832bd3e"
+  }
+}

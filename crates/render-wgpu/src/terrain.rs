@@ -106,6 +106,7 @@ pub struct NightLightsStats {
 
 #[derive(PartialEq)]
 struct ShadowCacheKey {
+    receiver_view: Option<[u32; 16]>,
     lights: u64,
     meshes: Option<(wgpu::Buffer, u64)>,
     surface: u64,
@@ -114,6 +115,7 @@ struct ShadowCacheKey {
 /// Persistent GPU terrain working set. Regular-patch geometry is generated at
 /// page publication; opt-in conforming geometry is emitted at encode_surface.
 pub struct TerrainRenderer {
+    shadow_receiver_view: Option<glam::Mat4>,
     temporal_epoch: u64,
     motion_vectors: bool,
     topology: Option<crate::terrain_topology::TerrainTopology>,
@@ -982,6 +984,7 @@ impl TerrainRenderer {
             ocean_settings,
             ocean_dirty: true,
             ocean_last_camera: None,
+            shadow_receiver_view: None,
             ocean_reason: None,
             ocean_possible: (0..if settings.is_some_and(|s| s.ocean.enabled) {
                 capacity
@@ -1166,6 +1169,39 @@ impl TerrainRenderer {
         }
     }
 
+    pub(crate) fn shadow_receiver_frame(
+        &self,
+        meshes: Option<&crate::mesh::MeshRenderer>,
+    ) -> Option<(glam::Mat4, f64)> {
+        let clip = self
+            .shadow_receiver_view
+            .filter(|&clip| meshes.is_none_or(|m| m.matches_receiver_view(clip, self.camera)))?;
+        let error = self
+            .receiver_error_m()?
+            .max(meshes.map_or(Some(0.0), crate::mesh::MeshRenderer::receiver_error_m)?);
+        Some((clip, error))
+    }
+
+    pub(crate) fn receiver_error_m(&self) -> Option<f64> {
+        // Bound all source vertices, including giant triangles crossing the
+        // primary frustum. Unknown custom anchors/ocean displacement fail open.
+        if self.ocean.is_some() {
+            return None;
+        }
+        let extent = self
+            .shadow_bounds
+            .iter()
+            .zip(&self.node_ids)
+            .filter(|(_, id)| **id != 0)
+            .try_fold(0.0_f64, |extent, (bound, _)| {
+                Some(extent.max(bound.as_ref()?.radius_m))
+            })?;
+        let magnitude =
+            glam::DVec3::from_array(self.camera).length() + self.body_radius_m.abs() + extent;
+        let error = 128.0 * f64::from(f32::EPSILON) * magnitude;
+        error.is_finite().then_some(error)
+    }
+
     pub fn shadows(&self) -> Option<&crate::shadows::ShadowAtlas> {
         self.shadows.as_ref()
     }
@@ -1238,6 +1274,12 @@ impl TerrainRenderer {
         self.last_shadow_draws = Default::default();
         if let Some(shadows) = &self.shadows {
             let key = ShadowCacheKey {
+                receiver_view: if shadows.receiver_culling {
+                    self.shadow_receiver_frame(meshes)
+                        .map(|(m, _)| m.to_cols_array().map(f32::to_bits))
+                } else {
+                    None
+                },
                 lights: shadows.depth_revision(),
                 meshes: meshes.and_then(crate::mesh::MeshRenderer::shadow_key),
                 surface: self
@@ -1673,6 +1715,9 @@ impl TerrainRenderer {
         backend.queue.write_buffer(&self.view, 0, &block.to_bytes());
         if let (Some(buffer), Some(primary)) = (&self.primary_view, primary) {
             backend.queue.write_buffer(buffer, 0, &primary.to_bytes());
+        }
+        if self.shadows.as_ref().is_some_and(|s| s.receiver_culling) {
+            self.shadow_receiver_view = Some(primary.unwrap_or(block).clip_from_world);
         }
         self.camera = camera;
         Ok(())

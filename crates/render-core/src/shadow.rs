@@ -248,3 +248,339 @@ mod tests {
         }
     }
 }
+
+/// A primary-receiver footprint extruded through the full light depth range.
+/// Fixed-size planes keep per-frame construction allocation-free.
+#[derive(Debug, Clone)]
+pub struct ReceiverVolume {
+    light: DMat4,
+    planes: [glam::DVec4; 8],
+    count: usize,
+}
+impl ReceiverVolume {
+    pub fn intersects_sphere(&self, center: DVec3, radius: f64) -> bool {
+        if !center.is_finite() || !radius.is_finite() || radius < 0.0 {
+            return true;
+        }
+        if !sphere_intersects_clip(self.light, center, radius) {
+            return false;
+        }
+        self.planes[..self.count].iter().all(|plane| {
+            let n = plane.truncate();
+            let support = radius * n.length();
+            let distance = n.dot(center) + plane.w;
+            let error = 16.0
+                * f64::from(f32::EPSILON)
+                * (n.abs().dot(center.abs()) + plane.w.abs() + support);
+            !distance.is_finite()
+                || !support.is_finite()
+                || !error.is_finite()
+                || distance + support >= -error
+        })
+    }
+}
+
+/// Tighten only the XY caster-selection volume to all primary receivers within
+/// this cascade. Depth stays unchanged: receiver-plane PCF can compare depths
+/// on either side of the centre sample at grazing incidence. `None` fails open.
+/// Inputs are the actual narrowed shader matrices, promoted by the consumer.
+/// `receiver_error_m` bounds primary clip/varying disagreement from source
+/// vertex arithmetic, including vertices outside this cascade.
+pub fn receiver_caster_volume(
+    primary: DMat4,
+    light: DMat4,
+    radius_m: f64,
+    normal_bias_m: f64,
+    receiver_error_m: f64,
+    map_size: u32,
+    filter_radius: u32,
+) -> Option<ReceiverVolume> {
+    if !primary.is_finite()
+        || !light.is_finite()
+        || light.row(3) != glam::DVec4::W
+        || !radius_m.is_finite()
+        || radius_m <= 0.0
+        || !normal_bias_m.is_finite()
+        || normal_bias_m < 0.0
+        || !receiver_error_m.is_finite()
+        || receiver_error_m < 0.0
+        || map_size == 0
+        || filter_radius > 2
+    {
+        return None;
+    }
+    let normal_bias_m = f64::from(normal_bias_m as f32);
+    if !normal_bias_m.is_finite() {
+        return None;
+    }
+    // Source vertices may be much farther than the interpolated receiver;
+    // the consumer bounds their clip/varying arithmetic separately.
+    // Include f32 cascade-distance/interpolation arithmetic before finding the
+    // receiver domain. Normal offset is applied separately in light XY below.
+    let radius = radius_m + 32.0 * f64::from(f32::EPSILON) * (radius_m + 1.0);
+    let rows = [
+        primary.row(0),
+        primary.row(1),
+        primary.row(2),
+        primary.row(3),
+    ];
+    let error = rows.map(|r| {
+        32.0 * f64::from(f32::EPSILON)
+            * (r.truncate().abs().element_sum() * radius + r.w.abs() + 1.0)
+            + r.truncate().length() * receiver_error_m
+    });
+    let w = rows[3];
+    let perspective = w.truncate().length_squared() > 0.0;
+    let (depth_row, lo, hi) = if perspective {
+        let alpha = rows[2].truncate().dot(w.truncate()) / w.truncate().length_squared();
+        let beta = rows[2].w - alpha * w.w;
+        let residual = (rows[2].truncate() - alpha * w.truncate()).length() * radius;
+        let mut lo = -error[3];
+        let mut hi = w.w + w.truncate().length() * radius;
+        // Necessary depth bounds for z>=0 and w-z>=0; retain reverse-Z and
+        // oblique projections by enclosing their residual over the radius.
+        for (a, b) in [
+            (alpha, -beta - residual - error[2]),
+            (1.0 - alpha, beta - residual - error[2] - error[3]),
+        ] {
+            if a > 0.0 {
+                lo = lo.max(b / a);
+            } else if a < 0.0 {
+                hi = hi.min(b / a);
+            } else if b > 0.0 {
+                return None;
+            }
+        }
+        (w, lo, hi)
+    } else {
+        if w.w <= 0.0 {
+            return None;
+        }
+        let z = rows[2];
+        (
+            z,
+            (-error[2]).max(z.w - z.truncate().length() * radius),
+            (w.w + error[2]).min(z.w + z.truncate().length() * radius),
+        )
+    };
+    if !lo.is_finite() || !hi.is_finite() || lo > hi {
+        return None;
+    }
+    let a = glam::DMat3::from_cols(rows[0].truncate(), rows[1].truncate(), depth_row.truncate())
+        .transpose();
+    let inverse = a.inverse();
+    if !inverse.is_finite() {
+        return None;
+    }
+    let norm = |m: glam::DMat3| m.to_cols_array().into_iter().map(f64::abs).sum::<f64>();
+    let mut points = [glam::DVec2::ZERO; 8];
+    let mut point_count = 0;
+    let mut numerical_m = 0.0_f64;
+    for depth in [lo, hi] {
+        for sx in [-1.0, 1.0] {
+            for sy in [-1.0, 1.0] {
+                let ww = if perspective { depth } else { w.w };
+                let rhs = DVec3::new(
+                    sx * (ww + error[0] + error[3]) - rows[0].w,
+                    sy * (ww + error[1] + error[3]) - rows[1].w,
+                    depth - depth_row.w,
+                );
+                let p = inverse * rhs;
+                // A badly conditioned solve with error larger than the shader's own
+                // coordinate envelope disables tightening rather than losing receivers.
+                let rounding = 256.0
+                    * f64::EPSILON
+                    * norm(inverse)
+                    * (norm(a) * p.abs().max_element() + rhs.abs().max_element() + 1.0);
+                if !p.is_finite()
+                    || !rounding.is_finite()
+                    || rounding > f64::from(f32::EPSILON) * radius.max(1.0)
+                {
+                    return None;
+                }
+                numerical_m = numerical_m.max(rounding);
+                let q = light * p.extend(1.0);
+                let xy = glam::DVec2::new(q.x, q.y);
+                points[point_count] = xy;
+                point_count += 1;
+            }
+        }
+    }
+    points.sort_unstable_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    let cross = |a: glam::DVec2, b: glam::DVec2, c: glam::DVec2| (b - a).perp_dot(c - a);
+    let mut hull = [glam::DVec2::ZERO; 16];
+    let mut count = 0;
+    for p in &points {
+        if count > 0 && hull[count - 1] == *p {
+            continue;
+        }
+        while count >= 2 && cross(hull[count - 2], hull[count - 1], *p) <= 0.0 {
+            count -= 1;
+        }
+        hull[count] = *p;
+        count += 1;
+    }
+    let lower = count;
+    for p in points.iter().rev().skip(1) {
+        if count > 0 && hull[count - 1] == *p {
+            continue;
+        }
+        while count > lower && cross(hull[count - 2], hull[count - 1], *p) <= 0.0 {
+            count -= 1;
+        }
+        hull[count] = *p;
+        count += 1;
+    }
+    if count < 4 {
+        return None;
+    }
+    count -= 1;
+    if count > 8 {
+        return None;
+    }
+    let projection_error = glam::DVec2::from_array(std::array::from_fn(|i| {
+        let r = light.row(i);
+        32.0 * f64::from(f32::EPSILON)
+            * (r.truncate().abs().element_sum() * (radius + normal_bias_m) + r.w.abs() + 1.0)
+    }));
+    let hull_error = 128.0
+        * f64::EPSILON
+        * points
+            .iter()
+            .map(|p| p.abs().max_element())
+            .fold(1.0_f64, f64::max);
+    let mut planes = [glam::DVec4::ZERO; 8];
+    for i in 0..count {
+        let delta = hull[(i + 1) % count] - hull[i];
+        let n = glam::DVec2::new(-delta.y, delta.x);
+        let mut plane = light.row(0) * n.x + light.row(1) * n.y;
+        let norm = plane.truncate().length();
+        if norm == 0.0 || !norm.is_finite() {
+            return None;
+        }
+        plane.w -= n.dot(hull[i]);
+        plane.w += norm * (normal_bias_m + numerical_m)
+            + n.abs().element_sum() * 2.0 * f64::from(filter_radius + 1) / f64::from(map_size)
+            + n.abs().dot(projection_error)
+            + n.length() * hull_error;
+        planes[i] = plane / norm;
+        if !planes[i].is_finite() {
+            return None;
+        }
+    }
+    Some(ReceiverVolume {
+        light,
+        planes,
+        count,
+    })
+}
+
+#[cfg(test)]
+mod receiver_tests {
+    use super::*;
+    #[test]
+    fn receiver_volume_keeps_both_light_directions_filter_and_normal_offset() {
+        let mut witnessed = 0;
+        for radius in [1.0, 25.0, 100.0, 12000.0] {
+            for origin in [DVec3::ZERO, DVec3::new(3e12, -2e12, 1e12)] {
+                for direction in [DVec3::Z, DVec3::Y, DVec3::new(0.3, 0.7, 0.2).normalize()] {
+                    let light = directional_clip(origin, direction, radius, 12000.0, 1024)
+                        .unwrap()
+                        .as_mat4()
+                        .as_dmat4();
+                    let perspective =
+                        glam::dcamera::rh::proj::directx::perspective(0.9, 1.7, 0.1, 1e8);
+                    let mut reversed = perspective.transpose();
+                    reversed.z_axis = reversed.w_axis - reversed.z_axis;
+                    let mut oblique = perspective.transpose();
+                    oblique.z_axis += oblique.x_axis * 0.03;
+                    for projection in [
+                        perspective,
+                        reversed.transpose(),
+                        oblique.transpose(),
+                        glam::dcamera::rh::proj::directx::orthographic(
+                            -20.0, 20.0, -15.0, 15.0, 0.1, 300.0,
+                        ),
+                    ] {
+                        let primary = (projection * DMat4::from_rotation_y(0.7))
+                            .as_mat4()
+                            .as_dmat4();
+                        let tightened =
+                            receiver_caster_volume(primary, light, radius, 0.2, 0.0, 1024, 2)
+                                .unwrap();
+                        for i in 0..2000 {
+                            let t = i as f64;
+                            let spread = if i % 2 == 0 { radius.min(20.0) } else { radius };
+                            let p = DVec3::new(
+                                (t * 1.7).sin() * spread,
+                                (t * 0.3).sin() * spread,
+                                (t * 0.9).cos() * spread,
+                            );
+                            let clip = primary * p.extend(1.0);
+                            if p.length() > radius
+                                || clip.w <= 0.0
+                                || clip.x.abs() > clip.w
+                                || clip.y.abs() > clip.w
+                                || clip.z < 0.0
+                                || clip.z > clip.w
+                            {
+                                continue;
+                            }
+                            witnessed += 1;
+                            let n = DVec3::new((t * 0.2).sin(), (t * 0.4).cos(), (t * 0.6).sin())
+                                .normalize();
+                            let inverse = light.inverse();
+                            for side in [-1.0, 1.0] {
+                                let sample = p
+                                    + n * 0.2
+                                    + inverse.transform_vector3(DVec3::new(
+                                        side * 6.0 / 1024.0,
+                                        -side * 6.0 / 1024.0,
+                                        0.0,
+                                    ));
+                                for depth in [-10000.0, -100.0, 0.0, 100.0, 10000.0] {
+                                    let caster = sample + direction * depth;
+                                    if sphere_intersects_clip(light, caster, 0.0) {
+                                        assert!(
+                                            tightened.intersects_sphere(caster, 0.0),
+                                            "lost receiver {p:?} caster {caster:?}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(witnessed > 100);
+        assert!(
+            receiver_caster_volume(DMat4::ZERO, DMat4::IDENTITY, 100.0, 0.0, 0.0, 1024, 2)
+                .is_none()
+        );
+    }
+    #[test]
+    fn receiver_volume_rejects_lateral_casters_but_keeps_off_camera_occluders() {
+        let primary = glam::dcamera::rh::proj::directx::perspective(0.9, 1.0, 0.1, 1e8)
+            .as_mat4()
+            .as_dmat4();
+        let light = directional_clip(DVec3::ZERO, DVec3::Z, 100.0, 12000.0, 1024)
+            .unwrap()
+            .as_mat4()
+            .as_dmat4();
+        let tightened = receiver_caster_volume(primary, light, 100.0, 0.001, 0.0, 1024, 2).unwrap();
+        assert!(sphere_intersects_clip(
+            light,
+            DVec3::new(80.0, 0.0, -4.0),
+            0.5
+        ));
+        assert!(!tightened.intersects_sphere(DVec3::new(80.0, 0.0, -4.0), 0.5));
+        let uncertain =
+            receiver_caster_volume(primary, light, 100.0, 0.001, 100.0, 1024, 2).unwrap();
+        assert!(uncertain.intersects_sphere(DVec3::new(80.0, 0.0, -4.0), 0.5));
+        for error in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(receiver_caster_volume(primary, light, 100.0, 0.001, error, 1024, 2).is_none());
+        }
+        assert!(tightened.intersects_sphere(DVec3::new(0.0, 0.0, 10.0), 0.5));
+    }
+}

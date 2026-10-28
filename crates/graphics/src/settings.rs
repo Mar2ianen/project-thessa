@@ -676,6 +676,9 @@ pub struct ShadowSettings {
     /// Zero disables alternate geometry; full geometry is always the fallback.
     #[serde(default)]
     pub mesh_lod_error_texels: f64,
+    /// Conservative mesh-caster selection for primary raster receivers.
+    #[serde(default)]
+    pub receiver_culling: bool,
     /// Shadow texel grid per cascade (power of two, 512..=8192).
     #[serde(default = "default_shadow_map_size")]
     pub map_size: u32,
@@ -709,6 +712,7 @@ impl Default for ShadowSettings {
             max_distance_m: default_shadow_distance(),
             first_cascade_distance_m: None,
             mesh_lod_error_texels: 0.0,
+            receiver_culling: false,
             map_size: default_shadow_map_size(),
             normal_bias_m: default_shadow_normal_bias(),
         }

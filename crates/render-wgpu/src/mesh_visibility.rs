@@ -8,6 +8,71 @@ pub(crate) struct Bounds {
     radius: f64,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct WorldBounds {
+    center: DVec3,
+    radius: f64,
+    stretch: f64,
+    magnitude: f64,
+    axis_abs_norm: f64,
+}
+#[derive(Clone, Copy)]
+pub(crate) struct LightProjection {
+    norm: f64,
+    offset: f64,
+    pixels: f64,
+}
+impl LightProjection {
+    pub fn new(clip: Mat4, size: u32) -> Option<Self> {
+        let clip = clip.as_dmat4();
+        if !clip.is_finite() || clip.row(3) != glam::DVec4::W || size == 0 {
+            return None;
+        }
+        Some(Self {
+            norm: (clip.row(0).truncate().length_squared()
+                + clip.row(1).truncate().length_squared())
+            .sqrt(),
+            offset: glam::DVec2::new(clip.w_axis.x, clip.w_axis.y).length(),
+            pixels: f64::from(size) * 0.5,
+        })
+    }
+}
+impl WorldBounds {
+    pub fn receiver_error_m(self) -> f64 {
+        128.0 * f64::from(f32::EPSILON) * self.magnitude
+    }
+    fn radius_with_error(self, error: f64) -> f64 {
+        self.radius + error * (self.stretch + 32.0 * f64::from(f32::EPSILON) * self.axis_abs_norm)
+    }
+    pub fn intersects(self, clip: Mat4, error: f64) -> bool {
+        thessa_render_core::shadow::sphere_intersects_clip(
+            clip.as_dmat4(),
+            self.center,
+            self.radius_with_error(error),
+        )
+    }
+    pub fn intersects_receivers(
+        self,
+        volume: &thessa_render_core::shadow::ReceiverVolume,
+        error: f64,
+    ) -> bool {
+        volume.intersects_sphere(self.center, self.radius_with_error(error))
+    }
+    pub fn projected_error(self, light: LightProjection, error: f64) -> Option<f64> {
+        if !error.is_finite() || error < 0.0 {
+            return None;
+        }
+        // ||L M||_F <= ||L||_F ||M||_2. Gershgorin already bounds ||M||_2;
+        // Cauchy-Schwarz encloses both shader products without rebuilding LM.
+        let projected = (light.norm * error * self.stretch
+            + 32.0
+                * f64::from(f32::EPSILON)
+                * (light.norm * (self.magnitude + error * self.axis_abs_norm) + light.offset))
+            * light.pixels;
+        projected.is_finite().then_some(projected)
+    }
+}
+
 impl Bounds {
     pub fn intersects_uploaded(self, clip: Mat4, bytes: &[u8]) -> bool {
         if bytes.len() != 64 {
@@ -18,6 +83,7 @@ impl Bounds {
         });
         self.intersects(clip, Mat4::from_cols_array(&words))
     }
+    #[cfg(test)]
     pub fn expanded(self, error_m: f64) -> Self {
         Self {
             radius: self.radius + error_m,
@@ -27,6 +93,7 @@ impl Bounds {
 
     /// Orthographic light error in radial texels, including an f32 arithmetic
     /// envelope for the shader's separate instance and clip multiplications.
+    #[cfg(test)]
     pub fn projected_error_texels(
         self,
         clip: Mat4,
@@ -85,6 +152,31 @@ impl Bounds {
 
     /// `model` is the actual camera-relative f32 matrix uploaded to the shader.
     pub fn intersects(self, clip: Mat4, model: Mat4) -> bool {
+        let (center, radius) = self.transformed(model);
+        thessa_render_core::shadow::sphere_intersects_clip(clip.as_dmat4(), center, radius)
+    }
+    pub fn uploaded_world(self, bytes: &[u8]) -> Option<WorldBounds> {
+        if bytes.len() != 64 {
+            return None;
+        }
+        let model = Mat4::from_cols_array(&std::array::from_fn(|i| {
+            f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+        }));
+        if !model.is_finite() || model.row(3) != glam::Vec4::W {
+            return None;
+        }
+        let mut world = self.transform(model);
+        let m = model.as_dmat4();
+        world.axis_abs_norm =
+            (m.x_axis.truncate().abs() + m.y_axis.truncate().abs() + m.z_axis.truncate().abs())
+                .length();
+        Some(world)
+    }
+    fn transformed(self, model: Mat4) -> (DVec3, f64) {
+        let world = self.transform(model);
+        (world.center, world.radius)
+    }
+    fn transform(self, model: Mat4) -> WorldBounds {
         let m = model.as_dmat4();
         let axes = [
             m.x_axis.truncate(),
@@ -105,8 +197,15 @@ impl Bounds {
             + axes[2].abs() * (self.center.z.abs() + self.radius);
         // Enclose f32 instance multiplication as well as the shared clip-plane
         // test's projection envelope. Invalid bounds deliberately fail open.
-        let radius = self.radius * stretch + 32.0 * f64::from(f32::EPSILON) * magnitude.length();
-        thessa_render_core::shadow::sphere_intersects_clip(clip.as_dmat4(), center, radius)
+        let magnitude = magnitude.length();
+        let radius = self.radius * stretch + 32.0 * f64::from(f32::EPSILON) * magnitude;
+        WorldBounds {
+            center,
+            radius,
+            stretch,
+            magnitude,
+            axis_abs_norm: 0.0,
+        }
     }
 }
 
@@ -282,6 +381,71 @@ mod shadow_lod_tests {
         assert!(
             bounds
                 .projected_error_texels(light, &bytes(Mat4::IDENTITY), f64::NAN, 1024)
+                .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod cached_tests {
+    use super::*;
+    #[test]
+    fn cached_spheres_match_primary_and_bound_original_shadow_error() {
+        let bounds = Bounds::new([[-2.0, -1.0, -0.5], [1.0, 4.0, 2.0]].into_iter()).unwrap();
+        for i in 0..2000 {
+            let t = i as f32 * 0.017;
+            let model = Mat4::from_scale_rotation_translation(
+                glam::vec3(0.1 + t, 0.2 + t * 0.4, 0.3 + t * 0.7),
+                glam::Quat::from_rotation_y(t) * glam::Quat::from_rotation_x(t * 0.3),
+                glam::vec3(t.sin() * 100.0, t.cos() * 30.0, -5.0 - t),
+            );
+            let bytes: Vec<_> = model
+                .to_cols_array()
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            let world = bounds.uploaded_world(&bytes).unwrap();
+            for direction in [glam::DVec3::Z, glam::DVec3::new(0.3, 0.7, 0.2).normalize()] {
+                let light = thessa_render_core::shadow::directional_clip(
+                    glam::DVec3::ZERO,
+                    direction,
+                    100.0,
+                    12000.0,
+                    1024,
+                )
+                .unwrap()
+                .as_mat4();
+                assert_eq!(
+                    bounds.intersects(light, model),
+                    world.intersects(light, 0.0)
+                );
+                let error = 0.09;
+                let cached = world
+                    .projected_error(LightProjection::new(light, 1024).unwrap(), error)
+                    .unwrap();
+                let original = bounds
+                    .expanded(error)
+                    .projected_error_texels(light, &bytes, error, 1024)
+                    .unwrap();
+                assert!(
+                    cached >= original - 1e-10,
+                    "cached {cached} < original {original}"
+                );
+                if bounds.expanded(error).intersects(light, model) {
+                    assert!(world.intersects(light, error));
+                }
+            }
+        }
+        assert!(bounds.uploaded_world(&[]).is_none());
+        assert!(
+            bounds
+                .uploaded_world(
+                    &Mat4::ZERO
+                        .to_cols_array()
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect::<Vec<_>>()
+                )
                 .is_none()
         );
     }

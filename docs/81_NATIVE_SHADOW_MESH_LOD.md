@@ -126,3 +126,5 @@ are recorded in [the evidence artifact](artifacts/native-shadow-mesh-lod-2026-10
 Source manifest: `3d71fecfb23688355b253d55e172c2d9ce6473e32cc4c4b2242439984b1706c3`.
 Release binary: `1cd5e8499e550a2a8ec3b220ba1662eeabd1f6e8ab645a4ff56695982d847737`.
 Physical-GPU, whole-frame, moving-camera and blind reference acceptance remain open.
+
+The [2026-10-28 shadow submission continuation](82_NATIVE_SHADOW_SUBMISSION.md) adds opt-in primary-receiver selection with full-volume fallbacks, shared-budget indexed indirect shadow batches, dirty command uploads and cached uploaded-world bounds. Its current evidence and limitations are separate from the dated measurements above.

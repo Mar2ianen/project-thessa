@@ -312,6 +312,9 @@ pub struct ResolvedGraphicsSettings {
     pub specular_reflections: bool,
     pub native_shadow_map_size: u32,
     pub shadow_filter_radius: u32,
+    /// Remaining raster-shadow map budget available for mesh draw commands.
+    #[serde(default)]
+    pub shadow_mesh_command_budget_bytes: u64,
     pub fleet_meshes: bool,
     /// Screen-size culling fallback, not a change to physical geometry.
     pub fleet_min_pixels: f32,
@@ -399,6 +402,8 @@ pub struct ResolvedGraphicsSettings {
     pub shadow_first_cascade_distance_m: Option<f64>,
     #[serde(default)]
     pub shadow_mesh_lod_error_texels: f64,
+    #[serde(default)]
+    pub shadow_receiver_culling: bool,
     pub shadow_map_size: u32,
     pub shadow_normal_bias_m: f64,
     /// Human-readable fallback notes, also stored in captures.
@@ -752,6 +757,9 @@ impl ResolvedGraphicsSettings {
         // Participation flags only matter when RT is active; clear them
         // otherwise so captures never claim RT work on a raster run.
         let rt_on = ray_tracing.is_active();
+        if requested.shadows.enabled && requested.shadows.receiver_culling && rt_on {
+            notes.push("primary receiver shadow culling withheld for off-screen ray-hit receivers; using full light volumes".into());
+        }
         if !rt_on
             && (requested.raytracing.terrain
                 || requested.raytracing.vehicles
@@ -922,6 +930,13 @@ impl ResolvedGraphicsSettings {
                 0.01
             },
             native_shadow_map_size,
+            shadow_mesh_command_budget_bytes: if requested.shadows.enabled {
+                budget.saturating_sub(
+                    u64::from(native_shadow_map_size).pow(2) * u64::from(layers) * 4,
+                )
+            } else {
+                0
+            },
             shadow_filter_radius: match requested.shadows.quality {
                 Quality::Low => 0,
                 Quality::Medium => 1,
@@ -1057,6 +1072,9 @@ impl ResolvedGraphicsSettings {
             shadow_first_cascade_distance_m,
             shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
             shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
+            shadow_receiver_culling: requested.shadows.enabled
+                && requested.shadows.receiver_culling
+                && !rt_on,
             shadow_mesh_lod_error_texels: if requested.shadows.enabled
                 && requested.shadows.mesh_lod_error_texels.is_finite()
             {
@@ -1396,6 +1414,14 @@ impl ResolvedGraphicsSettings {
             self.rt_reflection_bounces.to_string(),
         );
         map.insert("shadows".to_string(), self.shadow_enabled.to_string());
+        map.insert(
+            "shadow_mesh_command_budget_bytes".into(),
+            self.shadow_mesh_command_budget_bytes.to_string(),
+        );
+        map.insert(
+            "shadow_receiver_culling".into(),
+            self.shadow_receiver_culling.to_string(),
+        );
         map.insert(
             "shadow_mesh_lod_error_texels".into(),
             self.shadow_mesh_lod_error_texels.to_string(),
@@ -1950,6 +1976,53 @@ mod tests {
             ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
         assert_eq!(resolved.backend.name, "auto");
         assert!(resolved.notes.iter().any(|n| n.contains("dx12")));
+    }
+
+    #[test]
+    fn shadow_commands_use_only_the_unused_map_budget() {
+        let mut request = RequestedGraphics::default();
+        for memory in [4, 16, 64, 256] {
+            request.renderer.shadow_memory_mib = memory;
+            let resolved =
+                ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown());
+            let atlas = u64::from(resolved.native_shadow_map_size).pow(2)
+                * u64::from(resolved.shadow_cascades)
+                * 3
+                * 4;
+            assert_eq!(
+                atlas + resolved.shadow_mesh_command_budget_bytes,
+                u64::from(memory) * 1024 * 1024
+            );
+        }
+        request.shadows.enabled = false;
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown())
+                .shadow_mesh_command_budget_bytes,
+            0
+        );
+    }
+
+    #[test]
+    fn primary_receiver_shadow_policy_preserves_full_volume_for_rt_and_disabled() {
+        let mut request = RequestedGraphics::default();
+        let resolve = |r: &RequestedGraphics| {
+            ResolvedGraphicsSettings::from_requested(r, &Capabilities::unknown())
+        };
+        assert!(!resolve(&request).shadow_receiver_culling);
+        request.shadows.receiver_culling = true;
+        request.renderer.ray_tracing = RayTracingRequest::Off;
+        assert!(resolve(&request).shadow_receiver_culling);
+        request.renderer.ray_tracing = RayTracingRequest::Local;
+        let rt = resolve(&request);
+        assert!(!rt.shadow_receiver_culling);
+        assert!(rt.notes.iter().any(|n| n.contains("off-screen ray-hit")));
+        request.renderer.ray_tracing = RayTracingRequest::Off;
+        request.shadows.enabled = false;
+        assert!(!resolve(&request).shadow_receiver_culling);
+        assert_eq!(
+            toml::from_str::<RequestedGraphics>(&toml::to_string(&request).unwrap()).unwrap(),
+            request
+        );
     }
 
     #[test]

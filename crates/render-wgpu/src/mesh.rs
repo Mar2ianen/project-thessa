@@ -9,7 +9,6 @@ use thessa_render_core::mesh::{MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
 struct ShadowPrimitive {
-    bounds: crate::mesh_visibility::Bounds,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
@@ -57,7 +56,21 @@ pub struct SurfaceSettings<'a> {
     pub ray_tracing: Option<&'a thessa_graphics::ResolvedGraphicsSettings>,
 }
 
+#[derive(Default)]
+struct ShadowCommands {
+    commands: Vec<u8>,
+    alternate: Vec<u8>,
+    batches: Vec<(usize, bool, std::ops::Range<u32>)>,
+    uploaded: Vec<Vec<u8>>,
+}
+
 pub struct MeshRenderer {
+    shadow_queue: Option<std::sync::Arc<wgpu::Queue>>,
+    shadow_command_budget: u64,
+    shadow_indirect: Option<crate::shadows::MeshCommandStorage>,
+    shadow_available: Option<std::sync::Arc<std::sync::Mutex<u64>>>,
+    shadow_layer_capacity: usize,
+    shadow_commands: std::sync::Mutex<ShadowCommands>,
     shadow_receiver: Option<wgpu::BindGroup>,
     shadow_caster: Option<wgpu::BindGroup>,
     uploaded_instances: Vec<u8>,
@@ -71,6 +84,8 @@ pub struct MeshRenderer {
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
     primitives: Vec<Primitive>,
+    world_bounds: Vec<Vec<Option<crate::mesh_visibility::WorldBounds>>>,
+    cache_bounds: bool,
     view: wgpu::Buffer,
     lighting: wgpu::Buffer,
     instances: wgpu::Buffer,
@@ -334,16 +349,22 @@ impl MeshRenderer {
             frame_upload_bytes: self.primary_stats.frame_upload_bytes,
             ..Default::default()
         };
-        for ((primitive, range), runs) in self
+        for (primitive_index, ((primitive, range), runs)) in self
             .primitives
             .iter()
             .zip(&self.ranges)
             .zip(&mut self.primary_runs)
+            .enumerate()
         {
             runs.clear();
             let triangles = u64::from(primitive.count) / 3;
             stats.candidate_triangles += triangles * u64::from(range.end - range.start);
             let visible = |i: u32| {
+                if let Some(Some(world)) =
+                    self.world_bounds[primitive_index].get((i - range.start) as usize)
+                {
+                    return world.intersects(clip, 0.0);
+                }
                 primitive.bounds.is_none_or(|bounds| {
                     self.staging
                         .get(i as usize * 64..i as usize * 64 + 64)
@@ -788,6 +809,16 @@ impl MeshRenderer {
             _ => None,
         };
         Ok(Self {
+            shadow_queue: shadows.map(|_| backend.queue.clone()),
+            shadow_command_budget: if shadows.is_some() {
+                ray_tracing.map_or(0, |s| s.shadow_mesh_command_budget_bytes)
+            } else {
+                0
+            },
+            shadow_available: shadows.map(|s| s.command_available.clone()),
+            shadow_indirect: None,
+            shadow_layer_capacity: 0,
+            shadow_commands: Default::default(),
             uploaded_instances: Vec::new(),
             uploaded_origin: None,
             last_instances: Vec::new(),
@@ -809,6 +840,8 @@ impl MeshRenderer {
                         }],
                     })
             }),
+            world_bounds: vec![Vec::new(); primitives.len()],
+            cache_bounds: shadows.is_some(),
             primary_runs: vec![Vec::new(); primitives.len()],
             primary_seen: Vec::with_capacity(capacity),
             primary_stats: Default::default(),
@@ -840,6 +873,111 @@ impl MeshRenderer {
             staging: Vec::with_capacity(capacity * 64),
         })
     }
+    fn prepare_world_bounds(&mut self) {
+        if !self.cache_bounds {
+            return;
+        }
+        for ((p, range), cache) in self
+            .primitives
+            .iter()
+            .zip(&self.ranges)
+            .zip(&mut self.world_bounds)
+        {
+            cache.clear();
+            cache.extend(range.clone().map(|i| {
+                p.bounds.and_then(|bounds| {
+                    self.uploaded_instances
+                        .get(i as usize * 64..i as usize * 64 + 64)
+                        .and_then(|bytes| bounds.uploaded_world(bytes))
+                })
+            }));
+        }
+    }
+    pub(crate) fn matches_receiver_view(&self, clip: glam::Mat4, origin: [f64; 3]) -> bool {
+        self.primary_view == Some((glam::DVec3::from_array(origin), clip))
+    }
+    pub(crate) fn receiver_error_m(&self) -> Option<f64> {
+        self.world_bounds
+            .iter()
+            .flatten()
+            .try_fold(0.0_f64, |error, world| {
+                let bound = world.as_ref()?.receiver_error_m();
+                bound.is_finite().then_some(error.max(bound))
+            })
+    }
+    pub fn shadow_bounds_cpu_storage_bytes(&self) -> usize {
+        self.world_bounds
+            .iter()
+            .map(|c| {
+                c.capacity() * std::mem::size_of::<Option<crate::mesh_visibility::WorldBounds>>()
+            })
+            .sum::<usize>()
+            + self.world_bounds.capacity()
+                * std::mem::size_of::<Vec<Option<crate::mesh_visibility::WorldBounds>>>()
+    }
+
+    /// Allocate within the resolved unused atlas budget, using validated range
+    /// lengths as a hard upper bound on one command per instance per layer.
+    fn prepare_shadow_indirect(&mut self, backend: &Backend) {
+        if self.shadow_command_budget == 0
+            || !self.primary_indirect_supported
+            || self.shadow_queue.is_none()
+        {
+            self.shadow_indirect = None;
+            self.shadow_layer_capacity = 0;
+            return;
+        }
+        let needed = self.ranges.iter().try_fold(0_usize, |sum, r| {
+            sum.checked_add((r.end - r.start) as usize)
+        });
+        let available = self.shadow_available.as_ref().unwrap().clone();
+        let shared_capacity = *available.lock().unwrap_or_else(|p| p.into_inner())
+            + self.shadow_indirect_storage_bytes();
+        let max_capacity = self
+            .shadow_command_budget
+            .min(shared_capacity)
+            .min(backend.device.limits().max_buffer_size)
+            / (12 * 20);
+        let Some(needed) =
+            needed.filter(|&n| n > 0 && n as u64 <= max_capacity && n <= u32::MAX as usize)
+        else {
+            self.shadow_indirect = None;
+            self.shadow_layer_capacity = 0;
+            return;
+        };
+        if self.shadow_indirect.is_none() || needed > self.shadow_layer_capacity {
+            self.shadow_layer_capacity = needed.next_power_of_two().min(max_capacity as usize);
+            self.shadow_indirect = None; // Return the previous reservation before growing.
+            let size = (self.shadow_layer_capacity * 12 * 20) as u64;
+            let mut remaining = available.lock().unwrap_or_else(|p| p.into_inner());
+            if *remaining < size {
+                self.shadow_layer_capacity = 0;
+                return;
+            }
+            *remaining -= size;
+            drop(remaining);
+            self.shadow_indirect = Some(crate::shadows::MeshCommandStorage {
+                available,
+                buffer: backend.device.create_buffer(&wgpu::BufferDescriptor {
+                    // Queue writes precede the entire submission: each layer owns
+                    // a disjoint command region until this frame is submitted.
+                    label: Some("mesh-shadow-indirect"),
+                    size,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            });
+            self.shadow_commands
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .uploaded = vec![Vec::new(); 12];
+        }
+    }
+
+    pub fn shadow_indirect_storage_bytes(&self) -> u64 {
+        self.shadow_indirect.as_ref().map_or(0, |s| s.buffer.size())
+    }
+
     /// Validate the complete frame before any write; errors retain the previous
     /// draw count and data. Empty publication clears instances without a pass.
     pub fn update(
@@ -940,6 +1078,10 @@ impl MeshRenderer {
         if uploaded_changed {
             self.uploaded_instances.clone_from(&self.staging);
         }
+        if shadow_changed || uploaded_changed {
+            self.prepare_world_bounds();
+        }
+        self.prepare_shadow_indirect(backend);
         let primary_view = (view.world_position_m, block.clip_from_world);
         let primary_upload = if shadow_changed || self.primary_view != Some(primary_view) {
             let bytes = self.prepare_primary(backend, block.clip_from_world);
@@ -1185,10 +1327,6 @@ impl MeshRenderer {
                 )
             };
             replacements[lod.primitive] = Some(ShadowPrimitive {
-                bounds: self.primitives[lod.primitive]
-                    .bounds
-                    .unwrap()
-                    .expanded(lod.max_error_m),
                 vertices,
                 indices,
                 count: lod.indices.len() as u32,
@@ -1207,47 +1345,65 @@ impl MeshRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         atlas: &crate::shadows::ShadowAtlas,
         clip: Option<glam::Mat4>,
+        visibility_clip: Option<&thessa_render_core::shadow::ReceiverVolume>,
+        layer: usize,
+        mut observe: impl FnMut(usize, crate::shadows::ShadowDrawStats),
     ) -> crate::shadows::ShadowDrawStats {
-        let mut stats = crate::shadows::ShadowDrawStats::default();
+        let mut total = crate::shadows::ShadowDrawStats::default();
         let Some(bind) = &self.shadow_caster else {
-            return stats;
+            return total;
         };
+        let projection = if atlas.mesh_lod_pipeline.is_some() && atlas.mesh_lod_error_texels > 0.0 {
+            clip.and_then(|c| crate::mesh_visibility::LightProjection::new(c, atlas.map_size()))
+        } else {
+            None
+        };
+        let indirect = clip.is_some() && layer < 12 && self.shadow_indirect.is_some();
+        let mut commands = indirect.then(|| {
+            self.shadow_commands
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+        });
+        if let Some(s) = commands.as_mut() {
+            s.commands.clear();
+            s.batches.clear();
+        }
         pass.set_pipeline(&atlas.mesh_pipeline);
         pass.set_bind_group(1, bind, &[]);
-        for (p, range) in self.primitives.iter().zip(&self.ranges) {
+        for (primitive, (p, range)) in self.primitives.iter().zip(&self.ranges).enumerate() {
+            let mut stats = crate::shadows::ShadowDrawStats::default();
             if range.is_empty() {
                 continue;
             }
+            let first_command = commands.as_ref().map_or(0, |s| s.commands.len() / 20) as u32;
+            if let Some(s) = commands.as_mut() {
+                s.alternate.clear();
+            }
+            stats.mesh_indirect = indirect;
             let triangles = u64::from(p.count) / 3;
             stats.mesh_candidate_instances += u64::from(range.end - range.start);
             stats.mesh_candidate_triangles += triangles * u64::from(range.end - range.start);
             let selection = |i: u32| -> Option<(bool, f64)> {
-                let bytes = self
-                    .uploaded_instances
-                    .get(i as usize * 64..i as usize * 64 + 64);
-                let error =
-                    if atlas.mesh_lod_pipeline.is_some() && atlas.mesh_lod_error_texels > 0.0 {
-                        clip.zip(bytes).and_then(|(clip, bytes)| {
-                            p.shadow.as_ref().and_then(|lod| {
-                                lod.bounds.projected_error_texels(
-                                    clip,
-                                    bytes,
-                                    lod.max_error_m,
-                                    atlas.map_size(),
-                                )
-                            })
-                        })
-                    } else {
-                        None
-                    };
-                let lod = error.is_some_and(|e| e <= atlas.mesh_lod_error_texels);
-                let bounds = if lod {
-                    p.shadow.as_ref().map(|p| p.bounds)
-                } else {
-                    p.bounds
+                let Some(Some(world)) =
+                    self.world_bounds[primitive].get((i - range.start) as usize)
+                else {
+                    return Some((false, 0.0)); // Missing/unbounded data keeps full geometry.
                 };
-                if let Some(((clip, bounds), bytes)) = clip.zip(bounds).zip(bytes)
-                    && !bounds.intersects_uploaded(clip, bytes)
+                let max_error = p.shadow.as_ref().map_or(0.0, |p| p.max_error_m);
+                if let Some(volume) = visibility_clip
+                    && !world.intersects_receivers(volume, max_error)
+                {
+                    return None;
+                }
+                let error = projection.and_then(|projection| {
+                    p.shadow
+                        .as_ref()
+                        .and_then(|lod| world.projected_error(projection, lod.max_error_m))
+                });
+                let lod = error.is_some_and(|e| e <= atlas.mesh_lod_error_texels);
+                if visibility_clip.is_none()
+                    && let Some(clip) = clip
+                    && !world.intersects(clip, if lod { max_error } else { 0.0 })
                 {
                     return None;
                 }
@@ -1261,15 +1417,29 @@ impl MeshRenderer {
                 } else {
                     (&p.vertices, &p.indices, p.count)
                 };
-                pass.set_pipeline(if lod {
-                    atlas.mesh_lod_pipeline.as_ref().unwrap()
+                if let Some(s) = commands.as_mut() {
+                    let target = if lod {
+                        &mut s.alternate
+                    } else {
+                        &mut s.commands
+                    };
+                    target.extend(
+                        [count, end - start, 0, 0, start]
+                            .into_iter()
+                            .flat_map(u32::to_le_bytes),
+                    );
                 } else {
-                    &atlas.mesh_pipeline
-                });
-                pass.set_vertex_buffer(0, vertices.slice(..));
-                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..count, 0, start..end);
-                stats.mesh_draw_calls += 1;
+                    pass.set_pipeline(if lod {
+                        atlas.mesh_lod_pipeline.as_ref().unwrap()
+                    } else {
+                        &atlas.mesh_pipeline
+                    });
+                    pass.set_vertex_buffer(0, vertices.slice(..));
+                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..count, 0, start..end);
+                    stats.mesh_draw_calls += 1;
+                }
+                stats.mesh_draw_commands += 1;
                 stats.mesh_submitted_instances += u64::from(end - start);
                 stats.mesh_submitted_triangles += u64::from(count / 3) * u64::from(end - start);
                 if lod {
@@ -1297,11 +1467,73 @@ impl MeshRenderer {
             if let Some((start, end, lod)) = run {
                 draw(start, end, lod);
             }
+            if let Some(s) = commands.as_mut() {
+                let s = &mut **s;
+                let full_end = (s.commands.len() / 20) as u32;
+                if first_command < full_end {
+                    s.batches.push((primitive, false, first_command..full_end));
+                    stats.mesh_draw_calls += 1;
+                }
+                s.commands.append(&mut s.alternate);
+                let end = (s.commands.len() / 20) as u32;
+                if full_end < end {
+                    s.batches.push((primitive, true, full_end..end));
+                    stats.mesh_draw_calls += 1;
+                }
+            }
+            observe(primitive, stats);
+            total.accumulate(stats);
         }
-        stats
+        if let Some(s) = commands.as_mut() {
+            let buffer = &self.shadow_indirect.as_ref().unwrap().buffer;
+            let base = (layer * self.shadow_layer_capacity * 20) as u64;
+            let ShadowCommands {
+                commands,
+                uploaded,
+                batches,
+                ..
+            } = &mut **s;
+            debug_assert!(commands.len() <= self.shadow_layer_capacity * 20);
+            if uploaded[layer] != *commands {
+                if !commands.is_empty() {
+                    self.shadow_queue
+                        .as_ref()
+                        .unwrap()
+                        .write_buffer(buffer, base, commands);
+                }
+                total.mesh_indirect_upload_bytes = commands.len() as u64;
+                uploaded[layer].clone_from(commands);
+            }
+            for (primitive, lod, range) in batches {
+                let p = &self.primitives[*primitive];
+                let (vertices, indices) = if *lod {
+                    let p = p.shadow.as_ref().unwrap();
+                    (&p.vertices, &p.indices)
+                } else {
+                    (&p.vertices, &p.indices)
+                };
+                pass.set_pipeline(if *lod {
+                    atlas.mesh_lod_pipeline.as_ref().unwrap()
+                } else {
+                    &atlas.mesh_pipeline
+                });
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.multi_draw_indexed_indirect(
+                    buffer,
+                    base + u64::from(range.start) * 20,
+                    range.end - range.start,
+                );
+            }
+        }
+        total
     }
 }
 
 #[cfg(test)]
 #[path = "mesh_primary_tests.rs"]
 mod primary_tests;
+
+#[cfg(test)]
+#[path = "mesh_shadow_tests.rs"]
+mod shadow_tests;

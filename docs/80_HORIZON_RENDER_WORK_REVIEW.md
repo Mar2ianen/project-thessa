@@ -122,7 +122,7 @@ encoded shadow triangles to 283.2M; it still does not establish target-GPU FPS.
 1. Extend the geometric shadow-footprint work in doc 81 with moving-camera and
    broader receiver/radiometric acceptance. The implemented surface-distance
    certificate is not a global receiver-error or temporal-stability guarantee.
-2. Audit receiver-aware caster volumes and world-space cache keys together.
+2. The [receiver/submission continuation](82_NATIVE_SHADOW_SUBMISSION.md) implements primary receiver selection and view-key invalidation with full-volume RT/uncertain-bound fallbacks. Further audit of world-space cache keys remains.
    Off-camera casters can shadow visible receivers. Camera-relative matrix
    changes alone must not be confused with physical motion, but reusing depth
    across origins requires an explicit floating-point error/coordinate contract.

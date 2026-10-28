@@ -20,14 +20,50 @@ pub struct ShadowDrawStats {
     pub mesh_candidate_triangles: u64,
     pub mesh_submitted_triangles: u64,
     pub mesh_draw_calls: u64,
+    pub mesh_draw_commands: u64,
+    pub mesh_indirect: bool,
+    pub mesh_indirect_upload_bytes: u64,
     pub mesh_lod_instances: u64,
     pub mesh_lod_triangles_saved: u64,
     /// Conservative projected surface error, rounded up to millionths of a texel.
     pub mesh_lod_max_error_microtexels: u64,
 }
 
+impl ShadowDrawStats {
+    pub(crate) fn accumulate(&mut self, other: Self) {
+        self.candidate_slots += other.candidate_slots;
+        self.submitted_slots += other.submitted_slots;
+        self.draw_calls += other.draw_calls;
+        self.mesh_candidate_instances += other.mesh_candidate_instances;
+        self.mesh_submitted_instances += other.mesh_submitted_instances;
+        self.mesh_candidate_triangles += other.mesh_candidate_triangles;
+        self.mesh_submitted_triangles += other.mesh_submitted_triangles;
+        self.mesh_draw_calls += other.mesh_draw_calls;
+        self.mesh_draw_commands += other.mesh_draw_commands;
+        self.mesh_indirect |= other.mesh_indirect;
+        self.mesh_indirect_upload_bytes += other.mesh_indirect_upload_bytes;
+        self.mesh_lod_instances += other.mesh_lod_instances;
+        self.mesh_lod_triangles_saved += other.mesh_lod_triangles_saved;
+        self.indirect |= other.indirect;
+        self.mesh_lod_max_error_microtexels = self
+            .mesh_lod_max_error_microtexels
+            .max(other.mesh_lod_max_error_microtexels);
+    }
+}
+
+pub(crate) struct MeshCommandStorage {
+    pub buffer: wgpu::Buffer,
+    pub available: std::sync::Arc<std::sync::Mutex<u64>>,
+}
+impl Drop for MeshCommandStorage {
+    fn drop(&mut self) {
+        *self.available.lock().unwrap_or_else(|p| p.into_inner()) += self.buffer.size();
+    }
+}
+
 #[derive(Clone)]
 pub struct ShadowAtlas {
+    pub(crate) command_available: std::sync::Arc<std::sync::Mutex<u64>>,
     pub(crate) mesh_pipeline: wgpu::RenderPipeline,
     pub(crate) mesh_lod_pipeline: Option<wgpu::RenderPipeline>,
     pub(crate) terrain_pipeline: wgpu::RenderPipeline,
@@ -43,6 +79,7 @@ pub struct ShadowAtlas {
     radii: Vec<f64>,
     size: u32,
     pub(crate) mesh_lod_error_texels: f64,
+    pub(crate) receiver_culling: bool,
     normal_bias_m: f64,
     filter: u32,
     active: [bool; 3],
@@ -284,7 +321,11 @@ impl ShadowAtlas {
             layers,
             radii,
             size,
+            command_available: std::sync::Arc::new(std::sync::Mutex::new(
+                settings.shadow_mesh_command_budget_bytes,
+            )),
             mesh_lod_error_texels: settings.shadow_mesh_lod_error_texels,
+            receiver_culling: settings.shadow_receiver_culling,
             normal_bias_m: settings.shadow_normal_bias_m,
             filter: settings.shadow_filter_radius,
             active: [false; 3],
@@ -454,6 +495,25 @@ impl ShadowAtlas {
         meshes: Option<&MeshRenderer>,
         cull: bool,
     ) -> ShadowDrawStats {
+        self.encode_casters_observed(encoder, terrain, meshes, cull, |_, _, _| {})
+    }
+
+    /// Diagnostic observer of the production caster path. `Some(primitive)`
+    /// reports one mesh group; `None` reports the completed layer. No readback
+    /// or allocation is added to the ordinary no-observer path.
+    pub fn encode_casters_observed(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        terrain: &TerrainRenderer,
+        meshes: Option<&MeshRenderer>,
+        cull: bool,
+        mut observe: impl FnMut(usize, Option<usize>, ShadowDrawStats),
+    ) -> ShadowDrawStats {
+        let receiver_frame = if cull && self.receiver_culling {
+            terrain.shadow_receiver_frame(meshes)
+        } else {
+            None
+        };
         let mut total = ShadowDrawStats::default();
         for (i, (view, _, bind)) in self.layers.iter().enumerate() {
             if !self.active[i / self.radii.len()] {
@@ -473,32 +533,38 @@ impl ShadowAtlas {
                 ..Default::default()
             });
             pass.set_bind_group(0, bind, &[]);
-            let stats = terrain.cast_shadow(
+            let light_clip = if cull { self.layer_matrix(i) } else { None };
+            let receiver_clip =
+                receiver_frame
+                    .zip(light_clip)
+                    .and_then(|((primary, error), light)| {
+                        thessa_render_core::shadow::receiver_caster_volume(
+                            primary.as_dmat4(),
+                            light.as_dmat4(),
+                            self.radii[i % self.radii.len()],
+                            self.normal_bias_m,
+                            error,
+                            self.size,
+                            self.filter,
+                        )
+                    });
+            let mut layer = terrain.cast_shadow(
                 &mut pass,
                 self,
                 if cull { self.layer_matrix(i) } else { None },
             );
-            total.candidate_slots += stats.candidate_slots;
-            total.submitted_slots += stats.submitted_slots;
-            total.draw_calls += stats.draw_calls;
-            total.indirect |= stats.indirect;
             if let Some(meshes) = meshes {
-                let stats = meshes.cast_shadow(
+                layer.accumulate(meshes.cast_shadow(
                     &mut pass,
                     self,
-                    if cull { self.layer_matrix(i) } else { None },
-                );
-                total.mesh_candidate_instances += stats.mesh_candidate_instances;
-                total.mesh_submitted_instances += stats.mesh_submitted_instances;
-                total.mesh_candidate_triangles += stats.mesh_candidate_triangles;
-                total.mesh_submitted_triangles += stats.mesh_submitted_triangles;
-                total.mesh_draw_calls += stats.mesh_draw_calls;
-                total.mesh_lod_instances += stats.mesh_lod_instances;
-                total.mesh_lod_triangles_saved += stats.mesh_lod_triangles_saved;
-                total.mesh_lod_max_error_microtexels = total
-                    .mesh_lod_max_error_microtexels
-                    .max(stats.mesh_lod_max_error_microtexels);
+                    light_clip,
+                    receiver_clip.as_ref(),
+                    i,
+                    |primitive, stats| observe(i, Some(primitive), stats),
+                ));
             }
+            observe(i, None, layer);
+            total.accumulate(layer);
         }
         total
     }

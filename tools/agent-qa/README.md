@@ -10,12 +10,22 @@ python3 tools/agent-qa/check_architecture.py
 python3 -m unittest discover -s tools/agent-qa/tests -v
 ```
 
-`check_architecture.py` uses `cargo metadata --no-deps` to reject backend/runtime
-leakage into listed foundation crates and MIT-to-GPL workspace dependencies.
-This enforces a **subset** of the architecture rules in `AGENTS.md`, not the
-entire engine migration plan. Add crates to the guarded set as they become
-canonical foundations. It cannot inspect type-level leaks or transitive
-external package licenses; those require separate checks.
+The checker uses full `cargo metadata --format-version 1 --all-features`
+resolution: transitive runtime/build paths and root dev edges for backend/license
+checks, without inheriting downstream dev tooling. It guards 19 foundations,
+MIT-to-GPL workspace paths, reverse app dependencies, mandatory game worldgen
+in rendering and new generic-physics/celestial coupling. Three exact existing
+facade edges are staged. See [doc 88](../../docs/88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md).
+
+```sh
+cargo metadata --offline --format-version 1 --all-features > /tmp/thessa-cargo.json
+python3 tools/agent-qa/check_architecture.py --metadata /tmp/thessa-cargo.json \
+  --report /tmp/thessa-boundaries.json
+```
+
+Exit: 0 clean (possibly staged), 1 forbidden boundary, 2 metadata/read failure.
+The CLI rejects `--no-deps` input. Type-level leaks and external license
+obligations still need explicit review.
 
 ## Blind visual arena
 

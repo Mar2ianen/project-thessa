@@ -35,11 +35,14 @@ metadata or attach bogus co-author trailers.
 
 ## Executable architecture rules
 
-`python3 tools/agent-qa/check_architecture.py` inspects Cargo metadata. It
-fails on selected backend/runtime dependencies in canonical foundation crates
-and MIT workspace crates depending directly on GPL workspace crates. It is
-run by CI; type-level boundaries and indirect external license obligations
-still require explicit review.
+`python3 tools/agent-qa/check_architecture.py` inspects full resolved Cargo
+all-features metadata. It guards transitive backend and MIT-to-GPL workspace
+paths, reverse application edges, mandatory game worldgen in rendering and new
+celestial coupling in generic physics. Existing exact facade edges are staged;
+root dev edges are checked where relevant, downstream dev edges not inherited.
+CI runs the gate. Type-level boundaries and external licenses still require
+review. Commands and scope: [tooling README](../tools/agent-qa/README.md),
+[ownership audit and progression](88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md).
 
 ## Blind visual arena
 

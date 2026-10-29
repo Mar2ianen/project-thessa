@@ -480,6 +480,20 @@ The GPU tests in `crates/render-wgpu/tests/plume.rs` cover the actual publicatio
   scale, camera rebasing and the retained Low bake. Actual silent CLI captures
   exercise all tiers and verify identical final authoritative flight telemetry.
 
+### Shared native pre-exposure (2026-10-30)
+
+Both Low and Volume now apply the existing camera/view exposure to outgoing
+RGB exactly once before scene composition; opacity/transmittance is unchanged.
+Previously the plume ignored scene exposure. The 160-byte frame record reuses
+padding, with no new setting, allocation or field upload. GPU tests cover
+0/0.25/1/4 gains in HDR on Radeon and software Vulkan, with exact alpha and
+unchanged gain=1 fixture images. Publications require finite nondecreasing axial
+coordinates; the actual sampling function has a nonuniform/repeated-coordinate
+GPU oracle. Five measured lookup alternatives regressed near-nozzle views and
+were rejected; the original linear search remains. See
+[doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) for retained ABBA evidence,
+quantization envelopes and outstanding calibration/reference-volume limits.
+
 ### Native work/budget boundary
 
 One explicit starter source is supported, using the provisional 0.55 m /

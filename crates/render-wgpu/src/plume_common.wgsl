@@ -2,7 +2,8 @@ struct Frame {
     clip: mat4x4<f32>,
     inverse_clip: mat4x4<f32>,
     camera: vec4<f32>,
-    _padding: vec4<f32>,
+    // Shared scene pre-exposure gain; alpha/transmittance stays unexposed.
+    exposure: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var scene_depth: texture_depth_2d;

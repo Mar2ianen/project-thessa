@@ -14,5 +14,5 @@ struct Output {
 @fragment fn fragment(input: Output) -> @location(0) vec4<f32> {
     if input.clip.z > textureLoad(scene_depth, vec2<i32>(input.clip.xy), 0) { discard; }
     let texel = textureSample(impostor, impostor_sampler, input.uv);
-    return vec4<f32>(texel.rgb * texel.a, texel.a);
+    return vec4<f32>(texel.rgb * texel.a * frame.exposure.x, texel.a);
 }

@@ -32,17 +32,16 @@ fn volume(steps: f32) -> VolumeDraw {
     }
 }
 
-fn render(
-    backend: &Backend,
-    plume: &PlumeRenderer,
-    target: &OffscreenTarget,
-    depth: f32,
-) -> Vec<u8> {
-    let mut encoder = backend.device.create_command_encoder(&Default::default());
+fn clear(
+    encoder: &mut wgpu::CommandEncoder,
+    color: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    depth_value: f32,
+) {
     {
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target.color,
+                view: color,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -51,9 +50,9 @@ fn render(
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &target.depth,
+                view: depth,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(depth),
+                    load: wgpu::LoadOp::Clear(depth_value),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -61,6 +60,16 @@ fn render(
             ..Default::default()
         });
     }
+}
+
+fn render(
+    backend: &Backend,
+    plume: &PlumeRenderer,
+    target: &OffscreenTarget,
+    depth: f32,
+) -> Vec<u8> {
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    clear(&mut encoder, &target.color, &target.depth, depth);
     plume.encode(&mut encoder, &target.color, &target.depth);
     backend.queue.submit([encoder.finish()]);
     target.read_rgba8(backend).unwrap()
@@ -73,6 +82,108 @@ fn linear(byte: u8) -> f64 {
     } else {
         ((value + 0.055) / 1.055).powf(2.4)
     }
+}
+
+#[test]
+#[ignore = "hardware: Low and Volume HDR pre-exposure follows camera without changing opacity"]
+fn both_representations_follow_scene_exposure_with_cached_fields() {
+    let backend = Backend::bring_up().unwrap();
+    eprintln!(
+        "plume_exposure adapter={:?} backend={:?}",
+        backend.adapter_name,
+        backend.adapter.get_info().backend
+    );
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    let texture = backend.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("plume-exposure-oracle"),
+        size: wgpu::Extent3d {
+            width: 65,
+            height: 65,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let color = texture.create_view(&Default::default());
+    let mut camera = view(DVec3::ZERO, DQuat::IDENTITY);
+    let cone = PlumeFrame::Cone(ConeDraw {
+        model: Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0)).to_cols_array(),
+        texture: [64, 128, 192, 128].repeat(32 * 256).into(),
+    });
+    let half = |v: u16| {
+        assert_eq!(v & 0x8000, 0, "negative HDR");
+        let exponent = (v >> 10) & 31;
+        assert_ne!(exponent, 31, "non-finite HDR");
+        let fraction = f64::from(v & 1023);
+        if exponent == 0 {
+            fraction * 2.0_f64.powi(-24)
+        } else {
+            (1024.0 + fraction) * 2.0_f64.powi(i32::from(exponent) - 25)
+        }
+    };
+    let mut witnessed_hdr = false;
+    for frame in [PlumeFrame::Volume(volume(14.0)), cone] {
+        let mut plume =
+            PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+        let mut baseline = Vec::new();
+        for gain in [1.0, 0.25, 0.0, 4.0] {
+            camera.exposure = gain;
+            plume
+                .update(&backend, &camera, Some(frame.clone()))
+                .unwrap();
+            if gain != 1.0 {
+                assert_eq!(plume.stats().profile_upload_bytes, 0);
+                assert_eq!(plume.stats().texture_upload_bytes, 0);
+            }
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            clear(&mut encoder, &color, &target.depth, 1.0);
+            plume.encode(&mut encoder, &color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            let bytes = thessa_render_wgpu::readback::read_color(&backend, &texture).unwrap();
+            let words: Vec<_> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect();
+            if gain == 1.0 {
+                assert!(
+                    words
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|p| p[0] != 0 && p[3] != 0)
+                );
+                baseline = words;
+                continue;
+            }
+            for (pixel, reference) in words
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(baseline.as_chunks::<4>().0.iter())
+            {
+                assert_eq!(pixel[3], reference[3], "exposure must preserve opacity");
+                for c in 0..3 {
+                    let expected = half(reference[c]) * f64::from(gain);
+                    let actual = half(pixel[c]);
+                    witnessed_hdr |= actual > 1.0;
+                    assert!(
+                        (actual - expected).abs() <= expected.abs() * 0.002 + 1e-6,
+                        "gain={gain} channel={c} actual={actual} expected={expected}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        witnessed_hdr,
+        "HDR radiance must survive without SDR clipping"
+    );
 }
 
 #[test]
@@ -99,6 +210,17 @@ fn volume_energy_matches_cpu_slab_with_depth_and_camera_lifecycle() {
     };
     let (transmittance, expected) = integrate_ray(&profile, 2.0, 1.6, 256);
     let center = (32 * 65 + 32) * 4;
+    let mut unordered = volume(8.0);
+    std::sync::Arc::make_mut(&mut unordered.profile).swap(0, 1);
+    assert!(
+        plume
+            .update(
+                &backend,
+                &view(DVec3::ZERO, DQuat::IDENTITY),
+                Some(PlumeFrame::Volume(unordered))
+            )
+            .is_err()
+    );
     for steps in [8.0, 14.0] {
         let draw = volume(steps);
         for position in [DVec3::ZERO, DVec3::new(1e12, -2e12, 3e12)] {
@@ -417,6 +539,181 @@ fn plume_gpu_cost() {
             backend.adapter_name,
             samples[16] * 1000.0,
             samples[30] * 1000.0
+        );
+    }
+}
+
+#[test]
+#[ignore = "hardware: fixed-work HDR plume lookup ABBA; requires new THESSA_BENCH_OUTPUT directory"]
+fn published_profile_lookup_cost() {
+    use std::{io::Write, time::Instant};
+    use thessa_plume_core::{
+        ExhaustFamily, PlumeEnvironment, PlumeSource, RigidTransform, profile::build_axial_profile,
+    };
+    use thessa_render_wgpu::timing::GpuIntervals;
+    let out = std::path::PathBuf::from(
+        std::env::var_os("THESSA_BENCH_OUTPUT").expect("output directory required"),
+    );
+    std::fs::create_dir(&out).unwrap();
+    let backend = Backend::bring_up_for_graphics_profiled(&Default::default()).unwrap();
+    let timing = GpuIntervals::new(&backend, 2).expect("timestamps required");
+    let target = OffscreenTarget::new(&backend, 1280, 720).unwrap();
+    let hdr = backend.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("plume-lookup-hdr"),
+        size: wgpu::Extent3d {
+            width: 1280,
+            height: 720,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let color = hdr.create_view(&Default::default());
+    let mut camera = view(DVec3::ZERO, DQuat::IDENTITY);
+    camera.clip_from_view =
+        glam::dcamera::rh::proj::directx::perspective(0.9, 1280.0 / 720.0, 0.1, 1e6);
+    let mut plume = PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+    let mut csv = std::fs::File::create_new(out.join("frames.csv")).unwrap();
+    writeln!(csv, "case,frame,cpu_submit_ms,wall_ms,gpu_ms").unwrap();
+    // Both production-sized profiles, near-nozzle and whole-field side views,
+    // plus the publication limits. No scalar fitted to the measured pixels.
+    let cases = [
+        (101_325.0, 48, 0.5, 8.0),
+        (101_325.0, 48, 0.5, 14.0),
+        (0.0, 48, 0.5, 8.0),
+        (0.0, 48, 0.5, 14.0),
+        (101_325.0, 48, 0.02, 8.0),
+        (101_325.0, 48, 0.02, 14.0),
+        (0.0, 48, 0.02, 8.0),
+        (0.0, 48, 0.02, 14.0),
+        (101_325.0, 2, 0.5, 14.0),
+        (101_325.0, 64, 0.5, 14.0),
+    ];
+    for (case, (pressure_pa, count, center_fraction, steps)) in cases.into_iter().enumerate() {
+        let source = PlumeSource {
+            nozzle_to_vehicle: RigidTransform::IDENTITY,
+            exit_radius_m: 0.55,
+            mass_flow_kg_s: 480.0,
+            exhaust_velocity_mps: 3550.0,
+            exit_pressure_pa: 120_000.0,
+            exit_temperature_k: 1850.0,
+            exit_mach: 3.5,
+            throttle: 1.0,
+            exhaust: ExhaustFamily::Methalox,
+        };
+        let env = PlumeEnvironment {
+            pressure_pa,
+            density_kg_m3: 0.0,
+            temperature_k: 280.0,
+            oxygen_fraction: 0.0,
+            flow_velocity_local_mps: [0.0; 3],
+        };
+        let profile = build_axial_profile(&source, &env, count).unwrap();
+        let z = profile.length_m * center_fraction;
+        let radius = profile
+            .stations
+            .iter()
+            .map(|s| s.radius_m)
+            .fold(0.0, f64::max)
+            * 1.6;
+        let distance = if center_fraction < 0.1 {
+            profile.evaluate(z).unwrap().radius_m * 4.0
+        } else {
+            profile.length_m * 1.1
+        };
+        let publication: std::sync::Arc<[[f32; 8]]> = profile
+            .stations
+            .iter()
+            .map(|s| {
+                [
+                    s.z_m as f32,
+                    s.radius_m as f32,
+                    s.extinction_per_m as f32,
+                    s.shock as f32,
+                    s.emission_rgb[0] as f32,
+                    s.emission_rgb[1] as f32,
+                    s.emission_rgb[2] as f32,
+                    0.0,
+                ]
+            })
+            .collect();
+        std::fs::write(
+            out.join(format!("case-{case}.stations.f32")),
+            publication
+                .iter()
+                .flatten()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let draw = VolumeDraw {
+            origin_len: [0.0, -z as f32, -distance as f32, profile.length_m as f32],
+            axis_radius: [0.0, 1.0, 0.0, radius as f32],
+            animation: [steps, 0.0, 0.0, 0.0],
+            diamonds: true,
+            tail_dissolve: false,
+            profile: publication,
+        };
+        plume
+            .update(&backend, &camera, Some(PlumeFrame::Volume(draw)))
+            .unwrap();
+        for frame in 0..100 {
+            let started = Instant::now();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            {
+                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &color,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &target.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+            }
+            timing.mark(&mut encoder, 0);
+            plume.encode(&mut encoder, &color, &target.depth);
+            timing.mark(&mut encoder, 1);
+            timing.resolve(&mut encoder);
+            backend.queue.submit([encoder.finish()]);
+            let cpu = started.elapsed().as_secs_f64() * 1000.0;
+            backend
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            let wall = started.elapsed().as_secs_f64() * 1000.0;
+            let gpu = timing.read(&backend).unwrap()[0] * 1000.0;
+            if frame >= 20 {
+                writeln!(csv, "{case},{},{cpu},{wall},{gpu}", frame - 20).unwrap();
+            }
+        }
+        let pixels = thessa_render_wgpu::readback::read_color(&backend, &hdr).unwrap();
+        let mut signal = false;
+        for bytes in pixels.as_chunks::<2>().0.iter() {
+            let half = u16::from_le_bytes([bytes[0], bytes[1]]);
+            assert_ne!(half & 0x7c00, 0x7c00, "non-finite HDR");
+            signal |= half & 0x7fff != 0;
+        }
+        assert!(signal, "fixture must witness an actual plume");
+        std::fs::write(out.join(format!("case-{case}.rgba16f")), pixels).unwrap();
+        eprintln!(
+            "plume_lookup adapter={:?} case={case} pressure_pa={pressure_pa} stations={count} center_fraction={center_fraction} steps={steps} length_m={} radius_bound_m={radius} camera_distance_m={distance} extent=1280x720 format=RGBA16Float source=provisional-methalox throttle=1 time=0 erosion=0 tail_dissolve=false warmup=20 samples=80",
+            backend.adapter_name, profile.length_m
         );
     }
 }

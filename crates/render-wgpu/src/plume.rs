@@ -28,7 +28,8 @@ pub struct VolumeDraw {
     pub animation: [f32; 4],
     pub diamonds: bool,
     pub tail_dissolve: bool,
-    /// Immutable publication; cloned by handle, uploaded only on change.
+    /// Finite stations in nondecreasing axial order; immutable publication,
+    /// cloned by handle and uploaded only on change.
     pub profile: Arc<[ProfileStation]>,
 }
 
@@ -303,12 +304,13 @@ impl PlumeRenderer {
                 .into_iter()
                 .chain(view.world_from_clip.to_cols_array())
                 .chain(view.world_position.extend(0.0).to_array())
-                .chain([0.0; 4]),
+                .chain([view.exposure, 0.0, 0.0, 0.0]),
         );
         let draw_bytes = match &frame {
             PlumeFrame::Volume(draw) => {
                 if !(2..=MAX_STATIONS).contains(&draw.profile.len())
                     || !draw.profile.iter().flatten().all(|v| v.is_finite())
+                    || draw.profile.windows(2).any(|pair| pair[0][0] > pair[1][0])
                 {
                     return Err(BackendError::Device(
                         "invalid plume axial publication".into(),
@@ -605,6 +607,158 @@ mod tests {
             )
             .validate(&module)
             .unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "hardware: production station sampling against CPU linear interpolation at ties and uneven spacing"]
+    fn station_sampling_matches_cpu_at_publication_boundaries() {
+        use super::*;
+        let backend = Backend::bring_up().unwrap();
+        eprintln!(
+            "plume_station_oracle adapter={:?} backend={:?}",
+            backend.adapter_name,
+            backend.adapter.get_info().backend
+        );
+        let shader = backend.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("plume-station-oracle"),
+            source: wgpu::ShaderSource::Wgsl(format!(
+                "{}\n@group(2) @binding(0) var<storage,read> queries:array<f32>;\n\
+                 @group(2) @binding(1) var<storage,read_write> results:array<Station>;\n\
+                 @compute @workgroup_size(64) fn probe(@builtin(global_invocation_id) id:vec3<u32>) {{\n\
+                 if id.x < arrayLength(&queries) {{ results[id.x] = sample_station(queries[id.x]); }} }}",
+                volume_shader_source()
+            ).into()),
+        });
+        let pipeline = backend
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("plume-station-oracle"),
+                layout: None,
+                module: &shader,
+                entry_point: Some("probe"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let empty = backend
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[],
+            });
+        for count in [2, 3, 48, 64] {
+            for spacing in 0..3 {
+                let stations: Vec<ProfileStation> = (0..count)
+                    .map(|i| {
+                        let coordinate = match spacing {
+                            0 => i as f32 * 0.125,
+                            1 => (i * i) as f32 * 0.125,
+                            _ => (i / 3) as f32 * 0.125,
+                        };
+                        [
+                            coordinate,
+                            i as f32 + 1.0,
+                            0.1,
+                            1.0,
+                            (i % 5) as f32,
+                            (i % 7) as f32,
+                            (i % 11) as f32,
+                            0.0,
+                        ]
+                    })
+                    .collect();
+                let mut queries = vec![-1.0, stations[count - 1][0] + 1.0];
+                for s in &stations {
+                    // WGSL may flush subnormals; use representable physical
+                    // offsets around zero rather than the adjacent 1e-45 m.
+                    queries.extend(if s[0] == 0.0 {
+                        [-1e-6, 0.0, 1e-6]
+                    } else {
+                        [s[0].next_down(), s[0], s[0].next_up()]
+                    });
+                }
+                let upload = |data: Vec<u8>, usage| {
+                    backend
+                        .device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("plume-station-fixture"),
+                            contents: &data,
+                            usage,
+                        })
+                };
+                let mut draw = [0.0; 20];
+                draw[12] = count as f32;
+                let draw = upload(bytes(draw), wgpu::BufferUsages::UNIFORM);
+                let station_buffer = upload(
+                    bytes(stations.iter().flatten().copied()),
+                    wgpu::BufferUsages::STORAGE,
+                );
+                let queries_buffer =
+                    upload(bytes(queries.iter().copied()), wgpu::BufferUsages::STORAGE);
+                let size = queries.len() as u64 * 32;
+                let result = backend.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let group = |index, a: &wgpu::Buffer, b: &wgpu::Buffer| {
+                    backend
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: None,
+                            layout: &pipeline.get_bind_group_layout(index),
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: a.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: b.as_entire_binding(),
+                                },
+                            ],
+                        })
+                };
+                let publication = group(1, &draw, &station_buffer);
+                let probe = group(2, &queries_buffer, &result);
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &empty, &[]);
+                    pass.set_bind_group(1, &publication, &[]);
+                    pass.set_bind_group(2, &probe, &[]);
+                    pass.dispatch_workgroups((queries.len() as u32).div_ceil(64), 1, 1);
+                }
+                encoder.copy_buffer_to_buffer(&result, 0, &staging, 0, size);
+                backend.queue.submit([encoder.finish()]);
+                let actual = crate::terrain::map_buffer(&backend, &staging).unwrap();
+                for (q, record) in queries.iter().zip(actual.as_chunks::<32>().0.iter()) {
+                    // Independent linear walk over the original publication.
+                    let upper = (1..count - 1)
+                        .find(|&i| stations[i][0] >= *q)
+                        .unwrap_or(count - 1);
+                    let a = stations[upper - 1];
+                    let b = stations[upper];
+                    let t = ((*q - a[0]) / (b[0] - a[0]).max(1e-9)).clamp(0.0, 1.0);
+                    for c in 0..8 {
+                        let expected = a[c] * (1.0 - t) + b[c] * t;
+                        let v = f32::from_le_bytes(record[c * 4..c * 4 + 4].try_into().unwrap());
+                        assert!(
+                            (v - expected).abs() <= 2e-5 * expected.abs().max(1.0),
+                            "count={count} spacing={spacing} query={q} channel={c} actual={v} expected={expected}"
+                        );
+                    }
+                }
+            }
         }
     }
 }

@@ -27,7 +27,8 @@ CPU oracle. It uses the existing pool/OCBT contracts, pair-u32 geometric IDs,
 parallel classification/indexation and single-writer split/merge transactions.
 It is not integrated production terrain, concurrent multi-request propagation,
 height/material sampling, planetary precision, shadow/ocean/RT publication or
-whole-system parity with `large_cbt`. The production gaps below remain open.
+whole-system parity with `large_cbt` at that historical checkpoint. Subsequent
+production status is summarized in §6.1 and docs 62–63.
 The [parallel follow-up, doc 62](62_CBT_PARALLEL_TRANSACTIONS.md), adds bounded
 multi-request planning/reservation/conflict resolution and parallel mutation,
 with exact serial/CPU oracles and a 128K-capacity fixture. The
@@ -50,8 +51,9 @@ acceptance remain open; none of these phases establishes whole-system parity.
 In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
 logical tree and backend contract), `thessa-rcbt-ref` (portable differential
 oracle), `thessa-rcbt-wgpu` (WGSL/wgpu dispatch prototype) and
-`thessa-bevy-rcbt` (thin client resource/plugin adapter). This is not yet a replacement
-for the current client terrain renderer: the CPU tile path remains the fallback until parity.
+`thessa-bevy-rcbt` (thin client resource/plugin adapter). The native production
+selection is now persistent topology as recorded above; the CPU tile path remains
+an explicit disabled/unsupported and legacy fallback, with acceptance tracked separately.
 
 This doc records the next major terrain step after the current very fast CPU tile builder. The current cube-sphere path is useful as a baseline and fallback: it proved that procedural geometry can be churned on the CPU at a rate on the order of kilometers per second and scaled well across cores. But the fixed tile grid remains too coarse a refinement unit: when only a few additional triangles are locally needed, a whole tile is built, and the CPU budget ends up bounded by the total amount of geometry that has to be produced at all.
 
@@ -288,27 +290,29 @@ Those results may justify statements such as "the sparse/incremental Thessa
 state-maintenance path beats the measured reference path on this workload".
 They do **not** justify "Thessa replaces/beats `large_cbt`" as a renderer.
 
-`large_cbt` also owns work that the current production Thessa path does not
-yet reproduce as one equivalent system:
+Current production status (2026-10-30): docs 61–63 implement the broader
+pipeline independently in Rust/WGSL. The old missing-topology list is superseded:
 
-- a persistent GPU bisector pool used as live render topology;
-- neighbor-linked conforming split/merge propagation;
-- live GPU allocation and exhaustion behavior during refinement;
-- the full classify/allocate/bisect-or-simplify/propagate/reduce/index pipeline;
-- an indirect rendering path whose end-to-end frame cost and visual/error
-  target can be compared on the same scene and hardware.
+| Large CBT semantic component | Thessa owner / current status |
+| --- | --- |
+| Persistent live bisectors, allocator and neighbor records | `rcbt-core::conforming` and `rcbt-wgpu::sphere`; pool-backed GPU topology |
+| Conforming split/merge and bounded allocation | `sphere_update.wgsl`, `sphere_batch.wgsl`; parallel plan/reserve/conflict/commit, serial and CPU differential oracles |
+| Classification, indexation and indirect publication | `SphereGpu` plus `render-wgpu::ConformingSurface`; production projected-area and sampled midpoint error classifier |
+| Canonical planet height/material and precision | Borrowed residency and exact depth-58 addresses; f64-relative charts, shared raster/shadow/ocean/RT stream in doc 63 |
+| Native selection and fallback | WORLD13 checked-in configurations select persistent topology; explicit disabled/unsupported paths retain patches |
+| Whole-system equivalent-error reference acceptance | **Open**: continuous ground↔orbit trajectories, error extrema, exhaustion/recovery, complete-frame and cross-platform measurements |
 
-Thessa's microscaled surface storage is a separate axis. `microstore` reduces
-material/height storage, precision, filtering, residency, and dirty-upload cost;
-it is intentionally orthogonal to CBT topology and is not evidence of
-`large_cbt` topology parity.
+`microstore` is still a separate axis: material/height storage, precision,
+filtering, residency and dirty uploads do not themselves implement CBT topology.
+The production classifier samples deviation at three edge midpoints; it does not
+certify a universal geometric-error bound. RT still has full-capacity/dirty
+publication costs rather than an accepted active-only incremental optimization.
 
-A future whole-system replacement/parity claim requires those missing topology
-semantics to be present in the production GPU path and validated with equivalent
-fixtures, capacity/exhaustion cases, and end-to-end measurements at the same
-quality/error target. Until then, comparisons must name the layer actually
-measured: tree/rank maintenance, allocator state, storage/residency, or full
-renderer.
+Do not reinterpret the implemented topology as complete `large_cbt` parity.
+A whole-system claim requires equivalent fixtures, capacity/exhaustion behavior
+and end-to-end measurements at the same error/quality target. Continue through
+P01–P05 in [doc 98](98_GRAPHICS_PARITY_ROADMAP.md), naming the layer actually
+measured: tree/rank maintenance, allocator, storage/residency, or full renderer.
 
 ---
 

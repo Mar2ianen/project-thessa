@@ -111,5 +111,5 @@ fn sample_station(z: f32) -> Station {
         rgb += transmission * max(station.emission.rgb * weight * shock, vec3(0.0)) * dt * absorb;
         transmission *= absorb;
     }
-    return vec4<f32>(rgb, clamp(1.0 - transmission, 0.0, 1.0));
+    return vec4<f32>(rgb * frame.exposure.x, clamp(1.0 - transmission, 0.0, 1.0));
 }

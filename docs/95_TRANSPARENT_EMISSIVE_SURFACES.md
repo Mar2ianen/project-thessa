@@ -53,6 +53,10 @@ hosts omitting resolved settings must keep temporal history disabled themselves.
 
 ## B05 and actual external comparison
 
+The later [Unreal B05 comparison](97_UNREAL_B05_COMPARISON.md) uses the same
+GLB/camera and linear HDR with an explicit source-literal emission mapping.
+Its stock-import control and repeat hashes are recorded separately.
+
 `B05-transparency-emission-v1` exports three generated MIT panels: an opaque
 background, a far red emitter (alpha 0.25) and a near green emitter (alpha 0.5).
 Primitive order is deliberately unsorted. The dataset has 12 vertices, six

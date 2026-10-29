@@ -177,3 +177,7 @@ An additional official Khronos EmissiveStrengthTest original-byte cache and
 opt-in GPU oracle are recorded in [doc 95](95_TRANSPARENT_EMISSIVE_SURFACES.md#original-khronos-asset-continuation).
 Its individual license is CC-BY-4.0 (AGI/Ed Mackey), not CC0. It preserves all
 90 original triangles; this is not yet a native B06 capture scene.
+
+The same-data external diagnostics now include Cycles B01/B05 (docs 92/95) and
+[Unreal B05](97_UNREAL_B05_COMPARISON.md). These remain separate from temporal,
+blind-preference and full-scene performance acceptance.

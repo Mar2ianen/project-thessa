@@ -1,6 +1,8 @@
 # 92 — External renderer setup and first B01 Cycles diagnostic
 
-Status: Godot downloaded/verified; B01/B05 Cycles comparisons executed; Unreal Installed Build unpacked, probe status recorded below.
+Status: Godot downloaded/verified; B01/B05 Cycles comparisons executed; actual
+Unreal B05 is now documented in [doc 97](97_UNREAL_B05_COMPARISON.md). The
+setup and bootstrap sections below retain their historical milestone scope.
 
 The initial R1–R4 refactor deferred external adapters. After those milestones
 and B01/native capture, the user explicitly requested external-engine setup and

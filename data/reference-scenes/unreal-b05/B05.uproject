@@ -1,0 +1,12 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Reference",
+  "DisableEnginePluginsByDefault": true,
+  "Plugins": [
+    {"Name": "PythonScriptPlugin", "Enabled": true},
+    {"Name": "EditorScriptingUtilities", "Enabled": true},
+    {"Name": "InterchangeEditor", "Enabled": true},
+    {"Name": "InterchangeAssets", "Enabled": true}
+  ]
+}

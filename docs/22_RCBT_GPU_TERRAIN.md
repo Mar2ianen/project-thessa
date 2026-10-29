@@ -76,6 +76,9 @@ canonical physical surface
 
 ---
 
+The active plume/planet fidelity and performance backlog, including Large CBT
+whole-system acceptance, is [doc 98](98_GRAPHICS_PARITY_ROADMAP.md).
+
 ## 1. Core architectural contract
 
 Three things are kept separate:

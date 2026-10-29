@@ -803,7 +803,9 @@ explicit material losses. Native B02 rendering remains pending; no coastal
 speedup or reference parity claimed. The first
 [external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md) now
 captures the same GLB/camera with explicit BSDF/light-unit/AA differences;
-Godot is downloaded and verified; the user's Unreal 5.8.4 Installed Build is unpacked in the external cache.
+Godot is downloaded and verified. [Unreal B05](docs/97_UNREAL_B05_COMPARISON.md)
+now runs on the user's Unreal 5.8.4 Installed Build with linear-HDR readback,
+verified camera/geometry and explicit literal emissive-parameter mapping.
 
 [Stable direct GGX](docs/93_STABLE_DIRECT_GGX.md) repairs an epsilon that clipped
 smooth specular peaks in the shared mesh/terrain/ocean/ray-hit kernel. Analytic
@@ -829,3 +831,6 @@ coalesces consecutive sorted instances without changing alpha-over order. On
 the fixed 8,192-instance Radeon fixture, GPU mesh time falls from about 1.37 ms
 to 0.16 ms with identical HDR bytes. This is a call-overhead result, not a
 coastal or cross-engine speedup.
+
+The active plume/planet fidelity and performance backlog, including Large CBT
+whole-system acceptance, is [doc 98](docs/98_GRAPHICS_PARITY_ROADMAP.md).

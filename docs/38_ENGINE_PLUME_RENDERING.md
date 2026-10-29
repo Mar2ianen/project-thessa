@@ -12,6 +12,9 @@ The original CPU-baked cone from commit `33e58cd25abf82c17ffc2467edc0ebed23274dd
 (`feat/atmospheric-beauty`) remains as the Low-quality fallback, not the default
 representation for every quality level.
 
+The active plume/planet fidelity and performance backlog, including Large CBT
+whole-system acceptance, is [doc 98](98_GRAPHICS_PARITY_ROADMAP.md).
+
 ## 1. Problem statement
 
 The original engine-plume implementation was a CPU-baked `32x256` RGBA texture

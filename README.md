@@ -800,4 +800,7 @@ with verified static 880M repeats and explicit scene/geometry hashes.
 [B02 asset ingestion](docs/91_B02_ASSET_PROVENANCE.md) pins full evaluated
 CC0 Fern/Moss geometry in an external cache, with reproducible conversion and
 explicit material losses. Native B02 rendering remains pending; no coastal
-speedup or reference parity claimed.
+speedup or reference parity claimed. The first
+[external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md) now
+captures the same GLB/camera with explicit BSDF/light-unit/AA differences;
+Godot is downloaded and verified, while the user's Unreal Linux download is in progress.

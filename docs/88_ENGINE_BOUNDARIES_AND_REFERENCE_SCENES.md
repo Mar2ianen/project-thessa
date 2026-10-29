@@ -487,4 +487,7 @@ audit and reproducible external-cache producer, based on `148dce7`. It selects
 full evaluated Fern/Moss geometry, explicitly labels the derived core material
 variant and retains source/converted hashes and conversion loss evidence.
 No Rust/runtime dependency or renderer changes occur in this milestone.
-Native B02 MASK support, fixed scene tiers and external comparisons remain open.
+Native B02 MASK support and fixed scene tiers remain open. A subsequent explicit
+external-comparison request is implemented in [doc 92](92_EXTERNAL_RENDERER_COMPARISON.md):
+one actual Cycles B01 diagnostic, without changing runtime dependencies or
+claiming physical/visual equivalence. Godot/Unreal captures remain open.

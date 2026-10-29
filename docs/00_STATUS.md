@@ -35,6 +35,10 @@ derived materials. Native B02 MASK rendering and scene tiers remain pending.
 Cycles B01 diagnostic with explicit BSDF/light-unit/AA limits. This is not
 physical/visual parity or a performance comparison. Godot is downloaded and
 verified; Godot/Unreal captures remain pending.
+[Doc 93](93_STABLE_DIRECT_GGX.md) fixes clipped smooth-GGX peaks in the existing
+shared direct specular kernel. Analytic CPU/Radeon checks pass; same-data B01
+HDR RMSE against the fixed Cycles output falls about 12.46%. Multiscattering,
+AA/temporal quality, native B02 cutouts and coastal parity remain open.
 
 ## Simulation and physics
 

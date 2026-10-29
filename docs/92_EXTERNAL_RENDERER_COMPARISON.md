@@ -91,6 +91,9 @@ in the ten highest-error pixels around narrow highlights, so that L2 value
 does not summarize the entire material grid. The roughest metallic sphere also
 has a visible reflectance difference requiring a BSDF-specific investigation.
 These observations establish a useful external diagnostic, **not parity**.
+The subsequent [direct-GGX correction](93_STABLE_DIRECT_GGX.md) fixes one
+numerical cause and records a new same-data native capture. The initial numbers
+above remain the dated baseline; rough-metal/AA/model differences remain open.
 
 The [portable evidence record](artifacts/b01-cycles-comparison-2026-10-29.json)
 contains actual source/tool/artifact identities, settings, limits and metrics.
@@ -105,8 +108,8 @@ no blind votes or physical acceptance are inferred from these metrics.
   existing portable capture; no game scene, engine dependency or shader rewrite.
 - **Changed files:** adapter/tests, dated evidence, this document and living indexes.
 - **Tests executed:** 28 Python quality tests; actual Cycles 640×480/64-sample
-CPU capture in an isolated process without display/GPU/network; matching PNG
-and float32 HDR across repeated seed-0 renders; input/hash,
+  CPU capture in an isolated process without display/GPU/network; matching PNG
+  and float32 HDR across repeated seed-0 renders; input/hash,
   geometry-count and finite-output checks; PNG/HDR convention tests; Godot
   archive verification and headless version probe. Syntax/diff checks passed.
 - **Tests not executed:** Rust rebuild (no Rust changed), Godot/Unreal rendering,

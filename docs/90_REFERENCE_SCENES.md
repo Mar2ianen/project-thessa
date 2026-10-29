@@ -68,6 +68,9 @@ recorded in [doc 91](91_B02_ASSET_PROVENANCE.md).
 The first external same-GLB Cycles diagnostic and its explicit comparison limits
 are now recorded in [doc 92](92_EXTERNAL_RENDERER_COMPARISON.md); renderer parity
 remains unaccepted.
+[Doc 93](93_STABLE_DIRECT_GGX.md) records the first resulting production shader
+correction: stable direct-GGX peaks, an analytic regression and a new native
+same-data capture against the fixed external HDR reference.
 
 ## B01 data milestone record
 

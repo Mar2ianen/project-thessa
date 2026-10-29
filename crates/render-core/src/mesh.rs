@@ -98,9 +98,21 @@ impl Image {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
+}
+
 #[derive(Debug, Clone)]
 pub struct Material {
     pub base_color: [f32; 4],
+    pub alpha_mode: AlphaMode,
+    /// glTF MASK: alpha >= cutoff survives. Cutoffs above one reject everything.
+    /// Ignored by opaque/blended consumers.
+    pub alpha_cutoff: f32,
     pub base_texture: Option<usize>,
     pub normal_texture: Option<usize>,
     pub normal_scale: f32,
@@ -120,6 +132,8 @@ impl Default for Material {
     fn default() -> Self {
         Self {
             base_color: [1.0; 4],
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
             base_texture: None,
             normal_texture: None,
             normal_scale: 1.0,
@@ -220,6 +234,8 @@ impl MeshAsset {
                 .into_iter()
                 .any(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
                 || !material.normal_scale.is_finite()
+                || !material.alpha_cutoff.is_finite()
+                || material.alpha_cutoff < 0.0
             {
                 return Err("invalid mesh material factors");
             }
@@ -256,6 +272,35 @@ impl MeshAsset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cutout_thresholds_are_finite_nonnegative_and_may_exceed_one() {
+        let mut source = MeshAsset {
+            primitives: vec![Primitive {
+                ambient_visibility: vec![],
+                material: 0,
+                vertices: [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]
+                    .map(|position| Vertex {
+                        position,
+                        normal: [0., 0., 1.],
+                        uv: [0.; 2],
+                    })
+                    .to_vec(),
+                indices: vec![0, 1, 2],
+            }],
+            materials: vec![Material::default()],
+            textures: vec![],
+            images: vec![],
+        };
+        for cutoff in [0., 0.5, 1.5] {
+            source.materials[0].alpha_cutoff = cutoff;
+            assert!(source.validate().is_ok());
+        }
+        for cutoff in [-1., f32::NAN, f32::INFINITY] {
+            source.materials[0].alpha_cutoff = cutoff;
+            assert!(source.validate().is_err());
+        }
+    }
+
     #[test]
     fn texture_mips_preserve_linear_energy_and_npot_edge_area() {
         let image = Image {

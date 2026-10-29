@@ -12,7 +12,7 @@ python3 -m unittest discover -s tools/agent-qa/tests -v
 
 The checker uses full `cargo metadata --format-version 1 --all-features`
 resolution: transitive runtime/build paths and root dev edges for backend/license
-checks, without inheriting downstream dev tooling. It guards 19 foundations,
+checks, without inheriting downstream dev tooling. It guards 20 foundations,
 MIT-to-GPL workspace paths, reverse app dependencies, mandatory game worldgen
 in rendering and new generic-physics/celestial coupling. Two exact compiler
 facade edges remain staged; collision’s former facade edge is forbidden. See [doc 88](../../docs/88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md).

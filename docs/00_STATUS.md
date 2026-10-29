@@ -24,7 +24,9 @@ collision uses vehicle-core directly with sim-core API compatibility; the shared
 WGSL owner supplies mesh ABI requirements to both adapters; native hosts share
 mesh-frame publication through SceneMeshes. R5 capture infrastructure is
 implemented: [doc 89](89_REFERENCE_CAPTURE.md) records PNG/linear HDR/perf
-provenance and exact camera/light inputs. B01/B02 scene content remains staged. No new reference scenes, benchmark assets or cross-engine
+provenance and exact camera/light inputs. [Doc 90](90_REFERENCE_SCENES.md)
+adds B01 generated material-lab data/GLB export in a neutral 44th workspace
+package. Native B01 capture and B02 content remain staged. No new reference scenes, benchmark assets or cross-engine
 comparison has been introduced by this refactor.
 
 ## Simulation and physics

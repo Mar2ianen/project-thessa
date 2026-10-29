@@ -33,6 +33,11 @@ decoder library embeds no game asset. Its tests/benchmarks reference the existin
 CC BY 4.0 X-15; the GPL native application embeds that model for its optional
 diagnostic preview. Binary distribution must retain cmoreau's attribution and
 the source/license links in `assets/models/north_american_x-15_plane.LICENSE.txt`.
+`crates/reference-scenes` is MIT: generated mathematical B01 geometry and
+explicit material/camera/light definitions, without game content or GPU types.
+Its exported GLB/metadata retain the accompanying MIT notice from that crate;
+no third-party benchmark assets are embedded. Imported B02 content will require
+an independent source/license/conversion audit before ingestion.
 The existing flight terrain spin/axis convention remains GPL in
 `flight-authority::presentation`; the GPL native viewer samples it alongside
 baked ephemerides and combines it with the reusable presentation geometry.

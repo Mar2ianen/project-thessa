@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "scene_id": "B01-material-lab-v1",
+  "adapter_source": {
+    "commit": "5320b9344f9628ec49f13efbaa301888e9f94d44",
+    "dirty": true,
+    "tracked_diff_sha256": "faba9a4b8442cb7e009e8f588bfb94b56387d04ba7f0d1f3ad9224606b4bf91b",
+    "untracked_sha256": {
+      "docs/92_EXTERNAL_RENDERER_COMPARISON.md": "8ff105874209182cdb9a068ef1eac6dabe85e2dcdf1e2f35ed75f6cfa321e0bb",
+      "tools/agent-qa/cycles_b01.py": "2f93f0f712ec38e66f1add9e14e52085e2e52de28335a67e6f91502e1fb9ad51",
+      "tools/agent-qa/tests/test_cycles_b01.py": "72953e7241051b67dab4b8f0a441acdef79d06513215582f6d95d6bb4c18ae9b"
+    }
+  },
+  "adapter_sha256": "2f93f0f712ec38e66f1add9e14e52085e2e52de28335a67e6f91502e1fb9ad51",
+  "native_capture_sha256": "d27ef5afb3a26aae2202fd97a5ae5500e692c79876cd2b016518d34c501482c8",
+  "native_source": {
+    "commit": "148dce7dd91291ce66e796d6e1b18df48a1bc201",
+    "dirty": false,
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_sha256": {}
+  },
+  "native_platform": {
+    "os": "linux",
+    "cpu": "x86_64",
+    "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+  },
+  "native_build": {
+    "commit": "148dce7dd91291ce66e796d6e1b18df48a1bc201",
+    "version": "0.0.1",
+    "profile": "debug"
+  },
+  "reference_geometry_sha256": "d5777b784049330a639b7cb81b96a953cfe12e582f1d781f4f027577283feaf1",
+  "reference_scene_manifest_sha256": "cc209032c99ebb4987f49085556754552c8ec262aa5245459722cfdf2b27b08f",
+  "engine": {
+    "name": "Blender Cycles",
+    "version": "5.2.2 LTS",
+    "build_hash": "d13f752e3b9c",
+    "binary_sha256": "bc9eee8315e136d7ea48411e1bbfb29709f6069a79d9219d6eff793857f45233",
+    "device": "CPU",
+    "threads": 2
+  },
+  "capture": {
+    "width": 640,
+    "height": 480,
+    "exposure_gain": 0.00020345052,
+    "samples": 64,
+    "seed": 0,
+    "adaptive_sampling": false,
+    "denoising": false,
+    "max_bounces": 1,
+    "shadows": false,
+    "filter": "BOX, width 1",
+    "tone_mapping": "shared per-channel Reinhard then sRGB",
+    "color_management": "scene-linear EXR; no AgX/Standard view baked into comparison",
+    "loaded_exr_color_space": "Linear Rec.709",
+    "camera_world_matrix_blender": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.45902013778686523,
+        -0.888425886631012,
+        -18.0
+      ],
+      [
+        0.0,
+        0.888425886631012,
+        0.45902013778686523,
+        10.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "camera_vertical_fov_rad": 0.8726646304130554,
+    "sun_energy_numeric": 10000.0,
+    "sun_angle_rad": 0.0,
+    "triangles": 22082,
+    "mesh_objects": 11
+  },
+  "light_units": "Operational numeric mapping: 1 Thessa RGB lux input = 1 Cycles normalized SUN energy unit. No spectral/luminous-efficacy calibration; absolute photometric equivalence is unverified.",
+  "differences": [
+    "Cycles glTF Principled BSDF versus Thessa direct GGX/Lambert/Fresnel and derivative roughness filtering",
+    "Cycles path sampling/BOX pixel reconstruction versus native raster MSAA=1",
+    "Cycles float32 radiance versus Thessa pre-exposed float16 render target",
+    "CPU offline Cycles render versus GPU raster; durations are not a performance comparison"
+  ],
+  "render_wall_s": 4.477216170052998,
+  "metrics": {
+    "rgb_components": 921600,
+    "foreground_union_pixels": 92999,
+    "pre_exposed_linear_rgb_mae": 0.002715678915568535,
+    "pre_exposed_linear_rgb_rmse": 0.36535218021954596,
+    "relative_l2_against_thessa": 2.080346299052073,
+    "top_10_pixels_fraction_of_squared_error": 0.9990368654762843,
+    "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+  },
+  "acceptance": {
+    "physical": "not evaluated",
+    "visual": "not evaluated",
+    "performance": "not comparable",
+    "temporal": "not evaluated"
+  },
+  "artifacts_sha256": {
+    "radiance.exr": "4e09180f7397048267acc716cf399d8e12339d3293f3959af6851e0aef8c95e4",
+    "linear.rgba32f": "f0c55b6ed75ebe5464e09d1dc18e867243bf617ad74e9c75cd235acd039772e0",
+    "display.png": "4b3da451e57818afc4228203e5cc33ee58e5f035aa2b47d037e850a84f53ab8f",
+    "thessa.png": "c9ac81535e2fb1481ff7c566915a856549db61280689d9a933040d9cdca3c402",
+    "scene.glb": "d5777b784049330a639b7cb81b96a953cfe12e582f1d781f4f027577283feaf1",
+    "scene.json": "cc209032c99ebb4987f49085556754552c8ec262aa5245459722cfdf2b27b08f",
+    "scene.LICENSE.txt": "3d088852ab4f40761cb6864528419af05419a6c26af4237212587bcf22bb95be"
+  },
+  "repeat_evidence": {
+    "same_seed_same_build": true,
+    "artifacts_sha256": {
+      "display.png": "4b3da451e57818afc4228203e5cc33ee58e5f035aa2b47d037e850a84f53ab8f",
+      "linear.rgba32f": "f0c55b6ed75ebe5464e09d1dc18e867243bf617ad74e9c75cd235acd039772e0"
+    },
+    "scope": "Identical PNG and pre-exposed float32 HDR across three actual CPU renders, seed 0; no temporal-motion acceptance."
+  },
+  "external_tool_setup": {
+    "godot": {
+      "status": "installed",
+      "version": "4.7.2.stable.official.ed1daf0bf",
+      "binary_sha256": "8d106cbe6144c2dc7e881d61d2429c1a8a76e6b22ef48bd5e48dcf934953f71e",
+      "archive": {
+        "release": "https://github.com/godotengine/godot/releases/tag/4.7.2-stable",
+        "tag": "4.7.2-stable",
+        "published": "2026-08-18T16:12:28Z",
+        "name": "Godot_v4.7.2-stable_linux.x86_64.zip",
+        "size": 77860424,
+        "digest": "sha256:cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4",
+        "browser_download_url": "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
+      },
+      "gpu_render_tested": false
+    },
+    "unreal": {
+      "selected_filename": "Linux_Unreal_Engine_5.8.4.zip",
+      "state": "User browser download in progress; no extraction/executable verification",
+      "source": "https://www.unrealengine.com/en-US/linux"
+    }
+  }
+}

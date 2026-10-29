@@ -65,6 +65,9 @@ continuation below now captures B01; texture/normal-map and HDRI variants,
 external-renderer equivalence and native B02 remain separate work.
 The pinned B02 external-cache producer and declared conversion losses are
 recorded in [doc 91](91_B02_ASSET_PROVENANCE.md).
+The first external same-GLB Cycles diagnostic and its explicit comparison limits
+are now recorded in [doc 92](92_EXTERNAL_RENDERER_COMPARISON.md); renderer parity
+remains unaccepted.
 
 ## B01 data milestone record
 

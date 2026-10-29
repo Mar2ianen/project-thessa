@@ -31,7 +31,10 @@ Two static 880M PBR captures match exactly; this is not external-reference or
 coastal performance acceptance. [Doc 91](91_B02_ASSET_PROVENANCE.md) adds pinned
 CC0 Fern/Moss ingestion with reproducible external-cache GLBs and explicitly
 derived materials. Native B02 MASK rendering and scene tiers remain pending.
-No cross-engine comparison has been executed.
+[Doc 92](92_EXTERNAL_RENDERER_COMPARISON.md) adds the first actual same-scene
+Cycles B01 diagnostic with explicit BSDF/light-unit/AA limits. This is not
+physical/visual parity or a performance comparison. Godot is downloaded and
+verified; Godot/Unreal captures remain pending.
 
 ## Simulation and physics
 

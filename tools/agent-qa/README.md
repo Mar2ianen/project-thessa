@@ -113,4 +113,16 @@ result checksums and file budgets are enforced, and large assets stay outside
 Git. Existing mismatched files fail without replacement. No asset fetch occurs
 inside a benchmark capture. [Doc 91](../../docs/91_B02_ASSET_PROVENANCE.md)
 records the CC0 provenance, full evaluated geometry and explicitly derived
-material variant. Native B02 and cross-engine adapters remain separate work.
+material variant. Native B02 remains separate work; the first external B01
+diagnostic is documented below.
+
+## First external B01 diagnostic
+
+`cycles_b01.py` runs inside an existing Blender/Cycles installation and imports
+the GLB from a verified native B01 capture. It matches the actual captured camera
+and uses explicit numeric irradiance mapping and common HDR/exposure/Reinhard/
+sRGB output. It retains raw float32 radiance, images, hashes and diagnostic
+metrics. No renderer code or external package is added to Rust. See
+[doc 92](../../docs/92_EXTERNAL_RENDERER_COMPARISON.md) for the command, tested
+tool versions and BSDF/AA/light-unit limits. This is not a performance comparison
+or physical/visual parity acceptance; Godot/Unreal adapters remain pending.

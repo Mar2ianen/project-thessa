@@ -142,6 +142,17 @@ fn surface_schlick_fresnel(f0:vec3<f32>,cosine:f32)->vec3<f32> {
     return f0+(vec3(1.0)-f0)*pow(1.0-clamp(cosine,0.0,1.0),5.0);
 }
 
+// Split-sum white-furnace directional albedo for a GGX/Smith surface with
+// unit Fresnel. The three.js DFG fit's two angular terms cancel when the
+// scale+bias sum is taken, leaving a roughness-only approximation that is
+// still accurate enough to restore missing multiple-scattering energy.
+fn surface_ggx_directional_albedo(roughness:f32)->f32 {
+    let c0=vec4<f32>(-1.0,-0.0275,-0.572,0.022);
+    let c1=vec4<f32>(1.0,0.0425,1.04,-0.04);
+    let r=vec4<f32>(clamp(roughness,0.0,1.0))*c0+c1;
+    return clamp(r.z+r.w,0.0,1.0);
+}
+
 fn surface_sun_reflection(
     normal: vec3<f32>,
     view: vec3<f32>,
@@ -157,13 +168,18 @@ fn surface_sun_reflection(
     }
 
     let half_vector = ocean_safe_normalize(view + sun, normal);
-    let n_dot_h = max(dot(normal, half_vector), 0.0);
+    let n_dot_h = clamp(dot(normal, half_vector), 0.0, 1.0);
     let h_dot_v = max(dot(half_vector, view), 0.0);
     let perceptual_roughness = clamp(roughness, 0.02, 1.0);
     let alpha = max(perceptual_roughness * perceptual_roughness, 0.0025);
     let alpha_squared = alpha * alpha;
-    let denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
-    let distribution = alpha_squared / max(OCEAN_PI * denominator * denominator, OCEAN_EPSILON);
+    // |N x H|² = 1-(N.H)² avoids cancellation at smooth highlights.
+    // The existing positive alpha floor bounds this denominator; a generic
+    // epsilon on its square clips the physical GGX peak and loses energy.
+    let n_cross_h = cross(normal, half_vector);
+    let denominator = dot(n_cross_h,n_cross_h) + n_dot_h*n_dot_h*alpha_squared;
+    let quotient = alpha / denominator;
+    let distribution = quotient*quotient / OCEAN_PI;
 
     // Schlick-Smith masking approximation with N.V cancelled analytically
     // to preserve finite grazing limits without 0/0 floating-point instability.
@@ -171,7 +187,15 @@ fn surface_sun_reflection(
     let v_v = 1.0 / max(max(n_dot_v, 0.0) * (1.0 - k) + k, OCEAN_EPSILON);
     let v_l = 1.0 / max(max(n_dot_l, 0.0) * (1.0 - k) + k, OCEAN_EPSILON);
     let fresnel = surface_schlick_fresnel(f0, h_dot_v);
-    let brdf_times_cosine = fresnel * distribution * (0.25 * v_v * v_l * n_dot_l);
+    // Single-scatter GGX omits paths that bounce between microfacets. The
+    // split-sum white-furnace albedo supplies the missing fraction; the
+    // Fresnel average follows the standard 1/21 hemisphere integral.
+    let e_ss = surface_ggx_directional_albedo(perceptual_roughness);
+    let e_ms = max(1.0 - e_ss, 0.0);
+    let f_avg = f0 + (vec3<f32>(1.0) - f0) * (1.0 / 21.0);
+    let f_ms = fresnel * f_avg / max(vec3<f32>(1.0) - e_ms * f_avg, vec3<f32>(1e-6));
+    let f_total = fresnel + f_ms * e_ms;
+    let brdf_times_cosine = f_total * distribution * (0.25 * v_v * v_l * n_dot_l);
     return sun_illuminance * brdf_times_cosine;
 }
 

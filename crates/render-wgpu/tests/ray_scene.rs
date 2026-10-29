@@ -1251,6 +1251,16 @@ fn srgb8(linear: f32) -> u8 {
     (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+fn ggx_multiscatter_scale(roughness: f32, f0: f32) -> f32 {
+    let c0 = [-1.0_f32, -0.0275, -0.572, 0.022];
+    let c1 = [1.0_f32, 0.0425, 1.04, -0.04];
+    let fit: [f32; 4] = std::array::from_fn(|i| roughness.clamp(0.0, 1.0) * c0[i] + c1[i]);
+    let e_ss = (fit[2] + fit[3]).clamp(0.0, 1.0);
+    let e_ms = (1.0 - e_ss).max(0.0);
+    let f_avg = f0 + (1.0 - f0) / 21.0;
+    1.0 + e_ms * f_avg / (1.0 - e_ms * f_avg)
+}
+
 fn assert_rgb_near(actual: [u8; 3], linear: [f32; 3]) {
     let expected = linear.map(srgb8);
     for channel in 0..3 {
@@ -1471,7 +1481,8 @@ fn reflected_texture_wrap_modes_and_colour_spaces_match_raster_resources() {
     let mr = 128.0_f32 / 255.0;
     let albedo = ((mr + 0.055) / 1.055).powf(2.4);
     let fresnel = 0.04 * (1.0 - mr) + albedo * mr;
-    let expected = ((1.0 - fresnel) * (1.0 - mr) * albedo + fresnel / (4.0 * mr.powi(4))) * 0.5;
+    let specular = fresnel / (4.0 * mr.powi(4)) * ggx_multiscatter_scale(mr, fresnel);
+    let expected = ((1.0 - fresnel) * (1.0 - mr) * albedo + specular) * 0.5;
     assert_rgb_near(
         reflected_sample(
             &backend,
@@ -1511,7 +1522,8 @@ fn reflected_mr_channels_and_quality_control_hit_shading() {
         &instances(),
         &lighting([0.0; 3]),
     );
-    assert_rgb_near(metal, [0.0625; 3]);
+    let metal_linear = 0.0625 * ggx_multiscatter_scale(1.0, 0.5);
+    assert_rgb_near(metal, [metal_linear; 3]);
     asset.images[0].rgba8[1] = 128;
     let smooth = reflected_sample(
         &backend,
@@ -1537,7 +1549,7 @@ fn reflected_mr_channels_and_quality_control_hit_shading() {
             &instances(),
             &lighting([0.0; 3]),
         );
-        assert_rgb_near(fallback, [0.0625; 3]); // MR texture omitted, factors preserved.
+        assert_rgb_near(fallback, [metal_linear; 3]); // MR texture omitted, factors preserved.
     }
 }
 

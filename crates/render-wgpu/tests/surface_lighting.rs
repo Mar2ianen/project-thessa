@@ -66,6 +66,25 @@ fn camera(origin: DVec3) -> ViewParams {
         exposure: 0.5,
     }
 }
+fn ggx_multiscatter_scale(roughness: f32, f0: f32) -> f32 {
+    let c0 = [-1.0_f32, -0.0275, -0.572, 0.022];
+    let c1 = [1.0_f32, 0.0425, 1.04, -0.04];
+    let fit: [f32; 4] = std::array::from_fn(|i| roughness.clamp(0.0, 1.0) * c0[i] + c1[i]);
+    let e_ss = (fit[2] + fit[3]).clamp(0.0, 1.0);
+    let e_ms = (1.0 - e_ss).max(0.0);
+    let f_avg = f0 + (1.0 - f0) / 21.0;
+    1.0 + e_ms * f_avg / (1.0 - e_ms * f_avg)
+}
+
+fn srgb8(linear: f32) -> u8 {
+    let encoded = if linear <= 0.003_130_8 {
+        12.92 * linear
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 fn draw(
     backend: &Backend,
     mesh: &mut MeshRenderer,
@@ -488,11 +507,14 @@ fn pbr_uses_linear_metal_roughness_maps_and_reflection_disable_has_no_hidden_spe
     );
     let rough = render(&source, Quality::Medium, true);
     // At N=V=L, roughness=.5 gives D=16/PI, G=1 and F=base.
-    // E=PI and exposure=.5 therefore yield linear RGB=(1,.5,.25).
-    for (actual, expected) in center(&rough).into_iter().zip([255u8, 188, 137]) {
+    // E=PI and exposure=.5 therefore yield 2*base before the compensated
+    // multiple-scattering energy is included.
+    let expected: [u8; 3] =
+        [0.5, 0.25, 0.125].map(|f0| srgb8(2.0 * f0 * ggx_multiscatter_scale(0.5, f0)));
+    for (actual, expected) in center(&rough).into_iter().zip(expected) {
         assert!(
             actual.abs_diff(expected) <= 2,
-            "normal-incidence GGX oracle within two sRGB codes"
+            "normal-incidence GGX oracle within two sRGB codes: {actual} vs {expected}"
         );
     }
     source.materials[0].roughness = 128.0 / 255.0;

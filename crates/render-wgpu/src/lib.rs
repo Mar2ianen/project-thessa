@@ -16,11 +16,8 @@
 //! - `is_discrete_gpu`: adapter device type, exactly as the client reads it;
 //! - `ray_query_supported`: adapter exposes `EXPERIMENTAL_RAY_QUERY`;
 //! - `terrain_mesh_supported`: mesh-shader feature plus the terrain mesh
-//!   limits. Thresholds (96 output vertices / 32 primitives / 32
-//!   invocations / 7 storage buffers) duplicate
-//!   `bevy-rcbt/src/render.rs::{MESHLET_*, mesh_shader_supported}` — the
-//!   single source of truth until the terrain mesh path moves off the
-//!   bridge, at which point the constants hoist here.
+//!   limits. The shared mesh-stage ABI in `thessa-rcbt-core::shaders`
+//!   owns capacities/invocation/storage minima used here and in Bevy.
 //!
 //! Device negotiation: [`Backend::bring_up`] requests stable features only,
 //! so no `unsafe` experimental-feature consent lives in the default path
@@ -58,12 +55,9 @@ mod terrain_topology;
 pub mod timing;
 pub mod view;
 
-/// Mesh limits the terrain mesh-shader path needs. Duplicates the bridge
-/// (`bevy-rcbt/src/render.rs`); see module docs for the hoist plan.
-const MESH_MIN_OUTPUT_VERTICES: u32 = 96;
-const MESH_MIN_OUTPUT_PRIMITIVES: u32 = 32;
-const MESH_MIN_INVOCATIONS: u32 = 32;
-const MESH_MIN_STORAGE_BUFFERS: u32 = 7;
+use thessa_rcbt_core::shaders::{
+    MESH_OUTPUT_PRIMITIVES, MESH_OUTPUT_VERTICES, MESH_STORAGE_BUFFERS, MESH_WORKGROUP_SIZE,
+};
 
 /// Bring-up failure.
 #[derive(Debug, Clone, PartialEq)]
@@ -449,11 +443,11 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
     let features = adapter.features();
     let limits = adapter.limits();
     let mesh = features.contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER)
-        && limits.max_mesh_output_vertices >= MESH_MIN_OUTPUT_VERTICES
-        && limits.max_mesh_output_primitives >= MESH_MIN_OUTPUT_PRIMITIVES
-        && limits.max_mesh_invocations_per_workgroup >= MESH_MIN_INVOCATIONS
-        && limits.max_mesh_invocations_per_dimension >= MESH_MIN_INVOCATIONS
-        && limits.max_storage_buffers_per_shader_stage >= MESH_MIN_STORAGE_BUFFERS;
+        && limits.max_mesh_output_vertices >= MESH_OUTPUT_VERTICES
+        && limits.max_mesh_output_primitives >= MESH_OUTPUT_PRIMITIVES
+        && limits.max_mesh_invocations_per_workgroup >= MESH_WORKGROUP_SIZE
+        && limits.max_mesh_invocations_per_dimension >= MESH_WORKGROUP_SIZE
+        && limits.max_storage_buffers_per_shader_stage >= MESH_STORAGE_BUFFERS;
     Capabilities {
         // Vulkan guarantees centered 1x samples and at least four subpixel bits.
         // Other APIs retain the ordinary caster path until their contract is proved.

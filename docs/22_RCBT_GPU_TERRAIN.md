@@ -11,6 +11,14 @@ bindings 0–16 and the 256-wide fan-out (any renumber fails it); GPU tests are
 `#[ignore]`d without hardware runners, so the mesh path has no default-CI
 signal yet.
 
+2026-10-29 ownership clarification (R3): terrain mesh capacities, invocation and
+storage minima, plus the 256-wide dispatch ABI, belong to
+`thessa-rcbt-core::shaders`. Native and Bevy capability probes import these
+constants. Hardware probing and adapter-specific dispatch checks remain in the
+backends; requested/resolved fallback policy remains in `graphics`. A CPU guard
+checks host capacities against the shared WGSL. See
+[doc 88](88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md).
+
 Status: **implementation baseline / performance target**.
 
 2026-10-18 experimental follow-up: [doc 61](61_CBT_SPHERE_EXPERIMENT.md)

@@ -790,6 +790,7 @@ The [shadow geometry hierarchy](docs/83_NATIVE_SHADOW_HIERARCHY.md) reduces the 
 
 [Engine-boundary refactoring](docs/88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md)
 starts with a 43-package ownership audit and resolved dependency gate in the
-existing workspace. R1/R2 are implemented: collision imports existing vehicle
-types directly, retaining sim-core API compatibility. Renderer/native
-consolidation and deterministic reference scenes remain staged.
+existing workspace. R1–R3 are implemented: collision imports existing vehicle
+types directly with sim-core compatibility, and the shared WGSL owner supplies
+mesh requirements to both renderer adapters. Native integration consolidation
+and deterministic reference scenes remain staged.

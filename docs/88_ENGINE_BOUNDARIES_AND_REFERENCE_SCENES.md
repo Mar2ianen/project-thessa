@@ -1,6 +1,6 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1–R4, R5 capture and native B01 implemented; B02 staged.
+Status: R1–R4, R5 capture, native B01 and B02 asset ingestion implemented; native B02 pending.
 No third-party benchmark assets imported.
 
 ## Audit baseline
@@ -470,7 +470,7 @@ adapters are implemented by this refactor.
 [Doc 90](90_REFERENCE_SCENES.md) records the new neutral 44th package, generated
 material lab, portable GLB/metadata/license export and exact validation scope.
 The data source is `271e56a`; native B01 now runs independently through the
-existing mesh/display/perf consumers. B02 ingestion remains separate work.
+existing mesh/display/perf consumers. B02 ingestion is documented separately below.
 The capture infrastructure also passed a **clean-source** repeat at `271e56a`,
 with that exact build label, source dirty=false and an empty untracked set.
 
@@ -479,3 +479,12 @@ records changed boundaries, tests, actual 880M captures, static exact repeats,
 scene/geometry hashes and scoped dev timing. The canonical capture path also
 passed after shared neutral camera/light/timestamp formatting was extracted.
 No new external dependencies or imported benchmark assets were required.
+
+## B02 asset-ingestion continuation
+
+[Doc 91](91_B02_ASSET_PROVENANCE.md) records the independent source/license
+audit and reproducible external-cache producer, based on `148dce7`. It selects
+full evaluated Fern/Moss geometry, explicitly labels the derived core material
+variant and retains source/converted hashes and conversion loss evidence.
+No Rust/runtime dependency or renderer changes occur in this milestone.
+Native B02 MASK support, fixed scene tiers and external comparisons remain open.

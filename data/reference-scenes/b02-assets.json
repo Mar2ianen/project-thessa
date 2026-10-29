@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "variant": "core-cutout-v1",
+  "converter": {
+    "path": "tools/agent-qa/blender_reference_cutouts.py",
+    "sha256": "8e80192c0112018e0489218a5d479f9c0d8754fc09dee8c9b32f1773781b123c",
+    "blender_version": "5.2.2 LTS",
+    "blender_build_hash": "d13f752e3b9c",
+    "scripts_from_downloads_executed": false
+  },
+  "license_text": {
+    "source": "https://github.com/spdx/license-list-data/blob/617f1a78824394ada7525017d98c6fb215aad09b/text/CC0-1.0.txt",
+    "upstream_commit": "617f1a78824394ada7525017d98c6fb215aad09b",
+    "git_blob_sha": "0e259d42c996742e9e3cba14c677129b2c1b6311",
+    "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+  },
+  "assets": [
+    {
+      "id": "vegetation-fern-02-core-cutout-v1",
+      "source": "https://polyhaven.com/a/fern_02",
+      "license": "CC0-1.0",
+      "authors": [
+        "Rico Cilliers",
+        "Rob Tuytel"
+      ],
+      "license_notice": "data/reference-scenes/licenses/CC0-1.0.txt",
+      "license_evidence_urls": [
+        "https://polyhaven.com/license",
+        "https://polyhaven.com/a/fern_02"
+      ],
+      "upstream_revision_or_version": "unversioned 1K source snapshot 2026-10-29; original artifact SHA-256 pinned",
+      "source_sha256": "1bfb6e12d805cc97035c8cbd051187ca6db650e3157fd8884afcf66a6c4e78eb",
+      "converted_sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+      "sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+      "path": "polyhaven/fern_02/core-cutout-v1/fern_02.glb",
+      "bytes": 4047388,
+      "triangles": 6232,
+      "conversion_tool_version": "Blender 5.2.2 LTS d13f752e3b9c; core-cutout-v1; converter SHA-256 pinned below",
+      "asset_format": "glTF 2.0 GLB, embedded 1K PNG images, explicit core-PBR/MASK derived material variant",
+      "unit_scale": 1.0,
+      "coordinate_convention": "metres, right-handed Y-up via Blender exporter; authored world transforms retained",
+      "texture_color_spaces": {
+        "base_color": "sRGB",
+        "alpha": "linear",
+        "normal": "linear",
+        "metallic_roughness": "linear"
+      },
+      "geometry_lod": "full evaluated four source fern clumps; no decimation",
+      "material_variant": "core-cutout-v1; raw scanned color/maps, default glTF dielectric IOR 1.5/specular; source Blender translucency/mix/add/hue graph not reproduced; stored threshold 0.5 defines derived MASK coverage",
+      "tangent_basis": "not authored in GLB; native UV-derivative frame; Blender/MikkTSpace equality unverified",
+      "texture_conversion": "1K unchanged dimensions; RGB unchanged after JPEG decode; 16-bit alpha and EXR data quantized to 8-bit PNG; out-of-range normal EXR values clipped to [0,1], angular normal error unverified",
+      "source_files": [
+        {
+          "role": "blend",
+          "path": "polyhaven/fern_02/blend-1k/raw/fern_02_1k.blend",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/blend/1k/fern_02/fern_02_1k.blend",
+          "bytes": 261459,
+          "sha256": "1bfb6e12d805cc97035c8cbd051187ca6db650e3157fd8884afcf66a6c4e78eb"
+        },
+        {
+          "role": "rough",
+          "path": "polyhaven/fern_02/blend-1k/raw/textures/fern_02_rough_1k.exr",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/1k/fern_02/fern_02_rough_1k.exr",
+          "bytes": 267009,
+          "sha256": "6bde0113a818f78ebcce524fe417b9617a8aadf2873a1948fdbb200cc27eaf3c"
+        },
+        {
+          "role": "alpha",
+          "path": "polyhaven/fern_02/blend-1k/raw/textures/fern_02_alpha_1k.png",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/fern_02/fern_02_alpha_1k.png",
+          "bytes": 114589,
+          "sha256": "ea3c64284c7ebdeedf484d2d816eae92825ec526140c3bb83859ddc7a64001f9"
+        },
+        {
+          "role": "nor_gl",
+          "path": "polyhaven/fern_02/blend-1k/raw/textures/fern_02_nor_gl_1k.exr",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/1k/fern_02/fern_02_nor_gl_1k.exr",
+          "bytes": 801563,
+          "sha256": "318209d70836a9b078c395a2df26bcc732dae3df248ecd5d827005da7c8ff174"
+        },
+        {
+          "role": "diff",
+          "path": "polyhaven/fern_02/blend-1k/raw/textures/fern_02_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_diff_1k.jpg",
+          "bytes": 315705,
+          "sha256": "a828a6e7b4c01c826911e2eac4b3afc7457dab7b3b392a31c681ed88b7d50029"
+        }
+      ],
+      "upstream_gltf_audit": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf",
+        "sha256": "33974295ee19670af4877705fc7d91f33f42d6302f0d44a625e072271223031f",
+        "triangles": 6232,
+        "selected": false,
+        "reason": "Public export uses JPEG maps without embedded alpha; selected source Blender geometry plus explicitly derived coverage/material variant."
+      },
+      "evaluation_frame": 1
+    },
+    {
+      "id": "vegetation-moss-01-core-cutout-v1",
+      "source": "https://polyhaven.com/a/moss_01",
+      "license": "CC0-1.0",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license_notice": "data/reference-scenes/licenses/CC0-1.0.txt",
+      "license_evidence_urls": [
+        "https://polyhaven.com/license",
+        "https://polyhaven.com/a/moss_01"
+      ],
+      "upstream_revision_or_version": "unversioned 1K source snapshot 2026-10-29; original artifact SHA-256 pinned",
+      "source_sha256": "10e82ee6c0862db72353820528f1739af49084651ed890a24d156d112cb6f38b",
+      "converted_sha256": "e4a06589676930d55c4f2fdcac9a09489124075e2b596d620955d56908ae7790",
+      "sha256": "e4a06589676930d55c4f2fdcac9a09489124075e2b596d620955d56908ae7790",
+      "path": "polyhaven/moss_01/core-cutout-v1/moss_01.glb",
+      "bytes": 13961464,
+      "triangles": 245438,
+      "conversion_tool_version": "Blender 5.2.2 LTS d13f752e3b9c; core-cutout-v1; converter SHA-256 pinned below",
+      "asset_format": "glTF 2.0 GLB, embedded 1K PNG images, explicit core-PBR/MASK derived material variant",
+      "unit_scale": 1.0,
+      "coordinate_convention": "metres, right-handed Y-up via Blender exporter; authored world transforms retained",
+      "texture_color_spaces": {
+        "base_color": "sRGB",
+        "alpha": "linear",
+        "normal": "linear",
+        "metallic_roughness": "linear"
+      },
+      "geometry_lod": "full evaluated moss_01_geometry_nodes root; source strand/template/LOD libraries excluded",
+      "material_variant": "core-cutout-v1; raw scanned color/maps, default glTF dielectric IOR 1.5/specular; source Blender translucency/mix/add/hue graph not reproduced; stored threshold 0.5 defines derived MASK coverage",
+      "tangent_basis": "not authored in GLB; native UV-derivative frame; Blender/MikkTSpace equality unverified",
+      "texture_conversion": "1K unchanged dimensions; RGB unchanged after JPEG decode; 16-bit alpha and EXR data quantized to 8-bit PNG; out-of-range normal EXR values clipped to [0,1], angular normal error unverified",
+      "source_files": [
+        {
+          "role": "blend",
+          "path": "polyhaven/moss_01/blend-1k/raw/moss_01_1k.blend",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/blend/1k/moss_01/moss_01_1k.blend",
+          "bytes": 174449,
+          "sha256": "10e82ee6c0862db72353820528f1739af49084651ed890a24d156d112cb6f38b"
+        },
+        {
+          "role": "alpha",
+          "path": "polyhaven/moss_01/blend-1k/raw/textures/moss_01_alpha_1k.png",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/moss_01/moss_01_alpha_1k.png",
+          "bytes": 85174,
+          "sha256": "00da5c2d0164338c2330587737ff65cefb5575de0c7019ae20bd6f60976608c0"
+        },
+        {
+          "role": "diff",
+          "path": "polyhaven/moss_01/blend-1k/raw/textures/moss_01_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/moss_01/moss_01_diff_1k.jpg",
+          "bytes": 170297,
+          "sha256": "7c8d0794dd9db0a82f668a276896818d195c644cfed35f0fbf984a3260e70e50"
+        },
+        {
+          "role": "nor_gl",
+          "path": "polyhaven/moss_01/blend-1k/raw/textures/moss_01_nor_gl_1k.exr",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/1k/moss_01/moss_01_nor_gl_1k.exr",
+          "bytes": 896965,
+          "sha256": "b4751e322177c2a646b558d65a848331c3f9ece46b2ced938092484f024b6164"
+        },
+        {
+          "role": "rough",
+          "path": "polyhaven/moss_01/blend-1k/raw/textures/moss_01_rough_1k.exr",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/1k/moss_01/moss_01_rough_1k.exr",
+          "bytes": 523510,
+          "sha256": "be8776fca7d43d10ccb5ea0413b48cf1f41a6a2b4a96459c289a017cb585360e"
+        }
+      ],
+      "upstream_gltf_audit": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/moss_01/moss_01_1k.gltf",
+        "sha256": "36fe6cb9889abb33f4dbee402928e260a3e7dfaec043d39b80b1e3afff684f65",
+        "triangles": 214,
+        "selected": false,
+        "reason": "Source Blender evaluation plus declared material variant is used; public Moss glTF contains templates only and unsupported material semantics."
+      },
+      "evaluation_frame": 208
+    }
+  ]
+}

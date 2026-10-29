@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-29",
+  "source_commit": "148dce7dd91291ce66e796d6e1b18df48a1bc201",
+  "scope": "Asset conversion only; no B02 rendering or external-renderer equivalence. Reproduced with pinned raw inputs, no GPU/display/network access.",
+  "converter": {
+    "path": "tools/agent-qa/blender_reference_cutouts.py",
+    "sha256": "8e80192c0112018e0489218a5d479f9c0d8754fc09dee8c9b32f1773781b123c",
+    "blender_version": "5.2.2 LTS",
+    "blender_build_hash": "d13f752e3b9c",
+    "scripts_from_downloads_executed": false
+  },
+  "assets": [
+    {
+      "id": "vegetation-fern-02-core-cutout-v1",
+      "source_sha256": "1bfb6e12d805cc97035c8cbd051187ca6db650e3157fd8884afcf66a6c4e78eb",
+      "converted_sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+      "reproduced_sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+      "converted_bytes": 4047388,
+      "triangles": 6232,
+      "evaluation_frame": 1,
+      "source_unit_scale": 1.0,
+      "coordinate_conversion": "Blender Z-up to glTF right-handed Y-up; metres; existing object world transforms retained",
+      "objects": [
+        {
+          "source_object": "fern_02_b",
+          "triangles": 2384,
+          "vertices": 1590,
+          "uv_layers": [
+            "UVMap"
+          ],
+          "world_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              -4.76837158203125e-07
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              5.960464477539062e-07
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        {
+          "source_object": "fern_02_c",
+          "triangles": 2248,
+          "vertices": 1500,
+          "uv_layers": [
+            "UVMap"
+          ],
+          "world_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              1.0000009536743164
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              1.1920928955078125e-07
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        {
+          "source_object": "fern_02_a",
+          "triangles": 784,
+          "vertices": 525,
+          "uv_layers": [
+            "UVMap"
+          ],
+          "world_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              -1.1920928955078125e-07
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              -1.0000001192092896
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        {
+          "source_object": "fern_02_d",
+          "triangles": 816,
+          "vertices": 545,
+          "uv_layers": [
+            "UVMap"
+          ],
+          "world_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              -0.9999995827674866
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      ],
+      "source_images": [
+        {
+          "path": "textures/fern_02_diff_1k.jpg",
+          "sha256": "a828a6e7b4c01c826911e2eac4b3afc7457dab7b3b392a31c681ed88b7d50029",
+          "color_space": "sRGB",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.0,
+          "decoded_channel_max": 1.0
+        },
+        {
+          "path": "textures/fern_02_rough_1k.exr",
+          "sha256": "6bde0113a818f78ebcce524fe417b9617a8aadf2873a1948fdbb200cc27eaf3c",
+          "color_space": "Non-Color",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.29931640625,
+          "decoded_channel_max": 1.0
+        },
+        {
+          "path": "textures/fern_02_nor_gl_1k.exr",
+          "sha256": "318209d70836a9b078c395a2df26bcc732dae3df248ecd5d827005da7c8ff174",
+          "color_space": "Non-Color",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.0394287109375,
+          "decoded_channel_max": 1.0263671875
+        },
+        {
+          "path": "textures/fern_02_alpha_1k.png",
+          "sha256": "ea3c64284c7ebdeedf484d2d816eae92825ec526140c3bb83859ddc7a64001f9",
+          "color_space": "Non-Color",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.0,
+          "decoded_channel_max": 1.0
+        }
+      ],
+      "materials": [
+        {
+          "source_principled_parameters": [
+            {
+              "Base Color": [
+                0.800000011920929,
+                0.800000011920929,
+                0.800000011920929,
+                1.0
+              ],
+              "Metallic": 0.0,
+              "Roughness": 0.5,
+              "IOR": 1.4500000476837158,
+              "Alpha": 1.0,
+              "Specular IOR Level": 0.5,
+              "Transmission Weight": 0.0,
+              "Subsurface Weight": 0.0
+            }
+          ],
+          "source": "fern_02",
+          "derived": "fern_02__B02_CoreCutoutV1",
+          "source_render_method": "DITHERED",
+          "source_alpha_threshold": 0.5,
+          "normal_scale": 1.0,
+          "dielectric_ior": 1.5,
+          "specular_ior_level": 0.5,
+          "metallic": 0.0,
+          "roughness_factor": 1.0,
+          "double_sided": true
+        }
+      ],
+      "exporter_material_delta": [
+        {
+          "material": "fern_02__B02_CoreCutoutV1",
+          "exported_alpha_mode": "BLEND",
+          "benchmark_alpha_mode": "MASK",
+          "benchmark_cutoff": 0.5
+        }
+      ],
+      "texture_checks": [
+        {
+          "material": "fern_02__B02_CoreCutoutV1",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "source_alpha_bits": 16,
+          "converted_alpha_bits": 8,
+          "alpha_range_bytes": [
+            0,
+            255
+          ],
+          "max_normalized_alpha_error": 0.002029449912260728,
+          "max_source_rgb_byte_error": 0,
+          "source_coverage_fraction": 0.15347671508789062,
+          "converted_coverage_fraction": 0.15347671508789062
+        }
+      ]
+    },
+    {
+      "id": "vegetation-moss-01-core-cutout-v1",
+      "source_sha256": "10e82ee6c0862db72353820528f1739af49084651ed890a24d156d112cb6f38b",
+      "converted_sha256": "e4a06589676930d55c4f2fdcac9a09489124075e2b596d620955d56908ae7790",
+      "reproduced_sha256": "e4a06589676930d55c4f2fdcac9a09489124075e2b596d620955d56908ae7790",
+      "converted_bytes": 13961464,
+      "triangles": 245438,
+      "evaluation_frame": 208,
+      "source_unit_scale": 1.0,
+      "coordinate_conversion": "Blender Z-up to glTF right-handed Y-up; metres; existing object world transforms retained",
+      "objects": [
+        {
+          "source_object": "moss_01_geometry_nodes",
+          "triangles": 245438,
+          "vertices": 244854,
+          "uv_layers": [
+            "UVMap"
+          ],
+          "world_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              -0.48512691259384155
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      ],
+      "source_images": [
+        {
+          "path": "textures/moss_01_diff_1k.jpg",
+          "sha256": "7c8d0794dd9db0a82f668a276896818d195c644cfed35f0fbf984a3260e70e50",
+          "color_space": "sRGB",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.0,
+          "decoded_channel_max": 1.0
+        },
+        {
+          "path": "textures/moss_01_rough_1k.exr",
+          "sha256": "be8776fca7d43d10ccb5ea0413b48cf1f41a6a2b4a96459c289a017cb585360e",
+          "color_space": "Non-Color",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.2431640625,
+          "decoded_channel_max": 1.0
+        },
+        {
+          "path": "textures/moss_01_nor_gl_1k.exr",
+          "sha256": "b4751e322177c2a646b558d65a848331c3f9ece46b2ced938092484f024b6164",
+          "color_space": "Non-Color",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.1385498046875,
+          "decoded_channel_max": 1.0234375
+        },
+        {
+          "path": "textures/moss_01_alpha_1k.png",
+          "sha256": "00da5c2d0164338c2330587737ff65cefb5575de0c7019ae20bd6f60976608c0",
+          "color_space": "Non-Color",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "decoded_channel_min": 0.0,
+          "decoded_channel_max": 1.0
+        }
+      ],
+      "materials": [
+        {
+          "source_principled_parameters": [
+            {
+              "Base Color": [
+                0.010568717494606972,
+                0.0195279773324728,
+                0.002417034236714244,
+                1.0
+              ],
+              "Metallic": 0.023622047156095505,
+              "Roughness": 0.9173228740692139,
+              "IOR": 1.4500000476837158,
+              "Alpha": 1.0,
+              "Specular IOR Level": 0.0,
+              "Transmission Weight": 0.0,
+              "Subsurface Weight": 0.0
+            }
+          ],
+          "source": "moss_01_sphere",
+          "derived": "moss_01_sphere__B02_CoreCutoutV1",
+          "source_render_method": "DITHERED",
+          "source_alpha_threshold": 0.5,
+          "normal_scale": 1.0,
+          "dielectric_ior": 1.5,
+          "specular_ior_level": 0.5,
+          "metallic": 0.023622047156095505,
+          "roughness_factor": 0.9173228740692139,
+          "double_sided": true
+        },
+        {
+          "source_principled_parameters": [
+            {
+              "Base Color": [
+                0.800000011920929,
+                0.800000011920929,
+                0.800000011920929,
+                1.0
+              ],
+              "Metallic": 0.0,
+              "Roughness": 0.8920863270759583,
+              "IOR": 1.4500000476837158,
+              "Alpha": 1.0,
+              "Specular IOR Level": 0.0,
+              "Transmission Weight": 0.0,
+              "Subsurface Weight": 0.0
+            }
+          ],
+          "source": "moss_01",
+          "derived": "moss_01__B02_CoreCutoutV1",
+          "source_render_method": "DITHERED",
+          "source_alpha_threshold": 0.5,
+          "normal_scale": 2.0,
+          "dielectric_ior": 1.5,
+          "specular_ior_level": 0.5,
+          "metallic": 0.0,
+          "roughness_factor": 1.0,
+          "double_sided": true
+        }
+      ],
+      "exporter_material_delta": [
+        {
+          "material": "moss_01_sphere__B02_CoreCutoutV1",
+          "exported_alpha_mode": "OPAQUE",
+          "benchmark_alpha_mode": "OPAQUE",
+          "benchmark_cutoff": null
+        },
+        {
+          "material": "moss_01__B02_CoreCutoutV1",
+          "exported_alpha_mode": "BLEND",
+          "benchmark_alpha_mode": "MASK",
+          "benchmark_cutoff": 0.5
+        }
+      ],
+      "texture_checks": [
+        {
+          "material": "moss_01__B02_CoreCutoutV1",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "source_alpha_bits": 16,
+          "converted_alpha_bits": 8,
+          "alpha_range_bytes": [
+            0,
+            255
+          ],
+          "max_normalized_alpha_error": 0.0019684138246739424,
+          "max_source_rgb_byte_error": 0,
+          "source_coverage_fraction": 0.06299400329589844,
+          "converted_coverage_fraction": 0.06299304962158203
+        }
+      ]
+    }
+  ]
+}

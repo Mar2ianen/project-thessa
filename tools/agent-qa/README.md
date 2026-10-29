@@ -98,3 +98,19 @@ Native B01 uses `data/reference-scenes/b01-capture.toml`. The tool binds actual
 scene IDs and hashes exported GLB/scene metadata separately from the requested
 run manifest. [Doc 90](../../docs/90_REFERENCE_SCENES.md) records the frozen
 profiles, independent native path and verified static physical-GPU evidence.
+
+## Pinned B02 asset cache
+
+```sh
+python3 tools/agent-qa/reference_assets.py --cache /absolute/external/cache
+```
+
+`reference_assets.py` verifies existing pinned GLBs or fetches only the ten
+selected Poly Haven source files and converts them with the trusted repository
+Blender script. A fresh conversion requires Blender 5.2.2 LTS build
+`d13f752e3b9c`; automatic source scripts are disabled. Source/converter/license/
+result checksums and file budgets are enforced, and large assets stay outside
+Git. Existing mismatched files fail without replacement. No asset fetch occurs
+inside a benchmark capture. [Doc 91](../../docs/91_B02_ASSET_PROVENANCE.md)
+records the CC0 provenance, full evaluated geometry and explicitly derived
+material variant. Native B02 and cross-engine adapters remain separate work.

@@ -1,6 +1,6 @@
 # 90 — Deterministic reference-scene data
 
-Status: B01 data and native capture implemented; B02 staged.
+Status: B01 data/native capture and B02 asset ingestion implemented; native B02 pending.
 Capture infrastructure is operational ([doc 89](89_REFERENCE_CAPTURE.md)).
 
 ## Ownership
@@ -62,7 +62,9 @@ Strict all-target Clippy, formatting and the real 44-package architecture gate
 pass. The export example executed and produced actual GLB/JSON/license files.
 The original data milestone did not claim native rendering/timing. The native
 continuation below now captures B01; texture/normal-map and HDRI variants,
-external-renderer equivalence and B02 remain separate work.
+external-renderer equivalence and native B02 remain separate work.
+The pinned B02 external-cache producer and declared conversion losses are
+recorded in [doc 91](91_B02_ASSET_PROVENANCE.md).
 
 ## B01 data milestone record
 

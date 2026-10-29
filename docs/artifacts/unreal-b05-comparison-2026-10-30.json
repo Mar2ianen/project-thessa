@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-30",
+  "source_base": "c25bd04f1c8cef6f2bbbd0d6a69d8c9348369a4e",
+  "integrated_base": "00924ed9813242c2218eca6ec9ee03c57caf23bc",
+  "comparison": {
+    "schema_version": 1,
+    "scene_id": "B05-transparency-emission-v1",
+    "adapter_source": {
+      "commit": "c25bd04f1c8cef6f2bbbd0d6a69d8c9348369a4e",
+      "dirty": true,
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "untracked_sha256": {
+        "data/reference-scenes/unreal-b05/B05.uproject": "397d1fbe4124f894efd5901ffedc0ae2efb40b95ba77b2f26a928655b1584157",
+        "data/reference-scenes/unreal-b05/Config/DefaultEngine.ini": "bb0cf98c936f8dcab70cdae662efb63e36a17decb3623c65348ea4638dbe92e9",
+        "tools/agent-qa/tests/test_unreal_b05.py": "73ca15adfdb1252b08e5a3665d652e9053dc60ea8064960409db6b14ae8276c3",
+        "tools/agent-qa/unreal_b05.py": "03d78f4fafe3b0ef72f441ed298199aae88aca611ec00c572439b0cdee3fcae2"
+      }
+    },
+    "adapter_sha256": "03d78f4fafe3b0ef72f441ed298199aae88aca611ec00c572439b0cdee3fcae2",
+    "native_capture_sha256": "0fc9fec182cbd4cc0d675e185fd49365dfe9ca41d2051e5893b572ac78592278",
+    "reference_geometry_sha256": "d21ab7b6501c832fcc471be13d7d09586f2dc22932d7e9b89a9c103f985d5f2f",
+    "native_source": {
+      "commit": "14cedd8d8f9286c859eb664f6c32b74f5734558c",
+      "dirty": true,
+      "tracked_diff_sha256": "532036abafcbb0654f6657db75e946305c98133dbf6121e5a7ce79579dab70d9",
+      "untracked_sha256": {}
+    },
+    "engine": {
+      "name": "Unreal Engine",
+      "version": "5.8.4-58902052+++UE5+Release-5.8"
+    },
+    "capture": {
+      "width": 640,
+      "height": 480,
+      "exposure_gain": 0.41666666,
+      "camera_requested": {
+        "position_cm": [
+          0.0,
+          600.0,
+          0.0
+        ],
+        "forward": [
+          -0.0,
+          -1.0,
+          0.0
+        ],
+        "right": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "up": [
+          -0.0,
+          -0.0,
+          1.0
+        ],
+        "horizontal_fov_degrees": 63.74203213267385
+      },
+      "camera_actual": {
+        "position_cm": [
+          0.0,
+          600.0,
+          0.0
+        ],
+        "forward": [
+          2.220446049250313e-16,
+          -1.0,
+          0.0
+        ],
+        "right": [
+          1.0,
+          2.220446049250313e-16,
+          0.0
+        ],
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "horizontal_fov_degrees": 63.74203109741211,
+        "near_cm": 10.0,
+        "max_draw_distance_cm": 10000.0
+      },
+      "cvars": {
+        "r.AntiAliasingMethod": 0,
+        "r.EyeAdaptationQuality": 0,
+        "r.BloomQuality": 0,
+        "r.MotionBlurQuality": 0,
+        "r.PreExposure": 0,
+        "r.SeparateTranslucency": 0,
+        "r.DynamicGlobalIlluminationMethod": 0,
+        "r.ReflectionMethod": 0,
+        "r.ScreenPercentage": 100,
+        "r.SceneColorFormat": 4
+      },
+      "ray_tracing_verified_off": true,
+      "empty_light_world_verified": true,
+      "warmup_captures": 3,
+      "format": "RGBA16Float read as float32; normalize=False",
+      "source": "SCS_SCENE_COLOR_HDR; scene-linear RGB, inverse opacity alpha",
+      "alpha_comparison": "RGB only; native and capture alpha have different contracts",
+      "tone_mapping": "shared native gain, per-channel Reinhard, sRGB; Unreal tonemapper excluded",
+      "coordinate_conversion": "glTF metres (x,y,z) -> Unreal cm 100*(x,z,y)",
+      "geometry": [
+        {
+          "source_panel": 0,
+          "path": "/Game/ReferenceB05/scene/StaticMeshes/capture_node_0.capture_node_0",
+          "triangles": 2,
+          "vertices": 4,
+          "origin_cm": [
+            70.00000190734863,
+            40.0,
+            0.0
+          ],
+          "extent_cm": [
+            129.99999809265137,
+            0.0,
+            130.0
+          ],
+          "material": "/Game/ReferenceB05/scene/Materials/capture_material_0.capture_material_0",
+          "material_class": "MaterialInstanceConstant",
+          "emission_mapping": {
+            "factor": [
+              0.0,
+              1.0,
+              0.05000000074505806
+            ],
+            "strength": 2.0,
+            "radiance": [
+              0.0,
+              2.0,
+              0.10000000149011612
+            ],
+            "imported_factor": [
+              0.0,
+              1.0,
+              0.05000000074505806
+            ],
+            "imported_strength": 2.0,
+            "mapped_factor": [
+              0.0,
+              2.0,
+              0.10000000149011612
+            ],
+            "mapped_strength": 1.0
+          }
+        },
+        {
+          "source_panel": 1,
+          "path": "/Game/ReferenceB05/scene/StaticMeshes/capture_node_1.capture_node_1",
+          "triangles": 2,
+          "vertices": 4,
+          "origin_cm": [
+            0.0,
+            -60.000003814697266,
+            0.0
+          ],
+          "extent_cm": [
+            320.0,
+            0.0,
+            180.0
+          ],
+          "material": "/Game/ReferenceB05/scene/Materials/capture_material_1.capture_material_1",
+          "material_class": "MaterialInstanceConstant",
+          "emission_mapping": {
+            "factor": [
+              0.10000000149011612,
+              0.15000000596046448,
+              0.20000000298023224
+            ],
+            "strength": 1,
+            "radiance": [
+              0.10000000149011612,
+              0.15000000596046448,
+              0.20000000298023224
+            ],
+            "imported_factor": [
+              0.10000000149011612,
+              0.15000000596046448,
+              0.20000000298023224
+            ],
+            "imported_strength": 1.0,
+            "mapped_factor": [
+              0.10000000149011612,
+              0.15000000596046448,
+              0.20000000298023224
+            ],
+            "mapped_strength": 1.0
+          }
+        },
+        {
+          "source_panel": 2,
+          "path": "/Game/ReferenceB05/scene/StaticMeshes/capture_node_2.capture_node_2",
+          "triangles": 2,
+          "vertices": 4,
+          "origin_cm": [
+            -70.00000190734863,
+            0.0,
+            0.0
+          ],
+          "extent_cm": [
+            129.99999809265137,
+            0.0,
+            130.0
+          ],
+          "material": "/Game/ReferenceB05/scene/Materials/capture_material_2.capture_material_2",
+          "material_class": "MaterialInstanceConstant",
+          "emission_mapping": {
+            "factor": [
+              1.0,
+              0.02500000037252903,
+              0.0
+            ],
+            "strength": 4.0,
+            "radiance": [
+              4.0,
+              0.10000000149011612,
+              0.0
+            ],
+            "imported_factor": [
+              1.0,
+              0.02500000037252903,
+              0.0
+            ],
+            "imported_strength": 4.0,
+            "mapped_factor": [
+              4.0,
+              0.10000000149011612,
+              0.0
+            ],
+            "mapped_strength": 1.0
+          }
+        }
+      ],
+      "material_mapping": "Stock Interchange geometry/PBR/alpha; literal glTF factor*strength baked into existing EmissiveFactor, EmissiveStrength=1; no shader graph/BRDF override"
+    },
+    "metrics": {
+      "rgb_components": 921600,
+      "foreground_union_pixels": 140000,
+      "pre_exposed_linear_rgb_mae": 1.634569036670857e-05,
+      "pre_exposed_linear_rgb_rmse": 3.961954350149106e-05,
+      "relative_l2_against_thessa": 0.0002766864236374404,
+      "top_10_pixels_fraction_of_squared_error": 0.00018388036866959378,
+      "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+    },
+    "acceptance": {
+      "physical": "not evaluated",
+      "visual": "not evaluated",
+      "performance": "not measured/comparable",
+      "temporal": "not evaluated"
+    },
+    "limits": [
+      "Frozen emission-only B05; not glass/refraction/GI or coastal scene parity",
+      "No absolute photometric calibration; no incident-light unit mapping needed",
+      "Different engine rasterization/import/shader precision; silhouette differences possible",
+      "Readback/cold shader compilation duration is not frame time"
+    ],
+    "artifacts_sha256": {
+      "scene.glb": "d21ab7b6501c832fcc471be13d7d09586f2dc22932d7e9b89a9c103f985d5f2f",
+      "scene.json": "8ce4f3e288f73af2523aecc9e049f583c99b2d5b5bd4c1041f80033a92ee79fb",
+      "scene.LICENSE.txt": "3d088852ab4f40761cb6864528419af05419a6c26af4237212587bcf22bb95be",
+      "thessa.png": "c5803368570aacad2af863757c699775c95c347a38c66da40c956ffe031026ca",
+      "radiance.rgba32f": "da179a818364553507aa8c79ad9325ef62cdc8982e97b6ffdc64807ff063eff0",
+      "linear.rgba32f": "902786eb3a8f7285b0cd9bf36de1743744a1437577efa7fb051f27b3609c258d",
+      "display.png": "9bf3d6f44630332f5eaeb457eb75de3197fb1c7c27ec1dd0988e50da8409bedb"
+    }
+  },
+  "comparison_path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/ue-b05-cli-v3/capture/comparison.json",
+  "comparison_sha256": "28aa04c0b339790f0de907466e1406d41b029f107848d6184284e8b966be9bc8",
+  "command_path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/ue-b05-cli-v3/command.json",
+  "command_sha256": "60d1288c3a185fcaed00f238daec0c460d20514c8eeee679afad79a157ef3eb8",
+  "successful_cli_exit": 0,
+  "repeat": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/ue-b05-literal-v2/capture/comparison.json",
+    "sha256": "daf961e2154c7155e1e4e0d317c5874540af622cb4603a5ac863b061e57c2be8",
+    "metrics": {
+      "rgb_components": 921600,
+      "foreground_union_pixels": 140000,
+      "pre_exposed_linear_rgb_mae": 1.634569036670857e-05,
+      "pre_exposed_linear_rgb_rmse": 3.961954350149106e-05,
+      "relative_l2_against_thessa": 0.0002766864236374404,
+      "top_10_pixels_fraction_of_squared_error": 0.00018388036866959378,
+      "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+    },
+    "artifacts_sha256": {
+      "scene.glb": "d21ab7b6501c832fcc471be13d7d09586f2dc22932d7e9b89a9c103f985d5f2f",
+      "scene.json": "8ce4f3e288f73af2523aecc9e049f583c99b2d5b5bd4c1041f80033a92ee79fb",
+      "scene.LICENSE.txt": "3d088852ab4f40761cb6864528419af05419a6c26af4237212587bcf22bb95be",
+      "thessa.png": "c5803368570aacad2af863757c699775c95c347a38c66da40c956ffe031026ca",
+      "radiance.rgba32f": "da179a818364553507aa8c79ad9325ef62cdc8982e97b6ffdc64807ff063eff0",
+      "linear.rgba32f": "902786eb3a8f7285b0cd9bf36de1743744a1437577efa7fb051f27b3609c258d",
+      "display.png": "9bf3d6f44630332f5eaeb457eb75de3197fb1c7c27ec1dd0988e50da8409bedb"
+    }
+  },
+  "stock_import_and_update_only_controls": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/ue-render-sm6-probe/capture/comparison.json",
+      "sha256": "7d57551bd1ed5246fd6c97315732f5a80afa03a85b30a4f89ae53fe684a08ba4",
+      "metrics": {
+        "rgb_components": 921600,
+        "foreground_union_pixels": 140000,
+        "pre_exposed_linear_rgb_mae": 0.02671988635258458,
+        "pre_exposed_linear_rgb_rmse": 0.07826475849184673,
+        "relative_l2_against_thessa": 0.5465685419404719,
+        "top_10_pixels_fraction_of_squared_error": 0.00017267288746161883,
+        "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+      },
+      "artifacts_sha256": {
+        "scene.glb": "d21ab7b6501c832fcc471be13d7d09586f2dc22932d7e9b89a9c103f985d5f2f",
+        "scene.json": "8ce4f3e288f73af2523aecc9e049f583c99b2d5b5bd4c1041f80033a92ee79fb",
+        "scene.LICENSE.txt": "3d088852ab4f40761cb6864528419af05419a6c26af4237212587bcf22bb95be",
+        "thessa.png": "c5803368570aacad2af863757c699775c95c347a38c66da40c956ffe031026ca",
+        "radiance.rgba32f": "93ece76dea37d9350d9902e3f77c87f977893b420ae69f4736dfa41796dedaa8",
+        "linear.rgba32f": "221df2785250ce3afe86c6f17ed0d598f9c3962656ee97003316fe00bcdcd576",
+        "display.png": "a76e3ff34d3cffd7161cdd10980652df11302837ad02de2778f672badfd2188b"
+      }
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/ue-b05-stock-published/capture/comparison.json",
+      "sha256": "45f7efb7f3cef3732b7fc2db92f2833868658328b7c87f3dd7612bbdc56dc64c",
+      "metrics": {
+        "rgb_components": 921600,
+        "foreground_union_pixels": 140000,
+        "pre_exposed_linear_rgb_mae": 0.02671988635258458,
+        "pre_exposed_linear_rgb_rmse": 0.07826475849184673,
+        "relative_l2_against_thessa": 0.5465685419404719,
+        "top_10_pixels_fraction_of_squared_error": 0.00017267288746161883,
+        "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+      },
+      "artifacts_sha256": {
+        "scene.glb": "d21ab7b6501c832fcc471be13d7d09586f2dc22932d7e9b89a9c103f985d5f2f",
+        "scene.json": "8ce4f3e288f73af2523aecc9e049f583c99b2d5b5bd4c1041f80033a92ee79fb",
+        "scene.LICENSE.txt": "3d088852ab4f40761cb6864528419af05419a6c26af4237212587bcf22bb95be",
+        "thessa.png": "c5803368570aacad2af863757c699775c95c347a38c66da40c956ffe031026ca",
+        "radiance.rgba32f": "93ece76dea37d9350d9902e3f77c87f977893b420ae69f4736dfa41796dedaa8",
+        "linear.rgba32f": "221df2785250ce3afe86c6f17ed0d598f9c3962656ee97003316fe00bcdcd576",
+        "display.png": "a76e3ff34d3cffd7161cdd10980652df11302837ad02de2778f672badfd2188b"
+      }
+    }
+  ],
+  "installation": {
+    "archive": "/home/chechulin/Downloads/Linux_Unreal_Engine_5.8.4.zip",
+    "archive_bytes": 39819212076,
+    "archive_sha256": "cdff1e0c02010eb4fcf9c38d293cfd0f1afda09272256c146d73db52f570f607",
+    "entries": 299959,
+    "unpacked_bytes": 76967950798,
+    "build_version": {
+      "MajorVersion": 5,
+      "MinorVersion": 8,
+      "PatchVersion": 4,
+      "Changelist": 58902052,
+      "CompatibleChangelist": 55116800,
+      "IsLicenseeVersion": 0,
+      "IsPromotedBuild": 1,
+      "BranchName": "++UE5+Release-5.8"
+    },
+    "state": "extracted",
+    "source": "User browser download from https://www.unrealengine.com/en-US/linux; no archive files modified",
+    "unzip_exit": 0
+  },
+  "checks": {
+    "python_unittest": {
+      "passed": 33,
+      "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/unreal-b05-python-final.log"
+    },
+    "runtime_template": "copied repo B05.uproject and DefaultEngine.ini",
+    "native_changes": "none; existing c25bd04 milestone captures reused"
+  },
+  "acceptance": {
+    "numerical": "B05 RGB diagnostic only; native exposure precedes half-float blending, external gain follows it",
+    "visual_preference": "not evaluated",
+    "temporal": "not evaluated",
+    "performance": "not measured/comparable"
+  },
+  "notes": [
+    "Stock import and update-only control retain the same missing rendered strength despite CPU parameters 2 and 4. Literal glTF factor times strength is set into the existing stock EmissiveFactor input; no fitted image correction.",
+    "GPU-only bwrap: no display/network, renderD128 only; SDL_VIDEODRIVER and SDL_VIDEO_DRIVER dummy. Standard asynchronous compilation retained.",
+    "SDK binaries and generated captures remain external; no Epic source or new package dependency in repository."
+  ]
+}

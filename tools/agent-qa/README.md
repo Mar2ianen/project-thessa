@@ -125,7 +125,13 @@ sRGB output. It retains raw float32 radiance, images, hashes and diagnostic
 metrics. No renderer code or external package is added to Rust. See
 [doc 92](../../docs/92_EXTERNAL_RENDERER_COMPARISON.md) for the command, tested
 tool versions and BSDF/AA/light-unit limits. This is not a performance comparison
-or physical/visual parity acceptance; Godot/Unreal adapters remain pending.
+or physical/visual parity acceptance; Godot rendering remains pending.
+
+`unreal_b05.py` runs inside the stock Unreal PythonScript commandlet over the
+same verified B05 capture. Copy `data/reference-scenes/unreal-b05` to an external
+writable project first. [Doc 97](../../docs/97_UNREAL_B05_COMPARISON.md) gives
+the actual headless command, SDL/DDC settings, parameter-mapping control,
+linear-HDR results and scope. It is not a frame-performance comparison.
 
 ## Transparent/emissive diagnostic
 

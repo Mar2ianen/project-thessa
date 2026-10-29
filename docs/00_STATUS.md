@@ -34,7 +34,7 @@ derived materials. Native B02 MASK rendering and scene tiers remain pending.
 [Doc 92](92_EXTERNAL_RENDERER_COMPARISON.md) adds the first actual same-scene
 Cycles B01 diagnostic with explicit BSDF/light-unit/AA limits. This is not
 physical/visual parity or a performance comparison. Godot is downloaded and
-verified; Godot/Unreal captures remain pending.
+verified; Godot rendering remains pending. Actual Unreal B05 follows in doc 97.
 [Doc 93](93_STABLE_DIRECT_GGX.md) fixes clipped smooth-GGX peaks in the existing
 shared direct specular kernel. Analytic CPU/Radeon checks pass; same-data B01
 HDR RMSE against the fixed Cycles output falls about 12.46%. Multiscattering,
@@ -50,6 +50,13 @@ its five HDR strengths without conversion. It is not yet a native B06 capture.
 [Doc 96](96_TRANSPARENT_INSTANCE_RUNS.md) coalesces ordered transparent instance
 runs; exact GPU/capture regressions pass and a fixed 8,192-instance Radeon ABBA
 fixture improves CPU/GPU command cost. Coastal/B02 speedup remains unmeasured.
+[Doc 97](97_UNREAL_B05_COMPARISON.md) executes an actual Unreal 5.8.4 B05
+comparison with source-literal emissive mapping and repeat-identical external
+HDR. This is an emission/composition diagnostic, not engine performance or
+visual acceptance. [Doc 98](98_GRAPHICS_PARITY_ROADMAP.md) is the prioritized
+implementation backlog for realistic engine plumes and procedural CBT planets,
+with primary-engine references, current-code audit and separate numerical,
+temporal, performance and blind-preference gates.
 
 ## Simulation and physics
 

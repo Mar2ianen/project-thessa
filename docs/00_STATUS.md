@@ -19,9 +19,10 @@ do not update in place).
 
 [Doc 88](88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md) and
 [ADR-0012](adr/0012-engine-boundaries-reference-scenes.md) record the full
-43-package audit and resolved dependency gate. R1 and R2 are implemented:
-collision uses canonical vehicle-core types directly, while sim-core preserves
-its compatibility API. R3–R5 remain staged. No new reference scenes, benchmark assets or cross-engine
+43-package audit and resolved dependency gate. R1–R3 are implemented:
+collision uses vehicle-core directly with sim-core API compatibility; the shared
+WGSL module owns mesh ABI requirements consumed by both adapters. R4/R5 remain
+staged. No new reference scenes, benchmark assets or cross-engine
 comparison has been introduced by this refactor.
 
 ## Simulation and physics

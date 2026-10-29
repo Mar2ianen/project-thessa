@@ -119,13 +119,11 @@ fn dispatch_extent(workgroups: u32) -> (u32, u32) {
         )
     }
 }
-// Keep in sync with mesh.wgsl and the classifier's indirect finalizer.
 #[cfg(feature = "mesh-shaders")]
-const MESHLET_VERTEX_COUNT: u32 = 96;
-#[cfg(feature = "mesh-shaders")]
-const MESHLET_PRIMITIVE_COUNT: u32 = 32;
-#[cfg(feature = "mesh-shaders")]
-const MESH_DISPATCH_WIDTH: u32 = 256;
+use thessa_rcbt_core::shaders::{
+    MESH_DISPATCH_WIDTH, MESH_OUTPUT_PRIMITIVES as MESHLET_PRIMITIVE_COUNT,
+    MESH_OUTPUT_VERTICES as MESHLET_VERTEX_COUNT, MESH_STORAGE_BUFFERS, MESH_WORKGROUP_SIZE,
+};
 
 /// Enabled mesh feature and sufficient limits, independent of GPU vendor.
 #[cfg(feature = "mesh-shaders")]
@@ -136,9 +134,9 @@ pub fn mesh_shader_supported(device: &RenderDevice) -> bool {
         .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER)
         && limits.max_mesh_output_vertices >= MESHLET_VERTEX_COUNT
         && limits.max_mesh_output_primitives >= MESHLET_PRIMITIVE_COUNT
-        && limits.max_mesh_invocations_per_workgroup >= 32
-        && limits.max_mesh_invocations_per_dimension >= 32
-        && limits.max_storage_buffers_per_shader_stage >= 7
+        && limits.max_mesh_invocations_per_workgroup >= MESH_WORKGROUP_SIZE
+        && limits.max_mesh_invocations_per_dimension >= MESH_WORKGROUP_SIZE
+        && limits.max_storage_buffers_per_shader_stage >= MESH_STORAGE_BUFFERS
         && mesh_dispatch_supported(&limits, 1)
 }
 

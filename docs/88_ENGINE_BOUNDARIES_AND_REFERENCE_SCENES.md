@@ -1,6 +1,6 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1/R2 implemented; R3–R5 staged. No new scenes or benchmark assets.
+Status: R1–R3 implemented; R4/R5 staged. No new scenes or benchmark assets.
 
 ## Audit baseline
 
@@ -255,11 +255,15 @@ frames, instances, lighting and page contracts, not game `Scene`/`PlanetField`.
 RCBT includes terrain-specialized contracts and is not a general scene graph.
 Its dev oracle dependencies do not propagate into consumers.
 
-A concrete duplication exists in native/Bevy terrain mesh capability thresholds
-(96 vertices, 32 primitives/invocations, 7 storage buffers). R3 must trace shader
-and dispatch consumers before selecting one owner, preserving adapter-specific
-dispatch constraints. Native headless/window paths also duplicate renderer
-setup; R4 must select one bounded actual duplication after tracing both paths.
+R3 moved duplicate native/Bevy mesh capacity requirements into the existing
+`rcbt-core::shaders` WGSL ABI owner. Both adapters now import 96 output vertices,
+32 output primitives, 32 invocations and 7 storage buffers. Bevy also imports
+the existing 256-wide dispatch ABI; its adapter-specific dispatch-limit tests
+remain in place. Feature detection still belongs to each backend, and fallback
+policy remains in `graphics`. No game state or GPU handle was moved into the
+neutral core. Native frame publication still duplicates mesh update, primary
+jitter application and terrain RT synchronization; that bounded responsibility
+is the R4 candidate, rather than a universal app runner.
 
 ## Architecture gate: enforced and staged
 
@@ -361,3 +365,31 @@ adapters are implemented by this refactor.
 - **Imported assets/licenses:** none; MIT/GPL ownership unchanged.
 - **Known limitations:** aero-surfaces/fuselage facade edges remain staged.
 - **Next smallest useful change:** R3 shared terrain mesh shader ABI thresholds.
+
+## R3 milestone record
+
+- **Source commit:** `6e02463` (R2; R1 is `91a32c5`).
+- **Resulting commit:** the commit introducing this section.
+- **Architectural change:** existing shared shader module owns terrain mesh ABI
+  capacities used by both backend adapters. Ownership table above clarifies
+  cameras, transforms, instances, lighting, GPU resources, settings, residency,
+  scheduling and profiling without restructuring valid public APIs.
+- **Affected dependencies:** none; both adapters already depend on rcbt-core.
+- **Changed files:** rcbt-core shaders module, render-wgpu capability imports,
+  Bevy mesh probe/dispatch imports, docs 22/88, README/status and ADR status.
+- **Tests executed:** 75 rcbt-core tests (including the host/WGSL contract
+  guard); 51 graphics resolution/fallback tests; 8 Bevy render tests with
+  `--features mesh-shaders`, including Naga geometry/raster/classifier/mesh
+  validation and dispatch fallback limits. `cargo check --offline -p
+  thessa-render-wgpu -p thessa-bevy-rcbt --features
+  thessa-bevy-rcbt/mesh-shaders --all-targets` passed; real graph gate,
+  formatting and diff whitespace checks passed.
+- **Tests not executed:** GPU draw/performance capture; WGSL byte strings,
+  shader arithmetic, settings and all numerical thresholds are unchanged.
+- **Numerical evidence:** host/WGSL ABI regression guard; no physics changes.
+- **Visual evidence / GPU/CPU measurements:** none claimed; no render behavior
+  or performance change is intended.
+- **Imported assets/licenses:** none; ownership/license boundaries unchanged.
+- **Known limitations:** existing native/Bevy feature negotiation differences
+  and hardware-only mesh validation remain; two physics facade edges staged.
+- **Next smallest useful change:** R4 shared app-level mesh frame publication.

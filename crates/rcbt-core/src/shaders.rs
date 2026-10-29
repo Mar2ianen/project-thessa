@@ -13,6 +13,15 @@ pub const VERTICES_PER_PATCH: usize = GRID_SIZE * GRID_SIZE;
 /// Surface cells plus four edge skirts, two triangles per cell/segment.
 pub const TRIANGLES_PER_PATCH: usize = (GRID_SIZE - 1) * (GRID_SIZE - 1) * 2 + (GRID_SIZE - 1) * 8;
 
+/// Terrain mesh-stage ABI. Both capability probes consume these minima;
+/// changing capacities or invocation width also requires the WGSL contract.
+pub const MESH_OUTPUT_VERTICES: u32 = 96;
+pub const MESH_OUTPUT_PRIMITIVES: u32 = 32;
+pub const MESH_WORKGROUP_SIZE: u32 = 32;
+pub const MESH_STORAGE_BUFFERS: u32 = 7;
+/// X-major dispatch width shared by mesh.wgsl and the classifier finalizer.
+pub const MESH_DISPATCH_WIDTH: u32 = 256;
+
 /// Portable WGSL chunk `precision.wgsl`.
 pub const PRECISION_WGSL: &str = include_str!("shaders/precision.wgsl");
 
@@ -758,3 +767,29 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#
 );
+
+#[cfg(test)]
+mod mesh_contract_tests {
+    use super::*;
+
+    #[test]
+    fn host_mesh_requirements_match_shared_wgsl() {
+        // Cross-language ABI guard: a shader change must update both host probes.
+        assert!(MESH_WGSL.contains(&format!(
+            "vertices: array<VertexOutput, {MESH_OUTPUT_VERTICES}>"
+        )));
+        assert!(MESH_WGSL.contains(&format!(
+            "primitives: array<MeshPrimitive, {MESH_OUTPUT_PRIMITIVES}>"
+        )));
+        assert!(MESH_WGSL.contains(&format!("@workgroup_size({MESH_WORKGROUP_SIZE})")));
+        assert!(MESH_WGSL.contains(&format!("group.y * {MESH_DISPATCH_WIDTH}u")));
+        assert!(CBT_CLASSIFY_WGSL.contains(&format!(
+            "let groups = (triangles + {}u) / {MESH_OUTPUT_PRIMITIVES}u;",
+            MESH_OUTPUT_PRIMITIVES - 1
+        )));
+        assert!(
+            CBT_CLASSIFY_WGSL
+                .contains(&format!("let width = min(groups, {MESH_DISPATCH_WIDTH}u);"))
+        );
+    }
+}

@@ -428,6 +428,22 @@ impl SceneMeshes {
         }
     }
 
+    /// Publish the same mesh frame in window/headless hosts: source changes
+    /// precede primary jitter, then RT borrows the current terrain publication.
+    pub fn prepare_frame(
+        &mut self,
+        scene: &Scene,
+        backend: &Backend,
+        terrain: &thessa_render_wgpu::terrain::TerrainRenderer,
+        view: &thessa_render_core::ViewParams,
+        extent: [u32; 2],
+        jitter: thessa_render_core::temporal::JitterOffset,
+    ) -> Result<(), BackendError> {
+        scene.update_mesh(backend, self, extent[0], extent[1], view.exposure)?;
+        self.update_primary_jitter(scene, backend, view, extent, jitter)?;
+        self.sync_rt_terrain(backend, terrain)
+    }
+
     /// Applied after the ordinary mesh update so all source replacements and
     /// early local/server branches share the same primary sampling contract.
     pub fn update_primary_jitter(
@@ -1590,10 +1606,29 @@ mod tests {
                 ..Default::default()
             });
         };
+        let page = thessa_rcbt_core::HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+        let terrain = TerrainRenderer::new(
+            &backend,
+            &[TerrainPatch {
+                anchor: TileAnchor::new(TileKey::new(0, 0, 0, 0).unwrap(), scene.stream.radius_m())
+                    .unwrap(),
+                page: &page,
+            }],
+            OffscreenTarget::FORMAT,
+        )
+        .unwrap();
         let render = |scene: &Scene, meshes: &mut SceneMeshes, width, height| {
             let target = OffscreenTarget::new(&backend, width, height).unwrap();
-            scene
-                .update_mesh(&backend, meshes, width, height, 1.0)
+            let view = scene.view(width, height, 1.0);
+            meshes
+                .prepare_frame(
+                    scene,
+                    &backend,
+                    &terrain,
+                    &view,
+                    [width, height],
+                    thessa_render_core::temporal::JitterOffset::ZERO,
+                )
                 .unwrap();
             let mut encoder = backend.device.create_command_encoder(&Default::default());
             clear(&mut encoder, &target);
@@ -1602,9 +1637,10 @@ mod tests {
             target.read_rgba8(&backend).unwrap()
         };
         let image = render(&scene, &mut meshes, 320, 240);
-        assert_eq!(meshes.draw_stats().instances, 3);
-        // One primary primitive and one primitive for each of the two fleet shapes.
-        assert_eq!(meshes.draw_stats().draw_calls, 3);
+        assert_eq!(meshes.draw_stats().candidate_instances, 3);
+        // PRIMARY is deliberately outside the camera; only the two fleet shapes submit.
+        assert_eq!(meshes.draw_stats().instances, 2);
+        assert_eq!(meshes.draw_stats().draw_calls, 2);
         assert_eq!(meshes.source_publications, 1);
         assert_eq!(meshes.epoch_withheld, 0);
         let colored = |bytes: &[u8], left: bool| {
@@ -1777,12 +1813,13 @@ mod tests {
                 times.push(start.elapsed().as_secs_f64() * 1e6);
             }
         }
-        assert_eq!(meshes.draw_stats().instances, 64);
-        assert_eq!(meshes.draw_stats().draw_calls, 64);
+        assert_eq!(meshes.draw_stats().candidate_instances, 64);
+        assert_eq!(meshes.draw_stats().instances, 63);
+        assert_eq!(meshes.draw_stats().draw_calls, 63);
         assert_eq!(meshes.source_publications, 2);
         times.sort_by(f64::total_cmp);
         eprintln!(
-            "fleet_target_workload secondaries=63 primitives=64 synthetic_overlapping_triangles resolution=320x240 samples=100 warmup=10 update_submit_gpu_completion_median_us={:.3}; no readback, source upload excluded, not physical fleet or production FPS",
+            "fleet_target_workload secondaries=63 candidate_primitives=64 submitted_primitives=63 synthetic_overlapping_triangles resolution=320x240 samples=100 warmup=10 update_submit_gpu_completion_median_us={:.3}; no readback, source upload excluded, not physical fleet or production FPS",
             times[50]
         );
         // Full admitted vertex/part workload. Repeated triangles intentionally
@@ -1822,7 +1859,7 @@ mod tests {
         scene
             .update_mesh(&backend, &mut meshes, 320, 240, 1.0)
             .unwrap();
-        assert_eq!(meshes.draw_stats().draw_calls, 505);
+        assert_eq!(meshes.draw_stats().draw_calls, 504);
         let first_full = render(&scene, &mut meshes, 320, 240);
         let mut timings = [Vec::new(), Vec::new()];
         let mut revision = 4;
@@ -1875,8 +1912,9 @@ mod tests {
                 if sample >= 3 {
                     timings[usize::from(force_rebuild)].push(start.elapsed().as_secs_f64() * 1e6);
                 }
-                assert_eq!(meshes.draw_stats().instances, 64);
-                assert_eq!(meshes.draw_stats().draw_calls, 505);
+                assert_eq!(meshes.draw_stats().candidate_instances, 64);
+                assert_eq!(meshes.draw_stats().instances, 63);
+                assert_eq!(meshes.draw_stats().draw_calls, 504);
             }
             assert_eq!(
                 meshes.source_publications - publications,

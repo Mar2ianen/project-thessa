@@ -1,6 +1,6 @@
 # ADR-0012 — Incremental engine boundaries and reference scenes
 
-Status: accepted; R1–R3 implemented, later milestones staged.
+Status: accepted; R1–R4 implemented; R5 staged.
 
 ## Context
 

@@ -379,21 +379,14 @@ impl State {
             self.exposure,
         )?;
         if let Some(mesh) = &mut self.mesh_renderer {
-            scene.update_mesh(
-                &self.backend,
-                mesh,
-                self.config.width,
-                self.config.height,
-                self.exposure,
-            )?;
-            mesh.update_primary_jitter(
+            mesh.prepare_frame(
                 scene,
                 &self.backend,
+                &self.renderer,
                 &view,
                 [self.config.width, self.config.height],
                 jitter,
             )?;
-            mesh.sync_rt_terrain(&self.backend, &self.renderer)?;
         }
         let color = frame.texture.create_view(&Default::default());
         let mut encoder = self

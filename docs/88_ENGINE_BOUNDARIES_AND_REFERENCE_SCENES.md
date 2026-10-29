@@ -1,6 +1,6 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1–R3 implemented; R4/R5 staged. No new scenes or benchmark assets.
+Status: R1–R4 implemented; R5 capture/scenes staged. No new scenes or benchmark assets.
 
 ## Audit baseline
 
@@ -261,9 +261,11 @@ R3 moved duplicate native/Bevy mesh capacity requirements into the existing
 the existing 256-wide dispatch ABI; its adapter-specific dispatch-limit tests
 remain in place. Feature detection still belongs to each backend, and fallback
 policy remains in `graphics`. No game state or GPU handle was moved into the
-neutral core. Native frame publication still duplicates mesh update, primary
-jitter application and terrain RT synchronization; that bounded responsibility
-is the R4 candidate, rather than a universal app runner.
+neutral core. Native frame publication is consolidated in R4: `SceneMeshes::prepare_frame`
+updates source/epoch state, applies primary jitter and synchronizes borrowed
+terrain RT state in that order for both window and headless hosts. The view
+supplies the exposure used for mesh preparation. This remains GPL application
+integration; no game Scene type enters a neutral renderer contract.
 
 ## Architecture gate: enforced and staged
 
@@ -393,3 +395,42 @@ adapters are implemented by this refactor.
 - **Known limitations:** existing native/Bevy feature negotiation differences
   and hardware-only mesh validation remain; two physics facade edges staged.
 - **Next smallest useful change:** R4 shared app-level mesh frame publication.
+
+## R4 milestone record
+
+- **Source commit:** `c8fadd8` (R3).
+- **Resulting commit:** the commit introducing this section.
+- **Architectural change:** one shared mesh-frame publication entry point in
+  the existing app-owned SceneMeshes, used by window/headless hosts. Source
+  replacement/epoch checks precede jitter and RT terrain synchronization.
+  Existing lower-level helpers and their validation/error propagation remain.
+  Simulation clocks, input, target allocation, scheduling, profiling, streaming
+  and renderer pass order are unchanged.
+- **Affected dependencies:** none; no new crate/framework or public engine API.
+- **Changed files:** native main/window/fleet_mesh modules; existing heterogeneous
+  mesh/epoch pixel fixture exercises the new entry point; docs 77/88, README,
+  status and ADR status.
+- **Tests executed:** native unit suite: 133 passed, 43 GPU/diagnostic tests
+  ignored by default. The heterogeneous mesh/epoch pixel fixture was then
+  explicitly run with isolated software Vulkan: 1 passed. Feature-off
+  `cargo check --offline -p thessa-terrain-native --no-default-features --all-targets`,
+  strict `cargo clippy --offline -p thessa-terrain-native --all-targets -- -D warnings`,
+  formatting, real architecture gate and 16 Python quality tests passed.
+  The explicit fixture initially exposed stale pre-frustum-culling count
+  assertions, reproduced on unmodified R3. They now distinguish 3 candidates
+  from 2 submitted shapes (and 64 from 63 in the synthetic fleet), preserving
+  all pixel equality, COM-frame, source-publication and epoch assertions.
+  The test artifact directory was bound writable in isolation; no display or
+  physical GPU was exposed.
+- **Tests not executed:** interactive window/input session, physical-GPU timing,
+  moving-camera reference comparison; no frame-time improvement is claimed.
+- **Numerical evidence:** application integration only; no physics arithmetic,
+  solver state or simulation scheduling changes.
+- **Visual evidence:** existing software-Vulkan pixel/instance/epoch regression
+  passed, including exact COM reuse/rebuild image equality. No subjective
+  visual acceptance or reference parity.
+- **GPU/CPU measurements:** no benchmark claim; test durations are not frame times.
+- **Imported assets/licenses:** none; existing fixtures and GPL app boundary retained.
+- **Known limitations:** a shared entry point does not unify the entire app loop;
+  capture provenance and standalone reference scenes remain R5 work.
+- **Next smallest useful change:** extend existing capture provenance before B01.

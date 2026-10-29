@@ -6,6 +6,12 @@ The foundation through `f73eea4` is integrated into main (doc 78); subsequent
 visual development now continues on `feat/surface-visual-engineering`; the
 WORLD13 continuation below migrates the native terrain to persistent CBT and adds soil detail.
 
+Engine-boundary R4 consolidates native window/headless mesh-frame publication
+in the existing app-owned `SceneMeshes::prepare_frame`: source/epoch update,
+primary jitter, then borrowed-terrain RT synchronization. Physics, canonical
+content, settings/fallbacks and pass scheduling are unchanged. Architecture,
+verification and reference-scene progression: [doc 88](88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md).
+
 ## WORLD85+ — Coastal composition iterations (2026-10-26, in progress)
 
 The overnight continuation starts from `89d1e2a`, following the report that the

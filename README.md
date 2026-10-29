@@ -796,5 +796,8 @@ path for native window/headless hosts. R5 capture provenance is implemented;
 [B01 material-lab data](docs/90_REFERENCE_SCENES.md) now exports generated
 geometry and explicit camera/light metadata as GLB/JSON without GPU or game
 state. Its native capture now uses the existing mesh/display/perf consumers,
-with verified static 880M repeats and explicit scene/geometry hashes. B02
-asset ingestion remains staged; no coastal speedup or reference parity claimed.
+with verified static 880M repeats and explicit scene/geometry hashes.
+[B02 asset ingestion](docs/91_B02_ASSET_PROVENANCE.md) pins full evaluated
+CC0 Fern/Moss geometry in an external cache, with reproducible conversion and
+explicit material losses. Native B02 rendering remains pending; no coastal
+speedup or reference parity claimed.

@@ -28,8 +28,10 @@ provenance and exact camera/light inputs. [Doc 90](90_REFERENCE_SCENES.md)
 adds B01 generated material-lab data/GLB export in a neutral 44th workspace
 package and a native capture path without canonical game Scene construction.
 Two static 880M PBR captures match exactly; this is not external-reference or
-coastal performance acceptance. B02 content remains staged. No new reference scenes, benchmark assets or cross-engine
-comparison has been introduced by this refactor.
+coastal performance acceptance. [Doc 91](91_B02_ASSET_PROVENANCE.md) adds pinned
+CC0 Fern/Moss ingestion with reproducible external-cache GLBs and explicitly
+derived materials. Native B02 MASK rendering and scene tiers remain pending.
+No cross-engine comparison has been executed.
 
 ## Simulation and physics
 

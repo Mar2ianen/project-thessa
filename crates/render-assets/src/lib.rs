@@ -28,17 +28,28 @@ impl Default for Limits {
 }
 
 pub fn decode_glb(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
-    decode(bytes, limits, false)
+    decode(bytes, limits, false, false)
+}
+
+/// Explicit opaque/MASK subset. BLEND, animation and material extensions remain
+/// unsupported. The consumer must implement cutout coverage in every enabled pass.
+pub fn decode_glb_cutouts(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
+    decode(bytes, limits, false, true)
 }
 
 /// Explicit static inspection of a scene's authored node transforms even if
 /// the file also contains animation clips. No clip is sampled, nor are skins
 /// or other unsupported semantics accepted. Ordinary loading remains strict.
 pub fn decode_glb_rest_pose(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
-    decode(bytes, limits, true)
+    decode(bytes, limits, true, false)
 }
 
-fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, String> {
+fn decode(
+    bytes: &[u8],
+    limits: Limits,
+    rest_pose: bool,
+    cutouts: bool,
+) -> Result<MeshAsset, String> {
     if bytes.len() > limits.file_bytes {
         return Err("GLB file budget exceeded".into());
     }
@@ -170,11 +181,14 @@ fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, St
         .collect();
     let mut materials = Vec::new();
     for m in glb.materials() {
-        if m.alpha_mode() != gltf::material::AlphaMode::Opaque
+        if !(m.alpha_mode() == gltf::material::AlphaMode::Opaque
+            || (cutouts && m.alpha_mode() == gltf::material::AlphaMode::Mask))
             || m.emissive_factor() != [0.0; 3]
             || m.emissive_texture().is_some()
         {
-            return Err("only opaque non-emissive materials supported".into());
+            return Err(
+                "only opaque (or explicitly enabled MASK) non-emissive materials supported".into(),
+            );
         }
         let pbr = m.pbr_metallic_roughness();
         let texture = |t: Option<gltf::texture::Info<'_>>| -> Result<Option<usize>, String> {
@@ -194,6 +208,12 @@ fn decode(bytes: &[u8], limits: Limits, rest_pose: bool) -> Result<MeshAsset, St
         }
         materials.push(Material {
             base_color: pbr.base_color_factor(),
+            alpha_mode: if m.alpha_mode() == gltf::material::AlphaMode::Mask {
+                AlphaMode::Mask
+            } else {
+                AlphaMode::Opaque
+            },
+            alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
             base_texture: texture(pbr.base_color_texture())?,
             normal_texture: m.normal_texture().map(|t| t.texture().index()),
             normal_scale: m.normal_texture().map_or(1.0, |t| t.scale()),

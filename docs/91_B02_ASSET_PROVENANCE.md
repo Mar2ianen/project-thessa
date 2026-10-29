@@ -1,6 +1,6 @@
 # 91 — B02 vegetation asset provenance
 
-Status: pinned external-cache ingestion implemented; native B02 scene and cutout rendering pending.
+Status: pinned ingestion and explicit raster cutout capability implemented; native B02 scene pending.
 
 ## Selected source data
 
@@ -84,11 +84,11 @@ and 0.001969 for Moss. At cutoff 0.5, Fern atlas coverage is unchanged; Moss
 changes by one atlas texel out of 1,048,576. These are texture-conversion checks,
 not rendered silhouette or temporal-quality acceptance.
 
-The native opaque-only importer still rejects these MASK materials. This
-milestone does not silently bypass that guard. Explicit cutout import and a
-separate masked raster pipeline are the next step; opaque early-depth behavior
-must remain intact. Shadow/RT coverage, density tiers, culling/overdraw, native
-B02 captures and external engine comparisons remain unimplemented here.
+The strict default importer still rejects MASK. The later
+[explicit cutout API and raster pipeline](94_MESH_CUTOUT_COVERAGE.md) now retain
+coverage without changing opaque B01 output. Shadow/RT coverage, density tiers,
+culling/overdraw, native B02 captures and external vegetation comparisons remain
+unimplemented here.
 
 ## Asset-ingestion milestone record (2026-10-29)
 

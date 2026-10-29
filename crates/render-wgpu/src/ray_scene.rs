@@ -185,6 +185,15 @@ fn plan_inner(
     if let Err(reason) = source.validate() {
         return Enable::Unavailable(format!("invalid RT source: {reason}"));
     }
+    if source
+        .materials
+        .iter()
+        .any(|m| m.alpha_mode != thessa_render_core::mesh::AlphaMode::Opaque)
+    {
+        return Enable::Unavailable(
+            "MASK/BLEND ray coverage is unsupported; using raster cutouts".into(),
+        );
+    }
     if !backend
         .device
         .features()
@@ -633,6 +642,15 @@ impl RayScene {
             wgpu::TextureView,
         >,
     ) -> Result<Self, BackendError> {
+        if source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode != thessa_render_core::mesh::AlphaMode::Opaque)
+        {
+            return Err(BackendError::Device(
+                "MASK/BLEND ray coverage is unsupported".into(),
+            ));
+        }
         let device = &backend.device;
         let positions = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("rt-positions"),

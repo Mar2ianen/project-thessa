@@ -71,7 +71,9 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     if (material.quality==2u && material.pad!=0u) {
         normal=surface_map_normal(normal,map_normal,material.factors.z,dx,dy,du,dv);
     }
-    let albedo=textureSample(color_texture,color_sampler,in.uv).rgb*material.color.rgb;
+    let base_sample=textureSample(color_texture,color_sampler,in.uv);
+    let albedo=base_sample.rgb*material.color.rgb;
+    // MESH_CUTOUT_COVERAGE
     let transmission=material.optical.x;
     var direct_reflect=vec3(0.0);
     var direct_transmit=vec3(0.0);

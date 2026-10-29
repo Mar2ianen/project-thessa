@@ -39,6 +39,10 @@ verified; Godot/Unreal captures remain pending.
 shared direct specular kernel. Analytic CPU/Radeon checks pass; same-data B01
 HDR RMSE against the fixed Cycles output falls about 12.46%. Multiscattering,
 AA/temporal quality, native B02 cutouts and coastal parity remain open.
+[Doc 94](94_MESH_CUTOUT_COVERAGE.md) now implements explicit MASK import and
+raster coverage with CPU/Radeon alpha/depth checks and exact opaque B01 repeat.
+The native B02 scene, transparent/emissive surfaces and shadow/RT coverage are
+still pending.
 
 ## Simulation and physics
 

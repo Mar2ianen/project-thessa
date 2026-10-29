@@ -1,4 +1,4 @@
-//! Persistent opaque textured mesh consumer. Loads the caller's existing
+//! Persistent opaque/cutout textured mesh consumer. Loads the caller's existing
 //! color/depth targets after terrain; no scene copy, readback or extra device.
 #[path = "mesh_layout.rs"]
 pub(crate) mod layout;
@@ -7,8 +7,24 @@ use crate::{
     view::{ViewParams, ViewUniformBlock},
 };
 use thessa_rcbt_core::lighting::SurfaceLighting;
-use thessa_render_core::mesh::{MeshAsset, MeshInstance, Wrap};
+use thessa_render_core::mesh::{AlphaMode, MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
+
+fn primary_shader(masked: bool, motion_invalid: bool) -> String {
+    let mut source = include_str!("mesh.wgsl").to_owned();
+    if masked {
+        // All implicit texture/normal derivatives precede coverage rejection.
+        // Shadow and ray-query coverage are separate unsupported capabilities.
+        source = source.replace(
+            "// MESH_CUTOUT_COVERAGE",
+            "let mask_dx=dpdx(normal);let mask_dy=dpdy(normal);\nif(base_sample.a*material.color.a<material.optical.z){discard;}",
+        ).replace("dpdx(normal),dpdy(normal)", "mask_dx,mask_dy");
+    }
+    if motion_invalid {
+        source = source.replace("view.exposure,1.0)", "view.exposure,0.0)");
+    }
+    source
+}
 
 struct ShadowPrimitive {
     vertices: wgpu::Buffer,
@@ -30,6 +46,7 @@ struct Primitive {
     ambient: wgpu::Buffer,
     attributes: Option<wgpu::Buffer>,
     double_sided: bool,
+    masked: bool,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
@@ -93,6 +110,8 @@ pub struct MeshRenderer {
     environment: crate::environment::EnvironmentBinding,
     pipeline: wgpu::RenderPipeline,
     single_sided_pipeline: Option<wgpu::RenderPipeline>,
+    masked_pipeline: Option<wgpu::RenderPipeline>,
+    masked_single_sided_pipeline: Option<wgpu::RenderPipeline>,
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
     primitives: Vec<Primitive>,
@@ -523,6 +542,22 @@ impl MeshRenderer {
             ray_tracing,
         } = settings;
         source.validate().map_err(fail)?;
+        if source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Blend)
+        {
+            return Err(fail("BLEND requires a transparent render pass"));
+        }
+        let has_cutouts = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Mask);
+        if has_cutouts && shadows.is_some() {
+            return Err(fail(
+                "MASK shadow coverage is unsupported; use an explicit shadows-off baseline",
+            ));
+        }
         // Feasibility (device feature, scene sizes, RT memory budget) is
         // decided before the pipeline exists, because the shader include
         // depends on it.
@@ -580,34 +615,37 @@ impl MeshRenderer {
             crate::ray_scene::Enable::Ready(plan) => crate::ray_scene::shader(plan),
             _ => crate::ray_scene::fallback_shader(),
         };
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("owned-mesh"),
-            source: wgpu::ShaderSource::Wgsl(
-                format!(
-                    "{}\n{}\n{}\n{}\n{}",
-                    rt_include,
-                    thessa_rcbt_core::shaders::OCEAN_WGSL,
-                    crate::environment::shader(0),
-                    shadows.map_or_else(
-                        || crate::shadows::NO_SHADOWS.into(),
-                        |_| crate::shadows::receiver_shader(2)
-                    ),
-                    // Unknown/moving meshes remain motion-invalid. Immutable
-                    // geometry shares terrain's camera-only reconstruction.
-                    include_str!("mesh.wgsl").replace(
-                        "view.exposure,1.0)",
-                        if !static_geometry
-                            && ray_tracing.is_some_and(|s| s.temporal_motion_vectors)
-                        {
-                            "view.exposure,0.0)"
-                        } else {
-                            "view.exposure,1.0)"
-                        },
+        let make_module = |masked| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(if masked {
+                    "owned-mesh-mask"
+                } else {
+                    "owned-mesh"
+                }),
+                source: wgpu::ShaderSource::Wgsl(
+                    format!(
+                        "{}\n{}\n{}\n{}\n{}",
+                        rt_include,
+                        thessa_rcbt_core::shaders::OCEAN_WGSL,
+                        crate::environment::shader(0),
+                        shadows.map_or_else(
+                            || crate::shadows::NO_SHADOWS.into(),
+                            |_| crate::shadows::receiver_shader(2)
+                        ),
+                        // Unknown/moving meshes remain motion-invalid. Immutable
+                        // geometry shares terrain's camera-only reconstruction.
+                        primary_shader(
+                            masked,
+                            !static_geometry
+                                && ray_tracing.is_some_and(|s| s.temporal_motion_vectors)
+                        )
                     )
-                )
-                .into(),
-            ),
-        });
+                    .into(),
+                ),
+            })
+        };
+        let module = make_module(false);
+        let masked_module = has_cutouts.then(|| make_module(true));
         let has_vertex_ao = source
             .primitives
             .iter()
@@ -652,12 +690,17 @@ impl MeshRenderer {
                 },
             )
         });
-        let make_pipeline = |cull_mode| {
+        let make_pipeline = |cull_mode, masked| {
+            let module = if masked {
+                masked_module.as_ref().unwrap()
+            } else {
+                &module
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("owned-mesh"),
                 layout: shared_layout.as_ref(),
                 vertex: wgpu::VertexState {
-                    module: &module,
+                    module,
                     entry_point: Some("vertex"),
                     compilation_options: Default::default(),
                     buffers: &vertex_buffers,
@@ -678,7 +721,7 @@ impl MeshRenderer {
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &module,
+                    module,
                     entry_point: Some("fragment"),
                     // Opaque two-sided populations need no discard. Specialization
                     // lets the driver reject hidden foliage before expensive shading.
@@ -720,12 +763,36 @@ impl MeshRenderer {
                 cache: None,
             })
         };
-        let double_sided = source.materials.iter().any(|m| m.double_sided);
-        let single_sided = source.materials.iter().any(|m| !m.double_sided);
-        let pipeline =
-            make_pipeline((fixed_sidedness && !double_sided).then_some(wgpu::Face::Back));
+        let double_sided = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Opaque && m.double_sided);
+        let single_sided = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Opaque && !m.double_sided);
+        let pipeline = make_pipeline(
+            (fixed_sidedness && !double_sided).then_some(wgpu::Face::Back),
+            false,
+        );
         let single_sided_pipeline = (fixed_sidedness && double_sided && single_sided)
-            .then(|| make_pipeline(Some(wgpu::Face::Back)));
+            .then(|| make_pipeline(Some(wgpu::Face::Back), false));
+        let masked_double = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Mask && m.double_sided);
+        let masked_single = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Mask && !m.double_sided);
+        let masked_pipeline = has_cutouts.then(|| {
+            make_pipeline(
+                (fixed_sidedness && !masked_double).then_some(wgpu::Face::Back),
+                true,
+            )
+        });
+        let masked_single_sided_pipeline = (fixed_sidedness && masked_double && masked_single)
+            .then(|| make_pipeline(Some(wgpu::Face::Back), true));
         let environment = crate::environment::EnvironmentBinding::new(device);
         let global = frame_bind_group(
             device,
@@ -794,7 +861,11 @@ impl MeshRenderer {
             data.extend(words([
                 material.diffuse_transmission,
                 material.dielectric_f0,
-                0.0,
+                if material.alpha_mode == AlphaMode::Mask {
+                    material.alpha_cutoff
+                } else {
+                    0.0
+                },
                 0.0,
             ]));
             let params = buffer(&data, wgpu::BufferUsages::UNIFORM);
@@ -868,6 +939,7 @@ impl MeshRenderer {
                     wgpu::BufferUsages::VERTEX,
                 ),
                 double_sided: source.materials[p.material].double_sided,
+                masked: source.materials[p.material].alpha_mode == AlphaMode::Mask,
                 attributes: shadows.map(|_| {
                     buffer(
                         &words(
@@ -954,6 +1026,8 @@ impl MeshRenderer {
             ranges: vec![0..0; primitives.len()],
             pipeline,
             single_sided_pipeline,
+            masked_pipeline,
+            masked_single_sided_pipeline,
             global,
             materials,
             primitives,
@@ -1334,7 +1408,16 @@ impl MeshRenderer {
             if runs.is_empty() || range.is_empty() {
                 continue;
             }
-            pass.set_pipeline(if !p.double_sided {
+            pass.set_pipeline(if p.masked {
+                if p.double_sided {
+                    self.masked_pipeline.as_ref().unwrap()
+                } else {
+                    self.masked_single_sided_pipeline
+                        .as_ref()
+                        .or(self.masked_pipeline.as_ref())
+                        .unwrap()
+                }
+            } else if !p.double_sided {
                 self.single_sided_pipeline
                     .as_ref()
                     .unwrap_or(&self.pipeline)

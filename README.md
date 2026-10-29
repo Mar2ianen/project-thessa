@@ -809,3 +809,8 @@ Godot is downloaded and verified, while the user's Unreal Linux download is in p
 smooth specular peaks in the shared mesh/terrain/ocean/ray-hit kernel. Analytic
 software/Radeon tests pass, and fixed-reference B01 HDR RMSE falls about 12.46%.
 Rough-metal model, AA, vegetation and full-scene parity remain open.
+
+[Explicit mesh cutouts](docs/94_MESH_CUTOUT_COVERAGE.md) add opt-in glTF MASK
+coverage and a separate early-rejection raster variant. CPU/Radeon alpha/depth
+checks pass and opaque B01 remains byte-identical; BLEND/emission and B02 scene
+tiers remain in progress.

@@ -834,3 +834,9 @@ coastal or cross-engine speedup.
 
 The active plume/planet fidelity and performance backlog, including Large CBT
 whole-system acceptance, is [doc 98](docs/98_GRAPHICS_PARITY_ROADMAP.md).
+
+[Native plume exposure](docs/99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) now follows
+the scene's HDR exposure for Low and Volume without changing opacity or cached
+field uploads. Five lookup alternatives were rejected after same-field ABBA;
+the original linear lookup remains. Fidelity/calibration and full-scene
+performance acceptance stay open.

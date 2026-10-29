@@ -58,6 +58,12 @@ implementation backlog for realistic engine plumes and procedural CBT planets,
 with primary-engine references, current-code audit and separate numerical,
 temporal, performance and blind-preference gates.
 
+[Doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) fixes Low/Volume scene
+pre-exposure with HDR/opacity/cache GPU oracles on Radeon and software Vulkan.
+Five release lookup candidates were rejected because near-nozzle views regress;
+no lookup speedup is shipped. Doc 22 §6.1 now reflects implemented persistent
+CBT topology separately from open full-system error/trajectory acceptance.
+
 ## Simulation and physics
 
 | Doc | Status | Implemented | Future |

@@ -164,3 +164,10 @@ per-frame CSV and raw HDR to a new `THESSA_BENCH_OUTPUT` directory. It uses
 8,192 identical-source transparent instances and existing timestamp intervals;
 see [doc 96](../../docs/96_TRANSPARENT_INSTANCE_RUNS.md) for the exact workload,
 release ABBA evidence and limits. It measures submission cost, not B02 foliage.
+
+The opt-in `published_profile_lookup_cost` test writes ten frozen plume HDR
+fields/publications and per-frame CSV to a new `THESSA_BENCH_OUTPUT` directory.
+[Doc 99](../../docs/99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) records the release
+ABBA protocol and all rejected candidates. It is not an external volume render
+or a whole-scene speedup. Camera gain=1 images remain exact after the separate
+pre-exposure correction.

@@ -17,6 +17,7 @@ references, not pixel A/B controls.
 | Primary reference | Relevant behavior | Thessa implication |
 | --- | --- | --- |
 | [Large CBT paper](https://arxiv.org/html/2407.02215v1), [upstream demo](https://github.com/AnisB/large_cbt) | CBT manages allocation for persistent neighbor-linked bisectors; conforming refinement/decimation, GPU indexation and indirect rendering form the whole system | Compare topology, allocation/exhaustion and complete update/draw cost at equivalent error; rank-tree microbenchmarks cannot establish planetary parity |
+| [NASA nozzle design](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/nozzle-design/) | Nozzle geometry controls flow, exit velocity/pressure/temperature | Consume compiled/runtime nozzle state; a fixed artistic source is not a substitute |
 | [Unreal heterogeneous volumes](https://dev.epicgames.com/documentation/en-us/unreal-engine/heterogeneous-volumes-in-unreal-engine) | Participating-media transport with separate integration, shadow and cache accuracy/cost controls | Reuse the existing plume medium; validate integrals and lighting, rather than authoring an unrelated cone effect |
 | [Unreal sky atmosphere](https://dev.epicgames.com/documentation/en-us/unreal-engine/sky-atmosphere-component-in-unreal-engine) | Planet-scale density profiles, transmittance/multiple scattering and aerial perspective | Validate existing ground-to-orbit transport and terminator continuity with fixed physical inputs |
 | [Unreal volumetric clouds](https://dev.epicgames.com/documentation/en-us/unreal-engine/volumetric-cloud-component-in-unreal-engine) | Distinct view/shadow tracing quality, conservative empty-space rejection and cached sky lighting | Audit existing clouds before adding effects; measure per-pass cost and invalidation, retain conservative support |
@@ -43,6 +44,9 @@ console-level paper timings are not measurements of Thessa on 880M.
 - [x] Neutral analytic plume profile/optics, Low impostor, native Medium/High
   volume integration and opaque-depth clipping, [doc 38](38_ENGINE_PLUME_RENDERING.md).
   Current color ramps and client engine deck are provisional, not calibrated.
+- [x] Native plume shared pre-exposure correction and a five-candidate lookup
+  investigation, [doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md). All candidates
+  regress a near-nozzle case; the existing linear lookup is retained.
 - [x] Persistent GPU bisector pool, neighbor conformity, parallel bounded
   split/merge, canonical height/material sampling, GPU indexation and indirect
   raster/shadow/ocean/RT publication (docs 61–63). WORLD13 native configurations
@@ -56,10 +60,10 @@ Each row is a bounded change in existing owners, not a new generic framework.
 
 | ID / priority | Current gap and owner | Next work and acceptance |
 | --- | --- | --- |
-| F01 / P0 | `render-wgpu` plume lookup scans up to 64 stations per sample | Benchmark exact-bracket binary lookup against immutable baseline across atmosphere/vacuum and camera positions. Retain only measured wins with unchanged HDR and existing CPU-integral oracles; record tail latency and coverage |
-| F02 / P0 | No reusable frozen plume reference capture; current GPU tests cover selected chords | Add deterministic pressure/throttle/camera/time gallery using `plume-core` and existing capture/readback. Compare convergence against a dense CPU integral; include axial/side/inside, depth occlusion and translated astronomical origin. Export the same field for an external volume control; B05 is only a surface prerequisite |
+| F01 / measured, closed | `render-wgpu` plume lookup scans up to 64 stations per sample | Five exact-output alternatives rejected after release ABBA on ten views; retain linear lookup. [Doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) records p50/p95/p99 and hashes. Reopen only with a changed workload or a new measured reason |
+| F02 / P0 | No reusable frozen plume reference capture; current GPU tests cover selected chords | Shared pre-exposure is fixed (doc 99); ten deterministic HDR fields now exist as a lookup fixture. Extend this into a source-bound pressure/throttle/camera/time gallery using `plume-core` and existing capture/readback. Compare convergence against a dense CPU integral; include axial/side/inside, depth occlusion and translated astronomical origin. Export the same field for an external volume control; B05 is only a surface prerequisite |
 | F03 / P0 | `terrain-native/src/plume.rs` uses fixed radius, flow, exhaust state and mount; environment assumes oxygen | Extract actual compiled nozzle/mount and runtime operating point through existing presentation state. Use composition/flow queries. Pin SI/frame transforms and inactive/starved engines; no renderer writes to forces, mass flow or clocks |
-| P01 / P0 | Full Large CBT equivalent-error and continuous-flight acceptance remains open | Inventory live passes/capacity/publications; replay ground→orbit→ground with frozen canonical surface. Check neighbor reciprocity, no holes/cracks, allocation exhaustion, wake/recovery, origin shifts, active triangles/bytes and update/raster/shadow/RT p50/p95/p99 separately |
+| P01 / P0 | Full Large CBT equivalent-error and continuous-flight acceptance remains open | Live-pass ownership inventory is current in doc 22 §6.1; replay ground→orbit→ground with frozen canonical surface. Check neighbor reciprocity, no holes/cracks, allocation exhaustion, wake/recovery, origin shifts, active triangles/bytes and update/raster/shadow/RT p50/p95/p99 separately |
 | F04 / P1 | Optical templates are authored RGB ramps; absolute spectral/radiometric calibration absent | Calibrate declared exhaust families against physical input ranges and primary observations; preserve pressure-dependent expansion and throttling. Separate model uncertainty from integration error. Do not equate pretty bloom with validated chemistry |
 | F05 / P1 | Native plume has no field-derived local illumination; only legacy nozzle light exists | Reuse field radiant power/geometry for a bounded cheaper lighting consumer, then compare a transport control on hull/ground. Verify emission energy, occlusion, atmosphere and quality-off cost; no unrelated brightness multiplier |
 | P02 / P1 | WORLD13 uses sampled edge/chord error rather than a universal geometric bound | Compare against dense canonical geometry along close-up/horizon/orbit trajectories; detect missed extrema and popping. Improve the error estimator only where measured; hold source/residency and pixel error constant during topology performance comparison |
@@ -72,7 +76,7 @@ Each row is a bounded change in existing owners, not a new generic framework.
 | F06 / P2 | Crosswind, secondary combustion, condensation and impingement absent | Add only with causal atmosphere/composition/wall inputs and special-case/error/performance evidence. These are model extensions, not shader noise sliders |
 | S04 / P2 | Moving-camera temporal acceptance open; TAA default-off | Use disocclusion/thin-foliage/plume trajectories, frozen exposure and independent reviewers. Do not enable history to hide topology, coverage or transport errors |
 
-F01 is an exact-output optimization candidate, not a promise. F02/F03 and P01
+F01 yielded diagnostics rather than an accepted optimization. F02/F03 and P01
 are the next substantive plume/planet acceptance tasks. Native B02 and Godot
 remain useful controls, but do not displace the user's plume/planet priorities.
 Reinhard/PBR-neutral tone mapping, automatic exposure and bloom already exist;

@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut headless = None;
     let mut perf_capture = None;
+    let mut linear_hdr = None;
     let mut gpu_trace_path = None;
     let mut gpu_trace_mesh_limit = None;
     let mut frame_sequence = None;
@@ -107,6 +108,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 height = args.next().ok_or("--height requires pixels")?.parse()?;
             }
             "--headless" => headless = Some(args.next().ok_or("--headless requires a PNG path")?),
+            "--linear-hdr" => {
+                linear_hdr = Some(
+                    args.next()
+                        .ok_or("--linear-hdr requires a raw RGBA16F path")?,
+                )
+            }
             "--frame-sequence" => {
                 frame_sequence = Some(std::path::PathBuf::from(
                     args.next()
@@ -231,7 +238,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
                 println!(
-                    "--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
+                    "--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
                 );
                 println!(
                     "--gpu-trace NEW.toml requires --headless and excludes --perf-capture. Crash-durable CPU submission-intent/GPU-completion records with serial stage fences; changes scheduling and is not a performance capture. --gpu-trace-mesh-triangle-limit N sets positive per-stage mesh admission (default1000000); rejection submits no stage. This count is not a GPU-duration bound."
@@ -279,6 +286,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if linear_hdr.is_some() && headless.is_none() {
+        return Err(
+            "--linear-hdr requires --headless; unavailable when native HDR is disabled".into(),
+        );
     }
     if frame_limit == Some(0) {
         return Err("--frames must be non-zero".into());
@@ -1035,6 +1047,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let pixels = target.read_rgba8(&backend)?;
         write_rgba_png(std::path::Path::new(&path), width, height, &pixels)?;
+        if let Some(hdr_path) = &linear_hdr {
+            if let Some(texture) = display.scene_texture() {
+                let bytes = thessa_render_wgpu::readback::read_color(&backend, texture)?;
+                std::fs::write(hdr_path, bytes)?;
+                eprintln!(
+                    "linear_hdr={hdr_path} format=RGBA16Float pre_exposed=true tonemapped=false row_padding=none"
+                );
+            } else {
+                eprintln!("linear_hdr=unavailable: native HDR target is disabled or unsupported");
+            }
+        }
         let topology_state = renderer.read_topology_state(&backend)?;
         let drawn_triangles = if let Some(state) = topology_state {
             state[8] / 3

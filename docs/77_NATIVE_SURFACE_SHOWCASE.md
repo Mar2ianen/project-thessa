@@ -12,6 +12,12 @@ primary jitter, then borrowed-terrain RT synchronization. Physics, canonical
 content, settings/fallbacks and pass scheduling are unchanged. Architecture,
 verification and reference-scene progression: [doc 88](88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md).
 
+R5 capture infrastructure extends the same headless PNG/perf path with
+`--linear-hdr PATH`, final camera/projection/light/epoch metadata, and an opt-in
+source/input/binary provenance tool. Existing canonical terrain residency is
+not frozen by this change. See [doc 89](89_REFERENCE_CAPTURE.md); no visual or
+performance acceptance follows from capture availability.
+
 ## WORLD85+ — Coastal composition iterations (2026-10-26, in progress)
 
 The overnight continuation starts from `89d1e2a`, following the report that the

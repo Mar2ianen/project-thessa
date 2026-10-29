@@ -121,6 +121,54 @@ impl HeadlessPerf {
             .resolved
             .extend(scene.survey_capture_metadata(width, height));
         meta.graphics.resolved.insert("measurement_boundary".into(),"Serial offscreen frames after 30 warmup; frame.cpu ends after submit, excluding GPU wait; frame.wall includes GPU completion but excludes timestamp map/readback and capture writing. GPU command intervals include barriers/scheduling: surface_and_shadows (persistent topology classification/transactions/emission/deformation when selected, then shadow depth); rt_as_build; scene_classify_and_raster (opaque geometry and clear background); motion_vectors (opaque-depth diagnostics, empty when disabled); temporal_resolve (history compute, color copy-back and depth snapshot, empty when disabled); scene_overlays (plume, stars, cloud/aurora); display_transform (pre-exposed HDR to SDR, empty when HDR off); ui (after display). Layout v8 separates resolve from overlays; compare scope names and settings, not just totals, with older captures. Scene raster uses RGBA16Float when native_hdr=true. UI extra egui command buffers and queue-write uploads before the first mark are outside GPU intervals. Auto exposure and bloom remain unapplied in this manual HDR slice even when shared settings request them. Unknown world/sim counters retain defaults; no per-frame geometry readback. Up to 1800 measured frames retained".into());
+        let resolved = backend.resolve_graphics(&scene.requested);
+        let view = scene.view(
+            width,
+            height,
+            crate::manual_exposure(resolved.exposure_ev100),
+        );
+        let light = scene.lighting();
+        for (key, value) in [
+            (
+                "capture_world_from_view",
+                format!("{:?}", view.world_from_view.to_cols_array()),
+            ),
+            (
+                "capture_clip_from_view",
+                format!("{:?}", view.clip_from_view.to_cols_array()),
+            ),
+            (
+                "capture_camera_origin_m",
+                format!("{:?}", view.world_position_m.to_array()),
+            ),
+            ("capture_exposure_gain", view.exposure.to_string()),
+            ("capture_simulation_time_s", scene.sample.time.0.to_string()),
+            ("capture_ambient_lux", format!("{:?}", light.ambient_lux)),
+            (
+                "capture_light_directions",
+                format!("{:?}", light.directions),
+            ),
+            (
+                "capture_light_colors_lux",
+                format!("{:?}", light.colors_lux),
+            ),
+            (
+                "capture_linear_hdr",
+                if display.enabled() {
+                    "available: pre-exposed linear RGBA16Float"
+                } else {
+                    "unavailable: native HDR disabled or unsupported"
+                }
+                .into(),
+            ),
+            (
+                "capture_projection_convention",
+                "column-major; right-handed view; depth zero-to-one".into(),
+            ),
+            ("capture_warmup_frames", "30".into()),
+        ] {
+            meta.graphics.resolved.insert(key.into(), value);
+        }
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);

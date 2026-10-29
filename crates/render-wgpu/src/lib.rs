@@ -45,6 +45,7 @@ pub mod msaa;
 pub mod ocean;
 pub mod plume;
 pub mod ray_scene;
+pub mod readback;
 pub mod scene_temporal;
 pub mod shadows;
 mod sky;

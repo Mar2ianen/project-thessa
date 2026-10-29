@@ -771,8 +771,8 @@ The agent development guide and blind visual A/B workflow are documented in
 [agent quality control](docs/55_AGENT_QUALITY_CONTROL.md). Their executable
 architecture check and visual-arena tools live under
 [`tools/agent-qa/`](tools/agent-qa/README.md). The current arena works on
-supplied PNG frames; native headless capture and automated model judging are
-planned, not implemented.
+supplied PNG frames. Opt-in [native capture provenance](docs/89_REFERENCE_CAPTURE.md)
+adds actual PNG/linear HDR/perf evidence; automated model judging remains planned.
 
 Native render-work continuation: [Horizon source review and work counters](docs/80_HORIZON_RENDER_WORK_REVIEW.md) records conservative primary mesh selection, persistent indexed indirect batches and dirty-only instance/command uploads. The fixed coastal primary plan drops from 112.8M to 17.1M triangles at 37 API batches. [Texel-bounded depth-only plant geometry](docs/81_NATIVE_SHADOW_MESH_LOD.md) reduces the subsequent cold shadow plan from 999.6M to 283.2M triangles within the existing source-byte budget. These are scoped work counts, not target-GPU frame-time acceptance.
 
@@ -792,5 +792,5 @@ The [shadow geometry hierarchy](docs/83_NATIVE_SHADOW_HIERARCHY.md) reduces the 
 starts with a 43-package ownership audit and resolved dependency gate in the
 existing workspace. R1–R4 are implemented: direct collision type ownership,
 shared terrain mesh ABI requirements, and one app-owned mesh-frame publication
-path for native window/headless hosts. Capture provenance and deterministic
-reference scenes remain staged.
+path for native window/headless hosts. R5 capture provenance is implemented;
+deterministic B01/B02 scene content remains staged.

@@ -2448,8 +2448,6 @@ pub struct OffscreenTarget {
     pub color: wgpu::TextureView,
     pub depth: wgpu::TextureView,
     texture: wgpu::Texture,
-    width: u32,
-    height: u32,
 }
 
 impl OffscreenTarget {
@@ -2512,43 +2510,11 @@ impl OffscreenTarget {
             depth,
             depth_texture,
             texture,
-            width,
-            height,
         })
     }
 
     pub fn read_rgba8(&self, backend: &Backend) -> Result<Vec<u8>, BackendError> {
-        let stride = (self.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cbt-screenshot"),
-            size: stride as u64 * self.height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = backend.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        backend.queue.submit([encoder.finish()]);
-        let padded = map_buffer(backend, &staging)?;
-        Ok(padded
-            .chunks_exact(stride as usize)
-            .flat_map(|row| row[..self.width as usize * 4].iter().copied())
-            .collect())
+        crate::readback::read_color(backend, &self.texture)
     }
 }
 

@@ -1,6 +1,7 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1–R4 implemented; R5 capture/scenes staged. No new scenes or benchmark assets.
+Status: R1–R4 and R5 capture infrastructure implemented; B01/B02 staged.
+No new benchmark scenes or assets yet.
 
 ## Audit baseline
 
@@ -434,3 +435,31 @@ adapters are implemented by this refactor.
 - **Known limitations:** a shared entry point does not unify the entire app loop;
   capture provenance and standalone reference scenes remain R5 work.
 - **Next smallest useful change:** extend existing capture provenance before B01.
+
+## R5 capture-infrastructure milestone record
+
+- **Source commit:** `984ab9d` (R4; integrated development tree `76d18dc`).
+- **Resulting commit:** the commit introducing this section.
+- **Architectural change:** extend existing native PNG/perf capture with shared
+  bounded diagnostic color readback, pre-tonemap HDR and complete camera/light
+  metadata. Standard-library capture orchestrator verifies source/binary/input
+  and output provenance; reuses existing Cargo/native/perf/arena paths.
+- **Affected dependencies:** none; no new crates or external packages.
+- **Changed files:** render-wgpu readback/display/offscreen modules; native
+  CLI/perf metadata; capture tool/tests; docs 55/77/88/89, README/status/tool docs.
+- **Tests executed:** 20 Python quality tests; strict Clippy (render-wgpu/native
+  all targets); real graph/format/diff gates; bounded isolated software-Vulkan
+  RGBA8/RGBA16Float test (1 passed); actual capture smoke at 128×96 with 30 warmup
+  and 2 measured frames. PNG, raw HDR, perf JSON/CSV and verified provenance exist.
+- **Tests not executed:** interactive window, physical-GPU timing, deterministic
+  reference scene comparisons or subjective review. No benchmark gain claimed.
+- **Numerical evidence:** exact binary16 HDR 2.0/0.5/0.25/1.0 readback, exact
+  normalized-byte counterpart and padding removal; no shader/physics arithmetic changes.
+- **Visual evidence:** actual existing-scene smoke PNG, not B01/B02 or reference acceptance.
+- **GPU/CPU measurements:** real serial diagnostic samples recorded on llvmpipe
+  (Mesa 26.2.5-arch1.1, LLVM 23.1.3), dev profile. Not target-GPU results.
+- **Imported assets/licenses:** none; original game content retained without new ingestion.
+- **Known limitations:** the probe has an explicit dirty-source fingerprint;
+  canonical asynchronous residency is not frozen, so this is not B03. Full
+  capture schema, outputs and limitations are in [doc 89](89_REFERENCE_CAPTURE.md).
+- **Next smallest useful change:** B01 generated material lab through this capture path.

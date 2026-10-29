@@ -79,7 +79,17 @@ plausibility separately. Do not use this output as a physics oracle or claim
 statistical certainty from a handful of pairwise samples. Repeat comparisons,
 re-randomize positions and include human calibration before trusting a model
 judge. The arena is a **harness**, not a running model or screenshot capture
-integration. Frame capture/headless Thessa control remains a separate project.
+integration. Native build/run/capture provenance now uses `capture.py`; the
+general native control bridge and image judging remain separate work.
 
 For the overall workflow and the two-machine setup, see
 [`docs/55_AGENT_QUALITY_CONTROL.md`](../../docs/55_AGENT_QUALITY_CONTROL.md).
+
+## Native capture provenance
+
+`capture.py` builds and captures the existing native app, verifies declared
+input and binary hashes, and records camera/light/settings/backend identity,
+PNG, pre-tonemap HDR when available and existing perf JSON/CSV. It uses only
+Python standard library plus the existing native executable/Cargo toolchain.
+See [doc 89](../../docs/89_REFERENCE_CAPTURE.md) for manifest schema, commands,
+measurement boundaries and dirty-source limitations. No asset fetch is implicit.

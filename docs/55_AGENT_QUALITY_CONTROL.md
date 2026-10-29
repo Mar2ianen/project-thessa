@@ -1,9 +1,9 @@
 # 55 — Agent quality control and blind visual review
 
-**Status:** operational foundations + proposed integrations. The architecture
-guard and blind-pair harness below are implemented; Thessa-native headless
-screenshot capture, autonomous image judging and hardware performance gates
-are **not** implemented by this document.
+**Status:** architecture guard, blind-pair harness and opt-in native capture
+provenance are implemented. Autonomous image judging, general control bridge
+and hardware performance budgets remain proposals. Native capture details are
+in [doc 89](89_REFERENCE_CAPTURE.md).
 
 ## Workflow contract
 
@@ -70,8 +70,9 @@ it does not prove physical correctness or numerical fidelity.
 This is deliberately **different** from golden scene regression. Golden
 scenes must eventually replay fixed simulation seeds, camera trajectories,
 render settings and timestamps against structural/numeric oracles and visual
-thresholds. Such a capture bridge is future work and must not be inferred
-from the current Bevy remote MCP configuration.
+thresholds. The native build/run/capture provenance bridge is now implemented
+in `tools/agent-qa/capture.py`; deterministic B01/B02 content and golden-scene
+acceptance remain staged. This is independent of Bevy remote MCP configuration.
 
 ## Proposed native control bridge (not implemented)
 

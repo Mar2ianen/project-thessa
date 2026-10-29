@@ -93,3 +93,8 @@ PNG, pre-tonemap HDR when available and existing perf JSON/CSV. It uses only
 Python standard library plus the existing native executable/Cargo toolchain.
 See [doc 89](../../docs/89_REFERENCE_CAPTURE.md) for manifest schema, commands,
 measurement boundaries and dirty-source limitations. No asset fetch is implicit.
+
+Native B01 uses `data/reference-scenes/b01-capture.toml`. The tool binds actual
+scene IDs and hashes exported GLB/scene metadata separately from the requested
+run manifest. [Doc 90](../../docs/90_REFERENCE_SCENES.md) records the frozen
+profiles, independent native path and verified static physical-GPU evidence.

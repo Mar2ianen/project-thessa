@@ -17,6 +17,7 @@ thessa-audio-synth = { path = "../../crates/audio-synth" }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
 thessa-render-assets = { path = "../../crates/render-assets" }
 thessa-render-core = { path = "../../crates/render-core" }
+thessa-reference-scenes = { path = "../../crates/reference-scenes" }
 thessa-render-wgpu = { path = "../../crates/render-wgpu" }
 thessa-terrain-stream = { path = "../../crates/terrain-stream" }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }
@@ -32,6 +33,7 @@ thessa-plume-core = { path = "../../crates/plume-core" }
 glam.workspace = true
 rayon.workspace = true
 toml.workspace = true
+serde_json.workspace = true
 wgpu.workspace = true
 png = "0.18"
 winit = "0.30.13"

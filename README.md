@@ -795,4 +795,6 @@ shared terrain mesh ABI requirements, and one app-owned mesh-frame publication
 path for native window/headless hosts. R5 capture provenance is implemented;
 [B01 material-lab data](docs/90_REFERENCE_SCENES.md) now exports generated
 geometry and explicit camera/light metadata as GLB/JSON without GPU or game
-state. Native B01 capture and B02 ingestion remain staged.
+state. Its native capture now uses the existing mesh/display/perf consumers,
+with verified static 880M repeats and explicit scene/geometry hashes. B02
+asset ingestion remains staged; no coastal speedup or reference parity claimed.

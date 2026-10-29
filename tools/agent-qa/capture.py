@@ -92,6 +92,25 @@ def validate_capture(data: dict, manifest: dict, label: str) -> None:
         raise ValueError("unexpected native warmup contract")
 
 
+def reference_identity(output: Path, manifest: dict, capture: dict) -> dict:
+    values = capture["metadata"]["graphics"]["resolved"]
+    result = {}
+    for key, field in [("reference_scene_file", "reference_scene_manifest_sha256"),
+                       ("reference_geometry_file", "reference_geometry_sha256")]:
+        if key not in values:
+            continue
+        name = values[key]
+        if not isinstance(name, str) or Path(name).name != name:
+            raise ValueError("reference sidecar must be a filename inside the capture")
+        path = output / name
+        result[field] = sha256(path)
+        if key == "reference_scene_file":
+            scene = json.loads(path.read_text())
+            if scene.get("id") != manifest["id"] or scene.get("id") != capture["metadata"]["scenario"]:
+                raise ValueError("reference scene identity does not match capture/manifest")
+    return result
+
+
 def run(manifest_path: Path, output: Path, profile: str, allow_dirty: bool) -> None:
     manifest_path = manifest_path.resolve()
     output = output.resolve()
@@ -141,9 +160,10 @@ def run(manifest_path: Path, output: Path, profile: str, allow_dirty: bool) -> N
     for item in inputs:
         if sha256(Path(item["resolved_path"])) != item["sha256"]:
             raise ValueError("input changed during capture")
+    reference = reference_identity(output, manifest, capture)
     artifacts = {p.name: sha256(p) for p in output.iterdir() if p.is_file()}
     record = {"schema_version": 1, "scene_id": manifest["id"], "scene_manifest_sha256": manifest_hash,
-              "source": source, "binary_sha256": binary_hash, "profile": profile,
+              "source": source, "binary_sha256": binary_hash, "profile": profile, **reference,
               "inputs": inputs, "metadata": capture["metadata"], "artifacts_sha256": artifacts,
               "linear_hdr": {"available": available, "format": "RGBA16Float", "pre_exposed": True,
                              "tonemapped": False, "row_padding_bytes": 0},

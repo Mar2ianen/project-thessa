@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from capture import load_manifest, validate_capture
+from capture import load_manifest, validate_capture, reference_identity
 
 
 class CaptureTest(unittest.TestCase):
@@ -33,6 +33,21 @@ class CaptureTest(unittest.TestCase):
             path.write_text('schema_version=1\nid="probe"\nwidth=0\nheight=3\nframes=1\n')
             with self.assertRaisesRegex(ValueError, "width"):
                 load_manifest(path)
+
+    def test_reference_definition_and_geometry_are_bound_to_actual_scene(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scene.json").write_text('{"id":"B01"}')
+            (root / "scene.glb").write_bytes(b"geometry")
+            capture = {"metadata": {"scenario": "B01", "graphics": {"resolved": {
+                "reference_scene_file": "scene.json", "reference_geometry_file": "scene.glb"}}}}
+            result = reference_identity(root, {"id": "B01"}, capture)
+            self.assertEqual(result["reference_geometry_sha256"], hashlib.sha256(b"geometry").hexdigest())
+            with self.assertRaisesRegex(ValueError, "identity"):
+                reference_identity(root, {"id": "different"}, capture)
+            capture["metadata"]["graphics"]["resolved"]["reference_geometry_file"] = "../outside"
+            with self.assertRaisesRegex(ValueError, "filename"):
+                reference_identity(root, {"id": "B01"}, capture)
 
     def test_assets_cannot_enter_without_explicit_provenance(self):
         with tempfile.TemporaryDirectory() as directory:

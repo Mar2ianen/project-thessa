@@ -18,6 +18,12 @@ source/input/binary provenance tool. Existing canonical terrain residency is
 not frozen by this change. See [doc 89](89_REFERENCE_CAPTURE.md); no visual or
 performance acceptance follows from capture availability.
 
+`--reference-scene b01` now provides the generated material lab through existing
+MeshRenderer/display/perf consumers, before canonical Scene loading. Its fixed
+profiles, raw HDR, exact static 880M repeats and scene hashes are documented in
+[doc 90](90_REFERENCE_SCENES.md). Canonical WORLD00 generation and the ordinary
+native scheduling path remain unchanged.
+
 ## WORLD85+ — Coastal composition iterations (2026-10-26, in progress)
 
 The overnight continuation starts from `89d1e2a`, following the report that the

@@ -1,7 +1,7 @@
 # 89 — Native capture provenance
 
-Status: R5 capture infrastructure implemented; B01 data library available
-([doc 90](90_REFERENCE_SCENES.md)), native B01/B02 capture staged.
+Status: R5 capture infrastructure and native B01 implemented
+([doc 90](90_REFERENCE_SCENES.md)); B02 staged.
 No benchmark assets were imported for this milestone.
 
 ## Existing paths, extended
@@ -99,7 +99,9 @@ The manifest hash identifies the declared run. It does not yet prove immutable
 canonical resident geometry, asynchronous streaming state or equivalent content
 in another renderer. The capture probe uses the existing canonical scene and
 is **not** B03 Frozen Coast. B01/B02 will supply deterministic scene definitions
-and content hashes; B03/B04 and external engine adapters remain later work.
+and content hashes; native B01 now emits actual GLB/scene sidecars with separate
+`reference_geometry_sha256` and `reference_scene_manifest_sha256`, bound to the
+requested and actual scene IDs. B02, B03/B04 and external adapters remain later work.
 
 ## Comparison
 
@@ -127,3 +129,9 @@ remain four separate outcomes, initialized as unevaluated in the record.
 A subsequent clean-source smoke repeated at `271e56a` with `dirty=false`, no
 untracked source files and the exact commit in native perf metadata. This
 confirms the compiled source-label path beyond the earlier dirty diagnostic.
+
+B01 native capture now has a tested fixed-work path and two exact static Radeon
+880M repeats. See [doc 90](90_REFERENCE_SCENES.md) for profiles, supported flags,
+static mesh work counters and physical-GPU evidence scope. Reference sidecars
+are checked for matching IDs and hashed separately from the requested run
+manifest. Ordinary canonical captures retain their previous timing scope layout.

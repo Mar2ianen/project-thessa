@@ -787,3 +787,8 @@ The [shadow geometry hierarchy](docs/83_NATIVE_SHADOW_HIERARCHY.md) reduces the 
 [Opaque sidedness and stable selection demand](docs/86_NATIVE_OPAQUE_SIDEDNESS.md) removes mixed-material fragment discard through shared-layout culling variants and reuses deterministic stationary demand from an immutable source. The topology investigation confirmed normal convergence; its generation/publication rules remain. Exact image regressions and ordinary native GPU profiles have separate evidence scopes.
 
 [Cloud cost and finite Fresnel endpoints](docs/87_NATIVE_CLOUD_COST_AND_FRESNEL.md) fixes normalized-dot overflow in the shared Schlick formula across environment, stellar, mesh and ray-hit shading. Measured average-response-table and cloud-loop candidates were rejected; cloud transport remains the identified performance target, with no quality downgrade or reference-parity claim.
+
+[Engine-boundary refactoring](docs/88_ENGINE_BOUNDARIES_AND_REFERENCE_SCENES.md)
+starts with a 43-package ownership audit and resolved dependency gate in the
+existing workspace. R1 is implemented; collision decoupling, renderer/native
+consolidation and deterministic reference scenes remain staged.

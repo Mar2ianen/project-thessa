@@ -1,6 +1,6 @@
 # Rapier collision integration
 
-Status: implementation baseline, 2026-09-25.
+Status: implemented contact boundary; canonical type ownership reviewed 2026-10-29.
 
 This document fixes the ownership and frame rules for adding Rapier to the
 Project Thessa authoritative simulation. It is intentionally stricter than a
@@ -13,8 +13,9 @@ not as a second world simulation.
 
 Use `rapier3d-f64` 0.35.x behind the MIT `thessa-collision` crate.
 
-- `thessa-sim-core` owns authoritative physical data and backend-neutral
-  collision geometry.
+- `thessa-vehicle-core` owns physical state types and backend-neutral collision
+  geometry; `thessa-sim-core` retains identical compatibility reexports.
+  `thessa-collision` depends directly on `vehicle-core`, not the simulation facade.
 - `thessa-collision` owns transient Rapier pipeline state and the conversion
   boundary.
 - game/server crates decide when a body enters or leaves the contact-active
@@ -121,7 +122,8 @@ body's inertial pose and velocity. It is not a physics step.
 
 ## 5. Collision geometry ownership
 
-`thessa-sim-core::collision` contains solver-independent physical shapes:
+`thessa-vehicle-core::collision` contains solver-independent physical shapes
+(reexported by `thessa-sim-core` for existing consumers):
 
 - `CollisionGeometry`;
 - `CollisionPart` with a body-local f64 pose;
@@ -264,7 +266,8 @@ state divergence envelope.
 Implemented (update 2026-09-25):
 
 - workspace `thessa-collision` crate using `rapier3d-f64` 0.35.3;
-- backend-neutral f64/SI collision primitives in `thessa-sim-core`;
+- backend-neutral f64/SI collision primitives in `thessa-vehicle-core`, with
+  unchanged `thessa-sim-core` compatibility reexports;
 - explicit inertial/local-frame conversion;
 - explicit authoritative mass and full inertia mapping;
 - zero-density attached colliders;
@@ -441,7 +444,7 @@ tests, both worth re-checking on Rapier upgrades):
 
 All items from the §11 MVP and §13 fourth slice are now implemented in this branch:
 
-1. ✅ vehicle compilation emits a `CollisionGeometry` asset — `x15_contact_geometry()` in `thessa-sim-core`; `data/vehicles/example_aircraft.toml` carries four primitives at its panel stations;
+1. ✅ vehicle compilation emits a `CollisionGeometry` asset — `x15_contact_geometry()` in `thessa-vehicle-core` (reexported by `thessa-sim-core`); `data/vehicles/example_aircraft.toml` carries four primitives at its panel stations;
 2. ✅ kinematic terrain/body representation — `insert_kinematic_cuboid`, `insert_kinematic_trimesh`, `set_next_kinematic_pose` in `thessa-collision`;
 3. ✅ `ContactRuntime` in `thessa-flight-authority` — transient `CollisionWorld`, stable Thessa body mapping, activation hysteresis, terrain patch set;
 4. ✅ flight step split into `evaluate external loads` and `integrate` — `ContactRuntime::evaluate_wrench` reuses the flight step's force evaluation;
@@ -452,7 +455,7 @@ All items from the §11 MVP and §13 fourth slice are now implemented in this br
 The articulated wheel-running-gear slice is tracked in
 [`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md):
 
-- ✅ `thessa-sim-core` compiles parametric wheel stations and bakes their mass
+- ✅ `thessa-vehicle-core` (also exposed through `thessa-sim-core`) compiles parametric wheel stations and bakes their mass
   and inertia into `VehicleDefinition`, then partitions total mass/inertia
   into a sprung body and per-wheel unsprung bodies;
 - ✅ `thessa-collision` queries fixed/kinematic terrain per wheel, evaluates

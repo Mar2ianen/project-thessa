@@ -1,6 +1,6 @@
 //! Rapier collision backend for Project Thessa.
 //!
-//! `thessa-sim-core` owns authoritative state, units, mass properties and
+//! `thessa-vehicle-core` owns authoritative state types, units, mass properties and
 //! backend-neutral collision geometry. This crate owns only the transient
 //! contact scene and solver state. No Rapier handle or math type crosses this
 //! public API.
@@ -32,7 +32,7 @@ use rapier3d_f64::prelude::{
     JointAxesMask, JointAxis, MultibodyJointSet, NarrowPhase, PhysicsPipeline,
     PrismaticJointBuilder, QueryFilter, Ray, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
 };
-use thessa_sim_core::{
+use thessa_vehicle_core::{
     CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, CompiledLandingLeg,
     CompiledWheelChassis, FlightForces, LandingLegState, RigidBodyProperties, RigidBodyState,
 };

@@ -11,7 +11,7 @@
 
 use glam::{DQuat, DVec3};
 use thessa_collision::{CollisionFrame, CollisionWorld, DynamicBodyConfig, ExternalWrench};
-use thessa_sim_core::{
+use thessa_vehicle_core::{
     CollisionMaterial, RigidBodyProperties, RigidBodyState, x15_contact_geometry,
 };
 
@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CollisionMaterial::new(0.8, 0.0)?,
     )?;
 
-    let profile = thessa_sim_core::X15StarterProfile::new().map(|profile| profile.vehicle)?;
+    let profile = thessa_vehicle_core::X15StarterProfile::new().map(|profile| profile.vehicle)?;
     let properties = RigidBodyProperties::new(
         profile.mass_properties.mass_kg,
         profile.mass_properties.inertia_body_kg_m2,

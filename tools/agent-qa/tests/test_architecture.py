@@ -91,6 +91,10 @@ class ResolvedBoundaryTest(unittest.TestCase):
                       "new-bridge": [("thessa-celestial", None)]})
         self.assertTrue(any("generic physics requires" in e for e in violations(data)))
 
+    def test_collision_cannot_restore_the_removed_facade_edge(self):
+        data = graph({"thessa-collision": [("thessa-sim-core", None)]})
+        self.assertTrue(any("generic physics requires" in e for e in violations(data)))
+
     def test_cycle_terminates_and_keeps_shortest_diagnostic(self):
         data = graph({"thessa-render-core": [("bridge", None)],
                       "bridge": [("thessa-render-core", None), ("wgpu", None)]},

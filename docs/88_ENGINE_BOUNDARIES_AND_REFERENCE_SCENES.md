@@ -1,6 +1,6 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1 implemented; R2–R5 staged. No new scenes or benchmark assets.
+Status: R1/R2 implemented; R3–R5 staged. No new scenes or benchmark assets.
 
 ## Audit baseline
 
@@ -274,10 +274,10 @@ all-features graph and rejects:
   reusable renderer packages; test-only scene producers remain permitted.
 - New generic-physics → `sim-core`/`celestial`/`trajectory` paths.
 
-Only three exact existing edges are staged: collision → sim-core,
-aero-surfaces → sim-core and fuselage → sim-core. Removing these edges must
+Only two exact existing compiler edges remain staged: aero-surfaces → sim-core
+and fuselage → sim-core. Collision → sim-core was removed in R2. Removing these edges must
 eliminate every forbidden path; a second path through a new helper still fails.
-R2 removes collision's allowance with its dependency. Orbital libraries are not
+R2 removed collision's allowance with its dependency. Orbital libraries are not
 subject to a blanket celestial ban. Root dev edges are checked for neutral
 backend/license rules; downstream dev edges are never inherited. Build and
 target-specific paths are conservatively checked.
@@ -326,3 +326,38 @@ adapters are implemented by this refactor.
 - **Imported assets/licenses:** none; existing MIT/GPL split unchanged.
 - **Known limitations:** gate scope above; three facade edges staged.
 - **Next smallest useful change:** R2 collision → vehicle-core imports.
+
+## R2 milestone record
+
+- **Source commit:** `91a32c5` (R1).
+- **Resulting commit:** the commit introducing this section.
+- **Architectural change:** collision imports the existing vehicle-core owners
+  directly; sim-core compatibility reexports remain untouched. No extracted
+  crate, adapters, type copies, arithmetic or physics-law changes.
+- **Affected dependencies:** collision → sim-core replaced by collision →
+  vehicle-core; collision no longer requires celestial/trajectory. The existing
+  vehicle-core → aero-core/propulsion dependencies remain intentional.
+- **Changed files:** collision manifest, lib/tests/examples/bench imports,
+  Cargo.lock, architecture allowance/regression test, docs 03/40/88, README,
+  status index and tooling README.
+- **Tests executed:** `cargo test --offline -p thessa-collision --lib` before
+  and after the move (26 each); also `--no-default-features` and
+  `--no-default-features --features enhanced-determinism` (26 each).
+  `cargo check --offline -p thessa-collision --all-targets` includes examples
+  and the contact bench. Downstream `cargo check --offline -p
+  thessa-flight-authority -p thessa-server -p thessa-terrain-native --all-targets`
+  passed, as did `cargo fmt --all -- --check`, the real architecture gate and
+  all 16 Python quality tests. The 720-step settling example is unchanged:
+  `y=0.499930 m speed=0.000000 m/s omega=0.000000 rad/s`.
+  Actual workspace runtime closure is collision/vehicle-core/aero-core/
+  propulsion/simd, with no celestial/trajectory/sim-core.
+- **Tests not executed:** GPU rendering and performance benchmarks; this change
+  does not alter renderer code or arithmetic.
+- **Numerical evidence:** unchanged existing physical/regression envelopes,
+  including deterministic input-sequence replay; baseline contact result saved
+  before changing imports. No new error envelope is invented for an import move.
+- **Visual evidence / GPU/CPU measurements:** not applicable; no performance or
+  visual improvement claimed.
+- **Imported assets/licenses:** none; MIT/GPL ownership unchanged.
+- **Known limitations:** aero-surfaces/fuselage facade edges remain staged.
+- **Next smallest useful change:** R3 shared terrain mesh shader ABI thresholds.

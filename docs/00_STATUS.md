@@ -44,7 +44,9 @@ raster coverage with CPU/Radeon alpha/depth checks and exact opaque B01 repeat.
 [Doc 95](95_TRANSPARENT_EMISSIVE_SURFACES.md) adds explicit BLEND/HDR emission,
 stable instance sorting, opaque emission in RT reflections and actual B05
 native/Cycles captures. Native B02, refraction, GI and transparent temporal/
-shadow/RT coverage remain pending.
+shadow/RT coverage remain pending. The original Khronos EmissiveStrengthTest
+is separately pinned/cached under CC-BY-4.0; software/Radeon GPU oracles verify
+its five HDR strengths without conversion. It is not yet a native B06 capture.
 
 ## Simulation and physics
 

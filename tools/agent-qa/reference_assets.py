@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch pinned B02 source files and reproduce declared derived assets outside Git."""
+"""Fetch pinned reference assets and reproduce declared variants outside Git."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -37,7 +38,11 @@ def fetch_source(cache: Path, item: dict) -> Path:
         if path.stat().st_size != item["bytes"] or sha256(path) != item["sha256"]:
             raise ValueError(f"existing source checksum mismatch: {path}")
         return path
-    if not item["url"].startswith("https://dl.polyhaven.org/") or not 0 < item["bytes"] <= 16 << 20:
+    trusted = item["url"].startswith("https://dl.polyhaven.org/") or re.fullmatch(
+        r"https://raw\.githubusercontent\.com/KhronosGroup/glTF-Sample-Assets/[0-9a-f]{40}/Models/[^?#]+",
+        item["url"],
+    )
+    if not trusted or not 0 < item["bytes"] <= 16 << 20:
         raise ValueError("unexpected source host or file budget")
     path.parent.mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(item["url"], headers={"User-Agent": USER_AGENT})
@@ -50,6 +55,18 @@ def fetch_source(cache: Path, item: dict) -> Path:
     return path
 
 
+def retain_identity_notices(manifest: dict, asset: dict, target: Path) -> None:
+    notices = [(asset["license_notice"], manifest["license_text"]["sha256"])]
+    if asset.get("attribution_notice"):
+        notices.append((asset["attribution_notice"], asset["attribution_notice_sha256"]))
+    for relative, digest in notices:
+        source = ROOT / relative
+        if sha256(source) != digest:
+            raise ValueError("identity license/attribution notice differs from pinned text")
+        shutil.copyfile(source, target.parent / source.name)
+    (target.parent / "provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
 def prepare(manifest_path: Path, cache: Path) -> None:
     cache = cache.resolve()
     if cache == ROOT or ROOT in cache.parents:
@@ -57,19 +74,39 @@ def prepare(manifest_path: Path, cache: Path) -> None:
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schema_version") != 1:
         raise ValueError("unknown asset manifest schema")
-    converter = ROOT / manifest["converter"]["path"]
-    if sha256(converter) != manifest["converter"]["sha256"]:
+    identity = manifest["converter"].get("kind") == "identity"
+    converter = None if identity else ROOT / manifest["converter"]["path"]
+    if not identity and sha256(converter) != manifest["converter"]["sha256"]:
         raise ValueError("converter changed; audit/re-pin its version before ingestion")
     for asset in manifest["assets"]:
         if sha256(ROOT / asset["license_notice"]) != manifest["license_text"]["sha256"]:
             raise ValueError("license notice differs from pinned text")
+        if identity and (asset["source_sha256"] != asset["converted_sha256"]
+                         or len(asset["source_files"]) != 1
+                         or asset["source_files"][0]["role"] != "glb"
+                         or asset["source_files"][0]["sha256"] != asset["source_sha256"]):
+            raise ValueError("identity asset must retain the exact source GLB")
         target = cache_path(cache, asset["path"])
         if target.exists():
             if sha256(target) != asset["converted_sha256"]:
                 raise ValueError(f"existing converted asset checksum mismatch: {target}")
+            if identity:
+                retain_identity_notices(manifest, asset, target)
             print(f"verified {asset['id']}: {target}")
             continue
         sources = {item["role"]: fetch_source(cache, item) for item in asset["source_files"]}
+        if identity:
+            if (set(sources) != {"glb"} or asset["source_sha256"] != asset["converted_sha256"]
+                    or sha256(sources["glb"]) != asset["converted_sha256"]):
+                raise ValueError("identity asset must retain the exact source GLB")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="identity-", dir=target.parent) as temporary:
+                installed = Path(temporary) / target.name
+                shutil.copyfile(sources["glb"], installed)
+                installed.replace(target)
+            retain_identity_notices(manifest, asset, target)
+            print(f"copied original {asset['id']}: {target}")
+            continue
         source = sources["blend"]
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="convert-", dir=target.parent) as temporary:

@@ -109,3 +109,39 @@ outside Git and match the recorded source fingerprint.
   shader code is introduced. Blender stays an external development executable.
 - **Performance:** six-triangle diagnostic only; no coastal speedup claim.
   Next work is bounded vegetation tiers and independently verified transmission.
+
+## Original Khronos asset continuation
+
+The official [EmissiveStrengthTest](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/EmissiveStrengthTest)
+now has a reproducible original-byte cache manifest:
+`data/reference-scenes/khronos-emission-assets.json`. The pinned GLB is 10,668
+bytes, six primitives, 188 vertices and 90 triangles. It is **CC-BY-4.0**,
+copyright 2022 Analytical Graphics, Inc.; model/textures by Ed Mackey. It is not
+CC0 or MIT. Exact legal text, attribution and source/GLB Git identities are
+retained. Identity ingestion copies the original GLB, license, attribution and
+provenance into the external cache; no Blender conversion or downloaded script
+runs. Pinned Khronos raw URLs join the existing bounded Poly Haven fetch path.
+
+An opt-in GPU oracle imports the complete original asset through
+`decode_glb_surfaces` and renders all five original cubes with separate fixed
+orthographic cameras, no incident light, exposure=0.5 and Low/High lighting
+tiers. Both Radeon and llvmpipe reproduce RGB `[0.1,0.5,0.9] × strength × 0.5`
+for strengths 1/2/4/8/16, within one target half-float ULP. Strong emission
+remains above one. The strict opaque importer rejects the extension.
+
+These are import/raster radiance oracles, not a native B06 capture/performance
+scene. Upstream BabylonJS screenshots use different IBL/bloom; they are useful
+semantic references, not pixel-matched targets. B05 remains the actual same-GLB
+Cycles comparison. Physical transmission/volume tests remain unsupported.
+
+- **Source:** `030c1f9` (integrated development tree `4636940`); resulting
+  commit is the commit introducing this continuation.
+- **Architecture/dependencies:** existing cache tool, existing GPU oracle and
+  existing importer/consumer; no new Rust dependency or production render change.
+- **Checks:** fresh pinned-URL download and original-byte identity; repeated
+  cache/notice verification; 29 Python tests; exact SPDX legal-text Git blob;
+  actual Radeon and llvmpipe five-strength/two-tier GPU renders; strict wgpu
+  all-target Clippy and format/diff checks.
+- **Not checked / measurements:** no native B06, BabylonJS pixel match, GI,
+  cross-engine performance or blind acceptance. No speedup is inferred.
+- **Evidence:** [pinned asset/oracle record](artifacts/khronos-emission-2026-10-29.json).

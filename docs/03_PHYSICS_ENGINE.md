@@ -221,7 +221,9 @@ Policy may limit or reshape a demand, but it cannot bypass the actuator path.
 ## 3.10. Contacts and terrain
 
 The authoritative contact backend is `thessa-collision` using
-`rapier3d-f64` 0.35 behind `CollisionWorld` (see
+`rapier3d-f64` 0.35 behind `CollisionWorld`. It imports canonical physical
+types directly from `thessa-vehicle-core`; `sim-core` keeps identical reexports
+for existing consumers (see
 [`docs/40_RAPIER_COLLISION_INTEGRATION.md`](40_RAPIER_COLLISION_INTEGRATION.md)).
 
 The runtime supports:
@@ -235,9 +237,9 @@ The runtime supports:
   terrain patch retains a body-fixed anchor and recenters only near its edge;
 - dynamic bodies: rigid-body contact objects with full CCD,
   sleep, and zero-density colliders (mass/inertia come from
-  sim-core authority);
+  vehicle-core physical data under game authority);
 - parametric wheel assemblies, component laws and vehicle mass/inertia baking
-  are implemented in sim-core and specified in
+  are implemented in vehicle-core (reexported by sim-core) and specified in
   [`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md);
   the Rapier backend splits sprung/unsprung mass, assembles sensor-only wheel
   bodies with suspension/spin joints, evaluates tire/strut forces, and steps

@@ -4,7 +4,7 @@ use glam::{DMat3, DQuat, DVec3};
 use thessa_collision::{
     ArticulatedWheelBinding, CollisionFrame, CollisionWorld, DynamicBodyConfig, ExternalWrench,
 };
-use thessa_sim_core::{
+use thessa_vehicle_core::{
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, LandingLegSpec,
     LandingLegState, LandingShockAbsorberSpec, RigidBodyProperties, RigidBodyState,
     TireConstruction, WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
@@ -26,7 +26,7 @@ fn body_count_steps(body_count: usize) -> usize {
 
 fn wheel_chassis(
     wheel_count: u16,
-) -> Result<thessa_sim_core::CompiledWheelChassis, Box<dyn std::error::Error>> {
+) -> Result<thessa_vehicle_core::CompiledWheelChassis, Box<dyn std::error::Error>> {
     let axle_count = (wheel_count / 2).max(1);
     let radius_m = 0.25;
     let length_m = if wheel_count <= 2 {
@@ -52,7 +52,7 @@ fn wheel_chassis(
             // 120-Hz contact step to keep its radial and suspension modes
             // loaded throughout the articulated sweep.
             construction: TireConstruction::Airless {
-                structure: thessa_sim_core::AirlessWheelStructure::Spoked { spoke_count: 24 },
+                structure: thessa_vehicle_core::AirlessWheelStructure::Spoked { spoke_count: 24 },
                 structure_density_kg_m3: 4_400.0,
                 minimum_temperature_k: 80.0,
                 maximum_temperature_k: 500.0,
@@ -96,7 +96,7 @@ fn wheel_query_steps(wheel_count: u16) -> usize {
 
 fn landing_leg_specs(
     leg_count: usize,
-) -> Result<Vec<thessa_sim_core::CompiledLandingLeg>, Box<dyn std::error::Error>> {
+) -> Result<Vec<thessa_vehicle_core::CompiledLandingLeg>, Box<dyn std::error::Error>> {
     let mut legs = Vec::with_capacity(leg_count);
     for index in 0..leg_count {
         let angle = std::f64::consts::TAU * index as f64 / leg_count as f64;
@@ -133,7 +133,7 @@ fn landing_leg_specs(
 fn articulated_wheel_step(
     world: &mut CollisionWorld,
     sprung_body: thessa_collision::CollisionBodyId,
-    chassis: &thessa_sim_core::CompiledWheelChassis,
+    chassis: &thessa_vehicle_core::CompiledWheelChassis,
     bindings: &[ArticulatedWheelBinding],
     body_masses: &[(thessa_collision::CollisionBodyId, f64)],
 ) -> Result<usize, Box<dyn std::error::Error>> {

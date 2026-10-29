@@ -33,9 +33,8 @@ GENERIC_PHYSICS = frozenset({
 })
 CELESTIAL_AGGREGATES = frozenset({"thessa-sim-core", "thessa-celestial", "thessa-trajectory"})
 # Exact existing runtime edges, not exemptions for every path from these roots.
-# R2 removes collision's edge and its allowance together. Other removals stay staged.
+# Compiler facade removals remain staged; collision now imports its canonical owner.
 STAGED_EDGES = frozenset({
-    ("thessa-collision", "thessa-sim-core"),
     ("thessa-aero-surfaces", "thessa-sim-core"),
     ("thessa-fuselage", "thessa-sim-core"),
 })

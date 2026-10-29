@@ -6277,7 +6277,7 @@ dependencies = [
  "rapier3d-f64",
  "serde",
  "serde_json",
- "thessa-sim-core",
+ "thessa-vehicle-core",
 ]
 
 [[package]]

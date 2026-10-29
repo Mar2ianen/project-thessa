@@ -1,5 +1,5 @@
 use super::*;
-use thessa_sim_core::{
+use thessa_vehicle_core::{
     CollisionPart, CollisionShape, DockingKinematics, DockingPortSpec, DockingPortState,
     DockingSession,
 };

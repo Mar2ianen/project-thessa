@@ -1,6 +1,6 @@
 use glam::{DMat3, DQuat, DVec3};
 use thessa_collision::{CollisionFrame, CollisionWorld, DynamicBodyConfig, ExternalWrench};
-use thessa_sim_core::{
+use thessa_vehicle_core::{
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, RigidBodyProperties,
     RigidBodyState,
 };

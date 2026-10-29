@@ -1,6 +1,6 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1–R4, R5 capture and B01 data library implemented; native B01/B02 staged.
+Status: R1–R4, R5 capture and native B01 implemented; B02 staged.
 No third-party benchmark assets imported.
 
 ## Audit baseline
@@ -214,7 +214,7 @@ flowchart LR
   stream --> worldgen[canonical worldgen]
   native --> renderer[render-wgpu: GPU implementation]
   native --> assets[render-assets: bounded CPU decoder]
-  scenes[reference-scenes: B01 data, native adapter staged] --> core[render-core: neutral scene data]
+  scenes[reference-scenes: B01 data] --> core[render-core: neutral scene data]
   assets --> core
   renderer --> core
   renderer --> graphics[graphics: request/capability/resolution]
@@ -469,6 +469,13 @@ adapters are implemented by this refactor.
 
 [Doc 90](90_REFERENCE_SCENES.md) records the new neutral 44th package, generated
 material lab, portable GLB/metadata/license export and exact validation scope.
-The source is `271e56a`; native capture and B02 ingestion remain separate work.
+The data source is `271e56a`; native B01 now runs independently through the
+existing mesh/display/perf consumers. B02 ingestion remains separate work.
 The capture infrastructure also passed a **clean-source** repeat at `271e56a`,
 with that exact build label, source dirty=false and an empty untracked set.
+
+The native B01 continuation uses source `27984f4`; [doc 90](90_REFERENCE_SCENES.md)
+records changed boundaries, tests, actual 880M captures, static exact repeats,
+scene/geometry hashes and scoped dev timing. The canonical capture path also
+passed after shared neutral camera/light/timestamp formatting was extracted.
+No new external dependencies or imported benchmark assets were required.

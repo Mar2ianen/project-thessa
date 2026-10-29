@@ -63,31 +63,20 @@ impl HeadlessPerf {
         self.collector.begin_frame();
         self.collector.record_cpu_scope("world.streaming", stream_s);
         self.collector.record_cpu_scope("frame.cpu", cpu_submit_s);
-        let gpu = match &self.gpu {
-            Some(gpu) => {
-                let values = gpu.read(backend)?;
-                let names = [
-                    "render.surface_and_shadows",
-                    "render.rt_as_build",
-                    "render.scene_classify_and_raster",
-                    "render.motion_vectors",
-                    "render.temporal_resolve",
-                    "render.scene_overlays",
-                    "render.display_transform",
-                    "render.ui",
-                ];
-                GpuFrame {
-                    available: true,
-                    frame_s: Some(values.iter().sum()),
-                    scopes: names
-                        .into_iter()
-                        .zip(values)
-                        .map(|(n, v)| (n.to_string(), v))
-                        .collect(),
-                }
-            }
-            None => GpuFrame::unavailable(),
-        };
+        let gpu = gpu_frame(
+            self.gpu.as_ref(),
+            backend,
+            &[
+                "render.surface_and_shadows",
+                "render.rt_as_build",
+                "render.scene_classify_and_raster",
+                "render.motion_vectors",
+                "render.temporal_resolve",
+                "render.scene_overlays",
+                "render.display_transform",
+                "render.ui",
+            ],
+        )?;
         self.collector.set_gpu_frame(gpu);
         if let Some(budget) = scene.flight_budget(wall_s) {
             self.collector.set_sim_budget(budget);
@@ -128,47 +117,13 @@ impl HeadlessPerf {
             crate::manual_exposure(resolved.exposure_ev100),
         );
         let light = scene.lighting();
-        for (key, value) in [
-            (
-                "capture_world_from_view",
-                format!("{:?}", view.world_from_view.to_cols_array()),
-            ),
-            (
-                "capture_clip_from_view",
-                format!("{:?}", view.clip_from_view.to_cols_array()),
-            ),
-            (
-                "capture_camera_origin_m",
-                format!("{:?}", view.world_position_m.to_array()),
-            ),
-            ("capture_exposure_gain", view.exposure.to_string()),
-            ("capture_simulation_time_s", scene.sample.time.0.to_string()),
-            ("capture_ambient_lux", format!("{:?}", light.ambient_lux)),
-            (
-                "capture_light_directions",
-                format!("{:?}", light.directions),
-            ),
-            (
-                "capture_light_colors_lux",
-                format!("{:?}", light.colors_lux),
-            ),
-            (
-                "capture_linear_hdr",
-                if display.enabled() {
-                    "available: pre-exposed linear RGBA16Float"
-                } else {
-                    "unavailable: native HDR disabled or unsupported"
-                }
-                .into(),
-            ),
-            (
-                "capture_projection_convention",
-                "column-major; right-handed view; depth zero-to-one".into(),
-            ),
-            ("capture_warmup_frames", "30".into()),
-        ] {
-            meta.graphics.resolved.insert(key.into(), value);
-        }
+        capture_frame_inputs(
+            &mut meta,
+            &view,
+            &light,
+            scene.sample.time.0,
+            display.enabled(),
+        );
         meta.scenario = scenario;
         meta.window_frames = self.collector.len();
         let capture = self.collector.snapshot_capture(meta);
@@ -184,6 +139,106 @@ impl HeadlessPerf {
     }
 }
 
+/// Shared hardware timestamp adapter; source clocks/settings stay in callers.
+pub(crate) fn gpu_frame(
+    gpu: Option<&GpuIntervals>,
+    backend: &Backend,
+    names: &[&str],
+) -> Result<GpuFrame, BackendError> {
+    let Some(gpu) = gpu else {
+        return Ok(GpuFrame::unavailable());
+    };
+    let values = gpu.read(backend)?;
+    if values.len() != names.len() {
+        return Err(BackendError::Device(
+            "GPU scope layout does not match timestamp intervals".into(),
+        ));
+    }
+    Ok(GpuFrame {
+        available: true,
+        frame_s: Some(values.iter().sum()),
+        scopes: names
+            .iter()
+            .zip(values)
+            .map(|(name, value)| (name.to_string(), value))
+            .collect(),
+    })
+}
+
+/// Camera/light capture contract shared by canonical and independent scenes.
+pub(crate) fn capture_frame_inputs(
+    meta: &mut CaptureMetadata,
+    view: &thessa_render_core::ViewParams,
+    light: &thessa_rcbt_core::lighting::SurfaceLighting,
+    simulation_time_s: f64,
+    hdr: bool,
+) {
+    for (key, value) in [
+        (
+            "capture_world_from_view",
+            format!("{:?}", view.world_from_view.to_cols_array()),
+        ),
+        (
+            "capture_clip_from_view",
+            format!("{:?}", view.clip_from_view.to_cols_array()),
+        ),
+        (
+            "capture_camera_origin_m",
+            format!("{:?}", view.world_position_m.to_array()),
+        ),
+        ("capture_exposure_gain", view.exposure.to_string()),
+        ("capture_simulation_time_s", simulation_time_s.to_string()),
+        ("capture_ambient_lux", format!("{:?}", light.ambient_lux)),
+        (
+            "capture_light_directions",
+            format!("{:?}", light.directions),
+        ),
+        (
+            "capture_light_colors_lux",
+            format!("{:?}", light.colors_lux),
+        ),
+        (
+            "capture_linear_hdr",
+            if hdr {
+                "available: pre-exposed linear RGBA16Float"
+            } else {
+                "unavailable: native HDR disabled or unsupported"
+            }
+            .into(),
+        ),
+        (
+            "capture_projection_convention",
+            "column-major; right-handed view; depth zero-to-one".into(),
+        ),
+        ("capture_warmup_frames", "30".into()),
+    ] {
+        meta.graphics.resolved.insert(key.into(), value);
+    }
+}
+
+/// Platform/request/resolution identity without game Scene or terrain state.
+pub(crate) fn renderer_capture_metadata(
+    backend: &Backend,
+    requested: &thessa_graphics::RequestedGraphics,
+) -> CaptureMetadata {
+    let mut meta = default_capture_metadata();
+    let info = backend.adapter.get_info();
+    meta.platform.gpu = Some(info.name);
+    meta.platform.backend = format!("{:?}; {}; {}", info.backend, info.driver, info.driver_info);
+    meta.graphics.preset = format!("{:?}", requested.preset);
+    let resolved = backend.resolve_graphics(requested);
+    meta.graphics.ray_tracing = format!("{:?}", resolved.ray_tracing);
+    meta.graphics.resolved.extend(resolved.as_meta_map());
+    meta.graphics
+        .resolved
+        .insert("settings".into(), format!("{resolved:?}"));
+    meta.graphics.resolved.insert(
+        "requested_toml".into(),
+        toml::to_string(requested).unwrap_or_default(),
+    );
+    meta
+}
+
 /// Shared capture metadata for both adapters: platform/adapter identity and
 /// the requested->resolved graphics correlation (perf spec section 12). Each
 /// caller adds its own display/vsync, measurement boundary and scenario.
@@ -195,14 +250,8 @@ pub(crate) fn base_capture_metadata(
     motion: Option<&thessa_render_wgpu::motion::SceneMotion>,
     temporal: Option<&thessa_render_wgpu::scene_temporal::SceneTemporal>,
 ) -> CaptureMetadata {
-    let mut meta = default_capture_metadata();
-    let info = backend.adapter.get_info();
-    meta.platform.gpu = Some(info.name);
-    meta.platform.backend = format!("{:?}; {}; {}", info.backend, info.driver, info.driver_info);
-    meta.graphics.preset = format!("{:?}", scene.requested.preset);
+    let mut meta = renderer_capture_metadata(backend, &scene.requested);
     let resolved = backend.resolve_graphics(&scene.requested);
-    meta.graphics.ray_tracing = format!("{:?}", resolved.ray_tracing);
-    meta.graphics.resolved.extend(resolved.as_meta_map());
     meta.graphics.resolved.insert(
         "native_material_height_field_pages".into(),
         scene.material_height_field_pages.to_string(),
@@ -215,13 +264,6 @@ pub(crate) fn base_capture_metadata(
             "sh9"
         }
         .into(),
-    );
-    meta.graphics
-        .resolved
-        .insert("settings".into(), format!("{resolved:?}"));
-    meta.graphics.resolved.insert(
-        "requested_toml".into(),
-        toml::to_string(&scene.requested).unwrap_or_default(),
     );
     meta.graphics.resolved.insert(
         "gpu_scope_layout".into(),

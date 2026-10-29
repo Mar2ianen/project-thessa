@@ -1,0 +1,6 @@
+schema_version = 1
+id = "B01-material-lab-v1"
+width = 640
+height = 480
+frames = 60
+native_args = ["--reference-scene", "b01", "--graphics", "data/reference-scenes/b01-graphics.toml"]

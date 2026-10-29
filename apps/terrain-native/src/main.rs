@@ -15,6 +15,7 @@ mod map;
 mod night_lights;
 mod perf;
 mod plume;
+mod reference;
 mod scene;
 mod sky_layers;
 mod surface_plant_materials;
@@ -28,6 +29,8 @@ use thessa_render_wgpu::{Backend, terrain::OffscreenTarget};
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut headless = None;
+    let mut reference_scene = None;
+    let mut parsed_options = Vec::new();
     let mut perf_capture = None;
     let mut linear_hdr = None;
     let mut gpu_trace_path = None;
@@ -66,6 +69,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut docking_time = None;
     let mut docking_step = None;
     while let Some(arg) = args.next() {
+        parsed_options.push(arg.clone());
         match arg.as_str() {
             "--docking-demo" => docking = true,
             "--docking-time" => {
@@ -100,6 +104,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .ok_or("--warp requires a factor")?
                         .parse::<f64>()?,
                 )
+            }
+            "--reference-scene" => {
+                reference_scene = Some(args.next().ok_or("--reference-scene requires b01")?)
             }
             "--width" => {
                 width = args.next().ok_or("--width requires pixels")?.parse()?;
@@ -238,7 +245,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
                 println!(
-                    "--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
+                    "--reference-scene b01 uses the independent generated material lab; requires --headless/--perf-capture and data/reference-scenes/b01-graphics.toml. No canonical game Scene is loaded.\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
                 );
                 println!(
                     "--gpu-trace NEW.toml requires --headless and excludes --perf-capture. Crash-durable CPU submission-intent/GPU-completion records with serial stage fences; changes scheduling and is not a performance capture. --gpu-trace-mesh-triangle-limit N sets positive per-stage mesh admission (default1000000); rejection submits no stage. This count is not a GPU-duration bound."
@@ -499,6 +506,42 @@ fn main() -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
+    if let Some(id) = reference_scene {
+        if id != "b01" {
+            return Err(format!("unknown reference scene: {id}").into());
+        }
+        let supported = [
+            "--reference-scene",
+            "--graphics",
+            "--headless",
+            "--perf-capture",
+            "--linear-hdr",
+            "--width",
+            "--height",
+            "--frames",
+            "--no-hud",
+        ];
+        if let Some(option) = parsed_options
+            .iter()
+            .find(|flag| !supported.contains(&flag.as_str()))
+        {
+            return Err(format!("{option} is unavailable in the fixed B01 capture; use its explicit reference graphics profile").into());
+        }
+        return reference::material_lab(
+            &requested,
+            std::path::Path::new(
+                headless
+                    .as_deref()
+                    .ok_or("--reference-scene requires --headless")?,
+            ),
+            perf_capture
+                .as_deref()
+                .ok_or("--reference-scene requires --perf-capture")?,
+            linear_hdr.as_deref().map(std::path::Path::new),
+            [width, height],
+            frame_limit.unwrap_or(60),
+        );
+    }
     eprintln!(
         "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; full physical aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
     );

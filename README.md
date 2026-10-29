@@ -804,3 +804,8 @@ speedup or reference parity claimed. The first
 [external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md) now
 captures the same GLB/camera with explicit BSDF/light-unit/AA differences;
 Godot is downloaded and verified, while the user's Unreal Linux download is in progress.
+
+[Stable direct GGX](docs/93_STABLE_DIRECT_GGX.md) repairs an epsilon that clipped
+smooth specular peaks in the shared mesh/terrain/ocean/ray-hit kernel. Analytic
+software/Radeon tests pass, and fixed-reference B01 HDR RMSE falls about 12.46%.
+Rough-metal model, AA, vegetation and full-scene parity remain open.

@@ -947,6 +947,64 @@ probe_out[{i}]=vec4(a{i}.radiance.r,b{i}.radiance.r,a{i}.reflectance.r,b{i}.refl
         sum * std::f64::consts::TAU / (n * n) as f64
     }
     #[test]
+    #[ignore = "isolated Vulkan: smooth GGX peaks and angular tails against independent f64 equations"]
+    fn smooth_direct_ggx_preserves_the_analytic_peak_and_tail() {
+        let backend = crate::Backend::bring_up().unwrap();
+        eprintln!("direct GGX adapter={:?}", backend.adapter.get_info());
+        let binding = EnvironmentBinding::new(&backend.device);
+        let mut cases = Vec::new();
+        let mut body = String::new();
+        for roughness in [0.0_f64, 0.02, 0.05, 0.1, 0.15, 0.2, 0.5, 1.0] {
+            for angle in [0.0_f64, 0.00001, 0.0001, 0.001, 0.01, 0.1, 0.5] {
+                let index = cases.len();
+                body.push_str(&format!(
+                    "let d{index}=normalize(vec3({:?},0.0,{:?}));probe_out[{index}]=vec4(surface_sun_reflection(vec3(0.0,0.0,1.0),d{index},d{index},vec3(1.0),{:?},vec3(0.04,0.5,1.0)),f32(env_meta.header.w)+env_texels[0].r);\n",
+                    angle.sin() as f32, angle.cos() as f32, roughness as f32,
+                ));
+                // N=Z and V=L at angle theta imply H=V and H.V=1.
+                // This positive-sum f64 form avoids the shader's cancellation
+                // and has no denominator floor masking a narrow physical lobe.
+                let r = roughness.clamp(0.02, 1.0);
+                let alpha = (r * r).max(0.0025);
+                let denominator = angle.sin().powi(2) + alpha.powi(2) * angle.cos().powi(2);
+                let distribution = alpha.powi(2) / (std::f64::consts::PI * denominator.powi(2));
+                let k = (r + 1.0).powi(2) / 8.0;
+                let response =
+                    distribution * angle.cos() / (4.0 * (angle.cos() * (1.0 - k) + k).powi(2));
+                cases.push((roughness, angle, response));
+            }
+        }
+        let code = format!(
+            "{}\n{}\n@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{{body}}}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0),
+        );
+        let values = probe_entries(
+            &backend,
+            &binding.base_entries(),
+            code,
+            cases.len() as u64,
+            [1, 1, 1],
+        );
+        let mut max_relative_error = 0.0_f64;
+        for ((roughness, angle, reference), actual) in cases.into_iter().zip(values) {
+            for (channel, f0) in [0.04, 0.5, 1.0].into_iter().enumerate() {
+                let expected = reference * f0;
+                let error = (f64::from(actual[channel]) - expected).abs() / expected;
+                max_relative_error = max_relative_error.max(error);
+                assert!(
+                    actual[channel].is_finite() && error < 0.0002,
+                    "smooth GGX r={roughness} theta={angle} channel={channel}: {} vs {expected}, relative error {error}",
+                    actual[channel]
+                );
+            }
+        }
+        eprintln!(
+            "direct GGX 56 cases / 168 RGB comparisons max_relative_error={max_relative_error}"
+        );
+    }
+
+    #[test]
     #[ignore = "software Vulkan: normalized-dot roundoff must not poison Fresnel"]
     fn fresnel_endpoint_roundoff_keeps_finite_physical_energy() {
         compare_fresnel_endpoint(false);

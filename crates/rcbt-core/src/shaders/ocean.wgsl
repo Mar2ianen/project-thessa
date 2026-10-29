@@ -157,13 +157,18 @@ fn surface_sun_reflection(
     }
 
     let half_vector = ocean_safe_normalize(view + sun, normal);
-    let n_dot_h = max(dot(normal, half_vector), 0.0);
+    let n_dot_h = clamp(dot(normal, half_vector), 0.0, 1.0);
     let h_dot_v = max(dot(half_vector, view), 0.0);
     let perceptual_roughness = clamp(roughness, 0.02, 1.0);
     let alpha = max(perceptual_roughness * perceptual_roughness, 0.0025);
     let alpha_squared = alpha * alpha;
-    let denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
-    let distribution = alpha_squared / max(OCEAN_PI * denominator * denominator, OCEAN_EPSILON);
+    // |N x H|² = 1-(N.H)² avoids cancellation at smooth highlights.
+    // The existing positive alpha floor bounds this denominator; a generic
+    // epsilon on its square clips the physical GGX peak and loses energy.
+    let n_cross_h = cross(normal, half_vector);
+    let denominator = dot(n_cross_h,n_cross_h) + n_dot_h*n_dot_h*alpha_squared;
+    let quotient = alpha / denominator;
+    let distribution = quotient*quotient / OCEAN_PI;
 
     // Schlick-Smith masking approximation with N.V cancelled analytically
     // to preserve finite grazing limits without 0/0 floating-point instability.

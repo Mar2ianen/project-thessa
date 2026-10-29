@@ -58,6 +58,7 @@ struct RtSurface {
     occlusion: f32,
     dielectric:f32,
     transmission:f32,
+    emission:vec3<f32>,
 }
 
 // Barycentrics land in the primitive's own asset-local space; the pair rows
@@ -140,6 +141,7 @@ fn rt_surface(hit: RtHit, ray_direction: vec3<f32>,cone_width:f32) -> RtSurface 
     surface.occlusion = mix(1.0,rt_sample(material.textures.w,uv,uv_dx,uv_dy).r,material.factors.z)*(v0.uv.z*bary.x+v1.uv.z*bary.y+v2.uv.z*bary.z);
     surface.dielectric=material.optical.x;
     surface.transmission=material.factors.w;
+    surface.emission=material.optical.yzw;
     return surface;
 }
 
@@ -187,6 +189,7 @@ fn rt_reflection(
         let column=cloud_transport(origin,direction,length(surface.position-origin));
         radiance+=column.rgb*throughput;
         throughput*=column.a;
+        radiance+=throughput*surface.emission;
         var ambient=light.ambient.rgb;
         if(!RT_LOW_QUALITY){ambient=(1.0-surface.transmission)*env_diffuse_irradiance(surface.normal,ambient)+surface.transmission*env_diffuse_irradiance(-surface.normal,ambient);}
         var illuminance = ambient;

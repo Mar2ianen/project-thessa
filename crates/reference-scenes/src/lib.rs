@@ -4,10 +4,11 @@ use glam::DVec3;
 use serde_json::{Value, json};
 use thessa_render_core::{
     ViewParams,
-    mesh::{Material, MeshAsset, Primitive, Vertex},
+    mesh::{AlphaMode, Material, MeshAsset, Primitive, Vertex},
 };
 
 pub const B01_ID: &str = "B01-material-lab-v1";
+pub const B05_ID: &str = "B05-transparency-emission-v1";
 pub const GEOMETRY_LICENSE_NOTICE: &str = include_str!("../LICENSE");
 const SLICES: usize = 48;
 const STACKS: usize = 24;
@@ -25,6 +26,7 @@ pub const ROUGHNESS: [f32; 5] = [0.05, 0.2, 0.4, 0.7, 1.0];
 pub struct MaterialLab {
     asset: MeshAsset,
     glb: Vec<u8>,
+    transparent: bool,
 }
 impl Default for MaterialLab {
     fn default() -> Self {
@@ -83,8 +85,79 @@ impl MaterialLab {
             images: vec![],
         };
         debug_assert!(asset.validate().is_ok());
-        let glb = encode_lab_glb(&asset);
-        Self { asset, glb }
+        let glb = encode_lab_glb(&asset, "thessa-reference-scenes B01 v1");
+        Self {
+            asset,
+            glb,
+            transparent: false,
+        }
+    }
+    /// Frozen alpha-over/emission fixture using standard glTF material semantics.
+    /// Near, background, far source order intentionally requires render sorting.
+    pub fn transparency() -> Self {
+        let materials = vec![
+            Material {
+                alpha_mode: AlphaMode::Blend,
+                base_color: [0., 0., 0., 0.5],
+                emission_rgb: [0., 2., 0.1],
+                metallic: 0.,
+                roughness: 1.,
+                double_sided: true,
+                ..Default::default()
+            },
+            Material {
+                base_color: [0., 0., 0., 1.],
+                emission_rgb: [0.1, 0.15, 0.2],
+                metallic: 0.,
+                roughness: 1.,
+                ..Default::default()
+            },
+            Material {
+                alpha_mode: AlphaMode::Blend,
+                base_color: [0., 0., 0., 0.25],
+                emission_rgb: [4., 0.1, 0.],
+                metallic: 0.,
+                roughness: 1.,
+                ..Default::default()
+            },
+        ];
+        let panel = |center: [f32; 3], half: [f32; 2], material| Primitive {
+            ambient_visibility: vec![],
+            material,
+            vertices: [
+                [-half[0], -half[1]],
+                [half[0], -half[1]],
+                [half[0], half[1]],
+                [-half[0], half[1]],
+            ]
+            .map(|p| Vertex {
+                position: [center[0] + p[0], center[1] + p[1], center[2]],
+                normal: [0., 0., 1.],
+                uv: [0.; 2],
+            })
+            .to_vec(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+        };
+        let asset = MeshAsset {
+            primitives: vec![
+                panel([0.7, 0., 0.4], [1.3, 1.3], 0),
+                panel([0., 0., -0.6], [3.2, 1.8], 1),
+                panel([-0.7, 0., 0.], [1.3, 1.3], 2),
+            ],
+            materials,
+            textures: vec![],
+            images: vec![],
+        };
+        assert!(asset.validate().is_ok());
+        let glb = encode_lab_glb(&asset, "thessa-reference-scenes B05 v1");
+        Self {
+            asset,
+            glb,
+            transparent: true,
+        }
+    }
+    pub fn id(&self) -> &'static str {
+        if self.transparent { B05_ID } else { B01_ID }
     }
     pub fn asset(&self) -> &MeshAsset {
         &self.asset
@@ -96,20 +169,28 @@ impl MaterialLab {
         DVec3::new(-0.5, 1.0, 0.75).normalize().as_vec3().to_array()
     }
     pub fn illuminance_rgb_lux(&self) -> [f32; 3] {
-        [10_000.0; 3]
+        if self.transparent {
+            [0.; 3]
+        } else {
+            [10_000.0; 3]
+        }
     }
     pub fn view(&self, extent: [u32; 2], exposure: f32) -> Option<ViewParams> {
         if extent.contains(&0) || !exposure.is_finite() || exposure <= 0.0 {
             return None;
         }
-        let eye = DVec3::from_array(EYE_M);
+        let eye = if self.transparent {
+            DVec3::new(0., 0., 6.)
+        } else {
+            DVec3::from_array(EYE_M)
+        };
+        let target = if self.transparent {
+            DVec3::ZERO
+        } else {
+            DVec3::from_array(TARGET_M)
+        };
         Some(ViewParams {
-            world_from_view: glam::dcamera::rh::view::look_at_mat4(
-                eye,
-                DVec3::from_array(TARGET_M),
-                DVec3::Y,
-            )
-            .inverse(),
+            world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, target, DVec3::Y).inverse(),
             clip_from_view: glam::dcamera::rh::proj::directx::perspective(
                 FOV_Y_RAD,
                 f64::from(extent[0]) / f64::from(extent[1]),
@@ -121,6 +202,20 @@ impl MaterialLab {
         })
     }
     pub fn description(&self) -> Value {
+        if self.transparent {
+            return json!({"schema_version":1,"id":B05_ID,"geometry":"scene.glb","units":"metres",
+                "coordinate_system":"right-handed, Y-up","geometry_license":"MIT","third_party_assets":[],
+                "generator":"thessa-reference-scenes B05 v1","camera_eye_m":[0.,0.,6.],"camera_target_m":[0.,0.,0.],
+                "camera_up":[0.,1.,0.],"fov_y_rad":FOV_Y_RAD,"near_m":NEAR_M,"far_m":FAR_M,
+                "direction_to_light":self.direction_to_light(),"illuminance_rgb_lux":[0.,0.,0.],"ambient_rgb_lux":[0.,0.,0.],
+                "background_linear_rgba":[0.,0.,0.,1.],"environment":"none","dielectric_f0":0.04,"simulation_time_s":0.,
+                "emission_units":"linear RGB nits, glTF emissive factors times strength",
+                "materials":[{"role":"near green emitter","alpha":0.5,"emission":[0.,2.,0.1]},
+                    {"role":"opaque background","alpha":1.,"emission":[0.1,0.15,0.2]},
+                    {"role":"far red emitter","alpha":0.25,"emission":[4.,0.1,0.]}],
+                "center_unexposed_rgb":[0.5375,1.06875,0.125],
+                "limitations":["BLEND coverage, not refractive glass","no GI, bloom, shadows or temporal reconstruction"]});
+        }
         json!({"schema_version":1,"id":B01_ID,"geometry":"scene.glb","units":"metres","coordinate_system":"right-handed, Y-up",
             "sphere_radius_m":1.0,"sphere_slices":SLICES,"sphere_stacks":STACKS,"metallic_rows":[0.0,1.0],"roughness_columns":ROUGHNESS,
             "base_color_linear_rgba":BASE_COLOR,"plane_base_color_linear_rgba":PLANE_COLOR,"plane_roughness":0.8,"plane_metallic":0.0,"dielectric_f0":0.04,
@@ -178,9 +273,9 @@ fn sphere(center: [f32; 3], material: usize) -> Primitive {
     }
 }
 
-// Only the private generated opaque, untextured lab enters this encoder.
+// Only the private generated untextured material labs enter this encoder.
 // General imported materials must use their verified original asset files.
-fn encode_lab_glb(asset: &MeshAsset) -> Vec<u8> {
+fn encode_lab_glb(asset: &MeshAsset, generator: &str) -> Vec<u8> {
     let mut bin = Vec::new();
     let mut views = Vec::new();
     let mut accessors = Vec::new();
@@ -225,8 +320,26 @@ fn encode_lab_glb(asset: &MeshAsset) -> Vec<u8> {
         nodes.push(json!({"mesh":meshes.len()}));
         meshes.push(json!({"primitives":[{"attributes":{"POSITION":first,"NORMAL":first+1,"TEXCOORD_0":first+2},"indices":first+3,"material":p.material,"mode":4}]}));
     }
-    let materials:Vec<_>=asset.materials.iter().map(|m|json!({"pbrMetallicRoughness":{"baseColorFactor":m.base_color,"metallicFactor":m.metallic,"roughnessFactor":m.roughness},"alphaMode":"OPAQUE","doubleSided":false})).collect();
-    let mut document = json!({"asset":{"version":"2.0","generator":"thessa-reference-scenes B01 v1","copyright":"Project Thessa; generated mathematical geometry; MIT"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":materials,"buffers":[{"byteLength":bin.len()}],"bufferViews":views,"accessors":accessors});
+    let materials:Vec<_>=asset.materials.iter().map(|m| {
+        let mode=match m.alpha_mode {AlphaMode::Opaque=>"OPAQUE",AlphaMode::Mask=>"MASK",AlphaMode::Blend=>"BLEND"};
+        let mut value=json!({"pbrMetallicRoughness":{"baseColorFactor":m.base_color,"metallicFactor":m.metallic,"roughnessFactor":m.roughness},"alphaMode":mode,"doubleSided":m.double_sided});
+        if m.alpha_mode==AlphaMode::Mask {value["alphaCutoff"]=json!(m.alpha_cutoff);}
+        if m.emission_rgb != [0.;3] {
+            let strength=m.emission_rgb.into_iter().fold(1.,f32::max);
+            value["emissiveFactor"]=json!(m.emission_rgb.map(|v|v/strength));
+            if strength>1. {value["extensions"]=json!({"KHR_materials_emissive_strength":{"emissiveStrength":strength}});}
+        }
+        value
+    }).collect();
+    let mut document = json!({"asset":{"version":"2.0","generator":generator,"copyright":"Project Thessa; generated mathematical geometry; MIT"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":materials,"buffers":[{"byteLength":bin.len()}],"bufferViews":views,"accessors":accessors});
+    if asset
+        .materials
+        .iter()
+        .any(|m| m.emission_rgb.iter().any(|v| *v > 1.))
+    {
+        document["extensionsUsed"] = json!(["KHR_materials_emissive_strength"]);
+        document["extensionsRequired"] = json!(["KHR_materials_emissive_strength"]);
+    }
     document.sort_all_objects();
     let mut json = serde_json::to_vec(&document).expect("finite generated glTF");
     while !json.len().is_multiple_of(4) {
@@ -255,6 +368,33 @@ fn encode_lab_glb(asset: &MeshAsset) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transparency_lab_roundtrips_coverage_and_hdr_emission_without_dropping_extensions() {
+        let lab = MaterialLab::transparency();
+        assert_eq!(lab.id(), B05_ID);
+        assert_eq!(lab.glb(), MaterialLab::transparency().glb());
+        assert_eq!(
+            lab.asset
+                .primitives
+                .iter()
+                .map(|p| p.indices.len() / 3)
+                .sum::<usize>(),
+            6
+        );
+        assert!(thessa_render_assets::decode_glb(lab.glb(), Default::default()).is_err());
+        let decoded =
+            thessa_render_assets::decode_glb_surfaces(lab.glb(), Default::default()).unwrap();
+        for (actual, expected) in decoded.materials.iter().zip(&lab.asset.materials) {
+            assert_eq!(actual.alpha_mode, expected.alpha_mode);
+            assert_eq!(actual.base_color, expected.base_color);
+            assert_eq!(actual.emission_rgb, expected.emission_rgb);
+        }
+        assert_eq!(lab.illuminance_rgb_lux(), [0.; 3]);
+        assert_eq!(
+            lab.description()["center_unexposed_rgb"],
+            json!([0.5375, 1.06875, 0.125])
+        );
+    }
     #[test]
     fn lab_geometry_has_outward_nonzero_faces_and_explicit_material_grid() {
         let lab = MaterialLab::new();

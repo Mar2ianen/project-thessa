@@ -300,7 +300,12 @@ fn plan_inner(
             });
             records.extend(index.to_le_bytes());
         }
-        records.extend(f32_bytes([material.dielectric_f0, 0.0, 0.0, 0.0]));
+        records.extend(f32_bytes([
+            material.dielectric_f0,
+            material.emission_rgb[0],
+            material.emission_rgb[1],
+            material.emission_rgb[2],
+        ]));
     }
     // Static texture/sampler switches need no optional bindless features.
     // Reserve the primary material's four maps, shadow atlas and shared cloud

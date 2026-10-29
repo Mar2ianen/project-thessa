@@ -1,7 +1,7 @@
 struct View { clip:mat4x4<f32>, unjittered:mat4x4<f32>, inverse_clip:mat4x4<f32>,
     world_from_view:mat4x4<f32>, view_from_world:mat4x4<f32>, projection:mat4x4<f32>, inverse_projection:mat4x4<f32>, camera:vec3<f32>, exposure:f32 }
 struct Lighting { ambient:vec4<f32>, directions:array<vec4<f32>,3>, colors:array<vec4<f32>,3> }
-struct Material { color:vec4<f32>, double_sided:u32, quality:u32, reflections:u32, pad:u32, factors:vec4<f32>, optical:vec4<f32> }
+struct Material { color:vec4<f32>, double_sided:u32, quality:u32, reflections:u32, pad:u32, factors:vec4<f32>, optical:vec4<f32>, emission:vec4<f32> }
 @group(0) @binding(0) var<uniform> view:View;
 @group(0) @binding(1) var<uniform> light:Lighting;
 @group(0) @binding(2) var<storage,read> instances:array<mat4x4<f32>>;
@@ -53,6 +53,9 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     let shading=dot(normal,light_direction);let side=dot(geometry,light_direction);
     return vec2(select(0.0,max(shading,0.0),side>0.0),select(0.0,max(-shading,0.0),side<0.0));
 }
+fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
+    return vec4(radiance*view.exposure,1.0);
+}
 @fragment fn fragment(in:Output,@builtin(front_facing) front:bool)->@location(0) vec4<f32> {
     if (!MESH_ALL_DOUBLE_SIDED && !front && material.double_sided==0u) { discard; }
     var normal=normalize(in.normal)*select(-1.0,1.0,front);
@@ -96,8 +99,8 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     let diffuse_ambient=albedo*amb_up/OCEAN_PI;
     let diffuse_total=diffuse_ambient+diffuse_direct;
     if (material.quality==0u && material.reflections==0u) {
-        let low_rad = env_local_haze(in.position,diffuse_total*(1.0-material.factors.x),light.ambient.rgb);
-        return vec4(low_rad*view.exposure,1.0);
+        let low_rad = env_local_haze(in.position,diffuse_total*(1.0-material.factors.x)+material.emission.rgb,light.ambient.rgb);
+        return mesh_fragment_output(low_rad,base_sample.a*material.color.a);
     }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
@@ -121,6 +124,6 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
             }
         }
     }
-    radiance=env_local_haze(in.position,radiance,light.ambient.rgb);
-    return vec4(radiance*view.exposure,1.0);
+    radiance=env_local_haze(in.position,radiance+material.emission.rgb,light.ambient.rgb);
+    return mesh_fragment_output(radiance,base_sample.a*material.color.a);
 }

@@ -1,4 +1,4 @@
-//! Persistent opaque/cutout textured mesh consumer. Loads the caller's existing
+//! Persistent opaque/cutout/blended textured mesh consumer. Loads the caller's existing
 //! color/depth targets after terrain; no scene copy, readback or extra device.
 #[path = "mesh_layout.rs"]
 pub(crate) mod layout;
@@ -10,15 +10,21 @@ use thessa_rcbt_core::lighting::SurfaceLighting;
 use thessa_render_core::mesh::{AlphaMode, MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
-fn primary_shader(masked: bool, motion_invalid: bool) -> String {
+fn primary_shader(mode: AlphaMode, motion_invalid: bool) -> String {
     let mut source = include_str!("mesh.wgsl").to_owned();
-    if masked {
+    if mode == AlphaMode::Mask {
         // All implicit texture/normal derivatives precede coverage rejection.
         // Shadow and ray-query coverage are separate unsupported capabilities.
         source = source.replace(
             "// MESH_CUTOUT_COVERAGE",
             "let mask_dx=dpdx(normal);let mask_dy=dpdy(normal);\nif(base_sample.a*material.color.a<material.optical.z){discard;}",
         ).replace("dpdx(normal),dpdy(normal)", "mask_dx,mask_dy");
+    }
+    if mode == AlphaMode::Blend {
+        source = source.replace(
+            "radiance*view.exposure,1.0)",
+            "radiance*alpha*view.exposure,alpha)",
+        );
     }
     if motion_invalid {
         source = source.replace("view.exposure,1.0)", "view.exposure,0.0)");
@@ -47,6 +53,7 @@ struct Primitive {
     attributes: Option<wgpu::Buffer>,
     double_sided: bool,
     masked: bool,
+    blended: bool,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
@@ -92,6 +99,12 @@ struct ShadowCommands {
     uploaded: Vec<Vec<u8>>,
 }
 
+struct TransparentCommand {
+    primitive: usize,
+    instance: u32,
+    depth: f64,
+}
+
 pub struct MeshRenderer {
     shadow_queue: Option<std::sync::Arc<wgpu::Queue>>,
     shadow_command_budget: u64,
@@ -112,6 +125,9 @@ pub struct MeshRenderer {
     single_sided_pipeline: Option<wgpu::RenderPipeline>,
     masked_pipeline: Option<wgpu::RenderPipeline>,
     masked_single_sided_pipeline: Option<wgpu::RenderPipeline>,
+    blended_pipeline: Option<wgpu::RenderPipeline>,
+    blended_single_sided_pipeline: Option<wgpu::RenderPipeline>,
+    transparent_commands: Vec<TransparentCommand>,
     global: wgpu::BindGroup,
     materials: Vec<wgpu::BindGroup>,
     primitives: Vec<Primitive>,
@@ -373,6 +389,7 @@ impl MeshRenderer {
     }
 
     fn prepare_primary(&mut self, backend: &Backend, clip: glam::Mat4) -> usize {
+        self.transparent_commands.clear();
         self.primary_seen.resize(self.count as usize, false);
         self.primary_seen.fill(false);
         let mut stats = MeshDrawStats {
@@ -407,12 +424,48 @@ impl MeshRenderer {
                 stats.triangles += triangles * u64::from(run.end - run.start);
                 runs.push(run);
             }
-            stats.draw_commands += runs.len();
+            if primitive.blended {
+                for instance in runs.iter().flat_map(|r| r.clone()) {
+                    let cached = self.world_bounds[primitive_index]
+                        .get((instance - range.start) as usize)
+                        .copied()
+                        .flatten();
+                    let world = cached.or_else(|| {
+                        primitive.bounds.and_then(|b| {
+                            self.staging
+                                .get(instance as usize * 64..instance as usize * 64 + 64)
+                                .and_then(|bytes| b.uploaded_world(bytes))
+                        })
+                    });
+                    self.transparent_commands.push(TransparentCommand {
+                        primitive: primitive_index,
+                        instance,
+                        depth: world.map_or(f64::INFINITY, |w| w.clip_depth(clip)),
+                    });
+                }
+                stats.draw_commands += runs
+                    .iter()
+                    .map(|r| (r.end - r.start) as usize)
+                    .sum::<usize>();
+            } else {
+                stats.draw_commands += runs.len();
+            }
         }
+        self.transparent_commands.sort_by(|a, b| {
+            b.depth
+                .total_cmp(&a.depth)
+                .then(a.primitive.cmp(&b.primitive))
+                .then(a.instance.cmp(&b.instance))
+        });
         stats.instances = self.primary_seen.iter().filter(|&&seen| seen).count() as u32;
         let uploaded = self.prepare_primary_indirect(backend);
         stats.draw_calls = if self.primary_indirect.is_some() {
-            self.primary_runs.iter().filter(|r| !r.is_empty()).count()
+            self.primary_runs
+                .iter()
+                .zip(&self.primitives)
+                .filter(|(r, p)| !p.blended && !r.is_empty())
+                .count()
+                + self.transparent_commands.len()
         } else {
             stats.draw_commands
         };
@@ -432,7 +485,7 @@ impl MeshRenderer {
             .zip(&mut self.primary_indirect_ranges)
         {
             let first = (self.primary_indirect_staging.len() / 20) as u32;
-            for run in runs {
+            for run in runs.iter().filter(|_| !primitive.blended) {
                 self.primary_indirect_staging.extend(
                     [primitive.count, run.end - run.start, 0, 0, run.start]
                         .into_iter()
@@ -542,20 +595,22 @@ impl MeshRenderer {
             ray_tracing,
         } = settings;
         source.validate().map_err(fail)?;
-        if source
+        let has_blends = source
             .materials
             .iter()
-            .any(|m| m.alpha_mode == AlphaMode::Blend)
-        {
-            return Err(fail("BLEND requires a transparent render pass"));
+            .any(|m| m.alpha_mode == AlphaMode::Blend);
+        if has_blends && ray_tracing.is_some_and(|s| s.temporal_taa || s.temporal_motion_vectors) {
+            return Err(fail(
+                "BLEND temporal history is unsupported; disable TAA/motion vectors explicitly",
+            ));
         }
         let has_cutouts = source
             .materials
             .iter()
             .any(|m| m.alpha_mode == AlphaMode::Mask);
-        if has_cutouts && shadows.is_some() {
+        if (has_cutouts || has_blends) && shadows.is_some() {
             return Err(fail(
-                "MASK shadow coverage is unsupported; use an explicit shadows-off baseline",
+                "MASK shadow/BLEND shadow coverage is unsupported; use an explicit shadows-off baseline",
             ));
         }
         // Feasibility (device feature, scene sizes, RT memory budget) is
@@ -615,12 +670,12 @@ impl MeshRenderer {
             crate::ray_scene::Enable::Ready(plan) => crate::ray_scene::shader(plan),
             _ => crate::ray_scene::fallback_shader(),
         };
-        let make_module = |masked| {
+        let make_module = |mode| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(if masked {
-                    "owned-mesh-mask"
-                } else {
-                    "owned-mesh"
+                label: Some(match mode {
+                    AlphaMode::Opaque => "owned-mesh",
+                    AlphaMode::Mask => "owned-mesh-mask",
+                    AlphaMode::Blend => "owned-mesh-blend",
                 }),
                 source: wgpu::ShaderSource::Wgsl(
                     format!(
@@ -635,7 +690,7 @@ impl MeshRenderer {
                         // Unknown/moving meshes remain motion-invalid. Immutable
                         // geometry shares terrain's camera-only reconstruction.
                         primary_shader(
-                            masked,
+                            mode,
                             !static_geometry
                                 && ray_tracing.is_some_and(|s| s.temporal_motion_vectors)
                         )
@@ -644,8 +699,9 @@ impl MeshRenderer {
                 ),
             })
         };
-        let module = make_module(false);
-        let masked_module = has_cutouts.then(|| make_module(true));
+        let module = make_module(AlphaMode::Opaque);
+        let masked_module = has_cutouts.then(|| make_module(AlphaMode::Mask));
+        let blended_module = has_blends.then(|| make_module(AlphaMode::Blend));
         let has_vertex_ao = source
             .primitives
             .iter()
@@ -690,11 +746,11 @@ impl MeshRenderer {
                 },
             )
         });
-        let make_pipeline = |cull_mode, masked| {
-            let module = if masked {
-                masked_module.as_ref().unwrap()
-            } else {
-                &module
+        let make_pipeline = |cull_mode, mode| {
+            let module = match mode {
+                AlphaMode::Opaque => &module,
+                AlphaMode::Mask => masked_module.as_ref().unwrap(),
+                AlphaMode::Blend => blended_module.as_ref().unwrap(),
             };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("owned-mesh"),
@@ -711,7 +767,7 @@ impl MeshRenderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(mode != AlphaMode::Blend),
                     depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: Default::default(),
                     bias: Default::default(),
@@ -755,7 +811,8 @@ impl MeshRenderer {
                     },
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: None,
+                        blend: (mode == AlphaMode::Blend)
+                            .then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -773,10 +830,10 @@ impl MeshRenderer {
             .any(|m| m.alpha_mode == AlphaMode::Opaque && !m.double_sided);
         let pipeline = make_pipeline(
             (fixed_sidedness && !double_sided).then_some(wgpu::Face::Back),
-            false,
+            AlphaMode::Opaque,
         );
         let single_sided_pipeline = (fixed_sidedness && double_sided && single_sided)
-            .then(|| make_pipeline(Some(wgpu::Face::Back), false));
+            .then(|| make_pipeline(Some(wgpu::Face::Back), AlphaMode::Opaque));
         let masked_double = source
             .materials
             .iter()
@@ -788,11 +845,27 @@ impl MeshRenderer {
         let masked_pipeline = has_cutouts.then(|| {
             make_pipeline(
                 (fixed_sidedness && !masked_double).then_some(wgpu::Face::Back),
-                true,
+                AlphaMode::Mask,
             )
         });
         let masked_single_sided_pipeline = (fixed_sidedness && masked_double && masked_single)
-            .then(|| make_pipeline(Some(wgpu::Face::Back), true));
+            .then(|| make_pipeline(Some(wgpu::Face::Back), AlphaMode::Mask));
+        let blended_double = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Blend && m.double_sided);
+        let blended_single = source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == AlphaMode::Blend && !m.double_sided);
+        let blended_pipeline = has_blends.then(|| {
+            make_pipeline(
+                (fixed_sidedness && !blended_double).then_some(wgpu::Face::Back),
+                AlphaMode::Blend,
+            )
+        });
+        let blended_single_sided_pipeline = (fixed_sidedness && blended_double && blended_single)
+            .then(|| make_pipeline(Some(wgpu::Face::Back), AlphaMode::Blend));
         let environment = crate::environment::EnvironmentBinding::new(device);
         let global = frame_bind_group(
             device,
@@ -868,6 +941,12 @@ impl MeshRenderer {
                 },
                 0.0,
             ]));
+            data.extend(words([
+                material.emission_rgb[0],
+                material.emission_rgb[1],
+                material.emission_rgb[2],
+                0.0,
+            ]));
             let params = buffer(&data, wgpu::BufferUsages::UNIFORM);
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("mesh-material"),
@@ -940,6 +1019,7 @@ impl MeshRenderer {
                 ),
                 double_sided: source.materials[p.material].double_sided,
                 masked: source.materials[p.material].alpha_mode == AlphaMode::Mask,
+                blended: source.materials[p.material].alpha_mode == AlphaMode::Blend,
                 attributes: shadows.map(|_| {
                     buffer(
                         &words(
@@ -1028,6 +1108,9 @@ impl MeshRenderer {
             single_sided_pipeline,
             masked_pipeline,
             masked_single_sided_pipeline,
+            blended_pipeline,
+            blended_single_sided_pipeline,
+            transparent_commands: Vec::new(),
             global,
             materials,
             primitives,
@@ -1381,7 +1464,86 @@ impl MeshRenderer {
         self.draw_with_visibility(pass, true);
     }
 
+    /// Split composition for hosts with a sky/background between opaque and transparent surfaces.
+    pub fn draw_opaque_into_pass<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        self.draw_opaque_with_visibility(pass, true);
+    }
+
+    pub fn draw_transparent_into_pass<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        if self.count != 0 {
+            for command in &self.transparent_commands {
+                self.draw_transparent_command(pass, command);
+            }
+        }
+    }
+
+    /// Compose several consumers with all opaque/MASK draws first, followed by
+    /// one shared back-to-front BLEND queue. All must use the same camera/target.
+    /// Center sorting has the usual intersecting/self-overlapping mesh limitation.
+    pub fn draw_scene_into_pass<'a>(meshes: &[&'a Self], pass: &mut wgpu::RenderPass<'a>) {
+        for mesh in meshes {
+            mesh.draw_opaque_with_visibility(pass, true);
+        }
+        let mut commands: Vec<_> = meshes
+            .iter()
+            .copied()
+            .enumerate()
+            .flat_map(|(order, mesh)| {
+                mesh.transparent_commands
+                    .iter()
+                    .filter(move |_| mesh.count != 0)
+                    .map(move |command| (mesh, command, order))
+            })
+            .collect();
+        commands.sort_by(|a, b| {
+            b.1.depth
+                .total_cmp(&a.1.depth)
+                .then(a.2.cmp(&b.2))
+                .then(a.1.primitive.cmp(&b.1.primitive))
+                .then(a.1.instance.cmp(&b.1.instance))
+        });
+        for (mesh, command, _) in commands {
+            mesh.draw_transparent_command(pass, command);
+        }
+    }
+
     fn draw_with_visibility<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, cull: bool) {
+        self.draw_opaque_with_visibility(pass, cull);
+        self.draw_transparent_into_pass(pass);
+    }
+
+    fn bind_primitive<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, p: &'a Primitive) {
+        pass.set_bind_group(1, &self.materials[p.material], &[]);
+        pass.set_vertex_buffer(0, p.vertices.slice(..));
+        if let Some(attributes) = &p.attributes {
+            pass.set_vertex_buffer(1, attributes.slice(..));
+            pass.set_vertex_buffer(2, p.ambient.slice(..));
+        } else {
+            pass.set_vertex_buffer(1, p.ambient.slice(..));
+        }
+        pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
+    }
+
+    fn draw_transparent_command<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        command: &TransparentCommand,
+    ) {
+        let p = &self.primitives[command.primitive];
+        pass.set_pipeline(if p.double_sided {
+            self.blended_pipeline.as_ref().unwrap()
+        } else {
+            self.blended_single_sided_pipeline
+                .as_ref()
+                .or(self.blended_pipeline.as_ref())
+                .unwrap()
+        });
+        pass.set_bind_group(0, &self.global, &[]);
+        self.bind_primitive(pass, p);
+        pass.draw_indexed(0..p.count, 0, command.instance..command.instance + 1);
+    }
+
+    fn draw_opaque_with_visibility<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, cull: bool) {
         if self.count == 0 || self.ranges.iter().all(std::ops::Range::is_empty) {
             return;
         }
@@ -1400,6 +1562,9 @@ impl MeshRenderer {
             .zip(&self.primary_runs)
             .enumerate()
         {
+            if p.blended {
+                continue;
+            }
             let runs = if cull {
                 visible.as_slice()
             } else {
@@ -1424,15 +1589,7 @@ impl MeshRenderer {
             } else {
                 &self.pipeline
             });
-            pass.set_bind_group(1, &self.materials[p.material], &[]);
-            pass.set_vertex_buffer(0, p.vertices.slice(..));
-            if let Some(attributes) = &p.attributes {
-                pass.set_vertex_buffer(1, attributes.slice(..));
-                pass.set_vertex_buffer(2, p.ambient.slice(..));
-            } else {
-                pass.set_vertex_buffer(1, p.ambient.slice(..));
-            }
-            pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
+            self.bind_primitive(pass, p);
             if let Some(indirect) = self.primary_indirect.as_ref().filter(|_| cull) {
                 let range = &self.primary_indirect_ranges[i];
                 pass.multi_draw_indexed_indirect(

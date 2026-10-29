@@ -119,10 +119,21 @@ diagnostic is documented below.
 ## First external B01 diagnostic
 
 `cycles_b01.py` runs inside an existing Blender/Cycles installation and imports
-the GLB from a verified native B01 capture. It matches the actual captured camera
+the GLB from a verified native B01 or B05 capture. It matches the actual captured camera
 and uses explicit numeric irradiance mapping and common HDR/exposure/Reinhard/
 sRGB output. It retains raw float32 radiance, images, hashes and diagnostic
 metrics. No renderer code or external package is added to Rust. See
 [doc 92](../../docs/92_EXTERNAL_RENDERER_COMPARISON.md) for the command, tested
 tool versions and BSDF/AA/light-unit limits. This is not a performance comparison
 or physical/visual parity acceptance; Godot/Unreal adapters remain pending.
+
+## Transparent/emissive diagnostic
+
+`data/reference-scenes/b05-capture.toml` exercises standard BLEND coverage and
+HDR emission through the existing native consumer. Run `capture.py` with that
+manifest and pass the resulting directory to `cycles_b01.py --samples 1024`
+inside Blender. B01 uses zero transparent bounces; B05 uses eight, with zero
+incident light to isolate emission/composition. Native and external source,
+GLB, camera, exposure and artifact hashes stay bound by the same checks. See
+[doc 95](../../docs/95_TRANSPARENT_EMISSIVE_SURFACES.md) for actual evidence and
+unsupported refraction/GI/temporal/shadow/RT coverage.

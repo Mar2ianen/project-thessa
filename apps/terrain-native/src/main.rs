@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )
             }
             "--reference-scene" => {
-                reference_scene = Some(args.next().ok_or("--reference-scene requires b01")?)
+                reference_scene = Some(args.next().ok_or("--reference-scene requires b01 or b05")?)
             }
             "--width" => {
                 width = args.next().ok_or("--width requires pixels")?.parse()?;
@@ -245,7 +245,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
                 println!(
-                    "--reference-scene b01 uses the independent generated material lab; requires --headless/--perf-capture and data/reference-scenes/b01-graphics.toml. No canonical game Scene is loaded.\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
+                    "--reference-scene b01|b05 uses the independent generated material labs; requires --headless/--perf-capture and the matching data/reference-scenes/b01-graphics.toml or b05-graphics.toml. No canonical game Scene is loaded.\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
                 );
                 println!(
                     "--gpu-trace NEW.toml requires --headless and excludes --perf-capture. Crash-durable CPU submission-intent/GPU-completion records with serial stage fences; changes scheduling and is not a performance capture. --gpu-trace-mesh-triangle-limit N sets positive per-stage mesh admission (default1000000); rejection submits no stage. This count is not a GPU-duration bound."
@@ -507,7 +507,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     if let Some(id) = reference_scene {
-        if id != "b01" {
+        if !["b01", "b05"].contains(&id.as_str()) {
             return Err(format!("unknown reference scene: {id}").into());
         }
         let supported = [
@@ -525,7 +525,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .find(|flag| !supported.contains(&flag.as_str()))
         {
-            return Err(format!("{option} is unavailable in the fixed B01 capture; use its explicit reference graphics profile").into());
+            return Err(format!("{option} is unavailable in the fixed material-lab capture; use its explicit reference graphics profile").into());
         }
         return reference::material_lab(
             &requested,
@@ -540,6 +540,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             linear_hdr.as_deref().map(std::path::Path::new),
             [width, height],
             frame_limit.unwrap_or(60),
+            &id,
         );
     }
     eprintln!(

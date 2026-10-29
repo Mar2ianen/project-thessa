@@ -1,6 +1,6 @@
 """Run with Blender --background --factory-startup --disable-autoexec --python-exit-code 1
 --python tools/agent-qa/cycles_b01.py -- CAPTURE_DIRECTORY --output NEW_DIRECTORY.
-Same-scene B01 diagnostic; numeric irradiance mapping is not spectral calibration.
+Same-scene B01/B05 diagnostic; numeric irradiance mapping is not spectral calibration.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from capture import sha256, source_state, reference_identity, validate_capture
 
 ROOT = Path(__file__).resolve().parents[2]
 B01_ID = "B01-material-lab-v1"
+B05_ID = "B05-transparency-emission-v1"
 INPUTS = ("scene.json", "scene.glb", "linear.rgba16f", "display.png", "scene.toml", "perf.json", "scene.LICENSE.txt")
 
 
@@ -41,13 +42,14 @@ def load_inputs(directory: Path) -> tuple[dict, dict, dict]:
         if actual != capture[name]:
             raise ValueError(f"reference identity changed: {name}")
     scene = json.loads((directory / "scene.json").read_text())
+    expected_light = [10000,10000,10000] if scene["id"] == B01_ID else [0,0,0]
     values = capture["metadata"]["graphics"]["resolved"]
     graphics = tomllib.loads(values["requested_toml"])
     renderer = graphics["renderer"]
     temporal = graphics["temporal"]
-    if (scene["id"] != B01_ID or scene["schema_version"] != 1
+    if (scene["id"] not in (B01_ID,B05_ID) or scene["schema_version"] != 1
             or scene["environment"] != "none" or scene["ambient_rgb_lux"] != [0, 0, 0]
-            or scene["illuminance_rgb_lux"] != [10000, 10000, 10000]
+            or scene["illuminance_rgb_lux"] != expected_light
             or scene["coordinate_system"] != "right-handed, Y-up"
             or scene["units"] != "metres" or scene["dielectric_f0"] != 0.04
             or not renderer["hdr"] or renderer["auto_exposure"] or renderer["bloom"]
@@ -57,11 +59,11 @@ def load_inputs(directory: Path) -> tuple[dict, dict, dict]:
             or renderer["ray_tracing"] != "off" or any(temporal[key] for key in ("taa", "motion_vectors", "jitter"))
             or not capture["linear_hdr"]["available"] or not capture["linear_hdr"]["pre_exposed"]
             or capture["linear_hdr"]["tonemapped"] or capture["linear_hdr"]["format"] != "RGBA16Float"):
-        raise ValueError("only the frozen direct-light B01 HDR/Reinhard baseline is supported")
+        raise ValueError("only the frozen B01/B05 HDR/Reinhard baselines are supported")
     lights = json.loads(values["capture_light_colors_lux"])
     directions = json.loads(values["capture_light_directions"])
     ambient = json.loads(values["capture_ambient_lux"])
-    if (lights != [[10000, 10000, 10000, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+    if (lights != [expected_light+[0], [0, 0, 0, 0], [0, 0, 0, 0]]
             or ambient != [0, 0, 0, 0] or float(values["capture_simulation_time_s"]) != 0
             or len(directions) != 3 or len(directions[0]) != 4
             or any(not math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-7)
@@ -161,7 +163,7 @@ def render(directory: Path, output: Path, samples: int) -> dict:
     scene.cycles.glossy_bounces = 1
     scene.cycles.transmission_bounces = 0
     scene.cycles.volume_bounces = 0
-    scene.cycles.transparent_max_bounces = 0
+    scene.cycles.transparent_max_bounces = 8 if definition["id"] == B05_ID else 0
     scene.cycles.sample_clamp_direct = 0
     scene.cycles.sample_clamp_indirect = 0
     scene.cycles.pixel_filter_type = "BOX"
@@ -190,7 +192,8 @@ def render(directory: Path, output: Path, samples: int) -> dict:
         obj.visible_shadow = False
         obj.visible_diffuse = False
         obj.visible_glossy = False
-    if len(objects) != 11 or triangles != 22082:
+    expected_geometry = (11,22082) if definition["id"] == B01_ID else (3,6)
+    if (len(objects),triangles) != expected_geometry:
         raise ValueError(f"imported workload changed: objects={len(objects)} triangles={triangles}")
     # glTF importer maps (x,y,z) to Blender (x,-z,y). Camera local axes agree.
     conversion = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
@@ -252,7 +255,7 @@ def render(directory: Path, output: Path, samples: int) -> dict:
         raise ValueError("native inputs changed during Cycles render")
     if source_state(ROOT) != adapter_source or sha256(Path(__file__)) != adapter_hash:
         raise ValueError("adapter source changed during capture")
-    report = {"schema_version": 1, "scene_id": B01_ID, "adapter_source": adapter_source,
+    report = {"schema_version": 1, "scene_id": definition["id"], "adapter_source": adapter_source,
               "adapter_sha256": adapter_hash, "native_capture_sha256": input_hash,
               "native_source": capture["source"], "native_platform": capture["metadata"]["platform"],
               "native_build": capture["metadata"]["build"],
@@ -263,14 +266,19 @@ def render(directory: Path, output: Path, samples: int) -> dict:
                          "device": "CPU", "threads": scene.render.threads},
               "capture": {**settings, "samples": samples, "seed": 0, "adaptive_sampling": False,
                           "denoising": False, "max_bounces": 1, "shadows": False,
+                          "transparent_max_bounces": scene.cycles.transparent_max_bounces,
                           "filter": "BOX, width 1", "tone_mapping": "shared per-channel Reinhard then sRGB",
                           "color_management": "scene-linear EXR; no AgX/Standard view baked into comparison",
                           "loaded_exr_color_space": image.colorspace_settings.name,
                           "camera_world_matrix_blender": [list(row) for row in camera.matrix_world],
                           "camera_vertical_fov_rad": camera.data.angle_y, "sun_energy_numeric": sun_data.energy,
                           "sun_angle_rad": sun_data.angle, "triangles": triangles, "mesh_objects": len(objects)},
-              "light_units": "Operational numeric mapping: 1 Thessa RGB lux input = 1 Cycles normalized SUN energy unit. No spectral/luminous-efficacy calibration; absolute photometric equivalence is unverified.",
-              "differences": ["Cycles glTF Principled BSDF versus Thessa direct GGX/Lambert/Fresnel and derivative roughness filtering",
+              "light_units": ("Emission-only B05: no incident light; glTF factor times emissive strength is passed unchanged to both engines before the shared exposure. Absolute spectral/photometric calibration is unverified."
+                              if definition["id"] == B05_ID else
+                              "Operational numeric mapping: 1 Thessa RGB lux input = 1 Cycles normalized SUN energy unit. No spectral/luminous-efficacy calibration; absolute photometric equivalence is unverified."),
+              "differences": [("Cycles stochastic alpha coverage versus Thessa sorted premultiplied alpha-over; B05 has no incident illumination or indirect surface transport"
+                               if definition["id"] == B05_ID else
+                               "Cycles glTF Principled BSDF versus Thessa direct GGX/Lambert/Fresnel and derivative roughness filtering"),
                               "Cycles path sampling/BOX pixel reconstruction versus native raster MSAA=1",
                               "Cycles float32 radiance versus Thessa pre-exposed float16 render target",
                               "CPU offline Cycles render versus GPU raster; durations are not a performance comparison"],

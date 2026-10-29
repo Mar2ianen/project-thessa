@@ -38,6 +38,15 @@ impl LightProjection {
     }
 }
 impl WorldBounds {
+    pub fn clip_depth(self, clip: Mat4) -> f64 {
+        let p = clip.as_dmat4() * self.center.extend(1.0);
+        if p.is_finite() && p.w > 0.0 {
+            p.z / p.w
+        } else {
+            f64::INFINITY
+        }
+    }
+
     pub fn intersects_samples(
         self,
         grid: &thessa_render_core::shadow::RasterFootprint,

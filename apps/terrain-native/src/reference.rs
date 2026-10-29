@@ -22,7 +22,7 @@ fn validate_baseline(requested: &RequestedGraphics) -> Result<(), &'static str> 
         || requested.renderer.resolution_scale != 1.0
     {
         return Err(
-            "B01 v1 requires an explicit raster baseline: RT/shadows/temporal/bloom/auto exposure off, specular response on, MSAA=1 and resolution_scale=1; use data/reference-scenes/b01-graphics.toml",
+            "The material labs require an explicit raster baseline: RT/shadows/temporal/bloom/auto exposure off, specular response on, MSAA=1 and resolution_scale=1; use the matching b01-graphics.toml or b05-graphics.toml",
         );
     }
     Ok(())
@@ -54,6 +54,7 @@ pub fn material_lab(
     linear_hdr: Option<&Path>,
     extent: [u32; 2],
     frames: u32,
+    case: &str,
 ) -> Result<(), Box<dyn Error>> {
     validate_baseline(requested)?;
     if !(1..=1800).contains(&frames) {
@@ -77,7 +78,11 @@ pub fn material_lab(
     if files.iter().any(|p| p.exists()) {
         return Err("reference scene sidecars already exist; choose a new output directory".into());
     }
-    let scene = thessa_reference_scenes::MaterialLab::new();
+    let scene = match case {
+        "b01" => thessa_reference_scenes::MaterialLab::new(),
+        "b05" => thessa_reference_scenes::MaterialLab::transparency(),
+        _ => return Err(format!("unknown material reference scene: {case}").into()),
+    };
     let description = serde_json::to_vec_pretty(&scene.description())?;
     for (path, bytes) in [
         (&files[0], scene.glb()),
@@ -96,7 +101,11 @@ pub fn material_lab(
     }
     // Exercise the same portable GLB consumed by external renderers, including
     // its material bindings; no private showcase mesh replaces the dataset.
-    let asset = thessa_render_assets::decode_glb(scene.glb(), Default::default())?;
+    let asset = if case == "b01" {
+        thessa_render_assets::decode_glb(scene.glb(), Default::default())?
+    } else {
+        thessa_render_assets::decode_glb_surfaces(scene.glb(), Default::default())?
+    };
     let backend = Backend::bring_up_for_graphics_profiled(requested)?;
     let resolved = backend.resolve_graphics(requested);
     let target = OffscreenTarget::new(&backend, extent[0], extent[1])?;
@@ -204,7 +213,7 @@ pub fn material_lab(
         )?;
     }
     let mut metadata = crate::perf::renderer_capture_metadata(&backend, requested);
-    metadata.scenario = thessa_reference_scenes::B01_ID.into();
+    metadata.scenario = scene.id().into();
     metadata.display.width = extent[0];
     metadata.display.height = extent[1];
     metadata.display.vsync = false;
@@ -220,14 +229,14 @@ pub fn material_lab(
         ("reference_mesh_api_draws",stats.draw_calls.to_string()),
         ("reference_mesh_logical_draws",stats.draw_commands.to_string()),
         ("reference_scene_frozen","true".into()),
-        ("reference_unavailable_features","shadows, RT, area lights, environment/HDRI, temporal reconstruction, normal-map/texture variants; not part of this direct-light baseline".into()),
+        ("reference_unavailable_features","shadows, RT, area lights, environment/HDRI, temporal reconstruction, normal-map/texture variants, physical glass refraction and GI; not part of these fixed material baselines".into()),
     ] {metadata.graphics.resolved.insert(key.into(),value);}
     let capture = collector.snapshot_capture(metadata);
     capture.write_json(perf_path)?;
     capture.write_csv(&perf_path.with_extension("csv"))?;
     eprintln!(
         "reference_scene={} vertices={} submitted_triangles={} measured_frames={frames} gpu_timestamps={}",
-        thessa_reference_scenes::B01_ID,
+        scene.id(),
         asset
             .primitives
             .iter()

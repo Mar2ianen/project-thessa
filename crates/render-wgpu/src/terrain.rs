@@ -2232,12 +2232,15 @@ impl TerrainRenderer {
             pass.draw_indirect(&self.draw, 0);
         }
         if let Some(mesh) = mesh {
-            mesh.draw_into_pass(&mut pass);
+            mesh.draw_opaque_into_pass(&mut pass);
         }
         // Far depth, no depth writes: terrain and opaque meshes reject covered
         // pixels before sky sampling. UI remains a separate overlay pass.
         if let Some(sky) = &self.sky {
             sky.draw(&mut pass);
+        }
+        if let Some(mesh) = mesh {
+            mesh.draw_transparent_into_pass(&mut pass);
         }
         drop(pass);
     }

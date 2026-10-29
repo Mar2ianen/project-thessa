@@ -87,6 +87,15 @@ into reusable engine crates.
 
 Art, music, fonts, third-party datasets and trademarks have their own licenses. GPL code licensing does not automatically choose an asset license. Asset policy remains TBD.
 
+The optional original Khronos `EmissiveStrengthTest` benchmark asset is
+**CC-BY-4.0**, copyright 2022 Analytical Graphics, Inc.; model/textures by
+Ed Mackey. It is cached outside Git without conversion, separately from engine
+code. `data/reference-scenes/khronos-emission-assets.json` pins its source and
+exact bytes; `data/reference-scenes/licenses/CC-BY-4.0.txt` and
+`EmissiveStrengthTest.NOTICE.txt` retain legal text and attribution. Identity
+ingestion copies these notices and provenance alongside the cached GLB.
+Redistribution must retain them; engine MIT licensing does not relicense this asset.
+
 ## Dependencies
 
 Permissive dependencies are preferred in MIT engine crates. LGPL/AGPL/GPL dependencies require an ADR that checks the exact linking/distribution consequences. A GPL game does not make it acceptable to accidentally change the reusable engine's effective licensing.

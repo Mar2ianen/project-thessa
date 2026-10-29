@@ -250,3 +250,61 @@ fn moved_culled_and_removed_instances_refresh_the_transparent_queue() {
     assert_eq!(mesh.draw_stats().draw_commands, 0);
     assert_eq!(pixel(&backend, &[&mesh], false), [0, 0, 0, 0x3c00]);
 }
+
+#[test]
+#[ignore = "requires the pinned CC-BY-4.0 Khronos asset; set THESSA_REFERENCE_ASSET_CACHE after reference_assets.py ingestion"]
+fn original_khronos_emissive_strength_renders_all_five_hdr_levels() {
+    let path = std::path::PathBuf::from(std::env::var_os("THESSA_REFERENCE_ASSET_CACHE").expect("external cache required"))
+        .join("khronos/EmissiveStrengthTest/8f492390ddc7a2ae221a1369ef560589cf8c70fb/original/EmissiveStrengthTest.glb");
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(bytes.len(), 10668);
+    assert!(thessa_render_assets::decode_glb(&bytes, Default::default()).is_err());
+    let asset = thessa_render_assets::decode_glb_surfaces(&bytes, Default::default()).unwrap();
+    assert_eq!(asset.primitives.len(), 6);
+    assert_eq!(
+        asset
+            .primitives
+            .iter()
+            .map(|p| p.indices.len() / 3)
+            .sum::<usize>(),
+        90
+    );
+    let backend = Backend::bring_up().unwrap();
+    for quality in [Quality::Low, Quality::High] {
+        let mut mesh = renderer(&backend, &asset, quality);
+        for (level, x) in [-6., -3., 0., 3., 6.].into_iter().enumerate() {
+            let eye = DVec3::new(x, 0., 5.);
+            mesh.update(
+                &backend,
+                &ViewParams {
+                    world_from_view: DMat4::from_translation(eye),
+                    world_position_m: eye,
+                    clip_from_view: DMat4::from_scale(DVec3::new(1., 1., -0.1)),
+                    exposure: 0.5,
+                },
+                &SurfaceLighting::default(),
+                &[MeshInstance {
+                    position_m: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.,
+                }],
+            )
+            .unwrap();
+            let actual = pixel(&backend, &[&mesh], false);
+            // RGB=[0.1,0.5,0.9] × strength × exposure; powers of two shift the
+            // half-float exponent exactly. One ULP permits shader rounding.
+            let expected = [0x2a66u16, 0x3400, 0x3733].map(|bits| bits + (level as u16) * 0x400);
+            for i in 0..3 {
+                assert!(
+                    actual[i].abs_diff(expected[i]) <= 1,
+                    "{quality:?} level={level} actual={actual:?} expected={expected:?}"
+                );
+            }
+            assert_eq!(actual[3], 0x3c00);
+            eprintln!(
+                "khronos_emission quality={quality:?} strength={} rgba16_bits={actual:?}",
+                1 << level
+            );
+        }
+    }
+}

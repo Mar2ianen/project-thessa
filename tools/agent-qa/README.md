@@ -137,3 +137,18 @@ incident light to isolate emission/composition. Native and external source,
 GLB, camera, exposure and artifact hashes stay bound by the same checks. See
 [doc 95](../../docs/95_TRANSPARENT_EMISSIVE_SURFACES.md) for actual evidence and
 unsupported refraction/GI/temporal/shadow/RT coverage.
+
+The original Khronos emission asset is available separately:
+
+```sh
+python3 tools/agent-qa/reference_assets.py \
+  --manifest data/reference-scenes/khronos-emission-assets.json --cache /absolute/cache
+THESSA_REFERENCE_ASSET_CACHE=/absolute/cache cargo test -p thessa-render-wgpu \
+  --test transparency original_khronos_emissive_strength -- --ignored --nocapture
+```
+
+This opt-in oracle requires an actual adapter. It retains original geometry and
+materials and checks all five HDR strength levels on Low/High. Identity ingestion
+runs no converter; its cache includes the pinned CC-BY-4.0 license, Ed Mackey/AGI
+attribution and provenance. Do not redistribute its GLB without these notices.
+It is not a native B06 capture or an upstream BabylonJS screenshot match.

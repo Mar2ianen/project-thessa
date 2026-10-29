@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "converter": {
+    "kind": "identity",
+    "version": "identity-v1"
+  },
+  "license_text": {
+    "path": "data/reference-scenes/licenses/CC-BY-4.0.txt",
+    "source": "https://github.com/spdx/license-list-data/blob/617f1a78824394ada7525017d98c6fb215aad09b/text/CC-BY-4.0.txt",
+    "git_blob_sha1": "13ca539f377dc705af32b8d2ce89262298ea2f06",
+    "sha256": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744"
+  },
+  "upstream_license_evidence": {
+    "readme": "https://github.com/KhronosGroup/glTF-Sample-Assets/blob/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/EmissiveStrengthTest/README.md",
+    "git_blob_sha1": "d41ff1a488c9fc5472a8995caf61d7e7c7c392b8",
+    "embedded_copyright": "CC-BY 4.0 Copyright 2022 Analytical Graphics, Inc. Model and Textures by Ed Mackey."
+  },
+  "assets": [
+    {
+      "id": "khronos-emissive-strength-original",
+      "path": "khronos/EmissiveStrengthTest/8f492390ddc7a2ae221a1369ef560589cf8c70fb/original/EmissiveStrengthTest.glb",
+      "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/EmissiveStrengthTest",
+      "license": "CC-BY-4.0",
+      "license_notice": "data/reference-scenes/licenses/CC-BY-4.0.txt",
+      "attribution": "Copyright 2022 Analytical Graphics, Inc. Model and Textures by Ed Mackey. Original GLB unmodified; only benchmark camera/lighting may be set separately.",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "upstream_revision_or_version": "8f492390ddc7a2ae221a1369ef560589cf8c70fb",
+      "source_sha256": "074898ec4c3636230faffe0cacac7403c3f6135db61f943da28ffaa88ca2a39f",
+      "converted_sha256": "074898ec4c3636230faffe0cacac7403c3f6135db61f943da28ffaa88ca2a39f",
+      "conversion_tool_version": "identity-v1; no conversion",
+      "asset_format": "glTF 2.0 GLB",
+      "unit_scale": "1 metre",
+      "coordinate_convention": "right-handed, Y-up",
+      "texture_color_spaces": "base-color RGB sRGB, alpha linear; emissive factors and strength linear",
+      "geometry_lod": "complete original geometry, no decimation",
+      "triangles": 90,
+      "vertices": 188,
+      "mesh_primitives": 6,
+      "required_material_extensions": [
+        "KHR_materials_emissive_strength"
+      ],
+      "source_files": [
+        {
+          "role": "glb",
+          "path": "khronos/EmissiveStrengthTest/8f492390ddc7a2ae221a1369ef560589cf8c70fb/upstream/EmissiveStrengthTest.glb",
+          "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/EmissiveStrengthTest/glTF-Binary/EmissiveStrengthTest.glb",
+          "bytes": 10668,
+          "sha256": "074898ec4c3636230faffe0cacac7403c3f6135db61f943da28ffaa88ca2a39f",
+          "git_blob_sha1": "6020aa63ff3e45d5d28be01c11cabc1a6fd06315"
+        }
+      ],
+      "attribution_notice": "data/reference-scenes/licenses/EmissiveStrengthTest.NOTICE.txt",
+      "attribution_notice_sha256": "8753c6dfd35068417013d99a1499bac28dd4deb16b745da32691613f8aa30202"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+EmissiveStrengthTest — Khronos glTF Sample Assets
+
+Copyright 2022 Analytical Graphics, Inc. Model and Textures by Ed Mackey.
+Licensed under Creative Commons Attribution 4.0 International (CC-BY-4.0).
+https://creativecommons.org/licenses/by/4.0/
+The complete license text is supplied in CC-BY-4.0.txt.
+
+Original source and attribution evidence:
+https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/EmissiveStrengthTest
+
+The original GLB is unmodified. No geometry, textures or materials were converted.
+Thessa's diagnostic cameras, zero incident light, exposure and disabled GI/bloom
+are separately authored test conditions. The upstream BabylonJS screenshots use
+different lighting/postprocessing and are not pixel-matched render references.

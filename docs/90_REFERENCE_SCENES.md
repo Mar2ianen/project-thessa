@@ -172,3 +172,8 @@ BLEND/emission scene and its native/Cycles evidence. It uses the same generated
 GLB/JSON, capture provenance and existing renderer consumers. The native profile
 is `data/reference-scenes/b05-capture.toml`; the external adapter accepts both
 B01 and B05. B05 is an alpha-coverage diagnostic, with no glass refraction or GI.
+
+An additional official Khronos EmissiveStrengthTest original-byte cache and
+opt-in GPU oracle are recorded in [doc 95](95_TRANSPARENT_EMISSIVE_SURFACES.md#original-khronos-asset-continuation).
+Its individual license is CC-BY-4.0 (AGI/Ed Mackey), not CC0. It preserves all
+90 original triangles; this is not yet a native B06 capture scene.

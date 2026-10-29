@@ -51,7 +51,9 @@ class ReferenceAssetsTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "download checksum"):
                             assets.fetch_source(cache, item)
                     self.assertFalse((cache / item["path"]).exists())
-            for change in [{"url": "https://other.invalid/file"}, {"bytes": 0}, {"bytes": (16 << 20) + 1}]:
+            for change in [{"url": "https://other.invalid/file"},
+                           {"url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/test.glb"},
+                           {"bytes": 0}, {"bytes": (16 << 20) + 1}]:
                 with patch.object(assets.urllib.request, "urlopen") as fetch:
                     with self.assertRaisesRegex(ValueError, "host or file budget"):
                         assets.fetch_source(cache, item | change)
@@ -87,6 +89,33 @@ class ReferenceAssetsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "converter changed"):
                     assets.prepare(manifest_path, cache)
                 blender.assert_not_called()
+
+    def test_identity_ingestion_preserves_original_bytes_without_running_a_converter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "source"
+            root.mkdir()
+            (root / "license.txt").write_bytes(b"license notice")
+            data = b"original GLB"
+            digest = hashlib.sha256(data).hexdigest()
+            asset = {"id": "original", "path": "original/model.glb", "license_notice": "license.txt",
+                     "source_sha256": digest, "converted_sha256": digest,
+                     "source_files": [{"role": "glb", "path": "upstream/model.glb", "bytes": len(data),
+                                       "sha256": digest, "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/" + "a"*40 + "/Models/test.glb"}]}
+            manifest = {"schema_version": 1, "converter": {"kind": "identity"},
+                        "license_text": {"sha256": assets.sha256(root / "license.txt")}, "assets": [asset]}
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            with patch.object(assets, "ROOT", root), patch.object(assets.subprocess, "run") as converter:
+                with patch.object(assets.urllib.request, "urlopen", return_value=io.BytesIO(data)):
+                    assets.prepare(path, Path(directory) / "cache")
+                self.assertEqual((Path(directory) / "cache/original/model.glb").read_bytes(), data)
+                self.assertEqual((Path(directory) / "cache/original/license.txt").read_bytes(), b"license notice")
+                self.assertEqual(json.loads((Path(directory) / "cache/original/provenance.json").read_text()), manifest)
+                asset["converted_sha256"] = "0"*64
+                path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "exact source"):
+                    assets.prepare(path, Path(directory) / "fresh")
+                converter.assert_not_called()
 
 
 if __name__ == "__main__":

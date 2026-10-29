@@ -37,8 +37,10 @@ upgrade only with an independently validated transparency representation.
 
 Low/Medium/High retain the same coverage/emission semantics and existing lighting
 quality differences. Assets without BLEND create no blended pipeline or queue
-entries. Per visible transparent primitive instance there is one sorted draw,
-reported by existing work counters. The primary material record grows from 64
+entries. Per visible transparent primitive instance there is one sorted queue entry.
+[Doc 96](96_TRANSPARENT_INSTANCE_RUNS.md) now coalesces only adjacent ascending
+instance ranges without changing order; standalone and merged API counts are
+reported explicitly. The primary material record grows from 64
 to 80 bytes. RT retains its 64-byte record by using previously unused optical
 words for emission. Opaque ray hits add emission independently of incident light,
 reflectance and AO, before continuing the existing transport chain.

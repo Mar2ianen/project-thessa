@@ -67,6 +67,8 @@ pub struct MeshDrawStats {
     /// Retained instances before primary frustum rejection; shadow/RT sources remain.
     pub candidate_instances: u32,
     pub candidate_triangles: u64,
+    /// API draws for this consumer alone. Global BLEND merging may split runs;
+    /// draw_scene_into_pass returns the merged transparent API count.
     pub draw_calls: usize,
     /// Logical indexed commands; an indirect API call can batch several.
     pub draw_commands: usize,
@@ -103,6 +105,33 @@ struct TransparentCommand {
     primitive: usize,
     instance: u32,
     depth: f64,
+}
+
+// Only consecutive, ascending instance IDs can share a draw without changing
+// primitive order. Keep the original queue intact for cross-consumer sorting.
+fn transparent_runs<'a>(
+    commands: impl Iterator<Item = (&'a MeshRenderer, &'a TransparentCommand)> + 'a,
+) -> impl Iterator<
+    Item = (
+        &'a MeshRenderer,
+        &'a TransparentCommand,
+        std::ops::Range<u32>,
+    ),
+> + 'a {
+    let mut commands = commands.peekable();
+    std::iter::from_fn(move || {
+        let (mesh, first) = commands.next()?;
+        let mut end = first.instance + 1;
+        while commands.peek().is_some_and(|(next_mesh, next)| {
+            std::ptr::eq(mesh, *next_mesh)
+                && next.primitive == first.primitive
+                && next.instance == end
+        }) {
+            commands.next();
+            end += 1;
+        }
+        Some((mesh, first, first.instance..end))
+    })
 }
 
 pub struct MeshRenderer {
@@ -443,10 +472,6 @@ impl MeshRenderer {
                         depth: world.map_or(f64::INFINITY, |w| w.clip_depth(clip)),
                     });
                 }
-                stats.draw_commands += runs
-                    .iter()
-                    .map(|r| (r.end - r.start) as usize)
-                    .sum::<usize>();
             } else {
                 stats.draw_commands += runs.len();
             }
@@ -457,6 +482,9 @@ impl MeshRenderer {
                 .then(a.primitive.cmp(&b.primitive))
                 .then(a.instance.cmp(&b.instance))
         });
+        let transparent_draws =
+            transparent_runs(self.transparent_commands.iter().map(|c| (&*self, c))).count();
+        stats.draw_commands += transparent_draws;
         stats.instances = self.primary_seen.iter().filter(|&&seen| seen).count() as u32;
         let uploaded = self.prepare_primary_indirect(backend);
         stats.draw_calls = if self.primary_indirect.is_some() {
@@ -465,7 +493,7 @@ impl MeshRenderer {
                 .zip(&self.primitives)
                 .filter(|(r, p)| !p.blended && !r.is_empty())
                 .count()
-                + self.transparent_commands.len()
+                + transparent_draws
         } else {
             stats.draw_commands
         };
@@ -1471,8 +1499,10 @@ impl MeshRenderer {
 
     pub fn draw_transparent_into_pass<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         if self.count != 0 {
-            for command in &self.transparent_commands {
-                self.draw_transparent_command(pass, command);
+            for (mesh, command, instances) in
+                transparent_runs(self.transparent_commands.iter().map(move |c| (self, c)))
+            {
+                mesh.draw_transparent_command(pass, command, instances);
             }
         }
     }
@@ -1480,7 +1510,9 @@ impl MeshRenderer {
     /// Compose several consumers with all opaque/MASK draws first, followed by
     /// one shared back-to-front BLEND queue. All must use the same camera/target.
     /// Center sorting has the usual intersecting/self-overlapping mesh limitation.
-    pub fn draw_scene_into_pass<'a>(meshes: &[&'a Self], pass: &mut wgpu::RenderPass<'a>) {
+    /// Returns actual transparent API draws after the global merge; source
+    /// draw_stats describe each consumer alone and may coalesce different runs.
+    pub fn draw_scene_into_pass<'a>(meshes: &[&'a Self], pass: &mut wgpu::RenderPass<'a>) -> usize {
         for mesh in meshes {
             mesh.draw_opaque_with_visibility(pass, true);
         }
@@ -1502,9 +1534,14 @@ impl MeshRenderer {
                 .then(a.1.primitive.cmp(&b.1.primitive))
                 .then(a.1.instance.cmp(&b.1.instance))
         });
-        for (mesh, command, _) in commands {
-            mesh.draw_transparent_command(pass, command);
+        let mut draws = 0;
+        for (mesh, command, instances) in
+            transparent_runs(commands.into_iter().map(|(m, c, _)| (m, c)))
+        {
+            mesh.draw_transparent_command(pass, command, instances);
+            draws += 1;
         }
+        draws
     }
 
     fn draw_with_visibility<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, cull: bool) {
@@ -1528,6 +1565,7 @@ impl MeshRenderer {
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         command: &TransparentCommand,
+        instances: std::ops::Range<u32>,
     ) {
         let p = &self.primitives[command.primitive];
         pass.set_pipeline(if p.double_sided {
@@ -1540,7 +1578,7 @@ impl MeshRenderer {
         });
         pass.set_bind_group(0, &self.global, &[]);
         self.bind_primitive(pass, p);
-        pass.draw_indexed(0..p.count, 0, command.instance..command.instance + 1);
+        pass.draw_indexed(0..p.count, 0, instances);
     }
 
     fn draw_opaque_with_visibility<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, cull: bool) {

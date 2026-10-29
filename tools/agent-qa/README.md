@@ -152,3 +152,9 @@ materials and checks all five HDR strength levels on Low/High. Identity ingestio
 runs no converter; its cache includes the pinned CC-BY-4.0 license, Ed Mackey/AGI
 attribution and provenance. Do not redistribute its GLB without these notices.
 It is not a native B06 capture or an upstream BabylonJS screenshot match.
+
+The opt-in `fixed_transparent_instance_submission_cost` GPU test writes
+per-frame CSV and raw HDR to a new `THESSA_BENCH_OUTPUT` directory. It uses
+8,192 identical-source transparent instances and existing timestamp intervals;
+see [doc 96](../../docs/96_TRANSPARENT_INSTANCE_RUNS.md) for the exact workload,
+release ABBA evidence and limits. It measures submission cost, not B02 foliage.

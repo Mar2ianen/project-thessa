@@ -47,6 +47,9 @@ native/Cycles captures. Native B02, refraction, GI and transparent temporal/
 shadow/RT coverage remain pending. The original Khronos EmissiveStrengthTest
 is separately pinned/cached under CC-BY-4.0; software/Radeon GPU oracles verify
 its five HDR strengths without conversion. It is not yet a native B06 capture.
+[Doc 96](96_TRANSPARENT_INSTANCE_RUNS.md) coalesces ordered transparent instance
+runs; exact GPU/capture regressions pass and a fixed 8,192-instance Radeon ABBA
+fixture improves CPU/GPU command cost. Coastal/B02 speedup remains unmeasured.
 
 ## Simulation and physics
 

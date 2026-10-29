@@ -120,6 +120,35 @@ fn explicit_rest_pose_preserves_static_transforms_and_does_not_relax_other_limit
             .is_err()
     );
 }
+
+#[test]
+fn emissive_strength_and_blend_are_opt_in_and_keep_hdr_linear_values() {
+    let (mut doc, blob) = fixture();
+    doc["meshes"][0]["primitives"][0]["material"] = json!(0);
+    doc["extensionsUsed"] = json!(["KHR_materials_emissive_strength"]);
+    doc["materials"] = json!([{"alphaMode":"BLEND","emissiveFactor":[0.1,0.5,0.9],
+        "pbrMetallicRoughness":{"baseColorFactor":[0.,0.,0.,0.25]},
+        "extensions":{"KHR_materials_emissive_strength":{"emissiveStrength":4.}}}]);
+    let bytes = encode(&doc, &blob);
+    assert!(decode_glb(&bytes, Limits::default()).is_err());
+    assert!(thessa_render_assets::decode_glb_cutouts(&bytes, Limits::default()).is_err());
+    let source = thessa_render_assets::decode_glb_surfaces(&bytes, Limits::default()).unwrap();
+    assert_eq!(
+        source.materials[0].alpha_mode,
+        thessa_render_core::mesh::AlphaMode::Blend
+    );
+    assert_eq!(source.materials[0].base_color[3], 0.25);
+    assert_eq!(source.materials[0].emission_rgb, [0.4, 2., 3.6]);
+    doc["materials"][0]["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"] =
+        json!(-1.);
+    assert!(
+        thessa_render_assets::decode_glb_surfaces(&encode(&doc, &blob), Limits::default()).is_err()
+    );
+    doc["extensionsUsed"] = json!(["KHR_materials_transmission"]);
+    assert!(
+        thessa_render_assets::decode_glb_surfaces(&encode(&doc, &blob), Limits::default()).is_err()
+    );
+}
 #[test]
 fn embedded_image_color_bytes_and_sampler_are_preserved_and_budgeted() {
     let (mut doc, mut blob) = fixture();

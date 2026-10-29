@@ -113,6 +113,8 @@ pub struct Material {
     /// glTF MASK: alpha >= cutoff survives. Cutoffs above one reject everything.
     /// Ignored by opaque/blended consumers.
     pub alpha_cutoff: f32,
+    /// Linear outgoing emissive radiance in RGB cd/m², before exposure; may exceed one.
+    pub emission_rgb: [f32; 3],
     pub base_texture: Option<usize>,
     pub normal_texture: Option<usize>,
     pub normal_scale: f32,
@@ -134,6 +136,7 @@ impl Default for Material {
             base_color: [1.0; 4],
             alpha_mode: AlphaMode::Opaque,
             alpha_cutoff: 0.5,
+            emission_rgb: [0.0; 3],
             base_texture: None,
             normal_texture: None,
             normal_scale: 1.0,
@@ -236,6 +239,10 @@ impl MeshAsset {
                 || !material.normal_scale.is_finite()
                 || !material.alpha_cutoff.is_finite()
                 || material.alpha_cutoff < 0.0
+                || material
+                    .emission_rgb
+                    .iter()
+                    .any(|v| !v.is_finite() || *v < 0.0)
             {
                 return Err("invalid mesh material factors");
             }
@@ -273,7 +280,7 @@ impl MeshAsset {
 mod tests {
     use super::*;
     #[test]
-    fn cutout_thresholds_are_finite_nonnegative_and_may_exceed_one() {
+    fn coverage_and_emission_are_finite_nonnegative_and_may_exceed_one() {
         let mut source = MeshAsset {
             primitives: vec![Primitive {
                 ambient_visibility: vec![],
@@ -297,6 +304,16 @@ mod tests {
         }
         for cutoff in [-1., f32::NAN, f32::INFINITY] {
             source.materials[0].alpha_cutoff = cutoff;
+            assert!(source.validate().is_err());
+        }
+        source.materials[0].alpha_cutoff = 0.5;
+        source.materials[0].emission_rgb = [0., 16., 1024.];
+        assert!(
+            source.validate().is_ok(),
+            "HDR radiance is not a unit reflectance"
+        );
+        for invalid in [-1., f32::NAN, f32::INFINITY] {
+            source.materials[0].emission_rgb[1] = invalid;
             assert!(source.validate().is_err());
         }
     }

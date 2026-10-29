@@ -1,6 +1,6 @@
 # 89 — Native capture provenance
 
-Status: R5 capture infrastructure and native B01 implemented
+Status: R5 capture infrastructure and native B01/B05 implemented
 ([doc 90](90_REFERENCE_SCENES.md)); B02 staged.
 No benchmark assets were imported for this milestone.
 
@@ -135,3 +135,7 @@ B01 native capture now has a tested fixed-work path and two exact static Radeon
 static mesh work counters and physical-GPU evidence scope. Reference sidecars
 are checked for matching IDs and hashed separately from the requested run
 manifest. Ordinary canonical captures retain their previous timing scope layout.
+
+The same capture contract now supports [B05 transparent/emissive panels](95_TRANSPARENT_EMISSIVE_SURFACES.md),
+including exact static repeats, shared Cycles inputs and separate scene/geometry
+hashes. No new capture protocol or game-scene loader is introduced.

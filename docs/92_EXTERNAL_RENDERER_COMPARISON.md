@@ -1,6 +1,6 @@
 # 92 — External renderer setup and first B01 Cycles diagnostic
 
-Status: Godot downloaded/verified; first Cycles B01 comparison implemented and executed; Unreal download in progress in the user's browser.
+Status: Godot downloaded/verified; B01/B05 Cycles comparisons executed; Unreal archive downloaded, extraction status recorded below.
 
 The initial R1–R4 refactor deferred external adapters. After those milestones
 and B01/native capture, the user explicitly requested external-engine setup and
@@ -14,7 +14,7 @@ change. B02 MASK rendering and vegetation tiers remain pending.
 | --- | --- | --- |
 | Blender/Cycles 5.2.2 LTS | Existing `/usr/bin/blender`, build `d13f752e3b9c`; actual CPU render passed | Local distribution build; binary hash recorded per comparison |
 | Godot 4.7.2 stable | Official Linux x86_64 ZIP downloaded, size/SHA-256 verified; extracted binary reports `4.7.2.stable.official.ed1daf0bf` | [Official download](https://godotengine.org/download/linux/), [pinned release](https://github.com/godotengine/godot/releases/tag/4.7.2-stable) |
-| Unreal Engine | User browser download `Linux_Unreal_Engine_5.8.4.zip` in progress; no extraction or executable probe yet | [Epic Linux download](https://www.unrealengine.com/en-US/linux), [Installed Build instructions](https://dev.epicgames.com/documentation/unreal-engine/linux-development-quickstart-for-unreal-engine) |
+| Unreal Engine | User browser ZIP download complete; extraction initiated after size/path/disk checks; no executable probe yet | [Epic Linux download](https://www.unrealengine.com/en-US/linux), [Installed Build instructions](https://dev.epicgames.com/documentation/unreal-engine/linux-development-quickstart-for-unreal-engine) |
 
 Godot ZIP: `Godot_v4.7.2-stable_linux.x86_64.zip`, 77,860,424 bytes,
 SHA-256 `cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4`.
@@ -27,7 +27,7 @@ capture. Godot rendering itself has not yet been validated.
 
 Unreal needs a precompiled Linux **Installed Build** with editor/import support,
 not a source checkout. Epic requires an authenticated account to download it;
-the user has started that browser download. The agent did not read browser cookies,
+the user completed that browser download. The agent did not read browser cookies,
 accept account terms or use unofficial mirrors. Archive size and unpacked size
 must be checked against remaining disk space before extraction. No Unreal
 capture or adapter is claimed here.
@@ -124,3 +124,18 @@ no blind votes or physical acceptance are inferred from these metrics.
   initial diagnostic source fingerprint explicitly records dirty development files.
 - **Next smallest useful change:** investigate isolated material differences,
   complete explicit B02 cutouts/tiers, and add a Godot capture over the same data.
+
+## B05 continuation (2026-10-29)
+
+[Doc 95](95_TRANSPARENT_EMISSIVE_SURFACES.md) extends the existing adapter to
+B05 without replacing the stock glTF importer or Cycles materials. This
+emission-only scene isolates alpha composition and uses eight transparent
+bounces, 1,024 fixed samples and the same native exposure/display convention.
+Its successful actual captures do not imply refraction, GI or temporal parity.
+
+The user's Unreal ZIP download completed: 39,819,212,076 archive bytes,
+299,959 entries and 76,967,950,798 declared unpacked bytes. Embedded
+`Engine/Build/Build.version` identifies 5.8.4, changelist 58,902,052. Paths and
+disk reserve were checked before starting extraction into the external tool
+cache. Extraction provenance is `work/reference-engines/unreal-5.8.4/installation.json`
+beside the checkout. No Unreal render or executable probe is claimed.

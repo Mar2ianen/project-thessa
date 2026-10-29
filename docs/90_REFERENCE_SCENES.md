@@ -1,6 +1,6 @@
 # 90 — Deterministic reference-scene data
 
-Status: B01 data/native capture and B02 asset ingestion implemented; native B02 pending.
+Status: B01/B05 data and native/Cycles captures implemented; B02 asset ingestion implemented, native B02 pending.
 Capture infrastructure is operational ([doc 89](89_REFERENCE_CAPTURE.md)).
 
 ## Ownership
@@ -164,3 +164,11 @@ Both requested and resolved graphics remain in the existing metadata pipeline.
   diffuse-only configuration, not accepted B01 PBR evidence.
 - **Next smallest useful change:** individually audit/fetch bounded Fern02/Moss01
   payloads for B02; preserve alpha and material semantics.
+
+## B05 transparency and emission
+
+[Doc 95](95_TRANSPARENT_EMISSIVE_SURFACES.md) defines the additional controlled
+BLEND/emission scene and its native/Cycles evidence. It uses the same generated
+GLB/JSON, capture provenance and existing renderer consumers. The native profile
+is `data/reference-scenes/b05-capture.toml`; the external adapter accepts both
+B01 and B05. B05 is an alpha-coverage diagnostic, with no glass refraction or GI.

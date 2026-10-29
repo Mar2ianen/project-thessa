@@ -1318,6 +1318,36 @@ fn reflected_sample(
 }
 
 #[test]
+fn reflected_emission_survives_without_illumination_or_diffuse_reflectance() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
+    let mut asset = source();
+    asset.materials[1].base_color = [0., 0., 0., 1.];
+    asset.materials[1].emission_rgb = [1., 0.25, 0.];
+    let sample = reflected_sample(
+        &backend,
+        &settings,
+        &asset,
+        &instances(),
+        &SurfaceLighting::default(),
+    );
+    assert_rgb_near(sample, [0.5, 0.125, 0.]);
+    asset.materials[1].emission_rgb = [0.; 3];
+    assert_eq!(
+        reflected_sample(
+            &backend,
+            &settings,
+            &asset,
+            &instances(),
+            &SurfaceLighting::default()
+        ),
+        [0; 3]
+    );
+}
+
+#[test]
 fn reflected_subpixel_checker_converges_to_linear_mean_while_camera_moves() {
     let Some(backend) = backend(RayTracingRequest::Local) else {
         return;

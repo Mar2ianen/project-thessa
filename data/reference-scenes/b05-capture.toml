@@ -1,0 +1,10 @@
+schema_version = 1
+id = "B05-transparency-emission-v1"
+width = 640
+height = 480
+frames = 60
+native_args = ["--reference-scene", "b05", "--graphics", "data/reference-scenes/b05-graphics.toml", "--no-hud"]
+
+[[inputs]]
+path = "data/reference-scenes/b05-graphics.toml"
+sha256 = "3cffb2fe1d5ddf644a3bfa4d4cce64b914d075d3b4fa706f31f54ca5f90eba0c"

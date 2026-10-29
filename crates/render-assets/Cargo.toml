@@ -10,7 +10,7 @@ description = "Bounded embedded static GLB decoding into backend-neutral mesh so
 [dependencies]
 thessa-render-core = { path = "../render-core" }
 glam.workspace = true
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]

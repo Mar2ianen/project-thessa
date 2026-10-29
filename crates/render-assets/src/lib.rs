@@ -28,28 +28,43 @@ impl Default for Limits {
 }
 
 pub fn decode_glb(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
-    decode(bytes, limits, false, false)
+    decode(bytes, limits, false, MaterialSubset::Opaque)
 }
 
 /// Explicit opaque/MASK subset. BLEND, animation and material extensions remain
 /// unsupported. The consumer must implement cutout coverage in every enabled pass.
 pub fn decode_glb_cutouts(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
-    decode(bytes, limits, false, true)
+    decode(bytes, limits, false, MaterialSubset::Cutout)
+}
+
+/// Opaque/MASK/BLEND surfaces with emissive factors and KHR_materials_emissive_strength.
+/// Emissive textures, transmission and volume extensions remain unsupported.
+pub fn decode_glb_surfaces(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
+    decode(bytes, limits, false, MaterialSubset::Surface)
+}
+
+#[derive(Clone, Copy)]
+enum MaterialSubset {
+    Opaque,
+    Cutout,
+    Surface,
 }
 
 /// Explicit static inspection of a scene's authored node transforms even if
 /// the file also contains animation clips. No clip is sampled, nor are skins
 /// or other unsupported semantics accepted. Ordinary loading remains strict.
 pub fn decode_glb_rest_pose(bytes: &[u8], limits: Limits) -> Result<MeshAsset, String> {
-    decode(bytes, limits, true, false)
+    decode(bytes, limits, true, MaterialSubset::Opaque)
 }
 
 fn decode(
     bytes: &[u8],
     limits: Limits,
     rest_pose: bool,
-    cutouts: bool,
+    subset: MaterialSubset,
 ) -> Result<MeshAsset, String> {
+    let cutouts = !matches!(subset, MaterialSubset::Opaque);
+    let surfaces = matches!(subset, MaterialSubset::Surface);
     if bytes.len() > limits.file_bytes {
         return Err("GLB file budget exceeded".into());
     }
@@ -95,8 +110,10 @@ fn decode(
     if (!rest_pose && glb.animations().len() != 0)
         || glb.skins().len() != 0
         || glb.nodes().len() > limits.nodes
-        || glb.extensions_used().next().is_some()
-        || glb.extensions_required().next().is_some()
+        || glb
+            .extensions_used()
+            .chain(glb.extensions_required())
+            .any(|name| !(surfaces && name == "KHR_materials_emissive_strength"))
     {
         return Err("GLB animations/skins/extensions or node budget unsupported".into());
     }
@@ -182,15 +199,21 @@ fn decode(
     let mut materials = Vec::new();
     for m in glb.materials() {
         if !(m.alpha_mode() == gltf::material::AlphaMode::Opaque
-            || (cutouts && m.alpha_mode() == gltf::material::AlphaMode::Mask))
-            || m.emissive_factor() != [0.0; 3]
+            || (cutouts && m.alpha_mode() == gltf::material::AlphaMode::Mask)
+            || (surfaces && m.alpha_mode() == gltf::material::AlphaMode::Blend))
+            || (!surfaces && m.emissive_factor() != [0.0; 3])
             || m.emissive_texture().is_some()
         {
             return Err(
-                "only opaque (or explicitly enabled MASK) non-emissive materials supported".into(),
+                "material is outside the selected GLB subset; emissive textures remain unsupported"
+                    .into(),
             );
         }
         let pbr = m.pbr_metallic_roughness();
+        let strength = m.emissive_strength().unwrap_or(1.0);
+        if !strength.is_finite() || strength < 0.0 {
+            return Err("invalid emissive strength".into());
+        }
         let texture = |t: Option<gltf::texture::Info<'_>>| -> Result<Option<usize>, String> {
             t.map(|t| {
                 if t.tex_coord() != 0 {
@@ -208,12 +231,13 @@ fn decode(
         }
         materials.push(Material {
             base_color: pbr.base_color_factor(),
-            alpha_mode: if m.alpha_mode() == gltf::material::AlphaMode::Mask {
-                AlphaMode::Mask
-            } else {
-                AlphaMode::Opaque
+            alpha_mode: match m.alpha_mode() {
+                gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+                gltf::material::AlphaMode::Mask => AlphaMode::Mask,
+                gltf::material::AlphaMode::Blend => AlphaMode::Blend,
             },
             alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
+            emission_rgb: m.emissive_factor().map(|v| v * strength),
             base_texture: texture(pbr.base_color_texture())?,
             normal_texture: m.normal_texture().map(|t| t.texture().index()),
             normal_scale: m.normal_texture().map_or(1.0, |t| t.scale()),

@@ -803,7 +803,7 @@ explicit material losses. Native B02 rendering remains pending; no coastal
 speedup or reference parity claimed. The first
 [external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md) now
 captures the same GLB/camera with explicit BSDF/light-unit/AA differences;
-Godot is downloaded and verified, while the user's Unreal Linux download is in progress.
+Godot is downloaded and verified; the user's Unreal 5.8.4 ZIP is downloaded and is being extracted in the external cache.
 
 [Stable direct GGX](docs/93_STABLE_DIRECT_GGX.md) repairs an epsilon that clipped
 smooth specular peaks in the shared mesh/terrain/ocean/ray-hit kernel. Analytic
@@ -812,5 +812,9 @@ Rough-metal model, AA, vegetation and full-scene parity remain open.
 
 [Explicit mesh cutouts](docs/94_MESH_CUTOUT_COVERAGE.md) add opt-in glTF MASK
 coverage and a separate early-rejection raster variant. CPU/Radeon alpha/depth
-checks pass and opaque B01 remains byte-identical; BLEND/emission and B02 scene
-tiers remain in progress.
+checks pass and opaque B01 remains byte-identical.
+[Transparent/emissive surfaces](docs/95_TRANSPARENT_EMISSIVE_SURFACES.md) now
+add explicit glTF BLEND, sorted HDR composition and emissive-strength import.
+B05 runs in native and stock Cycles with matching overlap means; opaque
+emission is visible in RT reflections. Refraction, GI, transparent temporal/
+shadow/RT coverage and B02 tiers remain open.

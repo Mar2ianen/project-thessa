@@ -14,7 +14,7 @@ FOUNDATIONS = frozenset({
     "thessa-trajectory", "thessa-propulsion", "thessa-vehicle-core",
     "thessa-rcbt-core", "thessa-graphics", "thessa-plume-core",
     "thessa-microstore-core", "thessa-perf", "thessa-audio-core",
-    "thessa-render-core", "thessa-render-assets", "thessa-fastrt",
+    "thessa-render-core", "thessa-render-assets", "thessa-fastrt", "thessa-reference-scenes",
     "thessa-simd", "thessa-collision", "thessa-aero-surfaces", "thessa-fuselage",
 })
 FORBIDDEN_BACKENDS = frozenset({
@@ -22,7 +22,7 @@ FORBIDDEN_BACKENDS = frozenset({
     "tokio", "lightyear",
 })
 GENERIC_RENDERERS = frozenset({
-    "thessa-render-core", "thessa-render-assets", "thessa-render-wgpu",
+    "thessa-render-core", "thessa-render-assets", "thessa-render-wgpu", "thessa-reference-scenes",
     "thessa-graphics", "thessa-fastrt", "thessa-fastrt-wgpu",
     "thessa-rcbt-core", "thessa-rcbt-wgpu", "thessa-bevy-rcbt",
     "thessa-microstore-core", "thessa-plume-core", "thessa-wgpu-exp",

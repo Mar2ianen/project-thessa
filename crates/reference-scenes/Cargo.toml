@@ -1,0 +1,16 @@
+[package]
+name = "thessa-reference-scenes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Deterministic neutral reference scene data without game state or GPU handles"
+
+[dependencies]
+glam.workspace = true
+serde_json.workspace = true
+thessa-render-core = { path = "../render-core" }
+
+[dev-dependencies]
+thessa-render-assets = { path = "../render-assets" }

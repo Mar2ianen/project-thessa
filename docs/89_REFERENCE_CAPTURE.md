@@ -1,6 +1,7 @@
 # 89 — Native capture provenance
 
-Status: R5 capture infrastructure implemented; B01/B02 scenes remain staged.
+Status: R5 capture infrastructure implemented; B01 data library available
+([doc 90](90_REFERENCE_SCENES.md)), native B01/B02 capture staged.
 No benchmark assets were imported for this milestone.
 
 ## Existing paths, extended
@@ -122,3 +123,7 @@ remain four separate outcomes, initialized as unevaluated in the record.
   Backend: llvmpipe / Mesa 26.2.5-arch1.1 / LLVM 23.1.3, isolated from /dev/dri
   and display. The explicitly dirty source fingerprint is retained in the
   capture; no physical-GPU performance, B01/B02 or visual acceptance claimed.
+
+A subsequent clean-source smoke repeated at `271e56a` with `dirty=false`, no
+untracked source files and the exact commit in native perf metadata. This
+confirms the compiled source-label path beyond the earlier dirty diagnostic.

@@ -71,8 +71,9 @@ This is deliberately **different** from golden scene regression. Golden
 scenes must eventually replay fixed simulation seeds, camera trajectories,
 render settings and timestamps against structural/numeric oracles and visual
 thresholds. The native build/run/capture provenance bridge is now implemented
-in `tools/agent-qa/capture.py`; deterministic B01/B02 content and golden-scene
-acceptance remain staged. This is independent of Bevy remote MCP configuration.
+in `tools/agent-qa/capture.py`; B01 data is available in
+[doc 90](90_REFERENCE_SCENES.md). Native B01/B02 captures and golden acceptance
+remain staged. This is independent of Bevy remote MCP configuration.
 
 ## Proposed native control bridge (not implemented)
 

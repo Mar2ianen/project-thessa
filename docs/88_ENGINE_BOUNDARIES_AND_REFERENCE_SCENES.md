@@ -1,7 +1,7 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1–R4 and R5 capture infrastructure implemented; B01/B02 staged.
-No new benchmark scenes or assets yet.
+Status: R1–R4, R5 capture and B01 data library implemented; native B01/B02 staged.
+No third-party benchmark assets imported.
 
 ## Audit baseline
 
@@ -20,7 +20,7 @@ reusable orbital-domain libraries, not generic rigid-body primitives. Protocol
 has an opaque codec but a Thessa version/kind registry.
 See [ADR-0012](adr/0012-engine-boundaries-reference-scenes.md).
 
-## Ownership matrix (all workspace packages)
+## Ownership matrix (43-package audit baseline; 44 packages after B01)
 
 | Package | Classification | SPDX | Current responsibility |
 | --- | --- | --- | --- |
@@ -67,6 +67,7 @@ See [ADR-0012](adr/0012-engine-boundaries-reference-scenes.md).
 | `thessa-rcbt-ref` | Developer tools | MIT | Independent test oracle |
 | `thessa-system-baker` | Developer tools | MIT | Ephemeris baking CLI |
 | `thessa-vehicle-baker` | Developer tools | MIT | Vehicle compiler CLI |
+| `thessa-reference-scenes` | Generic rendering/assets (added after audit) | MIT | Frozen B01 geometry/material/camera/light data and GPU-free GLB export |
 
 ## Current dependency diagram (audit baseline)
 
@@ -213,7 +214,7 @@ flowchart LR
   stream --> worldgen[canonical worldgen]
   native --> renderer[render-wgpu: GPU implementation]
   native --> assets[render-assets: bounded CPU decoder]
-  scenes[future deterministic scene library] --> core[render-core: neutral scene data]
+  scenes[reference-scenes: B01 data, native adapter staged] --> core[render-core: neutral scene data]
   assets --> core
   renderer --> core
   renderer --> graphics[graphics: request/capability/resolution]
@@ -273,7 +274,7 @@ integration; no game Scene type enters a neutral renderer contract.
 `tools/agent-qa/check_architecture.py` uses the complete resolved Cargo
 all-features graph and rejects:
 
-- Backend frameworks in the closure of 19 neutral foundation packages,
+- Backend frameworks in the closure of 20 neutral foundation packages,
   including `render-core`, `render-assets`, `collision` and `fastrt`.
 - MIT → GPL **workspace** dependencies, directly and transitively.
 - Runtime/build library → application dependencies.
@@ -463,3 +464,11 @@ adapters are implemented by this refactor.
   canonical asynchronous residency is not frozen, so this is not B03. Full
   capture schema, outputs and limitations are in [doc 89](89_REFERENCE_CAPTURE.md).
 - **Next smallest useful change:** B01 generated material lab through this capture path.
+
+## B01 data continuation
+
+[Doc 90](90_REFERENCE_SCENES.md) records the new neutral 44th package, generated
+material lab, portable GLB/metadata/license export and exact validation scope.
+The source is `271e56a`; native capture and B02 ingestion remain separate work.
+The capture infrastructure also passed a **clean-source** repeat at `271e56a`,
+with that exact build label, source dirty=false and an empty untracked set.

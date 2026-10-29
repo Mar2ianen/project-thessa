@@ -793,4 +793,6 @@ starts with a 43-package ownership audit and resolved dependency gate in the
 existing workspace. R1–R4 are implemented: direct collision type ownership,
 shared terrain mesh ABI requirements, and one app-owned mesh-frame publication
 path for native window/headless hosts. R5 capture provenance is implemented;
-deterministic B01/B02 scene content remains staged.
+[B01 material-lab data](docs/90_REFERENCE_SCENES.md) now exports generated
+geometry and explicit camera/light metadata as GLB/JSON without GPU or game
+state. Native B01 capture and B02 ingestion remain staged.

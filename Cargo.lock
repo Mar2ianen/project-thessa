@@ -6442,6 +6442,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-reference-scenes"
+version = "0.0.1"
+dependencies = [
+ "glam 0.33.7",
+ "serde_json",
+ "thessa-render-assets",
+ "thessa-render-core",
+]
+
+[[package]]
 name = "thessa-render-assets"
 version = "0.0.1"
 dependencies = [

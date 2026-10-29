@@ -823,3 +823,9 @@ The original Khronos EmissiveStrengthTest now has a pinned, unconverted
 CC-BY-4.0 cache and an opt-in GPU oracle. Both software/Radeon reproduce all
 five HDR strengths on Low/High; attribution accompanies the cached GLB. See
 [the material diagnostic](docs/95_TRANSPARENT_EMISSIVE_SURFACES.md#original-khronos-asset-continuation).
+
+[Transparent instance batching](docs/96_TRANSPARENT_INSTANCE_RUNS.md) now
+coalesces consecutive sorted instances without changing alpha-over order. On
+the fixed 8,192-instance Radeon fixture, GPU mesh time falls from about 1.37 ms
+to 0.16 ms with identical HDR bytes. This is a call-overhead result, not a
+coastal or cross-engine speedup.

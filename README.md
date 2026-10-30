@@ -799,8 +799,19 @@ state. Its native capture now uses the existing mesh/display/perf consumers,
 with verified static 880M repeats and explicit scene/geometry hashes.
 [B02 asset ingestion](docs/91_B02_ASSET_PROVENANCE.md) pins full evaluated
 CC0 Fern/Moss geometry in an external cache, with reproducible conversion and
-explicit material losses. Native B02 rendering remains pending; no coastal
-speedup or reference parity claimed. The first
-[external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md) now
-captures the same GLB/camera with explicit BSDF/light-unit/AA differences;
-Godot is downloaded and verified, while the user's Unreal Linux download is in progress.
+explicit material losses. The first
+[external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md)
+captures the same GLB/camera with explicit BSDF/light-unit/AA differences.
+[GGX multiscatter compensation](docs/93_GGX_MULTISCATTER_AND_CYCLES_PARITY.md)
+repairs smooth specular peaks and adds a compact DFG-based multiple-scattering
+term, reducing the B01 diagnostic MAE by 21.4% and relative L2 by 30.9%; this
+is not a Kulla-Conty or visual-parity claim.
+[Native cutout rendering and B02 Cycles diagnostic](docs/94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md)
+implements glTF `alphaMode = "MASK"`, keeps opaque early-Z, wires reference
+scene B02 with the pinned CC0 Fern 02 asset, and records a 64-spp Cycles
+diagnostic (MAE 0.000601, relative L2 0.4097; no pass threshold).
+[Canonical coast B03](docs/95_CANONICAL_COAST_AND_CYCLES_PARITY.md) exports the
+conforming terrain and plant instances for an experimental Cycles diagnostic
+(MAE 0.0805 at 32 spp, procedural ground); its large generated inputs remain
+external and the result is not parity. Godot is downloaded and verified, while
+the user's Unreal Linux download is in progress.

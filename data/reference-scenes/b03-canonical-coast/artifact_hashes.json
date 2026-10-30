@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "note": "Large generated files are intentionally not committed. The SHA-256 values pin the observed B03 diagnostic inputs; regenerate them with the command in README.md.",
+  "files": {
+    "scene.glb": {
+      "bytes": 51298480,
+      "sha256": "e8d3847e20bf0ea855b1791709b1ea267a88098d4d6a5fa2a48c99ecedfb50a4"
+    },
+    "linear.rgba16f": {
+      "bytes": 7372800,
+      "sha256": "2264318881dff4b812b721e51f26685adcf87e42cb6751844b5597f1ff146507"
+    },
+    "display.png": {
+      "bytes": 1918912,
+      "sha256": "a7dc9afe2f60ad1c3b4bbbb11eae3e3bf3420ceff6a33ea4d2fd1f46c9cf850e"
+    },
+    "golden_radiance.exr": {
+      "bytes": 7971052,
+      "sha256": "2cfb74fc2cba8c748a04c43eae0ddadb279ca8671202d7d42374196b1bcae5cc"
+    },
+    "golden_reference.jpg": {
+      "bytes": 510461,
+      "sha256": "33378fa051842dda67c6d3390901a2282e0b3ab94f57092f7deae14f019d626f"
+    }
+  }
+}

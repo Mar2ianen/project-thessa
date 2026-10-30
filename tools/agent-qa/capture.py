@@ -13,6 +13,7 @@ import tomllib
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "thessa/reference-assets"
 RESERVED = {"--headless", "--perf-capture", "--linear-hdr", "--frames", "--width", "--height", "--frame-sequence", "--help"}
 
 
@@ -47,7 +48,10 @@ def load_manifest(path: Path, root: Path = ROOT) -> tuple[dict, list[dict]]:
     verified = []
     for kind in ("inputs", "assets"):
         for item in data.get(kind, []):
-            source = (root / item["path"]).resolve()
+            if kind == "assets" and not (root / item["path"]).exists() and (DEFAULT_CACHE / item["path"]).exists():
+                source = (DEFAULT_CACHE / item["path"]).resolve()
+            else:
+                source = (root / item["path"]).resolve()
             expected = item.get("sha256", "")
             if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
                 raise ValueError(f"{source}: exact lowercase SHA-256 is required")

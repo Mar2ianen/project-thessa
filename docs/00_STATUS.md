@@ -30,11 +30,22 @@ package and a native capture path without canonical game Scene construction.
 Two static 880M PBR captures match exactly; this is not external-reference or
 coastal performance acceptance. [Doc 91](91_B02_ASSET_PROVENANCE.md) adds pinned
 CC0 Fern/Moss ingestion with reproducible external-cache GLBs and explicitly
-derived materials. Native B02 MASK rendering and scene tiers remain pending.
-[Doc 92](92_EXTERNAL_RENDERER_COMPARISON.md) adds the first actual same-scene
-Cycles B01 diagnostic with explicit BSDF/light-unit/AA limits. This is not
-physical/visual parity or a performance comparison. Godot is downloaded and
-verified; Godot/Unreal captures remain pending.
+derived materials. [Doc 92](92_EXTERNAL_RENDERER_COMPARISON.md) adds the first
+actual same-scene Cycles B01 diagnostic with explicit BSDF/light-unit/AA limits.
+[Doc 93](93_GGX_MULTISCATTER_AND_CYCLES_PARITY.md) implements smooth specular
+peak repair and a compact DFG-based multiple-scattering term, reducing the B01
+diagnostic MAE by 21.4% and relative L2 by 30.9%; this is not a Kulla-Conty
+or visual-parity claim. [Doc 94](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md)
+implements native glTF `alphaMode = "MASK"` cutout raster rendering, wires
+reference scene B02 (`B02-vegetation-v1`) with the pinned CC0 Fern 02 asset, and
+records a 64-spp Cycles diagnostic (MAE 0.000601, relative L2 0.4097; no pass
+threshold). [Doc 95](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) implements the
+experimental canonical coastal export B03 (`B03-canonical-coast-v1`), exporting
+GPU-conforming terrain and 27,857 plant instances (112.8M instanced triangles)
+for a 32-spp procedural-ground Cycles diagnostic (MAE 0.0805, relative L2
+0.3030). Its large generated inputs remain external; no parity or visual
+equivalence is claimed. Godot is downloaded and verified; Godot/Unreal captures
+remain open.
 
 ## Simulation and physics
 
@@ -769,3 +780,9 @@ Native depth vertex streams (2026-10-28): [85 — Depth streams and physical GPU
 Native opaque sidedness and immutable demand (2026-10-28): [86 — Sidedness and demand reuse](86_NATIVE_OPAQUE_SIDEDNESS.md) uses fixed-function material sidedness with a shared explicit frame/material/shadow/ray layout and memoizes identical immutable geometry-selection inputs. The observed CBT work converged; no topology invalidation was removed. Exact CPU/physical colour-depth regressions remain separate from live-stream native profiling and reference acceptance.
 
 Native cloud cost and Fresnel endpoints (2026-10-29): [87 — Cloud cost and finite Fresnel](87_NATIVE_CLOUD_COST_AND_FRESNEL.md) clamps the shared physical cosine domain before Schlick evaluation. GPU endpoint regressions cover the observed normalized-dot NaN. Average-reflectance tables, invariant hoisting and zero-support cloud branches were rejected after target measurements. No cloud quality reduction or reference acceptance is inferred.
+
+GGX multiscatter compensation and B01 diagnostic (2026-10-29): [93 — GGX multiscatter and Cycles diagnostic](93_GGX_MULTISCATTER_AND_CYCLES_PARITY.md) implements finite smooth specular peak repair and a compact DFG-based multiple-scattering term in shared direct lighting. Measured on AMD Radeon 880M against Cycles 5.2.2 LTS CPU: pre-exposed RGB MAE falls 0.002716 → 0.002135 (-21.4%), and relative L2 error falls 2.080 → 1.436 (-30.9%). This is a diagnostic, not a Kulla-Conty or visual-parity result.
+
+Native cutout pipeline and reference scene B02 (2026-10-29): [94 — Native cutout and B02 Cycles diagnostic](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md) implements glTF `alphaMode = "MASK"` support with dual pipelines (preserving early-depth for opaque meshes), wires reference scene B02 (`B02-vegetation-v1`) with the pinned CC0 Fern 02 asset, and records a 64-spp Cycles diagnostic with 16 transparent bounces (MAE 0.000601, RMSE 0.003663, relative L2 0.4097; no pass threshold).
+
+Canonical coast scene B03 diagnostic (2026-10-30): [95 — Canonical coast B03](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) exports GPU-conforming terrain and 27,857 plant instances (112.8M instanced triangles) for an experimental Cycles comparison. The committed 32-spp procedural-ground run records MAE 0.0805, RMSE 0.1111 and relative L2 0.3030; large generated inputs remain external and the result is not parity or ground truth.

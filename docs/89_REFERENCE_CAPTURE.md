@@ -1,8 +1,9 @@
 # 89 — Native capture provenance
 
-Status: R5 capture infrastructure and native B01 implemented
-([doc 90](90_REFERENCE_SCENES.md)); B02 staged.
-No benchmark assets were imported for this milestone.
+Status: R5 capture infrastructure, native B01 and native B02 implemented
+([doc 90](90_REFERENCE_SCENES.md), [doc 94](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md)).
+B03 is an experimental exporter with a separate diagnostic path; it is not part
+of the ordinary capture manifest.
 
 ## Existing paths, extended
 
@@ -95,13 +96,21 @@ wall completion and GPU pass scopes retain the existing measurement boundaries;
 serialization and image readback remain outside samples. Dev/CPU-Vulkan samples
 are diagnostics, not target-GPU performance results.
 
+Declared `assets` entries resolve first inside the checkout and then in
+`$XDG_CACHE_HOME/thessa/reference-assets` (or `~/.cache/thessa/reference-assets`);
+the resolved path and SHA-256 are recorded. This keeps large third-party assets
+out of Git without weakening hash verification.
+
 The manifest hash identifies the declared run. It does not yet prove immutable
 canonical resident geometry, asynchronous streaming state or equivalent content
 in another renderer. The capture probe uses the existing canonical scene and
 is **not** B03 Frozen Coast. B01/B02 will supply deterministic scene definitions
 and content hashes; native B01 now emits actual GLB/scene sidecars with separate
 `reference_geometry_sha256` and `reference_scene_manifest_sha256`, bound to the
-requested and actual scene IDs. B02, B03/B04 and external adapters remain later work.
+requested and actual scene IDs. B02 uses the same manifest/provenance path with
+a pinned external CC0 asset; B03 currently uses a separate experimental exporter
+and has no clean capture manifest. B04 and additional external adapters remain
+later work.
 
 ## Comparison
 

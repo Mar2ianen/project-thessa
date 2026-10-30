@@ -1,0 +1,2 @@
+Canonical Thessa coastal world scene geometry and textures.
+MIT License / CC0 1.0 Universal.

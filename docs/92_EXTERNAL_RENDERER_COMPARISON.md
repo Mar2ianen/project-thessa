@@ -6,7 +6,9 @@ The initial R1–R4 refactor deferred external adapters. After those milestones
 and B01/native capture, the user explicitly requested external-engine setup and
 comparison. This continuation adds one development-only Cycles adapter over
 the existing portable B01 export. No production renderer or Rust dependencies
-change. B02 MASK rendering and vegetation tiers remain pending.
+change. B02 MASK rendering and its deterministic reference scene are implemented
+separately in [doc 94](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md); B03 is an
+experimental exporter/diagnostic in [doc 95](95_CANONICAL_COAST_AND_CYCLES_PARITY.md).
 
 ## Tool setup (2026-10-29)
 
@@ -104,7 +106,7 @@ no blind votes or physical acceptance are inferred from these metrics.
 - **Architectural change:** one Blender-side development adapter consuming the
   existing portable capture; no game scene, engine dependency or shader rewrite.
 - **Changed files:** adapter/tests, dated evidence, this document and living indexes.
-- **Tests executed:** 28 Python quality tests; actual Cycles 640×480/64-sample
+- **Tests executed:** 34 Python quality tests; actual Cycles 640×480/64-sample
 CPU capture in an isolated process without display/GPU/network; matching PNG
 and float32 HDR across repeated seed-0 renders; input/hash,
   geometry-count and finite-output checks; PNG/HDR convention tests; Godot
@@ -120,4 +122,5 @@ and float32 HDR across repeated seed-0 renders; input/hash,
 - **Known limitations:** numeric light-unit mapping, different BSDF/AA/precision,
   initial diagnostic source fingerprint explicitly records dirty development files.
 - **Next smallest useful change:** investigate isolated material differences,
-  complete explicit B02 cutouts/tiers, and add a Godot capture over the same data.
+  improve the B03 terrain/plant material reconstruction, and add a Godot capture
+  over the same data.

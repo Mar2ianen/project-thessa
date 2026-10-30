@@ -1,6 +1,7 @@
 # 91 — B02 vegetation asset provenance
 
-Status: pinned external-cache ingestion implemented; native B02 scene and cutout rendering pending.
+Status: pinned external-cache ingestion implemented; native B02 cutout scene and
+Cycles diagnostic implemented in [doc 94](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md).
 
 ## Selected source data
 
@@ -98,7 +99,7 @@ B02 captures and external engine comparisons remain unimplemented here.
   dependency or renderer change, no additional Cargo package/version.
 - **Changed files:** asset/license manifests, trusted converter, standard-library
   fetch/verify tool and tests, portable audit evidence and synchronized indexes.
-- **Tests executed:** 25 Python quality tests; fresh conversion from pinned raw
+- **Tests executed at this milestone:** 25 Python quality tests; fresh conversion from pinned raw
   inputs in a second cache, with no GPU/display/network access, matching both
   derived GLB hashes; cached verification; syntax/diff checks. Earlier selected
   downloads were verified against published sizes/checksums. RGB/alpha checks
@@ -114,5 +115,5 @@ B02 captures and external engine comparisons remain unimplemented here.
   development tool; no Blender implementation is copied into the engine.
 - **Known limitations:** pinned exporter build required for conversion; declared
   shader simplification, data quantization/clipping and unverified tangent frame.
-- **Next smallest useful change:** explicit MASK capability with opaque regression
-  checks, then fixed-camera/light B02 scene data and bounded density tiers.
+- **Next smallest useful change:** extend the fixed-camera/light B02 scene with
+  bounded vegetation tiers and preserve the explicit MASK regression coverage.

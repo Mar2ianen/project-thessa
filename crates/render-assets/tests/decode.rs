@@ -56,6 +56,46 @@ fn nested_nonuniform_mirrored_transform_preserves_normals_and_winding() {
 }
 
 #[test]
+fn cutout_import_is_explicit_and_preserves_coverage_instead_of_accepting_blend() {
+    let (mut doc, blob) = fixture();
+    doc["meshes"][0]["primitives"][0]["material"] = json!(0);
+    for cutoff in [None, Some(0.0), Some(0.37), Some(1.5)] {
+        doc["materials"] = json!([{"alphaMode":"MASK","doubleSided":true,
+            "pbrMetallicRoughness":{"baseColorFactor":[0.2,0.4,0.6,0.75]}}]);
+        if let Some(cutoff) = cutoff {
+            doc["materials"][0]["alphaCutoff"] = json!(cutoff);
+        }
+        let bytes = encode(&doc, &blob);
+        assert!(decode_glb(&bytes, Limits::default()).is_err());
+        let source = thessa_render_assets::decode_glb_cutouts(&bytes, Limits::default()).unwrap();
+        assert_eq!(source.materials[0].alpha_cutoff, cutoff.unwrap_or(0.5));
+        assert_eq!(
+            source.materials[0].alpha_mode,
+            thessa_render_core::mesh::AlphaMode::Mask
+        );
+        assert_eq!(source.materials[0].base_color, [0.2, 0.4, 0.6, 0.75]);
+        assert!(source.materials[0].double_sided);
+    }
+    doc["materials"][0]["alphaMode"] = json!("OPAQUE");
+    assert_eq!(
+        thessa_render_assets::decode_glb_cutouts(&encode(&doc, &blob), Limits::default())
+            .unwrap()
+            .materials[0]
+            .alpha_mode,
+        thessa_render_core::mesh::AlphaMode::Opaque
+    );
+    doc["materials"][0]["alphaMode"] = json!("BLEND");
+    assert!(
+        thessa_render_assets::decode_glb_cutouts(&encode(&doc, &blob), Limits::default()).is_err()
+    );
+    doc["materials"][0]["alphaMode"] = json!("MASK");
+    doc["extensionsUsed"] = json!(["KHR_materials_unlit"]);
+    assert!(
+        thessa_render_assets::decode_glb_cutouts(&encode(&doc, &blob), Limits::default()).is_err()
+    );
+}
+
+#[test]
 fn explicit_rest_pose_preserves_static_transforms_and_does_not_relax_other_limits() {
     let (doc, blob) = fixture();
     let bytes = encode(&doc, &blob);
@@ -225,4 +265,27 @@ fn shipped_x15_has_exact_geometry_material_roles_and_authored_extent() {
         (extent - 17.794085).abs() < 0.00002,
         "source length {extent}"
     );
+}
+
+#[test]
+fn cached_fern_02_cutout_decodes_cleanly_if_present() {
+    let path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".cache/thessa/reference-assets/polyhaven/fern_02/core-cutout-v1/fern_02.glb");
+    if !path.exists() {
+        return;
+    }
+    let bytes = std::fs::read(&path).unwrap();
+    let source = thessa_render_assets::decode_glb_cutouts(&bytes, Limits::default()).unwrap();
+    assert_eq!(source.primitives.len(), 4);
+    assert_eq!(source.materials.len(), 2); // 1 MASK material + 1 default
+    assert_eq!(
+        source.materials[0].alpha_mode,
+        thessa_render_core::mesh::AlphaMode::Mask
+    );
+    assert_eq!(source.materials[0].alpha_cutoff, 0.5);
+    assert!(source.materials[0].double_sided);
+    assert_eq!(source.textures.len(), 3);
+    assert_eq!(source.images.len(), 3);
+    let total_triangles: usize = source.primitives.iter().map(|p| p.indices.len() / 3).sum();
+    assert_eq!(total_triangles, 6232);
 }

@@ -410,6 +410,10 @@ impl SceneMeshes {
         }
         Ok(())
     }
+    pub fn plants(&self) -> Option<&crate::surface_plants::Prepared> {
+        self.plants.as_ref()
+    }
+
     pub fn encode_rt(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(inner) = &mut self.inner {
             inner.encode_rt(encoder);

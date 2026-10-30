@@ -1,6 +1,7 @@
 //! Native reference adapter: existing mesh/display/perf consumers, no game Scene.
 use std::{error::Error, path::Path, time::Instant};
 use thessa_graphics::RequestedGraphics;
+use thessa_render_core::{ViewParams, mesh::MeshAsset};
 use thessa_render_wgpu::{
     Backend,
     display::DisplayTransform,
@@ -22,7 +23,7 @@ fn validate_baseline(requested: &RequestedGraphics) -> Result<(), &'static str> 
         || requested.renderer.resolution_scale != 1.0
     {
         return Err(
-            "B01 v1 requires an explicit raster baseline: RT/shadows/temporal/bloom/auto exposure off, specular response on, MSAA=1 and resolution_scale=1; use data/reference-scenes/b01-graphics.toml",
+            "Reference scenes require an explicit raster baseline: RT/shadows/temporal/bloom/auto exposure off, specular response on, MSAA=1 and resolution_scale=1; use data/reference-scenes/b01-graphics.toml or b02-graphics.toml",
         );
     }
     Ok(())
@@ -47,7 +48,20 @@ fn validate_output_paths(paths: &[&Path]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn material_lab(
+struct ReferenceSceneInput<'a> {
+    scenario_id: &'static str,
+    glb_bytes: &'a [u8],
+    description_json: Vec<u8>,
+    license_notice: &'static str,
+    asset: MeshAsset,
+    direction_to_light: [f32; 3],
+    illuminance_rgb_lux: [f32; 3],
+    measurement_boundary: &'static str,
+    view_builder: Box<dyn FnOnce(f32) -> Option<ViewParams>>,
+}
+
+fn run_reference_scene(
+    input: ReferenceSceneInput<'_>,
     requested: &RequestedGraphics,
     image: &Path,
     perf_path: &Path,
@@ -77,15 +91,10 @@ pub fn material_lab(
     if files.iter().any(|p| p.exists()) {
         return Err("reference scene sidecars already exist; choose a new output directory".into());
     }
-    let scene = thessa_reference_scenes::MaterialLab::new();
-    let description = serde_json::to_vec_pretty(&scene.description())?;
     for (path, bytes) in [
-        (&files[0], scene.glb()),
-        (&files[1], description.as_slice()),
-        (
-            &files[2],
-            thessa_reference_scenes::GEOMETRY_LICENSE_NOTICE.as_bytes(),
-        ),
+        (&files[0], input.glb_bytes),
+        (&files[1], input.description_json.as_slice()),
+        (&files[2], input.license_notice.as_bytes()),
     ] {
         use std::io::Write;
         std::fs::OpenOptions::new()
@@ -94,9 +103,6 @@ pub fn material_lab(
             .open(path)?
             .write_all(bytes)?;
     }
-    // Exercise the same portable GLB consumed by external renderers, including
-    // its material bindings; no private showcase mesh replaces the dataset.
-    let asset = thessa_render_assets::decode_glb(scene.glb(), Default::default())?;
     let backend = Backend::bring_up_for_graphics_profiled(requested)?;
     let resolved = backend.resolve_graphics(requested);
     let target = OffscreenTarget::new(&backend, extent[0], extent[1])?;
@@ -109,7 +115,7 @@ pub fn material_lab(
     )?;
     let mut meshes = MeshRenderer::with_surface(
         &backend,
-        &asset,
+        &input.asset,
         SurfaceSettings {
             format: display.scene_format(),
             capacity: 1,
@@ -124,12 +130,11 @@ pub fn material_lab(
         rotation: glam::DQuat::IDENTITY,
         scale: 1.0,
     };
-    let view = scene
-        .view(extent, crate::manual_exposure(resolved.exposure_ev100))
+    let view = (input.view_builder)(crate::manual_exposure(resolved.exposure_ev100))
         .ok_or("invalid reference camera")?;
     let mut light = thessa_rcbt_core::lighting::SurfaceLighting::default();
-    light.directions[0][..3].copy_from_slice(&scene.direction_to_light());
-    light.colors_lux[0][..3].copy_from_slice(&scene.illuminance_rgb_lux());
+    light.directions[0][..3].copy_from_slice(&input.direction_to_light);
+    light.colors_lux[0][..3].copy_from_slice(&input.illuminance_rgb_lux);
     let gpu = GpuIntervals::new(&backend, 4);
     let mut collector = thessa_perf::PerfCollector::with_default_capacity();
     for frame in 0..frames + 30 {
@@ -204,31 +209,50 @@ pub fn material_lab(
         )?;
     }
     let mut metadata = crate::perf::renderer_capture_metadata(&backend, requested);
-    metadata.scenario = thessa_reference_scenes::B01_ID.into();
+    metadata.scenario = input.scenario_id.into();
     metadata.display.width = extent[0];
     metadata.display.height = extent[1];
     metadata.display.vsync = false;
     metadata.window_frames = collector.len();
     crate::perf::capture_frame_inputs(&mut metadata, &view, &light, 0.0, display.enabled());
     let stats = meshes.draw_stats();
-    for (key,value) in [
-        ("gpu_scope_layout","reference-mesh-v1".into()),
-        ("measurement_boundary","Fixed generated GLB; 30 warmup; serial frames; frame.cpu through submit, frame.wall through GPU completion, excluding timestamp map/image readback/serialization. Three GPU intervals: clear, mesh raster, display. Static mesh work recorded in header; no terrain, streaming, simulation or UI. Geometry/lighting unchanged across frames; physical/visual correctness not inferred from timings.".into()),
-        ("reference_geometry_file","scene.glb".into()),("reference_scene_file","scene.json".into()),
-        ("reference_mesh_candidate_triangles",stats.candidate_triangles.to_string()),
-        ("reference_mesh_submitted_triangles",stats.triangles.to_string()),
-        ("reference_mesh_api_draws",stats.draw_calls.to_string()),
-        ("reference_mesh_logical_draws",stats.draw_commands.to_string()),
-        ("reference_scene_frozen","true".into()),
-        ("reference_unavailable_features","shadows, RT, area lights, environment/HDRI, temporal reconstruction, normal-map/texture variants; not part of this direct-light baseline".into()),
-    ] {metadata.graphics.resolved.insert(key.into(),value);}
+    for (key, value) in [
+        ("gpu_scope_layout", "reference-mesh-v1".into()),
+        ("measurement_boundary", input.measurement_boundary.into()),
+        ("reference_geometry_file", "scene.glb".into()),
+        ("reference_scene_file", "scene.json".into()),
+        (
+            "reference_mesh_candidate_triangles",
+            stats.candidate_triangles.to_string(),
+        ),
+        (
+            "reference_mesh_submitted_triangles",
+            stats.triangles.to_string(),
+        ),
+        (
+            "reference_mesh_api_draws",
+            stats.draw_calls.to_string(),
+        ),
+        (
+            "reference_mesh_logical_draws",
+            stats.draw_commands.to_string(),
+        ),
+        ("reference_scene_frozen", "true".into()),
+        (
+            "reference_unavailable_features",
+            "shadows, RT, area lights, environment/HDRI, temporal reconstruction; direct-light baseline".into(),
+        ),
+    ] {
+        metadata.graphics.resolved.insert(key.into(), value);
+    }
     let capture = collector.snapshot_capture(metadata);
     capture.write_json(perf_path)?;
     capture.write_csv(&perf_path.with_extension("csv"))?;
     eprintln!(
         "reference_scene={} vertices={} submitted_triangles={} measured_frames={frames} gpu_timestamps={}",
-        thessa_reference_scenes::B01_ID,
-        asset
+        input.scenario_id,
+        input
+            .asset
             .primitives
             .iter()
             .map(|p| p.vertices.len())
@@ -239,9 +263,114 @@ pub fn material_lab(
     Ok(())
 }
 
+pub fn material_lab(
+    requested: &RequestedGraphics,
+    image: &Path,
+    perf_path: &Path,
+    linear_hdr: Option<&Path>,
+    extent: [u32; 2],
+    frames: u32,
+) -> Result<(), Box<dyn Error>> {
+    let scene = thessa_reference_scenes::MaterialLab::new();
+    let description_json = serde_json::to_vec_pretty(&scene.description())?;
+    // Exercise the same portable GLB consumed by external renderers, including
+    // its material bindings; no private showcase mesh replaces the dataset.
+    let asset = thessa_render_assets::decode_glb(scene.glb(), Default::default())?;
+    let direction_to_light = scene.direction_to_light();
+    let illuminance_rgb_lux = scene.illuminance_rgb_lux();
+    let glb = scene.glb().to_vec();
+    run_reference_scene(
+        ReferenceSceneInput {
+            scenario_id: thessa_reference_scenes::B01_ID,
+            glb_bytes: &glb,
+            description_json,
+            license_notice: thessa_reference_scenes::GEOMETRY_LICENSE_NOTICE,
+            asset,
+            direction_to_light,
+            illuminance_rgb_lux,
+            measurement_boundary: "Fixed generated GLB; 30 warmup; serial frames; frame.cpu through submit, frame.wall through GPU completion, excluding timestamp map/image readback/serialization. Three GPU intervals: clear, mesh raster, display. Static mesh work recorded in header; no terrain, streaming, simulation or UI. Geometry/lighting unchanged across frames; physical/visual correctness not inferred from timings.",
+            view_builder: Box::new(move |exposure| scene.view(extent, exposure)),
+        },
+        requested,
+        image,
+        perf_path,
+        linear_hdr,
+        extent,
+        frames,
+    )
+}
+
+pub fn resolve_b02_asset_path(custom: Option<&Path>) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    if let Some(path) = custom {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+        return Err(format!(
+            "specified reference asset does not exist: {}",
+            path.display()
+        )
+        .into());
+    }
+    let relative = "thessa/reference-assets/polyhaven/fern_02/core-cutout-v1/fern_02.glb";
+    let candidate = if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        std::path::PathBuf::from(xdg).join(relative)
+    } else if let Some(home) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(home).join(".cache").join(relative)
+    } else {
+        return Err("cannot locate reference asset cache: neither XDG_CACHE_HOME nor HOME is set. Use --reference-asset <PATH>".into());
+    };
+    if candidate.exists() {
+        Ok(candidate)
+    } else {
+        Err(format!(
+            "B02 asset not found at {}. Run `python3 tools/agent-qa/reference_assets.py` to fetch/verify it, or pass --reference-asset <PATH>",
+            candidate.display()
+        ).into())
+    }
+}
+
+pub fn vegetation_lab(
+    asset_path: Option<&Path>,
+    requested: &RequestedGraphics,
+    image: &Path,
+    perf_path: &Path,
+    linear_hdr: Option<&Path>,
+    extent: [u32; 2],
+    frames: u32,
+) -> Result<(), Box<dyn Error>> {
+    let resolved_path = resolve_b02_asset_path(asset_path)?;
+    let glb = std::fs::read(&resolved_path)?;
+    let scene = thessa_reference_scenes::VegetationLab::new();
+    // Cutout decoding: accepts Opaque and Mask, rejects Blend.
+    let asset = thessa_render_assets::decode_glb_cutouts(&glb, Default::default())?;
+    let description_json = serde_json::to_vec_pretty(&scene.description(&asset))?;
+    let direction_to_light = scene.direction_to_light();
+    let illuminance_rgb_lux = scene.illuminance_rgb_lux();
+    run_reference_scene(
+        ReferenceSceneInput {
+            scenario_id: thessa_reference_scenes::B02_ID,
+            glb_bytes: &glb,
+            description_json,
+            license_notice: thessa_reference_scenes::B02_CC0_LICENSE_NOTICE,
+            asset,
+            direction_to_light,
+            illuminance_rgb_lux,
+            measurement_boundary: "Pinned external CC0 GLB (fern_02); 30 warmup; serial frames; frame.cpu through submit, frame.wall through GPU completion, excluding timestamp map/image readback/serialization. Three GPU intervals: clear, mesh raster, display. Static cutout mesh work recorded in header; no terrain, streaming, simulation or UI. Geometry/lighting unchanged across frames; physical/visual correctness not inferred from timings.",
+            view_builder: Box::new(move |exposure| scene.view(extent, exposure)),
+        },
+        requested,
+        image,
+        perf_path,
+        linear_hdr,
+        extent,
+        frames,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn fixed_lab_profile_is_explicit_and_rejects_hidden_work_changes() {
         let mut requested = RequestedGraphics::from_toml(include_str!(
@@ -258,6 +387,7 @@ mod tests {
         requested.shadows.enabled = true;
         assert!(validate_baseline(&requested).is_err());
     }
+
     #[test]
     fn reference_artifacts_cannot_alias_the_image_or_each_other() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));

@@ -1,6 +1,7 @@
 //! Migration viewer: canonical terrain, owned compute/raster/materials,
 //! winit presentation/input and optional egui HUD. No Bevy or full client parity.
 #![forbid(unsafe_code)]
+mod canonical_export;
 mod celestial;
 #[cfg(feature = "hud")]
 mod contact_preview;
@@ -30,6 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut headless = None;
     let mut reference_scene = None;
+    let mut reference_asset = None;
     let mut parsed_options = Vec::new();
     let mut perf_capture = None;
     let mut linear_hdr = None;
@@ -68,6 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut docking = false;
     let mut docking_time = None;
     let mut docking_step = None;
+    let mut export_canonical_coast = None;
     while let Some(arg) = args.next() {
         parsed_options.push(arg.clone());
         match arg.as_str() {
@@ -106,7 +109,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )
             }
             "--reference-scene" => {
-                reference_scene = Some(args.next().ok_or("--reference-scene requires b01")?)
+                reference_scene = Some(
+                    args.next()
+                        .ok_or("--reference-scene requires a scene name (b01, b02)")?,
+                )
+            }
+            "--reference-asset" => {
+                reference_asset = Some(std::path::PathBuf::from(
+                    args.next()
+                        .ok_or("--reference-asset requires a file path")?,
+                ))
+            }
+            "--export-canonical-coast" => {
+                export_canonical_coast = Some(std::path::PathBuf::from(
+                    args.next()
+                        .ok_or("--export-canonical-coast requires a directory path")?,
+                ))
             }
             "--width" => {
                 width = args.next().ok_or("--width requires pixels")?.parse()?;
@@ -245,7 +263,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
                 println!(
-                    "--reference-scene b01 uses the independent generated material lab; requires --headless/--perf-capture and data/reference-scenes/b01-graphics.toml. No canonical game Scene is loaded.\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
+                    "--reference-scene b01|b02 runs the independent reference lab; requires --headless/--perf-capture and data/reference-scenes/b01-graphics.toml (or b02-graphics.toml). No canonical game Scene is loaded.\n--reference-asset PATH provides an explicit GLB path (optional for b02; defaults to external cache).\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
                 );
                 println!(
                     "--gpu-trace NEW.toml requires --headless and excludes --perf-capture. Crash-durable CPU submission-intent/GPU-completion records with serial stage fences; changes scheduling and is not a performance capture. --gpu-trace-mesh-triangle-limit N sets positive per-stage mesh admission (default1000000); rejection submits no stage. This count is not a GPU-duration bound."
@@ -507,11 +525,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     if let Some(id) = reference_scene {
-        if id != "b01" {
-            return Err(format!("unknown reference scene: {id}").into());
-        }
         let supported = [
             "--reference-scene",
+            "--reference-asset",
             "--graphics",
             "--headless",
             "--perf-capture",
@@ -525,22 +541,45 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .find(|flag| !supported.contains(&flag.as_str()))
         {
-            return Err(format!("{option} is unavailable in the fixed B01 capture; use its explicit reference graphics profile").into());
+            return Err(format!("{option} is unavailable in reference scene captures; use its explicit reference graphics profile").into());
         }
-        return reference::material_lab(
-            &requested,
-            std::path::Path::new(
-                headless
-                    .as_deref()
-                    .ok_or("--reference-scene requires --headless")?,
-            ),
-            perf_capture
+        let image = std::path::Path::new(
+            headless
                 .as_deref()
-                .ok_or("--reference-scene requires --perf-capture")?,
-            linear_hdr.as_deref().map(std::path::Path::new),
-            [width, height],
-            frame_limit.unwrap_or(60),
+                .ok_or("--reference-scene requires --headless")?,
         );
+        let perf_path = perf_capture
+            .as_deref()
+            .ok_or("--reference-scene requires --perf-capture")?;
+        let linear_hdr = linear_hdr.as_deref().map(std::path::Path::new);
+        let extent = [width, height];
+        let frames = frame_limit.unwrap_or(60);
+
+        match id.to_ascii_lowercase().as_str() {
+            "b01" => {
+                if reference_asset.is_some() {
+                    return Err(
+                        "--reference-asset is not applicable to B01 (geometry is self-generated)"
+                            .into(),
+                    );
+                }
+                return reference::material_lab(
+                    &requested, image, perf_path, linear_hdr, extent, frames,
+                );
+            }
+            "b02" => {
+                return reference::vegetation_lab(
+                    reference_asset.as_deref(),
+                    &requested,
+                    image,
+                    perf_path,
+                    linear_hdr,
+                    extent,
+                    frames,
+                );
+            }
+            _ => return Err(format!("unknown reference scene: {id}; expected b01 or b02").into()),
+        }
     }
     eprintln!(
         "migration viewer consumes exposure/vsync, retained fleet meshes, opaque material/reflection settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment with source discs, stars, depth-clipped clouds/aurora and manual HDR/tonemapping; full physical aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported"
@@ -1099,6 +1138,56 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             } else {
                 eprintln!("linear_hdr=unavailable: native HDR target is disabled or unsupported");
+            }
+        }
+        if let Some(export_dir) = &export_canonical_coast {
+            let terrain_mesh = renderer.read_conforming_mesh(&backend)?;
+            if let Some(mesh_ref) = &mesh_renderer {
+                if let Some(plants) = mesh_ref.plants() {
+                    let view = scene.view(width, height, 1.0);
+                    let camera_m = view.world_position_m;
+                    let mut instance_matrices: Vec<Vec<glam::Mat4>> =
+                        Vec::with_capacity(plants.asset.primitives.len());
+                    for range in &plants.ranges {
+                        let mut mats = Vec::with_capacity(range.len());
+                        for inst in &plants.instances[range.start as usize..range.end as usize] {
+                            if let Some(mat) = inst.camera_relative_matrix(camera_m) {
+                                mats.push(mat);
+                            }
+                        }
+                        instance_matrices.push(mats);
+                    }
+                    let fov_y = 2.0 * (1.0 / view.clip_from_view.y_axis.y).atan();
+                    let lighting = scene.lighting();
+                    let linear_bytes = if let Some(texture) = display.scene_texture() {
+                        Some(thessa_render_wgpu::readback::read_color(&backend, texture)?)
+                    } else {
+                        None
+                    };
+                    let export_input = canonical_export::CanonicalExportInput {
+                        terrain: terrain_mesh.as_ref(),
+                        plants_asset: &plants.asset,
+                        instance_matrices: &instance_matrices,
+                        view: &view,
+                        lighting: &lighting,
+                        camera_m,
+                        fov_y_rad: fov_y,
+                        near_m: 0.1,
+                        far_m: 1000.0,
+                        width,
+                        height,
+                    };
+                    canonical_export::export_canonical_scene(
+                        export_dir,
+                        &export_input,
+                        Some(&pixels),
+                        linear_bytes.as_deref(),
+                    )?;
+                } else {
+                    eprintln!("export_canonical_coast: surface_plants was not prepared");
+                }
+            } else {
+                eprintln!("export_canonical_coast: mesh_renderer is unavailable");
             }
         }
         let topology_state = renderer.read_topology_state(&backend)?;

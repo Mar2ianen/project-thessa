@@ -1,7 +1,9 @@
 # 88 — Engine boundaries and reference-scene progression
 
-Status: R1–R4, R5 capture, native B01 and B02 asset ingestion implemented; native B02 pending.
-No third-party benchmark assets imported.
+Status: R1–R4, R5 capture, native B01, native B02 cutouts and the experimental
+B03 exporter implemented. The B03 Cycles result is a diagnostic, not parity.
+Third-party CC0 assets are pinned in an external cache rather than imported into
+the checkout.
 
 ## Audit baseline
 
@@ -487,7 +489,39 @@ audit and reproducible external-cache producer, based on `148dce7`. It selects
 full evaluated Fern/Moss geometry, explicitly labels the derived core material
 variant and retains source/converted hashes and conversion loss evidence.
 No Rust/runtime dependency or renderer changes occur in this milestone.
-Native B02 MASK support and fixed scene tiers remain open. A subsequent explicit
-external-comparison request is implemented in [doc 92](92_EXTERNAL_RENDERER_COMPARISON.md):
-one actual Cycles B01 diagnostic, without changing runtime dependencies or
-claiming physical/visual equivalence. Godot/Unreal captures remain open.
+A subsequent explicit external-comparison request is implemented in
+[doc 92](92_EXTERNAL_RENDERER_COMPARISON.md): one actual Cycles B01 diagnostic,
+without changing runtime dependencies or claiming physical/visual equivalence.
+
+## GGX multiscatter and B01 diagnostic continuation
+
+[Doc 93](93_GGX_MULTISCATTER_AND_CYCLES_PARITY.md) implements finite smooth
+specular peak repair and a compact DFG-based multiple-scattering term in shared
+direct lighting. Measured on AMD Radeon 880M against Cycles 5.2.2 LTS CPU:
+pre-exposed RGB MAE falls 0.002716 → 0.002135 (-21.4%), and relative L2 error
+falls 2.080 → 1.436 (-30.9%). The term is an approximation, not a full
+Kulla-Conty or Cycles `MULTI_GGX` implementation, and the metrics are diagnostic.
+
+## Native cutout and B02 Cycles diagnostic continuation
+
+[Doc 94](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md) implements native glTF
+`alphaMode = "MASK"` cutout raster rendering across `render-core`, `render-assets`,
+and `render-wgpu`, preserving hardware early-depth for opaque meshes. Reference
+scene B02 (`B02-vegetation-v1`) wires the pinned Poly Haven Fern 02 asset into a
+deterministic reference capture. A 64-spp Cycles 5.2.2 LTS diagnostic via
+`cycles_b02.py` with 16 transparent bounces records pre-exposed linear RGB MAE
+0.000601, RMSE 0.003663, and relative L2 0.4097. This is not a pass threshold or
+parity claim. Godot/Unreal captures remain open.
+
+## Canonical coastal scene B03 diagnostic continuation
+
+[Doc 95](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) implements the experimental
+canonical coastal export B03 (`B03-canonical-coast-v1`) from
+`--survey-lat 23.565679 --survey-lon 165.138816 --survey-distance 80 --survey-eye-agl 2.5`
+with `data/graphics/surface-showcase.toml`. The conforming CBT sphere terrain is
+read from the GPU (`read_conforming_mesh`) together with 27,857 plant instances
+(112.8M instanced triangles across 37 prototypes). The observed plant materials
+are opaque, not alpha-cutout; camera basis vectors are recorded in `scene.json`.
+A 32-spp Cycles procedural-ground diagnostic via `cycles_b03.py` records MAE
+0.0805, RMSE 0.1111, and relative L2 0.3030. The large generated inputs remain
+external and the result is not parity, ground truth, or visual acceptance.

@@ -2318,6 +2318,104 @@ impl TerrainRenderer {
             .map(|b| u32::from_le_bytes(*b))
             .collect())
     }
+
+    /// Read back the active conforming terrain triangles in camera-relative coordinates.
+    pub fn read_conforming_mesh(
+        &self,
+        backend: &Backend,
+    ) -> Result<Option<thessa_render_core::mesh::Primitive>, BackendError> {
+        let Some(topology) = &self.topology else {
+            return Ok(None);
+        };
+        let draw = self.read_draw(backend)?;
+        let vertex_count = draw.first().copied().unwrap_or(0) as usize;
+        if vertex_count == 0 {
+            return Ok(None);
+        }
+        let triangle_count = vertex_count / 3;
+        let index_bytes = read_buffer(backend, &topology.gpu.indices)?;
+        let vertex_bytes = read_buffer(backend, &topology.surface.vertices)?;
+
+        let mut vertices = Vec::with_capacity(triangle_count * 3);
+        let mut indices = Vec::with_capacity(triangle_count * 3);
+
+        for t in 0..triangle_count {
+            let slot_offset = t * 4;
+            if slot_offset + 4 > index_bytes.len() {
+                break;
+            }
+            let slot = u32::from_le_bytes(
+                index_bytes[slot_offset..slot_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let mut tri_verts = Vec::with_capacity(3);
+            let mut zero_or_degen = false;
+            for corner in 0..3 {
+                let v_offset = (slot * 3 + corner) * 48;
+                if v_offset + 48 > vertex_bytes.len() {
+                    zero_or_degen = true;
+                    break;
+                }
+                let px =
+                    f32::from_le_bytes(vertex_bytes[v_offset..v_offset + 4].try_into().unwrap());
+                let py = f32::from_le_bytes(
+                    vertex_bytes[v_offset + 4..v_offset + 8].try_into().unwrap(),
+                );
+                let pz = f32::from_le_bytes(
+                    vertex_bytes[v_offset + 8..v_offset + 12]
+                        .try_into()
+                        .unwrap(),
+                );
+                let nx = f32::from_le_bytes(
+                    vertex_bytes[v_offset + 16..v_offset + 20]
+                        .try_into()
+                        .unwrap(),
+                );
+                let ny = f32::from_le_bytes(
+                    vertex_bytes[v_offset + 20..v_offset + 24]
+                        .try_into()
+                        .unwrap(),
+                );
+                let nz = f32::from_le_bytes(
+                    vertex_bytes[v_offset + 24..v_offset + 28]
+                        .try_into()
+                        .unwrap(),
+                );
+                if !px.is_finite() || !py.is_finite() || !pz.is_finite() {
+                    zero_or_degen = true;
+                    break;
+                }
+                let uv_x = px * 0.05;
+                let uv_y = pz * 0.05;
+                tri_verts.push(thessa_render_core::mesh::Vertex {
+                    position: [px, py, pz],
+                    normal: [nx, ny, nz],
+                    uv: [uv_x, uv_y],
+                });
+            }
+            if !zero_or_degen && tri_verts.len() == 3 {
+                // Skip zero-area triangles
+                let p0 = glam::Vec3::from(tri_verts[0].position);
+                let p1 = glam::Vec3::from(tri_verts[1].position);
+                let p2 = glam::Vec3::from(tri_verts[2].position);
+                if (p1 - p0).cross(p2 - p0).length_squared() > 1e-8 {
+                    let base_idx = vertices.len() as u32;
+                    vertices.extend(tri_verts);
+                    indices.push(base_idx);
+                    indices.push(base_idx + 1);
+                    indices.push(base_idx + 2);
+                }
+            }
+        }
+
+        Ok(Some(thessa_render_core::mesh::Primitive {
+            ambient_visibility: vec![],
+            vertices,
+            indices,
+            material: 0,
+        }))
+    }
 }
 
 fn ocean_height_range(page: &HeightPage) -> Option<(f64, f64)> {

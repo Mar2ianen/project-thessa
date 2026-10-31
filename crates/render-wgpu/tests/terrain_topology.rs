@@ -778,3 +778,353 @@ fn flat_surface_converges_at_zero_and_large_datum_elevations() {
         assert!(terrain.conforming_surface().unwrap().publication().revision < 128);
     }
 }
+
+#[path = "support/cbt.rs"]
+mod cbt_oracle;
+
+#[test]
+#[ignore = "hardware: production ground-orbit-ground topology, canonical vertices and bounded capacity recovery; new THESSA_BENCH_OUTPUT required"]
+fn production_ground_orbit_ground_preserves_closed_canonical_surface() {
+    use thessa_rcbt_core::{Node, conforming::cube_vertices, conforming_surface::SurfaceAddress};
+    use thessa_render_wgpu::timing::GpuIntervals;
+    let out = std::path::PathBuf::from(
+        std::env::var_os("THESSA_BENCH_OUTPUT").expect("new output directory required"),
+    );
+    std::fs::create_dir(&out).unwrap();
+    let mut request = RequestedGraphics::default();
+    request.renderer.ray_tracing = RayTracingRequest::Off;
+    let backend = Backend::bring_up_for_graphics_profiled(&request).unwrap();
+    let timing = GpuIntervals::new(&backend, 3);
+    let radius = 3_200_000.0;
+    let anchors: Vec<_> = (0..6)
+        .map(|face| TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), radius).unwrap())
+        .collect();
+    let pages: Vec<_> = anchors
+        .iter()
+        .map(|anchor| {
+            let samples: Vec<_> = (0..17 * 17)
+                .map(|i| {
+                    let direction =
+                        DVec3::from_array(anchor.project_body_m(
+                            [f64::from(i % 17) / 16.0, f64::from(i / 17) / 16.0],
+                            0.0,
+                        ))
+                        .normalize();
+                    80.0 * direction.x.powi(2)
+                        + 50.0 * direction.y.powi(2)
+                        + 30.0 * (4.0 * direction.z).sin()
+                })
+                .collect();
+            HeightPage::bake(&samples, 17, 0.001).unwrap()
+        })
+        .collect();
+    for (i, page) in pages.iter().enumerate() {
+        std::fs::write(out.join(format!("face-{i}.rhpg")), page.to_bytes()).unwrap();
+    }
+    let patches: Vec<_> = anchors
+        .iter()
+        .zip(&pages)
+        .map(|(anchor, page)| TerrainPatch {
+            anchor: *anchor,
+            page,
+        })
+        .collect();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        terrain_topology: thessa_graphics::ResolvedTerrainTopology {
+            capacity: 131072,
+            waves: 4,
+            split_area_px: 64.0,
+            merge_area_px: 8.0,
+        },
+        shadow_enabled: false,
+        specular_reflections: false,
+        ..Default::default()
+    };
+    let make = |settings: &thessa_graphics::ResolvedGraphicsSettings| {
+        TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &patches,
+            OffscreenTarget::FORMAT,
+            TerrainCapacity {
+                patches: 6,
+                height_grid_size: 17,
+                material_layers: 1,
+            },
+            Some(settings),
+        )
+        .unwrap()
+    };
+    let canonical = |cube: [i64; 3]| {
+        let address = SurfaceAddress::from_cube(cube).unwrap();
+        let (_, uv) = address.tile(0).unwrap();
+        let height = pages[address.face as usize].sample(uv[0] as f32, uv[1] as f32);
+        (
+            DVec3::from_array(anchors[address.face as usize].project_body_m(uv, f64::from(height))),
+            height,
+        )
+    };
+    let view_at = |phase: f64, altitude: f64| {
+        let direction = DVec3::new(
+            0.18 * (phase * std::f64::consts::TAU).sin(),
+            0.08 * (phase * std::f64::consts::TAU).sin(),
+            1.0,
+        )
+        .normalize();
+        let surface_height = f64::from(pages[4].sample(
+            (direction.x / direction.z * 0.5 + 0.5) as f32,
+            (direction.y / direction.z * 0.5 + 0.5) as f32,
+        ));
+        let eye = direction * (radius + surface_height + altitude);
+        ViewParams {
+            world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, DVec3::ZERO, DVec3::Y)
+                .inverse(),
+            clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.9, 1.0, 0.1, 1e8),
+            world_position_m: eye,
+            exposure: 1.0,
+        }
+    };
+    let target = OffscreenTarget::new(&backend, 129, 129).unwrap();
+    let mut terrain = make(&settings);
+    let mut csv = String::from(
+        "frame,phase,altitude_m,triangles,splits,merges,capacity_rejections,last_committed,last_requested,epoch,topology_emit_gpu_ms,raster_gpu_ms\n",
+    );
+    let mut ground_epochs = [0; 2];
+    let mut ground_counts = [0; 2];
+    let mut max_near = 0.0f64;
+    let mut max_whole = 0.0f64;
+    for frame in 0..224 {
+        let (phase, altitude, label) = if frame < 64 {
+            (0.0, 2.0, "initial-settle")
+        } else if frame < 160 {
+            let phase = f64::from(frame - 64) / 95.0;
+            let altitude = 2.0
+                * ((radius / 1.0_f64).ln() * (std::f64::consts::PI * phase).sin().max(0.0)).exp();
+            (phase, altitude, "continuous-flight")
+        } else {
+            (0.0, 2.0, "return-settle")
+        };
+        let view = view_at(phase, altitude);
+        terrain
+            .update_view_for_extent(&backend, &view, [129, 129])
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        if let Some(t) = &timing {
+            t.mark(&mut encoder, 0);
+        }
+        terrain.encode_surface(&mut encoder);
+        if let Some(t) = &timing {
+            t.mark(&mut encoder, 1);
+        }
+        terrain.encode(&mut encoder, &target.color, &target.depth);
+        if let Some(t) = &timing {
+            t.mark(&mut encoder, 2);
+            t.resolve(&mut encoder);
+        }
+        backend.queue.submit([encoder.finish()]);
+        let elapsed = timing.as_ref().map(|t| t.read(&backend).unwrap());
+        let records = terrain.read_topology_records(&backend).unwrap().unwrap();
+        cbt_oracle::assert_closed_snapshot(&records);
+        let live = records
+            .iter()
+            .filter(|r| {
+                Node::from_heap_id(u64::from(r.address[0]) | (u64::from(r.address[1]) << 32))
+                    .ok()
+                    .and_then(cube_vertices)
+                    .is_some()
+            })
+            .count();
+        let state = terrain.read_topology_state(&backend).unwrap().unwrap();
+        // The four reserved virtual roots are submitted as degenerate slots.
+        let active = records
+            .iter()
+            .filter(|r| r.address[0] != 0 || r.address[1] != 0)
+            .count();
+        assert_eq!(active - live, 4);
+        assert_eq!(
+            state[8] as usize,
+            active * 3,
+            "indirect membership at frame {frame}"
+        );
+        assert_eq!(terrain.read_draw(&backend).unwrap(), state[8..12]);
+        let publication = terrain.conforming_surface().unwrap().publication();
+        assert_eq!(publication.origin_m, view.world_position_m.to_array());
+        assert!(
+            state[7] == 0,
+            "normal-budget route must not masquerade as converged after exhaustion: frame={frame} state={state:?}"
+        );
+        if frame % 16 == 0 || frame == 63 || frame == 223 {
+            let vertices = terrain.read_vertices(&backend).unwrap();
+            let mut shared = std::collections::BTreeMap::new();
+            for (slot, r) in records.iter().enumerate() {
+                let id = u64::from(r.address[0]) | (u64::from(r.address[1]) << 32);
+                let Some(cube) = Node::from_heap_id(id).ok().and_then(cube_vertices) else {
+                    assert!(
+                        vertices[slot * 36..slot * 36 + 36]
+                            .iter()
+                            .all(|v| v.to_bits() == 0),
+                        "published inactive slot must be zero for shadow/RT consumers: frame={frame} slot={slot}"
+                    );
+                    continue;
+                };
+                for (corner, cube) in cube.into_iter().enumerate() {
+                    let index = (slot * 3 + corner) * 12;
+                    let actual = DVec3::new(
+                        f64::from(vertices[index]),
+                        f64::from(vertices[index + 1]),
+                        f64::from(vertices[index + 2]),
+                    );
+                    let (expected, height) = canonical(cube);
+                    let expected = expected - view.world_position_m;
+                    let error = (actual - expected).abs().max_element();
+                    max_whole = max_whole.max(error);
+                    assert!(
+                        error < 8.0,
+                        "whole-body coordinate error {error} at frame {frame}"
+                    );
+                    if expected.length() < 10_000.0 {
+                        max_near = max_near.max(error);
+                        assert!(
+                            error < 0.02,
+                            "near-camera coordinate error {error} at frame {frame}"
+                        );
+                    }
+                    assert!(
+                        (vertices[index + 3] - height).abs() < 0.005,
+                        "canonical height changed with camera"
+                    );
+                    let bits = [
+                        vertices[index].to_bits(),
+                        vertices[index + 1].to_bits(),
+                        vertices[index + 2].to_bits(),
+                    ];
+                    if let Some(previous) = shared.insert(cube, bits) {
+                        assert_eq!(previous, bits, "shared production vertex crack");
+                    }
+                }
+            }
+        }
+        if frame == 63 || frame == 223 {
+            assert_eq!(
+                (state[1], state[2]),
+                (0, 0),
+                "settled endpoint retains pending work"
+            );
+            let index = usize::from(frame == 223);
+            ground_epochs[index] = publication.revision;
+            ground_counts[index] = live;
+            std::fs::write(
+                out.join(format!("ground-{index}.rgba8")),
+                target.read_rgba8(&backend).unwrap(),
+            )
+            .unwrap();
+        }
+        let ms = elapsed.map(|v| [v[0] * 1000.0, v[1] * 1000.0]);
+        csv.push_str(&format!(
+            "{frame},{label},{altitude},{live},{},{},{},{},{},{},{},{}\n",
+            state[5],
+            state[6],
+            state[7],
+            state[1],
+            state[2],
+            publication.revision,
+            ms.map_or(String::new(), |v| v[0].to_string()),
+            ms.map_or(String::new(), |v| v[1].to_string())
+        ));
+    }
+    assert!(
+        ground_epochs[1] > ground_epochs[0],
+        "settled topology failed to wake for flight"
+    );
+    let publication = terrain.conforming_surface().unwrap().publication();
+    for _ in 0..4 {
+        terrain
+            .update_view_for_extent(&backend, &view_at(0.0, 2.0), [129, 129])
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        terrain.encode_surface(&mut encoder);
+        backend.queue.submit([encoder.finish()]);
+        backend
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+    }
+    assert_eq!(
+        terrain.conforming_surface().unwrap().publication(),
+        publication,
+        "settled view must retain its publication"
+    );
+    assert_eq!(
+        std::fs::read(out.join("ground-0.rgba8")).unwrap(),
+        std::fs::read(out.join("ground-1.rgba8")).unwrap(),
+        "return to the same frozen ground view must reproduce the raster"
+    );
+    std::fs::write(out.join("trajectory.csv"), csv).unwrap();
+    let record = serde_json::json!({"id":"production-cbt-ground-orbit-ground-v1","radius_m":radius,"extent":[129,129],"capacity":settings.terrain_topology.capacity,"waves":4,"split_area_px":64,"merge_area_px":8,"height_grid":17,"height_error_budget_m":0.001,"frames":224,"closed_topology_frames":224,"ground_triangles":ground_counts,"ground_epochs":ground_epochs,"max_near_vertex_error_m":max_near,"max_whole_vertex_error_m":max_whole,"storage_bytes":terrain.topology_storage_bytes(),"gpu_timing_available":timing.is_some(),"adapter":backend.adapter_name,"scope":"production topology/canonical geometry/raster; frozen root residency; not dense tessellation error, streaming, shadow/ocean/RT cost or whole-client performance"});
+    std::fs::write(
+        out.join("trajectory.json"),
+        serde_json::to_vec_pretty(&record).unwrap(),
+    )
+    .unwrap();
+    // Same frozen source, deliberately insufficient topology capacity.
+    // Exhaustion must retain pending requests and a closed mesh, then recover.
+    let mut bounded_settings = settings.clone();
+    bounded_settings.terrain_topology.capacity = 4096;
+    let mut bounded = make(&bounded_settings);
+    let large = OffscreenTarget::new(&backend, 513, 513).unwrap();
+    let mut bounded_rows = Vec::new();
+    let mut exhausted = None;
+    let mut recovered = None;
+    for frame in 0..192 {
+        let altitude = if frame < 96 { 2.0 } else { radius * 2.0 };
+        let view = view_at(0.0, altitude);
+        bounded
+            .update_view_for_extent(&backend, &view, [513, 513])
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        bounded.encode_surface(&mut encoder);
+        bounded.encode(&mut encoder, &large.color, &large.depth);
+        backend.queue.submit([encoder.finish()]);
+        let state = bounded.read_topology_state(&backend).unwrap().unwrap();
+        cbt_oracle::assert_closed_snapshot(
+            &bounded.read_topology_records(&backend).unwrap().unwrap(),
+        );
+        assert!(state[8] / 3 <= 4096);
+        bounded_rows.push(serde_json::json!({"frame":frame,"altitude_m":altitude,"state":state,"epoch":bounded.conforming_surface().unwrap().publication().revision}));
+        if frame == 95 {
+            assert!(
+                state[7] > 0 && state[2] > 0,
+                "exhausted pool must not report zero pending requests: {state:?}"
+            );
+            exhausted = Some(state);
+        }
+        if frame == 191 {
+            assert_eq!(
+                (state[1], state[2]),
+                (0, 0),
+                "far view failed to recover: {state:?}"
+            );
+            recovered = Some(state);
+        }
+    }
+    let before = bounded.conforming_surface().unwrap().publication();
+    bounded
+        .update_view_for_extent(&backend, &view_at(0.0, 2.0), [513, 513])
+        .unwrap();
+    let mut encoder = backend.device.create_command_encoder(&Default::default());
+    bounded.encode_surface(&mut encoder);
+    backend.queue.submit([encoder.finish()]);
+    let awake = bounded.read_topology_state(&backend).unwrap().unwrap();
+    assert!(
+        bounded.conforming_surface().unwrap().publication().revision > before.revision
+            && awake[2] > 0,
+        "recovered topology must wake on the next close view"
+    );
+    cbt_oracle::assert_closed_snapshot(&bounded.read_topology_records(&backend).unwrap().unwrap());
+    let recovery = serde_json::json!({"capacity":4096,"extent":[513,513],"exhausted_state":exhausted,"recovered_state":recovered,"reawakened_state":awake,"rows":bounded_rows,"scope":"same frozen six root pages; bounded overload control, not equal-error performance comparison"});
+    std::fs::write(
+        out.join("exhaustion.json"),
+        serde_json::to_vec_pretty(&recovery).unwrap(),
+    )
+    .unwrap();
+    eprintln!("production_cbt_trajectory {record}");
+}

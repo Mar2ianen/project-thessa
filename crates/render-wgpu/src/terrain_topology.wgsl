@@ -59,6 +59,9 @@ fn triangle_score(source:array<SurfaceVertex,3>)->f32 {
 fn classify(@builtin(global_invocation_id) id:vec3<u32>) {
     let slot=id.x;if(slot>=arrayLength(&areas)){return;}
     areas[slot]=0.0;
+    // Scratch may retain a freed slot until final publication. It must never
+    // participate in classification or parent hysteresis.
+    if(surface_pool[slot].address.z<4u){return;}
     let a=vertices[slot*3u];let b=vertices[slot*3u+1u];let c=vertices[slot*3u+2u];
     if(all(a.normal_face.xyz==vec3(0.0))){return;}
     var score=triangle_score(array(a,b,c));

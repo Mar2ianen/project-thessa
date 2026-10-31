@@ -856,3 +856,10 @@ per-nozzle geometry, remote publication and live consumption remain F03 work.
 pressure/throttle/view controls with stock Cycles at 256/2048 samples. Matching
 the volume ray start fixes the reference inside-camera mismatch; native
 shaders/budgets are unchanged. Live nozzle extraction and calibration remain open.
+
+[Production CBT flight and scratch traffic](docs/103_CBT_FLIGHT_AND_SCRATCH.md)
+verify a frozen ground–orbit–ground replay, closedness and exhaustion recovery.
+Skipping repeated inactive clears in land-only classification cuts High-budget
+update/emission time roughly in half on the fixed 880M ABBA control, with exact
+physical counters and endpoint pixels. Ocean scratch retains full clearing;
+streaming, dense error and whole-client performance acceptance remain open.

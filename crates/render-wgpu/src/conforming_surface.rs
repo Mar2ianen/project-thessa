@@ -119,6 +119,7 @@ pub struct ConformingSurface {
     pub(crate) indirect: wgpu::Buffer,
     charts: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
+    scratch_pipeline: wgpu::ComputePipeline,
     bind: wgpu::BindGroup,
     capacity: u32,
     radius_m: f64,
@@ -172,21 +173,63 @@ impl ConformingSurface {
                 label: Some("canonical-cbt-surface"),
                 source: wgpu::ShaderSource::Wgsl(shader_source().into()),
             });
+        let entries = (0..7)
+            .map(|binding| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: if binding == 6 {
+                        wgpu::BufferBindingType::Uniform
+                    } else {
+                        wgpu::BufferBindingType::Storage {
+                            read_only: binding != 5,
+                        }
+                    },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            })
+            .collect::<Vec<_>>();
+        let sources = backend
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("canonical-surface-sources"),
+                entries: &entries,
+            });
+        let layout = backend
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("canonical-surface-layout"),
+                bind_group_layouts: &[Some(&sources)],
+                immediate_size: 0,
+            });
         let pipeline = backend
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("emit-canonical-cbt-surface"),
-                layout: None,
+                layout: Some(&layout),
                 module: &module,
                 entry_point: Some("emit_surface"),
                 compilation_options: Default::default(),
                 cache: None,
             });
+        let scratch_pipeline =
+            backend
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("emit-active-canonical-scratch"),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("emit_active_scratch"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
         let bind = backend
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
-                layout: &pipeline.get_bind_group_layout(0),
+                layout: &sources,
                 entries: &[
                     pool,
                     &source.directory,
@@ -210,6 +253,7 @@ impl ConformingSurface {
             vertices,
             charts,
             pipeline,
+            scratch_pipeline,
             bind,
             capacity,
             radius_m: source.radius_m,
@@ -246,7 +290,10 @@ impl ConformingSurface {
     /// Must follow topology publication. Page uploads and camera updates must
     /// precede submission; readbacks are diagnostic only.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.encode_scratch(encoder);
+        self.encode_datum(encoder);
+        if let Some(ocean) = &self.ocean {
+            ocean.encode(encoder, self.capacity);
+        }
         let mut state = self.publication.lock().unwrap();
         state.published = SurfacePublication {
             revision: state
@@ -260,9 +307,16 @@ impl ConformingSurface {
     }
     /// Internal classification scratch: no consumer publication and no waves.
     pub(crate) fn encode_datum(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.encode_geometry(encoder, &self.pipeline);
+    }
+    fn encode_geometry(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::ComputePipeline,
+    ) {
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
             pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
         }
@@ -301,7 +355,16 @@ impl ConformingSurface {
     }
     /// Classification scratch includes the same admitted, filtered ocean geometry.
     pub(crate) fn encode_scratch(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.encode_datum(encoder);
+        // Ocean admission scans emitted slots, so it still requires cleared
+        // inactive geometry. The land-only classifier validates pool liveness.
+        self.encode_geometry(
+            encoder,
+            if self.ocean.is_some() {
+                &self.pipeline
+            } else {
+                &self.scratch_pipeline
+            },
+        );
         if let Some(ocean) = &self.ocean {
             ocean.encode(encoder, self.capacity);
         }

@@ -523,6 +523,11 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
     assert_eq!(surface.publication().revision, 1);
     assert_eq!(surface.publication().origin_m, origin.to_array());
     assert_eq!(mesh.rt_stats().terrain_instances, 2);
+    assert_eq!(
+        mesh.rt_stats().instances,
+        3,
+        "one selected mesh pairing plus two terrain chunks"
+    );
     assert_eq!(mesh.rt_stats().terrain_blas_builds, 2);
     assert_eq!(red, capture(&surface, &mut mesh, false, &view));
     assert_eq!(
@@ -613,16 +618,21 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
     capture(&surface, &mut mesh, true, &camera(next));
     assert_eq!(surface.publication().revision, epoch + 1);
     assert_eq!(mesh.rt_stats().terrain_blas_builds, 2);
-    // The existing instance budget admits only ONE of two allocation chunks;
-    // it must omit the whole partition instead of leaving arbitrary blockers.
+    // One live mesh pairing leaves only ONE slot for two terrain chunks.
+    // Construction capacity is not the current selected pairing count.
     let mut bounded = settings.clone();
-    bounded.rt_max_instances = 3;
+    bounded.rt_max_instances = 2;
     let mut fallback = make(&bounded, &rays);
     let image = capture(&surface, &mut fallback, false, &camera(next));
     assert_eq!(center(&image), [0; 3]);
     assert_eq!(fallback.rt_stats().terrain_instances, 0);
     assert_eq!(fallback.rt_stats().terrain_blas_builds, 0);
-    assert!(fallback.rt_terrain_reason().unwrap().contains("chunks"));
+    assert!(
+        fallback
+            .rt_terrain_reason()
+            .unwrap()
+            .contains("whole terrain partition")
+    );
     let mut off = settings.clone();
     off.ray_tracing = backend
         .resolve_graphics(&requested(RayTracingRequest::Off))

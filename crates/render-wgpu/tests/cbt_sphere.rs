@@ -1,5 +1,8 @@
 //! Experimental persistent topology, no patch geometry, skirts or grid steps.
 //! Not a production terrain/ocean/RT replacement or large_cbt parity claim.
+#[path = "support/cbt.rs"]
+mod cbt_oracle;
+use cbt_oracle::assert_closed_snapshot;
 use glam::Vec3;
 use std::collections::BTreeMap;
 use thessa_rcbt_core::{
@@ -853,40 +856,6 @@ fn parallel_waves_match_serial_bytes_and_cpu_topology() {
     );
     println!(
         "parallel_sphere_oracle frames=360 max_committed_per_wave={max_committed} forced_chains={chains} conflicts={conflicts} rejected_capacity={exhausted} merges={merged} commits_after_teleport={after_teleport} byte_equal_serial=true cpu_closed=true"
-    );
-}
-
-// Target-size raw GPU snapshot oracle, independent of the planner's links.
-fn assert_closed_snapshot(snapshot: &[Record]) {
-    let mut edges = BTreeMap::new();
-    let mut vertices = std::collections::BTreeSet::new();
-    let mut areas = [0u128; 12];
-    let mut triangles = 0;
-    for (slot, &r) in snapshot.iter().enumerate() {
-        let Ok(node) = Node::from_heap_id(identity(r)) else {
-            continue;
-        };
-        let Some(v) = cube_vertices(node) else {
-            continue;
-        };
-        let root = root_index(node).unwrap();
-        areas[root as usize] += 1u128 << (58 - node.depth());
-        triangles += 1;
-        for e in 0..3 {
-            vertices.insert(v[e]);
-            assert!(edges.insert((v[e], v[(e + 1) % 3]), (slot, e)).is_none());
-        }
-    }
-    for (&(a, b), &(slot, e)) in &edges {
-        let &(other, _) = edges
-            .get(&(b, a))
-            .expect("GPU snapshot must not contain open edges or T-junctions");
-        assert_eq!(snapshot[slot].neighbors[e] as usize, other);
-    }
-    assert_eq!(areas, [1u128 << 54; 12]);
-    assert_eq!(
-        vertices.len() as isize - (edges.len() / 2) as isize + triangles,
-        2
     );
 }
 

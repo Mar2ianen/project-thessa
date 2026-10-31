@@ -305,7 +305,10 @@ pipeline independently in Rust/WGSL. The old missing-topology list is superseded
 `microstore` is still a separate axis: material/height storage, precision,
 filtering, residency and dirty uploads do not themselves implement CBT topology.
 The production classifier samples deviation at three edge midpoints; it does not
-certify a universal geometric-error bound. RT still has full-capacity/dirty
+certify a universal geometric-error bound. [Doc 103](103_CBT_FLIGHT_AND_SCRATCH.md)
+adds a frozen production flight/closedness/recovery control and a measured
+land-only scratch traffic reduction; it does not close dense-error, residency
+or whole-system parity. RT still has full-capacity/dirty
 publication costs rather than an accepted active-only incremental optimization.
 
 Do not reinterpret the implemented topology as complete `large_cbt` parity.

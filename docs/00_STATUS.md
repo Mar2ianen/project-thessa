@@ -82,6 +82,13 @@ compiled-engine transport controls and fixes reference-camera near clipping.
 Radeon/software Vulkan and 256/2048-sample comparisons are recorded; this is
 not live extraction, calibrated appearance or an engine performance result.
 
+[Doc 103](103_CBT_FLIGHT_AND_SCRATCH.md) verifies 224 production CBT flight
+frames plus bounded-pool recovery. Land-only scratch skips repeated inactive
+clears; High-budget release ABBA reduces update/emission p50 from 6.41–6.49 ms
+to 2.94–3.27 ms with identical fields, topology counters and endpoint pixels.
+Final inactive geometry stays zero and ocean scratch retains full clearing.
+Dense equivalent-error, streaming and whole-consumer acceptance remain open.
+
 ## Simulation and physics
 
 | Doc | Status | Implemented | Future |

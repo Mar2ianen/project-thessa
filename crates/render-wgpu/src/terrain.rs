@@ -2285,6 +2285,33 @@ impl TerrainRenderer {
         .collect())
     }
 
+    /// One-shot snapshot of the production bisector pool for topology oracles.
+    /// Ordinary frame submission never maps or allocates this diagnostic data.
+    pub fn read_topology_records(
+        &self,
+        backend: &Backend,
+    ) -> Result<Option<Vec<thessa_rcbt_core::conforming::Record>>, BackendError> {
+        self.topology
+            .as_ref()
+            .map(|topology| {
+                Ok(read_buffer(backend, &topology.gpu.pool)?
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
+                    .map(|bytes| {
+                        let words = std::array::from_fn::<_, 8, _>(|i| {
+                            u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+                        });
+                        thessa_rcbt_core::conforming::Record {
+                            address: words[..4].try_into().unwrap(),
+                            neighbors: words[4..].try_into().unwrap(),
+                        }
+                    })
+                    .collect())
+            })
+            .transpose()
+    }
+
     /// One-shot diagnostic: request, cumulative mutation counters, live draw.
     /// Ordinary frame submission never maps the topology pool/state.
     pub fn read_topology_state(

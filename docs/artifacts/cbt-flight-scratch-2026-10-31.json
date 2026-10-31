@@ -1,0 +1,697 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-31",
+  "source_base": "d976bd5c5b173f8b48f219dad91f9811b5c51066",
+  "integrated_base": "57097001e43410c046bdf485fc67dc382366384f",
+  "change": "Land-only classification scratch omits inactive writes; classifier checks pool liveness. Final emission fully clears, conforming ocean scratch retains original full clear. One explicit shared layout, one additional compute pipeline, no new buffer/settings/dependency.",
+  "source_sha256": {
+    "crates/render-wgpu/src/conforming_surface.rs": "88b5c4b9ec3b119685ccddd12fa5a162d1bc4373c20a2a1089dd13af0246c327",
+    "crates/render-wgpu/src/conforming_surface.wgsl": "2517a373bfe28ddaf386bd841f5e7e3115eb2e69409b6642c248607166353942",
+    "crates/render-wgpu/src/terrain.rs": "017fdaf621289b7fba0ada815dd34175e83721a82586a99c3acddfc78bdc3b6a",
+    "crates/render-wgpu/src/terrain_topology.wgsl": "255e69dd287ccc8a52048c308192aca08d3454ebf49f5141ccf0a32fa502f073",
+    "crates/render-wgpu/tests/cbt_sphere.rs": "1a30fa8127912d850367ac5f140424b2e826a308b6245f26030006190a234baf",
+    "crates/render-wgpu/tests/ray_scene.rs": "83c5dbf39e2af1ee38bbd9ef0b1197a64e5d9ed8331faeb86168e789841ee2d6",
+    "crates/render-wgpu/tests/terrain_topology.rs": "9dd1a8326ec91b32fb556ffc5add3ce636cf25245d6d01886eef08944f69905c",
+    "crates/render-wgpu/tests/support/cbt.rs": "ee8af50b2326e8a9cdb03c21d0c03ba17b03a9a593a706e5b1ce14a4c12dd878"
+  },
+  "reference": "https://arxiv.org/html/2407.02215v1",
+  "backend": {
+    "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "driver": "Mesa 26.2.5-arch1.1",
+    "api": "Vulkan",
+    "cpu_software": "llvmpipe (LLVM 23.1.3,256bits), explicitly pinned Vulkan ICD; EGL discovery disabled per-process"
+  },
+  "trajectory": {
+    "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "capacity": 131072,
+    "closed_topology_frames": 224,
+    "extent": [
+      129,
+      129
+    ],
+    "frames": 224,
+    "gpu_timing_available": true,
+    "ground_epochs": [
+      39,
+      165
+    ],
+    "ground_triangles": [
+      1846,
+      1846
+    ],
+    "height_error_budget_m": 0.001,
+    "height_grid": 17,
+    "id": "production-cbt-ground-orbit-ground-v1",
+    "max_near_vertex_error_m": 0.0010819081508088857,
+    "max_whole_vertex_error_m": 0.6728227846324444,
+    "merge_area_px": 8,
+    "radius_m": 3200000.0,
+    "scope": "production topology/canonical geometry/raster; frozen root residency; not dense tessellation error, streaming, shadow/ocean/RT cost or whole-client performance",
+    "split_area_px": 64,
+    "storage_bytes": 24867116,
+    "waves": 4
+  },
+  "software_trajectory": {
+    "adapter": "llvmpipe (LLVM 23.1.3, 256 bits)",
+    "capacity": 131072,
+    "closed_topology_frames": 224,
+    "extent": [
+      129,
+      129
+    ],
+    "frames": 224,
+    "gpu_timing_available": true,
+    "ground_epochs": [
+      39,
+      170
+    ],
+    "ground_triangles": [
+      1846,
+      1846
+    ],
+    "height_error_budget_m": 0.001,
+    "height_grid": 17,
+    "id": "production-cbt-ground-orbit-ground-v1",
+    "max_near_vertex_error_m": 0.0013052882277406752,
+    "max_whole_vertex_error_m": 1.095006138086319,
+    "merge_area_px": 8,
+    "radius_m": 3200000.0,
+    "scope": "production topology/canonical geometry/raster; frozen root residency; not dense tessellation error, streaming, shadow/ocean/RT cost or whole-client performance",
+    "split_area_px": 64,
+    "storage_bytes": 24867116,
+    "waves": 4
+  },
+  "checks_per_run": {
+    "closed_topology_snapshots": 417,
+    "canonical_vertex_snapshots": 16,
+    "inactive_vertices_zero_checked": true,
+    "identical_ground_endpoint_rgba8": true,
+    "scope": "Vertex arithmetic versus the same decoded frozen pages; not dense tessellation/analytic-height/material/astronomical error."
+  },
+  "release_abba": {
+    "identities": {
+      "baseline": {
+        "source_base": "d976bd5c5b173f8b48f219dad91f9811b5c51066",
+        "files_sha256": {
+          "crates/render-wgpu/src/conforming_surface.rs": "08853298c3bc7eea3e53af2a5d6dee9c27774700637197b61755a909d4eb5f43",
+          "crates/render-wgpu/src/conforming_surface.wgsl": "8993f1dbf61b43583abfe3deacf85c633d6c5917aeaa6c44129d6458ccd9f488",
+          "crates/render-wgpu/src/terrain_topology.wgsl": "985e619a1ad2b0161207f74a58dd356f5dc2a093a8a67da347d81a1f6c2e4223",
+          "crates/render-wgpu/src/terrain.rs": "017fdaf621289b7fba0ada815dd34175e83721a82586a99c3acddfc78bdc3b6a",
+          "crates/render-wgpu/tests/terrain_topology.rs": "9dd1a8326ec91b32fb556ffc5add3ce636cf25245d6d01886eef08944f69905c",
+          "crates/render-wgpu/tests/support/cbt.rs": "ee8af50b2326e8a9cdb03c21d0c03ba17b03a9a593a706e5b1ce14a4c12dd878"
+        },
+        "binary_sha256": "617d4306fe8519fc99999be6a50de275883432a8f549f73c95f24ed77da3fd4f",
+        "build_command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--release",
+          "-p",
+          "thessa-render-wgpu",
+          "--test",
+          "terrain_topology",
+          "--no-run",
+          "--message-format=json"
+        ]
+      },
+      "candidate": {
+        "source_base": "d976bd5c5b173f8b48f219dad91f9811b5c51066",
+        "files_sha256": {
+          "crates/render-wgpu/src/conforming_surface.rs": "88b5c4b9ec3b119685ccddd12fa5a162d1bc4373c20a2a1089dd13af0246c327",
+          "crates/render-wgpu/src/conforming_surface.wgsl": "2517a373bfe28ddaf386bd841f5e7e3115eb2e69409b6642c248607166353942",
+          "crates/render-wgpu/src/terrain_topology.wgsl": "255e69dd287ccc8a52048c308192aca08d3454ebf49f5141ccf0a32fa502f073",
+          "crates/render-wgpu/src/terrain.rs": "017fdaf621289b7fba0ada815dd34175e83721a82586a99c3acddfc78bdc3b6a",
+          "crates/render-wgpu/tests/terrain_topology.rs": "9dd1a8326ec91b32fb556ffc5add3ce636cf25245d6d01886eef08944f69905c",
+          "crates/render-wgpu/tests/support/cbt.rs": "ee8af50b2326e8a9cdb03c21d0c03ba17b03a9a593a706e5b1ce14a4c12dd878"
+        },
+        "binary_sha256": "2722b1195f0cab5c568e223b763d32139429452c1a46839ba0623115ad0c644a",
+        "build_command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--release",
+          "-p",
+          "thessa-render-wgpu",
+          "--test",
+          "terrain_topology",
+          "--no-run",
+          "--message-format=json"
+        ]
+      }
+    },
+    "identical_frozen_pages_per_frame_topology_epochs_endpoint_pixels_and_recovery": true,
+    "results": {
+      "0-baseline": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 6.258310868150711,
+            "p95": 7.824025745807648,
+            "p99": 8.13665975429535,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04642821418190003,
+            "p95": 0.21108105662155152,
+            "p99": 0.21785392515563964,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 6.489690492301941,
+            "p95": 6.9590623045578015,
+            "p99": 7.171025036373139,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.03015729924201966,
+            "p95": 0.03751127188110352,
+            "p99": 0.04127842952728272,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.006412183227539063,
+            "p95": 6.812744298534394,
+            "p99": 8.02753241099167,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04853221180343628,
+            "p95": 0.20290552300643924,
+            "p99": 0.20510971099090577,
+            "samples": 64
+          }
+        }
+      },
+      "1-candidate": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 2.6468290078926087,
+            "p95": 3.3465985787429813,
+            "p99": 4.499188513893128,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.045706843568801885,
+            "p95": 0.20955816310501102,
+            "p99": 0.21047991444396974,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 3.2700130653190618,
+            "p95": 3.942210248291016,
+            "p99": 4.20855630910492,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.03075844141960144,
+            "p95": 0.039274622268676763,
+            "p99": 0.04448452114105225,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.0064923355178833015,
+            "p95": 3.32595936397934,
+            "p99": 4.402284394866944,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04781084119033814,
+            "p95": 0.20342651289367678,
+            "p99": 0.2047490256843567,
+            "samples": 64
+          }
+        }
+      },
+      "2-candidate": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 2.6215209222164155,
+            "p95": 3.224165955242157,
+            "p99": 4.720889748985291,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04684901370620728,
+            "p95": 0.20026049742507934,
+            "p99": 0.20186354323196412,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 2.9366396517047884,
+            "p95": 3.4283939910392762,
+            "p99": 3.7160204849395755,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.03011722309684754,
+            "p95": 0.0370704342842102,
+            "p99": 0.04276124689865113,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.006412183227539063,
+            "p95": 3.3465985787429813,
+            "p99": 4.445446403217316,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04859232602119446,
+            "p95": 0.20190361937713625,
+            "p99": 0.20366696976470947,
+            "samples": 64
+          }
+        }
+      },
+      "3-baseline": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 6.17298875507927,
+            "p95": 6.895180929153443,
+            "p99": 7.996433322338105,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04530608211708069,
+            "p95": 0.20062118273162843,
+            "p99": 0.2015830102157593,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 6.4104599532966615,
+            "p95": 6.887686690006257,
+            "p99": 6.981905707305908,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.02997695658874512,
+            "p95": 0.03859332780075074,
+            "p99": 0.06640617255020143,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.006512373590469361,
+            "p95": 6.613365476303102,
+            "p99": 7.902975751796723,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04785091733551026,
+            "p95": 0.20354674132919312,
+            "p99": 0.2043482642326355,
+            "samples": 64
+          }
+        }
+      }
+    },
+    "scope": "GPU intervals only: fixed High topology budget131K/4waves/64px area, six17x17 root height pages, 224-frame native trajectory with canonical/closedness/free-zero oracles. No shadows/ocean/RT/streaming or whole-client speedup.",
+    "percentile_method": "p50 median; p95/p99 lower empirical quantile at sorted floor((n-1)*q)"
+  },
+  "smaller_control": {
+    "binary_sha256": {
+      "baseline": "0ad4897da8dcf6b9838ca7999649b437e5527e312f4ddaf5685d94955c57ddb5",
+      "candidate": "9585bdd01fb706cf1480a5893226ae985314690e40789a4f98b7d369f44b580e"
+    },
+    "identical_frozen_pages_per_frame_topology_epochs_endpoint_pixels_and_recovery": true,
+    "results": {
+      "0-baseline": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.6177337140903474,
+            "p95": 2.4361086365776066,
+            "p99": 3.3872758660926823,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.045526500915527346,
+            "p95": 0.20879671634674074,
+            "p99": 0.21316501617050174,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.8979060449886322,
+            "p95": 2.4193568078956607,
+            "p99": 2.7409277967567447,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.029796613935470583,
+            "p95": 0.03823264249420166,
+            "p99": 0.042921551479339605,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.006472297445297242,
+            "p95": 2.3478208887634278,
+            "p99": 3.3362188571434026,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.048732592529296875,
+            "p95": 0.2024246092643738,
+            "p99": 0.20274521842575075,
+            "samples": 64
+          }
+        }
+      },
+      "1-candidate": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.210299584197998,
+            "p95": 2.0505761200218204,
+            "p99": 3.0166917516860963,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.046748823343276985,
+            "p95": 0.20959823925018312,
+            "p99": 0.2108405997505188,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.4757840078907014,
+            "p95": 2.0597535572662355,
+            "p99": 2.2286344330215453,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.030117223096847535,
+            "p95": 0.03723073886489869,
+            "p99": 0.04256086617279053,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.006372107082366943,
+            "p95": 2.0237651789016726,
+            "p99": 2.9625088034133915,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.047890993480682376,
+            "p95": 0.13118926122093202,
+            "p99": 0.2041478835067749,
+            "samples": 64
+          }
+        }
+      },
+      "2-candidate": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.2550446002826692,
+            "p95": 2.2160505234375,
+            "p99": 3.137561405525208,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.0476304985370636,
+            "p95": 0.2089570209274292,
+            "p99": 0.21180242723464968,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.485041597425461,
+            "p95": 1.9419296904602052,
+            "p99": 2.157659579921723,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.03001703273391724,
+            "p95": 0.03795210947799683,
+            "p99": 0.042320409301757816,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.0064923355178833015,
+            "p95": 1.7441138378906251,
+            "p99": 2.9782186523208622,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04761046046447755,
+            "p95": 0.12137060565376283,
+            "p99": 0.20278529457092287,
+            "samples": 64
+          }
+        }
+      },
+      "3-baseline": {
+        "initial-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.632020859844208,
+            "p95": 2.7574792447128296,
+            "p99": 3.580082200515747,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.046187757310867314,
+            "p95": 0.17486224042224885,
+            "p99": 0.21023945757293705,
+            "samples": 64
+          }
+        },
+        "continuous-flight": {
+          "topology_emit_gpu_ms": {
+            "p50": 1.8545636939849854,
+            "p95": 2.1939284913024903,
+            "p99": 2.3762348756904603,
+            "samples": 96
+          },
+          "raster_gpu_ms": {
+            "p50": 0.029796613935470583,
+            "p95": 0.036910129703521734,
+            "p99": 0.07602444739151001,
+            "samples": 96
+          }
+        },
+        "return-settle": {
+          "topology_emit_gpu_ms": {
+            "p50": 0.006532411663055421,
+            "p95": 2.0641619332351686,
+            "p99": 3.406993329517365,
+            "samples": 64
+          },
+          "raster_gpu_ms": {
+            "p50": 0.04734996552085877,
+            "p95": 0.20214407624816896,
+            "p99": 0.20250476155471803,
+            "samples": 64
+          }
+        }
+      }
+    },
+    "scope": "GPU intervals only, fixed 16K-capacity six-root-page trajectory, no shadows/ocean/RT/streaming. Readback checks and host work excluded; not a whole-client speedup."
+  },
+  "artifacts": {
+    "0-baseline": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/0-baseline",
+      "files_sha256": {
+        "face-0.rhpg": "9b3e33da29c3578963582c965cd5a36a5b9568583b93762e93379cf8199e9b49",
+        "face-1.rhpg": "a90836f1e47f413ac2995df6a70cdc9cd97148c5a448312cf58ceb09bb6a2bd8",
+        "face-2.rhpg": "dd466b0b393eee7d044c1567d9228374c7ac0285abac04db1bd32461b8292471",
+        "face-3.rhpg": "adb4ec13a973570dfc0a88173614e2b4034b81944805ec3503383b2df65c8ba4",
+        "face-4.rhpg": "10378329ea316a4db5dd40c9444f1e03b2db5ef04704c16b6d0a2dfb828f10a9",
+        "face-5.rhpg": "810225370e8eaaf156c0b07befce4a78b1ac7bd7a2fe7abc55b9bf0263f33f98",
+        "ground-0.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "ground-1.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "trajectory.csv": "04278368e6b2a7c2cbd2903bde8642461dace18707658b106ab54e2c749eb34c",
+        "trajectory.json": "3f973081b27ee97ae67d924cb4e7d7b8ffcedb8b6b84492fc6829a6567d21714",
+        "exhaustion.json": "6e94aaa4e85e9b8fd07eccb6843ebc6a7e2aa1a1a39a0eb5b695844d561e6da7"
+      }
+    },
+    "1-candidate": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/1-candidate",
+      "files_sha256": {
+        "face-0.rhpg": "9b3e33da29c3578963582c965cd5a36a5b9568583b93762e93379cf8199e9b49",
+        "face-1.rhpg": "a90836f1e47f413ac2995df6a70cdc9cd97148c5a448312cf58ceb09bb6a2bd8",
+        "face-2.rhpg": "dd466b0b393eee7d044c1567d9228374c7ac0285abac04db1bd32461b8292471",
+        "face-3.rhpg": "adb4ec13a973570dfc0a88173614e2b4034b81944805ec3503383b2df65c8ba4",
+        "face-4.rhpg": "10378329ea316a4db5dd40c9444f1e03b2db5ef04704c16b6d0a2dfb828f10a9",
+        "face-5.rhpg": "810225370e8eaaf156c0b07befce4a78b1ac7bd7a2fe7abc55b9bf0263f33f98",
+        "ground-0.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "ground-1.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "trajectory.csv": "be6a1d1f572104754b8504502af057423495528f4aaf21a0bc3831cf2d1d43ec",
+        "trajectory.json": "3f973081b27ee97ae67d924cb4e7d7b8ffcedb8b6b84492fc6829a6567d21714",
+        "exhaustion.json": "6e94aaa4e85e9b8fd07eccb6843ebc6a7e2aa1a1a39a0eb5b695844d561e6da7"
+      }
+    },
+    "2-candidate": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/2-candidate",
+      "files_sha256": {
+        "face-0.rhpg": "9b3e33da29c3578963582c965cd5a36a5b9568583b93762e93379cf8199e9b49",
+        "face-1.rhpg": "a90836f1e47f413ac2995df6a70cdc9cd97148c5a448312cf58ceb09bb6a2bd8",
+        "face-2.rhpg": "dd466b0b393eee7d044c1567d9228374c7ac0285abac04db1bd32461b8292471",
+        "face-3.rhpg": "adb4ec13a973570dfc0a88173614e2b4034b81944805ec3503383b2df65c8ba4",
+        "face-4.rhpg": "10378329ea316a4db5dd40c9444f1e03b2db5ef04704c16b6d0a2dfb828f10a9",
+        "face-5.rhpg": "810225370e8eaaf156c0b07befce4a78b1ac7bd7a2fe7abc55b9bf0263f33f98",
+        "ground-0.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "ground-1.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "trajectory.csv": "f05353ee5cb666e2c7c134dfb830c4b5f6a9bda3dd75d4c6b63ab3f67a16c33d",
+        "trajectory.json": "3f973081b27ee97ae67d924cb4e7d7b8ffcedb8b6b84492fc6829a6567d21714",
+        "exhaustion.json": "6e94aaa4e85e9b8fd07eccb6843ebc6a7e2aa1a1a39a0eb5b695844d561e6da7"
+      }
+    },
+    "3-baseline": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/3-baseline",
+      "files_sha256": {
+        "face-0.rhpg": "9b3e33da29c3578963582c965cd5a36a5b9568583b93762e93379cf8199e9b49",
+        "face-1.rhpg": "a90836f1e47f413ac2995df6a70cdc9cd97148c5a448312cf58ceb09bb6a2bd8",
+        "face-2.rhpg": "dd466b0b393eee7d044c1567d9228374c7ac0285abac04db1bd32461b8292471",
+        "face-3.rhpg": "adb4ec13a973570dfc0a88173614e2b4034b81944805ec3503383b2df65c8ba4",
+        "face-4.rhpg": "10378329ea316a4db5dd40c9444f1e03b2db5ef04704c16b6d0a2dfb828f10a9",
+        "face-5.rhpg": "810225370e8eaaf156c0b07befce4a78b1ac7bd7a2fe7abc55b9bf0263f33f98",
+        "ground-0.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "ground-1.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "trajectory.csv": "00ccfa4def4ace4f2c7cc60d32440462c08cd9b9c007e729ae81f83553240def",
+        "trajectory.json": "3f973081b27ee97ae67d924cb4e7d7b8ffcedb8b6b84492fc6829a6567d21714",
+        "exhaustion.json": "6e94aaa4e85e9b8fd07eccb6843ebc6a7e2aa1a1a39a0eb5b695844d561e6da7"
+      }
+    },
+    "software-flight": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/software-flight",
+      "files_sha256": {
+        "face-0.rhpg": "9b3e33da29c3578963582c965cd5a36a5b9568583b93762e93379cf8199e9b49",
+        "face-1.rhpg": "a90836f1e47f413ac2995df6a70cdc9cd97148c5a448312cf58ceb09bb6a2bd8",
+        "face-2.rhpg": "dd466b0b393eee7d044c1567d9228374c7ac0285abac04db1bd32461b8292471",
+        "face-3.rhpg": "adb4ec13a973570dfc0a88173614e2b4034b81944805ec3503383b2df65c8ba4",
+        "face-4.rhpg": "10378329ea316a4db5dd40c9444f1e03b2db5ef04704c16b6d0a2dfb828f10a9",
+        "face-5.rhpg": "810225370e8eaaf156c0b07befce4a78b1ac7bd7a2fe7abc55b9bf0263f33f98",
+        "ground-0.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "ground-1.rgba8": "36b728c874cda488d71f4cb51ebbe86f7695f666b2d357f7a19f2e8d3c11a608",
+        "trajectory.csv": "1954c44b34a6d3d98ffda686c3b7c06e67bc1f2bd8e7e7123e6905018679bebc",
+        "trajectory.json": "660c519b5459b4688d68ba114ecdd768f62c921a8b980239f5279af2a99c97a1",
+        "exhaustion.json": "7e111b90a0d3006031c078a1d3f12ee19d5a494b8357c8e2ae09277319b5d98c"
+      }
+    }
+  },
+  "checks": {
+    "unit": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/unit.log",
+      "sha256": "e5c271ae4c66d0cdaa9396cd26df420fa3b170744f0ad5dd0a2370aff94e5116",
+      "result": [
+        "test result: ok. 40 passed; 0 failed; 22 ignored; 0 measured; 0 filtered out; finished in 1.28s"
+      ]
+    },
+    "terrain": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/terrain-regressions.log",
+      "sha256": "0b7a0c208e8310ff3672da6b455328e3e9031ca49dfd642cbe3752738305a465",
+      "result": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.42s"
+      ]
+    },
+    "canonical_precision_shadow": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/canonical-precision-shadow.log",
+      "sha256": "d95cd85ad621c96f59ee3252acbc205730eef76aad5d89aee7a0ffe3604f2e73",
+      "result": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.21s"
+      ]
+    },
+    "canonical_material": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/canonical-material-rerouted.log",
+      "sha256": "0d323955858389f1a97286b80b051a39510e2cdf6e0a49611e345d7f86a2da3d",
+      "result": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 3.84s"
+      ]
+    },
+    "ocean": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/ocean.log",
+      "sha256": "5db0742576e66ea7e3d8258c50eeddaa674d92befe4078d6ecb6e2279f41abd9",
+      "result": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 2.58s"
+      ]
+    },
+    "rt": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/rt-publication-final.log",
+      "sha256": "5322043da02638500d33c6e34f91f480e6d41b9ef0e3cb929674fd2cfc0b76f8",
+      "result": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 3.33s"
+      ]
+    },
+    "software": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/software-flight.log",
+      "sha256": "93e97c77a3c484d30efd2d7a7653213c81a1398802da60b31b907dc54d3a3fc7",
+      "result": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 17.75s"
+      ]
+    },
+    "clippy": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-final-clippy.log",
+      "sha256": "d793a668336208afcac5e2f48b666fac7e91457f55b06e4849a7216e437f62ab",
+      "result": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.13s"
+      ]
+    },
+    "architecture": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae",
+      "result": [
+        "Architecture: OK (44 workspace packages, 20 guarded foundations; runtime/build closure, own dev edges only)"
+      ]
+    },
+    "native_compile": {
+      "status": "passed",
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-native-check.log",
+      "sha256": "25c833e3c66188a4b1d10c29a68cd9ddf0bf751bbdde3d731275ec0057be51d2",
+      "result": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.18s"
+      ]
+    }
+  },
+  "known_initial_failures": {
+    "exclusive_auto_layout": "Rejected by wgpu during development; replaced with explicit shared layout before all accepted A/B runs.",
+    "legacy_output_directory": "Read-only root rejected legacy hardcoded target/test-tmp writes; final checks bind an external artifact directory to the ignored crate target mount point.",
+    "rt_fixture": {
+      "original_emitter_same_failure_proven": true,
+      "old_budget": 3,
+      "actual_live_mesh_pairings": 1,
+      "terrain_chunks": 2,
+      "correct_overload_budget": 2,
+      "runtime_admission_changed": false,
+      "baseline_log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/rt-baseline-initial.log",
+      "baseline_log_sha256": "7fe0a8cd549f43786a1b9659f20760a1cca6b690d5f8d029bb00e18499210b42",
+      "candidate_initial_log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/cbt-flight-high/rt-publication.log",
+      "candidate_initial_log_sha256": "93bef717c03e5e8194a80dbfd8d36a58ea98cb121050f68c79085d55b02ffaa3",
+      "final_log_sha256": "5322043da02638500d33c6e34f91f480e6d41b9ef0e3cb929674fd2cfc0b76f8"
+    }
+  },
+  "remaining": [
+    "P01 dense equivalent-error and dynamic multi-level canonical residency, production soil and astronomical/body frames.",
+    "Complete update/raster/shadow/ocean/RT/streaming and whole-client latency/memory comparisons at equal error.",
+    "Metal/WebGPU execution and independent blind aesthetic acceptance.",
+    "F03 live accepted nozzle outlet/frame/remote extraction; F04 physical optical calibration and local plume lighting."
+  ]
+}

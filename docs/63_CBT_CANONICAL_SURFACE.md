@@ -56,6 +56,16 @@ The shared native primary material now also integrates rough sky/cloud
 reflection on both regular and conforming terrain (doc 69); it does not change
 topology, canonical heights, convergence or their outstanding acceptance gates.
 
+The 2026-10-31 [production flight replay and scratch optimization](103_CBT_FLIGHT_AND_SCRATCH.md)
+verify a frozen 224-frame ground→orbit→ground path and bounded-pool recovery.
+Land-only classification scratch skips inactive writes and validates pool
+liveness; final publication still clears every inactive slot. Conforming ocean
+scratch retains full clearing for its admission/footprint scan. Same-work High
+ABBA improves the isolated update/emission interval with identical counters
+and endpoint raster. Streaming, dense tessellation error and complete consumer
+cost remain separate open gates. `read_topology_records` is an explicit
+one-shot diagnostic; ordinary submission still performs no pool readback.
+
 ## What is implemented
 
 ### Exact surface addresses, independent of allocation slots

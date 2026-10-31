@@ -223,8 +223,12 @@ to a new subscriber. Each mailbox retains separate latest descriptor/payload
 slots and revision markers, updated under one lock and drained payload-first,
 so descriptor coalescing cannot discard an unsent mesh dependency.
 Coalescing can skip revisions. Readers keep independently bounded catalogue and
-snapshot inboxes. Catalogues and complete fleet membership wait for the short
-bounded inbox lock rather than losing their only publication under contention.
+snapshot inboxes. PRIMARY, catalogues and complete fleet membership wait for the
+short bounded receive-queue lock rather than losing their only first/stop or
+on-change publication under host-drain contention. The host moves at most two
+arrivals before releasing that lock, and no queue lock is held during pipe IO.
+Receive timestamps, independent generations and wire format are unchanged;
+[doc 105](105_PLUME_3D_MOTION.md) records the PRIMARY contention regression.
 The single reader resolves either dependency arrival order before exposing the
 existing Arc-shared `FleetGeometry` application API. Mesh IDs are epoch-local;
 skipped epochs never attach another epoch's IDs. Unknown matching-epoch IDs,

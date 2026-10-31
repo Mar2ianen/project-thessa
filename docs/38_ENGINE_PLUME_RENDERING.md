@@ -3,7 +3,9 @@
 Status: partially implemented. `thessa-plume-core` provides the backend-neutral
 analytic profile/optics/medium model. Both clients have a Low-quality impostor
 and Medium/High volume consumer. The native consumer reads the actual axial
-stations and scene depth; only the legacy client has a field-derived nozzle light.
+stations and scene depth; native Medium/High also has a kinematic 3D centerline
+and nozzle-frame shell motion ([doc 105](105_PLUME_3D_MOTION.md)). Only the legacy
+client has a field-derived nozzle light.
 Wiring live compiled engine/nozzle state into the client, adaptive residual
 rendering, and ray-traced lighting remain future work. The rest of this document
 records the architecture and acceptance targets for those follow-ups.
@@ -26,8 +28,10 @@ cross-section.
 
 The shipped volume path still reads provisional rocket/nozzle values and an
 X-15 nozzle offset from the client adapter; it is not yet driven by compiled
-vehicle engine data. Crosswind, condensation, secondary combustion, ground
-impingement, and ray-traced lighting remain future work.
+vehicle engine data. Native has reduced lateral crossflow and constant-rate
+retarded attitude; accepted nozzle history, calibrated/full crossflow,
+condensation, secondary combustion, ground impingement and ray-traced lighting
+remain future work.
 
 The long-term architecture must stay cheap in raster mode and remain useful if
 Thessa gains its own ray-query/ray-tracing lighting path.
@@ -105,9 +109,10 @@ Further effect-local extraction can happen as those renderers grow.
 
 ## 5. Source data
 
-The client currently supplies `EnginePlumeInput { throttle, engine_active,
-sim_time_s }` and constructs provisional nozzle/environment data in the
-renderer adapter. This is sufficient for the shipped visualization, but is too
+The retained client supplies `EnginePlumeInput { throttle, engine_active,
+sim_time_s }`. Native additionally extracts read-only angular/air kinematics
+through the shared rotating-atmosphere helper (doc 105). Both still construct
+provisional nozzle source data in the renderer adapter. This is sufficient for the shipped visualization, but is too
 small to connect actual propulsion hardware. Replace that adapter input with a
 compiled nozzle/engine description plus dynamic state and a local environment
 sample once client extraction from compiled vehicle/engine state is implemented.
@@ -276,12 +281,15 @@ A short Beer-Lambert integration is sufficient for the first implementation. The
 The shipped tiers use representation budgets, not different physical models:
 
 - Low: baked cone impostor;
-- Medium: field-volume integration, 8 view-ray samples per covered pixel;
-- High: the same field-volume integration, 14 samples per covered pixel;
+- Medium: field-volume integration, 8 steps per merged ray interval, up to 9 native centerline points;
+- High: the same field-volume integration, 14 steps per interval, up to 17 native centerline points;
 - future tiers: adaptive residual budget and ray-traced lighting/transmittance.
 
-Native coverage is a conservative projected finite-cylinder box, with full-screen
-coverage only for near-plane/inside crossings. The legacy consumer uses a
+Native coverage is a conservative projected box around the straight cylinder
+or swept centerline, with full-screen coverage for near-plane/inside crossings.
+Curved ray intervals come from rotation-invariant capsules and are merged before
+integration; the fixed step budget applies per distinct interval, giving at most
+64/224 cells for native Medium/High's 8/16 segments. The legacy consumer uses a
 cylindrical billboard. The current Medium/High path does not yet traverse RCBT residuals or use
 temporal reuse/jitter. Those remain architecture targets.
 
@@ -312,7 +320,10 @@ October KSA/BRUTAL reference audit. The Low impostor remains a fallback.
 Do not model plume instability as whole-plume brightness flicker. The current
 two-sine whole-cone animation is confined to Low. Native Medium/High use
 zero-mean advected azimuthal shell modes; the legacy path uses noise. Neither has an
-adaptive residual field.
+adaptive residual field. Native shell modes use the nozzle-radial basis with
+shortest-arc transport along the 3D centerline, so body roll is represented
+without a world-up pole switch. Density uses actual Gaussian decay and an
+emitted-length/arc-length correction; doc 105 records validity and cost.
 
 The analytic supersonic core should be comparatively stable. Higher-frequency motion belongs primarily to the mixing layer and residual field. A small deterministic 3D noise field may be advected approximately with exhaust/mixing flow:
 

@@ -1529,8 +1529,16 @@ impl Scene {
                     thessa_sim_core::SimTime(flight.flight_time_s),
                 )
                 .ok()?;
-            let altitude = (flight.state.position_inertial_m - body.position_inertial).length()
-                - flight.planet_radius_m;
+            let kinematics = thessa_flight_authority::local_air_kinematics(
+                flight.atmosphere,
+                flight.state,
+                body,
+                flight.planet_radius_m,
+            )
+            .ok()?;
+            let altitude = kinematics.altitude_m;
+            let orientation = flight.state.orientation_body_to_inertial;
+            let render_axes = thessa_flight_authority::presentation::inertial_to_render_axes;
             let env = crate::plume::environment(
                 flight
                     .atmosphere
@@ -1543,6 +1551,13 @@ impl Scene {
                     throttle: flight.throttle,
                     engine_active: flight.engine_active,
                     sim_time_s: flight.flight_time_s,
+                    air_velocity_render_mps: render_axes(
+                        -(orientation * kinematics.air_velocity_body_mps),
+                    ),
+                    angular_velocity_render_rps: render_axes(
+                        orientation * flight.state.angular_velocity_body_rps,
+                    ),
+                    air_rotation_render_rps: render_axes(flight.atmosphere.body_rotation_rad_s),
                 },
                 env,
                 self.vehicle.as_ref()?.1,

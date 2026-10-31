@@ -177,7 +177,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let ncenter = nblend - (0.72 + 0.28 * fine_fade) * 0.5;
         let deform = ncenter * erosion * radius;
         let r = r_len + deform * smoothstep(0.1, 0.9, r_len / max(radius, 1e-4));
-        let u = min(r / max(radius, 1e-4), 3.0);
+        let u = r / max(radius, 1e-4);
         // Radial weight mirrors medium.rs exactly.
         var w = exp(-2.2 * u * u) + 0.18 * exp(-0.7 * u * u);
         // Hard surface clip: outside the true barrel the medium is exactly

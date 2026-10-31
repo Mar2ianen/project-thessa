@@ -10,8 +10,9 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 const MAX_STATIONS: usize = 64;
+const MAX_CENTERS: usize = 33;
 const FRAME_BYTES: u64 = 160;
-const DRAW_BYTES: u64 = 80;
+const DRAW_BYTES: u64 = 96;
 const COMMON: &str = include_str!("plume_common.wgsl");
 
 /// GPU transport: axial distance/radius/extinction/shock, then emission RGB
@@ -20,6 +21,13 @@ pub type ProfileStation = [f32; 8];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VolumeDraw {
+    /// Unit nozzle-radial axis, perpendicular to the exhaust direction.
+    /// Carries roll into advected 3D shell modes; never derived from camera.
+    pub radial_reference: [f32; 3],
+    /// Optional camera-relative XYZ + emitted axial coordinate, in metres.
+    /// Empty preserves the straight-cylinder consumer; 2..=33 points sweep
+    /// the same optical field through 3D, independently of camera orientation.
+    pub centerline: Arc<[[f32; 4]]>,
     /// Camera-relative origin and physical field length (metres).
     pub origin_len: [f32; 4],
     /// Unit exhaust axis and conservative radial integration bound (metres).
@@ -51,10 +59,14 @@ pub enum PlumeFrame {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PlumeStats {
     pub draw_calls: u32,
+    /// Steps per merged ray interval (one for a straight cylinder).
     pub march_steps: u32,
+    /// Swept segments; zero denotes the unchanged straight consumer.
+    pub centerline_segments: u32,
     pub frame_upload_bytes: u64,
     pub profile_upload_bytes: u64,
     pub texture_upload_bytes: u64,
+    pub centerline_upload_bytes: u64,
 }
 
 pub struct PlumeRenderer {
@@ -62,11 +74,13 @@ pub struct PlumeRenderer {
     format: wgpu::TextureFormat,
     diamonds: bool,
     volume_pipeline: wgpu::RenderPipeline,
+    curved_pipeline: wgpu::RenderPipeline,
     cone_pipeline: wgpu::RenderPipeline,
     global_layout: wgpu::BindGroupLayout,
     frame: wgpu::Buffer,
     draw: wgpu::Buffer,
     profile: wgpu::Buffer,
+    centerline: wgpu::Buffer,
     volume_bind: wgpu::BindGroup,
     cone_bind: wgpu::BindGroup,
     cone_vertices: wgpu::Buffer,
@@ -92,7 +106,11 @@ fn uniform(binding: u32, size: u64) -> wgpu::BindGroupLayoutEntry {
 }
 
 pub fn volume_shader_source() -> String {
-    format!("{COMMON}\n{}", include_str!("plume_volume.wgsl"))
+    format!(
+        "{COMMON}\n{}\n{}",
+        include_str!("plume_volume.wgsl"),
+        include_str!("plume_curved.wgsl")
+    )
 }
 
 pub fn cone_shader_source() -> String {
@@ -129,6 +147,16 @@ impl PlumeRenderer {
                 uniform(0, DRAW_BYTES),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -176,6 +204,11 @@ impl PlumeRenderer {
             (MAX_STATIONS * 32) as u64,
             wgpu::BufferUsages::STORAGE,
         );
+        let centerline = make_buffer(
+            "plume-centerline",
+            (MAX_CENTERS * 16) as u64,
+            wgpu::BufferUsages::STORAGE,
+        );
         let volume_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("plume-profile"),
             layout: &volume_layout,
@@ -187,6 +220,10 @@ impl PlumeRenderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: profile.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: centerline.as_entire_binding(),
                 },
             ],
         });
@@ -236,6 +273,16 @@ impl PlumeRenderer {
             &global_layout,
             &volume_layout,
             false,
+            false,
+        );
+        let curved_pipeline = pipeline(
+            device,
+            format,
+            &volume_shader_source(),
+            &global_layout,
+            &volume_layout,
+            false,
+            true,
         );
         let cone_pipeline = pipeline(
             device,
@@ -244,6 +291,7 @@ impl PlumeRenderer {
             &global_layout,
             &cone_layout,
             true,
+            false,
         );
         let cone = impostor_cone_vertices();
         let cone_count = cone.len() as u32 / 5;
@@ -257,11 +305,13 @@ impl PlumeRenderer {
             format,
             diamonds,
             volume_pipeline,
+            curved_pipeline,
             cone_pipeline,
             global_layout,
             frame,
             draw,
             profile,
+            centerline,
             volume_bind,
             cone_bind,
             cone_vertices,
@@ -309,12 +359,46 @@ impl PlumeRenderer {
         let draw_bytes = match &frame {
             PlumeFrame::Volume(draw) => {
                 if !(2..=MAX_STATIONS).contains(&draw.profile.len())
+                    || !draw
+                        .origin_len
+                        .iter()
+                        .chain(draw.axis_radius.iter())
+                        .chain(draw.animation.iter())
+                        .chain(draw.radial_reference.iter())
+                        .all(|v| v.is_finite())
+                    || draw.origin_len[3] <= 0.0
+                    || draw.axis_radius[3] <= 0.0
+                    || (Vec3::from_slice(&draw.axis_radius).length_squared() - 1.0).abs() > 1e-3
+                    || (Vec3::from_array(draw.radial_reference).length_squared() - 1.0).abs() > 1e-3
+                    || Vec3::from_array(draw.radial_reference)
+                        .dot(Vec3::from_slice(&draw.axis_radius))
+                        .abs()
+                        > 1e-3
                     || !draw.profile.iter().flatten().all(|v| v.is_finite())
                     || draw.profile.windows(2).any(|pair| pair[0][0] > pair[1][0])
                 {
                     return Err(BackendError::Device(
                         "invalid plume axial publication".into(),
                     ));
+                }
+                if !draw.centerline.is_empty() {
+                    let valid = (2..=MAX_CENTERS).contains(&draw.centerline.len())
+                        && draw.centerline.iter().flatten().all(|v| v.is_finite())
+                        && draw.centerline[0][3] == 0.0
+                        && draw.centerline.last().unwrap()[3] == draw.origin_len[3]
+                        && draw.centerline.windows(2).all(|p| {
+                            let d2 =
+                                Vec3::from_slice(&p[0]).distance_squared(Vec3::from_slice(&p[1]));
+                            p[0][3] < p[1][3] && d2.is_finite() && d2 > 1e-12
+                        });
+                    if !valid {
+                        return Err(BackendError::Device(
+                            "invalid plume centerline publication".into(),
+                        ));
+                    }
+                    let data = bytes(draw.centerline.iter().flatten().copied());
+                    backend.queue.write_buffer(&self.centerline, 0, &data);
+                    self.stats.centerline_upload_bytes = data.len() as u64;
                 }
                 if self
                     .published
@@ -330,6 +414,7 @@ impl PlumeRenderer {
                     return Ok(());
                 };
                 self.stats.march_steps = draw.animation[0].clamp(1.0, 16.0) as u32;
+                self.stats.centerline_segments = draw.centerline.len().saturating_sub(1) as u32;
                 bytes(
                     rect.into_iter()
                         .chain(draw.origin_len)
@@ -344,8 +429,10 @@ impl PlumeRenderer {
                             draw.animation[3],
                             f32::from(draw.diamonds),
                             f32::from(draw.tail_dissolve),
-                            0.0,
-                        ]),
+                            draw.centerline.len() as f32,
+                        ])
+                        .chain(draw.radial_reference)
+                        .chain([0.0]),
                 )
             }
             PlumeFrame::Cone(draw) => {
@@ -423,8 +510,12 @@ impl PlumeRenderer {
         });
         pass.set_bind_group(0, &global, &[]);
         match active {
-            PlumeFrame::Volume(_) => {
-                pass.set_pipeline(&self.volume_pipeline);
+            PlumeFrame::Volume(draw) => {
+                pass.set_pipeline(if draw.centerline.is_empty() {
+                    &self.volume_pipeline
+                } else {
+                    &self.curved_pipeline
+                });
                 pass.set_bind_group(1, &self.volume_bind, &[]);
                 pass.draw(0..6, 0..1);
             }
@@ -445,6 +536,7 @@ fn pipeline(
     global: &wgpu::BindGroupLayout,
     local: &wgpu::BindGroupLayout,
     cone: bool,
+    curved: bool,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("native-plume"),
@@ -477,7 +569,11 @@ fn pipeline(
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: &module,
-            entry_point: Some("fragment"),
+            entry_point: Some(if curved {
+                "curved_fragment"
+            } else {
+                "fragment"
+            }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -497,8 +593,16 @@ fn clip_rect(view: &ViewUniformBlock, draw: &VolumeDraw) -> Option<[f32; 4]> {
     let axis = Vec3::from_slice(&draw.axis_radius);
     let end = origin + axis * draw.origin_len[3];
     let r = Vec3::splat(draw.axis_radius[3]);
-    let min = origin.min(end) - r;
-    let max = origin.max(end) + r;
+    let mut min = origin.min(end) - r;
+    let mut max = origin.max(end) + r;
+    if !draw.centerline.is_empty() {
+        min = Vec3::splat(f32::INFINITY);
+        max = Vec3::splat(f32::NEG_INFINITY);
+        for p in draw.centerline.iter() {
+            min = min.min(Vec3::from_slice(p) - r);
+            max = max.max(Vec3::from_slice(p) + r);
+        }
+    }
     let mut rect = Vec4::new(
         f32::INFINITY,
         f32::INFINITY,
@@ -580,6 +684,8 @@ mod tests {
         };
         let view = ViewUniformBlock::new(&camera).unwrap();
         let mut draw = VolumeDraw {
+            radial_reference: [1.0, 0.0, 0.0],
+            centerline: std::sync::Arc::from([]),
             origin_len: [1000.0, 0.0, -10.0, 4.0],
             axis_radius: [0.0, 1.0, 0.0, 1.0],
             animation: [8.0, 0.0, 0.0, 0.0],
@@ -824,7 +930,7 @@ mod tests {
                             usage,
                         })
                 };
-                let mut draw = [0.0; 20];
+                let mut draw = [0.0; 24];
                 draw[12] = count as f32;
                 let draw = upload(bytes(draw), wgpu::BufferUsages::UNIFORM);
                 let station_buffer = upload(

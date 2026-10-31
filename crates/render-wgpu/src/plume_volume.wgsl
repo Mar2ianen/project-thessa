@@ -6,6 +6,7 @@ struct Draw {
     controls: vec4<f32>,
     // advection speed, diamonds, tail dissolve, reserved
     flow: vec4<f32>,
+    radial_reference: vec4<f32>,
 }
 struct Station { geometry: vec4<f32>, emission: vec4<f32>, }
 @group(1) @binding(0) var<uniform> draw: Draw;
@@ -38,6 +39,16 @@ fn shock_multiplier(axial: f32, u: f32) -> f32 {
     let mode = 1.0 + q * (-1.0 + q * (0.25 + q * (-1.0 / 36.0
         + q * (1.0 / 576.0 + q * (-1.0 / 14400.0 + q / 518400.0)))));
     return max(1.0 + (max(axial, 0.15) - 1.0) * clamp(mode, 0.0, 1.0), 0.15);
+}
+
+// Shortest-arc transport of the nozzle frame; no world-up pole switch.
+fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
+    let radial = draw.radial_reference.xyz;
+    let start = draw.axis_radius.xyz;
+    let v = cross(start,axis);
+    let denominator = 1.0+dot(start,axis);
+    if denominator < 1e-5 { return normalize(radial-axis*dot(radial,axis)); }
+    return normalize(radial+cross(v,radial)+cross(v,cross(v,radial))/denominator);
 }
 
 @fragment fn fragment(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
@@ -102,8 +113,7 @@ fn shock_multiplier(axial: f32, u: f32) -> f32 {
         let radius = max(station.geometry.y, 1e-6);
         var r = length(radial);
         if draw.controls.w > 0.0 {
-            let reference = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
-            let u1 = normalize(cross(axis, reference)); let u2 = cross(axis, u1);
+            let u1 = draw.radial_reference.xyz; let u2 = cross(axis, u1);
             // Independent zero-mean modal shell representation; no copied
             // game-owned optical/noise bake. Wavelength follows local radius.
             let az = atan2(dot(radial, u2), dot(radial, u1) + 1e-6);
@@ -111,7 +121,7 @@ fn shock_multiplier(axial: f32, u: f32) -> f32 {
             let n = (sin(phase + 3.0 * az) + sin(phase * 1.7 - 5.0 * az)) * 0.25;
             r += n * draw.controls.w * radius * smoothstep(0.1, 0.9, r / radius);
         }
-        let u = min(abs(r) / radius, 3.0);
+        let u = abs(r) / radius;
         var weight = exp(-2.2 * u * u) + 0.18 * exp(-0.7 * u * u);
         // No hard radial skirt clip or fitted mean extinction. Optical
         // integration is the CPU sampler over the same bounded chord.

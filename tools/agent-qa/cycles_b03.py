@@ -340,7 +340,7 @@ def render_cycles(
     scene.cycles.volume_bounces = 1
     scene.cycles.transparent_max_bounces = 32
     scene.cycles.sample_clamp_direct = 0
-    scene.cycles.sample_clamp_indirect = 10.0
+    scene.cycles.sample_clamp_indirect = 6.0
     scene.cycles.pixel_filter_type = "BOX"
     scene.cycles.filter_width = 1.0
 
@@ -396,8 +396,8 @@ def render_cycles(
         w_bg_cam.inputs["Strength"].default_value = 1.0
 
         w_bg_diffuse = wnodes.new("ShaderNodeBackground")
-        w_bg_diffuse.inputs["Color"].default_value = (0.95, 0.75, 0.48, 1.0)
-        w_bg_diffuse.inputs["Strength"].default_value = 7500.0 * rad_scale
+        w_bg_diffuse.inputs["Color"].default_value = (0.96, 0.72, 0.45, 1.0)
+        w_bg_diffuse.inputs["Strength"].default_value = 8500.0 * rad_scale
 
         wlinks.new(w_lightpath.outputs["Is Camera Ray"], w_mix_cam.inputs[0])
         wlinks.new(w_bg_diffuse.outputs["Background"], w_mix_cam.inputs[1])
@@ -464,7 +464,7 @@ def render_cycles(
     sun_data = bpy.data.lights.new("Thessa Sun", "SUN")
     if golden:
         sun_data.color = (1.0, 0.82, 0.50)
-        sun_data.energy = 42000.0
+        sun_data.energy = 28000.0
         sun_data.angle = math.radians(2.5)
         sun_data.use_shadow = True
 
@@ -477,8 +477,8 @@ def render_cycles(
         # Fill light from the opposite side to soften shadow contrast
         fill_data = bpy.data.lights.new("Golden Fill", "SUN")
         fill_data.color = (0.90, 0.78, 0.60)
-        fill_data.energy = 8000.0
-        fill_data.angle = math.radians(45.0)
+        fill_data.energy = 20000.0
+        fill_data.angle = math.radians(60.0)
         fill_data.use_shadow = False
         fill_obj = bpy.data.objects.new("Golden Fill", fill_data)
         scene.collection.objects.link(fill_obj)
@@ -520,7 +520,7 @@ def render_cycles(
         haze_vol.inputs["Color"].default_value = (0.96, 0.86, 0.70, 1.0)
         haze_vol.inputs["Anisotropy"].default_value = 0.82
 
-        # Height falloff: ground mist below 8m, perfectly clear sky above 8m
+        # Height falloff: ground mist below 10m, perfectly clear sky above 10m
         geom = haze_mat.node_tree.nodes.new("ShaderNodeNewGeometry")
         dot_up = haze_mat.node_tree.nodes.new("ShaderNodeVectorMath")
         dot_up.operation = "DOT_PRODUCT"
@@ -529,7 +529,7 @@ def render_cycles(
 
         ramp_fog = haze_mat.node_tree.nodes.new("ShaderNodeMapRange")
         ramp_fog.inputs["From Min"].default_value = 0.0
-        ramp_fog.inputs["From Max"].default_value = 8.0
+        ramp_fog.inputs["From Max"].default_value = 10.0
         ramp_fog.inputs["To Min"].default_value = 1.0
         ramp_fog.inputs["To Max"].default_value = 0.0
         ramp_fog.clamp = True
@@ -537,7 +537,7 @@ def render_cycles(
 
         math_dens = haze_mat.node_tree.nodes.new("ShaderNodeMath")
         math_dens.operation = "MULTIPLY"
-        math_dens.inputs[1].default_value = 0.0005
+        math_dens.inputs[1].default_value = 0.00065
         haze_mat.node_tree.links.new(ramp_fog.outputs["Result"], math_dens.inputs[0])
         haze_mat.node_tree.links.new(math_dens.outputs["Value"], haze_vol.inputs["Density"])
     else:
@@ -593,7 +593,7 @@ def render_cycles(
                         warm_mix.blend_type = "MULTIPLY"
                         warm_mix.inputs[0].default_value = 0.35
                         mat.node_tree.links.new(from_socket, warm_mix.inputs[6])
-                        warm_mix.inputs[7].default_value = (1.12, 0.95, 0.72, 1.0)
+                        warm_mix.inputs[7].default_value = (1.10, 0.90, 0.70, 1.0)
                         # Re-link principled Base Color through warm grade
                         mat.node_tree.links.new(warm_mix.outputs[2], principled.inputs["Base Color"])
                         leaf_color_socket = warm_mix.outputs[2]
@@ -611,8 +611,18 @@ def render_cycles(
                 elif has_textures:
                     # Solid opaque tree trunks and bark
                     principled.inputs["Roughness"].default_value = 0.85
+                    if golden:
+                        # Brighten bark in golden mode — warm ambient bounce on trunks
+                        bc = principled.inputs["Base Color"]
+                        if not bc.is_linked:
+                            r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
+                            bc.default_value = (min(1.0, r0 * 2.5 + 0.02), min(1.0, g0 * 2.2 + 0.015), min(1.0, b0 * 1.8 + 0.01), 1.0)
                 else:
                     principled.inputs["Roughness"].default_value = 0.32 if golden else 0.72
+                    if golden and not principled.inputs["Base Color"].is_linked:
+                        bc = principled.inputs["Base Color"]
+                        r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
+                        bc.default_value = (min(1.0, r0 * 1.8 + 0.01), min(1.0, g0 * 1.6 + 0.01), min(1.0, b0 * 1.3 + 0.005), 1.0)
 
         # Coastal terrain material: faithful radiance from canonical reference (fallback: photogrammetric PBR)
         if "terrain" in mat.name.lower():

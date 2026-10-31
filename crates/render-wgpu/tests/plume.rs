@@ -325,6 +325,174 @@ fn frozen_plume_volume_reference() {
     );
 }
 
+/// Model-generated fields are transport controls, not calibrated engine firings.
+#[test]
+#[ignore = "hardware: compiled-engine pressure/throttle/view gallery; new THESSA_BENCH_OUTPUT required"]
+fn frozen_compiled_plume_reference() {
+    use thessa_plume_core::{
+        PlumeEnvironment, RigidTransform,
+        source::{PropellantFamily, engine_plume_source},
+    };
+    use thessa_propulsion::{
+        ChamberMaterial, CompiledEngine, CoolingMode, EngineCycle, LiquidEngineSpec, NozzleContour,
+        Propellant,
+    };
+    let out = std::path::PathBuf::from(
+        std::env::var_os("THESSA_BENCH_OUTPUT").expect("output directory required"),
+    );
+    std::fs::create_dir(&out).unwrap();
+    let spec = LiquidEngineSpec {
+        name: "compiled-methalox-transport-control".into(),
+        propellant: Propellant::LoxMethane,
+        cycle: EngineCycle::GasGenerator,
+        chamber_pressure_pa: 9.7e6,
+        throat_radius_m: 0.08,
+        expansion_ratio: 18.0,
+        nozzle_length_m: 0.9,
+        contour: NozzleContour::Bell,
+        chamber_material: ChamberMaterial::nickel_superalloy(),
+        cooling: CoolingMode::Regenerative,
+        mixture_ratio: None,
+        characteristic_length_m: None,
+        gimbal_range_rad: 0.0,
+        min_throttle: None,
+        restartable: true,
+    };
+    let engine = CompiledEngine::Liquid(spec.compile().unwrap());
+    let backend = Backend::bring_up().unwrap();
+    let target = OffscreenTarget::new(&backend, 129, 129).unwrap();
+    let hdr = hdr_target(&backend, 129, 129);
+    let color = hdr.create_view(&Default::default());
+    let camera = view(DVec3::ZERO, DQuat::IDENTITY);
+    let mut renderer =
+        PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+    for (name, pressure, throttle, angle) in [
+        ("sea-full", Some(101_325.0), 1.0, 0),
+        ("sea-half", Some(101_325.0), 0.5, 0),
+        ("matched-full", None, 1.0, 0),
+        ("matched-half", None, 0.5, 0),
+        ("thin-full", Some(1_000.0), 1.0, 0),
+        ("thin-half", Some(1_000.0), 0.5, 0),
+        ("matched-axial", None, 1.0, 1),
+        ("matched-inside", None, 1.0, 2),
+        ("matched-oblique", None, 1.0, 3),
+    ] {
+        let ambient = pressure.unwrap_or_else(|| {
+            engine
+                .operating_point(throttle, 0.0, 0.0)
+                .unwrap()
+                .exit_pressure_pa
+        });
+        let point = engine.operating_point(throttle, ambient, 0.0).unwrap();
+        let state = engine.plume_state(&point);
+        let source = engine_plume_source(
+            RigidTransform::IDENTITY,
+            state.exit_radius_m,
+            state.mass_flow_kg_s,
+            state.exhaust_velocity_mps,
+            state.exit_pressure_pa,
+            state.exit_temp_k,
+            state.exit_mach,
+            1.0,
+            PropellantFamily::Methalox,
+        );
+        let env = PlumeEnvironment {
+            pressure_pa: ambient,
+            density_kg_m3: ambient / (287.05 * 288.15),
+            temperature_k: 288.15,
+            oxygen_fraction: 0.0,
+            flow_velocity_local_mps: [0.0; 3],
+        };
+        let profile = thessa_plume_core::profile::build_axial_profile(&source, &env, 48).unwrap();
+        let first = profile.stations[0];
+        let expected_density = point.mass_flow_kg_s
+            / (point.exhaust_velocity_mps * std::f64::consts::PI * source.exit_radius_m.powi(2));
+        assert!(
+            (first.center_density_kg_m3 / expected_density - 1.0).abs() < 1e-12,
+            "actual flow must not be throttled twice"
+        );
+        let len = profile.length_m as f32;
+        let radius = profile
+            .stations
+            .iter()
+            .map(|s| s.radius_m as f32)
+            .fold(0.0, f32::max)
+            * 1.6;
+        let distance = len.max(radius * 2.0) * 1.5;
+        let (origin, axis) = match angle {
+            1 => ([0.0, 0.0, -distance], [0.0, 0.0, -1.0]),
+            2 => ([0.0, 0.0, len * 0.5], [0.0, 0.0, -1.0]),
+            3 => ([0.0, -0.3 * len, -distance + 0.4 * len], [0.0, 0.6, -0.8]),
+            _ => ([0.0, -len * 0.5, -distance], [0.0, 1.0, 0.0]),
+        };
+        let draw = VolumeDraw {
+            origin_len: [origin[0], origin[1], origin[2], len],
+            axis_radius: [axis[0], axis[1], axis[2], radius],
+            animation: [14.0, 0.0, 0.0, 0.0],
+            diamonds: true,
+            tail_dissolve: false,
+            profile: profile
+                .stations
+                .iter()
+                .map(|s| {
+                    [
+                        s.z_m as f32,
+                        s.radius_m as f32,
+                        s.extinction_per_m as f32,
+                        s.shock as f32,
+                        s.emission_rgb[0] as f32,
+                        s.emission_rgb[1] as f32,
+                        s.emission_rgb[2] as f32,
+                        0.0,
+                    ]
+                })
+                .collect(),
+        };
+        let directory = out.join(name);
+        std::fs::create_dir(&directory).unwrap();
+        for steps in [14, 16] {
+            let mut current = draw.clone();
+            current.animation[0] = steps as f32;
+            renderer
+                .update(&backend, &camera, Some(PlumeFrame::Volume(current)))
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            clear(&mut encoder, &color, &target.depth, 1.0);
+            renderer.encode(&mut encoder, &color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            let name = if steps == 14 {
+                "linear.rgba16f"
+            } else {
+                "steps16.rgba16f"
+            };
+            std::fs::write(
+                directory.join(name),
+                thessa_render_wgpu::readback::read_color(&backend, &hdr).unwrap(),
+            )
+            .unwrap();
+        }
+        let metadata = serde_json::json!({
+            "id":"compiled-plume-volume-v1", "case":name, "extent":[129,129], "units":"metres",
+            "origin_len":draw.origin_len, "axis_radius":draw.axis_radius, "profile":&*draw.profile,
+            "steps":14, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
+            "world_from_view":camera.world_from_view.to_cols_array(), "clip_from_view":camera.clip_from_view.to_cols_array(),
+            "engine_spec":spec, "operating_point":point, "effective_throttle":throttle,
+            "source_throttle":source.throttle, "exit_radius_m":state.exit_radius_m,
+            "ambient_pressure_pa":ambient, "ambient_temperature_k":env.temperature_k,
+            "model_regime":format!("{:?}", profile.regime), "backend":format!("{:?}",backend.adapter.get_info().backend)
+        });
+        std::fs::write(
+            directory.join("scene.json"),
+            serde_json::to_vec_pretty(&metadata).unwrap(),
+        )
+        .unwrap();
+    }
+    eprintln!(
+        "compiled_plume_reference adapter={:?} cases=9 extent=129x129 steps=14/16 calibration=none",
+        backend.adapter_name
+    );
+}
+
 #[test]
 #[ignore = "hardware: actual raster energy against CPU slab oracle, depth and camera lifecycle"]
 fn volume_energy_matches_cpu_slab_with_depth_and_camera_lifecycle() {

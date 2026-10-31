@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from plume_reference import CASES, ID, analytic_pixels, bounds, load_inputs, sha256, validate_scene
+from plume_reference import CASES, ID, ENGINE_CASES, ENGINE_ID, analytic_pixels, bounds, load_inputs, sha256, validate_scene
 
 
 def fixture():
@@ -56,6 +56,24 @@ class PlumeReferenceTests(unittest.TestCase):
             load_inputs(root)
             (root/"native"/CASES[0]/"scene.json").write_text("{}")
             with self.assertRaises(ValueError):load_inputs(root)
+
+    def test_compiled_profile_requires_actual_flow_gate_uniformity_and_known_case(self):
+        scene=fixture();scene["id"]=ENGINE_ID;scene["case"]=ENGINE_CASES[0]
+        scene["profile"]=[[4*i/47,1+0.01*i,0.15,1+0.001*i,0.3,0.15,0.07,0] for i in range(48)]
+        scene["axis_radius"][3]=1.6*scene["profile"][-1][1]
+        scene.update(source_throttle=1,effective_throttle=0.5,exit_radius_m=1,
+                     ambient_pressure_pa=101325,ambient_temperature_k=288.15,
+                     operating_point={"mass_flow_kg_s":10,"exit_temp_k":1000})
+        validate_scene(scene)
+        with self.assertRaises(ValueError):analytic_pixels(scene)
+        for key,value in [("source_throttle",0.5),("effective_throttle",0.1),("case","../other"),
+                          ("ambient_pressure_pa",math.nan)]:
+            changed=copy.deepcopy(scene);changed[key]=value
+            with self.assertRaises(ValueError):validate_scene(changed)
+        changed=copy.deepcopy(scene);changed["profile"][20][0]+=0.01
+        with self.assertRaises(ValueError):validate_scene(changed)
+        changed=copy.deepcopy(scene);changed["operating_point"]["mass_flow_kg_s"]=0
+        with self.assertRaises(ValueError):validate_scene(changed)
 
     def test_gaussian_line_integral_matches_known_axial_and_side_solutions(self):
         scene=fixture(); image=analytic_pixels(scene);center=(64*129+64)*4

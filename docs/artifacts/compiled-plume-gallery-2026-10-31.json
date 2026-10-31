@@ -1,0 +1,3262 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-31",
+  "source_base": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+  "source_sha256": {
+    "Cargo.lock": "1749e4a197a2d7838384d32dfddfc58b702c436bf737129aa360b0b2ac625436",
+    "crates/plume-core/src/source.rs": "338c30d7ecd46d3258b6f4964d72537ba71e7a9a453ed5e096fc29736e56976b",
+    "crates/render-wgpu/Cargo.toml": "dc54dd52890283abc9a03ea6acb1251fb0c12c8c7c0fca9c5ca11ca953da782e",
+    "crates/render-wgpu/tests/plume.rs": "f4873b1f2341daed0b4d2d54d7028baed18d1ab6d49eb8ff5be778b03950eef9",
+    "tools/agent-qa/plume_reference.py": "bc16471e7338aa087fb60515bf7a7c1bba22f9e44c0fb5b58ce0f97774c1198e",
+    "tools/agent-qa/tests/test_plume_reference.py": "85dff3d8ee1ce9c48b86d57c5c073f4891f28b5a9e41e7d24a77e6b9fe0c6029"
+  },
+  "scope": "Compiled-methalox transport gallery and reference-camera correction. Native renderer/sampling budgets and authority unchanged.",
+  "reference_sources": {
+    "rocket_nozzle": "https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/nozzle-design/",
+    "cycles_camera_ray_origin": "https://github.com/blender/blender/blob/main/intern/cycles/kernel/camera/camera.h",
+    "cycles_coefficients": "https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/volume_coefficients.html"
+  },
+  "native": {
+    "id": "compiled-plume-volume-v1",
+    "source": {
+      "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+      "dirty": true,
+      "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+      "untracked_sha256": {}
+    },
+    "binary_sha256": "d160d7b09a9b18f4408a9b88b84f202282c54a067362d0dc3d2dcda36be02e59",
+    "profile": "dev",
+    "tool_sha256": "b3a130ba4e5d57e6a001cba99f7317f0e1260f4a216eba90876ee0464e6d0314",
+    "native_command": [
+      "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-8e3d0668014e124b",
+      "frozen_compiled_plume_reference",
+      "--ignored",
+      "--nocapture",
+      "--test-threads",
+      "1"
+    ],
+    "cases": {
+      "sea-full": {
+        "linear.rgba16f": "ebe9f3d65e12115446d16d4b04a9774d0ae464bca3b74efec1f82abd0f8db108",
+        "steps16.rgba16f": "7fcc44e2031f0af74bd37b3668a1f3addc10e341621b77b1ee5ec74d3fa24173",
+        "scene.json": "62fc63e3a2d203735f23175ed6ba41ae9f279d7d46d1c23dbc9fd5092d4449d7",
+        "display.png": "d6cade2a94de1e8c74aeaaca98c56a356ab9194b54e3da70460d3e06c0192611",
+        "steps16.png": "f68e0b50b5898cc07c994faed35f2d347b9fc30c9c4d809a1aa6f2c30757f3ec"
+      },
+      "sea-half": {
+        "linear.rgba16f": "a826b90c6c1c0abe3b59a1025ebfa059a518cee3c1ab5e3398d02e4a6fd43030",
+        "steps16.rgba16f": "79ed6aa557c6338fb511f41c3869322daaf73122a318084d4da2f71acb56c55c",
+        "scene.json": "73067e2bfe68269dd4325a2a52e36770e406e754aa0b742fb1e3b088873a8bc1",
+        "display.png": "bc973721bf471c7a25ac67b357b8461f374bceacc8d9b92d72b47c820c591be9",
+        "steps16.png": "56d270f0d4edab4a2ce1044f3bab6e3eb799f61114e5a0992fc25a4c3a090a4f"
+      },
+      "matched-full": {
+        "linear.rgba16f": "5de691f600a066cf08359ef9af0a05f86e4af32e5127f299f05c0e5403ef5d2c",
+        "steps16.rgba16f": "e7f08abce347adab17484e39869ade39ed995baafe228dad021192674839668e",
+        "scene.json": "fae4a08978c427e8e857488710af647f87c88d16bf9652731a71de93e3544ff6",
+        "display.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+        "steps16.png": "4f7b0ef967a4ff6fb2ff02e38318e795418bc43467acd1b6d3670d1655d63f65"
+      },
+      "matched-half": {
+        "linear.rgba16f": "11e139d68c6ef3a41ab838b2fe6b6b1b83db6e272d31610a133768b5445bde0d",
+        "steps16.rgba16f": "1972378c2626cfd0337e44c4c6a2f4be461b08c09e4df44aeaa4bfbf12d895ed",
+        "scene.json": "3156876c942a4953581c741eaab24d1f05c0b2f486ae3bb1c9470b3b99c9ffc3",
+        "display.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+        "steps16.png": "8ffcab5afece6142d46f056b5a41e8d58ac2f848bb67de5b9ce191acb89da8a0"
+      },
+      "thin-full": {
+        "linear.rgba16f": "06d9c25ce5b767a0d09c3ef1f6a9079d851f6b0dea0e6d1a14ac84a9dbcb9368",
+        "steps16.rgba16f": "a47a9686dc0d1fd60279f1517a8430896868493edd4c1d60d7e18cf7151e9046",
+        "scene.json": "0b040ea41bc35b9502df1e03249925aae2976ff9983bf66646fb2d0b63f75b39",
+        "display.png": "d748d4ddd16f4a2c30c32a0a84c15875832c7451d523f52a1072b3da03850c04",
+        "steps16.png": "cabf18a509a8b2595f3cb8f24fe82d826022456393a498573bba9766d49b7be0"
+      },
+      "thin-half": {
+        "linear.rgba16f": "ef1ed54c7aa687099aab2ffc40d824b47c1862c5ea7e89815331905438ec2f29",
+        "steps16.rgba16f": "1a35cd0061d81d09005ada2f640e4e23ac458bcfeb25b9f65c36c637d4e2dc2a",
+        "scene.json": "a0580bd13730665f398dac2a6d8ea2220217968801e8cfdc83e2a46541056b9c",
+        "display.png": "e380330599b3cd3cf23ea7b56512830e4ac18005ff50e5aacaf186e2890fdbfe",
+        "steps16.png": "b32311ba0126f422cf779f15a797ebfa2392be130bf439911e72573e1cded56b"
+      },
+      "matched-axial": {
+        "linear.rgba16f": "ce2f546a91972cc2a722bf2de4cd513c6e7c0ccea7f0cacf8d74a08ee9103f81",
+        "steps16.rgba16f": "4be8d772ec61eff5895c6bcce71b050453ee8132e2452f5598d63fd10311a875",
+        "scene.json": "3661320b0d427c572d16a8f4674df4e7e2bb4276e09b38274641f10e2fa449a8",
+        "display.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+        "steps16.png": "3c28c8391dbfd416543147ad3abf1c1cbb487175533c9fc847238a488bf36fe9"
+      },
+      "matched-inside": {
+        "linear.rgba16f": "1148afb7fbf69ad05f93c9e2241f71b1b63c4f2559658ffe1302e4379bef7f37",
+        "steps16.rgba16f": "e231c6f597b8d557702864246a8e48e96b972e1b2a02f0501197b1f2fa331c28",
+        "scene.json": "1a263199c53d259e7501fa0a986ac72eda4a99315c2e44a894da713f07c5971a",
+        "display.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+        "steps16.png": "7f03c6fb907fe1f609098e981b807caf917330cf2f145fd37fd094f1f18ffca9"
+      },
+      "matched-oblique": {
+        "linear.rgba16f": "a6c918c5e562366042fb2f33e0cd95a84f1afbafcd885138fe155cdb027b4608",
+        "steps16.rgba16f": "26bee5018ad68c8349f398b6963dda216719565716fd73b850cb5232dc0c3a6d",
+        "scene.json": "3bb8ff5cce68c1cfea4a5d670578227c9ab12c9cf17a492312dc74d0917b2910",
+        "display.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+        "steps16.png": "11b6ecc0c8865c284d465dd20b77c81c4e58df8f21ab7ba416a779c22971a75f"
+      }
+    },
+    "scope": "frozen transport controls; compiled cases use model operating points, not calibrated firings, full-frame performance or preference acceptance"
+  },
+  "software": {
+    "id": "compiled-plume-volume-v1",
+    "source": {
+      "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+      "dirty": true,
+      "tracked_diff_sha256": "7cb1e54b33068feb19985bb184e35f1710ed0d391890d0ae63978bd609feaaa1",
+      "untracked_sha256": {}
+    },
+    "binary_sha256": "d160d7b09a9b18f4408a9b88b84f202282c54a067362d0dc3d2dcda36be02e59",
+    "profile": "dev",
+    "tool_sha256": "bc16471e7338aa087fb60515bf7a7c1bba22f9e44c0fb5b58ce0f97774c1198e",
+    "native_command": [
+      "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-8e3d0668014e124b",
+      "frozen_compiled_plume_reference",
+      "--ignored",
+      "--nocapture",
+      "--test-threads",
+      "1"
+    ],
+    "cases": {
+      "sea-full": {
+        "linear.rgba16f": "19438d9abb3e64b166defe76032ef11a57724d7d0cfc269db774835d88488649",
+        "steps16.rgba16f": "60684024f59df4c7d62e2b40717fda8c50977c2f74ad79f743d636839e1f420c",
+        "scene.json": "62fc63e3a2d203735f23175ed6ba41ae9f279d7d46d1c23dbc9fd5092d4449d7",
+        "display.png": "d6cade2a94de1e8c74aeaaca98c56a356ab9194b54e3da70460d3e06c0192611",
+        "steps16.png": "f68e0b50b5898cc07c994faed35f2d347b9fc30c9c4d809a1aa6f2c30757f3ec"
+      },
+      "sea-half": {
+        "linear.rgba16f": "45271dc7826848fb4068b17857f51e560eb50fa492ca6e13e9b3fa475912e5ee",
+        "steps16.rgba16f": "2322c3dc42d84ff7e3afee0c3987b12fbd77495ef57230747d209094b1a643fa",
+        "scene.json": "73067e2bfe68269dd4325a2a52e36770e406e754aa0b742fb1e3b088873a8bc1",
+        "display.png": "bc973721bf471c7a25ac67b357b8461f374bceacc8d9b92d72b47c820c591be9",
+        "steps16.png": "56d270f0d4edab4a2ce1044f3bab6e3eb799f61114e5a0992fc25a4c3a090a4f"
+      },
+      "matched-full": {
+        "linear.rgba16f": "d9ed5cdcb81e13342bac8ed6fa84a28ad9a01dc01dc2518b925421183bee397f",
+        "steps16.rgba16f": "aeaa1140646465dcc662aafc86dd7881e101fb0a9cc2c370ba312fa431a36bab",
+        "scene.json": "fae4a08978c427e8e857488710af647f87c88d16bf9652731a71de93e3544ff6",
+        "display.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+        "steps16.png": "3211f9e32c3d5b45f74c2993e7e877d19e1e935196bec214934261f43dd1f0e1"
+      },
+      "matched-half": {
+        "linear.rgba16f": "31df784d599413e49d34c228b922795428863f4feb8f62fbad6ca8604d401e29",
+        "steps16.rgba16f": "cdf00032a6fc62f8c17d8dd606849c51d1d025fd8e72b9779c484e3355e2e09a",
+        "scene.json": "3156876c942a4953581c741eaab24d1f05c0b2f486ae3bb1c9470b3b99c9ffc3",
+        "display.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+        "steps16.png": "8ffcab5afece6142d46f056b5a41e8d58ac2f848bb67de5b9ce191acb89da8a0"
+      },
+      "thin-full": {
+        "linear.rgba16f": "be2103eb54cfca13595fea530152792149ada05679d14eb577d299554042671b",
+        "steps16.rgba16f": "77d1bc71f1f03578e1976e90addce59b9cad53795c9e7b74a7c2eca0b873df81",
+        "scene.json": "0b040ea41bc35b9502df1e03249925aae2976ff9983bf66646fb2d0b63f75b39",
+        "display.png": "79850c29c5457e5d06dc11096353d00d62f0e0feff70f64f55e28f2d7c90f5f7",
+        "steps16.png": "cabf18a509a8b2595f3cb8f24fe82d826022456393a498573bba9766d49b7be0"
+      },
+      "thin-half": {
+        "linear.rgba16f": "aa796e6aded95142317040d3bb298bf334e3d6fa56731ffeba091d39c15b0bfb",
+        "steps16.rgba16f": "f874233c146a987cfb36e34eac63950acd56a8c065a3049a4530ffae1d68e7be",
+        "scene.json": "a0580bd13730665f398dac2a6d8ea2220217968801e8cfdc83e2a46541056b9c",
+        "display.png": "e380330599b3cd3cf23ea7b56512830e4ac18005ff50e5aacaf186e2890fdbfe",
+        "steps16.png": "b32311ba0126f422cf779f15a797ebfa2392be130bf439911e72573e1cded56b"
+      },
+      "matched-axial": {
+        "linear.rgba16f": "176867df75c4fa153b734c2e1f8c3745255489e66bc8b543cc50eb9e9cfc275c",
+        "steps16.rgba16f": "5c87dc593afea8446b9833cc59ba3254f45cf2e7b65cc1169c6790a72c772e29",
+        "scene.json": "3661320b0d427c572d16a8f4674df4e7e2bb4276e09b38274641f10e2fa449a8",
+        "display.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+        "steps16.png": "3c28c8391dbfd416543147ad3abf1c1cbb487175533c9fc847238a488bf36fe9"
+      },
+      "matched-inside": {
+        "linear.rgba16f": "cda98ded800dea2d99801d62477c9e23cf8f44f187549d88dbc71055516fe87e",
+        "steps16.rgba16f": "6b66ebd02432813dd5e571267a735338e402d060f09ea3ba96cc81e163024d24",
+        "scene.json": "1a263199c53d259e7501fa0a986ac72eda4a99315c2e44a894da713f07c5971a",
+        "display.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+        "steps16.png": "7f03c6fb907fe1f609098e981b807caf917330cf2f145fd37fd094f1f18ffca9"
+      },
+      "matched-oblique": {
+        "linear.rgba16f": "d5201ea683e893a408fd5ba69e9f66aba867fad56702212653eec86349b91997",
+        "steps16.rgba16f": "cc7525017c25f0399ac4655cbc23082790e5aa8856085bb823d360d2778a7cbc",
+        "scene.json": "3bb8ff5cce68c1cfea4a5d670578227c9ab12c9cf17a492312dc74d0917b2910",
+        "display.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+        "steps16.png": "11b6ecc0c8865c284d465dd20b77c81c4e58df8f21ab7ba416a779c22971a75f"
+      }
+    },
+    "scope": "frozen transport controls; compiled cases use model operating points, not calibrated firings, full-frame performance or preference acceptance"
+  },
+  "cycles": {
+    "compiled-plume-cycles-256": {
+      "id": "compiled-plume-volume-v1",
+      "engine": {
+        "name": "Blender/Cycles",
+        "version": "5.2.2 LTS",
+        "build_hash": "d13f752e3b9c"
+      },
+      "source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+        "untracked_sha256": {}
+      },
+      "tool_sha256": "b3a130ba4e5d57e6a001cba99f7317f0e1260f4a216eba90876ee0464e6d0314",
+      "native_capture_sha256": "36673f903ac5276a6c657ee9019ce71c5005d6e72484d6916ca2aa7c6f1e0185",
+      "native_source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+        "untracked_sha256": {}
+      },
+      "settings": {
+        "device": "CPU",
+        "samples": 256,
+        "seed": 0,
+        "volume_step_rate": 0.1,
+        "volume_max_steps": 4096,
+        "volume_biased": false,
+        "scattering": 0,
+        "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+        "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+      },
+      "cases": {
+        "sea-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3553,
+            "pre_exposed_linear_rgb_mae": 0.00012834563097964918,
+            "pre_exposed_linear_rgb_rmse": 0.0007077054629118316,
+            "relative_l2_against_thessa": 0.05287889638302213,
+            "top_10_pixels_fraction_of_squared_error": 0.21580085443657626,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.0683281198143959,
+            0.031463269144296646,
+            0.019391225650906563,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "af3b362edab1cc1772369aa369f6526c8a6fe97cc36cafad5c4f31bd7d60a007",
+            "linear.rgba32f": "fae64558ee203c61bb6f359f39f9aebc3baf198bd0fbb5fb747f00da4f9a7f38",
+            "display.png": "3c95466a0d3c2dd5f59040c97928bcd9f7ccfa7caa87b71e0af7e2e333e3f167",
+            "thessa.png": "d6cade2a94de1e8c74aeaaca98c56a356ab9194b54e3da70460d3e06c0192611",
+            "scene.json": "62fc63e3a2d203735f23175ed6ba41ae9f279d7d46d1c23dbc9fd5092d4449d7",
+            "scene.blend": "269b9a09d4a76a4536a2887b2edbcfefba299c5126ba47777ab3c72518a69b87"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3553,
+            "pre_exposed_linear_rgb_mae": 0.00012837544538126623,
+            "pre_exposed_linear_rgb_rmse": 0.000707778158182532,
+            "relative_l2_against_thessa": 0.05284873667769519,
+            "top_10_pixels_fraction_of_squared_error": 0.21631800701601714,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "sea-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4437,
+            "pre_exposed_linear_rgb_mae": 9.488593992591019e-05,
+            "pre_exposed_linear_rgb_rmse": 0.000540052118082091,
+            "relative_l2_against_thessa": 0.06652816385355899,
+            "top_10_pixels_fraction_of_squared_error": 0.2530696091707423,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.012444201856851578,
+            0.0057289209216833115,
+            0.003527812659740448,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "ccdd33a802d579fe81f0037b1af02a6343d5fa3cbb3666346287af6d637b5b23",
+            "linear.rgba32f": "9bed4e970898a1fd8b728ee4d99c5c73152103750bd0a821ab0f1893b0d45fef",
+            "display.png": "8412b28988a549ac8cb12513c7b187d1795ee7ebcaea3e10247b211c155dc48b",
+            "thessa.png": "bc973721bf471c7a25ac67b357b8461f374bceacc8d9b92d72b47c820c591be9",
+            "scene.json": "73067e2bfe68269dd4325a2a52e36770e406e754aa0b742fb1e3b088873a8bc1",
+            "scene.blend": "3e5111f297f59e7aeb7f5c11d066d11a4fed6c31d0c6c510c77e1eb544950cf8"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4437,
+            "pre_exposed_linear_rgb_mae": 9.490073605027634e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0005399394188327773,
+            "relative_l2_against_thessa": 0.06647756250055668,
+            "top_10_pixels_fraction_of_squared_error": 0.25210965039227246,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3004,
+            "pre_exposed_linear_rgb_mae": 0.00011126282678522331,
+            "pre_exposed_linear_rgb_rmse": 0.0006124567387694617,
+            "relative_l2_against_thessa": 0.056468657481659676,
+            "top_10_pixels_fraction_of_squared_error": 0.20030832066538798,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.05763548985123634,
+            0.02653946727514267,
+            0.01635633409023285,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "171ace730e17bea36204d07931346cc4d05bc72101f9d0405aa944e90cef512a",
+            "linear.rgba32f": "6173f2ac38e2752e46f05204dea24406fbb6b9c0d42c7bf8b579a00861af07a2",
+            "display.png": "5b3f6dedaf0702c6d48bc6f44abbe3dfe9fd2cee4107000a27b58c6918ea3bb8",
+            "thessa.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+            "scene.json": "fae4a08978c427e8e857488710af647f87c88d16bf9652731a71de93e3544ff6",
+            "scene.blend": "dffb85cf85c905dfa8362d1acef7e0e6b37c26781ab04e83bbe581048b49b98d"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3004,
+            "pre_exposed_linear_rgb_mae": 0.00011130267429501379,
+            "pre_exposed_linear_rgb_rmse": 0.0006127859256721182,
+            "relative_l2_against_thessa": 0.05645031994116448,
+            "top_10_pixels_fraction_of_squared_error": 0.2006384443936531,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3044,
+            "pre_exposed_linear_rgb_mae": 6.406571673478284e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00040606371637639355,
+            "relative_l2_against_thessa": 0.0744179076600611,
+            "top_10_pixels_fraction_of_squared_error": 0.24162058542147669,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.026230113580822945,
+            0.012077008374035358,
+            0.0074403295293450356,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "d3e9fdc15eb6d34f83766cc745b55b843711d3e6c110d96a3ad5f25c40458d97",
+            "linear.rgba32f": "001f54eab1ce4d95d6ad7415d7f86ca0864603de6c0def9bebc03dc488d3d507",
+            "display.png": "b04859984fdc0768085878717ad8c8b21b67603cd6adf2687c1ea3600f153ee7",
+            "thessa.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+            "scene.json": "3156876c942a4953581c741eaab24d1f05c0b2f486ae3bb1c9470b3b99c9ffc3",
+            "scene.blend": "714df5423ab3c5fb3c841c956e7cf1f3b147dfbe56d552c0d54e2259404f8b48"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3044,
+            "pre_exposed_linear_rgb_mae": 6.410070980575382e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00040621321808058695,
+            "relative_l2_against_thessa": 0.07438102842146359,
+            "top_10_pixels_fraction_of_squared_error": 0.2403815555283043,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3558,
+            "pre_exposed_linear_rgb_mae": 0.000442649820851994,
+            "pre_exposed_linear_rgb_rmse": 0.002363013929996294,
+            "relative_l2_against_thessa": 0.05622076099060704,
+            "top_10_pixels_fraction_of_squared_error": 0.23139177230229363,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.3765798807144165,
+            0.17338810861110687,
+            0.10682238638401031,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "256b5113c517a3ae2b9049ff8b40fcb6c24850270cfb61ab5bfbe082bed77005",
+            "linear.rgba32f": "6ff422fe560203359373e368de0019846f0680208485a79ed3b96255d924b207",
+            "display.png": "6a0e08dafdf63d94d9ff4a4a6a0a26f5bce0980f42ec0dd7f253eada0acd650f",
+            "thessa.png": "d748d4ddd16f4a2c30c32a0a84c15875832c7451d523f52a1072b3da03850c04",
+            "scene.json": "0b040ea41bc35b9502df1e03249925aae2976ff9983bf66646fb2d0b63f75b39",
+            "scene.blend": "7b8a029451a47f558303851b5c91e9d1ecdb1e2a674691969d4b24acc8b25a4f"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3558,
+            "pre_exposed_linear_rgb_mae": 0.00044278459348236085,
+            "pre_exposed_linear_rgb_rmse": 0.002371686107609094,
+            "relative_l2_against_thessa": 0.05636345639212702,
+            "top_10_pixels_fraction_of_squared_error": 0.23324086766255306,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3753,
+            "pre_exposed_linear_rgb_mae": 0.0002142006045052247,
+            "pre_exposed_linear_rgb_rmse": 0.0011676253344291214,
+            "relative_l2_against_thessa": 0.0670487246908777,
+            "top_10_pixels_fraction_of_squared_error": 0.2029575907650993,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.12392841279506683,
+            0.057059917598962784,
+            0.03515344485640526,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "f9a912e00c6ba6b9308bafc67edb821c433267b639aae71ed2f109739c39ed10",
+            "linear.rgba32f": "04746503969cf89c085cf62cdc761945f820ed1a13aeb08859503c6d7d09e996",
+            "display.png": "1c148475e63583282c1808d23a9b36037cce0888fc7246f248cfcce694ef189a",
+            "thessa.png": "e380330599b3cd3cf23ea7b56512830e4ac18005ff50e5aacaf186e2890fdbfe",
+            "scene.json": "a0580bd13730665f398dac2a6d8ea2220217968801e8cfdc83e2a46541056b9c",
+            "scene.blend": "99316f2b6bd80f2df637ab79939544e819d203baab6565ddc0ec09c8cbc94666"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3753,
+            "pre_exposed_linear_rgb_mae": 0.00021429329247557195,
+            "pre_exposed_linear_rgb_rmse": 0.0011705962028042837,
+            "relative_l2_against_thessa": 0.06714149487015729,
+            "top_10_pixels_fraction_of_squared_error": 0.20462380431754348,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-axial": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 691,
+            "pre_exposed_linear_rgb_mae": 6.197653460356985e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0007648054941242776,
+            "relative_l2_against_thessa": 0.039191932287106136,
+            "top_10_pixels_fraction_of_squared_error": 0.4373238062069741,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.7788198590278625,
+            0.47176340222358704,
+            0.5400773882865906,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "f29749199ab1df00bfb6faa2157d1ade292230ec8ef7d701648e00698c996671",
+            "linear.rgba32f": "0bd4820a71b79c2188702d185e81ea850edaab9ac1ca4080cdc846de73a677b4",
+            "display.png": "0fa7f8ac746602c091d0c9a4c9ea5de6b9c1c0aff1d8facad90cfbfbe5724bea",
+            "thessa.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+            "scene.json": "3661320b0d427c572d16a8f4674df4e7e2bb4276e09b38274641f10e2fa449a8",
+            "scene.blend": "ebe790c5daad838cead11090052a2a86ff7161275286ea7f16d0f8c6ceea3cfd"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 691,
+            "pre_exposed_linear_rgb_mae": 5.840233968204975e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0007240457779386992,
+            "relative_l2_against_thessa": 0.036903409983129826,
+            "top_10_pixels_fraction_of_squared_error": 0.4665794672978856,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-inside": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.004335839973941609,
+            "pre_exposed_linear_rgb_rmse": 0.0050012152598117214,
+            "relative_l2_against_thessa": 0.10174601138646981,
+            "top_10_pixels_fraction_of_squared_error": 0.0017107476574417077,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.12501412630081177,
+            0.056427232921123505,
+            0.03203270956873894,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "44d0e63187038bb473bb8ed888490f3441cc2423a3e6dd617f740f934dfd55f1",
+            "linear.rgba32f": "b1c93366d0c62adde97aff9c9a7969b6d8a42e09de9b54e11bb7f1e2d816db6d",
+            "display.png": "ce6efc9aba21d83c41f413450e810d9d2fc5a29d57b0984373e155f27a598462",
+            "thessa.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+            "scene.json": "1a263199c53d259e7501fa0a986ac72eda4a99315c2e44a894da713f07c5971a",
+            "scene.blend": "c5847fa98d5323de2a616137aa9ef41f08d9192311b42bcb48f1619096b36faf"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.004366244063500081,
+            "pre_exposed_linear_rgb_rmse": 0.005034490036722095,
+            "relative_l2_against_thessa": 0.10234840547581867,
+            "top_10_pixels_fraction_of_squared_error": 0.0017016002276556924,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-oblique": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2503,
+            "pre_exposed_linear_rgb_mae": 0.0001860031239336603,
+            "pre_exposed_linear_rgb_rmse": 0.0011114136715701887,
+            "relative_l2_against_thessa": 0.07515026995043199,
+            "top_10_pixels_fraction_of_squared_error": 0.18623166184075737,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.0843718871474266,
+            0.03894671052694321,
+            0.02421259507536888,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "1903f4a796ce58c2c37c65d1e0df65009bfe7af2058b2788b149f0b0d967c0b2",
+            "linear.rgba32f": "f31844196d9c8df152372707c24cf7ad6533e56b2812041a7ef1ddd769880d32",
+            "display.png": "d209feea6000a5da542915211d70a1dd31685ea29888098f5a38263000675f9d",
+            "thessa.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+            "scene.json": "3bb8ff5cce68c1cfea4a5d670578227c9ab12c9cf17a492312dc74d0917b2910",
+            "scene.blend": "074dca732adbf49049697091c96368ae710152fb029a0127921f2d11fa44585d"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2503,
+            "pre_exposed_linear_rgb_mae": 0.00018592772769464866,
+            "pre_exposed_linear_rgb_rmse": 0.0011115466570292454,
+            "relative_l2_against_thessa": 0.0750739719470704,
+            "top_10_pixels_fraction_of_squared_error": 0.18553839792464294,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        }
+      },
+      "acceptance": {
+        "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+        "visual": "not evaluated",
+        "performance": "not comparable",
+        "temporal": "not evaluated"
+      }
+    },
+    "compiled-plume-cycles-2048": {
+      "id": "compiled-plume-volume-v1",
+      "engine": {
+        "name": "Blender/Cycles",
+        "version": "5.2.2 LTS",
+        "build_hash": "d13f752e3b9c"
+      },
+      "source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+        "untracked_sha256": {}
+      },
+      "tool_sha256": "b3a130ba4e5d57e6a001cba99f7317f0e1260f4a216eba90876ee0464e6d0314",
+      "native_capture_sha256": "36673f903ac5276a6c657ee9019ce71c5005d6e72484d6916ca2aa7c6f1e0185",
+      "native_source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+        "untracked_sha256": {}
+      },
+      "settings": {
+        "device": "CPU",
+        "samples": 2048,
+        "seed": 0,
+        "volume_step_rate": 0.1,
+        "volume_max_steps": 4096,
+        "volume_biased": false,
+        "scattering": 0,
+        "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+        "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+      },
+      "cases": {
+        "sea-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3668,
+            "pre_exposed_linear_rgb_mae": 4.9307807005230044e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0003161358367155568,
+            "relative_l2_against_thessa": 0.023621287426354914,
+            "top_10_pixels_fraction_of_squared_error": 0.4428311123324253,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.058769989758729935,
+            0.027058036997914314,
+            0.01666705682873726,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "5dc06da7e136ccd454b7828571be52801b81b70abe0b9f30edf6b783d4f7043b",
+            "linear.rgba32f": "b5bc259ecbb30ea1f8cf6212257f8e021b38814d5e52183fcc5b252bf22c56d4",
+            "display.png": "e00be21b6f1b753880dc51753c6f4782b08521a6a00620c34eaf27bf3767514a",
+            "thessa.png": "d6cade2a94de1e8c74aeaaca98c56a356ab9194b54e3da70460d3e06c0192611",
+            "scene.json": "62fc63e3a2d203735f23175ed6ba41ae9f279d7d46d1c23dbc9fd5092d4449d7",
+            "scene.blend": "17abb0d59db29348f04af6843bc56f7a239d059e888f871d673be5626fe978c9"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3668,
+            "pre_exposed_linear_rgb_mae": 4.928795686834074e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0003160988161462737,
+            "relative_l2_against_thessa": 0.02360262591536114,
+            "top_10_pixels_fraction_of_squared_error": 0.4409704167308658,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "sea-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4532,
+            "pre_exposed_linear_rgb_mae": 3.3392356435442625e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00021010081713329209,
+            "relative_l2_against_thessa": 0.025881986423180015,
+            "top_10_pixels_fraction_of_squared_error": 0.2750389974262333,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.014656037092208862,
+            0.006747538223862648,
+            0.004155900329351425,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "af1c73f343587cfe155c5c267743d1e192a4ee364bdd6a801b52db6f069b3564",
+            "linear.rgba32f": "f3a131434b66d0c8b40ec1942843db01bf59d0e5017605cb2534055480110587",
+            "display.png": "b75f4735d665e1d0c6f7455e778cd68923d4eeff8113e7982a9707928128b7ce",
+            "thessa.png": "bc973721bf471c7a25ac67b357b8461f374bceacc8d9b92d72b47c820c591be9",
+            "scene.json": "73067e2bfe68269dd4325a2a52e36770e406e754aa0b742fb1e3b088873a8bc1",
+            "scene.blend": "d2c5037fea4e042724b707c6da8c0ad146b86a38aab73048cbe13eb648ebf28e"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4532,
+            "pre_exposed_linear_rgb_mae": 3.3400391551051685e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0002099503125113668,
+            "relative_l2_against_thessa": 0.02584916850886259,
+            "top_10_pixels_fraction_of_squared_error": 0.2740121212154672,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3084,
+            "pre_exposed_linear_rgb_mae": 4.618617766245555e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0002886186906216359,
+            "relative_l2_against_thessa": 0.026610712156198594,
+            "top_10_pixels_fraction_of_squared_error": 0.40332213858225757,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.05306341499090195,
+            0.02443080022931099,
+            0.015049021691083908,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "032a746749810bdd86b1db6a879ca6ad6407c1ca14edadddcc5e59498ef54364",
+            "linear.rgba32f": "4c408d3b4272474d2d679969ff2fe8e27b086a1fb3e8b7b28e6cc588bbd0725a",
+            "display.png": "3f63ca514c9517fc94a795c4b219060963b264e8bf9f3c4fc6428e05839f8320",
+            "thessa.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+            "scene.json": "fae4a08978c427e8e857488710af647f87c88d16bf9652731a71de93e3544ff6",
+            "scene.blend": "71cbeff91c92bbc4b4c99bbe83a06126a63f80630af5f02eed35a500ce240702"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3084,
+            "pre_exposed_linear_rgb_mae": 4.618079767980241e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0002895547585481075,
+            "relative_l2_against_thessa": 0.02667401138921265,
+            "top_10_pixels_fraction_of_squared_error": 0.4000303667226216,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3110,
+            "pre_exposed_linear_rgb_mae": 2.584733932527095e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00017665626362748957,
+            "relative_l2_against_thessa": 0.03237518887803341,
+            "top_10_pixels_fraction_of_squared_error": 0.3550451667961546,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.028953976929187775,
+            0.013330771587789059,
+            0.008211891166865826,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "4f96ffa921d3310de0767b7ffe02a5fd698fc1908c078050b660863ac7413a39",
+            "linear.rgba32f": "3690ced9fd47c8de4ee35e8d2e3f1e6cad04870f39f9aa315858a1eb2924c0fa",
+            "display.png": "305aacf144e8cc2fa1eb49cb396334153a66e0d0f1978f82debbb774282241d6",
+            "thessa.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+            "scene.json": "3156876c942a4953581c741eaab24d1f05c0b2f486ae3bb1c9470b3b99c9ffc3",
+            "scene.blend": "55bfdabaca4b171171b4e16a5db4259fb7e1430756ced03d47ec0f94e8aa9675"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3110,
+            "pre_exposed_linear_rgb_mae": 2.5822942785068016e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0001771571701583008,
+            "relative_l2_against_thessa": 0.03243895550931205,
+            "top_10_pixels_fraction_of_squared_error": 0.3545905364715828,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3673,
+            "pre_exposed_linear_rgb_mae": 0.0002248479721115729,
+            "pre_exposed_linear_rgb_rmse": 0.0017048678436768759,
+            "relative_l2_against_thessa": 0.04056216780748286,
+            "top_10_pixels_fraction_of_squared_error": 0.579651851254431,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.39586231112480164,
+            0.18225809931755066,
+            0.11226855218410492,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "4405a1f16a1cd9aeeff8da97570de422d7c4c6c0a020b49e5fb28a0c05ec1c32",
+            "linear.rgba32f": "8a8ad3de9a0637e7bade3ab252968c2ac6a6a76586b49a7cf75ed4882f1306d0",
+            "display.png": "9f71002c61282535dcc9db5c1ed53bf14a656f46bba8d27987e7b824a9d97bdb",
+            "thessa.png": "d748d4ddd16f4a2c30c32a0a84c15875832c7451d523f52a1072b3da03850c04",
+            "scene.json": "0b040ea41bc35b9502df1e03249925aae2976ff9983bf66646fb2d0b63f75b39",
+            "scene.blend": "f03d591f88c076194e2d96e52d52fea544d0dac3d7b49112126d58f94eb0187a"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3673,
+            "pre_exposed_linear_rgb_mae": 0.00022516217121678472,
+            "pre_exposed_linear_rgb_rmse": 0.0017190985687279042,
+            "relative_l2_against_thessa": 0.040854621065324184,
+            "top_10_pixels_fraction_of_squared_error": 0.5835359239773736,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3835,
+            "pre_exposed_linear_rgb_mae": 9.518320859411923e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0006726194335948833,
+            "relative_l2_against_thessa": 0.03862392660988895,
+            "top_10_pixels_fraction_of_squared_error": 0.5425853544273848,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.13100014626979828,
+            0.06031394749879837,
+            0.03715364634990692,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "0fff44513c29a2458da36be8facf5865c7093c0e065035e391b5793a69f79797",
+            "linear.rgba32f": "45893c737d2d17e20352dab552b02172a7aa1ca3e3fc0458d0422a5141805e8d",
+            "display.png": "27a167eb18e9bbb5a3bdae999c1b0227190b8f17fc8fb4e3019b17d94dcb1849",
+            "thessa.png": "e380330599b3cd3cf23ea7b56512830e4ac18005ff50e5aacaf186e2890fdbfe",
+            "scene.json": "a0580bd13730665f398dac2a6d8ea2220217968801e8cfdc83e2a46541056b9c",
+            "scene.blend": "21a8bdbe9b0a4724e743823120883372f87c7d7ac3a7d2dd3c6daae07036925f"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3835,
+            "pre_exposed_linear_rgb_mae": 9.511680003192274e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0006764195197872391,
+            "relative_l2_against_thessa": 0.03879716815164008,
+            "top_10_pixels_fraction_of_squared_error": 0.5452077483771909,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-axial": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 723,
+            "pre_exposed_linear_rgb_mae": 4.1438087981478384e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00045648019959308717,
+            "relative_l2_against_thessa": 0.02339201432299055,
+            "top_10_pixels_fraction_of_squared_error": 0.26651297250234784,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.7543118000030518,
+            0.4592765271663666,
+            0.5297377705574036,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "f6a08216bbdc43c5a2c72edbe04361fc3f58cb68726f8efb1e9266b59d0cbc07",
+            "linear.rgba32f": "45fd88e5c347a44fbf073ad20a8614752737bfdd9b18ecb3f1fe8b8d8c7f3f9c",
+            "display.png": "7fa5be88aa61f07d94588c550a58e22bd54e99ca4907f7b5b5674ba2d58a1f27",
+            "thessa.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+            "scene.json": "3661320b0d427c572d16a8f4674df4e7e2bb4276e09b38274641f10e2fa449a8",
+            "scene.blend": "d5185c9ec2d56a1ea0c39fa994bb3ef4a5237e9bce8a3e0a92a0cf2f45c82660"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 723,
+            "pre_exposed_linear_rgb_mae": 3.663487463190034e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0004041399677091812,
+            "relative_l2_against_thessa": 0.020598342499006266,
+            "top_10_pixels_fraction_of_squared_error": 0.3125940585474626,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-inside": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.004327869707382288,
+            "pre_exposed_linear_rgb_rmse": 0.00490926259237457,
+            "relative_l2_against_thessa": 0.09987530263628717,
+            "top_10_pixels_fraction_of_squared_error": 0.0009469638585590511,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.1319350153207779,
+            0.05953921005129814,
+            0.03376918286085129,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "885e54cc9dbdcbcbcd2d124f651c19a9385abb871ba1f4f6dd2a5e0505d1d3f0",
+            "linear.rgba32f": "60c73966ddc84cc81d19618c65cf32847a5bb754cb8429b845eac095a685023a",
+            "display.png": "0cb4d2368503085f54ad5ceb93f54e108a0af1fc3b5bc2b41ae12c583588294b",
+            "thessa.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+            "scene.json": "1a263199c53d259e7501fa0a986ac72eda4a99315c2e44a894da713f07c5971a",
+            "scene.blend": "6b7f46fbb4082619853cd5b84306597000ef8ed32deb798727dff2157d269ff5"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.004358315764231711,
+            "pre_exposed_linear_rgb_rmse": 0.004943030169117963,
+            "relative_l2_against_thessa": 0.10048907681570932,
+            "top_10_pixels_fraction_of_squared_error": 0.0009456829963633833,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-oblique": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2576,
+            "pre_exposed_linear_rgb_mae": 6.488788160099398e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0003899341812495355,
+            "relative_l2_against_thessa": 0.026366113476365187,
+            "top_10_pixels_fraction_of_squared_error": 0.21108470799328852,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.09615137428045273,
+            0.0444338358938694,
+            0.027738813310861588,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 0.10000000149011612,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "11c255c40b709b581ad1c70f772334789bebef4d3594905bb40592f049ebf205",
+            "linear.rgba32f": "b37e0c3ecd94b3587373ccc59edf96a6fe7ac7fbb40e8ec780b9619983b55ebb",
+            "display.png": "034cfc31bfe0f01de8465d111bd776f4c55bba8267bae6f223c93d37c0b8dbf5",
+            "thessa.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+            "scene.json": "3bb8ff5cce68c1cfea4a5d670578227c9ab12c9cf17a492312dc74d0917b2910",
+            "scene.blend": "3347395485f33d5a88cabf0e5ebfbc901e54b9a4965b68725ae8608468b992ca"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2576,
+            "pre_exposed_linear_rgb_mae": 6.47976270018937e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00039028999370783747,
+            "relative_l2_against_thessa": 0.02636022505537845,
+            "top_10_pixels_fraction_of_squared_error": 0.2119471145453477,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        }
+      },
+      "acceptance": {
+        "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+        "visual": "not evaluated",
+        "performance": "not comparable",
+        "temporal": "not evaluated"
+      }
+    },
+    "compiled-plume-cycles-matched-256": {
+      "id": "compiled-plume-volume-v1",
+      "engine": {
+        "name": "Blender/Cycles",
+        "version": "5.2.2 LTS",
+        "build_hash": "d13f752e3b9c"
+      },
+      "source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "7cb1e54b33068feb19985bb184e35f1710ed0d391890d0ae63978bd609feaaa1",
+        "untracked_sha256": {}
+      },
+      "tool_sha256": "bc16471e7338aa087fb60515bf7a7c1bba22f9e44c0fb5b58ce0f97774c1198e",
+      "native_capture_sha256": "36673f903ac5276a6c657ee9019ce71c5005d6e72484d6916ca2aa7c6f1e0185",
+      "native_source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+        "untracked_sha256": {}
+      },
+      "settings": {
+        "device": "CPU",
+        "samples": 256,
+        "seed": 0,
+        "volume_step_rate": 0.1,
+        "volume_max_steps": 4096,
+        "volume_biased": false,
+        "scattering": 0,
+        "volume_ray_start": "native optical camera (t0=0); Cycles minimum clip_start=1e-6 m, not opaque projection near=0.1 m",
+        "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+        "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+      },
+      "cases": {
+        "sea-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3553,
+            "pre_exposed_linear_rgb_mae": 0.00012834625687348762,
+            "pre_exposed_linear_rgb_rmse": 0.0007077193163168768,
+            "relative_l2_against_thessa": 0.05287993149269461,
+            "top_10_pixels_fraction_of_squared_error": 0.21579186921944374,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.06832807511091232,
+            0.03146324306726456,
+            0.01939121074974537,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "f21090efa8013d7db8a1a6af6cc7ca0760a5f718eaa264f26cab01255620bbb3",
+            "linear.rgba32f": "62f925376befa8138535d3f6e3654c7e8fde6e1bacc6c5db8fc809242368b676",
+            "display.png": "2dcf5d9daa18c5e1961c8f8944f7119b2b2439a7972ec87e8b4cc421ac1032b6",
+            "thessa.png": "d6cade2a94de1e8c74aeaaca98c56a356ab9194b54e3da70460d3e06c0192611",
+            "scene.json": "62fc63e3a2d203735f23175ed6ba41ae9f279d7d46d1c23dbc9fd5092d4449d7",
+            "scene.blend": "14dd3813a399c6575b5dd04c62d673421aa4202adb134d16da569ab3ab81cc2b"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3553,
+            "pre_exposed_linear_rgb_mae": 0.00012837601745724093,
+            "pre_exposed_linear_rgb_rmse": 0.000707791786332888,
+            "relative_l2_against_thessa": 0.052849754271303076,
+            "top_10_pixels_fraction_of_squared_error": 0.21630913511332334,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "sea-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4437,
+            "pre_exposed_linear_rgb_mae": 9.48858723566849e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0005400523680121233,
+            "relative_l2_against_thessa": 0.06652819464204326,
+            "top_10_pixels_fraction_of_squared_error": 0.25307057029585633,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.01244419626891613,
+            0.0057289195246994495,
+            0.0035278114955872297,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "24ce2d914ace8114d83d5a4ced2babbb659083414f9d10ef510bddab1bbe1024",
+            "linear.rgba32f": "4c3406c27c5c4e1993ac21793640a901e12c500e582853ebb7aa945b692f9358",
+            "display.png": "8412b28988a549ac8cb12513c7b187d1795ee7ebcaea3e10247b211c155dc48b",
+            "thessa.png": "bc973721bf471c7a25ac67b357b8461f374bceacc8d9b92d72b47c820c591be9",
+            "scene.json": "73067e2bfe68269dd4325a2a52e36770e406e754aa0b742fb1e3b088873a8bc1",
+            "scene.blend": "8a7fee86d50963cb6c8a49c2053113efd25d7c664da96011bcf598116cea4709"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4437,
+            "pre_exposed_linear_rgb_mae": 9.49006691701268e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0005399396582363168,
+            "relative_l2_against_thessa": 0.06647759197601857,
+            "top_10_pixels_fraction_of_squared_error": 0.2521106202414781,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3004,
+            "pre_exposed_linear_rgb_mae": 0.00011126258367779354,
+            "pre_exposed_linear_rgb_rmse": 0.0006124566503064077,
+            "relative_l2_against_thessa": 0.05646864932534499,
+            "top_10_pixels_fraction_of_squared_error": 0.20030867770754224,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.057635512202978134,
+            0.026539478451013565,
+            0.016356337815523148,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "1480892417a19399b6dd478b6c332c6795a91f9e9d60ae4694c454d6e76916db",
+            "linear.rgba32f": "293a0b01750124f514a2245daf071ff717f499dfa21ae2851fedf38c76ec1b66",
+            "display.png": "5b3f6dedaf0702c6d48bc6f44abbe3dfe9fd2cee4107000a27b58c6918ea3bb8",
+            "thessa.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+            "scene.json": "fae4a08978c427e8e857488710af647f87c88d16bf9652731a71de93e3544ff6",
+            "scene.blend": "02386f89f4710c1e9ce085e2b57eb22913a8d4498bb02f289fdccdb042fc9c75"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3004,
+            "pre_exposed_linear_rgb_mae": 0.00011130243990654899,
+            "pre_exposed_linear_rgb_rmse": 0.00061278579706924,
+            "relative_l2_against_thessa": 0.0564503080941665,
+            "top_10_pixels_fraction_of_squared_error": 0.20063829099862568,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3044,
+            "pre_exposed_linear_rgb_mae": 6.406569194269133e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00040606375227526624,
+            "relative_l2_against_thessa": 0.07441791423912464,
+            "top_10_pixels_fraction_of_squared_error": 0.24162076228387344,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.02623010240495205,
+            0.012077005580067635,
+            0.007440326735377312,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "1f810dfa1a0a8299e93b19bafe9114e838e88625e43e41807c51c588b11745d3",
+            "linear.rgba32f": "541801d7c8755c487f78311387517b8c6802387a45c38899c685b9b2093d72d6",
+            "display.png": "b04859984fdc0768085878717ad8c8b21b67603cd6adf2687c1ea3600f153ee7",
+            "thessa.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+            "scene.json": "3156876c942a4953581c741eaab24d1f05c0b2f486ae3bb1c9470b3b99c9ffc3",
+            "scene.blend": "1dd09bee028f033d72f515b5eba34a35f1e688635cc7b251f5390259a75c142d"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3044,
+            "pre_exposed_linear_rgb_mae": 6.410068605310563e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00040621325214395935,
+            "relative_l2_against_thessa": 0.07438103465875119,
+            "top_10_pixels_fraction_of_squared_error": 0.24038172923492918,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3558,
+            "pre_exposed_linear_rgb_mae": 0.00044247643714324686,
+            "pre_exposed_linear_rgb_rmse": 0.0023623483372793063,
+            "relative_l2_against_thessa": 0.0562049252273964,
+            "top_10_pixels_fraction_of_squared_error": 0.2315254687829107,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.3765798807144165,
+            0.17338815331459045,
+            0.10682237893342972,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "e2c0312c76ea5952580ac1d62aff0bcfe3ecf560d0d63e7a6be70a9dbf0f9513",
+            "linear.rgba32f": "27c4b3499bd2aff256e0198c55e54553f39cbd68c0bbf6b058a1b2912902e141",
+            "display.png": "43e53d17b288e7ed2aab079ba514146bdafa62833d2c6257858f5707fd8ca39b",
+            "thessa.png": "d748d4ddd16f4a2c30c32a0a84c15875832c7451d523f52a1072b3da03850c04",
+            "scene.json": "0b040ea41bc35b9502df1e03249925aae2976ff9983bf66646fb2d0b63f75b39",
+            "scene.blend": "64e106e76fed38d8dff6451b5ea83787ed89d4718f3384c8f42bce20e9f568ff"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3558,
+            "pre_exposed_linear_rgb_mae": 0.00044259654132646864,
+            "pre_exposed_linear_rgb_rmse": 0.0023710211185161713,
+            "relative_l2_against_thessa": 0.056347652832111246,
+            "top_10_pixels_fraction_of_squared_error": 0.23337502341469404,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3753,
+            "pre_exposed_linear_rgb_mae": 0.0002142227301834335,
+            "pre_exposed_linear_rgb_rmse": 0.0011676981391018125,
+            "relative_l2_against_thessa": 0.06705290536451636,
+            "top_10_pixels_fraction_of_squared_error": 0.2029302432721556,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.12392837554216385,
+            0.05705989524722099,
+            0.03515343368053436,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "5488d288e2fb4df7ad07a677edb5ef30871638e351b0b68cbcf8ba9704f39b4b",
+            "linear.rgba32f": "87f8e0b59784d1efa1b9c6864bbe55f7471c6e37d479af5f1eec07f89941cd0c",
+            "display.png": "6451ab978857d888375ea4fcaac33815d62a2f97f1ed2a365a87c7ff08aaeec7",
+            "thessa.png": "e380330599b3cd3cf23ea7b56512830e4ac18005ff50e5aacaf186e2890fdbfe",
+            "scene.json": "a0580bd13730665f398dac2a6d8ea2220217968801e8cfdc83e2a46541056b9c",
+            "scene.blend": "5d68d65730f3dcd06bf899939fad472576b9c95c1b343afad5e94dd158cec481"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3753,
+            "pre_exposed_linear_rgb_mae": 0.00021431539534315881,
+            "pre_exposed_linear_rgb_rmse": 0.0011706687413777395,
+            "relative_l2_against_thessa": 0.06714565544085273,
+            "top_10_pixels_fraction_of_squared_error": 0.20459643263975744,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-axial": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 691,
+            "pre_exposed_linear_rgb_mae": 6.197612063742723e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0007648030579760789,
+            "relative_l2_against_thessa": 0.03919180744836481,
+            "top_10_pixels_fraction_of_squared_error": 0.43732742949976877,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.7788198590278625,
+            0.47176337242126465,
+            0.5400774478912354,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "281a874cbb8a5a3fbd0bac8701a20d4652137672484ddf69644bf8b232b6d130",
+            "linear.rgba32f": "7d562dff87e897a287e68c22817c395bb305bf37100f09f91710385d5727681b",
+            "display.png": "0fa7f8ac746602c091d0c9a4c9ea5de6b9c1c0aff1d8facad90cfbfbe5724bea",
+            "thessa.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+            "scene.json": "3661320b0d427c572d16a8f4674df4e7e2bb4276e09b38274641f10e2fa449a8",
+            "scene.blend": "3a38c33f6fa214d6c4b27c8e94aedf1f8c8c565b728951f8412577c7c7d7aa07"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 691,
+            "pre_exposed_linear_rgb_mae": 5.840195147871137e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0007240433042696006,
+            "relative_l2_against_thessa": 0.03690328390432695,
+            "top_10_pixels_fraction_of_squared_error": 0.46658340649716373,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-inside": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.0007121320935152944,
+            "pre_exposed_linear_rgb_rmse": 0.0010744965025161722,
+            "relative_l2_against_thessa": 0.02185983360049337,
+            "top_10_pixels_fraction_of_squared_error": 0.018006151765832333,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.13200248777866364,
+            0.05964049696922302,
+            0.034001823514699936,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "5f2be2374d950a8614dc0eee72c52cde2336af835011004fc07e3b9b7edc8d54",
+            "linear.rgba32f": "9245a418c4210c0c7aa2c1846c814d7dc7f27345bf5bca134b02fe2378b5e5ff",
+            "display.png": "6779236e83a9d4c7071f6e2e63bb94ec6de8c11effafbb39c0e72ea8cba99e8a",
+            "thessa.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+            "scene.json": "1a263199c53d259e7501fa0a986ac72eda4a99315c2e44a894da713f07c5971a",
+            "scene.blend": "e905009ad9d7717034ee5babcf6f2d79d142b082a4c29be1986a21197c30ea6f"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.0007119827802490878,
+            "pre_exposed_linear_rgb_rmse": 0.0010698452061678424,
+            "relative_l2_against_thessa": 0.021749362926243767,
+            "top_10_pixels_fraction_of_squared_error": 0.0179322210618066,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-oblique": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2503,
+            "pre_exposed_linear_rgb_mae": 0.00018600271561704224,
+            "pre_exposed_linear_rgb_rmse": 0.0011114124738672135,
+            "relative_l2_against_thessa": 0.07515018896555281,
+            "top_10_pixels_fraction_of_squared_error": 0.18623186272527018,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.08437187224626541,
+            0.038946714252233505,
+            0.024212585762143135,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "fb8f3cd50f42fe237ade8a7b4e62bc7f75f7faf25a3006a1ae74a7f306f75bc6",
+            "linear.rgba32f": "f5a2adaf6f89583b61be0b29b1ee252506201c2dfccc9693953e9a53e4bd753f",
+            "display.png": "bc21d53b56eca21e8e47a6b6249069521ee6eb1ffe67bd48379b7afb0be5f77f",
+            "thessa.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+            "scene.json": "3bb8ff5cce68c1cfea4a5d670578227c9ab12c9cf17a492312dc74d0917b2910",
+            "scene.blend": "5fa4202090e948d155002f4bda3e02166a322456550e94231e8d52297fb59e84"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2503,
+            "pre_exposed_linear_rgb_mae": 0.00018592730700060984,
+            "pre_exposed_linear_rgb_rmse": 0.0011115454655758331,
+            "relative_l2_against_thessa": 0.07507389147618823,
+            "top_10_pixels_fraction_of_squared_error": 0.1855385936565719,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        }
+      },
+      "acceptance": {
+        "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+        "visual": "not evaluated",
+        "performance": "not comparable",
+        "temporal": "not evaluated"
+      }
+    },
+    "compiled-plume-cycles-matched-2048": {
+      "id": "compiled-plume-volume-v1",
+      "engine": {
+        "name": "Blender/Cycles",
+        "version": "5.2.2 LTS",
+        "build_hash": "d13f752e3b9c"
+      },
+      "source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "7cb1e54b33068feb19985bb184e35f1710ed0d391890d0ae63978bd609feaaa1",
+        "untracked_sha256": {}
+      },
+      "tool_sha256": "bc16471e7338aa087fb60515bf7a7c1bba22f9e44c0fb5b58ce0f97774c1198e",
+      "native_capture_sha256": "36673f903ac5276a6c657ee9019ce71c5005d6e72484d6916ca2aa7c6f1e0185",
+      "native_source": {
+        "commit": "8639aebe2b266222e5f3913e315d232a2e81dcc5",
+        "dirty": true,
+        "tracked_diff_sha256": "85d402b8eddbd5e633a1a67f3aea08c854fee1fa4218f78dfa99ff96624900fb",
+        "untracked_sha256": {}
+      },
+      "settings": {
+        "device": "CPU",
+        "samples": 2048,
+        "seed": 0,
+        "volume_step_rate": 0.1,
+        "volume_max_steps": 4096,
+        "volume_biased": false,
+        "scattering": 0,
+        "volume_ray_start": "native optical camera (t0=0); Cycles minimum clip_start=1e-6 m, not opaque projection near=0.1 m",
+        "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+        "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+      },
+      "cases": {
+        "sea-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3668,
+            "pre_exposed_linear_rgb_mae": 4.930732801379043e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00031613499631202987,
+            "relative_l2_against_thessa": 0.023621224632419655,
+            "top_10_pixels_fraction_of_squared_error": 0.4428372967234911,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.05877004936337471,
+            0.027058051899075508,
+            0.016667073592543602,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "915277ba092b8dbf792753e369ecde64afa33d6df8aba596b520384899e8db87",
+            "linear.rgba32f": "427dee4041207a4fdc918ab6aab24ceed2d56a07af357d58065b3c4b95b925fe",
+            "display.png": "e00be21b6f1b753880dc51753c6f4782b08521a6a00620c34eaf27bf3767514a",
+            "thessa.png": "d6cade2a94de1e8c74aeaaca98c56a356ab9194b54e3da70460d3e06c0192611",
+            "scene.json": "62fc63e3a2d203735f23175ed6ba41ae9f279d7d46d1c23dbc9fd5092d4449d7",
+            "scene.blend": "7d29a45b128e3dbb8750d24e677c01408e2c337419d689cc87609acb4db80355"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3668,
+            "pre_exposed_linear_rgb_mae": 4.9287447859549804e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0003160977941709328,
+            "relative_l2_against_thessa": 0.023602549605990668,
+            "top_10_pixels_fraction_of_squared_error": 0.4409770923089117,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "sea-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4532,
+            "pre_exposed_linear_rgb_mae": 3.339289348289784e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00021010067461138334,
+            "relative_l2_against_thessa": 0.025881968866132133,
+            "top_10_pixels_fraction_of_squared_error": 0.2750367573792338,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.01465604081749916,
+            0.006747541483491659,
+            0.004155901726335287,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "9686fdad79954c23a6aed8705f317a27a293b03bd388d5d8e2ae5968bd46d08b",
+            "linear.rgba32f": "e38b94b322a2b37d92f8af8c2eeaf08d678c6dd1d81b431e6a07839f84d15fcc",
+            "display.png": "b75f4735d665e1d0c6f7455e778cd68923d4eeff8113e7982a9707928128b7ce",
+            "thessa.png": "bc973721bf471c7a25ac67b357b8461f374bceacc8d9b92d72b47c820c591be9",
+            "scene.json": "73067e2bfe68269dd4325a2a52e36770e406e754aa0b742fb1e3b088873a8bc1",
+            "scene.blend": "2b905ee29c6c47a67d9e0b760d8f628b5930cbaae3d8584ac0d8944342021a27"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4532,
+            "pre_exposed_linear_rgb_mae": 3.340092782985517e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0002099501461710536,
+            "relative_l2_against_thessa": 0.025849148028975064,
+            "top_10_pixels_fraction_of_squared_error": 0.2740099356757849,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3084,
+            "pre_exposed_linear_rgb_mae": 4.6189511134779075e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00028861794297279346,
+            "relative_l2_against_thessa": 0.02661064322279689,
+            "top_10_pixels_fraction_of_squared_error": 0.40332295943118285,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.05306340754032135,
+            0.024430805817246437,
+            0.015049019828438759,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "c1c71bb378411d2d259ee7b704bb06b87dd1e5f8f239ce7a1cb219255335741c",
+            "linear.rgba32f": "8c97f867ae19223953557235bb0d65509f7560fdb7d9a5e3e349030a3276cb81",
+            "display.png": "b9bab2d6edfcaa79714979c0a0801dc935a4e92c35d03cbe9079e346449bf102",
+            "thessa.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+            "scene.json": "fae4a08978c427e8e857488710af647f87c88d16bf9652731a71de93e3544ff6",
+            "scene.blend": "86fab98cd7f082775d554901b77f86efbb12fdb534adbb06f35db06bf393a05d"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3084,
+            "pre_exposed_linear_rgb_mae": 4.618419156343003e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00028955387889423887,
+            "relative_l2_against_thessa": 0.026673930354808563,
+            "top_10_pixels_fraction_of_squared_error": 0.40003154652639067,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3110,
+            "pre_exposed_linear_rgb_mae": 2.5847248105654272e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00017665608230441743,
+            "relative_l2_against_thessa": 0.032375155647574504,
+            "top_10_pixels_fraction_of_squared_error": 0.35504548370631855,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.028953971341252327,
+            0.013330774381756783,
+            0.0082118920981884,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "85d1c00c995b3c7c399c229969a1a4ac786e6a8d478a200f173f2c86adc2bd5e",
+            "linear.rgba32f": "a0ca1609a81041ee762ac06b1366d26672c935a68e159856e53002ae0b4d09cf",
+            "display.png": "305aacf144e8cc2fa1eb49cb396334153a66e0d0f1978f82debbb774282241d6",
+            "thessa.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+            "scene.json": "3156876c942a4953581c741eaab24d1f05c0b2f486ae3bb1c9470b3b99c9ffc3",
+            "scene.blend": "ca18a62c59e5cb0bbae9f263315ce0c4c45cf131e9ea8a303b6c17f3296a488e"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3110,
+            "pre_exposed_linear_rgb_mae": 2.582285547400313e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0001771569900535443,
+            "relative_l2_against_thessa": 0.0324389225306289,
+            "top_10_pixels_fraction_of_squared_error": 0.3545908411639793,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3673,
+            "pre_exposed_linear_rgb_mae": 0.0002248728729034972,
+            "pre_exposed_linear_rgb_rmse": 0.001704918560714532,
+            "relative_l2_against_thessa": 0.04056337446581696,
+            "top_10_pixels_fraction_of_squared_error": 0.5796172148989577,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.3958621919155121,
+            0.18225805461406708,
+            0.11226858198642731,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "d3f2769f837031517f93ef9ebe17542cb67d74fb9d733540f0a1ee83ada506b0",
+            "linear.rgba32f": "0d07ad4b4182e6a24db3880553cd14afbae0e29bc3ce1c7c00106f00d4655614",
+            "display.png": "9f71002c61282535dcc9db5c1ed53bf14a656f46bba8d27987e7b824a9d97bdb",
+            "thessa.png": "d748d4ddd16f4a2c30c32a0a84c15875832c7451d523f52a1072b3da03850c04",
+            "scene.json": "0b040ea41bc35b9502df1e03249925aae2976ff9983bf66646fb2d0b63f75b39",
+            "scene.blend": "2ca2ab69246e285e1cbc9caed9b3dcc7e624979c30ef5289153feb42e2f577d3"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3673,
+            "pre_exposed_linear_rgb_mae": 0.00022518848707060677,
+            "pre_exposed_linear_rgb_rmse": 0.0017191454178137975,
+            "relative_l2_against_thessa": 0.0408557344404885,
+            "top_10_pixels_fraction_of_squared_error": 0.5835039571862637,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3835,
+            "pre_exposed_linear_rgb_mae": 9.518332523514502e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0006726198791451896,
+            "relative_l2_against_thessa": 0.03862395219479101,
+            "top_10_pixels_fraction_of_squared_error": 0.5425847777937299,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.13100020587444305,
+            0.06031399965286255,
+            0.03715365752577782,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "6eefafde7b3f8d44aae9ed080b29ea18fe1cff7605381a8398d3f6061f3a5c21",
+            "linear.rgba32f": "eb99d0a2cf583587c50d2c6a65dc5c3106cb68305158831d00f1988b7d0bb706",
+            "display.png": "c348578ca64c635dfc9aee2f5ac16dd38ee5dcbc0a3d184f36d570a087642e2c",
+            "thessa.png": "e380330599b3cd3cf23ea7b56512830e4ac18005ff50e5aacaf186e2890fdbfe",
+            "scene.json": "a0580bd13730665f398dac2a6d8ea2220217968801e8cfdc83e2a46541056b9c",
+            "scene.blend": "a2b39b4266b85a657235f866d9817b0aa05e35cbd2ce0efec3a4c369c6a7e647"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3835,
+            "pre_exposed_linear_rgb_mae": 9.511691829128544e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0006764200483020443,
+            "relative_l2_against_thessa": 0.03879719846548699,
+            "top_10_pixels_fraction_of_squared_error": 0.5452070452506659,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-axial": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 723,
+            "pre_exposed_linear_rgb_mae": 4.142938225392339e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00045641423202873903,
+            "relative_l2_against_thessa": 0.023388633860461264,
+            "top_10_pixels_fraction_of_squared_error": 0.2665894256638165,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.7543119192123413,
+            0.45927658677101135,
+            0.529737651348114,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "50f9a522fe09fd7eb0b46dc91793b1545af73fdb3e9df1971f38663eaa92d749",
+            "linear.rgba32f": "da03603d7818852925cb3baad7b00e87a751a2014ebc98dee0dab03e87ecaedb",
+            "display.png": "cbe13398a4406b68ccad378e7adcb9f7299920320f33e688d5d6015c590be92c",
+            "thessa.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+            "scene.json": "3661320b0d427c572d16a8f4674df4e7e2bb4276e09b38274641f10e2fa449a8",
+            "scene.blend": "c94531860a448cbe5ac56eb7feab9771a39f4c17ffa4bd662d3e89be43b6bb5e"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 723,
+            "pre_exposed_linear_rgb_mae": 3.662621461886509e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0004040706152241027,
+            "relative_l2_against_thessa": 0.02059480771810127,
+            "top_10_pixels_fraction_of_squared_error": 0.31269986191996785,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-inside": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.0002723903002786507,
+            "pre_exposed_linear_rgb_rmse": 0.0004083619020658817,
+            "relative_l2_against_thessa": 0.008307819715594456,
+            "top_10_pixels_fraction_of_squared_error": 0.014569873312002057,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.13885459303855896,
+            0.06272486597299576,
+            0.03573180362582207,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "037d1e7f792c813fa0695da10a0bb3d4ade481ec496f51a3dc0df7e9810e6218",
+            "linear.rgba32f": "fea14a87adc7531936b149e76a249fd0b9ba81d2c7d4fe3f9fccbd348192620e",
+            "display.png": "e63f3ffee2d60b2b2b21b48af6e0df5c7a9be599b42c945f5f80b530f113f4c6",
+            "thessa.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+            "scene.json": "1a263199c53d259e7501fa0a986ac72eda4a99315c2e44a894da713f07c5971a",
+            "scene.blend": "41bd8737b96c437412dcbbea324a4996c3949c0e7e60a0ab2d72990be8464a92"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.00026328737352379855,
+            "pre_exposed_linear_rgb_rmse": 0.00039442998534664994,
+            "relative_l2_against_thessa": 0.008018544038745218,
+            "top_10_pixels_fraction_of_squared_error": 0.015247451557664646,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-oblique": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2576,
+            "pre_exposed_linear_rgb_mae": 6.488781616665472e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0003899332063605897,
+            "relative_l2_against_thessa": 0.026366047557464495,
+            "top_10_pixels_fraction_of_squared_error": 0.2110844575723337,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.09615136682987213,
+            0.044433820992708206,
+            0.027738817036151886,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "4244969f839285f1928b90eeae28a4b8dc94c7747486dcd4ba760edf19ffb3d1",
+            "linear.rgba32f": "73694acd52925744b5053551011ba6a83f273a35fcc00cecce6686bc62decebf",
+            "display.png": "034cfc31bfe0f01de8465d111bd776f4c55bba8267bae6f223c93d37c0b8dbf5",
+            "thessa.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+            "scene.json": "3bb8ff5cce68c1cfea4a5d670578227c9ab12c9cf17a492312dc74d0917b2910",
+            "scene.blend": "ad4a16ae984a2b7c1d9b697c1890ebf4bfd935e1e1436a9d7cdc37a9c60b7126"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2576,
+            "pre_exposed_linear_rgb_mae": 6.479755545157012e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0003902889292947984,
+            "relative_l2_against_thessa": 0.026360153164815756,
+            "top_10_pixels_fraction_of_squared_error": 0.21194695667775051,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        }
+      },
+      "acceptance": {
+        "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+        "visual": "not evaluated",
+        "performance": "not comparable",
+        "temporal": "not evaluated"
+      }
+    }
+  },
+  "case_summary": {
+    "sea-full": {
+      "pressure_pa": 101325.0,
+      "effective_throttle": 1.0,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 107.34758306124652,
+      "length_m": 5.537406921386719,
+      "regime": "Overexpanded",
+      "rmse_256": 0.0007077193163168768,
+      "rmse_2048": 0.00031613499631202987,
+      "rmse_steps16_2048": 0.0003160977941709328
+    },
+    "sea-half": {
+      "pressure_pa": 101325.0,
+      "effective_throttle": 0.5,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 53.67379153062326,
+      "length_m": 3.9155380725860596,
+      "regime": "Overexpanded",
+      "rmse_256": 0.0005400523680121233,
+      "rmse_2048": 0.00021010067461138334,
+      "rmse_steps16_2048": 0.0002099501461710536
+    },
+    "matched-full": {
+      "pressure_pa": 52822.67015458314,
+      "effective_throttle": 1.0,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 107.34758306124652,
+      "length_m": 7.6692795753479,
+      "regime": "Matched",
+      "rmse_256": 0.0006124566503064077,
+      "rmse_2048": 0.00028861794297279346,
+      "rmse_steps16_2048": 0.00028955387889423887
+    },
+    "matched-half": {
+      "pressure_pa": 26411.33507729157,
+      "effective_throttle": 0.5,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 53.67379153062326,
+      "length_m": 7.6692795753479,
+      "regime": "Matched",
+      "rmse_256": 0.00040606375227526624,
+      "rmse_2048": 0.00017665608230441743,
+      "rmse_steps16_2048": 0.0001771569900535443
+    },
+    "thin-full": {
+      "pressure_pa": 1000.0,
+      "effective_throttle": 1.0,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 107.34758306124652,
+      "length_m": 55.739715576171875,
+      "regime": "Underexpanded",
+      "rmse_256": 0.0023623483372793063,
+      "rmse_2048": 0.001704918560714532,
+      "rmse_steps16_2048": 0.0017191454178137975
+    },
+    "thin-half": {
+      "pressure_pa": 1000.0,
+      "effective_throttle": 0.5,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 53.67379153062326,
+      "length_m": 39.41393280029297,
+      "regime": "Underexpanded",
+      "rmse_256": 0.0011676981391018125,
+      "rmse_2048": 0.0006726198791451896,
+      "rmse_steps16_2048": 0.0006764200483020443
+    },
+    "matched-axial": {
+      "pressure_pa": 52822.67015458314,
+      "effective_throttle": 1.0,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 107.34758306124652,
+      "length_m": 7.6692795753479,
+      "regime": "Matched",
+      "rmse_256": 0.0007648030579760789,
+      "rmse_2048": 0.00045641423202873903,
+      "rmse_steps16_2048": 0.0004040706152241027
+    },
+    "matched-inside": {
+      "pressure_pa": 52822.67015458314,
+      "effective_throttle": 1.0,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 107.34758306124652,
+      "length_m": 7.6692795753479,
+      "regime": "Matched",
+      "rmse_256": 0.0010744965025161722,
+      "rmse_2048": 0.0004083619020658817,
+      "rmse_steps16_2048": 0.00039442998534664994
+    },
+    "matched-oblique": {
+      "pressure_pa": 52822.67015458314,
+      "effective_throttle": 1.0,
+      "source_throttle": 1.0,
+      "mass_flow_kg_s": 107.34758306124652,
+      "length_m": 7.6692795753479,
+      "regime": "Matched",
+      "rmse_256": 0.0011114124738672135,
+      "rmse_2048": 0.0003899332063605897,
+      "rmse_steps16_2048": 0.0003902889292947984
+    }
+  },
+  "cross_backend": {
+    "sea-full": {
+      "max_absolute_rgba_error": 6.103515625e-05,
+      "within_half_float_envelope": true
+    },
+    "sea-half": {
+      "max_absolute_rgba_error": 1.52587890625e-05,
+      "within_half_float_envelope": true
+    },
+    "matched-full": {
+      "max_absolute_rgba_error": 3.0517578125e-05,
+      "within_half_float_envelope": true
+    },
+    "matched-half": {
+      "max_absolute_rgba_error": 1.52587890625e-05,
+      "within_half_float_envelope": true
+    },
+    "thin-full": {
+      "max_absolute_rgba_error": 0.000244140625,
+      "within_half_float_envelope": true
+    },
+    "thin-half": {
+      "max_absolute_rgba_error": 3.0517578125e-05,
+      "within_half_float_envelope": true
+    },
+    "matched-axial": {
+      "max_absolute_rgba_error": 7.62939453125e-06,
+      "within_half_float_envelope": true
+    },
+    "matched-inside": {
+      "max_absolute_rgba_error": 6.103515625e-05,
+      "within_half_float_envelope": true
+    },
+    "matched-oblique": {
+      "max_absolute_rgba_error": 6.103515625e-05,
+      "within_half_float_envelope": true
+    }
+  },
+  "old_analytic_controls": {
+    "axial-zero": {
+      "native_hdr_byte_identical": true
+    },
+    "axial-one": {
+      "native_hdr_byte_identical": true
+    },
+    "axial-ten": {
+      "native_hdr_byte_identical": true
+    },
+    "side": {
+      "native_hdr_byte_identical": true
+    }
+  },
+  "reference_camera_correction": {
+    "native_ray_start_m": 0,
+    "initial_cycles_clip_start_m": 0.1,
+    "shipping_cycles_clip_start_m": 1e-06,
+    "inside_initial_2048_rmse": 0.00490926259237457,
+    "inside_matched_2048_rmse": 0.0004083619020658817,
+    "field_source_changes": false,
+    "interpretation": "Corrects mismatched reference clipping, not a renderer or optics improvement."
+  },
+  "exploratory_quadrature": {
+    "method": "Independent f64 NumPy uniform midpoint integration of frozen rounded stations; no native warped bins or Cycles integrator reused.",
+    "frame_results": {
+      "matched-inside": {
+        "512": {
+          "elapsed_s": 0.747880220413208,
+          "native_rgb_rmse": 0.00017170287125306587,
+          "cycles_rgb_rmse": 0.005066839986127854,
+          "successive_rgb_rmse": null
+        },
+        "1024": {
+          "elapsed_s": 1.3196690082550049,
+          "native_rgb_rmse": 0.00017173593165002696,
+          "cycles_rgb_rmse": 0.0050668713881803175,
+          "successive_rgb_rmse": 3.381274259141942e-08
+        },
+        "nearclip_0.1": {
+          "cycles_rgb_rmse": 0.0003408186011039793,
+          "center_rgba": [
+            0.13135004315573626,
+            0.059277039867550924,
+            0.0336249169630045,
+            0.07442535678001344
+          ]
+        }
+      },
+      "thin-full": {
+        "512": {
+          "elapsed_s": 0.15066814422607422,
+          "native_rgb_rmse": 0.00023744435363159174,
+          "cycles_rgb_rmse": 0.001780076927689137,
+          "successive_rgb_rmse": null
+        },
+        "1024": {
+          "elapsed_s": 0.2834620475769043,
+          "native_rgb_rmse": 0.00023743317740697358,
+          "cycles_rgb_rmse": 0.0017800681626000507,
+          "successive_rgb_rmse": 6.59459823776e-08
+        }
+      },
+      "matched-axial": {
+        "512": {
+          "elapsed_s": 0.04451322555541992,
+          "native_rgb_rmse": 0.0005367208084547132,
+          "cycles_rgb_rmse": 0.0004701389670330011,
+          "successive_rgb_rmse": null
+        },
+        "1024": {
+          "elapsed_s": 0.07687783241271973,
+          "native_rgb_rmse": 0.0005367225064806253,
+          "cycles_rgb_rmse": 0.00047014726217403706,
+          "successive_rgb_rmse": 4.165730680887057e-08
+        }
+      }
+    },
+    "chord_results_sha256": "edc2c3c2072666ba7065053ef34189d428e35c4dc51e82eb50d0ce2b59b8c441",
+    "retained_scripts": {
+      "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/compiled_plume_oracle.py": "0cf1a514944422d54e61a9636e1132e4426241967c9f512c1d930c466be165da",
+      "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/compiled_plume_frame_oracle.py": "ddcc2e515435bf156cc52a5db781feca74669cd0ce793aa9558cfc8092126fd7"
+    },
+    "acceptance": "Diagnostic convergence only; no universal production ray error bound."
+  },
+  "checks": {
+    "python": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/compiled-plume-python-tests.log",
+      "sha256": "938c7773471a7333cc9deba47a19f75c8e44de764b287a0ea533ff74dd03aa7f",
+      "tail": [
+        "Ran 39 tests in 0.218s",
+        "",
+        "OK",
+        "copied original original: /tmp/tmpsl0ykci9/cache/original/model.glb",
+        "verified probe: /tmp/tmp2h3o_re_/cache/model.glb"
+      ]
+    },
+    "strict_clippy": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/compiled-plume-clippy.log",
+      "sha256": "b5699824185b729a528182a816727f09e5a8bdad4b6042dc1716d09a270f3c86",
+      "tail": [
+        "Checking thessa-plume-core v0.0.1 (/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-render-worktree/crates/plume-core)",
+        "    Checking thessa-aero-core v0.0.1 (/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-render-worktree/crates/aero-core)",
+        "    Checking thessa-propulsion v0.0.1 (/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-render-worktree/crates/propulsion)",
+        "    Checking thessa-render-wgpu v0.0.1 (/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-render-worktree/crates/render-wgpu)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.33s"
+      ]
+    },
+    "core": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/compiled-plume-core-tests.log",
+      "sha256": "dd35b85201b467b8a0536ed9e9d983e622dc22491da9fc2dc1be4c585e803015",
+      "tail": [
+        "test source::tests::sample_inputs_validate_clean ... ok",
+        "test source::tests::vacuum_is_infinite_pressure_ratio ... ok",
+        "test medium::tests::constant_source_function_conserves_emitted_energy_at_any_step_budget ... ok",
+        "",
+        "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "architecture": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/compiled-plume-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae",
+      "tail": [
+        "Architecture staged: thessa-aero-surfaces: staged facade removal: thessa-aero-surfaces -> thessa-sim-core",
+        "Architecture staged: thessa-fuselage: staged facade removal: thessa-fuselage -> thessa-sim-core",
+        "Architecture: OK (44 workspace packages, 20 guarded foundations; runtime/build closure, own dev edges only)"
+      ]
+    }
+  },
+  "remaining": [
+    "Live F03 per-nozzle/frame/environment extraction and remote publication.",
+    "F02 continuous trajectories, occlusion, astronomical origin and complete compiled-engine families.",
+    "F04 physical optical calibration, scattering and field-derived local lighting.",
+    "P01 CBT trajectory/error/whole-system performance acceptance.",
+    "Blind visual preference, Metal/WebGPU and performance comparison with Cycles were not performed."
+  ]
+}

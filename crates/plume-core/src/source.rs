@@ -85,9 +85,11 @@ pub struct PlumeSource {
     pub nozzle_to_vehicle: RigidTransform,
     /// Nozzle exit radius (m, > 0).
     pub exit_radius_m: f64,
-    /// Mass flow at full throttle (kg/s, >= 0).
+    /// Input mass flow (kg/s, >= 0), multiplied by `throttle` by the field.
+    /// Use `throttle = 1` with an already-allocated operating-point flow.
     pub mass_flow_kg_s: f64,
-    /// Exhaust velocity at full throttle (m/s, >= 0).
+    /// Input exhaust velocity (m/s, >= 0). Use the actual operating value
+    /// with `throttle = 1` when supplied by propulsion.
     pub exhaust_velocity_mps: f64,
     /// Static pressure at the nozzle exit plane (Pa, >= 0).
     pub exit_pressure_pa: f64,
@@ -184,9 +186,10 @@ pub fn validation_error(source: &PlumeSource, env: &PlumeEnvironment) -> Option<
 /// Build a plume source from propulsion-backend state. This is the single
 /// game-side choke point between compiled engines and the renderer: callers
 /// pass the `EnginePlumeState` scalars through, never hand-roll a source.
-/// Mass flow and exhaust velocity are full-throttle design values scaled by
-/// the caller-supplied effective throttle outside (spool state lives in the
-/// propulsion backend); `throttle <= 0` contributes zero output.
+/// For already-allocated `EnginePlumeState` scalars, pass `throttle = 1`:
+/// applying the pilot command again would double-scale flow and luminosity.
+/// A provisional full-design deck may instead use its effective throttle;
+/// `throttle <= 0` contributes zero output.
 #[allow(clippy::too_many_arguments)]
 pub fn engine_plume_source(
     nozzle_to_vehicle: RigidTransform,

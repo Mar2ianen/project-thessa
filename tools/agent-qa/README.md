@@ -191,3 +191,12 @@ finite-cell correction, fixed-budget A/B and measured scope. Raw HDR, source
 fingerprints and saved node graphs are retained. These four analytic controls
 are separate from a calibrated-engine gallery, blind preference or full-frame
 performance acceptance.
+
+Add `--suite compiled` to `capture` for the nine generated methalox operating-
+point controls, including 14/16-step native HDR. The same `cycles` command
+loads either publication type. It validates uniform frozen samples and uses
+packed Non-Color float tables with stock Volume Coefficients; no fitted gain.
+Cycles uses its minimum 1e−6 m near clip to match native volume integration
+from the optical camera. [Doc 102](../../docs/102_COMPILED_PLUME_GALLERY.md)
+records the actual comparisons, near-clip control, sampling differences and
+remaining calibration/motion/live-source limits.

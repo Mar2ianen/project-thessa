@@ -59,21 +59,19 @@ BOX filter). Metrics are over the whole pre-exposed linear RGB frame:
 | Stage | Source | Linear RGB MAE | Linear RGB RMSE | Relative L2 against native | Top-10 px error |
 | --- | --- | ---: | ---: | ---: | ---: |
 | Initial diagnostic | `dee0eda`, doc 92 | 0.00271568 | 0.36535218 | 2.080346 | 99.9% |
-| Smooth peak + multiscatter | `ccde98f` | 0.00213465 | 0.31302077 | 1.436160 | 99.8% |
+| Smooth peak + multiscatter | `ccde98f`, clean capture `e3ab865` | 0.00213465 | 0.31302077 | 1.436160 | 99.9% |
 | Diagnostic reduction | — | −21.4% | −14.3% | −30.9% | — |
 
 `ccde98f` contains both the denominator change and the multiscatter term.
+The clean B01 capture and Cycles run were rerun at `e3ab865`; the full
+record is [`docs/artifacts/b01-cycles-comparison-2026-10-29.json`](artifacts/b01-cycles-comparison-2026-10-29.json).
 `c332c5b` is a smooth-peak commit on another branch and is **not** an ancestor
 of this branch; its intermediate row is therefore not claimed here.
 
-The top-10 pixels still contribute 99.8% of the squared error. The remaining
+The top-10 pixels still contribute 99.9% of the squared error. The remaining
 difference is dominated by sub-pixel highlight sampling and geometry/AA, not by
 a proven BRDF equivalence. Relative L2 uses the native frame as the
 denominator; it is not a physical radiance error.
-
-The native capture used for the table was recorded with a dirty source tree.
-A clean recapture is tracked separately; the metric values above are retained
-as the observed diagnostic until that record replaces them.
 
 ## Verification
 

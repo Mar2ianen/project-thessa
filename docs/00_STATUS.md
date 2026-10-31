@@ -42,7 +42,7 @@ records a 64-spp Cycles diagnostic (MAE 0.000601, relative L2 0.4097; no pass
 threshold). [Doc 95](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) implements the
 experimental canonical coastal export B03 (`B03-canonical-coast-v1`), exporting
 GPU-conforming terrain and 27,857 plant instances (112.8M instanced triangles)
-for a 32-spp procedural-ground Cycles diagnostic (MAE 0.0805, relative L2
+for a 32-spp procedural-ground Cycles diagnostic (MAE 0.0806, relative L2
 0.3030). Its large generated inputs remain external; no parity or visual
 equivalence is claimed. Godot is downloaded and verified; Godot/Unreal captures
 remain open.
@@ -785,4 +785,4 @@ GGX multiscatter compensation and B01 diagnostic (2026-10-29): [93 — GGX multi
 
 Native cutout pipeline and reference scene B02 (2026-10-29): [94 — Native cutout and B02 Cycles diagnostic](94_NATIVE_CUTOUT_AND_B02_CYCLES_PARITY.md) implements glTF `alphaMode = "MASK"` support with dual pipelines (preserving early-depth for opaque meshes), wires reference scene B02 (`B02-vegetation-v1`) with the pinned CC0 Fern 02 asset, and records a 64-spp Cycles diagnostic with 16 transparent bounces (MAE 0.000601, RMSE 0.003663, relative L2 0.4097; no pass threshold).
 
-Canonical coast scene B03 diagnostic (2026-10-30): [95 — Canonical coast B03](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) exports GPU-conforming terrain and 27,857 plant instances (112.8M instanced triangles) for an experimental Cycles comparison. The committed 32-spp procedural-ground run records MAE 0.0805, RMSE 0.1111 and relative L2 0.3030; large generated inputs remain external and the result is not parity or ground truth.
+Canonical coast scene B03 diagnostic (2026-10-30): [95 — Canonical coast B03](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) exports GPU-conforming terrain and 27,857 plant instances (112.8M instanced triangles) for an experimental Cycles comparison. The committed 32-spp procedural-ground run records MAE 0.0806, RMSE 0.1111 and relative L2 0.3030; large generated inputs remain external and the result is not parity or ground truth.

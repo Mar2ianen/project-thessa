@@ -2,19 +2,15 @@
   "schema_version": 1,
   "scene_id": "B01-material-lab-v1",
   "adapter_source": {
-    "commit": "5320b9344f9628ec49f13efbaa301888e9f94d44",
-    "dirty": true,
-    "tracked_diff_sha256": "faba9a4b8442cb7e009e8f588bfb94b56387d04ba7f0d1f3ad9224606b4bf91b",
-    "untracked_sha256": {
-      "docs/92_EXTERNAL_RENDERER_COMPARISON.md": "8ff105874209182cdb9a068ef1eac6dabe85e2dcdf1e2f35ed75f6cfa321e0bb",
-      "tools/agent-qa/cycles_b01.py": "2f93f0f712ec38e66f1add9e14e52085e2e52de28335a67e6f91502e1fb9ad51",
-      "tools/agent-qa/tests/test_cycles_b01.py": "72953e7241051b67dab4b8f0a441acdef79d06513215582f6d95d6bb4c18ae9b"
-    }
+    "commit": "e3ab8655ba4a3acd30c6a91e15f498e6383a22df",
+    "dirty": false,
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_sha256": {}
   },
   "adapter_sha256": "2f93f0f712ec38e66f1add9e14e52085e2e52de28335a67e6f91502e1fb9ad51",
-  "native_capture_sha256": "d27ef5afb3a26aae2202fd97a5ae5500e692c79876cd2b016518d34c501482c8",
+  "native_capture_sha256": "9ff18bae6d8c8bbdf68b907c00335a294169e0176cb3c323301f1e5c989fb725",
   "native_source": {
-    "commit": "148dce7dd91291ce66e796d6e1b18df48a1bc201",
+    "commit": "e3ab8655ba4a3acd30c6a91e15f498e6383a22df",
     "dirty": false,
     "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "untracked_sha256": {}
@@ -26,9 +22,9 @@
     "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
   },
   "native_build": {
-    "commit": "148dce7dd91291ce66e796d6e1b18df48a1bc201",
+    "commit": "e3ab8655ba4a3acd30c6a91e15f498e6383a22df",
     "version": "0.0.1",
-    "profile": "debug"
+    "profile": "release"
   },
   "reference_geometry_sha256": "d5777b784049330a639b7cb81b96a953cfe12e582f1d781f4f027577283feaf1",
   "reference_scene_manifest_sha256": "cc209032c99ebb4987f49085556754552c8ec262aa5245459722cfdf2b27b08f",
@@ -38,7 +34,7 @@
     "build_hash": "d13f752e3b9c",
     "binary_sha256": "bc9eee8315e136d7ea48411e1bbfb29709f6069a79d9219d6eff793857f45233",
     "device": "CPU",
-    "threads": 2
+    "threads": 20
   },
   "capture": {
     "width": 640,
@@ -93,14 +89,14 @@
     "Cycles float32 radiance versus Thessa pre-exposed float16 render target",
     "CPU offline Cycles render versus GPU raster; durations are not a performance comparison"
   ],
-  "render_wall_s": 4.477216170052998,
+  "render_wall_s": 0.6216788730816916,
   "metrics": {
     "rgb_components": 921600,
     "foreground_union_pixels": 92999,
-    "pre_exposed_linear_rgb_mae": 0.002715678915568535,
-    "pre_exposed_linear_rgb_rmse": 0.36535218021954596,
-    "relative_l2_against_thessa": 2.080346299052073,
-    "top_10_pixels_fraction_of_squared_error": 0.9990368654762843,
+    "pre_exposed_linear_rgb_mae": 0.0021346525573450407,
+    "pre_exposed_linear_rgb_rmse": 0.3130207717303014,
+    "relative_l2_against_thessa": 1.4361600981201705,
+    "top_10_pixels_fraction_of_squared_error": 0.9990937942799614,
     "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
   },
   "acceptance": {
@@ -110,21 +106,13 @@
     "temporal": "not evaluated"
   },
   "artifacts_sha256": {
-    "radiance.exr": "4e09180f7397048267acc716cf399d8e12339d3293f3959af6851e0aef8c95e4",
+    "radiance.exr": "c62ac1f6c7668084ce0afcad35b572a4cdaf3d1247d2f980c31ecbb53bbe6441",
     "linear.rgba32f": "f0c55b6ed75ebe5464e09d1dc18e867243bf617ad74e9c75cd235acd039772e0",
     "display.png": "4b3da451e57818afc4228203e5cc33ee58e5f035aa2b47d037e850a84f53ab8f",
-    "thessa.png": "c9ac81535e2fb1481ff7c566915a856549db61280689d9a933040d9cdca3c402",
+    "thessa.png": "34e215e2de1c79a94e201fbd74703580b23bcbe07e2fcff23e55f87b748c57de",
     "scene.glb": "d5777b784049330a639b7cb81b96a953cfe12e582f1d781f4f027577283feaf1",
     "scene.json": "cc209032c99ebb4987f49085556754552c8ec262aa5245459722cfdf2b27b08f",
     "scene.LICENSE.txt": "3d088852ab4f40761cb6864528419af05419a6c26af4237212587bcf22bb95be"
-  },
-  "repeat_evidence": {
-    "same_seed_same_build": true,
-    "artifacts_sha256": {
-      "display.png": "4b3da451e57818afc4228203e5cc33ee58e5f035aa2b47d037e850a84f53ab8f",
-      "linear.rgba32f": "f0c55b6ed75ebe5464e09d1dc18e867243bf617ad74e9c75cd235acd039772e0"
-    },
-    "scope": "Identical PNG and pre-exposed float32 HDR across three actual CPU renders, seed 0; no temporal-motion acceptance."
   },
   "external_tool_setup": {
     "godot": {
@@ -147,5 +135,13 @@
       "state": "User browser download in progress; no extraction/executable verification",
       "source": "https://www.unrealengine.com/en-US/linux"
     }
+  },
+  "repeat_evidence": {
+    "same_seed_same_build": true,
+    "artifacts_sha256": {
+      "display.png": "4b3da451e57818afc4228203e5cc33ee58e5f035aa2b47d037e850a84f53ab8f",
+      "linear.rgba32f": "f0c55b6ed75ebe5464e09d1dc18e867243bf617ad74e9c75cd235acd039772e0"
+    },
+    "scope": "Historical three-render repeat from the initial clean artifact; the rerun output hashes match, but no new repeat was executed."
   }
 }

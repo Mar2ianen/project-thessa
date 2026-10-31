@@ -39,7 +39,7 @@ cargo run -p thessa-terrain-native --release -- \
 The export path receives `scene.glb`, `scene.json`, `scene.LICENSE.txt`,
 `display.png` and (when HDR is available) `linear.rgba16f`. The committed
 `scene.json` and `display.png` are copies of the observed run; the GLB is the
-frozen input for the Cycles adapter.
+hash-pinned input for the Cycles adapter (not committed).
 
 ## Reproduce the Cycles diagnostic
 
@@ -54,7 +54,9 @@ blender --background --factory-startup --disable-autoexec \
 
 `--ground reference-radiance` projects native terrain radiance as emission and
 is a sanity check only, not independent parity evidence. The committed
-`cycles_metrics.json` uses the default `procedural` ground.
+`cycles_metrics.json` uses the default `procedural` ground and the
+`tools/agent-qa/cycles_b03.py` at `067e98d` (SHA-256
+`d5e9d9b7a3433e94398caee2f3f4af1f6cc3522dfa74ed0dc01d89d51d4e7afd`).
 
 ## Limits
 

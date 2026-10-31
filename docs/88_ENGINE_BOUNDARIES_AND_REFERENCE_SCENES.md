@@ -523,5 +523,5 @@ read from the GPU (`read_conforming_mesh`) together with 27,857 plant instances
 (112.8M instanced triangles across 37 prototypes). The observed plant materials
 are opaque, not alpha-cutout; camera basis vectors are recorded in `scene.json`.
 A 32-spp Cycles procedural-ground diagnostic via `cycles_b03.py` records MAE
-0.0805, RMSE 0.1111, and relative L2 0.3030. The large generated inputs remain
+0.0806, RMSE 0.1111, and relative L2 0.3030. The large generated inputs remain
 external and the result is not parity, ground truth, or visual acceptance.

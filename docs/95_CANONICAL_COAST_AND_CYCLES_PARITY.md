@@ -68,21 +68,20 @@ The current default procedural run (`cycles_metrics.json`) gives:
 | Metric | Value |
 | --- | ---: |
 | Samples | 32 |
-| Linear RGB MAE | 0.080523 |
-| Linear RGB RMSE | 0.111121 |
-| Relative L2 against native | 0.302982 |
+| Linear RGB MAE | 0.080588 |
+| Linear RGB RMSE | 0.111143 |
+| Relative L2 against native | 0.303041 |
 | Top-10 pixels' squared-error fraction | 0.000989 (0.10%) |
 
 These values are a whole-frame diagnostic. They mix terrain-material mismatch,
 plant opacity/transmission approximation, sky and haze approximations, and
 sampling noise. No pass threshold or parity reduction is inferred. Earlier
-uncommitted V6/V9/V11 numbers and the "100% canonical match" claim are not
-retained as evidence because they were not produced by a clean, committed,
-independent configuration.
+V6/V9/V11 numbers and the "100% canonical match" claim are not retained as
+evidence because they were not produced by a clean, committed, independent
+configuration.
 
 The native GLB/linear HDR were exported before a clean capture manifest existed;
-the committed metadata is a dated diagnostic, not a clean source-clean
-benchmark.
+the committed metadata is a dated diagnostic, not a source-clean benchmark.
 
 ## Verification
 

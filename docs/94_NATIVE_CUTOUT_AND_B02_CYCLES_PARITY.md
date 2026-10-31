@@ -69,7 +69,7 @@ samples, BOX filtering, 16 transparent bounces, direct-light bounces and no
 denoising, applies the native exposure and Reinhard mapping, and compares
 pre-exposed linear RGB.
 
-The observed dirty-source diagnostic on 640×480 is:
+The clean-source diagnostic at `e3ab865` on 640×480 is:
 
 ```json
 {
@@ -90,8 +90,8 @@ No pass threshold is claimed.
 
 The comparison record is
 [`docs/artifacts/b02-cycles-comparison-2026-10-29.json`](artifacts/b02-cycles-comparison-2026-10-29.json).
-The committed JSON records the capture source as dirty; a clean recapture must
-replace that provenance before the artifact is treated as a clean benchmark.
+It records `dirty: false` for both the native capture and the Cycles adapter at
+`e3ab865`, including the capture, scene and reference-geometry hashes.
 
 ## Verification
 

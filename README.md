@@ -812,6 +812,6 @@ scene B02 with the pinned CC0 Fern 02 asset, and records a 64-spp Cycles
 diagnostic (MAE 0.000601, relative L2 0.4097; no pass threshold).
 [Canonical coast B03](docs/95_CANONICAL_COAST_AND_CYCLES_PARITY.md) exports the
 conforming terrain and plant instances for an experimental Cycles diagnostic
-(MAE 0.0805 at 32 spp, procedural ground); its large generated inputs remain
+(MAE 0.0806 at 32 spp, procedural ground); its large generated inputs remain
 external and the result is not parity. Godot is downloaded and verified, while
 the user's Unreal Linux download is in progress.

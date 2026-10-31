@@ -12,6 +12,12 @@ spawning, persisted dock sessions, vacuum-gated joints, and fleet
 snapshots. Reference stays KSP: parts mate through explicit nodes into one
 craft tree.
 
+Installed rocket allocation also retains its actual liquid/solid/chamber
+operating observations; authority publishes them only after endpoint acceptance
+and resource/COM commit. They carry scalar operating points, not mount/frame
+publication, and do not change resource booking. See
+[doc 101](../101_ACCEPTED_PROPULSION_OBSERVATIONS.md) for scope and cost.
+
 ## 1. Goal
 
 Separate parts assemble into one craft through authored interfaces:

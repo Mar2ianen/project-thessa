@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-31",
+  "source_base": "fabc0958d2216f5e4f36828b408b68178516b357",
+  "integrated_base": "50c27b0caee7ffad434f5f134e350db2de39d4d8",
+  "scope": "Read-only accepted installed liquid/solid/chamber operating observations; no renderer/wire integration or new physics solve.",
+  "source_sha256": {
+    "crates/flight-authority/benches/resource_allocation.rs": "7902f1efa76599c3e2965db50f04d04cda94dac95c3d5500766d9b082df74902",
+    "crates/flight-authority/src/runtime.rs": "a9ec6a2fd08bc45702de8253b4646522b40b9712fed8b9ef0a6b88caa4e7ff5e",
+    "crates/flight-authority/src/runtime/advance.rs": "4f8d9e295159343e7e6c5f94f860cfa05afbf7a2cd758f4dcddb595989d0a311",
+    "crates/flight-authority/src/runtime_tests.rs": "542b38d8d1e6e01d381d14e310a0ab854352d54856ef2d20631efad6cac8c5d4",
+    "crates/propulsion/src/propulsion/system.rs": "6b52aff1cdc5726e78e1363a5d539d50428c217a993d3d28fe1243418c34562a",
+    "crates/sim-core/src/lib.rs": "ab9d13be0e83b4284527fbaa9de84e9afaad1d556366fd2e95436d058e7452fa",
+    "crates/vehicle-core/src/lib.rs": "dce42d57ddcc074b269612b2a44682371ca23c29ee59d1dee86f201a7abb17d6",
+    "crates/vehicle-core/src/resources.rs": "df650b13c036cada9a7aae18a0c2477e60cc8516aad5875e2843856e1141e126"
+  },
+  "reference_sources": {
+    "rocket_thrust": "https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/rocket-thrust/",
+    "transport_controls": "docs/100_PLUME_SEGMENT_TRANSPORT.md"
+  },
+  "benchmark": {
+    "cpu": "AMD Ryzen AI 9 H 365 w/ Radeon 880M",
+    "scenario": "32 liquid engines / 64 tanks, fixed inventory, 1/120 second allocation",
+    "iterations_per_batch": 20000,
+    "batches_per_run": 5,
+    "warmup_allocations_per_run": 64,
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "batch_means_ns": {
+      "0-baseline.log": [
+        3819.4,
+        3300.3,
+        3320.3,
+        3308.2,
+        3302.9
+      ],
+      "1-candidate.log": [
+        4640.8,
+        3425.0,
+        3444.0,
+        3448.9,
+        3447.8
+      ],
+      "2-candidate.log": [
+        4057.2,
+        3423.7,
+        3437.7,
+        3436.8,
+        3432.5
+      ],
+      "3-baseline.log": [
+        4236.8,
+        3293.7,
+        3304.0,
+        3300.2,
+        3309.1
+      ]
+    },
+    "baseline_median_ns": 3306.1,
+    "candidate_median_ns": 3440.85,
+    "delta_ns": 134.75,
+    "delta_percent": 4.075799280118564,
+    "physical_outputs_bit_identical": true,
+    "physical_output_line_sha256": "3aa79367d018234fcb5b45044d8713721543b36ff2bcd7e9540f34b29fc9f24a",
+    "identities": {
+      "baseline": {
+        "source_base": "fabc0958d2216f5e4f36828b408b68178516b357",
+        "files_sha256": {
+          "crates/propulsion/src/propulsion/system.rs": "f830a193b73a55f69ed11faf58d16efb8f2aba15e2b34434b1319ebb3dcc7791",
+          "crates/vehicle-core/src/resources.rs": "9fc050a88b6f9218437e6cdb88a1efd72310a5e5ca4dc7ec6e091784ccc0061f",
+          "crates/vehicle-core/src/lib.rs": "4d9706fa4a85ada35f74c01b254ee62c12af446e6af2c576aa1dd39c15f4f056",
+          "crates/sim-core/src/lib.rs": "426452c29de97f7491481dd234e8d4fd11bc166797adb2f071438de98107083e",
+          "crates/flight-authority/src/runtime.rs": "9debeb9f8bf2bd14e9ac8370d641e2d82d94246909270eb87c68490758281a24",
+          "crates/flight-authority/src/runtime/advance.rs": "18f4e438b84d24a0fcedbf46a8387b5e1c59e26f0c27fb918a4bb3a4704277b8"
+        },
+        "benchmark_sha256": "7902f1efa76599c3e2965db50f04d04cda94dac95c3d5500766d9b082df74902",
+        "binary_sha256": "df9275034c4cd044cc04f93c459635ad4393aa5b95fb8671363de6e9c6b0d37f",
+        "build_command": [
+          "cargo",
+          "bench",
+          "--offline",
+          "--locked",
+          "-p",
+          "thessa-flight-authority",
+          "--bench",
+          "resource_allocation",
+          "--no-run",
+          "--message-format=json"
+        ]
+      },
+      "candidate": {
+        "source_base": "fabc0958d2216f5e4f36828b408b68178516b357",
+        "files_sha256": {
+          "crates/propulsion/src/propulsion/system.rs": "6b52aff1cdc5726e78e1363a5d539d50428c217a993d3d28fe1243418c34562a",
+          "crates/vehicle-core/src/resources.rs": "df650b13c036cada9a7aae18a0c2477e60cc8516aad5875e2843856e1141e126",
+          "crates/vehicle-core/src/lib.rs": "dce42d57ddcc074b269612b2a44682371ca23c29ee59d1dee86f201a7abb17d6",
+          "crates/sim-core/src/lib.rs": "ab9d13be0e83b4284527fbaa9de84e9afaad1d556366fd2e95436d058e7452fa",
+          "crates/flight-authority/src/runtime.rs": "a9ec6a2fd08bc45702de8253b4646522b40b9712fed8b9ef0a6b88caa4e7ff5e",
+          "crates/flight-authority/src/runtime/advance.rs": "4f8d9e295159343e7e6c5f94f860cfa05afbf7a2cd758f4dcddb595989d0a311"
+        },
+        "benchmark_sha256": "7902f1efa76599c3e2965db50f04d04cda94dac95c3d5500766d9b082df74902",
+        "binary_sha256": "d40d4cccf9b9cc1877b9d6648aacae6bc628f218b81967fa7846270ead338359",
+        "build_command": [
+          "cargo",
+          "bench",
+          "--offline",
+          "--locked",
+          "-p",
+          "thessa-flight-authority",
+          "--bench",
+          "resource_allocation",
+          "--no-run",
+          "--message-format=json"
+        ]
+      }
+    },
+    "evidence_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/nozzle-observation",
+    "limitations": [
+      "Batch means, not per-frame p95/p99.",
+      "One fixed liquid allocation workload; no system/solid timing claim.",
+      "No renderer, GPU or whole-scene performance change."
+    ]
+  },
+  "checks": {
+    "library_tests": {
+      "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/nozzle-observation-final-tests.log",
+      "sha256": "8e6fae6afbaaf117f8119bc8d5d03a0640d1697a90e0ea32b19be4eda803b26b",
+      "results": [
+        "test result: ok. 114 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 8.24s",
+        "test result: ok. 128 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 157 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "strict_clippy": {
+      "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/nozzle-observation-final-clippy.log",
+      "sha256": "427ad05739bfc4230b59680f0b6b8452636e742912689686c4c470a934845766"
+    },
+    "native_check": {
+      "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/nozzle-observation-native-check.log",
+      "sha256": "c1e2bcc0f887705d3a058b305334278ea9de3d001a7a8b3fe415c328b027336a"
+    },
+    "architecture": {
+      "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/nozzle-observation-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    }
+  },
+  "remaining": [
+    "F03 mount/frame revisions, geometry and remote publication, actual native per-nozzle/environment consumption.",
+    "F02 compiled-engine gallery and real-engine optical calibration.",
+    "P01 full production CBT trajectory/error/performance acceptance."
+  ]
+}

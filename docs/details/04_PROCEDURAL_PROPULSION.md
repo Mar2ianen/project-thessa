@@ -23,6 +23,13 @@ independent free-power-turbine spool, high-fidelity scramjet shock-train and
 finite-rate chemistry, fusion confinement and transient thermal fidelity, and
 the editor UI remain future work (see section 18).
 
+Accepted liquid/solid and multi-chamber operating points are retained by the
+existing resource allocation and published at the accepted interval end by
+FlightAuthority. Partial-tick solids retain their active fraction; rejected
+ticks preserve the previous observation. This rocket-only readout does not
+change dynamics or add another solve. Live renderer/wire extraction remains
+open; see [doc 101](../101_ACCEPTED_PROPULSION_OBSERVATIONS.md).
+
 ## 1. Design goal
 
 Project Thessa should treat engines as procedural systems assembled from physical components and flow paths rather than as a catalogue of fixed engine parts.

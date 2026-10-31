@@ -71,6 +71,12 @@ absorbing-control RGB error while preserving alpha. Full engine calibration,
 compiled-nozzle extraction, general animated convergence and visual acceptance
 remain open; no full-scene performance win is inferred.
 
+[Doc 101](101_ACCEPTED_PROPULSION_OBSERVATIONS.md) retains accepted liquid/solid/
+chamber operating observations without another physics solve. Resource-limited,
+shutdown and partial-tick solid cases are covered, and the existing 32-engine
+release allocation fixture retains bit-identical physical outputs. Live F03
+nozzle/frame extraction and remote/render consumption remain open.
+
 ## Simulation and physics
 
 | Doc | Status | Implemented | Future |

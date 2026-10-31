@@ -619,3 +619,12 @@ The same audit also reinforces the lighting rule in §13: visible plume radiance
 and scene illumination should share a causal source. Medium/high quality should
 derive radiance proxies from the field instead of tuning an independent nozzle
 light.
+
+## 21. Accepted operating source foundation
+
+[Doc 101](101_ACCEPTED_PROPULSION_OBSERVATIONS.md) retains the actual installed
+liquid/solid/chamber points and publishes them only after a tick is accepted.
+This is read-only source data, not another propulsion solve. The native fixed
+engine deck remains provisional: accepted nozzle poses/frame revisions, remote
+transport and multi-nozzle consumption are still required before F03 is done.
+Already-allocated flow must not receive the requested throttle a second time.

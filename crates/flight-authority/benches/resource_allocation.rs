@@ -86,6 +86,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (vehicle, state) = workload()?;
     let engine_throttles = vec![1.0; ENGINES];
     let system_throttles = [];
+    let sample = vehicle.plan_propulsion_step(
+        &state,
+        &engine_throttles,
+        &system_throttles,
+        101_325.0,
+        STEP_S,
+    )?;
+    let physical_bits: Vec<_> = sample
+        .force_body_n
+        .to_array()
+        .into_iter()
+        .chain(sample.moment_body_nm.to_array())
+        .chain(sample.tank_consumption_kg.iter().copied())
+        .chain(sample.solid_burn_time_s.iter().copied())
+        .chain(sample.solid_ignited.iter().map(|v| f64::from(u8::from(*v))))
+        .chain(sample.engine_throttles.iter().copied())
+        .chain(sample.system_chamber_throttles.iter().flatten().copied())
+        .chain([sample.total_propellant_flow_kg_s])
+        .map(f64::to_bits)
+        .collect();
+    println!(
+        "physical_allocation_bits={physical_bits:?} fuel_limited={}",
+        sample.fuel_limited
+    );
+    for _ in 0..64 {
+        black_box(vehicle.plan_propulsion_step(
+            &state,
+            &engine_throttles,
+            &system_throttles,
+            101_325.0,
+            STEP_S,
+        )?);
+    }
     for _ in 0..REPETITIONS {
         let started = Instant::now();
         for _ in 0..ITERATIONS {

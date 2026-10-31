@@ -846,3 +846,8 @@ emission through absorbing cells at the same sampling budget. Four actual
 native/Cycles volume controls and an independent Gaussian oracle expose the
 previous bias; source/camera/alpha remain fixed in A/B. This is transport
 validation, with engine calibration and live per-nozzle extraction still open.
+
+[Accepted rocket observations](docs/101_ACCEPTED_PROPULSION_OBSERVATIONS.md)
+now retain the liquid/solid/chamber points used by resource allocation, published
+only after an accepted physical tick. The fixed native plume deck is unchanged;
+per-nozzle geometry, remote publication and live consumption remain F03 work.

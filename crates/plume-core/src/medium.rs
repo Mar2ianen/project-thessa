@@ -97,9 +97,15 @@ pub fn integrate_ray(
         let r = -half_chord_m + (i as f64 + 0.5) * dt;
         let sample = sample_medium(profile, z_m, r);
         let absorb = (-sample.extinction_per_m * dt).exp();
-        rgb[0] += transmittance * sample.emission_rgb[0] * dt * absorb;
-        rgb[1] += transmittance * sample.emission_rgb[1] * dt * absorb;
-        rgb[2] += transmittance * sample.emission_rgb[2] * dt * absorb;
+        // Integrate emission throughout the cell, not at its far boundary.
+        let emission_length = if sample.extinction_per_m > 0.0 {
+            -(-sample.extinction_per_m * dt).exp_m1() / sample.extinction_per_m
+        } else {
+            dt
+        };
+        rgb[0] += transmittance * sample.emission_rgb[0] * emission_length;
+        rgb[1] += transmittance * sample.emission_rgb[1] * emission_length;
+        rgb[2] += transmittance * sample.emission_rgb[2] * emission_length;
         transmittance *= absorb;
     }
     (transmittance, rgb)
@@ -134,6 +140,30 @@ mod tests {
         let (t_wide, _) = integrate_ray(&profile, z, 3.0, 16);
         assert!(t_narrow > t_wide);
         assert!((0.0..=1.0).contains(&t_wide));
+    }
+
+    #[test]
+    fn constant_source_function_conserves_emitted_energy_at_any_step_budget() {
+        // E(r) = sigma(r) * S gives L = S*(1-T), independently of the
+        // radial quadrature. Attenuating each whole cell's emission at its
+        // far boundary violates this identity, especially in thick cells.
+        for extinction in [1e-8, 0.1, 1.0, 100.0] {
+            let mut profile = live_profile();
+            for s in &mut profile.stations {
+                s.extinction_per_m = extinction;
+                s.emission_rgb = [4.0, 2.0, 1.0].map(|v| v * extinction);
+            }
+            for steps in [1, 2, 8, 14, 64, 256] {
+                let (transmittance, rgb) = integrate_ray(&profile, 2.0, 1.6, steps);
+                for (actual, source_function) in rgb.into_iter().zip([4.0, 2.0, 1.0]) {
+                    let expected = source_function * (1.0 - transmittance);
+                    assert!(
+                        (actual - expected).abs() < 2e-12,
+                        "sigma={extinction} steps={steps} actual={actual} expected={expected}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

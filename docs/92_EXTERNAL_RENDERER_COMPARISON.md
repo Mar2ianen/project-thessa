@@ -4,6 +4,10 @@ Status: Godot downloaded/verified; B01/B05 Cycles comparisons executed; actual
 Unreal B05 is now documented in [doc 97](97_UNREAL_B05_COMPARISON.md). The
 setup and bootstrap sections below retain their historical milestone scope.
 
+The later [volume comparison](100_PLUME_SEGMENT_TRANSPORT.md) also renders four
+analytic plume controls in stock Cycles with an independent mathematical oracle.
+Its source/transport contract is separate from the B01/B05 material imports.
+
 The initial R1–R4 refactor deferred external adapters. After those milestones
 and B01/native capture, the user explicitly requested external-engine setup and
 comparison. This continuation adds one development-only Cycles adapter over

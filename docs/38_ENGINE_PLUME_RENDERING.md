@@ -494,6 +494,22 @@ were rejected; the original linear search remains. See
 [doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) for retained ABBA evidence,
 quantization envelopes and outstanding calibration/reference-volume limits.
 
+### Finite-cell emission transport and volume references (2026-10-31)
+
+The CPU reference, native WGSL and retained Bevy WESL now integrate emission
+through each sampled cell as `j*(1-exp(-sigma*ds))/sigma`, with the transparent
+limit `j*ds`. Previously they attenuated all cell emission at the far boundary,
+underestimating thick emitters and making intensity depend on step budget.
+Transmittance, source fields, sampling positions/counts and resolved policy are
+unchanged. Stable thin-cell evaluation avoids cancellation and division by zero.
+
+[Doc 100](100_PLUME_SEGMENT_TRANSPORT.md) records the independent conservation
+and 64-case homogeneous GPU oracles, four source-bound native/Cycles controls,
+closed-form Gaussian full-image comparisons, unchanged stored alpha and measured
+cost. Native and stock Cycles render the same declared coefficients; actual
+camera/geometry and raw HDR are retained. These controls establish transport
+behavior, not calibrated engine appearance or a general animated-field envelope.
+
 ### Native work/budget boundary
 
 One explicit starter source is supported, using the provisional 0.55 m /

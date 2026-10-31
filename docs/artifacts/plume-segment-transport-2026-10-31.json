@@ -1,0 +1,2064 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-31",
+  "source_base": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+  "integrated_base": "d69dc3f03931fb4f62638fc004334760cda4f4cb",
+  "change": "Integrate emission throughout each constant-coefficient cell; retain transmittance, source, sample budget and shared pre-exposure.",
+  "reference_sources": {
+    "transfer_equation": "https://pbr-book.org/4ed/Light_Transport_II_Volume_Rendering/The_Equation_of_Transfer",
+    "cycles_volume_coefficients": "https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/volume_coefficients.html"
+  },
+  "shipping_source_sha256": {
+    "crates/plume-core/src/medium.rs": "fe5d91162bdf20a1c88f8c004866f85839ca58525f3faee413aedbfef0ce5244",
+    "crates/render-wgpu/src/plume_volume.wgsl": "9c77ad9bb1064ecba7c012b14f9cba4c262cb6a39caf1fcb04822ff8398036a3",
+    "crates/render-wgpu/tests/plume.rs": "5527431d7068f41f60d02e05fcfe967b89346f14ef0afe2f4dd4b74b694752c5",
+    "assets/shaders/plume_volume.wesl": "396497721f64f45cc5334676bbec7d54df3a917c21977e02f13112771a3f8e6f",
+    "tools/agent-qa/plume_reference.py": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+    "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+  },
+  "baseline_gpu_shader_sha256": "fda08274ecec76b4f8c4ec45df1f5a65c11a442cd0a8457030f45ff3690a70e3",
+  "native_before": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-volume-native-baseline",
+    "capture_sha256": "77bdc08ee0ea2acdc4d54698c9bcfecbe61912593c36983eba201d7d250878aa",
+    "record": {
+      "id": "analytic-plume-volume-v1",
+      "source": {
+        "commit": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+        "dirty": true,
+        "tracked_diff_sha256": "e7fa134b51ada6a4e766dd79554f8c93a91b730e9958cbfc0753d30b685bbc39",
+        "untracked_sha256": {
+          "tools/agent-qa/plume_reference.py": "bc0c9f83c13bdd8630f31e9d4889575b56232d724151bd5a78960d133a468581",
+          "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+        }
+      },
+      "binary_sha256": "72661a2b93f5c12d475fa589b49be421c0f11aefd33e5b1ea572045365115007",
+      "profile": "dev",
+      "tool_sha256": "bc0c9f83c13bdd8630f31e9d4889575b56232d724151bd5a78960d133a468581",
+      "native_command": [
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-af1b7d1cf4dbbb70",
+        "frozen_plume_volume_reference",
+        "--ignored",
+        "--nocapture",
+        "--test-threads",
+        "1"
+      ],
+      "cases": {
+        "axial-zero": {
+          "linear.rgba16f": "2e7542702b07bf459cd2abf0a44476c8bafc633a69d0f3dd3e1db23d73cfaf5d",
+          "scene.json": "fee4968b47cfffedfdfbf68d0d49937e57e3f5f22f2fda8878820067c9fc0104",
+          "display.png": "d10eebf81c93c29354f647026aee950ff5f0816cb2aaabb5732048d180447fd0",
+          "analytic.png": "1545c013d2125fe02d46341ddca32d10753648b6772e3d8a1d103a95da979241",
+          "analytic.json": "c06cb7fd1ec6cefbb9088e366fe5b2c828557f6d6e8c2152da817a58b6eb1a7c"
+        },
+        "axial-one": {
+          "linear.rgba16f": "e68ff7897a514f7623e429f4f6b9d42b1059d3d7fcf2cfe5aa1b7612197efab5",
+          "scene.json": "6a6d8db019b2de4b2b7d59bb53c889a17c1d5dd3f4e320e2c286395c80906755",
+          "display.png": "b3c012035b7fd618790cca5d83086b1748cb61d97d8c27b1f0250e390c39e3e3",
+          "analytic.png": "b79bfe9eab0cfdce09f728c3a3fd47cfb672272d5468ea59ef8ee5da99dc90b7",
+          "analytic.json": "df791814549133b266ed00903e3d7658e18aaa0edf710ce45a506ff0d7c2c8d8"
+        },
+        "axial-ten": {
+          "linear.rgba16f": "9a4bc35295c2d1b7a020ec95f5769edec2c10a17bd958cc6c152728286059213",
+          "scene.json": "bcb9efc0115c86e5823007b29bb46771e62c2b95d2ff585f363e91719b949c04",
+          "display.png": "fb477045bfefea0aa50aa631e5ee85f4b8cc5657e5911ebc689f29ceaf820161",
+          "analytic.png": "498ad78d115bc0f8d112980a62473556ae1021f109ab1b4fb657c216aa7df956",
+          "analytic.json": "9cdf430158755f4cb32eff1eae1a0f233e73228564e4f3fe95f91970f611f851"
+        },
+        "side": {
+          "linear.rgba16f": "a5a88d337407129a0930bf21b8c4e524827c89160d7f406f22db6d63ea09f19c",
+          "scene.json": "2b0fcd3cede18cf40aacbef4fef01a57b5014be6256e983cc11fcd9218fa6d06",
+          "display.png": "4a2e2f1e9634277c2571fe26c484a52ea7c359b1e654ed8031678b15d8c20a66",
+          "analytic.png": "d5276e25df7eb1e59ddf930079476e51648f24e9527c85703542c689299b05f9",
+          "analytic.json": "4a0f34460760833290ed6f9b5ed25bede6b5db31ce0f30bf0fdd37f6f1e0f754"
+        }
+      },
+      "scope": "analytic field controls; not a physical engine, full-frame benchmark or preference acceptance"
+    }
+  },
+  "native_after": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-volume-native-shipping",
+    "capture_sha256": "5cac60d82eef5b54b4073299fde7c5726e185240307d633eecaa88f52db3881c",
+    "record": {
+      "id": "analytic-plume-volume-v1",
+      "source": {
+        "commit": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+        "dirty": true,
+        "tracked_diff_sha256": "f42d7884cc212d7a6d3986c48f15df0072b74ba5ce3b6d888adbf5aec6b9a831",
+        "untracked_sha256": {
+          "tools/agent-qa/plume_reference.py": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+          "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+        }
+      },
+      "binary_sha256": "8d6c809d81510b3705813cd52d6a334596ba8046620122314d16b48dd0f613b0",
+      "profile": "dev",
+      "tool_sha256": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+      "native_command": [
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-af1b7d1cf4dbbb70",
+        "frozen_plume_volume_reference",
+        "--ignored",
+        "--nocapture",
+        "--test-threads",
+        "1"
+      ],
+      "cases": {
+        "axial-zero": {
+          "linear.rgba16f": "2e7542702b07bf459cd2abf0a44476c8bafc633a69d0f3dd3e1db23d73cfaf5d",
+          "scene.json": "fee4968b47cfffedfdfbf68d0d49937e57e3f5f22f2fda8878820067c9fc0104",
+          "display.png": "d10eebf81c93c29354f647026aee950ff5f0816cb2aaabb5732048d180447fd0",
+          "analytic.png": "1545c013d2125fe02d46341ddca32d10753648b6772e3d8a1d103a95da979241",
+          "analytic.json": "3fe8cc464a3ae1018392821fad12d42f0409de05b6bec9d46b0ea433198cf807"
+        },
+        "axial-one": {
+          "linear.rgba16f": "18907233408bf17f02605df3752ed3e442d01c47e1bb754db02c91384b87f06a",
+          "scene.json": "6a6d8db019b2de4b2b7d59bb53c889a17c1d5dd3f4e320e2c286395c80906755",
+          "display.png": "f871690053ae39bd6078950e540a05f672176ce45ad2d0cd56b711da5d572339",
+          "analytic.png": "b79bfe9eab0cfdce09f728c3a3fd47cfb672272d5468ea59ef8ee5da99dc90b7",
+          "analytic.json": "c69334046290177123edd6a2609d30d1f3e78e6c2de691da855ac70a1c74ba6e"
+        },
+        "axial-ten": {
+          "linear.rgba16f": "20d656e022955ded7e27ce31b4c7190eb3d0875571af5c7de24fecc304e040d2",
+          "scene.json": "bcb9efc0115c86e5823007b29bb46771e62c2b95d2ff585f363e91719b949c04",
+          "display.png": "6eaadca8e1baafdff66ca25b1990ed641036e1b1cd1cb55d79e5178e8136bb2f",
+          "analytic.png": "498ad78d115bc0f8d112980a62473556ae1021f109ab1b4fb657c216aa7df956",
+          "analytic.json": "1bab69966bb364c2400c5e55020f6a579f2c742a337a4f687fcfbed542df4f1e"
+        },
+        "side": {
+          "linear.rgba16f": "e35cc68926a721a39df229bc3db4b0b6ec50ae557723c49f984b05fd6e5a1a35",
+          "scene.json": "2b0fcd3cede18cf40aacbef4fef01a57b5014be6256e983cc11fcd9218fa6d06",
+          "display.png": "110340d57c2b034d9869f15bcacbb18e34f29ea047ceb23a8b615ea6a6913509",
+          "analytic.png": "d5276e25df7eb1e59ddf930079476e51648f24e9527c85703542c689299b05f9",
+          "analytic.json": "0b8d8a83b2e2817e2d8d4dba3842fcbf3a6a46ac2b40c63f9c71582ca57aca86"
+        }
+      },
+      "scope": "analytic field controls; not a physical engine, full-frame benchmark or preference acceptance"
+    }
+  },
+  "controls": [
+    {
+      "case": "axial-zero",
+      "field": {
+        "id": "analytic-plume-volume-v1",
+        "case": "axial-zero",
+        "extent": [
+          129,
+          129
+        ],
+        "units": "metres",
+        "origin_len": [
+          0.0,
+          0.0,
+          -5.0,
+          4.0
+        ],
+        "axis_radius": [
+          0.0,
+          0.0,
+          -1.0,
+          1.6
+        ],
+        "profile": [
+          [
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ],
+          [
+            4.0,
+            1.0,
+            0.0,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ]
+        ],
+        "steps": 14,
+        "exposure_gain": 1.0,
+        "erosion": 0,
+        "tail_dissolve": false,
+        "diamonds": true,
+        "world_from_view": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "clip_from_view": [
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -1.00000010000001,
+          -1.0,
+          0.0,
+          0.0,
+          -0.100000010000001,
+          0.0
+        ],
+        "backend": "Vulkan"
+      },
+      "field_json_sha256": "fee4968b47cfffedfdfbf68d0d49937e57e3f5f22f2fda8878820067c9fc0104",
+      "alpha_bit_identical": true,
+      "alpha_sha256": "a965791baa8a24fac8a3d1e8096e4fecc8ff9a8adf7fa546913250cb6104f7df",
+      "old_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 5745,
+          "pre_exposed_linear_rgb_mae": 2.420276628673146e-05,
+          "pre_exposed_linear_rgb_rmse": 7.860973831063265e-05,
+          "relative_l2_against_thessa": 0.0006087221441593772,
+          "top_10_pixels_fraction_of_squared_error": 0.037185278457287425,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        },
+        "center_linear_rgba": [
+          1.416,
+          0.708,
+          0.3304,
+          0.0
+        ]
+      },
+      "new_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 5745,
+          "pre_exposed_linear_rgb_mae": 2.420276628673146e-05,
+          "pre_exposed_linear_rgb_rmse": 7.860973831063265e-05,
+          "relative_l2_against_thessa": 0.0006087221441593772,
+          "top_10_pixels_fraction_of_squared_error": 0.037185278457287425,
+          "interpretation": "Native midpoint integration/half-float versus exact Gaussian line integral at pixel centres; no reconstruction filter or engine calibration"
+        },
+        "max_absolute_alpha_error": 0.0,
+        "center_linear_rgba": [
+          1.416,
+          0.708,
+          0.3304,
+          0.0
+        ]
+      },
+      "analytic_rgb_rmse_reduction": 1.0,
+      "old_against_cycles_2048": {
+        "rgb_components": 49923,
+        "foreground_union_pixels": 5936,
+        "pre_exposed_linear_rgb_mae": 0.0002691810509046516,
+        "pre_exposed_linear_rgb_rmse": 0.0012335931840314026,
+        "relative_l2_against_thessa": 0.009552448642389395,
+        "top_10_pixels_fraction_of_squared_error": 0.131272424039918,
+        "interpretation": "Old native raster/finite-cell approximation versus the same 2048-sample Cycles volume reference; includes stochastic/pixel reconstruction and precision differences."
+      }
+    },
+    {
+      "case": "axial-one",
+      "field": {
+        "id": "analytic-plume-volume-v1",
+        "case": "axial-one",
+        "extent": [
+          129,
+          129
+        ],
+        "units": "metres",
+        "origin_len": [
+          0.0,
+          0.0,
+          -5.0,
+          4.0
+        ],
+        "axis_radius": [
+          0.0,
+          0.0,
+          -1.0,
+          1.6
+        ],
+        "profile": [
+          [
+            0.0,
+            1.0,
+            0.21186441,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ],
+          [
+            4.0,
+            1.0,
+            0.21186441,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ]
+        ],
+        "steps": 14,
+        "exposure_gain": 1.0,
+        "erosion": 0,
+        "tail_dissolve": false,
+        "diamonds": true,
+        "world_from_view": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "clip_from_view": [
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -1.00000010000001,
+          -1.0,
+          0.0,
+          0.0,
+          -0.100000010000001,
+          0.0
+        ],
+        "backend": "Vulkan"
+      },
+      "field_json_sha256": "6a6d8db019b2de4b2b7d59bb53c889a17c1d5dd3f4e320e2c286395c80906755",
+      "alpha_bit_identical": true,
+      "alpha_sha256": "19f80e7e775957a11982fa529c23e8228fc7da2e9bf3ef6a2faffe52a8c8f52b",
+      "old_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 5745,
+          "pre_exposed_linear_rgb_mae": 0.0004577072652494998,
+          "pre_exposed_linear_rgb_rmse": 0.0023880659890885194,
+          "relative_l2_against_thessa": 0.025192714617353895,
+          "top_10_pixels_fraction_of_squared_error": 0.054946162451754384,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        },
+        "center_linear_rgba": [
+          0.8950827056139233,
+          0.44754135280696167,
+          0.20885263130991547,
+          0.6321205644203252
+        ]
+      },
+      "new_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 5745,
+          "pre_exposed_linear_rgb_mae": 2.0100332402095558e-05,
+          "pre_exposed_linear_rgb_rmse": 6.188898466461768e-05,
+          "relative_l2_against_thessa": 0.0006385780557594737,
+          "top_10_pixels_fraction_of_squared_error": 0.017408450391521568,
+          "interpretation": "Native midpoint integration/half-float versus exact Gaussian line integral at pixel centres; no reconstruction filter or engine calibration"
+        },
+        "max_absolute_alpha_error": 0.00046857565219915465,
+        "center_linear_rgba": [
+          0.8950827056139233,
+          0.44754135280696167,
+          0.20885263130991547,
+          0.6321205644203252
+        ]
+      },
+      "analytic_rgb_rmse_reduction": 38.586284813520166,
+      "old_against_cycles_2048": {
+        "rgb_components": 49923,
+        "foreground_union_pixels": 5936,
+        "pre_exposed_linear_rgb_mae": 0.0004818066450596758,
+        "pre_exposed_linear_rgb_rmse": 0.0023478328679076826,
+        "relative_l2_against_thessa": 0.024768278464958833,
+        "top_10_pixels_fraction_of_squared_error": 0.05549584493514836,
+        "interpretation": "Old native raster/finite-cell approximation versus the same 2048-sample Cycles volume reference; includes stochastic/pixel reconstruction and precision differences."
+      }
+    },
+    {
+      "case": "axial-ten",
+      "field": {
+        "id": "analytic-plume-volume-v1",
+        "case": "axial-ten",
+        "extent": [
+          129,
+          129
+        ],
+        "units": "metres",
+        "origin_len": [
+          0.0,
+          0.0,
+          -5.0,
+          4.0
+        ],
+        "axis_radius": [
+          0.0,
+          0.0,
+          -1.0,
+          1.6
+        ],
+        "profile": [
+          [
+            0.0,
+            1.0,
+            2.1186442,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ],
+          [
+            4.0,
+            1.0,
+            2.1186442,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ]
+        ],
+        "steps": 14,
+        "exposure_gain": 1.0,
+        "erosion": 0,
+        "tail_dissolve": false,
+        "diamonds": true,
+        "world_from_view": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "clip_from_view": [
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -1.00000010000001,
+          -1.0,
+          0.0,
+          0.0,
+          -0.100000010000001,
+          0.0
+        ],
+        "backend": "Vulkan"
+      },
+      "field_json_sha256": "bcb9efc0115c86e5823007b29bb46771e62c2b95d2ff585f363e91719b949c04",
+      "alpha_bit_identical": true,
+      "alpha_sha256": "d6d0ae9b5f329616b1319e5fdd37dd170e07462ebeb5f5475574c3445e857c66",
+      "old_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 5745,
+          "pre_exposed_linear_rgb_mae": 0.0008626952002383327,
+          "pre_exposed_linear_rgb_rmse": 0.0032204928527314186,
+          "relative_l2_against_thessa": 0.12035211745692422,
+          "top_10_pixels_fraction_of_squared_error": 0.022737122241796547,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        },
+        "center_linear_rgba": [
+          0.1415935625385188,
+          0.0707967812692594,
+          0.033038497925654386,
+          0.9999546000985671
+        ]
+      },
+      "new_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 5745,
+          "pre_exposed_linear_rgb_mae": 7.3138011741956184e-06,
+          "pre_exposed_linear_rgb_rmse": 2.010255250426491e-05,
+          "relative_l2_against_thessa": 0.0006811709310982262,
+          "top_10_pixels_fraction_of_squared_error": 0.012375617271009016,
+          "interpretation": "Native midpoint integration/half-float versus exact Gaussian line integral at pixel centres; no reconstruction filter or engine calibration"
+        },
+        "max_absolute_alpha_error": 0.000902334803224214,
+        "center_linear_rgba": [
+          0.1415935625385188,
+          0.0707967812692594,
+          0.033038497925654386,
+          0.9999546000985671
+        ]
+      },
+      "analytic_rgb_rmse_reduction": 160.20318076762473,
+      "old_against_cycles_2048": {
+        "rgb_components": 49923,
+        "foreground_union_pixels": 5951,
+        "pre_exposed_linear_rgb_mae": 0.0008662628388041887,
+        "pre_exposed_linear_rgb_rmse": 0.0032130267878541833,
+        "relative_l2_against_thessa": 0.120073105281417,
+        "top_10_pixels_fraction_of_squared_error": 0.022844501371327416,
+        "interpretation": "Old native raster/finite-cell approximation versus the same 2048-sample Cycles volume reference; includes stochastic/pixel reconstruction and precision differences."
+      }
+    },
+    {
+      "case": "side",
+      "field": {
+        "id": "analytic-plume-volume-v1",
+        "case": "side",
+        "extent": [
+          129,
+          129
+        ],
+        "units": "metres",
+        "origin_len": [
+          0.0,
+          -2.0,
+          -10.0,
+          4.0
+        ],
+        "axis_radius": [
+          0.0,
+          1.0,
+          0.0,
+          1.6
+        ],
+        "profile": [
+          [
+            0.0,
+            1.0,
+            0.15,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ],
+          [
+            4.0,
+            1.0,
+            0.15,
+            1.0,
+            0.3,
+            0.15,
+            0.07,
+            0.0
+          ]
+        ],
+        "steps": 14,
+        "exposure_gain": 1.0,
+        "erosion": 0,
+        "tail_dissolve": false,
+        "diamonds": true,
+        "world_from_view": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "clip_from_view": [
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          2.0701573613012125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -1.00000010000001,
+          -1.0,
+          0.0,
+          0.0,
+          -0.100000010000001,
+          0.0
+        ],
+        "backend": "Vulkan"
+      },
+      "field_json_sha256": "2b0fcd3cede18cf40aacbef4fef01a57b5014be6256e983cc11fcd9218fa6d06",
+      "alpha_bit_identical": true,
+      "alpha_sha256": "5d28e3a586d7b1049477458ce61db31ec155b134437212524fb07a24072fb0ff",
+      "old_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 2653,
+          "pre_exposed_linear_rgb_mae": 0.00012842690857632586,
+          "pre_exposed_linear_rgb_rmse": 0.0006114132537535179,
+          "relative_l2_against_thessa": 0.011047022307197738,
+          "top_10_pixels_fraction_of_squared_error": 0.023372856243083027,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        },
+        "center_linear_rgba": [
+          0.4156434540056337,
+          0.20782172700281684,
+          0.09698347260131454,
+          0.20782172700281684
+        ]
+      },
+      "new_against_analytic": {
+        "method": "Gaussian erf line integral; pixel centres, no reconstruction filter",
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 2653,
+          "pre_exposed_linear_rgb_mae": 1.5204912168015814e-05,
+          "pre_exposed_linear_rgb_rmse": 6.97078819945945e-05,
+          "relative_l2_against_thessa": 0.0012477586930188605,
+          "top_10_pixels_fraction_of_squared_error": 0.025351888165104367,
+          "interpretation": "Native midpoint integration/half-float versus exact Gaussian line integral at pixel centres; no reconstruction filter or engine calibration"
+        },
+        "max_absolute_alpha_error": 0.00034876932285027307,
+        "center_linear_rgba": [
+          0.4156434540056337,
+          0.20782172700281684,
+          0.09698347260131454,
+          0.20782172700281684
+        ]
+      },
+      "analytic_rgb_rmse_reduction": 8.771077764217969,
+      "old_against_cycles_2048": {
+        "rgb_components": 49923,
+        "foreground_union_pixels": 2857,
+        "pre_exposed_linear_rgb_mae": 0.00021320916610529644,
+        "pre_exposed_linear_rgb_rmse": 0.0009707356553536931,
+        "relative_l2_against_thessa": 0.017539263948320588,
+        "top_10_pixels_fraction_of_squared_error": 0.08851928968313234,
+        "interpretation": "Old native raster/finite-cell approximation versus the same 2048-sample Cycles volume reference; includes stochastic/pixel reconstruction and precision differences."
+      }
+    }
+  ],
+  "cycles": {
+    "256": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-volume-cycles-shipping-256/comparison.json",
+      "sha256": "f95243ced0176db50bc59b72a52d44ebe2e8c50080cfdcebd630bf8820bcceac",
+      "report": {
+        "id": "analytic-plume-volume-v1",
+        "engine": {
+          "name": "Blender/Cycles",
+          "version": "5.2.2 LTS",
+          "build_hash": "d13f752e3b9c"
+        },
+        "source": {
+          "commit": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+          "dirty": true,
+          "tracked_diff_sha256": "f42d7884cc212d7a6d3986c48f15df0072b74ba5ce3b6d888adbf5aec6b9a831",
+          "untracked_sha256": {
+            "tools/agent-qa/plume_reference.py": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+            "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+          }
+        },
+        "tool_sha256": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+        "native_capture_sha256": "5cac60d82eef5b54b4073299fde7c5726e185240307d633eecaa88f52db3881c",
+        "native_source": {
+          "commit": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+          "dirty": true,
+          "tracked_diff_sha256": "f42d7884cc212d7a6d3986c48f15df0072b74ba5ce3b6d888adbf5aec6b9a831",
+          "untracked_sha256": {
+            "tools/agent-qa/plume_reference.py": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+            "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+          }
+        },
+        "settings": {
+          "device": "CPU",
+          "samples": 256,
+          "seed": 0,
+          "volume_step_rate": 0.1,
+          "volume_max_steps": 4096,
+          "volume_biased": false,
+          "scattering": 0,
+          "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+          "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+        },
+        "cases": {
+          "axial-zero": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 5830,
+              "pre_exposed_linear_rgb_mae": 0.0007741876458585112,
+              "pre_exposed_linear_rgb_rmse": 0.0036692146666681014,
+              "relative_l2_against_thessa": 0.028412920170898675,
+              "top_10_pixels_fraction_of_squared_error": 0.16789911941603722,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              1.461946964263916,
+              0.730973482131958,
+              0.3411208987236023,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "4fa2529dcb530b18b9d554d205673dd732d35e38bf0b2ee2cbc783410b7de172",
+              "linear.rgba32f": "6f30aa458845bbb01dce08be5c06a95932d96eef73ae5fc980f16aeeec029c2f",
+              "display.png": "7a277f6e4e693fb9bb0a79f8f95b07e1a86bb77b5e9f651cf7f944118f5ce8e2",
+              "thessa.png": "d10eebf81c93c29354f647026aee950ff5f0816cb2aaabb5732048d180447fd0",
+              "scene.json": "fee4968b47cfffedfdfbf68d0d49937e57e3f5f22f2fda8878820067c9fc0104",
+              "scene.blend": "6c941e8efbf0067500f8b96a4c256d1671eecf9bee4902f04610a7788ef14a2a"
+            }
+          },
+          "axial-one": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 5830,
+              "pre_exposed_linear_rgb_mae": 0.0003729869653552871,
+              "pre_exposed_linear_rgb_rmse": 0.0012775024873577503,
+              "relative_l2_against_thessa": 0.013181425725848,
+              "top_10_pixels_fraction_of_squared_error": 0.06461117019977337,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              0.9043442010879517,
+              0.45217210054397583,
+              0.21101365983486176,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "85a80fc24c1a1a5670ffdd9c527ca858543787828528f6ca279c6d1c428f79c5",
+              "linear.rgba32f": "d630ca21991eef0662624878277f81ab2ab06cbd7d0598e63a961ab67519905e",
+              "display.png": "b21937d04d74c3db6ea2e70d5f56731fa54def30d05904c6864f0341e3bd410c",
+              "thessa.png": "f871690053ae39bd6078950e540a05f672176ce45ad2d0cd56b711da5d572339",
+              "scene.json": "6a6d8db019b2de4b2b7d59bb53c889a17c1d5dd3f4e320e2c286395c80906755",
+              "scene.blend": "5dd74916e377b013d3f480cb0d071593f836169c9a1bf5ccc8c068dc01b161b6"
+            }
+          },
+          "axial-ten": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 5854,
+              "pre_exposed_linear_rgb_mae": 7.580316664342345e-05,
+              "pre_exposed_linear_rgb_rmse": 0.00020706187846385225,
+              "relative_l2_against_thessa": 0.007016249927378443,
+              "top_10_pixels_fraction_of_squared_error": 0.043568954386711885,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              0.14159998297691345,
+              0.07079999148845673,
+              0.033040039241313934,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "b31e96f3a09ec39940c5372fe33782a81530291b7be7b4676a4c2e197af5916d",
+              "linear.rgba32f": "45e9afd37a83b682262dd8df651639982baaeb944a13c760c2d61b1c0e804fc5",
+              "display.png": "25dda918e80e1b55ddce8fbaf2dbd43eacd9bd8d19e4eec6c96784cd016039a0",
+              "thessa.png": "6eaadca8e1baafdff66ca25b1990ed641036e1b1cd1cb55d79e5178e8136bb2f",
+              "scene.json": "bcb9efc0115c86e5823007b29bb46771e62c2b95d2ff585f363e91719b949c04",
+              "scene.blend": "743dbca73498c2295c781fb272dd737511398a5a2f5de5cc71c9076503a86ea9"
+            }
+          },
+          "side": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 2815,
+              "pre_exposed_linear_rgb_mae": 0.0005160906701058255,
+              "pre_exposed_linear_rgb_rmse": 0.0023016791075312713,
+              "relative_l2_against_thessa": 0.041199646765694896,
+              "top_10_pixels_fraction_of_squared_error": 0.07239079756095827,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              0.40630823373794556,
+              0.20315411686897278,
+              0.0948052778840065,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "8bc0f9c0770820ef8a1a4f68fe124334563c4c08e79b0226cdcb154448b1f661",
+              "linear.rgba32f": "cfe6d7006345f3e5b8d04b43a06b308ac8fa953ad080ac4aebc4ff0e43395293",
+              "display.png": "c5c448ad2c702c47f57a6644dd50a63df38bc3557caa8de82b1fa4c21e3a2254",
+              "thessa.png": "110340d57c2b034d9869f15bcacbb18e34f29ea047ceb23a8b615ea6a6913509",
+              "scene.json": "2b0fcd3cede18cf40aacbef4fef01a57b5014be6256e983cc11fcd9218fa6d06",
+              "scene.blend": "8e6f00b4b7ed0eaa90fb35532b5a3574194598eec4ef2c62bd39471ca70b8522"
+            }
+          }
+        },
+        "acceptance": {
+          "physical": "analytic transport control only; not engine calibration",
+          "visual": "not evaluated",
+          "performance": "not comparable",
+          "temporal": "not evaluated"
+        }
+      }
+    },
+    "2048": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-volume-cycles-shipping-2048/comparison.json",
+      "sha256": "b739e79a22d9af80ec37569b73bdc2a166fee3515b1d3cc20597ac82a1f8c676",
+      "report": {
+        "id": "analytic-plume-volume-v1",
+        "engine": {
+          "name": "Blender/Cycles",
+          "version": "5.2.2 LTS",
+          "build_hash": "d13f752e3b9c"
+        },
+        "source": {
+          "commit": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+          "dirty": true,
+          "tracked_diff_sha256": "f42d7884cc212d7a6d3986c48f15df0072b74ba5ce3b6d888adbf5aec6b9a831",
+          "untracked_sha256": {
+            "tools/agent-qa/plume_reference.py": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+            "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+          }
+        },
+        "tool_sha256": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+        "native_capture_sha256": "5cac60d82eef5b54b4073299fde7c5726e185240307d633eecaa88f52db3881c",
+        "native_source": {
+          "commit": "3519ea2881ea811c0b2bab13c28c39752f775ba5",
+          "dirty": true,
+          "tracked_diff_sha256": "f42d7884cc212d7a6d3986c48f15df0072b74ba5ce3b6d888adbf5aec6b9a831",
+          "untracked_sha256": {
+            "tools/agent-qa/plume_reference.py": "22115e8a35216a82664c75aa78b0b120bbb3cb9e9f63fe9ced3112ae9a83126b",
+            "tools/agent-qa/tests/test_plume_reference.py": "5194cfd705d01493a23004ef0b31ebf1541db12b69a576206d3b9f2af85fec38"
+          }
+        },
+        "settings": {
+          "device": "CPU",
+          "samples": 2048,
+          "seed": 0,
+          "volume_step_rate": 0.1,
+          "volume_max_steps": 4096,
+          "volume_biased": false,
+          "scattering": 0,
+          "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+          "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+        },
+        "cases": {
+          "axial-zero": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 5936,
+              "pre_exposed_linear_rgb_mae": 0.0002691810509046516,
+              "pre_exposed_linear_rgb_rmse": 0.0012335931840314026,
+              "relative_l2_against_thessa": 0.009552448642389395,
+              "top_10_pixels_fraction_of_squared_error": 0.131272424039918,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              1.4215103387832642,
+              0.7107551693916321,
+              0.3316858410835266,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "fb5506d58a0a31d87a11daeea9a6d789adca6a07799af1f207b8ef756f22878c",
+              "linear.rgba32f": "a6aea7276bf7b814a4fc4eb4b334527427fe542dc6d7b0139811b0888f001356",
+              "display.png": "e716f495a0ba8bc69fa25ea658692e1771bc977a729d7fefe4a7c1a293848617",
+              "thessa.png": "d10eebf81c93c29354f647026aee950ff5f0816cb2aaabb5732048d180447fd0",
+              "scene.json": "fee4968b47cfffedfdfbf68d0d49937e57e3f5f22f2fda8878820067c9fc0104",
+              "scene.blend": "71116c4e7eff8a87626366429cab15babb11cbc87e72c670870a2d6dc6750829"
+            }
+          },
+          "axial-one": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 5936,
+              "pre_exposed_linear_rgb_mae": 0.00013254801290954335,
+              "pre_exposed_linear_rgb_rmse": 0.0004561278737870819,
+              "relative_l2_against_thessa": 0.004706382765836198,
+              "top_10_pixels_fraction_of_squared_error": 0.07290123792055325,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              0.8941298127174377,
+              0.44706490635871887,
+              0.20863047242164612,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "5df8392c258ef77f9fcb487ae15a8868fe79329c22a23806b64a37ca4227fab8",
+              "linear.rgba32f": "af92488000cdbfb32e8b89ab1ddc76dd701d87cb4f898208e531e96b2557d5ee",
+              "display.png": "2790ce3450476fe4109937e3c89f83fc9a668b9f03e56033d09bb3f4698152e4",
+              "thessa.png": "f871690053ae39bd6078950e540a05f672176ce45ad2d0cd56b711da5d572339",
+              "scene.json": "6a6d8db019b2de4b2b7d59bb53c889a17c1d5dd3f4e320e2c286395c80906755",
+              "scene.blend": "dc1fdedd6333b6ee0f0c0a10e0fdbfce1d61617682f33e7da8efc9f1e4509275"
+            }
+          },
+          "axial-ten": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 5951,
+              "pre_exposed_linear_rgb_mae": 2.8323584931046626e-05,
+              "pre_exposed_linear_rgb_rmse": 7.614268338897355e-05,
+              "relative_l2_against_thessa": 0.0025800794465966827,
+              "top_10_pixels_fraction_of_squared_error": 0.06423431850566803,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              0.1416008621454239,
+              0.07080043107271194,
+              0.033039409667253494,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "7301f931f9a3807220f78dd1a117748b2d97d748202adcf47afc4c6f4f1a9146",
+              "linear.rgba32f": "0c5e3bede13178de6a4e26692eba9ccf37d47b7e700824ee81a6dd596d1ad8e2",
+              "display.png": "bcc963a22556dbc2e496bca5e70888cb8ac372df8d44c5275e948d6d2e71c2a2",
+              "thessa.png": "6eaadca8e1baafdff66ca25b1990ed641036e1b1cd1cb55d79e5178e8136bb2f",
+              "scene.json": "bcb9efc0115c86e5823007b29bb46771e62c2b95d2ff585f363e91719b949c04",
+              "scene.blend": "5bbf443dec54a8aaf4a7a2fd3d2593d173a15e6859bc52418094e836c8ad24d4"
+            }
+          },
+          "side": {
+            "metrics": {
+              "rgb_components": 49923,
+              "foreground_union_pixels": 2857,
+              "pre_exposed_linear_rgb_mae": 0.00018806419082127146,
+              "pre_exposed_linear_rgb_rmse": 0.0008307820505132291,
+              "relative_l2_against_thessa": 0.014870850983713725,
+              "top_10_pixels_fraction_of_squared_error": 0.07911678110159892,
+              "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+            },
+            "center_linear_rgba": [
+              0.4202130436897278,
+              0.2101065218448639,
+              0.09804977476596832,
+              1.0
+            ],
+            "actual_camera": {
+              "world_from_view_rows": [
+                [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              ],
+              "vertical_fov_rad": 0.8999999761581421,
+              "near_m": 0.10000000149011612,
+              "far_m": 1000000.0
+            },
+            "carrier_triangles": 12,
+            "material_node": "ShaderNodeVolumeCoefficients",
+            "scatter_coefficients": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "artifacts_sha256": {
+              "radiance.exr": "771a185d0081e8b143596959d8c891f3bf43db996f7524e7c0bfc747232d8d7d",
+              "linear.rgba32f": "628ff869556e5cf4712b16f1a1724140548bb4dd96dbb0efeb10f8e6f7b72171",
+              "display.png": "3710857620eacf31ffd037f8bc39824bce2ad568990276a326abd569f5cc1a4d",
+              "thessa.png": "110340d57c2b034d9869f15bcacbb18e34f29ea047ceb23a8b615ea6a6913509",
+              "scene.json": "2b0fcd3cede18cf40aacbef4fef01a57b5014be6256e983cc11fcd9218fa6d06",
+              "scene.blend": "b4c0409b5df6810240d049144b1c387eacb3075d327c5e0b2431d0a94c3174b3"
+            }
+          }
+        },
+        "acceptance": {
+          "physical": "analytic transport control only; not engine calibration",
+          "visual": "not evaluated",
+          "performance": "not comparable",
+          "temporal": "not evaluated"
+        }
+      }
+    }
+  },
+  "release_abba": {
+    "extent": [
+      1280,
+      720
+    ],
+    "warmup": 20,
+    "measured_samples_per_case": 80,
+    "cases": 10,
+    "same_station_publications": true,
+    "scope": "plume pass GPU intervals; clear/readback/mapping excluded. Static-field CPU encode is not profile build or full-frame work.",
+    "gpu_median_change_percent_by_case": [
+      -0.35963613285381335,
+      0.1230356244057873,
+      0.228810187027495,
+      0.8916756580688467,
+      -1.444760728288308,
+      -2.767691438715414,
+      4.1024221453287435,
+      6.619437305559317,
+      3.490944849627131,
+      0.2840335649817005
+    ],
+    "runs": [
+      {
+        "label": "0-baseline",
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/0-baseline",
+        "csv_sha256": "27617521f645c7f3f684faed43dbba937489d6397f0e5348b1933f96462a9c35",
+        "statistics_by_case": {
+          "gpu_ms": [
+            {
+              "median": 0.3331930709609986,
+              "p95": 0.34004609178543094,
+              "p99": 0.35832081398391724
+            },
+            {
+              "median": 0.5376415255565643,
+              "p95": 0.5498847879066467,
+              "p99": 0.553692021697998
+            },
+            {
+              "median": 0.30169322085571293,
+              "p95": 0.3095882214546204,
+              "p99": 0.3123133993263245
+            },
+            {
+              "median": 0.4904518646163941,
+              "p95": 0.5013124999580384,
+              "p99": 0.5096483381538391
+            },
+            {
+              "median": 0.3709247616405488,
+              "p95": 0.3835287092971802,
+              "p99": 0.40256487825393683
+            },
+            {
+              "median": 0.6253882454109192,
+              "p95": 0.6438232721900939,
+              "p99": 0.6761246451988221
+            },
+            {
+              "median": 0.36148682945251465,
+              "p95": 0.3736699775848389,
+              "p99": 0.39458972536468506
+            },
+            {
+              "median": 0.5948702608623505,
+              "p95": 0.616571493473053,
+              "p99": 0.6502755315628053
+            },
+            {
+              "median": 0.11956717912101747,
+              "p95": 0.12988678650283816,
+              "p99": 0.133533715713501
+            },
+            {
+              "median": 0.6954413471717835,
+              "p95": 0.7124737088699341,
+              "p99": 0.7240957909698487
+            }
+          ],
+          "cpu_submit_ms": [
+            {
+              "median": 0.067736,
+              "p95": 0.21613200000000002,
+              "p99": 0.303816
+            },
+            {
+              "median": 0.03488,
+              "p95": 0.12562399999999999,
+              "p99": 0.145551
+            },
+            {
+              "median": 0.033812999999999996,
+              "p95": 0.038813,
+              "p99": 0.068086
+            },
+            {
+              "median": 0.035214999999999996,
+              "p95": 0.118891,
+              "p99": 0.14567200000000002
+            },
+            {
+              "median": 0.033893,
+              "p95": 0.038903,
+              "p99": 0.046777000000000006
+            },
+            {
+              "median": 0.0345645,
+              "p95": 0.040906,
+              "p99": 0.049482
+            },
+            {
+              "median": 0.034069,
+              "p95": 0.038292,
+              "p99": 0.047078
+            },
+            {
+              "median": 0.0340035,
+              "p95": 0.036869,
+              "p99": 0.04308
+            },
+            {
+              "median": 0.0212995,
+              "p95": 0.074229,
+              "p99": 0.17715
+            },
+            {
+              "median": 0.033998,
+              "p95": 0.060403,
+              "p99": 0.229237
+            }
+          ],
+          "wall_ms": [
+            {
+              "median": 0.5502345,
+              "p95": 0.7418509999999999,
+              "p99": 1.142407
+            },
+            {
+              "median": 0.6986405,
+              "p95": 0.7898109999999999,
+              "p99": 0.840966
+            },
+            {
+              "median": 0.4462305,
+              "p95": 0.45921500000000004,
+              "p99": 0.559592
+            },
+            {
+              "median": 0.6382335,
+              "p95": 0.728336,
+              "p99": 0.758392
+            },
+            {
+              "median": 0.5454655,
+              "p95": 0.5668850000000001,
+              "p99": 0.587113
+            },
+            {
+              "median": 0.791364,
+              "p95": 0.830036,
+              "p99": 0.871643
+            },
+            {
+              "median": 0.540682,
+              "p95": 0.565923,
+              "p99": 0.5791890000000001
+            },
+            {
+              "median": 0.750998,
+              "p95": 0.8038770000000001,
+              "p99": 0.873757
+            },
+            {
+              "median": 0.2354485,
+              "p95": 0.31137,
+              "p99": 0.447694
+            },
+            {
+              "median": 0.8515205,
+              "p95": 0.882564,
+              "p99": 1.0870739999999999
+            }
+          ]
+        }
+      },
+      {
+        "label": "1-candidate",
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/1-candidate",
+        "csv_sha256": "c9bcaef2d14d0e0f7ae48bacbb526274f8d6f37bf62329e7ee3d3e26eef09458",
+        "statistics_by_case": {
+          "gpu_ms": [
+            {
+              "median": 0.33062819766998297,
+              "p95": 0.3372808377685547,
+              "p99": 0.3424907366409302
+            },
+            {
+              "median": 0.5363590889110565,
+              "p95": 0.550646234664917,
+              "p99": 0.559743519618988
+            },
+            {
+              "median": 0.30141268783950814,
+              "p95": 0.3095882214546204,
+              "p99": 0.3117122571487427
+            },
+            {
+              "median": 0.4936980323753357,
+              "p95": 0.502194175151825,
+              "p99": 0.5136559526710511
+            },
+            {
+              "median": 0.3334936420497895,
+              "p95": 0.3364392387199402,
+              "p99": 0.33928464502716066
+            },
+            {
+              "median": 0.541248378622055,
+              "p95": 0.5801022013664247,
+              "p99": 0.6075543608093262
+            },
+            {
+              "median": 0.37885983838462833,
+              "p95": 0.4051297515449524,
+              "p99": 0.4078950055618286
+            },
+            {
+              "median": 0.6268710627822877,
+              "p95": 0.6611361669044495,
+              "p99": 0.6820158385391235
+            },
+            {
+              "median": 0.12431620232391359,
+              "p95": 0.1308886901321411,
+              "p99": 0.1502855443954468
+            },
+            {
+              "median": 0.6946398242683411,
+              "p95": 0.7108706630630494,
+              "p99": 0.731229344810486
+            }
+          ],
+          "cpu_submit_ms": [
+            {
+              "median": 0.036642999999999995,
+              "p95": 0.160739,
+              "p99": 0.423188
+            },
+            {
+              "median": 0.036032,
+              "p95": 0.083526,
+              "p99": 0.214319
+            },
+            {
+              "median": 0.0346195,
+              "p95": 0.060993,
+              "p99": 0.12336000000000001
+            },
+            {
+              "median": 0.034783999999999995,
+              "p95": 0.057156,
+              "p99": 0.122538
+            },
+            {
+              "median": 0.034795,
+              "p95": 0.06651399999999999,
+              "p99": 0.146794
+            },
+            {
+              "median": 0.0350355,
+              "p95": 0.118851,
+              "p99": 0.126536
+            },
+            {
+              "median": 0.0352505,
+              "p95": 0.040475000000000004,
+              "p99": 0.047298
+            },
+            {
+              "median": 0.0345545,
+              "p95": 0.039834,
+              "p99": 0.052448
+            },
+            {
+              "median": 0.034359,
+              "p95": 0.067185,
+              "p99": 0.097181
+            },
+            {
+              "median": 0.0357665,
+              "p95": 0.12143599999999999,
+              "p99": 0.125243
+            }
+          ],
+          "wall_ms": [
+            {
+              "median": 0.49653899999999995,
+              "p95": 0.688442,
+              "p99": 1.232916
+            },
+            {
+              "median": 0.6983705,
+              "p95": 0.770444,
+              "p99": 0.888023
+            },
+            {
+              "median": 0.449898,
+              "p95": 0.5155,
+              "p99": 0.547479
+            },
+            {
+              "median": 0.6383535,
+              "p95": 0.662914,
+              "p99": 0.727615
+            },
+            {
+              "median": 0.505411,
+              "p95": 0.588786,
+              "p99": 0.643488
+            },
+            {
+              "median": 0.721223,
+              "p95": 0.83789,
+              "p99": 0.895568
+            },
+            {
+              "median": 0.556216,
+              "p95": 0.5965010000000001,
+              "p99": 0.652115
+            },
+            {
+              "median": 0.798702,
+              "p95": 0.8545109999999999,
+              "p99": 0.9908849999999999
+            },
+            {
+              "median": 0.283343,
+              "p95": 0.313093,
+              "p99": 0.479844
+            },
+            {
+              "median": 0.853559,
+              "p95": 0.944308,
+              "p99": 1.011654
+            }
+          ]
+        }
+      },
+      {
+        "label": "2-candidate",
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/2-candidate",
+        "csv_sha256": "e8059ed2aae001edf54f63061323d8b9d9e3d15fc5bc9056be8b0a8b29c0baf1",
+        "statistics_by_case": {
+          "gpu_ms": [
+            {
+              "median": 0.33002705549240113,
+              "p95": 0.33724076162338257,
+              "p99": 0.34092776697921756
+            },
+            {
+              "median": 0.5398657516136169,
+              "p95": 0.5554954482307435,
+              "p99": 0.5676385202178955
+            },
+            {
+              "median": 0.3042380560741425,
+              "p95": 0.31732291747283936,
+              "p99": 0.3332732232513428
+            },
+            {
+              "median": 0.4993688069171906,
+              "p95": 0.5172227295913696,
+              "p99": 0.5254383393516541
+            },
+            {
+              "median": 0.40190362185859685,
+              "p95": 0.42055906743621835,
+              "p99": 0.4325418348426819
+            },
+            {
+              "median": 0.6660454946880341,
+              "p95": 0.6888287832183838,
+              "p99": 0.697284849849701
+            },
+            {
+              "median": 0.37471195735931406,
+              "p95": 0.3943893446388245,
+              "p99": 0.4065324166259766
+            },
+            {
+              "median": 0.6367097564220429,
+              "p95": 0.6756036553115845,
+              "p99": 0.6998897992858888
+            },
+            {
+              "median": 0.12874461636543275,
+              "p95": 0.1358581321334839,
+              "p99": 0.18286745042037963
+            },
+            {
+              "median": 0.6991083144550324,
+              "p95": 0.7083057897720338,
+              "p99": 0.716801932548523
+            }
+          ],
+          "cpu_submit_ms": [
+            {
+              "median": 0.0361175,
+              "p95": 0.13261699999999998,
+              "p99": 0.147455
+            },
+            {
+              "median": 0.036914,
+              "p95": 0.061314,
+              "p99": 0.148005
+            },
+            {
+              "median": 0.039218,
+              "p95": 0.158055,
+              "p99": 0.196827
+            },
+            {
+              "median": 0.041337,
+              "p95": 0.161772,
+              "p99": 0.184093
+            },
+            {
+              "median": 0.0362675,
+              "p95": 0.119853,
+              "p99": 0.153326
+            },
+            {
+              "median": 0.037465,
+              "p95": 0.053829999999999996,
+              "p99": 0.15861599999999998
+            },
+            {
+              "median": 0.034443999999999995,
+              "p95": 0.036538,
+              "p99": 0.041157
+            },
+            {
+              "median": 0.035450999999999996,
+              "p95": 0.057447,
+              "p99": 0.173834
+            },
+            {
+              "median": 0.0352705,
+              "p95": 0.119963,
+              "p99": 0.160228
+            },
+            {
+              "median": 0.035401,
+              "p95": 0.12640500000000002,
+              "p99": 0.15732300000000002
+            }
+          ],
+          "wall_ms": [
+            {
+              "median": 0.49736649999999993,
+              "p95": 0.584679,
+              "p99": 0.835065
+            },
+            {
+              "median": 0.6945785,
+              "p95": 0.7310110000000001,
+              "p99": 0.866232
+            },
+            {
+              "median": 0.46710949999999996,
+              "p95": 0.594387,
+              "p99": 0.7744219999999999
+            },
+            {
+              "median": 0.6614964999999999,
+              "p95": 0.8519559999999999,
+              "p99": 0.947364
+            },
+            {
+              "median": 0.5860215,
+              "p95": 0.742322,
+              "p99": 0.8189649999999999
+            },
+            {
+              "median": 0.8462054999999999,
+              "p95": 0.917017,
+              "p99": 0.997487
+            },
+            {
+              "median": 0.552669,
+              "p95": 0.5867929999999999,
+              "p99": 0.60145
+            },
+            {
+              "median": 0.8172565,
+              "p95": 0.931966,
+              "p99": 1.0591920000000001
+            },
+            {
+              "median": 0.285867,
+              "p95": 0.370069,
+              "p99": 0.525919
+            },
+            {
+              "median": 0.856495,
+              "p95": 0.948827,
+              "p99": 0.975216
+            }
+          ]
+        }
+      },
+      {
+        "label": "3-baseline",
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/3-baseline",
+        "csv_sha256": "2ba08368955a6d96267ef6979a00fbf600bfc10c7e4f5e612b08eee2468b2fdf",
+        "statistics_by_case": {
+          "gpu_ms": [
+            {
+              "median": 0.3298467128391266,
+              "p95": 0.3371205331878663,
+              "p99": 0.3522292399177552
+            },
+            {
+              "median": 0.5372608021774292,
+              "p95": 0.5559362858276368,
+              "p99": 0.5831079122543336
+            },
+            {
+              "median": 0.3025748960494995,
+              "p95": 0.3094279168739319,
+              "p99": 0.3335537562675477
+            },
+            {
+              "median": 0.49383829888343816,
+              "p95": 0.5041178301200867,
+              "p99": 0.5094078812828065
+            },
+            {
+              "median": 0.37525298531913764,
+              "p95": 0.4011622131729126,
+              "p99": 0.4201583059844971
+            },
+            {
+              "median": 0.6162709223842622,
+              "p95": 0.6429015208511353,
+              "p99": 0.6602144155654908
+            },
+            {
+              "median": 0.3623885427188874,
+              "p95": 0.3875763999595643,
+              "p99": 0.39154393833160406
+            },
+            {
+              "median": 0.5902615041675567,
+              "p95": 0.6119226606330872,
+              "p99": 0.6249073316688538
+            },
+            {
+              "median": 0.12495742064666748,
+              "p95": 0.14343252357101444,
+              "p99": 0.14932371691131593
+            },
+            {
+              "median": 0.6943592912521364,
+              "p95": 0.7083458659172058,
+              "p99": 0.7242160194053651
+            }
+          ],
+          "cpu_submit_ms": [
+            {
+              "median": 0.036077,
+              "p95": 0.127226,
+              "p99": 0.151502
+            },
+            {
+              "median": 0.0346495,
+              "p95": 0.040676000000000004,
+              "p99": 0.04833
+            },
+            {
+              "median": 0.034209,
+              "p95": 0.039063,
+              "p99": 0.046176
+            },
+            {
+              "median": 0.036804,
+              "p95": 0.121286,
+              "p99": 0.17411400000000002
+            },
+            {
+              "median": 0.0400445,
+              "p95": 0.13454100000000002,
+              "p99": 0.177961
+            },
+            {
+              "median": 0.036868,
+              "p95": 0.062085,
+              "p99": 0.1453
+            },
+            {
+              "median": 0.035325999999999996,
+              "p95": 0.052528000000000005,
+              "p99": 0.163004
+            },
+            {
+              "median": 0.044378,
+              "p95": 0.13142500000000001,
+              "p99": 0.15842499999999998
+            },
+            {
+              "median": 0.0390275,
+              "p95": 0.156912,
+              "p99": 0.20403000000000002
+            },
+            {
+              "median": 0.038592,
+              "p95": 0.14083199999999998,
+              "p99": 0.149979
+            }
+          ],
+          "wall_ms": [
+            {
+              "median": 0.49402999999999997,
+              "p95": 0.5791379999999999,
+              "p99": 0.6124200000000001
+            },
+            {
+              "median": 0.69285,
+              "p95": 0.729328,
+              "p99": 0.847177
+            },
+            {
+              "median": 0.445419,
+              "p95": 0.45799300000000004,
+              "p99": 0.496875
+            },
+            {
+              "median": 0.6399565,
+              "p95": 0.73557,
+              "p99": 1.6355149999999998
+            },
+            {
+              "median": 0.5611145,
+              "p95": 0.666521,
+              "p99": 0.822341
+            },
+            {
+              "median": 0.790632,
+              "p95": 0.851806,
+              "p99": 1.051909
+            },
+            {
+              "median": 0.541513,
+              "p95": 0.5761419999999999,
+              "p99": 0.6588069999999999
+            },
+            {
+              "median": 0.7888489999999999,
+              "p95": 0.898594,
+              "p99": 0.965578
+            },
+            {
+              "median": 0.2970275,
+              "p95": 0.458905,
+              "p99": 0.561486
+            },
+            {
+              "median": 0.8562595,
+              "p95": 0.969385,
+              "p99": 1.022253
+            }
+          ]
+        }
+      }
+    ],
+    "binaries_sha256": {
+      "baseline.bin": "e0abd53e7d59c2faf8bce45f59241f25b6bd8a9c6d132b769d3d0786f8dff75c",
+      "candidate.bin": "a3035fc4e2cad3e2c7d116a02bd1687cb8141c6c72952ba8fa76e54e8af016f5",
+      "field-old-dev.bin": "72661a2b93f5c12d475fa589b49be421c0f11aefd33e5b1ea572045365115007",
+      "field-new-dev.bin": "8d6c809d81510b3705813cd52d6a334596ba8046620122314d16b48dd0f613b0",
+      "shipping.bin": "8d6c809d81510b3705813cd52d6a334596ba8046620122314d16b48dd0f613b0",
+      "shipping-unit.bin": "6342b72bc5449a2a59924f75c5f03df613be9efae67274148d5161b8b62df80b"
+    },
+    "limits": "Correctness change, no speedup claim. Main whole-field medians within about 1%; one near-nozzle vacuum case +6.6%; some close-up runs vary substantially."
+  },
+  "checks": {
+    "plume_core": "35 passed; baseline conservation test fails before fix",
+    "python": "38 passed",
+    "wgpu_library": "40 ordinary passed, 22 ignored separately",
+    "gpu": "production station query oracle and 6 plume GPU tests pass on RADV and pinned llvmpipe Vulkan",
+    "bevy": "6 CPU/input/lifecycle/prologue tests pass; Rust builds, material not rendered on GPU",
+    "clippy": "relevant all targets -D warnings",
+    "architecture": "44 workspace packages, 20 foundations pass",
+    "format_diff": "checked"
+  },
+  "check_logs": {
+    "plume-segment-baseline-cpu.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment-baseline-cpu.log",
+      "sha256": "896fc10ecf25d633058406307d08d423da0e668cd3713c149182097902c2af0b"
+    },
+    "plume-segment-core-tests.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment-core-tests.log",
+      "sha256": "40a0515ff5cb8045da12436732a8c3c334a8d55be9289cdb1fbd13d406133459"
+    },
+    "plume-volume-python-shipping.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-volume-python-shipping.log",
+      "sha256": "bca168249558809fef96daec502e680652ff3740d80d7f6f9fad233078d4dae8"
+    },
+    "plume-segment-clippy-shipping.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment-clippy-shipping.log",
+      "sha256": "5c3d0150cb776f98265ace1bc19946d437b633e4126c10d41c90fbd532bda9ae"
+    },
+    "plume-segment-bevy-tests.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment-bevy-tests.log",
+      "sha256": "359618db1b01e98040b74e792286c2f026bdc2e18c6e3e182323b0327a282f8e"
+    },
+    "plume-segment-architecture.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    "plume-segment/shipping-radeon-unit.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/shipping-radeon-unit.log",
+      "sha256": "6bb385c4ae0d6f898fc1602c0338f5b39ac67a1697aa92055cf6cfc2bda9ec37"
+    },
+    "plume-segment/shipping-radeon-station.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/shipping-radeon-station.log",
+      "sha256": "418b9909aae17d7dd5bf7135cb33319033a3d457aa89779ce78a9043aa61888c"
+    },
+    "plume-segment/shipping-radeon-oracles.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/shipping-radeon-oracles.log",
+      "sha256": "232b818fdd4a51e8b06f851cdf7637a2f9ab32ba062f8264c7f93836c61efd80"
+    },
+    "plume-segment/shipping-software-vulkan-unit.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/shipping-software-vulkan-unit.log",
+      "sha256": "90e11d1ab5712114ea5d1cc4a8f6ec277a77c0c8afd7ce679d917b6f3c315132"
+    },
+    "plume-segment/shipping-software-vulkan-station.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/shipping-software-vulkan-station.log",
+      "sha256": "dcd09f01ba30d0c68a97ee0e3ad5d987ac0d63721177ae7fca2d43a9e82b85fd"
+    },
+    "plume-segment/shipping-software-vulkan-oracles.log": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/shipping-software-vulkan-oracles.log",
+      "sha256": "478381f02134e13f43e109a9fd8702e7070da55167d3e54554bffaa74d04af36"
+    }
+  },
+  "technical_figure": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/plume-segment/volume-comparison.png",
+    "sha256": "ccd4f16a4cb1413f2652aedf57af30112ddac1f464f97105b166d26d14529810",
+    "labels_visible": true,
+    "blind_preference": "not evaluated"
+  },
+  "acceptance": {
+    "numerical": "constant-cell conservation, homogeneous GPU envelope and four Gaussian full-image controls only",
+    "visual": "not evaluated",
+    "temporal": "not evaluated",
+    "performance": "scoped raw ABBA measurements; no engine-frame speedup",
+    "engine_calibration": "not evaluated"
+  },
+  "limits": [
+    "Four synthetic, constant-axial fields; not live engine/nozzle telemetry or pressure/throttle/animated galleries.",
+    "Cycles stochastic volume integration and reconstruction differ from native point sampling; alpha contracts differ, compare RGB only.",
+    "Metal/WebGPU hardware, canonical game replay, full Bevy material draw, scattering/GI and blind preference not run.",
+    "Initial development Cycles attempt referenced a nonpublic/dynamic Weight socket and failed before render; final adapter uses public coefficient sockets and has successful camera/geometry-verified CLI runs.",
+    "No Epic/Blender/PBRT implementation source copied into runtime. New controls and node graphs are generated project data."
+  ]
+}

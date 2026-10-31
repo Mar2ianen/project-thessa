@@ -195,8 +195,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let emission = col * (gain * decay * max(w * max(shock, 0.15), 0.0));
         // Extinction mirrors the CPU oracle (station mean x weight x shock).
         let ext = max(ext_mean * w * max(shock, 0.15), 0.0);
-        let absorb = exp(-ext * dt);
-        rgb += transmittance * emission * dt * absorb;
+        let tau = ext * dt;
+        let absorb = exp(-tau);
+        // Same finite-cell emission integral as plume-core/native WGSL.
+        var emission_length = dt * (1.0 - tau * (0.5 - tau / 6.0));
+        if tau >= 0.01 { emission_length = (1.0 - absorb) / ext; }
+        rgb += transmittance * emission * emission_length;
         transmittance *= absorb;
     }
 

@@ -1,6 +1,6 @@
 # 98 — Graphics parity roadmap: engine plumes and procedural CBT planets
 
-Status: living implementation backlog, audited 2026-10-30. The active goal is
+Status: living implementation backlog, audited 2026-10-31. The active goal is
 beautiful, causally plausible rocket exhaust and procedural planets from
 close-up soil to orbit, with measured frame cost. Checked boxes require linked
 evidence; listing a feature does not implement it or establish visual parity.
@@ -47,6 +47,10 @@ console-level paper timings are not measurements of Thessa on 880M.
 - [x] Native plume shared pre-exposure correction and a five-candidate lookup
   investigation, [doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md). All candidates
   regress a near-nozzle case; the existing linear lookup is retained.
+- [x] Finite-cell emission transport, independent conservation/homogeneous
+  GPU tests and four actual native/Cycles volume controls with a Gaussian
+  mathematical oracle, [doc 100](100_PLUME_SEGMENT_TRANSPORT.md). This closes
+  an integrator defect, not physical engine calibration or the full F02 gallery.
 - [x] Persistent GPU bisector pool, neighbor conformity, parallel bounded
   split/merge, canonical height/material sampling, GPU indexation and indirect
   raster/shadow/ocean/RT publication (docs 61–63). WORLD13 native configurations
@@ -61,8 +65,8 @@ Each row is a bounded change in existing owners, not a new generic framework.
 | ID / priority | Current gap and owner | Next work and acceptance |
 | --- | --- | --- |
 | F01 / measured, closed | `render-wgpu` plume lookup scans up to 64 stations per sample | Five exact-output alternatives rejected after release ABBA on ten views; retain linear lookup. [Doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) records p50/p95/p99 and hashes. Reopen only with a changed workload or a new measured reason |
-| F02 / P0 | No reusable frozen plume reference capture; current GPU tests cover selected chords | Shared pre-exposure is fixed (doc 99); ten deterministic HDR fields now exist as a lookup fixture. Extend this into a source-bound pressure/throttle/camera/time gallery using `plume-core` and existing capture/readback. Compare convergence against a dense CPU integral; include axial/side/inside, depth occlusion and translated astronomical origin. Export the same field for an external volume control; B05 is only a surface prerequisite |
-| F03 / P0 | `terrain-native/src/plume.rs` uses fixed radius, flow, exhaust state and mount; environment assumes oxygen | Extract actual compiled nozzle/mount and runtime operating point through existing presentation state. Use composition/flow queries. Pin SI/frame transforms and inactive/starved engines; no renderer writes to forces, mass flow or clocks |
+| F02 / partial, P0 | Pre-exposure and finite-cell emission fixed; four source-bound constant-axial fields now have actual Cycles and exact Gaussian controls (doc 100) | Extend to compiled-engine pressure/throttle/camera/time galleries and general heterogeneous-field convergence. Include continuous axial/side/inside motion, depth occlusion and astronomical origin changes. Existing chord tests do not certify arbitrary animated views |
+| F03 / P0 | `terrain-native/src/plume.rs` uses fixed radius, flow, exhaust state and mount; environment assumes oxygen | Publish accepted per-nozzle operating points/mounts from the existing resource allocation into presentation; only aggregate thrust/flow is retained currently. Extract those observations, rather than recomputing from a requested throttle. Use composition/flow queries. Pin SI/frame transforms and inactive/starved engines; no renderer writes to forces, mass flow or clocks |
 | P01 / P0 | Full Large CBT equivalent-error and continuous-flight acceptance remains open | Live-pass ownership inventory is current in doc 22 §6.1; replay ground→orbit→ground with frozen canonical surface. Check neighbor reciprocity, no holes/cracks, allocation exhaustion, wake/recovery, origin shifts, active triangles/bytes and update/raster/shadow/RT p50/p95/p99 separately |
 | F04 / P1 | Optical templates are authored RGB ramps; absolute spectral/radiometric calibration absent | Calibrate declared exhaust families against physical input ranges and primary observations; preserve pressure-dependent expansion and throttling. Separate model uncertainty from integration error. Do not equate pretty bloom with validated chemistry |
 | F05 / P1 | Native plume has no field-derived local illumination; only legacy nozzle light exists | Reuse field radiant power/geometry for a bounded cheaper lighting consumer, then compare a transport control on hull/ground. Verify emission energy, occlusion, atmosphere and quality-off cost; no unrelated brightness multiplier |

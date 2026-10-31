@@ -181,3 +181,8 @@ Its individual license is CC-BY-4.0 (AGI/Ed Mackey), not CC0. It preserves all
 The same-data external diagnostics now include Cycles B01/B05 (docs 92/95) and
 [Unreal B05](97_UNREAL_B05_COMPARISON.md). These remain separate from temporal,
 blind-preference and full-scene performance acceptance.
+
+[Doc 100](100_PLUME_SEGMENT_TRANSPORT.md) adds separate analytic participating-
+medium controls through the opt-in native GPU fixture and stock Cycles Volume
+Coefficients. These are source-bound field datasets, not new MaterialLab/GLB
+CLI cases or calibrated rocket engines.

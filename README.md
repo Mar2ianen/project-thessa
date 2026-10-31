@@ -840,3 +840,9 @@ the scene's HDR exposure for Low and Volume without changing opacity or cached
 field uploads. Five lookup alternatives were rejected after same-field ABBA;
 the original linear lookup remains. Fidelity/calibration and full-scene
 performance acceptance stay open.
+
+[Finite-cell plume transport](docs/100_PLUME_SEGMENT_TRANSPORT.md) now preserves
+emission through absorbing cells at the same sampling budget. Four actual
+native/Cycles volume controls and an independent Gaussian oracle expose the
+previous bias; source/camera/alpha remain fixed in A/B. This is transport
+validation, with engine calibration and live per-nozzle extraction still open.

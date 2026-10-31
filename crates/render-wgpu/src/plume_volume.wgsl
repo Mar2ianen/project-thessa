@@ -107,8 +107,14 @@ fn sample_station(z: f32) -> Station {
         // integration is the CPU sampler over the same bounded chord.
         if draw.flow.z > 0.0 { weight *= 1.0 - smoothstep(0.70, 1.0, z / len); }
         let shock = max(mix(1.0, station.geometry.w, draw.flow.y), 0.15);
-        let absorb = exp(-max(station.geometry.z * weight * shock, 0.0) * dt);
-        rgb += transmission * max(station.emission.rgb * weight * shock, vec3(0.0)) * dt * absorb;
+        let extinction = max(station.geometry.z * weight * shock, 0.0);
+        let tau = extinction * dt;
+        let absorb = exp(-tau);
+        // Integral exp(-sigma*s) ds. The thin-cell series avoids cancellation;
+        // its omitted relative term is <= 4.2e-8 below tau=0.01, before f32 error.
+        var emission_length = dt * (1.0 - tau * (0.5 - tau / 6.0));
+        if tau >= 0.01 { emission_length = (1.0 - absorb) / extinction; }
+        rgb += transmission * max(station.emission.rgb * weight * shock, vec3(0.0)) * emission_length;
         transmission *= absorb;
     }
     return vec4<f32>(rgb * frame.exposure.x, clamp(1.0 - transmission, 0.0, 1.0));

@@ -171,3 +171,23 @@ fields/publications and per-frame CSV to a new `THESSA_BENCH_OUTPUT` directory.
 ABBA protocol and all rejected candidates. It is not an external volume render
 or a whole-scene speedup. Camera gain=1 images remain exact after the separate
 pre-exposure correction.
+
+## Analytic plume-volume references
+
+`plume_reference.py capture --output /absolute/new-native-volume --profile dev`
+builds/runs the actual native volume fixture with source and binary identities.
+For a recorded development tree, add `--allow-dirty`. Pass that output to the
+same script's `cycles` command inside Blender, for example:
+
+```sh
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 \
+  --threads 2 --python tools/agent-qa/plume_reference.py -- cycles \
+  /absolute/native-volume --output /absolute/new-cycles-volume --samples 2048
+```
+
+[Doc 100](../../docs/100_PLUME_SEGMENT_TRANSPORT.md) records the frozen field,
+actual Cycles Volume Coefficients/camera, closed-form Gaussian oracle,
+finite-cell correction, fixed-budget A/B and measured scope. Raw HDR, source
+fingerprints and saved node graphs are retained. These four analytic controls
+are separate from a calibrated-engine gallery, blind preference or full-frame
+performance acceptance.

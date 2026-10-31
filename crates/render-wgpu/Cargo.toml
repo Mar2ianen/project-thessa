@@ -22,6 +22,8 @@ pollster = "0.4"
 thessa-atmosphere = { path = "../atmosphere" }
 thessa-microstore-core = { path = "../microstore-core" }
 thessa-plume-core = { path = "../plume-core" }
+thessa-propulsion = { path = "../propulsion" }
+serde_json.workspace = true
 naga = { version = "30", features = ["wgsl-in"] }
 thessa-render-assets = { path = "../render-assets" }
 png = "0.18"

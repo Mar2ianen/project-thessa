@@ -851,3 +851,8 @@ validation, with engine calibration and live per-nozzle extraction still open.
 now retain the liquid/solid/chamber points used by resource allocation, published
 only after an accepted physical tick. The fixed native plume deck is unchanged;
 per-nozzle geometry, remote publication and live consumption remain F03 work.
+
+[Compiled plume gallery](docs/102_COMPILED_PLUME_GALLERY.md) compares nine
+pressure/throttle/view controls with stock Cycles at 256/2048 samples. Matching
+the volume ray start fixes the reference inside-camera mismatch; native
+shaders/budgets are unchanged. Live nozzle extraction and calibration remain open.

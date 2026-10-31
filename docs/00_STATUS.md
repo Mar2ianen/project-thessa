@@ -77,6 +77,11 @@ shutdown and partial-tick solid cases are covered, and the existing 32-engine
 release allocation fixture retains bit-identical physical outputs. Live F03
 nozzle/frame extraction and remote/render consumption remain open.
 
+[Doc 102](102_COMPILED_PLUME_GALLERY.md) adds nine actual native/Cycles
+compiled-engine transport controls and fixes reference-camera near clipping.
+Radeon/software Vulkan and 256/2048-sample comparisons are recorded; this is
+not live extraction, calibrated appearance or an engine performance result.
+
 ## Simulation and physics
 
 | Doc | Status | Implemented | Future |

@@ -628,3 +628,9 @@ This is read-only source data, not another propulsion solve. The native fixed
 engine deck remains provisional: accepted nozzle poses/frame revisions, remote
 transport and multi-nozzle consumption are still required before F03 is done.
 Already-allocated flow must not receive the requested throttle a second time.
+
+[Doc 102](102_COMPILED_PLUME_GALLERY.md) adds nine frozen compiled-engine
+pressure/throttle/view comparisons with actual Cycles. It documents the
+operating-point throttle-one handoff and corrects the reference near-plane
+ray-origin mismatch for inside views. No runtime source or sampling budget
+is changed; these controls do not calibrate the optical templates.

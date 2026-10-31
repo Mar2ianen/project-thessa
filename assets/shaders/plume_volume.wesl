@@ -76,6 +76,15 @@ fn mean_radius(r0: f32, spread: f32, fan: f32, z: f32) -> f32 {
     return r0 * (1.0 + spread * zc / d) + r0 * fan * (1.0 - exp(-zc / (2.0 * d)));
 }
 
+// Same circular-jet pressure mode as plume-core; quiet mixing skirt at r>=R.
+fn shock_multiplier(axial: f32, u: f32) -> f32 {
+    if u >= 1.0 || axial == 1.0 { return 1.0; }
+    let q = 1.4457964907366962 * u * u;
+    let mode = 1.0 + q * (-1.0 + q * (0.25 + q * (-1.0 / 36.0
+        + q * (1.0 / 576.0 + q * (-1.0 / 14400.0 + q / 518400.0)))));
+    return max(1.0 + (max(axial, 0.15) - 1.0) * clamp(mode, 0.0, 1.0), 0.15);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let origin = plume.origin_len.xyz;
@@ -188,8 +197,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // striping into aliased noise on long march paths.
         let span = max(spacing, len * 0.05);
         let cell = pow(0.5 + 0.5 * cos(6.2831853 * z / spacing), 1.25);
-        let shock = 1.0 + amp * 0.6 * (2.0 * cell - 1.0)
-            * exp(-z / (3.0 * span));
+        let shock = shock_multiplier(1.0 + amp * 0.6 * (2.0 * cell - 1.0)
+            * exp(-z / (3.0 * span)), abs(u));
         let col = axial_ramp(zn, plume.core_rgb.rgb, plume.mid_rgb.rgb, plume.edge_rgb.rgb);
         let decay = max(axial_decay(zn), 0.02);
         let emission = col * (gain * decay * max(w * max(shock, 0.15), 0.0));

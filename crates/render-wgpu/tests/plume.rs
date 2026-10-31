@@ -472,7 +472,7 @@ fn frozen_compiled_plume_reference() {
             .unwrap();
         }
         let metadata = serde_json::json!({
-            "id":"compiled-plume-volume-v1", "case":name, "extent":[129,129], "units":"metres",
+            "id":"compiled-plume-volume-v1", "case":name, "shock_radial_mode":"axisymmetric-j0-v1", "extent":[129,129], "units":"metres",
             "origin_len":draw.origin_len, "axis_radius":draw.axis_radius, "profile":&*draw.profile,
             "steps":14, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
             "world_from_view":camera.world_from_view.to_cols_array(), "clip_from_view":camera.clip_from_view.to_cols_array(),

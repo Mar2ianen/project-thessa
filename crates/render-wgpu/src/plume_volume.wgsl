@@ -30,6 +30,16 @@ fn sample_station(z: f32) -> Station {
     return Station(mix(a.geometry, b.geometry, t), mix(a.emission, b.emission, t));
 }
 
+// First circular-jet pressure mode, matching plume-core::shock_multiplier.
+// Degree-six J0 polynomial has <5.3e-7 absolute truncation error on the core.
+fn shock_multiplier(axial: f32, u: f32) -> f32 {
+    if u >= 1.0 || axial == 1.0 { return 1.0; }
+    let q = 1.4457964907366962 * u * u;
+    let mode = 1.0 + q * (-1.0 + q * (0.25 + q * (-1.0 / 36.0
+        + q * (1.0 / 576.0 + q * (-1.0 / 14400.0 + q / 518400.0)))));
+    return max(1.0 + (max(axial, 0.15) - 1.0) * clamp(mode, 0.0, 1.0), 0.15);
+}
+
 @fragment fn fragment(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
     let ro = frame.camera.xyz;
     let rd = normalize(unproject(pixel.xy, 0.5) - ro);
@@ -106,7 +116,8 @@ fn sample_station(z: f32) -> Station {
         // No hard radial skirt clip or fitted mean extinction. Optical
         // integration is the CPU sampler over the same bounded chord.
         if draw.flow.z > 0.0 { weight *= 1.0 - smoothstep(0.70, 1.0, z / len); }
-        let shock = max(mix(1.0, station.geometry.w, draw.flow.y), 0.15);
+        var shock = 1.0;
+        if draw.flow.y > 0.0 { shock = shock_multiplier(station.geometry.w, u); }
         let extinction = max(station.geometry.z * weight * shock, 0.0);
         let tau = extinction * dt;
         let absorb = exp(-tau);

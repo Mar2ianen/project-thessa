@@ -854,8 +854,8 @@ per-nozzle geometry, remote publication and live consumption remain F03 work.
 
 [Compiled plume gallery](docs/102_COMPILED_PLUME_GALLERY.md) compares nine
 pressure/throttle/view controls with stock Cycles at 256/2048 samples. Matching
-the volume ray start fixes the reference inside-camera mismatch; native
-shaders/budgets are unchanged. Live nozzle extraction and calibration remain open.
+the volume ray start fixes the reference inside-camera mismatch. Live nozzle
+extraction and calibration remain open.
 
 [Production CBT flight and scratch traffic](docs/103_CBT_FLIGHT_AND_SCRATCH.md)
 verify a frozen ground–orbit–ground replay, closedness and exhaustion recovery.
@@ -863,3 +863,10 @@ Skipping repeated inactive clears in land-only classification cuts High-budget
 update/emission time roughly in half on the fixed 880M ABBA control, with exact
 physical counters and endpoint pixels. Ocean scratch retains full clearing;
 streaming, dense error and whole-client performance acceptance remain open.
+
+[October KSA audit and radial shock structure](docs/104_KSA_AUDIT_AND_RADIAL_SHOCK.md)
+replace uniform whole-slice optical modulation with a circular core mode and
+quiet mixing skirt. Independent CPU/GPU oracles, nine stock Cycles controls
+and release ABBA record transport error and cost. The user-supplied KSA build
+is inspected statically; actual nozzle publication, nonlinear shock physics,
+local lighting and visual parity remain open.

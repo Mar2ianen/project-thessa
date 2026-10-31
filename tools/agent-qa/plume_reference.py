@@ -35,6 +35,8 @@ def cases_for(identity):
 
 def validate_scene(scene):
     identity = scene["id"]; cases = cases_for(identity)
+    if scene.get("shock_radial_mode", "uniform-v1") not in ("uniform-v1", "axisymmetric-j0-v1"):
+        raise ValueError("unknown radial shock model")
     if (scene["case"] not in cases or scene["extent"] != [129,129]
             or scene["units"] != "metres" or scene["exposure_gain"] != 1
             or scene["steps"] != 14 or scene["erosion"] != 0 or scene["tail_dissolve"]
@@ -273,7 +275,15 @@ def cycles(directory, output, samples):
         weight=scalar("ADD",scalar("EXPONENT",scalar("MULTIPLY",u2,-2.2)),scalar("MULTIPLY",scalar("EXPONENT",scalar("MULTIPLY",u2,-0.7)),0.18))
         support=scalar("MULTIPLY",scalar("GREATER_THAN",z,0),scalar("LESS_THAN",z,field["origin_len"][3]))
         support=scalar("MULTIPLY",support,scalar("LESS_THAN",radius_squared,field["axis_radius"][3]**2))
-        weight=scalar("MULTIPLY",scalar("MULTIPLY",weight,support),scalar("MAXIMUM",shock,0.15))
+        shock=scalar("MAXIMUM",shock,0.15)
+        if field.get("shock_radial_mode", "uniform-v1") == "axisymmetric-j0-v1":
+            q=scalar("MULTIPLY",scalar("MINIMUM",u2,1),1.4457964907366962)
+            mode=1/518400
+            for coefficient in (-1/14400,1/576,-1/36,0.25,-1,1):
+                mode=scalar("ADD",coefficient,scalar("MULTIPLY",q,mode))
+            mode=scalar("MULTIPLY",scalar("MINIMUM",scalar("MAXIMUM",mode,0),1),scalar("LESS_THAN",u2,1))
+            shock=scalar("MAXIMUM",scalar("ADD",1,scalar("MULTIPLY",scalar("SUBTRACT",shock,1),mode)),0.15)
+        weight=scalar("MULTIPLY",scalar("MULTIPLY",weight,support),shock)
         volume=nodes.new("ShaderNodeVolumeCoefficients")
         volume.inputs["Scatter Coefficients"].default_value=(0,0,0)
         absorb=scalar("MULTIPLY",extinction,weight)

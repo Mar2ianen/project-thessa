@@ -115,20 +115,10 @@ impl SnapshotInbox<Snapshot> {
 }
 
 impl<T> SnapshotInboxWriter<T> {
-    /// Non-blocking latest-wins ingress. At most the two newest
-    /// receive-timestamped snapshots are retained for interpolation.
+    /// Receive-thread latest-wins ingress: retain the two newest arrivals.
+    /// Even PRIMARY can be a sole first/stop publication. Wait only for the
+    /// host's bounded two-item drain; no queue lock is held during pipe IO.
     fn push(&self, received: ReceivedSnapshot<T>) -> bool {
-        let Ok(mut queue) = self.queue.try_lock() else {
-            return false;
-        };
-        Self::retain_latest(&mut queue, received);
-        true
-    }
-
-    /// A catalogue is sent on change, not periodically: mutex contention
-    /// must not silently lose its only publication. Only the reader waits on
-    /// this short bounded queue lock; it never holds a lock during pipe IO.
-    fn push_catalogue(&self, received: ReceivedSnapshot<T>) -> bool {
         let Ok(mut queue) = self.queue.lock() else {
             return false;
         };
@@ -365,7 +355,7 @@ impl EmbeddedLink {
                                 ) {
                                     match geometry_receiver.accept(&envelope) {
                                         Ok(Some(geometry)) => {
-                                            if !geometries_writer.push_catalogue(ReceivedSnapshot {
+                                            if !geometries_writer.push(ReceivedSnapshot {
                                                 snapshot: geometry,
                                                 received_at: std::time::Instant::now(),
                                                 generation: 0,
@@ -393,7 +383,7 @@ impl EmbeddedLink {
                                             // Complete membership may be the only
                                             // birth/removal observation. Don't lose
                                             // it merely because a host drains now.
-                                            fleets_writer.push_catalogue(ReceivedSnapshot {
+                                            fleets_writer.push(ReceivedSnapshot {
                                                 snapshot: fleet,
                                                 received_at: std::time::Instant::now(),
                                                 generation: 0,
@@ -417,7 +407,7 @@ impl EmbeddedLink {
                                     });
                                     if !accepted {
                                         eprintln!(
-                                            "[client] snapshot inbox busy; dropping stale snapshot"
+                                            "[client] snapshot inbox unavailable; preserving last complete state"
                                         );
                                     }
                                 }
@@ -656,22 +646,32 @@ mod tests {
     }
 
     #[test]
-    fn on_change_catalogue_publication_survives_queue_contention() {
+    fn receive_publication_survives_queue_contention() {
         let (mut inbox, writer) = SnapshotInbox::<u64>::new();
         let queue = inbox.queue.clone();
         let held = queue.lock().unwrap();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             started_tx.send(()).unwrap();
-            writer.push_catalogue(ReceivedSnapshot {
+            let accepted = writer.push(ReceivedSnapshot {
                 snapshot: 42,
                 received_at: std::time::Instant::now(),
                 generation: 0,
-            })
+            });
+            result_tx.send(accepted).unwrap();
         });
         started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(
+                result_rx.recv_timeout(Duration::from_millis(30)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "sole publication must wait for the bounded drain, not be dropped"
+        );
         drop(held);
-        assert!(worker.join().unwrap());
+        assert!(result_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        worker.join().unwrap();
         assert_eq!(inbox.latest(), Some(42));
         assert!(inbox.latest().is_none());
     }

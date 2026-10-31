@@ -23,6 +23,8 @@ from cycles_b01 import ROOT, compare_hdr, display_png, sha256, source_state
 CASES = ("axial-zero", "axial-one", "axial-ten", "side")
 ID = "analytic-plume-volume-v1"
 ENGINE_ID = "compiled-plume-volume-v1"
+MOTION_ID = "curved-plume-volume-v1"
+MOTION_CASES = ("sea-full", "thin-full", "matched-inside")
 ENGINE_CASES = ("sea-full", "sea-half", "matched-full", "matched-half", "thin-full", "thin-half",
                 "matched-axial", "matched-inside", "matched-oblique")
 
@@ -30,11 +32,16 @@ ENGINE_CASES = ("sea-full", "sea-half", "matched-full", "matched-half", "thin-fu
 def cases_for(identity):
     if identity == ID: return CASES
     if identity == ENGINE_ID: return ENGINE_CASES
+    if identity == MOTION_ID: return MOTION_CASES
     raise ValueError("unsupported plume publication")
 
 
 def validate_scene(scene):
     identity = scene["id"]; cases = cases_for(identity)
+    if scene.get("radial_weight_mode", "clamped-gaussian-v1") not in ("clamped-gaussian-v1", "gaussian-v2"):
+        raise ValueError("unknown radial density model")
+    if scene.get("curve_metric", "unscaled-v1") not in ("unscaled-v1", "emitted-length-v1"):
+        raise ValueError("unknown curve metric")
     if scene.get("shock_radial_mode", "uniform-v1") not in ("uniform-v1", "axisymmetric-j0-v1"):
         raise ValueError("unknown radial shock model")
     if (scene["case"] not in cases or scene["extent"] != [129,129]
@@ -67,11 +74,25 @@ def validate_scene(scene):
                 or not math.isclose(axis[3],1.6*max(p[1] for p in profile),rel_tol=2e-7)
                 or any(abs(p[0]-origin[3]*i/47) > origin[3]*2e-7 for i,p in enumerate(profile))):
             raise ValueError("compiled operating source and uniformly spaced f32 stations required")
+    centers = scene.get("centerline", [])
+    if identity == MOTION_ID:
+        if (not 2 <= len(centers) <= 33 or any(len(p) != 4 for p in centers)
+                or any(not math.isfinite(v) for p in centers for v in p)
+                or centers[0][3] != 0 or centers[-1][3] != origin[3]
+                or any(a[3] >= b[3] or sum((a[i]-b[i])**2 for i in range(3)) <= 1e-12
+                       for a,b in zip(centers,centers[1:]))):
+            raise ValueError("finite ordered swept centerline required")
+    elif centers:
+        raise ValueError("straight control must not contain a swept centerline")
     return scene
 
 
 def bounds(scene):
     origin, axis = scene["origin_len"], scene["axis_radius"]
+    if scene.get("centerline"):
+        lo = [min(p[i] for p in scene["centerline"])-axis[3] for i in range(3)]
+        hi = [max(p[i] for p in scene["centerline"])+axis[3] for i in range(3)]
+        return [(a+b)/2 for a,b in zip(lo,hi)], [(b-a)/2 for a,b in zip(lo,hi)]
     center = [origin[i] + axis[i]*origin[3]/2 for i in range(3)]
     half = [abs(axis[i])*origin[3]/2 + axis[3]*math.sqrt(max(0,1-axis[i]**2)) for i in range(3)]
     return center, half
@@ -140,7 +161,7 @@ def native_pixels(directory, filename="linear.rgba16f"):
 
 
 def capture(output, profile, allow_dirty, suite="analytic"):
-    identity = ID if suite == "analytic" else ENGINE_ID
+    identity = {"analytic":ID, "compiled":ENGINE_ID, "motion":MOTION_ID}[suite]
     cases = cases_for(identity)
     source = source_state(ROOT)
     if source["dirty"] and not allow_dirty:
@@ -156,7 +177,7 @@ def capture(output, profile, allow_dirty, suite="analytic"):
                    and m.get("target",{}).get("name")=="plume" and m.get("executable")]
     if len(executables) != 1: raise ValueError("one native plume test executable required")
     binary = Path(executables[0]); binary_hash = sha256(binary)
-    command = [str(binary),"frozen_plume_volume_reference" if identity == ID else "frozen_compiled_plume_reference","--ignored","--nocapture","--test-threads","1"]
+    command = [str(binary),{ID:"frozen_plume_volume_reference",ENGINE_ID:"frozen_compiled_plume_reference",MOTION_ID:"frozen_curved_plume_reference"}[identity],"--ignored","--nocapture","--test-threads","1"]
     import os
     env = {**os.environ,"THESSA_BENCH_OUTPUT":str(output/"native")}
     with (output/"native.log").open("w") as log:
@@ -202,7 +223,7 @@ def load_inputs(directory):
         scene = validate_scene(json.loads((directory/"native"/case/"scene.json").read_text()))
         if scene["id"] != record["id"] or scene["case"] != case: raise ValueError("case identity differs")
         native_pixels(directory/"native"/case)
-        if record["id"] == ENGINE_ID: native_pixels(directory/"native"/case, "steps16.rgba16f")
+        if record["id"] in (ENGINE_ID, MOTION_ID): native_pixels(directory/"native"/case, "steps16.rgba16f")
     return record
 
 
@@ -252,7 +273,31 @@ def cycles(directory, output, samples):
         position = nodes.new("ShaderNodeNewGeometry").outputs["Position"]
         p = vector("SUBTRACT",position,field["origin_len"][:3]); axis=field["axis_radius"][:3]
         z = vector("DOT_PRODUCT",p,axis); radial = vector("SUBTRACT",p,vector("SCALE",axis,z))
-        radius_squared = vector("DOT_PRODUCT",radial,radial); station = field["profile"][0]
+        radius_squared = vector("DOT_PRODUCT",radial,radial)
+        metric = 1
+        if field.get("centerline"):
+            # Stock Cycles material nodes implement the declared swept field;
+            # the renderer/integrator is unchanged. Equal-distance ties keep
+            # the first segment, just like the native field definition.
+            radius_squared = 1e30; z = 0
+            centers = field["centerline"]
+            def select(a,b,t):
+                return scalar("ADD",scalar("MULTIPLY",a,scalar("SUBTRACT",1,t)),scalar("MULTIPLY",b,t))
+            for j,(a,b) in enumerate(zip(centers,centers[1:])):
+                ab=[b[i]-a[i] for i in range(3)]
+                t=scalar("DIVIDE",vector("DOT_PRODUCT",vector("SUBTRACT",position,a[:3]),ab),sum(v*v for v in ab))
+                valid=1
+                if j == 0: valid=scalar("SUBTRACT",1,scalar("LESS_THAN",t,0))
+                if j == len(centers)-2: valid=scalar("MULTIPLY",valid,scalar("SUBTRACT",1,scalar("GREATER_THAN",t,1)))
+                fraction=scalar("MINIMUM",scalar("MAXIMUM",t,0),1)
+                delta=vector("SUBTRACT",position,vector("ADD",a[:3],vector("SCALE",ab,fraction)))
+                d2=vector("DOT_PRODUCT",delta,delta)
+                wins=scalar("MULTIPLY",valid,scalar("LESS_THAN",d2,radius_squared))
+                z=select(z,scalar("ADD",a[3],scalar("MULTIPLY",b[3]-a[3],fraction)),wins)
+                if field.get("curve_metric", "unscaled-v1") == "emitted-length-v1":
+                    metric=select(metric,(b[3]-a[3])/math.sqrt(sum(v*v for v in ab)),wins)
+                radius_squared=select(radius_squared,d2,wins)
+        station = field["profile"][0]
         if field["id"] == ID:
             radius, extinction, shock, emission = station[1], station[2], station[3], station[4:7]
         else:
@@ -271,7 +316,9 @@ def cycles(directory, output, samples):
             separate=nodes.new("ShaderNodeSeparateColor");links.new(geometry,separate.inputs["Color"])
             radius,extinction,shock=separate.outputs["Red"],separate.outputs["Green"],separate.outputs["Blue"]
             emission=table("captured linear emission",[p[4:7]+[1] for p in field["profile"]])
-        u2=scalar("MINIMUM",scalar("DIVIDE",radius_squared,scalar("MULTIPLY",radius,radius)),9)
+        u2=scalar("DIVIDE",radius_squared,scalar("MULTIPLY",radius,radius))
+        if field.get("radial_weight_mode", "clamped-gaussian-v1") == "clamped-gaussian-v1":
+            u2=scalar("MINIMUM",u2,9)
         weight=scalar("ADD",scalar("EXPONENT",scalar("MULTIPLY",u2,-2.2)),scalar("MULTIPLY",scalar("EXPONENT",scalar("MULTIPLY",u2,-0.7)),0.18))
         support=scalar("MULTIPLY",scalar("GREATER_THAN",z,0),scalar("LESS_THAN",z,field["origin_len"][3]))
         support=scalar("MULTIPLY",support,scalar("LESS_THAN",radius_squared,field["axis_radius"][3]**2))
@@ -283,7 +330,7 @@ def cycles(directory, output, samples):
                 mode=scalar("ADD",coefficient,scalar("MULTIPLY",q,mode))
             mode=scalar("MULTIPLY",scalar("MINIMUM",scalar("MAXIMUM",mode,0),1),scalar("LESS_THAN",u2,1))
             shock=scalar("MAXIMUM",scalar("ADD",1,scalar("MULTIPLY",scalar("SUBTRACT",shock,1),mode)),0.15)
-        weight=scalar("MULTIPLY",scalar("MULTIPLY",weight,support),shock)
+        weight=scalar("MULTIPLY",scalar("MULTIPLY",scalar("MULTIPLY",weight,support),shock),metric)
         volume=nodes.new("ShaderNodeVolumeCoefficients")
         volume.inputs["Scatter Coefficients"].default_value=(0,0,0)
         absorb=scalar("MULTIPLY",extinction,weight)
@@ -329,7 +376,7 @@ def cycles(directory, output, samples):
                        "axial_representation":"constant coefficients" if field["id"] == ID else "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
                        "material_node":"ShaderNodeVolumeCoefficients","scatter_coefficients":list(volume.inputs["Scatter Coefficients"].default_value),
                        "artifacts_sha256":{p.name:sha256(p) for p in destination.iterdir() if p.is_file()}}
-        if field["id"] == ENGINE_ID:
+        if field["id"] in (ENGINE_ID, MOTION_ID):
             reports[case]["steps16_metrics"] = compare_hdr(original/"steps16.rgba16f",rgba)
     if source_state(ROOT)!=source or sha256(directory/"capture.json")!=identity or load_inputs(directory)!=record:
         raise ValueError("adapter source or native inputs changed during comparison")
@@ -346,7 +393,7 @@ def cycles(directory, output, samples):
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__); commands=parser.add_subparsers(dest="command",required=True)
     native=commands.add_parser("capture");native.add_argument("--output",type=Path,required=True)
-    native.add_argument("--profile",choices=("dev","release"),default="dev");native.add_argument("--allow-dirty",action="store_true");native.add_argument("--suite",choices=("analytic","compiled"),default="analytic")
+    native.add_argument("--profile",choices=("dev","release"),default="dev");native.add_argument("--allow-dirty",action="store_true");native.add_argument("--suite",choices=("analytic","compiled","motion"),default="analytic")
     external=commands.add_parser("cycles");external.add_argument("capture",type=Path);external.add_argument("--output",type=Path,required=True)
     external.add_argument("--samples",type=int,default=256)
     args=parser.parse_args(sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else None)

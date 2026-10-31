@@ -25,6 +25,7 @@
 
 pub mod cbt_volume;
 pub mod medium;
+pub mod motion;
 pub mod optics;
 pub mod profile;
 pub mod source;

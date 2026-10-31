@@ -1,0 +1,1723 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-31",
+  "source_base": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+  "scope": "Native 3D kinematic plume, transported nozzle frame, decaying Gaussian and line-density correction; bounded sole PRIMARY receive publication. No calibrated combustion or KSA visual parity claim.",
+  "source_sha256": {
+    "apps/terrain-native/src/main.rs": "80e67390247acf367792c7b2621be94d564c38155ee0987489bfdb8b7dd1f625",
+    "apps/terrain-native/src/plume.rs": "0b0b7a9e9e1ef731aa6bdc5b344db0c20f5f2edcc45404540072455f5139d2b1",
+    "apps/terrain-native/src/scene.rs": "b628b10326169f0f86b28375ec233e034beaa0f51760d1fd2f654c37c876244a",
+    "assets/shaders/plume_volume.wesl": "45678331768017839a60a653f12789d82bef260ce6886e956eaf1d06593120bd",
+    "crates/flight-net/src/embedded.rs": "7dd2b3bd52f65dcc0f9ac72cfedcd9c3c353a13379aa649fa66157ae360bd81c",
+    "crates/plume-core/src/lib.rs": "ddd8093c1fa00eaf42f0ea2e5821f8c80a52f8c3f42a47e660c6bf0740481fd8",
+    "crates/plume-core/src/medium.rs": "170a9601d69e2e3812e714ed5495831fd0809e477921ad1892d4aa57e60177fa",
+    "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+    "crates/render-wgpu/src/plume.rs": "825ec85f9d186aee9b7ffbb36f9b1d82255d926a2d1728833605b2c26093a83d",
+    "crates/render-wgpu/src/plume_volume.wgsl": "4628e1149151f5d6da64d127cae02f525e975e3b796ba48c605315aa4790717c",
+    "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd",
+    "crates/render-wgpu/tests/plume.rs": "dbb007f6a80c22f9156e9b7e0eeeaad9af7eb04349d23e67779e22972fde3730",
+    "tools/agent-qa/plume_reference.py": "8ba48a5d41c01f697a251dfe4cf42a3b95d5a96dced9b7a634221f0306ab15ce",
+    "tools/agent-qa/tests/test_plume_reference.py": "6abc106703b076690f474e483d50863ef0e132de9bf18dd0e98a7cbb26720e95"
+  },
+  "references": {
+    "prior_ksa_audit": "docs/104_KSA_AUDIT_AND_RADIAL_SHOCK.md",
+    "crossflow_future_calibration": "https://ntrs.nasa.gov/api/citations/20110013214/downloads/20110013214.pdf",
+    "nozzle_inputs": "https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/nozzle-design/",
+    "stock_cycles": "https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/volume_coefficients.html"
+  },
+  "native": {
+    "motion": {
+      "id": "curved-plume-volume-v1",
+      "source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "197bc15fb32c8d79130061fe57dcc2baeb93af738c059c83060a42e970a33e2d",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "binary_sha256": "5cb80f89a653c6ae1afc7165104f5deb5bfdb5160ffb468e2832e66f2026003d",
+      "profile": "dev",
+      "tool_sha256": "8ba48a5d41c01f697a251dfe4cf42a3b95d5a96dced9b7a634221f0306ab15ce",
+      "native_command": [
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-8e3d0668014e124b",
+        "frozen_curved_plume_reference",
+        "--ignored",
+        "--nocapture",
+        "--test-threads",
+        "1"
+      ],
+      "cases": {
+        "sea-full": {
+          "linear.rgba16f": "11c37185717c39a2b9d92b26543d0860eda5c0db6a9fe7e73307794d510c4b84",
+          "steps16.rgba16f": "7627d230289e5b20755cae08f34cdaf4c9a575fd88898210b2afaa9f30e7c186",
+          "scene.json": "3c4beb4f1a080c2e15d12ce2b6902f40b9116e222d41b9a93376778ecf0df870",
+          "display.png": "b412b45484b2b0fc3c1a3b3f432d8867bf02088f3af2ff32adb9616d46c08476",
+          "steps16.png": "dfcf6823aef356f796f1e5f5866f505e5905a472859ae1f7ab4d1bf4aad23c05"
+        },
+        "thin-full": {
+          "linear.rgba16f": "7d40a65acd29fe184dff501ec114f9246dbab1a11937c462cfdd7a99b15f239d",
+          "steps16.rgba16f": "d70358876e110ff2dd503053f89e7be48f878796b4745db4569035740662fde4",
+          "scene.json": "9719828bd8d90a7685999f344556dc4c1153eb989161e8613081e5a4cafc6de1",
+          "display.png": "3457c6562716bb4d10983b9b3f540c3a28564fcbab9053a4170c6fd6b2e0e10b",
+          "steps16.png": "287dabaa7b1afa62b6b762da1c2d3063cb1928e3fbe17567b0f22c1944f9f77a"
+        },
+        "matched-inside": {
+          "linear.rgba16f": "fd96ac097bd7cb711240806348976430bbcb95c3a9396b6711680a4603755298",
+          "steps16.rgba16f": "6028c0fb0f3ecedddc8fb83d91e15a10d3e8ef4718c03c31f9a83183a5d0a363",
+          "scene.json": "fedc33c593863c72f047427aa4458ac3bad7618384c8205df80d8f7568565a23",
+          "display.png": "a46e4a2ca073b861e556d355ed37f63da397456cc44e9ef3ea43e0ad18b50015",
+          "steps16.png": "3e309250574d119a900e0e6a753c30fe409fee650d5bcf397aaa406a58e55000"
+        }
+      },
+      "scope": "frozen transport controls; compiled cases use model operating points, not calibrated firings, full-frame performance or preference acceptance"
+    },
+    "compiled": {
+      "id": "compiled-plume-volume-v1",
+      "source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "197bc15fb32c8d79130061fe57dcc2baeb93af738c059c83060a42e970a33e2d",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "binary_sha256": "5cb80f89a653c6ae1afc7165104f5deb5bfdb5160ffb468e2832e66f2026003d",
+      "profile": "dev",
+      "tool_sha256": "8ba48a5d41c01f697a251dfe4cf42a3b95d5a96dced9b7a634221f0306ab15ce",
+      "native_command": [
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-8e3d0668014e124b",
+        "frozen_compiled_plume_reference",
+        "--ignored",
+        "--nocapture",
+        "--test-threads",
+        "1"
+      ],
+      "cases": {
+        "sea-full": {
+          "linear.rgba16f": "54c6393035cc9603dfb829900d022c812a8c669f99b6acc5d1cec61d8756af64",
+          "steps16.rgba16f": "b34094fefbf2dea64485affa6138a0e1f3fbbc1c020f053602f30d6f96b6acaa",
+          "scene.json": "e899c2ee6e2862e79c98c53e4cddce89b283b463ea0455007add8105e3d80630",
+          "display.png": "2d29a1958bc0e65de6be37598c9de0f40617bfeb8d86cd9d6f306b9f9c2b9883",
+          "steps16.png": "e1a760e28de47fcc9838e51631e0d241a4a7bf8df649ccfe0d6464084e1acc35"
+        },
+        "sea-half": {
+          "linear.rgba16f": "329d37a8c198450272e31d52d731085cb7cb530b47372382b3fc1c6af6ce6186",
+          "steps16.rgba16f": "e58de2e37ad12b70b02e82fda46c30d7cb33de9e38edc12f8b40765cf3ce6efd",
+          "scene.json": "927867bb35f2a54b6be33aa573147b58bb168969a7237d6b0335c15d8619f168",
+          "display.png": "a5f14cc0d56e8146f6534fffe2ef0e7b12ad8532060b3bed3690291b910eeec9",
+          "steps16.png": "cf04bf89a0d5835273dca7ac7e3ec1d966c1550da08b15f9790483c926e74929"
+        },
+        "matched-full": {
+          "linear.rgba16f": "7d1ff7ea576a24c03fbe2fbae4df0f92549cb38d88e6cd53e5301422e71e9e04",
+          "steps16.rgba16f": "070650ed90119d02093f0cdd1dbc70edc403530f51a55d57028bbf615c214f63",
+          "scene.json": "5ed8382d6ea62ce6fca8fb5bb250a12caf0cde53e49c5af375deb1fcd5be37b6",
+          "display.png": "2f9433b8fd2500e1f1482dfae12536e62aa3c302c79f795999e76eb1821eb310",
+          "steps16.png": "58dee0cc8cc159a7bc0f9a48ca1e490831a081619aebe25c72bc1be9af9b29b5"
+        },
+        "matched-half": {
+          "linear.rgba16f": "b419ca3f3cd823f6dc455dfbf673624807cd78393879e0dbe07c14407ab8c851",
+          "steps16.rgba16f": "1ceb41421e009600f279a0707c93d010c6384c22d842da71726ee09192465132",
+          "scene.json": "e195c23a4f566856f9d5500ff1c133fbfcfc4e190ebd2ae90842a6e9e0a36825",
+          "display.png": "95c2fb16897f709b53996dcebfea19c9863d34e0d087be6e0d06a7174b2b95b1",
+          "steps16.png": "f43e479522b2bc5aaf314899fbbd135227796dfed57c9c41a971e16b69c6f5e6"
+        },
+        "thin-full": {
+          "linear.rgba16f": "206f474ccd1b5d37ada40480b00d2ce3aebfb428df13e742cf5c556f43840c0b",
+          "steps16.rgba16f": "a7a1ffa5ad0a17aed16c944abc07bf30aa4b9788932aa41a2489febacaab3d15",
+          "scene.json": "2d6b6d4879b4274a87ad2de17f2fa30969924473de84ad1d2819003878fe0590",
+          "display.png": "21b8c6e6486715d86ebbde729cfae179ba7aed890e5b73d84e32d162b847fd1c",
+          "steps16.png": "c451bee5420a8604c64cc59ff2950e005f162478f72833c7c651ecc7276075af"
+        },
+        "thin-half": {
+          "linear.rgba16f": "a7c283530fe8a2b28e53b015b236f08ada831fe6d4cc7e2c3b6ecf3c24ee992b",
+          "steps16.rgba16f": "ab43c5529aa7e02af035310c9cefdd30cd7e69f8edadec924730da334a4b19de",
+          "scene.json": "502059a8e7ce3b31f819a00d71abedf1f9c22cecb80f6eae2a0aabf4c41e467e",
+          "display.png": "4c283548d7a11c249469f6c62da693e0cd294de09ee55557bac796e2ee0e19ce",
+          "steps16.png": "d847e03fe444cfc2f4e2b9ce08703e7ee677bc8f56e2be3a3650541a8f9b823d"
+        },
+        "matched-axial": {
+          "linear.rgba16f": "2b1a8aa086feda5e643efc32b0b40885e654e02bc69f98fe728b1783d0e15207",
+          "steps16.rgba16f": "8343115cf8a66ad1d6c5519b5da9a80f61593dc0e9572d7b6e56cf8aa27bb361",
+          "scene.json": "80c6c4b4d034bd962bf6d0ec775a950c0355b6e4c2f35cf3ff3f392dcff32e63",
+          "display.png": "4d3cbee2150f93f1a3dd529d9f6f4621bcb35849a359468c61ae03d08acdf602",
+          "steps16.png": "91f70a16cd936d384c11baba3b8d6345d58fb4599e5892b58d117e9c3f6c1036"
+        },
+        "matched-inside": {
+          "linear.rgba16f": "1148afb7fbf69ad05f93c9e2241f71b1b63c4f2559658ffe1302e4379bef7f37",
+          "steps16.rgba16f": "e231c6f597b8d557702864246a8e48e96b972e1b2a02f0501197b1f2fa331c28",
+          "scene.json": "76cb6ea16b7f31b0c7592821e9687fa0cb9e3697faa933db710f9a106244bad9",
+          "display.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+          "steps16.png": "7f03c6fb907fe1f609098e981b807caf917330cf2f145fd37fd094f1f18ffca9"
+        },
+        "matched-oblique": {
+          "linear.rgba16f": "1524b680b66e19234297e071fc933d6ff648bd7a83b98e41a5f22a3ddd424a3a",
+          "steps16.rgba16f": "0d2476d248a43f968f17472d5ac21845e3fd05ec6c07087a465ebda93b5f0a5d",
+          "scene.json": "6f499feae703edd3cad806a85b2cdff0f4ff5912fe7fe70bb72d5efb6ed09fc9",
+          "display.png": "271d123d2da56a26efc410c9398b5a2b737dc179a74975892bd64d266e74ed02",
+          "steps16.png": "ccb60c2ff9f95af51b8c295e40b47ff57fe7426ea09aa18aeead6d1e0654b7ea"
+        }
+      },
+      "scope": "frozen transport controls; compiled cases use model operating points, not calibrated firings, full-frame performance or preference acceptance"
+    },
+    "analytic": {
+      "id": "analytic-plume-volume-v1",
+      "source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "197bc15fb32c8d79130061fe57dcc2baeb93af738c059c83060a42e970a33e2d",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "binary_sha256": "5cb80f89a653c6ae1afc7165104f5deb5bfdb5160ffb468e2832e66f2026003d",
+      "profile": "dev",
+      "tool_sha256": "8ba48a5d41c01f697a251dfe4cf42a3b95d5a96dced9b7a634221f0306ab15ce",
+      "native_command": [
+        "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-8e3d0668014e124b",
+        "frozen_plume_volume_reference",
+        "--ignored",
+        "--nocapture",
+        "--test-threads",
+        "1"
+      ],
+      "cases": {
+        "axial-zero": {
+          "linear.rgba16f": "2e7542702b07bf459cd2abf0a44476c8bafc633a69d0f3dd3e1db23d73cfaf5d",
+          "scene.json": "fee4968b47cfffedfdfbf68d0d49937e57e3f5f22f2fda8878820067c9fc0104",
+          "display.png": "d10eebf81c93c29354f647026aee950ff5f0816cb2aaabb5732048d180447fd0",
+          "analytic.png": "1545c013d2125fe02d46341ddca32d10753648b6772e3d8a1d103a95da979241",
+          "analytic.json": "3fe8cc464a3ae1018392821fad12d42f0409de05b6bec9d46b0ea433198cf807"
+        },
+        "axial-one": {
+          "linear.rgba16f": "18907233408bf17f02605df3752ed3e442d01c47e1bb754db02c91384b87f06a",
+          "scene.json": "6a6d8db019b2de4b2b7d59bb53c889a17c1d5dd3f4e320e2c286395c80906755",
+          "display.png": "f871690053ae39bd6078950e540a05f672176ce45ad2d0cd56b711da5d572339",
+          "analytic.png": "b79bfe9eab0cfdce09f728c3a3fd47cfb672272d5468ea59ef8ee5da99dc90b7",
+          "analytic.json": "c69334046290177123edd6a2609d30d1f3e78e6c2de691da855ac70a1c74ba6e"
+        },
+        "axial-ten": {
+          "linear.rgba16f": "20d656e022955ded7e27ce31b4c7190eb3d0875571af5c7de24fecc304e040d2",
+          "scene.json": "bcb9efc0115c86e5823007b29bb46771e62c2b95d2ff585f363e91719b949c04",
+          "display.png": "6eaadca8e1baafdff66ca25b1990ed641036e1b1cd1cb55d79e5178e8136bb2f",
+          "analytic.png": "498ad78d115bc0f8d112980a62473556ae1021f109ab1b4fb657c216aa7df956",
+          "analytic.json": "1bab69966bb364c2400c5e55020f6a579f2c742a337a4f687fcfbed542df4f1e"
+        },
+        "side": {
+          "linear.rgba16f": "e35cc68926a721a39df229bc3db4b0b6ec50ae557723c49f984b05fd6e5a1a35",
+          "scene.json": "2b0fcd3cede18cf40aacbef4fef01a57b5014be6256e983cc11fcd9218fa6d06",
+          "display.png": "110340d57c2b034d9869f15bcacbb18e34f29ea047ceb23a8b615ea6a6913509",
+          "analytic.png": "d5276e25df7eb1e59ddf930079476e51648f24e9527c85703542c689299b05f9",
+          "analytic.json": "0b8d8a83b2e2817e2d8d4dba3842fcbf3a6a46ac2b40c63f9c71582ca57aca86"
+        }
+      },
+      "scope": "frozen transport controls; compiled cases use model operating points, not calibrated firings, full-frame performance or preference acceptance"
+    }
+  },
+  "cycles_2048": {
+    "motion": {
+      "id": "curved-plume-volume-v1",
+      "engine": {
+        "name": "Blender/Cycles",
+        "version": "5.2.2 LTS",
+        "build_hash": "d13f752e3b9c"
+      },
+      "source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "a6e7b647b09a6a9b683f161bdef3e168be9852b754946e64e8f2553492dde46b",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "tool_sha256": "8ba48a5d41c01f697a251dfe4cf42a3b95d5a96dced9b7a634221f0306ab15ce",
+      "native_capture_sha256": "746843e2596170408042dc69dbcbfcbca87256ea4b05fc572bc5d79c65563c4a",
+      "native_source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "197bc15fb32c8d79130061fe57dcc2baeb93af738c059c83060a42e970a33e2d",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "settings": {
+        "device": "CPU",
+        "samples": 2048,
+        "seed": 0,
+        "volume_step_rate": 0.1,
+        "volume_max_steps": 4096,
+        "volume_biased": false,
+        "scattering": 0,
+        "volume_ray_start": "native optical camera (t0=0); Cycles minimum clip_start=1e-6 m, not opaque projection near=0.1 m",
+        "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+        "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+      },
+      "cases": {
+        "sea-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3842,
+            "pre_exposed_linear_rgb_mae": 6.0654145301112246e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0004690659147507567,
+            "relative_l2_against_thessa": 0.037299408687814055,
+            "top_10_pixels_fraction_of_squared_error": 0.607678047144364,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.02886679209768772,
+            0.013309036381542683,
+            0.008240913040935993,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "75759538b2150392aba9b17f4944261b95fa431555b9ef9c8cf8beac02105a09",
+            "linear.rgba32f": "0cd34215a28fcd021aaeb1cf39d2b9e2606f82c9f65eaca7ec765e4112e21579",
+            "display.png": "75e5f32c08614da1bc5e744210821117c098b8a4f5258d199cc4e77cffa547e8",
+            "thessa.png": "b412b45484b2b0fc3c1a3b3f432d8867bf02088f3af2ff32adb9616d46c08476",
+            "scene.json": "3c4beb4f1a080c2e15d12ce2b6902f40b9116e222d41b9a93376778ecf0df870",
+            "scene.blend": "a9b9dc61101f7b25dd3a771893ec03dc7a5d1e12ffc06034612b4f5fa3690b62"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3842,
+            "pre_exposed_linear_rgb_mae": 5.779434878244402e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0004078207274955322,
+            "relative_l2_against_thessa": 0.03239184207124713,
+            "top_10_pixels_fraction_of_squared_error": 0.520396786604657,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3241,
+            "pre_exposed_linear_rgb_mae": 0.00022654320605207411,
+            "pre_exposed_linear_rgb_rmse": 0.001692176019660674,
+            "relative_l2_against_thessa": 0.04028820378554329,
+            "top_10_pixels_fraction_of_squared_error": 0.5881366265441192,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.35049962997436523,
+            0.16139952838420868,
+            0.0994812399148941,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "90e6ac213adf6578f87c9ab347511d3deffd53a9f60536857cc149433838e67d",
+            "linear.rgba32f": "9f816ff8bf9e2c1dc52c894c246687fb12bc519646358d2d87df7719f6ce0ae5",
+            "display.png": "2badbed8ecdbdc47c6a56495895a442d6730f140e882f07715a4872f92530285",
+            "thessa.png": "3457c6562716bb4d10983b9b3f540c3a28564fcbab9053a4170c6fd6b2e0e10b",
+            "scene.json": "9719828bd8d90a7685999f344556dc4c1153eb989161e8613081e5a4cafc6de1",
+            "scene.blend": "2156c0bbff08d4df891a0811258c3ab3188ba8971d7c7fc506577b7efcb405ed"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3241,
+            "pre_exposed_linear_rgb_mae": 0.00022437219987252372,
+            "pre_exposed_linear_rgb_rmse": 0.0017057605019567396,
+            "relative_l2_against_thessa": 0.0405635113677148,
+            "top_10_pixels_fraction_of_squared_error": 0.5932185874912838,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-inside": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.00029976008031099016,
+            "pre_exposed_linear_rgb_rmse": 0.0006210256229943956,
+            "relative_l2_against_thessa": 0.020811966339424746,
+            "top_10_pixels_fraction_of_squared_error": 0.017566956865549245,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.03442112356424332,
+            0.015605391934514046,
+            0.0090324180200696,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "6f19faf0f4fa1f88422fa81c85efcc081025fbbaa148a46f760ac604ae572900",
+            "linear.rgba32f": "eacd41cd8540fcbe9dc1b9043cade3177b2a31378c82007b72496dfc9b7d5790",
+            "display.png": "0af483b5e6e2ff38558eee695f50321216d6c58b71059917f7fb82d431c767b9",
+            "thessa.png": "a46e4a2ca073b861e556d355ed37f63da397456cc44e9ef3ea43e0ad18b50015",
+            "scene.json": "fedc33c593863c72f047427aa4458ac3bad7618384c8205df80d8f7568565a23",
+            "scene.blend": "79e1dafaa7e61ea5976a8d22d42a32f8e1e47b8c9f93d6f249abd06c23dd0c6c"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.00026096147498136005,
+            "pre_exposed_linear_rgb_rmse": 0.000512653636445794,
+            "relative_l2_against_thessa": 0.01714569651788464,
+            "top_10_pixels_fraction_of_squared_error": 0.017191879975600864,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        }
+      },
+      "acceptance": {
+        "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+        "visual": "not evaluated",
+        "performance": "not comparable",
+        "temporal": "not evaluated"
+      }
+    },
+    "compiled": {
+      "id": "compiled-plume-volume-v1",
+      "engine": {
+        "name": "Blender/Cycles",
+        "version": "5.2.2 LTS",
+        "build_hash": "d13f752e3b9c"
+      },
+      "source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "a6e7b647b09a6a9b683f161bdef3e168be9852b754946e64e8f2553492dde46b",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "tool_sha256": "8ba48a5d41c01f697a251dfe4cf42a3b95d5a96dced9b7a634221f0306ab15ce",
+      "native_capture_sha256": "faf406b98a7baf2ce706d1efcad7edd5717e7df7cd497b7612baa70d118ba609",
+      "native_source": {
+        "commit": "0681f70c4af70cd10ff9a67cc371dcf1d3769dd7",
+        "dirty": true,
+        "tracked_diff_sha256": "197bc15fb32c8d79130061fe57dcc2baeb93af738c059c83060a42e970a33e2d",
+        "untracked_sha256": {
+          "crates/plume-core/src/motion.rs": "f854eee3eed21de14ff4373131f8f43e901207f48546923ff0f40106371274cd",
+          "crates/render-wgpu/src/plume_curved.wgsl": "6c1a4cf645ecee11adbb64273c28e7edc650e6094552079941ee4e9d953444fd"
+        }
+      },
+      "settings": {
+        "device": "CPU",
+        "samples": 2048,
+        "seed": 0,
+        "volume_step_rate": 0.1,
+        "volume_max_steps": 4096,
+        "volume_biased": false,
+        "scattering": 0,
+        "volume_ray_start": "native optical camera (t0=0); Cycles minimum clip_start=1e-6 m, not opaque projection near=0.1 m",
+        "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+        "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+      },
+      "cases": {
+        "sea-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3662,
+            "pre_exposed_linear_rgb_mae": 4.9500023534301126e-05,
+            "pre_exposed_linear_rgb_rmse": 0.000311709956985673,
+            "relative_l2_against_thessa": 0.02486381505720532,
+            "top_10_pixels_fraction_of_squared_error": 0.4713378035444861,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.05488962307572365,
+            0.025271659716963768,
+            0.015567108988761902,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "0f28b0727745877d32a74e19f0cb224c525ca25ca1230165b6d50f0ef0705bef",
+            "linear.rgba32f": "aae78ac188415890d32cffc19e00a820b1dad1e75319784fa742e0d5f3533c89",
+            "display.png": "62c553c5d85269bcd23a5d6f875bd50f1808a45682c7d557ec7ba846929b8b2b",
+            "thessa.png": "2d29a1958bc0e65de6be37598c9de0f40617bfeb8d86cd9d6f306b9f9c2b9883",
+            "scene.json": "e899c2ee6e2862e79c98c53e4cddce89b283b463ea0455007add8105e3d80630",
+            "scene.blend": "69cece8bce0c80844b62e6bf9acbe35819287543714a2d3159e14d35bc45eada"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3662,
+            "pre_exposed_linear_rgb_mae": 4.938281061956078e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00031159057732300363,
+            "relative_l2_against_thessa": 0.024839928252915425,
+            "top_10_pixels_fraction_of_squared_error": 0.4719298837899295,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "sea-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4532,
+            "pre_exposed_linear_rgb_mae": 3.232997767259148e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00020250701022100383,
+            "relative_l2_against_thessa": 0.02745829136853233,
+            "top_10_pixels_fraction_of_squared_error": 0.3041771983258446,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.017096249386668205,
+            0.00787095632404089,
+            0.004847733769565821,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "ccdfdc53cc074855b45f40bfea289c55963f12ebfe8309e417e0c7625a26eecb",
+            "linear.rgba32f": "da5ba2abcb72d603d09630f71bbf724f4f7fbec6dd5db138b025a50a48385f63",
+            "display.png": "29dcfa04e4404d2050e6baa536731ce2b3a0adf3baf3345228d16897e99fbc1d",
+            "thessa.png": "a5f14cc0d56e8146f6534fffe2ef0e7b12ad8532060b3bed3690291b910eeec9",
+            "scene.json": "927867bb35f2a54b6be33aa573147b58bb168969a7237d6b0335c15d8619f168",
+            "scene.blend": "d33a42e69e0a96ac6d4641c11ece846e3a1fe506892707429092b25ea512c144"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 4532,
+            "pre_exposed_linear_rgb_mae": 3.233618752570107e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0002025109459893241,
+            "relative_l2_against_thessa": 0.027436428864877693,
+            "top_10_pixels_fraction_of_squared_error": 0.30284529386530346,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3079,
+            "pre_exposed_linear_rgb_mae": 4.610614667058897e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00028863079045709285,
+            "relative_l2_against_thessa": 0.02661260215453586,
+            "top_10_pixels_fraction_of_squared_error": 0.4037458344701066,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.05306340754032135,
+            0.024430805817246437,
+            0.015049019828438759,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "c19402674321db7e2d8c283ad880d653ebd8a605fa38f2f7ec9319d971708120",
+            "linear.rgba32f": "83884b38fc2dfee919f172da9183ee2cc35006165d630d34dbfe214d47db6daf",
+            "display.png": "26e4374365a9a6c90be83bb1e95955827394a622be770ebd42d52483ab74e215",
+            "thessa.png": "2f9433b8fd2500e1f1482dfae12536e62aa3c302c79f795999e76eb1821eb310",
+            "scene.json": "5ed8382d6ea62ce6fca8fb5bb250a12caf0cde53e49c5af375deb1fcd5be37b6",
+            "scene.blend": "f5d3f0a74b213feb998a29e8458b404c50e3783d858cc02c64a92c342ee3cfe9"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3079,
+            "pre_exposed_linear_rgb_mae": 4.6114457884617916e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00028962585460892996,
+            "relative_l2_against_thessa": 0.026681695793203435,
+            "top_10_pixels_fraction_of_squared_error": 0.4003524732437577,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3103,
+            "pre_exposed_linear_rgb_mae": 2.5820293823523058e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00017659391042416461,
+            "relative_l2_against_thessa": 0.032365202941096835,
+            "top_10_pixels_fraction_of_squared_error": 0.3547431525338982,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.028953971341252327,
+            0.013330774381756783,
+            0.0082118920981884,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "867ed43ba198071e33569c9f1c1b61862ca2b69bb02f15f4aee976591e3af757",
+            "linear.rgba32f": "94abbab671bba9421026730ef8980a8f5c6583ab83474f2c889cdc9a66e66312",
+            "display.png": "5c6ceb82a8472a4b0624be542e3f791b8efc3bab0b46baae73db6a1988419898",
+            "thessa.png": "95c2fb16897f709b53996dcebfea19c9863d34e0d087be6e0d06a7174b2b95b1",
+            "scene.json": "e195c23a4f566856f9d5500ff1c133fbfcfc4e190ebd2ae90842a6e9e0a36825",
+            "scene.blend": "2d36455be0c4b3e24c21449512af78e1e81d9d11e3983a771128c3bf696788bb"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3103,
+            "pre_exposed_linear_rgb_mae": 2.580743426079495e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00017719632309079163,
+            "relative_l2_against_thessa": 0.032447374560194024,
+            "top_10_pixels_fraction_of_squared_error": 0.35452621039148524,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-full": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3210,
+            "pre_exposed_linear_rgb_mae": 0.00021616878737017452,
+            "pre_exposed_linear_rgb_rmse": 0.0016690145745182885,
+            "relative_l2_against_thessa": 0.03986505033983406,
+            "top_10_pixels_fraction_of_squared_error": 0.5896702492136245,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.3917248845100403,
+            0.18035118281841278,
+            0.11108911782503128,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "b7adf05815b06c8c760d1dd110e0ce8de2e2a03ec1332094cfa2fb36d0707ae5",
+            "linear.rgba32f": "693de21594c6dc0700a5456161d0e23093965a780b0de8840a940e25a0bc0b7c",
+            "display.png": "4f529e41404cfdc31afb4c9a25fbfe0d913757274594c33af466245712b3887b",
+            "thessa.png": "21b8c6e6486715d86ebbde729cfae179ba7aed890e5b73d84e32d162b847fd1c",
+            "scene.json": "2d6b6d4879b4274a87ad2de17f2fa30969924473de84ad1d2819003878fe0590",
+            "scene.blend": "1d239b493e1e5a6d490fe34f0a632bf93d9eb4eef7693d640dfd905a84edbae6"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3210,
+            "pre_exposed_linear_rgb_mae": 0.00021644971905043726,
+            "pre_exposed_linear_rgb_rmse": 0.0016853996375467899,
+            "relative_l2_against_thessa": 0.04020921054515644,
+            "top_10_pixels_fraction_of_squared_error": 0.5939515257530705,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "thin-half": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3408,
+            "pre_exposed_linear_rgb_mae": 9.161682048822753e-05,
+            "pre_exposed_linear_rgb_rmse": 0.000664981180655542,
+            "relative_l2_against_thessa": 0.038455089223806034,
+            "top_10_pixels_fraction_of_squared_error": 0.5487528526029581,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.13526222109794617,
+            0.06227606162428856,
+            0.038361676037311554,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "2c062a89ea3ca73d04f64d4672ce9fbcb76b0a4ebaf425a3fb9418c1c84d7889",
+            "linear.rgba32f": "10a9bf7c1b18bc3c2668851a0f4b5995ebdcc5234aceefd25ce0a70fe7c49093",
+            "display.png": "63890e2e07be66e2e5a5880f379c653f60adeb00aa67fa8fc68586633c9a1b77",
+            "thessa.png": "4c283548d7a11c249469f6c62da693e0cd294de09ee55557bac796e2ee0e19ce",
+            "scene.json": "502059a8e7ce3b31f819a00d71abedf1f9c22cecb80f6eae2a0aabf4c41e467e",
+            "scene.blend": "e24fdece68bef10885c7f9ecb7e312de0ea6adff2234092d274bafd45e643dc9"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 3408,
+            "pre_exposed_linear_rgb_mae": 9.166863658736957e-05,
+            "pre_exposed_linear_rgb_rmse": 0.0006693513548378375,
+            "relative_l2_against_thessa": 0.038659102885369445,
+            "top_10_pixels_fraction_of_squared_error": 0.5497193883717839,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-axial": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 723,
+            "pre_exposed_linear_rgb_mae": 4.1371012641427294e-05,
+            "pre_exposed_linear_rgb_rmse": 0.000456411747886949,
+            "relative_l2_against_thessa": 0.02338850846124273,
+            "top_10_pixels_fraction_of_squared_error": 0.26659232763879137,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.7543119192123413,
+            0.45927658677101135,
+            0.529737651348114,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "3eb79cab6e78827d9717e459a17498d8218f6de810b71046411ad5ef1b67729c",
+            "linear.rgba32f": "ea30a6d5d38a50b0e9a95daed280b1f12356a37a5df22dbaa2a841d7e41a44d2",
+            "display.png": "4fe7aeeddb7879c508a3dd13c6974e26a926a98fa64c1ab02c0950e159ff05a1",
+            "thessa.png": "4d3cbee2150f93f1a3dd529d9f6f4621bcb35849a359468c61ae03d08acdf602",
+            "scene.json": "80c6c4b4d034bd962bf6d0ec775a950c0355b6e4c2f35cf3ff3f392dcff32e63",
+            "scene.blend": "0a64363c75be0b5b5df27983295d2f06694ef1c907fc1f452177818beb92fdf0"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 723,
+            "pre_exposed_linear_rgb_mae": 3.656781065285416e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00040406780026579225,
+            "relative_l2_against_thessa": 0.020594665898387054,
+            "top_10_pixels_fraction_of_squared_error": 0.31270421881324423,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-inside": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.0002723903002786507,
+            "pre_exposed_linear_rgb_rmse": 0.0004083619020658817,
+            "relative_l2_against_thessa": 0.008307819715594456,
+            "top_10_pixels_fraction_of_squared_error": 0.014569873312002057,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.13885459303855896,
+            0.06272486597299576,
+            0.03573180362582207,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "954b7efca627b375847d56d14f7b463131a914def6e7cb96bfde44a5fd9d95c1",
+            "linear.rgba32f": "fea14a87adc7531936b149e76a249fd0b9ba81d2c7d4fe3f9fccbd348192620e",
+            "display.png": "e63f3ffee2d60b2b2b21b48af6e0df5c7a9be599b42c945f5f80b530f113f4c6",
+            "thessa.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+            "scene.json": "76cb6ea16b7f31b0c7592821e9687fa0cb9e3697faa933db710f9a106244bad9",
+            "scene.blend": "97db4bed762a76655d31d1e4622874924311c804fd8519a500f3ac1d7fe27b61"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 16641,
+            "pre_exposed_linear_rgb_mae": 0.00026328737352379855,
+            "pre_exposed_linear_rgb_rmse": 0.00039442998534664994,
+            "relative_l2_against_thessa": 0.008018544038745218,
+            "top_10_pixels_fraction_of_squared_error": 0.015247451557664646,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        },
+        "matched-oblique": {
+          "metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2571,
+            "pre_exposed_linear_rgb_mae": 6.480887490209394e-05,
+            "pre_exposed_linear_rgb_rmse": 0.000389934611200398,
+            "relative_l2_against_thessa": 0.02636661981906304,
+            "top_10_pixels_fraction_of_squared_error": 0.21135770488622696,
+            "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+          },
+          "center_linear_rgba": [
+            0.09615136682987213,
+            0.044433820992708206,
+            0.027738817036151886,
+            1.0
+          ],
+          "actual_camera": {
+            "world_from_view_rows": [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "vertical_fov_rad": 0.8999999761581421,
+            "near_m": 9.999999974752427e-07,
+            "far_m": 1000000.0
+          },
+          "carrier_triangles": 12,
+          "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+          "material_node": "ShaderNodeVolumeCoefficients",
+          "scatter_coefficients": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "artifacts_sha256": {
+            "radiance.exr": "bf6183fd9e2be60c0076295bfec017b0f55bfe66245b2d8c89520a77dc16ccc3",
+            "linear.rgba32f": "fe86413d0833ab3fa5cd86c5c3225136b60d944cd7aa05fceeffebe416be5746",
+            "display.png": "fcf7248d93589727b1e0caf9b6bd4797eecd1d5f5fc5bf716b2d43a9b6bd452d",
+            "thessa.png": "271d123d2da56a26efc410c9398b5a2b737dc179a74975892bd64d266e74ed02",
+            "scene.json": "6f499feae703edd3cad806a85b2cdff0f4ff5912fe7fe70bb72d5efb6ed09fc9",
+            "scene.blend": "c0253cc34bea0e06f9cf4a7d7e7710acb226ef782ab43ff4d76113cb2ebed7ed"
+          },
+          "steps16_metrics": {
+            "rgb_components": 49923,
+            "foreground_union_pixels": 2571,
+            "pre_exposed_linear_rgb_mae": 6.473271682544563e-05,
+            "pre_exposed_linear_rgb_rmse": 0.00039023855208018056,
+            "relative_l2_against_thessa": 0.02635730892779999,
+            "top_10_pixels_fraction_of_squared_error": 0.21189650102874416,
+            "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+          }
+        }
+      },
+      "acceptance": {
+        "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+        "visual": "not evaluated",
+        "performance": "not comparable",
+        "temporal": "not evaluated"
+      }
+    }
+  },
+  "contracts": {
+    "medium": "9 center points,8 steps per merged interval; at most64 cells per ray",
+    "high": "17 center points,14 steps per merged interval; at most224 cells per ray",
+    "gpu_limit": "33 center points (32 segments); consumer clamp1..16 steps per interval",
+    "motionless": "No centerline allocation for exact undeformed inputs; existing straight consumer below sampled0.1mm displacement",
+    "storage": "528 byte enabled-only centerline buffer;96 byte draw uniforms; original optical profile separate",
+    "frame": "f64 nozzle-point relative air and angular kinematics; camera-relative XYZ after f64 subtraction",
+    "density": "gaussian-v2 without outer floor; emitted-length-v1 scales sigma and emission together",
+    "legacy": "Gaussian floor corrected; legacy volume remains straight; Low impostor unchanged",
+    "authority": "read-only inputs; no force/mass/actuator/clock write; requested/resolved quality and default-off TAA preserved"
+  },
+  "geometry_oracles": {
+    "rays": 784,
+    "uniform_cells_per_ray": 8192,
+    "views": 8,
+    "depth_variants": 2,
+    "cases": "rotations,eye inside,separated folded crossings,opaque plane",
+    "max_absolute_rgba_error": 0.005840542815321648,
+    "declared_envelope": 0.012,
+    "rotation_covariance_envelope": 0.002,
+    "rotation_covariance_max_radv": 0.0008392333984375,
+    "rotation_covariance_max_llvmpipe": 0.00115966796875,
+    "initial_box_interval_rotation_error": 0.021240234375,
+    "fix": "Ray/capsule support endpoints replace orientation-dependent world boxes; shortest-arc transport of published nozzle radial reference; actual roll changes asymmetric shell"
+  },
+  "native_preview": {
+    "scope": "actual native Cache and PlumeRenderer with prescribed kinematic inputs; not authority flight replay or calibrated firing",
+    "extent": [
+      640,
+      360
+    ],
+    "frames": 32,
+    "exposure_gain": 1,
+    "profile_uploads": 1,
+    "scene_json_sha256": "b2ef47a670546065b1383e79951440461d96370bd7151dc6dc604b11bf380e9e",
+    "binary": {
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/thessa_terrain_native-99e591c1c7e8344b",
+      "sha256": "bc866ba5376a8b78072a822f85f6307d75d3512582508a50ad2f2349b179847b",
+      "all_32_frames_equal_previous_preview": true
+    },
+    "frame_sha256": {
+      "frame-00.rgba16f": "8da76e0542f496445affae97bf4ca147077b8ed2ed090dd35b67ae1849c6257d",
+      "frame-01.rgba16f": "be8c5ee4fcd36d032897efa3228836678d87ed66762b0944e6ea46867d3daf09",
+      "frame-02.rgba16f": "53fe85c58d79dd2156ee853bd077486e6930480f07efcfb2d94f1ed1453807e8",
+      "frame-03.rgba16f": "f44ef080ce010dae67d8f00c3f9024fca73688205cd5aa17ea0c391c87106fb2",
+      "frame-04.rgba16f": "a9b3381453ab2f59aad49f1a0f27d79202db303004dda49717a02319265cabfb",
+      "frame-05.rgba16f": "7311ddfda6b35529f593de63862e2379812371942892b50245843746c166187e",
+      "frame-06.rgba16f": "459b19f3cbb66b9c16150cff04d7b4e193152949c8543f1b08d3e97c31336ac6",
+      "frame-07.rgba16f": "d09a0937caeac14a734b65d4870a5e7077efc5d2a94ef0091e1bd596737f7ab6",
+      "frame-08.rgba16f": "6db59f58d507f5fcec4fe903f31553873af417edb07d11bb7fff2554875e10c1",
+      "frame-09.rgba16f": "4294ee637a5a36d3fac5f41c9b67d5e3cc98efe458093e569131bf50a75f00eb",
+      "frame-10.rgba16f": "c0b539b763beeea9a693788944e6baeeb11391f20ee5734750fecfda9c762eba",
+      "frame-11.rgba16f": "ffefe0e4c15188a5d6fb91b6e8c1461572b1a0dc9da727e3f4740699c82a78f8",
+      "frame-12.rgba16f": "23e3d3e14eab0091a8328b062e874f36c4bc93eec4e53fcd34243c7e4ca79902",
+      "frame-13.rgba16f": "8fbac6c4dd7a90c92da431ab4ad0fa4f9248f8dad5a81862a227418b1aa71a39",
+      "frame-14.rgba16f": "9c9aaac7118e6e6ef7e0c55190d94fe924f5ba1c67e754dd04ade66265ee52ed",
+      "frame-15.rgba16f": "8f0738c58c1c1b38466483c1bb3a1170d03c4ae7c99a34b73cf3f9c74793e888",
+      "frame-16.rgba16f": "b10f9069fc2fabf2825c082a7b77d360e278ffa88ff131a91fa3fa096bbbd649",
+      "frame-17.rgba16f": "54cd2cd28b056f1393e7c62b8f61e658578f64c84506937c58fa654ae41eedd0",
+      "frame-18.rgba16f": "58d5b49c4219662df289205daa1cb8058282cd81633d1c4dc5429aee6308d7d9",
+      "frame-19.rgba16f": "29dbe544d369fe219157534d8e1427328834554085d262a6d29e6f48909aa87a",
+      "frame-20.rgba16f": "8209fafb88aef31e6ae0ae5f3776aae23c5bb06f9d1d159a9d2e31131a17ed8f",
+      "frame-21.rgba16f": "5b0c35740d1874aeeecdeb7af83579bdcfb573c3cb9471ed63fe6ee084d4b1bb",
+      "frame-22.rgba16f": "4adaa4f7fc2764117bcc3e6b02c8bf7c99f8e51784f83ad16d70096c867114a7",
+      "frame-23.rgba16f": "152591cfde9ab6a85c326302fcb27f4583629b3b956c898459213c740259a735",
+      "frame-24.rgba16f": "21d0254d4b24d18ee269348793b5834700135edd952ab07d11c6b2197bc40ce2",
+      "frame-25.rgba16f": "c9c1da459f281a33e2e86adc376bf74ccd54c79e591bb350de44a0c8a3ba7d9a",
+      "frame-26.rgba16f": "b722dd1e08463e05994071eeb9622e6881a0a85ccfd778c9b5d8877311e1b8f6",
+      "frame-27.rgba16f": "64c7460a89c66ab2494cc4c8601c4915fbf2dd459222dc23bc4192fbe45d1bed",
+      "frame-28.rgba16f": "d7f86e6dc5a033fcb7d10c20ccad321f2c28313cc2800b04638272b129a95b68",
+      "frame-29.rgba16f": "4a66cd3eeb881aae99015e7ce97847f317bbc86f6e02b1e1f13a7632ef7243e7",
+      "frame-30.rgba16f": "8f5ef6bdde121b7b138c6dcdf83d255abe4b1c70fae3f2f78d8c5aaa5211ca14",
+      "frame-31.rgba16f": "fb320f76282e392e1b942aa4b4b829ad6c3cb461c1ce788b49ed5374de8fefa9"
+    },
+    "display": "shared Reinhard/sRGB after readback; GIF one common palette,50ms/frame; display quantization is not transport",
+    "gif_sha256": "241ef85397ac4df7ee3ba21de4a5b58c994256617c2bf339691bdd5b6eb31be0",
+    "gif_path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/plume-motion-2026-10-31/native-plume-motion.gif"
+  },
+  "cost": {
+    "scope": "ten1280x720 views;20 warmup and80 measured frames/run/case; compiler-free release straight/curved/curved/straight; different fields, not equal-output optimization or whole-client FPS",
+    "runs": {
+      "0": {
+        "0": {
+          "p50": 0.3333132993965149,
+          "p95": 0.3398236691797257,
+          "p99": 0.342089975189209
+        },
+        "1": {
+          "p50": 0.5468590389461518,
+          "p95": 0.5578659522176743,
+          "p99": 0.5631255455100631
+        },
+        "2": {
+          "p50": 0.30123234518623354,
+          "p95": 0.31158200967693334,
+          "p99": 0.31305120115894325
+        },
+        "3": {
+          "p50": 0.4948201644401551,
+          "p95": 0.5081735360115051,
+          "p99": 0.5113499712778473
+        },
+        "4": {
+          "p50": 0.3391043023738861,
+          "p95": 0.3430678331314087,
+          "p99": 0.36255926709732056
+        },
+        "5": {
+          "p50": 0.5477407141399384,
+          "p95": 0.5700991955314637,
+          "p99": 0.5744133925592423
+        },
+        "6": {
+          "p50": 0.3220919787483216,
+          "p95": 0.3242600982021332,
+          "p99": 0.3246736840203095
+        },
+        "7": {
+          "p50": 0.5220719431571961,
+          "p95": 0.543364399087143,
+          "p99": 0.5458435094274903
+        },
+        "8": {
+          "p50": 0.12473700184822083,
+          "p95": 0.126404169487381,
+          "p99": 0.12898266866775507
+        },
+        "9": {
+          "p50": 0.7011521978588104,
+          "p95": 0.710552057708931,
+          "p99": 0.7162392634703063
+        }
+      },
+      "1": {
+        "0": {
+          "p50": 0.9097886096248627,
+          "p95": 0.9397836004789353,
+          "p99": 0.9500943911088181
+        },
+        "1": {
+          "p50": 2.004468515001297,
+          "p95": 2.0314337492803576,
+          "p99": 2.0372924809430697
+        },
+        "2": {
+          "p50": 0.5037771828861237,
+          "p95": 0.5227472262033463,
+          "p99": 0.5313399524897003
+        },
+        "3": {
+          "p50": 1.1335537661933899,
+          "p95": 1.1523975696533204,
+          "p99": 1.1613758284562303
+        },
+        "4": {
+          "p50": 2.1878970314540864,
+          "p95": 2.2196734069610597,
+          "p99": 2.237925285756798
+        },
+        "5": {
+          "p50": 5.815409349781037,
+          "p95": 5.891243435482979,
+          "p99": 5.9104527333868795
+        },
+        "6": {
+          "p50": 2.1287246031074525,
+          "p95": 2.1619637579132087,
+          "p99": 2.1660976122877122
+        },
+        "7": {
+          "p50": 5.809538194513321,
+          "p95": 5.883907497109224,
+          "p99": 5.913376688938637
+        },
+        "8": {
+          "p50": 1.3249975116806032,
+          "p95": 1.3917102667413712,
+          "p99": 1.3977128717652512
+        },
+        "9": {
+          "p50": 2.178178566249848,
+          "p95": 2.2496363368989947,
+          "p99": 2.2605679070175935
+        }
+      },
+      "2": {
+        "0": {
+          "p50": 0.9110510081977845,
+          "p95": 0.935096695301056,
+          "p99": 0.9433479728305435
+        },
+        "1": {
+          "p50": 2.0046288195819857,
+          "p95": 2.0334034918155672,
+          "p99": 2.0389243815744784
+        },
+        "2": {
+          "p50": 0.5045787057895661,
+          "p95": 0.5212924621335984,
+          "p99": 0.5315399324541092
+        },
+        "3": {
+          "p50": 1.1187656686248781,
+          "p95": 1.146622597134018,
+          "p99": 1.1495862280694962
+        },
+        "4": {
+          "p50": 2.176695748878479,
+          "p95": 2.1987757010610585,
+          "p99": 2.2056603820401763
+        },
+        "5": {
+          "p50": 5.822703208202363,
+          "p95": 5.88453068116665,
+          "p99": 5.9207022075146485
+        },
+        "6": {
+          "p50": 2.1529105567188265,
+          "p95": 2.1711772636882785,
+          "p99": 2.20093460300148
+        },
+        "7": {
+          "p50": 5.819416964298249,
+          "p95": 5.879370877475739,
+          "p99": 5.907947974313622
+        },
+        "8": {
+          "p50": 1.3228333998413087,
+          "p95": 1.389658368108559,
+          "p99": 1.4023072010477828
+        },
+        "9": {
+          "p50": 2.180923782194138,
+          "p95": 2.2320348939393995,
+          "p99": 2.244520216206322
+        }
+      },
+      "3": {
+        "0": {
+          "p50": 0.32315399659538274,
+          "p95": 0.33537120945110327,
+          "p99": 0.3367037412780762
+        },
+        "1": {
+          "p50": 0.5285041644573212,
+          "p95": 0.5468991150913238,
+          "p99": 0.5530760513467026
+        },
+        "2": {
+          "p50": 0.296663664636612,
+          "p95": 0.3105520527460099,
+          "p99": 0.31151949089046477
+        },
+        "3": {
+          "p50": 0.49317704248809824,
+          "p95": 0.5078248735485078,
+          "p99": 0.5106057572620011
+        },
+        "4": {
+          "p50": 0.3392245308094025,
+          "p95": 0.34541028381671907,
+          "p99": 0.3705580649122238
+        },
+        "5": {
+          "p50": 0.5508866915359498,
+          "p95": 0.565897211710167,
+          "p99": 0.5690600210871507
+        },
+        "6": {
+          "p50": 0.3221721310386658,
+          "p95": 0.32487727083778384,
+          "p99": 0.3498074384650039
+        },
+        "7": {
+          "p50": 0.525057615972519,
+          "p95": 0.5431279498306275,
+          "p99": 0.5497228802801514
+        },
+        "8": {
+          "p50": 0.12479711606597901,
+          "p95": 0.12841799578227997,
+          "p99": 0.13071596194644924
+        },
+        "9": {
+          "p50": 0.7018735684719086,
+          "p95": 0.7130007101789475,
+          "p99": 0.7148089458491135
+        }
+      }
+    },
+    "binary_sha256": "5f5e836f79994318f0604dcdb8067c42a3d32b8be8599f6a920ebe830caf1b3d",
+    "invariants": "all source optical station bytes equal across variants; repeated HDR exact within each variant",
+    "earlier_isolated_hoist": {
+      "runs_p50_ms": {
+        "0": {
+          "0": 1.2258491285247803,
+          "1": 2.849393883665085,
+          "2": 0.8834585822467804,
+          "3": 2.1632301641006473,
+          "4": 2.382126069030762,
+          "5": 6.458751708229066,
+          "6": 3.050516018211365,
+          "7": 7.535918338165284,
+          "8": 1.860494963470459,
+          "9": 3.1774371699714665
+        },
+        "1": {
+          "0": 0.9631299588489532,
+          "1": 2.309407903615952,
+          "2": 0.7129946987571716,
+          "3": 1.76387137746048,
+          "4": 2.255345183778763,
+          "5": 6.3972749015350345,
+          "6": 2.7921250722141266,
+          "7": 6.765053685779572,
+          "8": 1.7321911847019198,
+          "9": 2.4833984878807067
+        },
+        "2": {
+          "0": 0.9598437149448396,
+          "1": 2.2817754015197753,
+          "2": 0.7123134042892456,
+          "3": 1.7726480532531739,
+          "4": 2.248251706083298,
+          "5": 5.9824467228584295,
+          "6": 2.5481615384788516,
+          "7": 6.734094863634111,
+          "8": 1.767598458961487,
+          "9": 2.469512103578568
+        },
+        "3": {
+          "0": 1.2278128596382143,
+          "1": 2.8557058765296937,
+          "2": 0.8921551057491304,
+          "3": 2.166456293787003,
+          "4": 2.3795411576671603,
+          "5": 6.440657328683853,
+          "6": 2.841298502340317,
+          "7": 7.445967430326462,
+          "8": 1.871555979537964,
+          "9": 3.126239894514084
+        }
+      },
+      "old_binary_sha256": "30f8b7c9eecd444d02e30c4ce6c9f559b6f2ea5057dcfaf2730d4d5dd9112df6",
+      "optimized_binary_sha256": "f51d06309775d802cda7e827f0d8f6d660073ef1515b5a60fc1bb3d30bd6c993",
+      "result": "4.03..21.63 percent lower stage p50 with identical HDR in40 ABBA outputs; applies to earlier clamped/unscaled box-interval fixture only; final density/support changes reported separately"
+    }
+  },
+  "snapshot_ingress": {
+    "bug": "PRIMARY try_lock could drop a sole first/stopped state while the host drained its queue",
+    "fix": "reuse one bounded two-arrival latest-wins lock path for PRIMARY and catalogues; queue released before presentation, no pipe IO under lock",
+    "wire": "version,receive timestamps,generations,interpolation and physical state schema unchanged",
+    "regression_before": {
+      "result": "failed on sole-publication contention",
+      "log_sha256": "15228b94afac90d2b70c802be34a71ca09894979a9483add31c8489ceb9a6610"
+    },
+    "after": [
+      "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s"
+    ]
+  },
+  "validation": {
+    "plume_core_render_lib": [
+      "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 40 passed; 0 failed; 23 ignored; 0 measured; 0 filtered out; finished in 0.54s"
+    ],
+    "python": "........................\n----------------------------------------------------------------------\nRan 41 tests in 0.162s\n\n",
+    "gpu_integration": {
+      "radeon": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.60s"
+      ],
+      "software": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.82s"
+      ]
+    },
+    "gpu_lib": {
+      "radeon": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.10s"
+      ],
+      "software": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.15s"
+      ]
+    },
+    "flight_net": [
+      "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s"
+    ],
+    "native": {
+      "unique_regular_cases_covered": 136,
+      "unresolved_failures": 0,
+      "original_ignored": 44,
+      "initial_broad": "128passed/8failed because declared crate-local scratch was read-only",
+      "harness_fix": "mount external native-unit-scratch at existing crate-local target inside bwrap; host checkout untouched",
+      "secondary_failure": "after writable scratch, actual PRIMARY contention race reproduced; fixed rather than masking the timeout",
+      "recovered_groups": {
+        "server-unit": [
+          "test result: ok. 15 passed; 0 failed; 4 ignored; 0 measured; 161 filtered out; finished in 20.10s"
+        ],
+        "perf-unit": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 177 filtered out; finished in 0.00s"
+        ],
+        "producer-unit": [
+          "test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 173 filtered out; finished in 0.00s"
+        ]
+      }
+    },
+    "strict_clippy": "plume-core,render-wgpu,terrain-native,flight-net all-targets passed",
+    "architecture": "Architecture staged: thessa-aero-surfaces: staged facade removal: thessa-aero-surfaces -> thessa-sim-core\nArchitecture staged: thessa-fuselage: staged facade removal: thessa-fuselage -> thessa-sim-core\nArchitecture: OK (44 workspace packages, 20 guarded foundations; runtime/build closure, own dev edges only)",
+    "portable_shaders": "Naga validation uses no native capabilities; actual RADV and llvmpipe probes pass"
+  },
+  "raw_output_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/plume-motion-2026-10-31",
+  "raw_file_sha256": {
+    "initial-tests.log": "f1335509e3e10728d95fa87421054338cea212032d0974d544842c8971e17201",
+    "producer-initial.log": "99c5242b27b06d29144d9d7afa2ae42437e779538ad180ed25f0aa87e2bda6ff",
+    "gpu-build.jsonl": "fd7e6422f5a5faf0a9926cb5a16a1d6729d07d4f186a96b62454bfbeac982d89",
+    "gpu-build.log": "c2b6e886dfe51257fea39331376ed45379b2617d7cbba4427980876aaf00d644",
+    "curved-radeon-command.json": "b6aeb643a1c0f3689a14771b2ec3fe2e7a6868acfaf0261dd29cdbf0d8626077",
+    "curved-radeon.log": "465479a20861d3cdbaf750d1c4853a5f257646a8acd93c5f478d897915a11734",
+    "producer-tests.log": "0a13ecb0223eabe189ee0e23191355c67e93853822fa2c19986efd5b0da28b44",
+    "release-build.jsonl": "fcd9c59fef2ef42ce7e8da543f2ae6da4dd53e69f281ae8cec1a6f3f9693a566",
+    "release-build.log": "99a0ccaa4ce4a88fd904f2d62680be9a9cf677eeb980a2686b271f481f8aa757",
+    "clippy.log": "295524d6f5d34b01cf9e49f3c1f8fe07ec8a2672f0da13a916d08b01ca13854b",
+    "python-tests.log": "5db64d826853c7b998f610bda05406ef8814a0f53fdbb8dcb9e21a630d50dfe2",
+    "motion-capture-command.json": "ac3f45b4292570f202fd8dc402655d0aedcc262bf8dd00b55b72bc5f86ba670b",
+    "motion-capture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compiled-capture-command.json": "3389fbbdcac571fd6ef10492d3135fd1585ab3121b068f56f17086b2dcd43839",
+    "compiled-capture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "motion-cycles-command.json": "2e0876c6f11eb6b0a4ddc2fdaca1df9caf218b7d167d2d5eef574a41618cb1b3",
+    "motion-cycles.log": "5b1ae37f25b65629e64f75e006f56a5e90328c94be5b386588c900739ad38d11",
+    "final-release-build.jsonl": "e60112f079d84e5502d5b7d7e4e66123634b9b5019da11fe5920bc80417f3979",
+    "final-release-build.log": "169e44910490c61f3bf983b5288275e729b9efcb7c29b96f13ce1d7764acfd49",
+    "radeon-oracles-command.json": "72474d141114555a4782228eed6edbcce6105d825cf4a856c4ac3cc9b59bf69b",
+    "radeon-oracles.log": "4079a601507774754d77e7f25aee904505da908ab8df5d7ebf3e15a7c814c7b4",
+    "software-oracles-command.json": "4862d89d60e5e2f80c519afbfc14f8c1133415a5e3f0d0e1cbbbb93c789e11e0",
+    "software-oracles.log": "7ad320f9bbfb76e6e2bd5e05e1dbea58fe655078f775f99183f5da0cf2f15d8c",
+    "measured.patch": "1ab1ea1ebc07327953fa9d054ec546a02feddee4423b14101f0911c106407ad6",
+    "cost-0-command.json": "f2a8e5191237fc24064c15faaec1e6590f22a6d8c48880730fa574740452e53f",
+    "cost-0-baseline.log": "e9f4b30490a6efe9138ddcb110fd0561d076b54ffdb2a35f5e101c2d9777bfb8",
+    "cost-1-command.json": "be7ec59050aa7d69845d3c449e62929416664681d2b597c07e19665150bb8b2e",
+    "cost-1-straight.log": "553fffd0e71a97cfd74d46d25fc1cecedf86bc6816ed16c6b4f933a56e51f21a",
+    "cost-2-command.json": "81b474b64e710567f59a7300b64d9a579f4d2f4d6a9a237d9ccf3090332eed5b",
+    "cost-2-straight.log": "75042175e03e5b3c12121144eabc74137ec572cb9ddd4e0d9974975d1b8abe15",
+    "cost-3-command.json": "e5260605f177b16248c7720b52a2c272edd4fd9b18c6a33cdc247563f90ced69",
+    "cost-3-baseline.log": "38410f46267510f463f6cbab7cec77547c4dd04f49b128f3940a3e8643a33b0a",
+    "cost-4-command.json": "6f6b4ae23a03431aa7bec9eb0ed919a072fa3c4174cc44951c38693d24c5f5c3",
+    "cost-4-curved.log": "390260dea638791b9259048edff1e87f142de287714c9c4f53baa27afaa905f5",
+    "cost-5-command.json": "3c1dfb54a8b1e120c0244a9ad605ddd2bc454d7a8f44d8dc11461e1ed1e167ed",
+    "cost-5-curved.log": "82ddfbf14e5678fadf497aa85d19aba5d904daaf7f47a32b72a05e64844eb7fe",
+    "cost-summary.json": "5377b1e92751203cff4e28e5e7887c071eba0e9276098876ae55e4fea2848b32",
+    "curve-before-redundancy.wgsl": "fe602f4d0af5e34a11d183320b202bb243980fb3c6031ba5ea0af53c3d656eb8",
+    "optimized-release-build.jsonl": "9a515d756d2ec65ad0fa44635a5554c072f5666f65b4cfd52accb27623a3e52f",
+    "optimized-release-build.log": "d5f69d78e61f2dc05cf3b5568b1be929b2f79759600c206bc8e2217e17cdd2b5",
+    "opt-0-command.json": "cc86952f560cce888bedab0d22074b9d9d960884c4f8ed8da0bf620fed25d62f",
+    "opt-0-old.log": "52c454adfff582d88cd8b2589fef7de7385dca6156b1680b0a67065b41601b48",
+    "opt-1-command.json": "afddd66b8e708f142f8bc8a970a956930e2765b637d9e759375b8c50eec0fd55",
+    "opt-1-optimized.log": "7a8cd9a1b42f1bc751362e2b67649eea910815b87e3a335fe52ffce7326420d8",
+    "opt-2-command.json": "e3df7a167e7c0343a597ef7fb374a8bf0d02a8055d722b2153146af55919aebf",
+    "opt-2-optimized.log": "b2f524882e90b011e6d18398069e82463eb1f4ba135c9232d562a74bbd81e2eb",
+    "opt-3-command.json": "dd232a4001da5d22756451c0579e2ba19c5d27cc1b6367222a241ae8498e89b0",
+    "opt-3-old.log": "7565a716040b0cc40ae322f8e039e1acc84a53350689c79780edc832439c590d",
+    "opt-summary.json": "22f290667f12206ee68f4e8a6073f259dbde0ee1fad86b2514639397916869d5",
+    "v2-build.jsonl": "10a627eaee59131eac376fee6fbb185bea001768e60878c55bfb3b2c360ae2e4",
+    "v2-build.log": "086fab00a581bfcef05803ea7785c20e056a0c821ca04aa66e2bf7bdde14431e",
+    "radeon-v2-oracles.log": "8e629d41e8eae1e864ccabbb71610a5fa6fe86750f98658fdb8a9ac508e27c9c",
+    "v2-unit-tests.log": "efda681a0f1af8f1caf8251ff41dc30b5377d6db3d2db7662e8c44e33872ca46",
+    "software-v2-oracles.log": "ea5a9da7fe992c613ce76836b80dfa2016ec6b1420d4359d4beacd0aad492cf1",
+    "native-test-build.jsonl": "520cea2e1b20426a6204b22e0cdf0874fa23b80fca19b57182f07a17fceb5838",
+    "native-test-build.log": "0fe45f2ae26a9a9c58218b01ad22b52f2be60c3090287d72168ee76adaa9257b",
+    "final-python-tests.log": "749dcdc601461d1c7df7465fcc4c74fdd29c136e2ab8e009d5facd61ff2947bc",
+    "final-motion-capture-command.json": "c9cdaaea1070fa9685a67b614083e62219cb2e716c07a990e4357b04ba73ddb8",
+    "final-motion-capture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "final-compiled-capture-command.json": "d68c391d192f759e7d7e78dae2435beac310aa8b5c1ca0b457800009b591ed3d",
+    "final-compiled-capture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "final-analytic-capture-command.json": "1347560e6c7bd261ce4769766740125a986253a44c7eca6fb290a06c7faef0b2",
+    "final-analytic-capture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "preview-command.json": "2bbe10554ea6f15297f9d833b14a14551c843dba13b9b824e148d5fb384d783f",
+    "preview.log": "a4603f0462dc566f2b3cd25baebd76ead392cc1da854da612fa4459814b88cdc",
+    "shipping-release-build.jsonl": "232e177ff3ba4ecb30b0f17f08d62389c9e67104bc3dece308eb449419c1e5e8",
+    "shipping-release-build.log": "106b95159440b50c369591c870653e0740324d3d546879b94942231069a64ad1",
+    "native-unit-command.json": "02438b71114d76203ecffc41109f559145b07f771f759801e2122802cc81871f",
+    "native-unit-tests.log": "2649307a66605cd2848b339657eb3c50e13d4b8ead5957ed85e898c0c51ac848",
+    "shipping-unit-tests.log": "89bc1d6f41dda56ac35af183ec0792a4414cedb600637197849b8dc20f349be7",
+    "shipping-clippy.log": "827a06231161fba5f21c6986c29c169dbcc39a78fac1e9e5778ae7a96bb622e5",
+    "shipping-motion-cycles-command.json": "bd0e88ba2569b30212f1060466890b1eabbc34af0e4d423c92e611e317cf4c81",
+    "shipping-motion-cycles.log": "ae70a3a971a3c83bdfc647cf8bb588a1bb7e8494f7fdd647ab35c63bf9dfa1e4",
+    "shipping-compiled-cycles-command.json": "41630361e6fd2e442f962cf7f182357df36be7543940059d4f6e1c2fbffbe6e6",
+    "shipping-compiled-cycles.log": "347daa0dff910282de6ad96e577b348b67f3a1081de650ac1e4b42cb8c03be06",
+    "native-recovery-0-command.json": "38fd9ada105990d38d3caa75243aed0c7862f9129f3e92d88b4148cd4adc4dd5",
+    "native-recovery-0.log": "138fc72e6a0279bed5423eafe66ff171277bfedc9892db5a385d395ce6acc858",
+    "native-recovery-1-command.json": "ceda5d63376971c59a406cfdb9e1deb8cb644cb0b9f7d5bcebe6891dc4e58b6b",
+    "native-recovery-1.log": "0c404ceb9bf3d5f7b3710fcbf0544f455b6c14a5b9f51106fcdeb554ca9dfe6b",
+    "shipping-cost-0-command.json": "88cb3870a89f5ec6420206f104afe143e9f67a99ccc8e67ec20e01cef8bf470f",
+    "shipping-cost-0-straight.log": "a0ea53affd7f9773abdd27fc927111faf91c7023cb38f66b89ec145019ada23b",
+    "shipping-cost-1-command.json": "880930ef22f63925418c8ce36eaf9798aab068a25c04210646e4d0077653a36d",
+    "shipping-cost-1-curved.log": "e3f5acd3a1654bae7a86b3af612dcaefce0b8f69a6b98ac08d80cf78f97f77c6",
+    "shipping-cost-2-command.json": "a52eb87ec3df883d59bb374e2538c23e4130155a28ca98595b2a4a2a3c9efcbd",
+    "shipping-cost-2-curved.log": "cccbf3243da38b4a44802c805f260e13a620ced9ccb06294a354920b53f69c14",
+    "shipping-cost-3-command.json": "fb0929f403089ebb7fd627995ac45a0bbb7f706d0f75d81c3a9e95c0731741cd",
+    "shipping-cost-3-straight.log": "e61771e58d541e38099a0507066aee6bffcb090e4fd4fe927c46ae8147d1755d",
+    "inbox-before.log": "15228b94afac90d2b70c802be34a71ca09894979a9483add31c8489ceb9a6610",
+    "shipping-cost-summary.json": "9a7d11f53d39f91f8587f6d478124d55c5c3a096e0f6800116a82cc7ba7c226e",
+    "inbox-after.log": "2723a462402d1d211796c4b724d0d9e29e25f82fe9ea2fa4952f8720a1e86446",
+    "reliable-native-build.jsonl": "a0b46ca075b79830347e2c7f19ef2e61d264325044db3607e7df21095c7ca543",
+    "reliable-native-build.log": "0edfc2b474ffc1e44556f01ce8344f4e3753fc35465ed9f04abec2ebc99b8757",
+    "shipping-server-unit-command.json": "d39ed8b5291c0a0c1c34c5d70a764b2b4da924122d393d644fe833b8b73f0e19",
+    "shipping-server-unit.log": "6608a480852803ac86a0c5af43b01d20a005a9454a5d527bb2eadf76f735606c",
+    "final-clippy.log": "874fc495f5d552a32c0351a779518ba7e64357bbd1552e0661e4106bc90075ee",
+    "shipping-perf-unit-command.json": "4cb80eb6d11246066954b716399881aa0b30aaed4d5c07b63de9b0ccab672092",
+    "shipping-perf-unit.log": "e6657fcd905205731c4274961d3e101312104f51cadedd8722bf4598c3da32fb",
+    "shipping-producer-unit-command.json": "dcac29e6037524a914029b3782a08bc05f617565731f09625d667c0767106097",
+    "shipping-producer-unit.log": "f686ee6c9236e710f96005cadf7035a4b2a2ddba7db8236198a2fbe84b96fe06",
+    "architecture.log": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae",
+    "radeon-lib-oracles-command.json": "7358645117a3bbc0b29e8702c5aa15e71629216e7a2aa2afa3a08547f0eaa766",
+    "radeon-lib-oracles.log": "60f0f9be7b2b7aaabd5b371c0c1a30d4475bf6f06fb06c9e3132a763a20832bf",
+    "software-lib-oracles-command.json": "3ba7a5b89fdf2b948ca289f60bfc11b9022e163e6387e53e09ed121494e74af3",
+    "software-lib-oracles.log": "0390f90c4c569b249786139a117bcdc4b7bc850aad17e47e26737143274c8b96",
+    "shipping-native-build.jsonl": "c86ebb55b9e31868e049d176f8fc884b61b7cd0065654db2ef7013d6d23233e0",
+    "shipping-native-build.log": "7ae10c8801d0125df10a40af76381c740fb489a51d70fe1c20baf8407ec83681",
+    "shipping-preview-command.json": "f42ec740e82bea839bace33ae29688d76a61bafc3621de23ed1b971198fc12ed",
+    "shipping-preview.log": "072d52044b7caeec7f9e053666c05b9a69264c23c9e48ec848120e60996c7e39",
+    "shipping-preview-binary.json": "1e676a5a75c4e4f71198c91533e491028f79b3f9eba658380c07ccb251280720"
+  },
+  "limits": [
+    "Quasi-steady current-rate/current-exit-speed motion and exit-width lateral capture, not accepted nozzle history or calibrated CFD",
+    "No acceleration,axial counterflow,transient gas lifetime,secondary chemistry,condensation,impingement or fluid self-intersection mixing",
+    "Native provisional starter deck/mount remains; actual hardware/nozzle/gimbal publication and field-derived lighting are open",
+    "Closest-segment field uses per-segment line-density scaling; global mass conservation in overlapping tubes not established",
+    "Reference and geometry probes validate the declared field at bounded fixtures, not arbitrary animated-ray convergence or superiority to KSA",
+    "Near-camera High remains expensive; performance measured per plume pass, no client FPS claim",
+    "Capture source states precede test-only camera API cleanup,extra counters,PRIMARY inbox fix and docs; plume field/shader math remains the captured version; fresh preview confirms all32 HDR frames exact"
+  ]
+}

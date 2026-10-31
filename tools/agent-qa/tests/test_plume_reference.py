@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from plume_reference import CASES, ID, ENGINE_CASES, ENGINE_ID, analytic_pixels, bounds, load_inputs, sha256, validate_scene
+from plume_reference import CASES, ID, ENGINE_CASES, ENGINE_ID, MOTION_ID, analytic_pixels, bounds, load_inputs, sha256, validate_scene
 
 
 def fixture():
@@ -43,8 +43,10 @@ class PlumeReferenceTests(unittest.TestCase):
     def test_radial_shock_model_is_explicit_and_old_publications_remain_supported(self):
         scene=fixture();validate_scene(scene)
         scene["shock_radial_mode"]="axisymmetric-j0-v1";validate_scene(scene)
-        scene["shock_radial_mode"]="fitted";
-        with self.assertRaises(ValueError):validate_scene(scene)
+        scene["radial_weight_mode"]="gaussian-v2";validate_scene(scene)
+        for key in ("shock_radial_mode","radial_weight_mode","curve_metric"):
+            bad=copy.deepcopy(scene);bad[key]="fitted"
+            with self.assertRaises(ValueError):validate_scene(bad)
 
     def test_native_artifact_identity_is_verified_before_import(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,6 +82,23 @@ class PlumeReferenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):validate_scene(changed)
         changed=copy.deepcopy(scene);changed["operating_point"]["mass_flow_kg_s"]=0
         with self.assertRaises(ValueError):validate_scene(changed)
+
+    def test_swept_carrier_and_invalid_centerlines(self):
+        scene=fixture();scene.update(id=MOTION_ID,case="sea-full",source_throttle=1,
+            effective_throttle=1,exit_radius_m=1,ambient_pressure_pa=101325,
+            ambient_temperature_k=288.15,operating_point={"mass_flow_kg_s":10})
+        scene["profile"]=[[4*i/47,1,0.15,1,0.3,0.15,0.07,0] for i in range(48)]
+        scene["centerline"]=[[0,0,-5,0],[2,1,-6,2],[-1,3,-7,4]]
+        validate_scene(scene)
+        center,half=bounds(scene)
+        for i,expected in enumerate([0.5,1.5,-6]):self.assertAlmostEqual(center[i],expected)
+        for i,expected in enumerate([3.1,3.1,2.6]):self.assertAlmostEqual(half[i],expected)
+        for points in ([],[[0,0,-5,0]],[[0,0,-5,0],[0,0,-5,4]],
+                       [[0,0,-5,0],[1,0,-5,3]],[[0,0,-5,0],[math.nan,0,-5,4]]):
+            bad=copy.deepcopy(scene);bad["centerline"]=points
+            with self.assertRaises(ValueError):validate_scene(bad)
+        scene["id"]=ENGINE_ID
+        with self.assertRaises(ValueError):validate_scene(scene)
 
     def test_gaussian_line_integral_matches_known_axial_and_side_solutions(self):
         scene=fixture(); image=analytic_pixels(scene);center=(64*129+64)*4

@@ -19,6 +19,8 @@ fn view(position: DVec3, rotation: DQuat) -> ViewParams {
 
 fn volume(steps: f32) -> VolumeDraw {
     VolumeDraw {
+        radial_reference: [1.0, 0.0, 0.0],
+        centerline: std::sync::Arc::from([]),
         origin_len: [0.0, -2.0, -10.0, 4.0],
         axis_radius: [0.0, 1.0, 0.0, 1.6],
         animation: [steps, 0.0, 0.0, 0.0],
@@ -329,6 +331,16 @@ fn frozen_plume_volume_reference() {
 #[test]
 #[ignore = "hardware: compiled-engine pressure/throttle/view gallery; new THESSA_BENCH_OUTPUT required"]
 fn frozen_compiled_plume_reference() {
+    compiled_reference(false);
+}
+
+#[test]
+#[ignore = "hardware: three curved compiled-engine controls for stock Cycles; new output required"]
+fn frozen_curved_plume_reference() {
+    compiled_reference(true);
+}
+
+fn compiled_reference(curved: bool) {
     use thessa_plume_core::{
         PlumeEnvironment, RigidTransform,
         source::{PropellantFamily, engine_plume_source},
@@ -377,6 +389,9 @@ fn frozen_compiled_plume_reference() {
         ("matched-inside", None, 1.0, 2),
         ("matched-oblique", None, 1.0, 3),
     ] {
+        if curved && !["sea-full", "thin-full", "matched-inside"].contains(&name) {
+            continue;
+        }
         let ambient = pressure.unwrap_or_else(|| {
             engine
                 .operating_point(throttle, 0.0, 0.0)
@@ -425,7 +440,35 @@ fn frozen_compiled_plume_reference() {
             3 => ([0.0, -0.3 * len, -distance + 0.4 * len], [0.0, 0.6, -0.8]),
             _ => ([0.0, -len * 0.5, -distance], [0.0, 1.0, 0.0]),
         };
+        let centerline = if curved {
+            let mut motion_env = env;
+            motion_env.flow_velocity_local_mps = [450.0, -180.0, 0.0];
+            let rotation = DQuat::from_rotation_arc(
+                DVec3::Z,
+                DVec3::new(axis[0] as f64, axis[1] as f64, axis[2] as f64),
+            );
+            thessa_plume_core::motion::centerline(
+                &source,
+                &motion_env,
+                [0.8, 1.2, 0.4],
+                profile.length_m,
+                9,
+            )
+            .unwrap()
+            .iter()
+            .map(|p| {
+                let point = DVec3::new(origin[0] as f64, origin[1] as f64, origin[2] as f64)
+                    + rotation * DVec3::new(p[0], p[1], p[2]);
+                [point.x as f32, point.y as f32, point.z as f32, p[3] as f32]
+            })
+            .collect::<Vec<_>>()
+            .into()
+        } else {
+            std::sync::Arc::from([])
+        };
         let draw = VolumeDraw {
+            radial_reference: [1.0, 0.0, 0.0],
+            centerline,
             origin_len: [origin[0], origin[1], origin[2], len],
             axis_radius: [axis[0], axis[1], axis[2], radius],
             animation: [14.0, 0.0, 0.0, 0.0],
@@ -472,8 +515,11 @@ fn frozen_compiled_plume_reference() {
             .unwrap();
         }
         let metadata = serde_json::json!({
-            "id":"compiled-plume-volume-v1", "case":name, "shock_radial_mode":"axisymmetric-j0-v1", "extent":[129,129], "units":"metres",
+            "id":if curved {"curved-plume-volume-v1"} else {"compiled-plume-volume-v1"}, "case":name, "shock_radial_mode":"axisymmetric-j0-v1", "radial_weight_mode":"gaussian-v2", "extent":[129,129], "units":"metres",
             "origin_len":draw.origin_len, "axis_radius":draw.axis_radius, "profile":&*draw.profile,
+            "centerline":&*draw.centerline,
+            "curve_metric":"emitted-length-v1",
+            "motion":if curved { serde_json::json!({"angular_velocity_nozzle_rps":[0.8,1.2,0.4],"air_velocity_nozzle_mps":[450.0,-180.0,0.0],"ambient_density_kg_m3":env.density_kg_m3}) } else {serde_json::Value::Null},
             "steps":14, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
             "world_from_view":camera.world_from_view.to_cols_array(), "clip_from_view":camera.clip_from_view.to_cols_array(),
             "engine_spec":spec, "operating_point":point, "effective_throttle":throttle,
@@ -488,7 +534,7 @@ fn frozen_compiled_plume_reference() {
         .unwrap();
     }
     eprintln!(
-        "compiled_plume_reference adapter={:?} cases=9 extent=129x129 steps=14/16 calibration=none",
+        "compiled_plume_reference adapter={:?} curved={curved} cases=9-or-3 extent=129x129 steps=14/16 calibration=none",
         backend.adapter_name
     );
 }
@@ -698,6 +744,8 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
                 .collect();
             for steps in [8.0, 14.0] {
                 let draw = VolumeDraw {
+                    radial_reference: [1.0, 0.0, 0.0],
+                    centerline: std::sync::Arc::from([]),
                     origin_len: [
                         0.0,
                         -z as f32,
@@ -853,6 +901,16 @@ fn plume_gpu_cost() {
 #[test]
 #[ignore = "hardware: fixed-work HDR plume lookup ABBA; requires new THESSA_BENCH_OUTPUT directory"]
 fn published_profile_lookup_cost() {
+    profile_cost(false);
+}
+
+#[test]
+#[ignore = "hardware: fixed-work 3D trajectory plume cost; new THESSA_BENCH_OUTPUT directory required"]
+fn curved_plume_gpu_cost() {
+    profile_cost(true);
+}
+
+fn profile_cost(curved: bool) {
     use std::{io::Write, time::Instant};
     use thessa_plume_core::{
         ExhaustFamily, PlumeEnvironment, PlumeSource, RigidTransform, profile::build_axial_profile,
@@ -957,7 +1015,35 @@ fn published_profile_lookup_cost() {
                 .collect::<Vec<_>>(),
         )
         .unwrap();
+        let centerline = if curved {
+            let mut moving_env = env;
+            moving_env.density_kg_m3 = if pressure_pa > 0.0 { 1.2 } else { 0.0 };
+            moving_env.flow_velocity_local_mps = [150.0, -60.0, 0.0];
+            thessa_plume_core::motion::centerline(
+                &source,
+                &moving_env,
+                [0.8, 0.5, 0.2],
+                profile.length_m,
+                if steps < 10.0 { 9 } else { 17 },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|p| {
+                [
+                    p[0] as f32,
+                    (p[2] - z) as f32,
+                    (-p[1] - distance) as f32,
+                    p[3] as f32,
+                ]
+            })
+            .collect::<Vec<_>>()
+            .into()
+        } else {
+            std::sync::Arc::from([])
+        };
         let draw = VolumeDraw {
+            radial_reference: [1.0, 0.0, 0.0],
+            centerline,
             origin_len: [0.0, -z as f32, -distance as f32, profile.length_m as f32],
             axis_radius: [0.0, 1.0, 0.0, radius as f32],
             animation: [steps, 0.0, 0.0, 0.0],
@@ -1019,8 +1105,286 @@ fn published_profile_lookup_cost() {
         assert!(signal, "fixture must witness an actual plume");
         std::fs::write(out.join(format!("case-{case}.rgba16f")), pixels).unwrap();
         eprintln!(
-            "plume_lookup adapter={:?} case={case} pressure_pa={pressure_pa} stations={count} center_fraction={center_fraction} steps={steps} length_m={} radius_bound_m={radius} camera_distance_m={distance} extent=1280x720 format=RGBA16Float source=provisional-methalox throttle=1 time=0 erosion=0 tail_dissolve=false warmup=20 samples=80",
+            "plume_lookup adapter={:?} curved={curved} case={case} pressure_pa={pressure_pa} stations={count} center_fraction={center_fraction} steps={steps} length_m={} radius_bound_m={radius} camera_distance_m={distance} extent=1280x720 format=RGBA16Float source=provisional-methalox throttle=1 time=0 erosion=0 tail_dissolve=false warmup=20 samples=80",
             backend.adapter_name, profile.length_m
         );
     }
+}
+
+#[test]
+#[ignore = "hardware: curved 3D field from six rotations vs independent dense world-space ray integration"]
+fn curved_volume_matches_dense_world_space_integration() {
+    let backend = Backend::bring_up().unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    let texture = hdr_target(&backend, 65, 65);
+    let color = texture.create_view(&Default::default());
+    let camera = view(DVec3::ZERO, DQuat::IDENTITY);
+    let mut renderer =
+        PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+    let path = [
+        DVec3::new(-0.7, -2.0, 0.5),
+        DVec3::new(0.0, -0.8, -0.3),
+        DVec3::new(0.9, 0.6, -0.1),
+        DVec3::new(-0.1, 2.0, 0.7),
+    ];
+    let profile = AxialProfile {
+        length_m: 4.0,
+        regime: ExpansionRegime::Matched,
+        stations: [0.0, 4.0]
+            .map(|z_m| AxialStation {
+                z_m,
+                radius_m: 0.65,
+                center_density_kg_m3: 1.0,
+                center_temp_k: 1800.0,
+                extinction_per_m: 0.15,
+                emission_rgb: [0.06, 0.03, 0.015],
+                shock: 1.0,
+            })
+            .to_vec(),
+    };
+    let mut max_error = 0.0_f64;
+    for (case, rotation) in [
+        DQuat::IDENTITY,
+        DQuat::from_rotation_y(0.7),
+        DQuat::from_rotation_x(0.9),
+        DQuat::from_rotation_z(1.2),
+        DQuat::from_rotation_y(1.6),
+        DQuat::from_rotation_x(2.2),
+        DQuat::IDENTITY,
+        DQuat::IDENTITY,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let folded = [
+            DVec3::new(0.0, -1.0, -5.0),
+            DVec3::new(0.0, 1.0, -5.0),
+            DVec3::new(5.0, 1.0, -10.0),
+            DVec3::new(5.0, -1.0, -15.0),
+            DVec3::new(0.0, -1.0, -15.0),
+            DVec3::new(0.0, 1.0, -15.0),
+        ];
+        let path: &[DVec3] = if case == 7 { &folded } else { &path };
+        let centers: Vec<_> = path
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let p = rotation * *p
+                    + if case >= 6 {
+                        DVec3::ZERO
+                    } else {
+                        DVec3::new(0.0, 0.0, -10.0)
+                    };
+                [
+                    p.x as f32,
+                    p.y as f32,
+                    p.z as f32,
+                    4.0 * i as f32 / (path.len() - 1) as f32,
+                ]
+            })
+            .collect();
+        let mut draw = volume(14.0);
+        draw.centerline = centers.clone().into();
+        draw.origin_len = [centers[0][0], centers[0][1], centers[0][2], 4.0];
+        draw.profile = vec![
+            [0.0, 0.65, 0.15, 1.0, 0.06, 0.03, 0.015, 0.0],
+            [4.0, 0.65, 0.15, 1.0, 0.06, 0.03, 0.015, 0.0],
+        ]
+        .into();
+        renderer
+            .update(&backend, &camera, Some(PlumeFrame::Volume(draw)))
+            .unwrap();
+        for clipped in [false, true] {
+            let plane_m = if case == 6 { 0.3 } else { 9.5 };
+            let depth_value = if clipped {
+                camera
+                    .clip_from_view
+                    .project_point3(DVec3::new(0.0, 0.0, -plane_m))
+                    .z as f32
+            } else {
+                1.0
+            };
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            clear(&mut encoder, &color, &target.depth, depth_value);
+            renderer.encode(&mut encoder, &color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            let pixels = thessa_render_wgpu::readback::read_color(&backend, &texture).unwrap();
+            let actual: Vec<_> = pixels
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| half(u16::from_le_bytes(*p)))
+                .collect();
+            let mut signal = 0.0_f64;
+            for y in (20..45).step_by(4) {
+                for x in (20..45).step_by(4) {
+                    let rd = DVec3::new(
+                        (2.0 * (x as f64 + 0.5) / 65.0 - 1.0) * (0.45_f64).tan(),
+                        (1.0 - 2.0 * (y as f64 + 0.5) / 65.0) * (0.45_f64).tan(),
+                        -1.0,
+                    )
+                    .normalize();
+                    let dt = (if clipped { plane_m / -rd.z } else { 25.0 }) / 8192.0;
+                    let (mut trans, mut rgb) = (1.0, [0.0; 3]);
+                    for step in 0..8192 {
+                        let p = rd * ((step as f64 + 0.5) * dt);
+                        let mut nearest = None;
+                        let mut best = 1.6_f64.powi(2);
+                        for (j, pair) in centers.windows(2).enumerate() {
+                            let a =
+                                DVec3::new(pair[0][0] as f64, pair[0][1] as f64, pair[0][2] as f64);
+                            let b =
+                                DVec3::new(pair[1][0] as f64, pair[1][1] as f64, pair[1][2] as f64);
+                            let ab = b - a;
+                            let t = (p - a).dot(ab) / ab.length_squared();
+                            if (j == 0 && t < 0.0) || (j == centers.len() - 2 && t > 1.0) {
+                                continue;
+                            }
+                            let t = t.clamp(0.0, 1.0);
+                            let d2 = (p - a - ab * t).length_squared();
+                            if d2 < best {
+                                best = d2;
+                                nearest = Some((
+                                    pair[0][3] as f64 * (1.0 - t) + pair[1][3] as f64 * t,
+                                    d2.sqrt(),
+                                    (pair[1][3] - pair[0][3]) as f64 / ab.length(),
+                                ));
+                            }
+                        }
+                        if let Some((z, r, metric)) = nearest {
+                            let mut sample = thessa_plume_core::sample_medium(&profile, z, r);
+                            sample.extinction_per_m *= metric;
+                            sample.emission_rgb = sample.emission_rgb.map(|v| v * metric);
+                            let tau = sample.extinction_per_m * dt;
+                            let length = if sample.extinction_per_m > 0.0 {
+                                -(-tau).exp_m1() / sample.extinction_per_m
+                            } else {
+                                dt
+                            };
+                            for (c, v) in rgb.iter_mut().enumerate() {
+                                *v += trans * sample.emission_rgb[c] * length;
+                            }
+                            trans *= (-tau).exp();
+                        }
+                    }
+                    let expected = [rgb[0], rgb[1], rgb[2], 1.0 - trans];
+                    for (c, expected) in expected.into_iter().enumerate() {
+                        let v = actual[(y * 65 + x) * 4 + c];
+                        let error = (v - expected).abs();
+                        max_error = max_error.max(error);
+                        assert!(
+                            error < 0.012,
+                            "case={case} pixel={x},{y} channel={c} actual={v} expected={expected}"
+                        );
+                        signal = signal.max(v);
+                    }
+                }
+            }
+            if !clipped {
+                assert!(signal > 0.03, "nonempty 3D view required");
+            }
+        }
+        let mut invalid = volume(14.0);
+        invalid.centerline = vec![[0.0; 4]; 2].into();
+        assert!(
+            renderer
+                .update(&backend, &camera, Some(PlumeFrame::Volume(invalid)))
+                .is_err()
+        );
+        assert!(!renderer.active());
+    }
+    eprintln!(
+        "curved_volume adapter={:?} views=8 depth_variants=2 probe_rays=784 dense_steps=8192 max_abs_rgba_error={max_error}",
+        backend.adapter_name
+    );
+}
+
+#[test]
+#[ignore = "hardware: 3D shell is covariant under world/camera rotations and follows nozzle roll"]
+fn curved_turbulence_uses_the_nozzle_frame() {
+    let backend = Backend::bring_up().unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    let texture = hdr_target(&backend, 65, 65);
+    let color = texture.create_view(&Default::default());
+    let mut renderer =
+        PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+    let path = [
+        Vec3::new(0.0, -2.0, -10.0),
+        Vec3::new(0.4, 0.0, -9.5),
+        Vec3::new(0.0, 2.0, -10.0),
+    ];
+    let mut baseline: Vec<f64> = Vec::new();
+    let mut max_error = 0.0_f64;
+    for (case, rotation) in [
+        DQuat::IDENTITY,
+        DQuat::from_rotation_y(0.8),
+        DQuat::from_rotation_x(1.1),
+        DQuat::from_rotation_z(0.6),
+        DQuat::IDENTITY,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut draw = volume(14.0);
+        draw.centerline = path
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let point = rotation * p.as_dvec3();
+                [
+                    point.x as f32,
+                    point.y as f32,
+                    point.z as f32,
+                    i as f32 * 2.0,
+                ]
+            })
+            .collect::<Vec<_>>()
+            .into();
+        draw.origin_len[..3].copy_from_slice(&draw.centerline[0][..3]);
+        draw.axis_radius[..3].copy_from_slice(&(rotation * DVec3::Y).as_vec3().to_array());
+        draw.radial_reference = (rotation * if case == 4 { -DVec3::X } else { DVec3::X })
+            .as_vec3()
+            .to_array();
+        draw.animation = [14.0, 2.0, 0.4, 150.0];
+        renderer
+            .update(
+                &backend,
+                &view(DVec3::ZERO, rotation),
+                Some(PlumeFrame::Volume(draw)),
+            )
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        clear(&mut encoder, &color, &target.depth, 1.0);
+        renderer.encode(&mut encoder, &color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        let raw = thessa_render_wgpu::readback::read_color(&backend, &texture).unwrap();
+        let pixels: Vec<_> = raw
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| half(u16::from_le_bytes(*b)))
+            .collect();
+        if case == 0 {
+            baseline = pixels;
+            continue;
+        }
+        let error = baseline
+            .iter()
+            .zip(&pixels)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max);
+        if case == 4 {
+            assert!(
+                error > 0.001,
+                "rolling nozzle must rotate asymmetric shell structure"
+            );
+        } else {
+            max_error = max_error.max(error);
+            assert!(error < 0.002, "case={case} rotation error={error}");
+        }
+    }
+    eprintln!(
+        "curved_turbulence adapter={:?} common_rotation_max_rgba_error={max_error}",
+        backend.adapter_name
+    );
 }

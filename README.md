@@ -870,3 +870,11 @@ quiet mixing skirt. Independent CPU/GPU oracles, nine stock Cycles controls
 and release ABBA record transport error and cost. The user-supplied KSA build
 is inspected statically; actual nozzle publication, nonlinear shock physics,
 local lighting and visual parity remain open.
+
+[Native 3D plume motion](docs/105_PLUME_3D_MOTION.md) now follows read-only
+nozzle-point air and angular kinematics. Swept-volume integration, transported
+nozzle frames and corrected Gaussian/line density have independent GPU and
+stock Cycles checks plus an actual native orbit/motion preview. High near-camera
+cost remains material; actual nozzle hardware, motion history, optical calibration
+and local illumination are still open. Sole PRIMARY snapshots now survive
+short queue contention using the existing bounded receive path.

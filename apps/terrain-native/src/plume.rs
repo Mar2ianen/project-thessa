@@ -1,7 +1,7 @@
 //! Direct native port of the starter X-15 plume producer. This provisional
 //! methalox deck is a visualization fixture, not calibrated propulsion data.
 //! Nothing here writes authoritative state, forces, clocks, or mesh poses.
-use glam::{DVec3, Mat4};
+use glam::{DQuat, DVec3, Mat4};
 use std::sync::Arc;
 use thessa_graphics::{Quality, ResolvedGraphicsSettings};
 use thessa_plume_core::{
@@ -16,6 +16,10 @@ pub struct Input {
     pub throttle: f64,
     pub engine_active: bool,
     pub sim_time_s: f64,
+    /// Ambient air minus COM velocity, inertial-aligned render axes (m/s).
+    pub air_velocity_render_mps: DVec3,
+    pub angular_velocity_render_rps: DVec3,
+    pub air_rotation_render_rps: DVec3,
 }
 
 /// SI craft-space station (nose +Y); deliberately not scaled a second time
@@ -31,7 +35,7 @@ pub fn environment(sample: Option<[f64; 3]>) -> PlumeEnvironment {
         density_kg_m3,
         temperature_k,
         // Same provisional oxygen assumption as the retained producer.
-        // Secondary combustion/crosswind are not implemented in this slice.
+        // Secondary combustion is not implemented in this slice.
         oxygen_fraction: if density_kg_m3 > 0.0 { 0.21 } else { 0.0 },
         flow_velocity_local_mps: [0.0; 3],
     }
@@ -79,6 +83,13 @@ impl Cache {
         settings: &ResolvedGraphicsSettings,
     ) -> Option<PlumeFrame> {
         if !settings.plume_enabled || !input.throttle.is_finite() || !input.sim_time_s.is_finite() {
+            self.clear();
+            return None;
+        }
+        if !input.air_velocity_render_mps.is_finite()
+            || !input.angular_velocity_render_rps.is_finite()
+            || !input.air_rotation_render_rps.is_finite()
+        {
             self.clear();
             return None;
         }
@@ -176,7 +187,63 @@ impl Cache {
                 .to_cols_array(),
             }));
         }
+        let nozzle_rotation = craft * DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2);
+        let offset = craft * NOZZLE_M;
+        let mut motion_env = env;
+        motion_env.flow_velocity_local_mps = (nozzle_rotation.conjugate()
+            * (input.air_velocity_render_mps
+                + (input.air_rotation_render_rps - input.angular_velocity_render_rps)
+                    .cross(offset)))
+        .to_array();
+        let angular = (nozzle_rotation.conjugate() * input.angular_velocity_render_rps).to_array();
+        let deformed = angular[0] != 0.0
+            || angular[1] != 0.0
+            || (motion_env.density_kg_m3 > 0.0
+                && (motion_env.flow_velocity_local_mps[0] != 0.0
+                    || motion_env.flow_velocity_local_mps[1] != 0.0));
+        let points = if deformed {
+            thessa_plume_core::motion::centerline(
+                &field.source,
+                &motion_env,
+                angular,
+                field.profile.length_m,
+                if settings.plume_quality == Quality::High {
+                    17
+                } else {
+                    9
+                },
+            )
+            .ok()?
+        } else {
+            Vec::new()
+        };
+        // The exact straight field remains the cheaper path below 0.1 mm
+        // transverse displacement; this is a representation tolerance only.
+        let bent = points
+            .iter()
+            .any(|p| p[0].hypot(p[1]) > 1e-4 || (p[2] - p[3]).abs() > 1e-4);
+        let centerline = if bent {
+            points
+                .iter()
+                .map(|p| {
+                    let center = (instance.position_m - camera_m)
+                        + offset
+                        + nozzle_rotation * DVec3::new(p[0], p[1], p[2]);
+                    [
+                        center.x as f32,
+                        center.y as f32,
+                        center.z as f32,
+                        p[3] as f32,
+                    ]
+                })
+                .collect::<Vec<_>>()
+                .into()
+        } else {
+            Arc::from([])
+        };
         Some(PlumeFrame::Volume(VolumeDraw {
+            radial_reference: (nozzle_rotation * DVec3::X).as_vec3().to_array(),
+            centerline,
             origin_len: nozzle.extend(field.profile.length_m as f32).to_array(),
             axis_radius: exhaust
                 .extend(
@@ -266,6 +333,9 @@ mod tests {
             throttle: 0.5,
             engine_active: true,
             sim_time_s: 12.0,
+            air_velocity_render_mps: DVec3::ZERO,
+            angular_velocity_render_rps: DVec3::ZERO,
+            air_rotation_render_rps: DVec3::ZERO,
         }
     }
 
@@ -378,6 +448,63 @@ mod tests {
     }
 
     #[test]
+    fn motion_tracks_air_and_attitude_without_rebuilding_optics_or_following_camera() {
+        let craft = DQuat::from_rotation_x(0.4) * DQuat::from_rotation_z(0.7);
+        let env = environment(Some([101325.0, 1.2, 280.0]));
+        let mut settings = settings();
+        settings.plume_flicker = false;
+        let mut moving = input();
+        moving.air_velocity_render_mps = DVec3::new(180.0, -90.0, 30.0);
+        moving.angular_velocity_render_rps = DVec3::new(0.5, -0.7, 0.2);
+        let mut cache = Cache::default();
+        let mut baseline = None;
+        for shift in [DVec3::ZERO, DVec3::new(1e12, -2e12, 3e12)] {
+            let mesh = instance(shift, craft, 1.0);
+            let camera = shift + DVec3::new(2.0, 3.0, 100.0);
+            let Some(PlumeFrame::Volume(draw)) = cache.frame(moving, env, &mesh, camera, &settings)
+            else {
+                panic!()
+            };
+            assert_eq!(draw.centerline.len(), 9);
+            assert_eq!(draw.centerline[0][..3], draw.origin_len[..3]);
+            assert_eq!(
+                draw.animation[1], 0.0,
+                "motion does not require cosmetic flicker"
+            );
+            if let Some(ref old) = baseline {
+                assert_eq!(&draw.centerline, old);
+            }
+            baseline = Some(draw.centerline);
+        }
+        let mesh = instance(DVec3::ZERO, craft, 1.0);
+        let camera = DVec3::new(2.0, 3.0, 100.0);
+        let profile = cache.field.as_ref().unwrap().gpu_profile.clone();
+        settings.plume_quality = Quality::High;
+        let Some(PlumeFrame::Volume(high)) = cache.frame(moving, env, &mesh, camera, &settings)
+        else {
+            panic!()
+        };
+        assert_eq!(high.centerline.len(), 17);
+        for (a, b) in baseline
+            .unwrap()
+            .iter()
+            .zip(high.centerline.iter().step_by(2))
+        {
+            assert_eq!(a, b);
+        }
+        assert!(Arc::ptr_eq(&profile, &high.profile));
+        let Some(PlumeFrame::Volume(rest)) = cache.frame(input(), env, &mesh, camera, &settings)
+        else {
+            panic!()
+        };
+        assert!(rest.centerline.is_empty());
+        assert!(Arc::ptr_eq(&profile, &rest.profile));
+        moving.air_velocity_render_mps = DVec3::NAN;
+        assert!(cache.frame(moving, env, &mesh, camera, &settings).is_none());
+        assert!(cache.field.is_none());
+    }
+
+    #[test]
     fn low_bake_has_symmetric_transparent_edges_and_a_dissolving_tail() {
         for diamonds in [false, true] {
             let texture = impostor_bake(diamonds);
@@ -388,6 +515,137 @@ mod tests {
                 assert_eq!(alpha(0, y), alpha(31, y));
             }
         }
+    }
+
+    #[test]
+    #[ignore = "hardware: actual cached native producer orbit/motion HDR preview; new THESSA_BENCH_OUTPUT required"]
+    fn plume_motion_gallery() {
+        use thessa_render_wgpu::{
+            Backend, plume::PlumeRenderer, terrain::OffscreenTarget, view::ViewParams,
+        };
+        let out = std::path::PathBuf::from(
+            std::env::var_os("THESSA_BENCH_OUTPUT").expect("new output required"),
+        );
+        std::fs::create_dir(&out).unwrap();
+        let backend = Backend::bring_up().unwrap();
+        let depth = OffscreenTarget::new(&backend, 640, 360).unwrap();
+        let hdr = backend.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("native-plume-motion-preview"),
+            size: wgpu::Extent3d {
+                width: 640,
+                height: 360,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let color = hdr.create_view(&Default::default());
+        let mut renderer =
+            PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+        let settings = ResolvedGraphicsSettings {
+            plume_quality: Quality::High,
+            ..settings()
+        };
+        let env = environment(Some([1000.0, 1000.0 / (287.05 * 288.15), 288.15]));
+        let mut cache = Cache::default();
+        let length = build_axial_profile(&source(1.0), &env, 48)
+            .unwrap()
+            .length_m;
+        let mut records = Vec::new();
+        for index in 0..32 {
+            let time = f64::from(index) / 20.0;
+            let craft = DQuat::from_rotation_z(0.35 * time);
+            let position = DVec3::X * (120.0 * time);
+            let mesh = instance(position, craft, 1.0);
+            let target = position + craft * (NOZZLE_M + DVec3::NEG_Y * (0.45 * length));
+            let yaw = time * 1.4;
+            let camera = target + DVec3::new(yaw.sin(), 0.0, yaw.cos()) * (length * 1.25);
+            let view = ViewParams {
+                world_from_view: glam::dcamera::rh::view::look_at_mat4(camera, target, DVec3::Y)
+                    .inverse(),
+                world_position_m: camera,
+                clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                    0.9,
+                    640.0 / 360.0,
+                    0.1,
+                    1e6,
+                ),
+                exposure: 1.0,
+            };
+            let input = Input {
+                throttle: 1.0,
+                engine_active: true,
+                sim_time_s: time,
+                air_velocity_render_mps: -DVec3::X * 120.0,
+                angular_velocity_render_rps: DVec3::Z * 0.35,
+                air_rotation_render_rps: DVec3::ZERO,
+            };
+            let frame = cache.frame(input, env, &mesh, camera, &settings).unwrap();
+            let PlumeFrame::Volume(ref draw) = frame else {
+                panic!("volume required")
+            };
+            assert_eq!(draw.centerline.len(), 17);
+            records.push(
+                serde_json::json!({"time_s":time,"craft_position_m":position.to_array(),
+                "craft_rotation_xyzw":craft.to_array(),"camera_m":camera.to_array(),
+                "world_from_view":view.world_from_view.to_cols_array(),"origin_len":draw.origin_len,
+                "centerline":&*draw.centerline,"radial_reference":draw.radial_reference,
+                    "axis_radius":draw.axis_radius,"animation":draw.animation,"diamonds":draw.diamonds,
+                    "tail_dissolve":draw.tail_dissolve,"clip_from_view":view.clip_from_view.to_cols_array()}),
+            );
+            renderer.update(&backend, &view, Some(frame)).unwrap();
+            if index > 0 {
+                assert_eq!(renderer.stats().profile_upload_bytes, 0);
+            }
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &color,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+            }
+            renderer.encode(&mut encoder, &color, &depth.depth);
+            backend.queue.submit([encoder.finish()]);
+            let raw = thessa_render_wgpu::readback::read_color(&backend, &hdr).unwrap();
+            assert!(
+                raw.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .all(|b| u16::from_le_bytes(*b) & 0x7c00 != 0x7c00)
+            );
+            std::fs::write(out.join(format!("frame-{index:02}.rgba16f")), raw).unwrap();
+        }
+        std::fs::write(out.join("scene.json"),serde_json::to_vec_pretty(&serde_json::json!({
+            "scope":"Actual native Cache/PlumeRenderer; prescribed kinematic preview, not calibrated firing or authority replay",
+            "extent":[640,360],"frames":records,"settings":settings,"exposure_gain":1.0,
+            "profile":&*cache.field.as_ref().unwrap().gpu_profile,
+            "ambient_pressure_pa":1000.0,"ambient_density_kg_m3":env.density_kg_m3,
+            "air_velocity_render_mps":[-120.0,0.0,0.0],"angular_velocity_render_rps":[0.0,0.0,0.35]
+        })).unwrap()).unwrap();
+        eprintln!(
+            "native_motion_gallery adapter={:?} frames=32 extent=640x360 profile_uploads=1",
+            backend.adapter_name
+        );
     }
 
     #[test]

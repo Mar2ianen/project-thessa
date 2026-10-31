@@ -27,7 +27,7 @@ pub fn radial_weight(r_m: f64, radius_m: f64) -> f64 {
     if !(radius_m > 0.0) || !r_m.is_finite() {
         return 0.0;
     }
-    let u = (r_m.abs() / radius_m).min(3.0);
+    let u = r_m.abs() / radius_m;
     (-2.2 * u * u).exp() + 0.18 * (-0.7 * u * u).exp()
 }
 
@@ -136,6 +136,16 @@ mod tests {
     use super::*;
     use crate::profile::build_axial_profile;
     use crate::source::tests::{sample_env_sea_level, sample_source};
+
+    #[test]
+    fn radial_density_decays_instead_of_freezing_beyond_three_radii() {
+        let values = [2.0, 3.0, 4.0, 6.0, 10.0].map(|u| radial_weight(u, 1.0));
+        assert!(values.windows(2).all(|p| p[1] < p[0]));
+        assert!(values[2] < values[1] * 0.01);
+        assert!(values[3] < 3e-12);
+        assert!(values[4] < 1e-30);
+        assert_eq!(radial_weight(1e200, 1.0), 0.0);
+    }
 
     #[test]
     fn radial_shock_matches_independent_bessel_series_and_core_boundary() {

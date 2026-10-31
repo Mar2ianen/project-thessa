@@ -18,6 +18,29 @@ use crate::{
     VehicleDefinition, VehicleError,
 };
 
+/// Representative physical operating point during one installed-engine tick.
+/// Solids can finish partway through a tick: the point is sampled at the
+/// active interval midpoint, while `active_fraction` preserves its duration.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EngineOperatingSample {
+    pub point: crate::EngineOperatingPoint,
+    /// Fraction represented by this point. A liquid zero-flow point still
+    /// represents the full tick; presence/fraction alone does not imply firing.
+    pub active_fraction: f64,
+}
+
+/// Read-only outputs of the same liquid/solid/chamber solves used for dynamics.
+/// Slots follow the installed definition. A solid slot is absent before
+/// ignition/after burnout; liquid off points retain their actual zero flow.
+/// No renderer or requested visual throttle participates in this observation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VehiclePropulsionObservation {
+    pub ambient_pressure_pa: f64,
+    pub duration_s: f64,
+    pub engines: Vec<Option<EngineOperatingSample>>,
+    pub systems: Vec<crate::SystemOperatingPoint>,
+}
+
 /// Live, server-authoritative resource state for one compiled vehicle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VehicleResourceState {
@@ -60,6 +83,8 @@ pub struct VehiclePropulsionAllocation {
     pub system_chamber_throttles: Vec<Vec<f64>>,
     pub total_propellant_flow_kg_s: f64,
     pub fuel_limited: bool,
+    /// Tentative until this allocation's physical tick is committed.
+    pub observation: VehiclePropulsionObservation,
     /// Availability scales for additional operating-point consumers booked
     /// alongside the installed liquid/solid rocket mounts.
     pub additional_resource_consumers: Vec<ConsumerResourceAllocation>,
@@ -1211,6 +1236,8 @@ impl VehicleDefinition {
         let mut solid_burn_time_s = state.solid_burn_time_s.clone();
         let mut solid_ignited = state.solid_ignited.clone();
         let mut solid_draw_kg = 0.0;
+        let mut engine_points = vec![None; self.engines.len()];
+        let mut system_points = Vec::with_capacity(self.systems.len());
         let mut fuel_limited = allocation
             .resource_scales
             .iter()
@@ -1225,6 +1252,10 @@ impl VehicleDefinition {
                         .operating_point(throttle, ambient_pa, 0.0)
                         .map_err(VehicleError::Propulsion)?;
                     let thrust = DVec3::from_array(mount.thrust_axis_body) * point.thrust_n;
+                    engine_points[index] = Some(EngineOperatingSample {
+                        point,
+                        active_fraction: 1.0,
+                    });
                     force += thrust;
                     moment += DVec3::from_array(mount.position_body_m).cross(thrust);
                     fuel_limited |=
@@ -1249,6 +1280,10 @@ impl VehicleDefinition {
                         .map_err(VehicleError::Propulsion)?;
                     let thrust = DVec3::from_array(mount.thrust_axis_body)
                         * (point.thrust_n * active_s / dt_s);
+                    engine_points[index] = Some(EngineOperatingSample {
+                        point,
+                        active_fraction: active_s / dt_s,
+                    });
                     force += thrust;
                     moment += DVec3::from_array(mount.position_body_m).cross(thrust);
                     let old_remaining = mount
@@ -1266,15 +1301,16 @@ impl VehicleDefinition {
         }
 
         for (system_index, mount) in self.systems.iter().enumerate() {
-            let (system_force, system_moment) = mount
+            let (point, system_force, system_moment) = mount
                 .system
-                .wrench_body_n(
+                .operating_point_and_wrench(
                     &allocation.system_chamber_throttles[system_index],
                     ambient_pa,
                 )
                 .map_err(VehicleError::Propulsion)?;
             force += system_force;
             moment += system_moment;
+            system_points.push(point);
             if allocation.system_chamber_throttles[system_index]
                 .iter()
                 .zip(&system_chamber_throttles[system_index])
@@ -1321,6 +1357,12 @@ impl VehicleDefinition {
             system_chamber_throttles: allocation.system_chamber_throttles,
             total_propellant_flow_kg_s: (tank_draw_kg + solid_draw_kg) / dt_s,
             fuel_limited,
+            observation: VehiclePropulsionObservation {
+                ambient_pressure_pa: ambient_pa,
+                duration_s: dt_s,
+                engines: engine_points,
+                systems: system_points,
+            },
             additional_resource_consumers,
         })
     }
@@ -3724,6 +3766,14 @@ mod tests {
             .plan_propulsion_step(&state, &[0.5, 1.0], &[], 0.0, dt_s)
             .expect("allocate engine flow");
         let expected_mass = (point_a.mass_flow_kg_s + point_b.mass_flow_kg_s) * dt_s;
+        assert_eq!(allocation.observation.ambient_pressure_pa, 0.0);
+        assert_eq!(allocation.observation.duration_s, dt_s);
+        assert_eq!(allocation.observation.engines[0].unwrap().point, point_a);
+        assert_eq!(allocation.observation.engines[1].unwrap().point, point_b);
+        assert_eq!(
+            allocation.observation.engines[0].unwrap().active_fraction,
+            1.0
+        );
         assert!((allocation.total_propellant_flow_kg_s * dt_s - expected_mass).abs() < 1.0e-10);
         assert!(
             (allocation.tank_consumption_kg.iter().sum::<f64>() - expected_mass).abs() < 1.0e-10
@@ -3747,6 +3797,77 @@ mod tests {
                 .abs()
                 < 1.0e-9
         );
+    }
+
+    #[test]
+    fn system_observation_retains_every_allocated_chamber_and_shutdown() {
+        let spec = crate::PropulsionSystemSpec {
+            name: "observed-twin".into(),
+            propellant: Propellant::LoxRp1,
+            cycle: EngineCycle::GasGenerator,
+            chamber_pressure_pa: 9.7e6,
+            mixture_ratio: None,
+            chamber_material: ChamberMaterial::nickel_superalloy(),
+            cooling: CoolingMode::Regenerative,
+            characteristic_length_m: None,
+            min_throttle: Some(0.4),
+            restartable: true,
+            chambers: [0.5, -0.5]
+                .into_iter()
+                .enumerate()
+                .map(|(i, z)| crate::ChamberSpec {
+                    name: format!("chamber-{i}"),
+                    throat_radius_m: 0.08,
+                    expansion_ratio: 18.0,
+                    nozzle_length_m: 0.9,
+                    contour: NozzleContour::Bell,
+                    position_body_m: [0.0, 0.0, z],
+                    thrust_axis_body: [1.0, 0.0, 0.0],
+                    gimbal_range_rad: 0.0,
+                })
+                .collect(),
+        };
+        let vehicle = vehicle(
+            vec![tank(
+                "pair",
+                TankResource::Pair(Propellant::LoxRp1),
+                800.0,
+                1.0,
+                DVec3::ZERO,
+            )],
+            0,
+        )
+        .with_systems(vec![crate::SystemMount {
+            name: "twin".into(),
+            system: spec.compile().unwrap(),
+        }])
+        .unwrap();
+        let mut state = vehicle.initial_resource_state();
+        let plan = vehicle
+            .plan_propulsion_step(&state, &[], &[vec![1.0, 0.5]], 101_325.0, 0.01)
+            .unwrap();
+        let point = vehicle.systems[0]
+            .system
+            .operating_point(&plan.system_chamber_throttles[0], 101_325.0)
+            .unwrap();
+        assert!(plan.observation.engines.is_empty());
+        assert_eq!(plan.observation.systems, vec![point]);
+        assert!(
+            plan.observation.systems[0].chambers[0].mass_flow_kg_s
+                > plan.observation.systems[0].chambers[1].mass_flow_kg_s
+        );
+        state.tank_propellant_kg[0] = 0.0;
+        let starved = vehicle
+            .plan_propulsion_step(&state, &[], &[vec![1.0, 0.5]], 101_325.0, 0.01)
+            .unwrap();
+        assert_eq!(starved.observation.systems[0].chambers.len(), 2);
+        assert!(
+            starved.observation.systems[0]
+                .chambers
+                .iter()
+                .all(|p| p.mass_flow_kg_s == 0.0)
+        );
+        assert_eq!(starved.force_body_n, DVec3::ZERO);
     }
 
     #[test]
@@ -3784,6 +3905,17 @@ mod tests {
 
         assert!((allocation.engine_throttles[0] - 0.45).abs() < 1.0e-10);
         assert!((allocation.engine_throttles[1] - 0.75).abs() < 1.0e-10);
+        for (index, sample) in allocation.observation.engines.iter().enumerate() {
+            let actual = vehicle.engines[index]
+                .engine
+                .operating_point(allocation.engine_throttles[index], 0.0, 0.0)
+                .unwrap();
+            assert_eq!(
+                sample.unwrap().point,
+                actual,
+                "observe allocated, not requested flow"
+            );
+        }
         assert!((allocation.tank_consumption_kg[0] - available_kg).abs() < 1.0e-10);
         assert!(allocation.fuel_limited);
 
@@ -3794,6 +3926,13 @@ mod tests {
         assert_eq!(starved.engine_throttles, vec![0.0, 0.0]);
         assert_eq!(starved.tank_consumption_kg, vec![0.0]);
         assert!(starved.fuel_limited);
+        assert!(
+            starved
+                .observation
+                .engines
+                .iter()
+                .all(|p| p.unwrap().point.mass_flow_kg_s == 0.0)
+        );
     }
 
     #[test]
@@ -4081,6 +4220,10 @@ mod tests {
         let mut state = vehicle.initial_resource_state();
         let initial_mass = vehicle.mass_properties.mass_kg;
         let dt_s = motor.burn_time_s / 100.0;
+        let cold = vehicle
+            .plan_propulsion_step(&state, &[0.0], &[], 0.0, dt_s)
+            .unwrap();
+        assert_eq!(cold.observation.engines, vec![None]);
         let allocation = vehicle
             .plan_propulsion_step(&state, &[1.0], &[], 0.0, dt_s)
             .expect("plan solid burn");
@@ -4101,5 +4244,27 @@ mod tests {
                 < 1.0e-8
         );
         assert!(state.solid_ignited[0]);
+
+        // A solid keeps burning with its command off and can finish inside
+        // the tick. Preserve the actual midpoint and duration separately.
+        state.solid_burn_time_s[0] = motor.burn_time_s - dt_s * 0.25;
+        let tail = vehicle
+            .plan_propulsion_step(&state, &[0.0], &[], 0.0, dt_s)
+            .unwrap();
+        let sample = tail.observation.engines[0].unwrap();
+        assert!((sample.active_fraction - 0.25).abs() < 1e-10);
+        let midpoint = 0.5 * (state.solid_burn_time_s[0] + tail.solid_burn_time_s[0]);
+        assert_eq!(
+            sample.point,
+            vehicle.engines[0]
+                .engine
+                .operating_point(1.0, 0.0, midpoint)
+                .unwrap()
+        );
+        state.solid_burn_time_s[0] = motor.burn_time_s;
+        let ended = vehicle
+            .plan_propulsion_step(&state, &[0.0], &[], 0.0, dt_s)
+            .unwrap();
+        assert_eq!(ended.observation.engines, vec![None]);
     }
 }

@@ -616,6 +616,17 @@ impl CompiledPropulsionSystem {
         throttles: &[f64],
         ambient_pa: f64,
     ) -> Result<(DVec3, DVec3), PropulsionError> {
+        let (_, force, moment) = self.operating_point_and_wrench(throttles, ambient_pa)?;
+        Ok((force, moment))
+    }
+
+    /// Evaluate once for both dynamics and read-only operating telemetry.
+    /// The returned chamber points are the ones used by this wrench.
+    pub fn operating_point_and_wrench(
+        &self,
+        throttles: &[f64],
+        ambient_pa: f64,
+    ) -> Result<(SystemOperatingPoint, DVec3, DVec3), PropulsionError> {
         let point = self.operating_point(throttles, ambient_pa)?;
         let main: f64 = point.chambers.iter().map(|c| c.thrust_n).sum();
         let scale = if main > 0.0 {
@@ -631,7 +642,7 @@ impl CompiledPropulsionSystem {
             force += thrust;
             moment += DVec3::from_array(chamber.position_body_m).cross(thrust);
         }
-        Ok((force, moment))
+        Ok((point, force, moment))
     }
 
     /// Gimbal authority of one chamber for the flight allocator.
@@ -882,10 +893,10 @@ mod tests {
             ..twin_chamber(0.0)
         };
         let system = spec.compile().expect("twin compiles");
-        let point = system
-            .operating_point(&[1.0, 0.5], 0.0)
-            .expect("differential");
-        let (force, moment) = system.wrench_body_n(&[1.0, 0.5], 0.0).expect("wrench");
+        let (point, force, moment) = system
+            .operating_point_and_wrench(&[1.0, 0.5], 0.0)
+            .expect("differential point and wrench");
+        assert_eq!(point, system.operating_point(&[1.0, 0.5], 0.0).unwrap());
         assert!((force.x - point.thrust_n).abs() / point.thrust_n < 1e-12);
         assert!(force.y.abs() < 1e-6 && force.z.abs() < 1e-6);
         let fa = point.chambers[0].thrust_n;

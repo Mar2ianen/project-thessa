@@ -418,6 +418,11 @@ pub struct FlightAuthority {
     system_throttle_overrides: Vec<Vec<Option<f64>>>,
     pub last_propulsion_force_body_n: DVec3,
     pub last_propellant_flow_kg_s: f64,
+    /// Latest accepted installed liquid/solid/chamber operating observation,
+    /// stamped at the physical interval end. Presentation never recomputes it
+    /// from a requested lever. Legacy scalar thrust has no nozzle observation.
+    pub last_propulsion_observation:
+        Option<(SimTime, thessa_sim_core::VehiclePropulsionObservation)>,
     pub fuel_limited: bool,
 }
 
@@ -961,6 +966,7 @@ impl FlightAuthority {
             system_throttle_overrides,
             last_propulsion_force_body_n: DVec3::ZERO,
             last_propellant_flow_kg_s: 0.0,
+            last_propulsion_observation: None,
             fuel_limited: false,
         })
     }

@@ -153,6 +153,20 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
     assert!(flight.vehicle.mass_properties.mass_kg < initial_mass);
     assert!(flight.last_propellant_flow_kg_s > 0.0);
     assert!(flight.last_propulsion_force_body_n.length() > 0.0);
+    let (time, observed) = flight.last_propulsion_observation.as_ref().unwrap();
+    assert_eq!(*time, SimTime(flight.flight_time_s));
+    assert_eq!(observed.duration_s, FLIGHT_STEP_S);
+    assert_eq!(
+        observed.engines[0].unwrap().point.mass_flow_kg_s,
+        flight.last_propellant_flow_kg_s
+    );
+
+    flight.set_engine_throttle("main", 0.0).unwrap();
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .unwrap();
+    let (_, observed) = flight.last_propulsion_observation.as_ref().unwrap();
+    assert_eq!(observed.engines[0].unwrap().point.mass_flow_kg_s, 0.0);
 }
 
 #[test]
@@ -188,6 +202,38 @@ fn rejected_endpoint_does_not_commit_propellant_or_mass_properties() {
     assert_eq!(flight.resource_state, initial_resources);
     assert_eq!(flight.vehicle.mass_properties, initial_mass);
     assert_eq!(flight.flight_time_s, 0.0);
+    assert!(flight.last_propulsion_observation.is_none());
+}
+
+#[test]
+fn accepted_engine_observation_survives_a_rejected_following_tick() {
+    let (ephemeris, starter) = fixture();
+    let vehicle = vehicle_with_resource_test_rocket(&starter.vehicle, [1.0, 0.0, 0.0]);
+    let mut flight =
+        FlightAuthority::new_with_vehicle(&ephemeris, starter.reference_body, vehicle).unwrap();
+    flight.set_engine_throttle("main", 1.0).unwrap();
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .unwrap();
+    let accepted = flight.last_propulsion_observation.clone();
+    let time = flight.flight_time_s;
+    assert!(accepted.is_some());
+    let body = ephemeris
+        .body_state(flight.reference_body, SimTime(time))
+        .unwrap();
+    flight.state.velocity_inertial_mps =
+        body.velocity_inertial + DVec3::X * (MAX_PILOT_RELATIVE_SPEED_MPS + 100.0);
+    assert!(
+        flight
+            .step(
+                &ephemeris,
+                &GravityField::from_ephemeris(&ephemeris),
+                ControlMode::Direct
+            )
+            .is_err()
+    );
+    assert_eq!(flight.flight_time_s, time);
+    assert_eq!(flight.last_propulsion_observation, accepted);
 }
 
 #[test]

@@ -91,9 +91,9 @@ pub use reaction_wheel::{
     reaction_wheel_bank_telemetry, reaction_wheel_step_heat_w,
 };
 pub use resources::{
-    ConsumerResourceAllocation, FeedResourceProperties, VehicleAuxiliaryPowerUnitStep,
-    VehiclePropulsionAllocation, VehicleResourceDemand, VehicleResourceFeedPort,
-    VehicleResourcePlan, VehicleResourceState,
+    ConsumerResourceAllocation, EngineOperatingSample, FeedResourceProperties,
+    VehicleAuxiliaryPowerUnitStep, VehiclePropulsionAllocation, VehiclePropulsionObservation,
+    VehicleResourceDemand, VehicleResourceFeedPort, VehicleResourcePlan, VehicleResourceState,
 };
 pub use shield::{HeatShieldMount, ShieldError};
 pub use thermal::{

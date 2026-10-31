@@ -40,6 +40,12 @@ class PlumeReferenceTests(unittest.TestCase):
         s=fixture();s["axis_radius"][2]=-2
         with self.assertRaises(ValueError):validate_scene(s)
 
+    def test_radial_shock_model_is_explicit_and_old_publications_remain_supported(self):
+        scene=fixture();validate_scene(scene)
+        scene["shock_radial_mode"]="axisymmetric-j0-v1";validate_scene(scene)
+        scene["shock_radial_mode"]="fitted";
+        with self.assertRaises(ValueError):validate_scene(scene)
+
     def test_native_artifact_identity_is_verified_before_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);cases={}

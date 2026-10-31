@@ -31,6 +31,27 @@ pub fn radial_weight(r_m: f64, radius_m: f64) -> f64 {
     (-2.2 * u * u).exp() + 0.18 * (-0.7 * u * u).exp()
 }
 
+/// First axisymmetric pressure mode of a circular jet, J0(j01*r/R).
+/// The core boundary is a pressure node; the mixing skirt is unmodulated.
+/// This is a weak-shock representation, not a nonlinear Mach-disk solution.
+pub fn shock_multiplier(axial_shock: f64, radius_fraction: f64) -> f64 {
+    if !axial_shock.is_finite() || !radius_fraction.is_finite() {
+        return 1.0;
+    }
+    let u = radius_fraction.abs();
+    if u >= 1.0 || axial_shock == 1.0 {
+        return 1.0;
+    }
+    // J0(x) = sum((-x*x/4)^k / (k!)^2), through k=6.
+    // At x<=j01 the next term bounds absolute truncation below 5.3e-7.
+    let q = 1.445_796_490_736_696_2 * u * u;
+    let mode = 1.0
+        + q * (-1.0
+            + q * (0.25
+                + q * (-1.0 / 36.0 + q * (1.0 / 576.0 + q * (-1.0 / 14_400.0 + q / 518_400.0)))));
+    (1.0 + (axial_shock.max(0.15) - 1.0) * mode.clamp(0.0, 1.0)).max(0.15)
+}
+
 /// Medium at axial `z_m` / radial `r_m`: axial interpolation from the
 /// profile, then the radial weight. Station emission already carries
 /// material hues (shared ramp); only weight and the shared shock factor
@@ -42,11 +63,10 @@ pub fn sample_medium(profile: &AxialProfile, z_m: f64, r_m: f64) -> MediumSample
             emission_rgb: [0.0; 3],
         };
     };
-    // Station emission already carries material hues, axial decay, and heat;
-    // here only the radial weight and the shared shock factor apply, so
-    // diamonds modulate density/temperature/emission together (doc §9).
+    // Station emission carries hues, decay and heat. The circular pressure
+    // mode modulates core emission/extinction together, with a quiet skirt.
     let w = radial_weight(r_m, station.radius_m);
-    let shock = station.shock.max(0.15);
+    let shock = shock_multiplier(station.shock, r_m / station.radius_m);
     MediumSample {
         extinction_per_m: (station.extinction_per_m * w * shock).max(0.0),
         emission_rgb: [
@@ -116,6 +136,45 @@ mod tests {
     use super::*;
     use crate::profile::build_axial_profile;
     use crate::source::tests::{sample_env_sea_level, sample_source};
+
+    #[test]
+    fn radial_shock_matches_independent_bessel_series_and_core_boundary() {
+        let mut max_error = 0.0_f64;
+        for i in 0..=10_000 {
+            let u = f64::from(i) / 10_000.0;
+            let q = (2.404_825_557_695_773 * u).powi(2) / 4.0;
+            let mut term = 1.0;
+            let mut exact = 1.0;
+            for k in 1..32 {
+                term *= -q / f64::from(k * k);
+                exact += term;
+            }
+            let actual = shock_multiplier(2.0, u) - 1.0;
+            max_error = max_error.max((actual - exact).abs());
+            assert!(
+                (actual - exact).abs() < 5.3e-7,
+                "u={u} actual={actual} exact={exact}"
+            );
+        }
+        assert!(
+            max_error > 1e-7,
+            "oracle must exercise truncation, not mirror the polynomial"
+        );
+        for axial in [0.15, 0.45, 0.75, 1.0, 1.55, 4.0] {
+            assert!((shock_multiplier(axial, 0.0) - axial).abs() < 1e-15);
+            for u in [1.0, 1.25, 3.0] {
+                assert_eq!(shock_multiplier(axial, u), 1.0);
+            }
+            for u in [0.0, 0.2, 0.5, 0.9] {
+                assert_eq!(shock_multiplier(axial, u), shock_multiplier(axial, -u));
+                let value = shock_multiplier(axial, u);
+                assert!(value >= axial.min(1.0) - 1e-15 && value <= axial.max(1.0) + 1e-15);
+                assert_eq!(shock_multiplier(1.0, u), 1.0);
+            }
+        }
+        assert_eq!(shock_multiplier(f64::NAN, 0.5), 1.0);
+        assert_eq!(shock_multiplier(1.5, f64::INFINITY), 1.0);
+    }
 
     fn live_profile() -> AxialProfile {
         build_axial_profile(&sample_source(), &sample_env_sea_level(), 48).unwrap()

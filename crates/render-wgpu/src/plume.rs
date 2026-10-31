@@ -598,7 +598,22 @@ mod tests {
 
     #[test]
     fn shaders_need_no_native_capabilities() {
-        for source in [super::volume_shader_source(), super::cone_shader_source()] {
+        let legacy_body = include_str!("../../../assets/shaders/plume_volume.wesl")
+            .lines()
+            .filter(|line| !line.starts_with("import "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Replace Bevy-owned imports only; validate the complete material body.
+        let legacy = format!(
+            "struct VertexOutput {{ @builtin(position) position:vec4<f32>, @location(0) world_position:vec4<f32>, }}\n\
+             struct View {{ world_position:vec4<f32>, }}\n\
+             @group(0) @binding(0) var<uniform> view:View;\n{legacy_body}"
+        );
+        for source in [
+            super::volume_shader_source(),
+            super::cone_shader_source(),
+            legacy,
+        ] {
             let module = naga::front::wgsl::parse_str(&source)
                 .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
             naga::valid::Validator::new(
@@ -608,6 +623,128 @@ mod tests {
             .validate(&module)
             .unwrap();
         }
+    }
+
+    #[test]
+    #[ignore = "hardware: production radial shock mode against independent f64 Bessel series"]
+    fn radial_shock_matches_bessel_series_on_gpu() {
+        use super::*;
+        let backend = Backend::bring_up().unwrap();
+        eprintln!("plume_radial_oracle adapter={:?}", backend.adapter_name);
+        let shader = backend.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("plume-radial-oracle"),
+            source: wgpu::ShaderSource::Wgsl(format!(
+                "{}\n@group(2) @binding(0) var<storage,read> queries:array<vec2<f32>>;\n\
+                 @group(2) @binding(1) var<storage,read_write> results:array<f32>;\n\
+                 @compute @workgroup_size(64) fn probe(@builtin(global_invocation_id) id:vec3<u32>) {{\n\
+                 if id.x < arrayLength(&queries) {{\n\
+                 results[id.x] = shock_multiplier(queries[id.x].x, queries[id.x].y); }} }}",
+                volume_shader_source()
+            ).into()),
+        });
+        let pipeline = backend
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("plume-radial-oracle"),
+                layout: None,
+                module: &shader,
+                entry_point: Some("probe"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let mut queries = Vec::new();
+        for axial in [0.15_f32, 0.45, 0.75, 1.0, 1.25, 1.55, 4.0] {
+            for i in -160..=160 {
+                queries.push([axial, i as f32 / 100.0]);
+            }
+            for u in [1.0_f32.next_down(), 1.0, 1.0_f32.next_up()] {
+                queries.push([axial, u]);
+            }
+        }
+        let input = backend
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: &bytes(queries.iter().flatten().copied()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let size = queries.len() as u64 * 4;
+        let result = backend.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let empty = |index| {
+            backend
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.get_bind_group_layout(index),
+                    entries: &[],
+                })
+        };
+        let group = backend
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(2),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: input.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: result.as_entire_binding(),
+                    },
+                ],
+            });
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &empty(0), &[]);
+            pass.set_bind_group(1, &empty(1), &[]);
+            pass.set_bind_group(2, &group, &[]);
+            pass.dispatch_workgroups((queries.len() as u32).div_ceil(64), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&result, 0, &staging, 0, size);
+        backend.queue.submit([encoder.finish()]);
+        let actual = crate::terrain::map_buffer(&backend, &staging).unwrap();
+        let mut max_error = 0.0_f64;
+        for ([axial, u], record) in queries.iter().zip(actual.as_chunks::<4>().0.iter()) {
+            // Independent converged series, not the shader's truncated polynomial.
+            let q = (2.404_825_557_695_773 * f64::from(*u)).powi(2) / 4.0;
+            let mut term = 1.0;
+            let mut mode = 1.0;
+            for k in 1..32 {
+                term *= -q / f64::from(k * k);
+                mode += term;
+            }
+            let expected = if u.abs() >= 1.0 {
+                1.0
+            } else {
+                1.0 + (f64::from(*axial) - 1.0) * mode
+            };
+            let value = f64::from(f32::from_le_bytes(*record));
+            let error = (value - expected).abs();
+            max_error = max_error.max(error);
+            assert!(
+                error < (1.0 + f64::from((*axial - 1.0).abs())) * 1e-6,
+                "axial={axial} u={u} actual={value} expected={expected}"
+            );
+        }
+        eprintln!(
+            "plume_radial_oracle queries={} max_abs_error={max_error:.9e}",
+            queries.len()
+        );
     }
 
     #[test]

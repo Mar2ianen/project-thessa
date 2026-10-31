@@ -1,0 +1,1440 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-10-31",
+  "source_base": "02c8c8e7df0f637e554f34f4bd5c6b4ca9a32f26",
+  "scope": "KSA/BRUTAL static audit and first circular radial optical shock mode; no live nozzle extraction or whole-scene visual parity claim",
+  "source_sha256": {
+    "crates/plume-core/src/lib.rs": "cae79be9033218dae96379745b3c11f7f1e0ab4c3403b7ba6618800382e573d2",
+    "crates/plume-core/src/medium.rs": "1c6bd6a806cea9210db628bb2dc71ece295f64ebdc98890acdd7f6a1cf489656",
+    "crates/render-wgpu/src/plume.rs": "b2eb91214b6abd46fc3ac4f1d420e9586989c748dcc9540799c2c73387b12db6",
+    "crates/render-wgpu/src/plume_volume.wgsl": "a2626736f8487e0a97aa09de1ea5a1c838954e7f9e5b694ff93494c2a431be4c",
+    "assets/shaders/plume_volume.wesl": "c5baa5088105e64728809020efc31bbf75c4bf83992fe35c6bb1b2ccd89c4af3",
+    "crates/render-wgpu/tests/plume.rs": "44a1a1b3e69180709d369316f80c192bb678ee227a2022670d35d2340d48bd90",
+    "tools/agent-qa/plume_reference.py": "ed4112f7c94ef145fc6428f21c9d10c4ea16d28b215eef32b5a374930e15c42a",
+    "tools/agent-qa/tests/test_plume_reference.py": "3a8c538361f1682b5af50131e6f22d44e371e202a8df330ee0c3a2314b317389"
+  },
+  "reference_sources": {
+    "brutal": "https://github.com/ahwootech/BRUTAL/tree/7a3b72d84368872b885094e34fe8cdf5f7989460",
+    "shock_mode": "https://arxiv.org/pdf/2012.01342#page=8",
+    "shock_cells_background": "https://ntrs.nasa.gov/citations/19850067203",
+    "deep_compositing_background": "https://graphics.pixar.com/library/DeepCompositing/paper.pdf",
+    "nozzle_design": "https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/nozzle-design/"
+  },
+  "ksa_static_audit": {
+    "archive_path": "/home/chechulin/Downloads/ksa_linux_v2026.10.25.5707.tar.gz",
+    "archive_sha256": "3cb605b91635a078870f71bc76dfec260ca68373369ad00106f9ef55d858e544",
+    "method": "REA 6.5.0 managed artifact + four selected types; plaintext shipped GLSL/XML read outside Git; no target execution",
+    "new_type_coverage": {
+      "state": "complete for four selected types",
+      "methods": 105,
+      "fields": 176,
+      "call_edges": 1901,
+      "field_accesses": 2156
+    },
+    "managed_evidence": {
+      "artifact.json": {
+        "evidence_id": "ev_05ba6778743e7443f02addae2d8571c9a7691894548a57b4e3d97158732b0d74",
+        "sha256": "58b5c955a3533c7988857dccb761e7cc950d136771d3b5de4112ead0471259df",
+        "artifact": {
+          "path": "/home/chechulin/Downloads/ksa_linux_v2026.9.10.5438/KSA.dll",
+          "sha256": "7aadb15ef67094b276b290074075b565a221ebbe18dfef49151cd19f832a265e",
+          "byte_length": 4926464,
+          "format": "pe"
+        },
+        "module": {
+          "name": "KSA.dll",
+          "generation": 0,
+          "mvid": "c2f25cf6-4e84-48ea-8369-bb4875a2e887",
+          "enc_id": null,
+          "enc_base_id": null,
+          "token": "0x00000001",
+          "row_offset": 2459064
+        },
+        "assembly": {
+          "name": "KSA",
+          "version": "2026.9.10.5438",
+          "culture": null,
+          "flags": 0,
+          "hash_algorithm": 32772,
+          "public_key": {
+            "kind": "none",
+            "byte_length": 0,
+            "sha256": null,
+            "token": null
+          },
+          "token": "0x20000001",
+          "row_offset": 3644656
+        },
+        "selection": null,
+        "coverage": {
+          "state": "complete",
+          "issues": []
+        }
+      },
+      "new-artifact.json": {
+        "evidence_id": "ev_3fc86106f8b7fd36831c045f4297b1a18aa7136924593ab54aede703dc7a9e2d",
+        "sha256": "626f4e529b498f7a78e988fcb86fac82bfe951a2ec0ffe1c70dd67b954bcae0f",
+        "artifact": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ksa-audit-2026-10-31/ksa-2026.10.25.5707/KSA.dll",
+          "sha256": "0578047715c733b4157161c4bb0e9e7bee5ec769909c91e24fa1dd0d81c8e8c1",
+          "byte_length": 5309952,
+          "format": "pe"
+        },
+        "module": {
+          "name": "KSA.dll",
+          "generation": 0,
+          "mvid": "bdb346bd-bdf8-48b4-b231-124a5ff90f11",
+          "enc_id": null,
+          "enc_base_id": null,
+          "token": "0x00000001",
+          "row_offset": 2527208
+        },
+        "assembly": {
+          "name": "KSA",
+          "version": "2026.10.25.5707",
+          "culture": null,
+          "flags": 0,
+          "hash_algorithm": 32772,
+          "public_key": {
+            "kind": "none",
+            "byte_length": 0,
+            "sha256": null,
+            "token": null
+          },
+          "token": "0x20000001",
+          "row_offset": 3883860
+        },
+        "selection": null,
+        "coverage": {
+          "state": "complete",
+          "issues": []
+        }
+      },
+      "exhaust-renderer.json": {
+        "evidence_id": "ev_084ac0d9c8f08626f08878e5dfab64ab1c0d6d40e6f01e0f5adaae9a7744a187",
+        "sha256": "760d23c3a9f5193238b0abddbd90ed2ff4c75dd5d446398ccda966352ac22a19",
+        "artifact": {
+          "path": "/home/chechulin/Downloads/ksa_linux_v2026.9.10.5438/KSA.dll",
+          "sha256": "7aadb15ef67094b276b290074075b565a221ebbe18dfef49151cd19f832a265e",
+          "byte_length": 4926464,
+          "format": "pe"
+        },
+        "module": {
+          "name": "KSA.dll",
+          "generation": 0,
+          "mvid": "c2f25cf6-4e84-48ea-8369-bb4875a2e887",
+          "enc_id": null,
+          "enc_base_id": null,
+          "token": "0x00000001",
+          "row_offset": 2459064
+        },
+        "assembly": null,
+        "selection": {
+          "type_names": [
+            "KSA.VolumetricExhaustRenderer"
+          ],
+          "unmatched_type_names": []
+        },
+        "coverage": {
+          "state": "complete",
+          "issues": []
+        }
+      },
+      "gas-nozzles.json": {
+        "evidence_id": "ev_c5151b2db77dc4763ebc85aceb8bbdea73c6c587dc14c5eb92336d72c85d0417",
+        "sha256": "775e8c8971cc38d231c30c49580d836be7253d216ae86320b78b958e212d2455",
+        "artifact": {
+          "path": "/home/chechulin/Downloads/ksa_linux_v2026.9.10.5438/KSA.dll",
+          "sha256": "7aadb15ef67094b276b290074075b565a221ebbe18dfef49151cd19f832a265e",
+          "byte_length": 4926464,
+          "format": "pe"
+        },
+        "module": {
+          "name": "KSA.dll",
+          "generation": 0,
+          "mvid": "c2f25cf6-4e84-48ea-8369-bb4875a2e887",
+          "enc_id": null,
+          "enc_base_id": null,
+          "token": "0x00000001",
+          "row_offset": 2459064
+        },
+        "assembly": null,
+        "selection": {
+          "type_names": [
+            "KSA.ExhaustGasDynamics",
+            "KSA.RocketNozzle",
+            "KSA.ExhaustLobes"
+          ],
+          "unmatched_type_names": []
+        },
+        "coverage": {
+          "state": "complete",
+          "issues": []
+        }
+      },
+      "new-exhaust-members.json": {
+        "evidence_id": "ev_d22a686571cce89164bec3bb776c228081083dabcc32502287f2b6c59866efa3",
+        "sha256": "c17df0b8796b4d4367b86768830b2d4c9d6da9056db3e679bcc3b5c07d06ee14",
+        "artifact": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ksa-audit-2026-10-31/ksa-2026.10.25.5707/KSA.dll",
+          "sha256": "0578047715c733b4157161c4bb0e9e7bee5ec769909c91e24fa1dd0d81c8e8c1",
+          "byte_length": 5309952,
+          "format": "pe"
+        },
+        "module": {
+          "name": "KSA.dll",
+          "generation": 0,
+          "mvid": "bdb346bd-bdf8-48b4-b231-124a5ff90f11",
+          "enc_id": null,
+          "enc_base_id": null,
+          "token": "0x00000001",
+          "row_offset": 2527208
+        },
+        "assembly": null,
+        "selection": {
+          "type_names": [
+            "KSA.VolumetricExhaustRenderer",
+            "KSA.ExhaustGasDynamics",
+            "KSA.RocketNozzle",
+            "KSA.ExhaustLobes"
+          ],
+          "unmatched_type_names": []
+        },
+        "coverage": {
+          "state": "complete",
+          "issues": []
+        }
+      }
+    },
+    "content_files": {
+      "ExhaustAssets.xml": {
+        "old_sha256": "f876d81622ba740c551536a5c5ad067ef602b39304c524fc72a358cc40242750",
+        "new_sha256": "f876d81622ba740c551536a5c5ad067ef602b39304c524fc72a358cc40242750",
+        "identical": true
+      },
+      "PlumeTrailAssets.xml": {
+        "old_sha256": "e4d77d402e0d5cfd12f75e2bac8b8fc30de4311ce94c50867c819600ca42db52",
+        "new_sha256": "20b706507a37088d18f25565f0499eb4f7e3a18028326c4c7e439dea2626f10e",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/ComposeWithClouds.glsl": {
+        "old_sha256": null,
+        "new_sha256": "fbf6dfacf41dea55712f3a0dd96f51eb4c6f283d51d61a182291207fb63b8199",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/CopyScreenColor.comp": {
+        "old_sha256": "57176cfeac5650a949b3ac772fa1a3e6f53c3c6995ae76df9e1a3220847005d5",
+        "new_sha256": "57176cfeac5650a949b3ac772fa1a3e6f53c3c6995ae76df9e1a3220847005d5",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/Data/InstanceData.glsl": {
+        "old_sha256": "d675afbdf9afa9c8fadc830368876362ecb8351c8a41b188acbfba61531335e3",
+        "new_sha256": "d675afbdf9afa9c8fadc830368876362ecb8351c8a41b188acbfba61531335e3",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/Data/PassData.glsl": {
+        "old_sha256": "f8261b1efed037c87ef0fe63ab867211c1370ac706896ad347f3cacad93b4a32",
+        "new_sha256": "f8261b1efed037c87ef0fe63ab867211c1370ac706896ad347f3cacad93b4a32",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/ExhaustBlurMip.comp": {
+        "old_sha256": "6d64309adb6a649ca74c620d0a080ef96accd2a6205b03c344baf6963de6b614",
+        "new_sha256": "6d64309adb6a649ca74c620d0a080ef96accd2a6205b03c344baf6963de6b614",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/ExhaustDenoise.comp": {
+        "old_sha256": "57102bfcfd78642e01f5c315d5d89e2ca64ba1ab85cfc3bf4bf465af1d626014",
+        "new_sha256": "d901f472e51c39f8678f04334940979651605a0a4c1040c4bab2f453a72a8eaa",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/ExhaustOit.comp": {
+        "old_sha256": "35f24d342fb88412fd57e51f45734622b9897a6141612e6fc0689282a2773cef",
+        "new_sha256": "d4458806956037f56838ad5c00962702837fe1048f52d82201305c43145dd06e",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/ExhaustRefraction.frag": {
+        "old_sha256": "48970f5a5d73eca8500a80d2c5334bf39918f85af31d009f56bf9530a183b2ed",
+        "new_sha256": "c6f0c205b0d9cf3d3d73b9a0bfeb69550e7422fa0521379c2eb159993882a383",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/ExhaustRefraction.vert": {
+        "old_sha256": "efdd23d7d38ee1281d58add181978a7d6c5880fa2ef1dbb6559b0eb81b9b10d1",
+        "new_sha256": "66c81f2497bc790ed65755b911979e6b397a684bf3e870b49d5ca2e48b4323f2",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/PhysicalDensity.glsl": {
+        "old_sha256": "115b859f98e9d5ec050bfa5bddb68408d972e0534f645738075459a8f1ff912a",
+        "new_sha256": "115b859f98e9d5ec050bfa5bddb68408d972e0534f645738075459a8f1ff912a",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/PlumeBend.glsl": {
+        "old_sha256": "8349df67b375c6bb1c67c0ecc9d98dc2a3dbcdff9c36f4785054d1d07a7d76f4",
+        "new_sha256": "8349df67b375c6bb1c67c0ecc9d98dc2a3dbcdff9c36f4785054d1d07a7d76f4",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/ShockCells.glsl": {
+        "old_sha256": "fdf61348510dc25ee5be95c62e484f4b03c1929f5e47bc17b2710763158a88d6",
+        "new_sha256": "fdf61348510dc25ee5be95c62e484f4b03c1929f5e47bc17b2710763158a88d6",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/TransientLutBake.comp": {
+        "old_sha256": "4e350e92919f3eead81dee1bdd92fadec5b025e095677588bb8df26db9f889e7",
+        "new_sha256": "4e350e92919f3eead81dee1bdd92fadec5b025e095677588bb8df26db9f889e7",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/Transients.glsl": {
+        "old_sha256": "da7fdfa755fd8ac9cad99793d68a24e8b672e10b343a22a75b20f2a4b2aa145d",
+        "new_sha256": "da7fdfa755fd8ac9cad99793d68a24e8b672e10b343a22a75b20f2a4b2aa145d",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/Upscaling/Compose.comp": {
+        "old_sha256": "38f78f4318cf5b3e52963b46c33b13f216313404b34c3503a9d60eb6d9ae321a",
+        "new_sha256": "07a6d17365e3b449ffd7e90140ff0f70875fe36c3131f59f6967af77dd9791ee",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/Upscaling/DepthWrite.frag": {
+        "old_sha256": "6091a00225e6dd94c7db835162efe421deb48408c2e5f383e9c4c0d29acaee58",
+        "new_sha256": "0a99cba6c262f646ac39273ed23f0022e7bb5ffaa8add360b4355bec7ce5eda7",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/Upscaling/DownscaleDepth.comp": {
+        "old_sha256": "f74398a61cd164e97989c22667023fe6abd9c2a1d97a535d234a1e4c0a7ef1a7",
+        "new_sha256": "919d5e7805a0d20dccbae1170c776c2c535557e3fddfd361fb80ac2750f09b37",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/Upscaling/NearestDepthUpscaling.glsl": {
+        "old_sha256": "1ff332226f8538d24dea4fc325d90268a8fdfebf55c6b334e9300af97aaa3301",
+        "new_sha256": "1ff332226f8538d24dea4fc325d90268a8fdfebf55c6b334e9300af97aaa3301",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/Upscaling/UpscaleExhausts.comp": {
+        "old_sha256": "8fe5e397931a2c4f04f7b1cdb2f182e2173bfee0c339d17bdbbbf1890a6265e7",
+        "new_sha256": "128b8a7fc492d3326537ce38a5bd2267dd2649123bcae51d416cbd044ed1e157",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/Upscaling/VolumetricExhaustPrePass.frag": {
+        "old_sha256": "40788fe9f645932d737d7814feb3f9bcfc25fda45bd2c5882dfc7f39ec9608bb",
+        "new_sha256": "0ca655e8ae32262e81d3b4d26d0b2ba4aa02e24b7c18b889e40f1702d8cdf377",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/Utils.glsl": {
+        "old_sha256": "58fb97970a72ec8ef7abaf9e938aab8266b8e7e390da087b0989dae6d2a513cf",
+        "new_sha256": "58fb97970a72ec8ef7abaf9e938aab8266b8e7e390da087b0989dae6d2a513cf",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/VolumeBounds.glsl": {
+        "old_sha256": "1c83c79ff0f1fcab10966882b5f357457f2f4b9c5119c17dcbbb1ee5d82dcf7e",
+        "new_sha256": "1c83c79ff0f1fcab10966882b5f357457f2f4b9c5119c17dcbbb1ee5d82dcf7e",
+        "identical": true
+      },
+      "Shaders/VolumetricExhaust/VolumetricExhaust.frag": {
+        "old_sha256": "b1a1619b55a61ec43c5d781f9001ad1200701ea66ee80b43699326adf66d3064",
+        "new_sha256": "8256549390760a6eba90fef683f82c3a93cff4ac427acd3a34d2a3c75714f408",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/VolumetricExhaust.vert": {
+        "old_sha256": "f9f3dea23ee15e61032202907931b0296e0c7640b914072180714fe05a4777a9",
+        "new_sha256": "94223bdce4f1449000688d920b0f8417aefb571ab889efea0e9fb6e564436093",
+        "identical": false
+      },
+      "Shaders/VolumetricExhaust/VolumetricExhaustBoundingBox.frag": {
+        "old_sha256": "080a8302e73f618fcb535413064f5cff110f2c5a16aec4b7fcf79be11047d548",
+        "new_sha256": "080a8302e73f618fcb535413064f5cff110f2c5a16aec4b7fcf79be11047d548",
+        "identical": true
+      }
+    },
+    "limits": [
+      "Broad unfiltered member enumeration exceeded REA 64 MB representation budget; not evidence of absent code",
+      "CIL body/call graph is not recovered original C#",
+      "No KSA runtime image/frame-cost comparison performed",
+      "KSA shaders/assets/DLL and full REA evidence remain outside Git",
+      "BRUTAL framework contains no renderer; custom MIT-style license includes credits/logo/NOTICE requirements; no code adopted"
+    ]
+  },
+  "native": {
+    "id": "compiled-plume-volume-v1",
+    "source": {
+      "commit": "02c8c8e7df0f637e554f34f4bd5c6b4ca9a32f26",
+      "dirty": true,
+      "tracked_diff_sha256": "9197b219fcb2ca26a30ecdcccaa393925ac5eacbb844e43307ae3c351a2fea38",
+      "untracked_sha256": {
+        "tools/agent-qa/__pycache__/plume_reference.cpython-314.pyc": "769988842cbf434262f13833ee2dec007a669e71187f1db8b5441561998a0edc",
+        "tools/agent-qa/tests/__pycache__/test_plume_reference.cpython-314.pyc": "11a13becd51504c347ea24245c3cd109b9437d65b72a9e4929f60d47792d3f50"
+      }
+    },
+    "binary_sha256": "cdc8ee48ecdcd50476154faab28369a316d7ebe121c150f0063e9e4e0a74f19a",
+    "profile": "dev",
+    "tool_sha256": "ed4112f7c94ef145fc6428f21c9d10c4ea16d28b215eef32b5a374930e15c42a",
+    "native_command": [
+      "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/debug/deps/plume-8e3d0668014e124b",
+      "frozen_compiled_plume_reference",
+      "--ignored",
+      "--nocapture",
+      "--test-threads",
+      "1"
+    ],
+    "cases": {
+      "sea-full": {
+        "linear.rgba16f": "645a44f2ced652f6624a6409edce1242e27ee32aa0f0d79cdf9dec276380e412",
+        "steps16.rgba16f": "11db23e1aec3196c8f423cb736809c48f76eeffae73e745011d61891373704ec",
+        "scene.json": "49ec62c3fd41d5fd5d7ccf606011332fb920e7957dc9c921a78ad10416b03d84",
+        "display.png": "2d29a1958bc0e65de6be37598c9de0f40617bfeb8d86cd9d6f306b9f9c2b9883",
+        "steps16.png": "e1a760e28de47fcc9838e51631e0d241a4a7bf8df649ccfe0d6464084e1acc35"
+      },
+      "sea-half": {
+        "linear.rgba16f": "329d37a8c198450272e31d52d731085cb7cb530b47372382b3fc1c6af6ce6186",
+        "steps16.rgba16f": "e58de2e37ad12b70b02e82fda46c30d7cb33de9e38edc12f8b40765cf3ce6efd",
+        "scene.json": "b0b58c36754dd483a65e0dd47dab7bb2d37e096af3e04dd16c089ca4d78cdb67",
+        "display.png": "a5f14cc0d56e8146f6534fffe2ef0e7b12ad8532060b3bed3690291b910eeec9",
+        "steps16.png": "cf04bf89a0d5835273dca7ac7e3ec1d966c1550da08b15f9790483c926e74929"
+      },
+      "matched-full": {
+        "linear.rgba16f": "5de691f600a066cf08359ef9af0a05f86e4af32e5127f299f05c0e5403ef5d2c",
+        "steps16.rgba16f": "e7f08abce347adab17484e39869ade39ed995baafe228dad021192674839668e",
+        "scene.json": "3d82b135d5a0d58a0490d7fef49f80246afbc31bf50cfa95b0484b1e51da7562",
+        "display.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+        "steps16.png": "4f7b0ef967a4ff6fb2ff02e38318e795418bc43467acd1b6d3670d1655d63f65"
+      },
+      "matched-half": {
+        "linear.rgba16f": "11e139d68c6ef3a41ab838b2fe6b6b1b83db6e272d31610a133768b5445bde0d",
+        "steps16.rgba16f": "1972378c2626cfd0337e44c4c6a2f4be461b08c09e4df44aeaa4bfbf12d895ed",
+        "scene.json": "247788cc9279858fb9589a94822fb662bc8cd524e247adcd302a0aa34aae09f6",
+        "display.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+        "steps16.png": "8ffcab5afece6142d46f056b5a41e8d58ac2f848bb67de5b9ce191acb89da8a0"
+      },
+      "thin-full": {
+        "linear.rgba16f": "3d3ae7387da06b5a574a1c8ee1a69c507b7b82c89d398589bbb0412888f9d165",
+        "steps16.rgba16f": "3dbd39c62dc0144ca183e5adf41e6c98d2831f540ec1aeb8b5fab0580b6f12bb",
+        "scene.json": "e0db5a4c7f36351492819fad365ffa7c277ec3a49577d7933c1b3ccb0d4a0410",
+        "display.png": "b7c1b8ff50c382a8037c01595fffb7166a1a0daaae60cf32b9d4721e8f779f02",
+        "steps16.png": "09fdf416286d22f1e5a1c82c30bd7f71940fc84fa6f45d78271b9b001c27f3f0"
+      },
+      "thin-half": {
+        "linear.rgba16f": "e3de42d32dcfc03f5fe3dc7a50d822b838961d615551165cad5f012648f93703",
+        "steps16.rgba16f": "faf3b9105ace966d7d4961ad06590f3948899a84ff19e644c130d1a4cae26317",
+        "scene.json": "c914a6b9230a7a32dbfea14c0de3f4e75ff608d8437e24e68bbc41d573069717",
+        "display.png": "aed1cf8036ac1b253baa63f343fe063f3dca26f027dc085faad5af850c49647b",
+        "steps16.png": "4f0e7167056818b9f5c9b81bb0dd201006f01a1f992eff04fe33e30bd1932e54"
+      },
+      "matched-axial": {
+        "linear.rgba16f": "ce2f546a91972cc2a722bf2de4cd513c6e7c0ccea7f0cacf8d74a08ee9103f81",
+        "steps16.rgba16f": "4be8d772ec61eff5895c6bcce71b050453ee8132e2452f5598d63fd10311a875",
+        "scene.json": "53a77cfc4073bfac5d5ebe4ce62de9e6d4fccca2d03ada7394a74e3f79a92666",
+        "display.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+        "steps16.png": "3c28c8391dbfd416543147ad3abf1c1cbb487175533c9fc847238a488bf36fe9"
+      },
+      "matched-inside": {
+        "linear.rgba16f": "1148afb7fbf69ad05f93c9e2241f71b1b63c4f2559658ffe1302e4379bef7f37",
+        "steps16.rgba16f": "e231c6f597b8d557702864246a8e48e96b972e1b2a02f0501197b1f2fa331c28",
+        "scene.json": "be339e9731804875f5abec0ddc553009ebbd6d5ff77c42031bed5c7fa03a0abe",
+        "display.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+        "steps16.png": "7f03c6fb907fe1f609098e981b807caf917330cf2f145fd37fd094f1f18ffca9"
+      },
+      "matched-oblique": {
+        "linear.rgba16f": "a6c918c5e562366042fb2f33e0cd95a84f1afbafcd885138fe155cdb027b4608",
+        "steps16.rgba16f": "26bee5018ad68c8349f398b6963dda216719565716fd73b850cb5232dc0c3a6d",
+        "scene.json": "20fe783110b82f1f8ccd6e9742a404ae99f438a94fd38ca91e1128f7ace7e84d",
+        "display.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+        "steps16.png": "11b6ecc0c8865c284d465dd20b77c81c4e58df8f21ab7ba416a779c22971a75f"
+      }
+    },
+    "scope": "frozen transport controls; compiled cases use model operating points, not calibrated firings, full-frame performance or preference acceptance"
+  },
+  "cycles_2048": {
+    "id": "compiled-plume-volume-v1",
+    "engine": {
+      "name": "Blender/Cycles",
+      "version": "5.2.2 LTS",
+      "build_hash": "d13f752e3b9c"
+    },
+    "source": {
+      "commit": "02c8c8e7df0f637e554f34f4bd5c6b4ca9a32f26",
+      "dirty": true,
+      "tracked_diff_sha256": "9197b219fcb2ca26a30ecdcccaa393925ac5eacbb844e43307ae3c351a2fea38",
+      "untracked_sha256": {
+        "tools/agent-qa/__pycache__/plume_reference.cpython-314.pyc": "769988842cbf434262f13833ee2dec007a669e71187f1db8b5441561998a0edc",
+        "tools/agent-qa/tests/__pycache__/test_plume_reference.cpython-314.pyc": "11a13becd51504c347ea24245c3cd109b9437d65b72a9e4929f60d47792d3f50"
+      }
+    },
+    "tool_sha256": "ed4112f7c94ef145fc6428f21c9d10c4ea16d28b215eef32b5a374930e15c42a",
+    "native_capture_sha256": "abe9ed8c83fc65e7c1579b06e541320126c93929d998c995e846da31e08073b8",
+    "native_source": {
+      "commit": "02c8c8e7df0f637e554f34f4bd5c6b4ca9a32f26",
+      "dirty": true,
+      "tracked_diff_sha256": "9197b219fcb2ca26a30ecdcccaa393925ac5eacbb844e43307ae3c351a2fea38",
+      "untracked_sha256": {
+        "tools/agent-qa/__pycache__/plume_reference.cpython-314.pyc": "769988842cbf434262f13833ee2dec007a669e71187f1db8b5441561998a0edc",
+        "tools/agent-qa/tests/__pycache__/test_plume_reference.cpython-314.pyc": "11a13becd51504c347ea24245c3cd109b9437d65b72a9e4929f60d47792d3f50"
+      }
+    },
+    "settings": {
+      "device": "CPU",
+      "samples": 2048,
+      "seed": 0,
+      "volume_step_rate": 0.1,
+      "volume_max_steps": 4096,
+      "volume_biased": false,
+      "scattering": 0,
+      "volume_ray_start": "native optical camera (t0=0); Cycles minimum clip_start=1e-6 m, not opaque projection near=0.1 m",
+      "alpha_comparison": "RGB only; Cycles opaque film alpha is not transmittance",
+      "display": "shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"
+    },
+    "cases": {
+      "sea-full": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3663,
+          "pre_exposed_linear_rgb_mae": 4.9507355165448225e-05,
+          "pre_exposed_linear_rgb_rmse": 0.00031171784853886177,
+          "relative_l2_against_thessa": 0.02486444438187507,
+          "top_10_pixels_fraction_of_squared_error": 0.4713241568452064,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.05488962307572365,
+          0.025271659716963768,
+          0.015567108988761902,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "700877e22519419e933204f3ab769c9293547d5e2704e092ff86aee75c4a5fe4",
+          "linear.rgba32f": "03cbaf7dc4476901717d3ac7969de6e59164c6b929c28484bbedb695a53c5d22",
+          "display.png": "3a23739aa914819ae4dc1f11384c1f66b73c1cb7d5f6d48e17c6482daa3198b7",
+          "thessa.png": "2d29a1958bc0e65de6be37598c9de0f40617bfeb8d86cd9d6f306b9f9c2b9883",
+          "scene.json": "49ec62c3fd41d5fd5d7ccf606011332fb920e7957dc9c921a78ad10416b03d84",
+          "scene.blend": "9ba16ae7744d19f084aa14c2321f02327feade5cc3efb8bb49dd53aaaa88b786"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3663,
+          "pre_exposed_linear_rgb_mae": 4.9389923164268436e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0003115979436241057,
+          "relative_l2_against_thessa": 0.024840515306373667,
+          "top_10_pixels_fraction_of_squared_error": 0.4719177074691391,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "sea-half": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 4532,
+          "pre_exposed_linear_rgb_mae": 3.232997767259148e-05,
+          "pre_exposed_linear_rgb_rmse": 0.00020250701022100383,
+          "relative_l2_against_thessa": 0.02745829136853233,
+          "top_10_pixels_fraction_of_squared_error": 0.3041771983258446,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.017096249386668205,
+          0.00787095632404089,
+          0.004847733769565821,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "4f05ee1ac96f22c2715ad772bcd1de1d87060bb9ce35ccbb14e10ff60c39c5f8",
+          "linear.rgba32f": "da5ba2abcb72d603d09630f71bbf724f4f7fbec6dd5db138b025a50a48385f63",
+          "display.png": "29dcfa04e4404d2050e6baa536731ce2b3a0adf3baf3345228d16897e99fbc1d",
+          "thessa.png": "a5f14cc0d56e8146f6534fffe2ef0e7b12ad8532060b3bed3690291b910eeec9",
+          "scene.json": "b0b58c36754dd483a65e0dd47dab7bb2d37e096af3e04dd16c089ca4d78cdb67",
+          "scene.blend": "7506be3852d8069110f01c174b3ba9b646c3259b46b15643956c9e91d828ee97"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 4532,
+          "pre_exposed_linear_rgb_mae": 3.233618752570107e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0002025109459893241,
+          "relative_l2_against_thessa": 0.027436428864877693,
+          "top_10_pixels_fraction_of_squared_error": 0.30284529386530346,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "matched-full": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3084,
+          "pre_exposed_linear_rgb_mae": 4.6189511134779075e-05,
+          "pre_exposed_linear_rgb_rmse": 0.00028861794297279346,
+          "relative_l2_against_thessa": 0.02661064322279689,
+          "top_10_pixels_fraction_of_squared_error": 0.40332295943118285,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.05306340754032135,
+          0.024430805817246437,
+          0.015049019828438759,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "b7b80158a6cc57ad2e238220b8a8ee76455ba65f40f47226f4a9824053fb31fd",
+          "linear.rgba32f": "8c97f867ae19223953557235bb0d65509f7560fdb7d9a5e3e349030a3276cb81",
+          "display.png": "b9bab2d6edfcaa79714979c0a0801dc935a4e92c35d03cbe9079e346449bf102",
+          "thessa.png": "3e19ee25e83efff4326e6673f6bdb74e3a8a4ba9e9b8989b04a75a32a4ab4103",
+          "scene.json": "3d82b135d5a0d58a0490d7fef49f80246afbc31bf50cfa95b0484b1e51da7562",
+          "scene.blend": "d5e23f0559b66733349460315e1e51ca6c0e7d7ce4d26d61b4bd7007602d5ca3"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3084,
+          "pre_exposed_linear_rgb_mae": 4.618419156343003e-05,
+          "pre_exposed_linear_rgb_rmse": 0.00028955387889423887,
+          "relative_l2_against_thessa": 0.026673930354808563,
+          "top_10_pixels_fraction_of_squared_error": 0.40003154652639067,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "matched-half": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3110,
+          "pre_exposed_linear_rgb_mae": 2.5847248105654272e-05,
+          "pre_exposed_linear_rgb_rmse": 0.00017665608230441743,
+          "relative_l2_against_thessa": 0.032375155647574504,
+          "top_10_pixels_fraction_of_squared_error": 0.35504548370631855,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.028953971341252327,
+          0.013330774381756783,
+          0.0082118920981884,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "8a0b5f7577320427914a92354446de3ba04bb79a7ee83b8b6f6685a37af1df47",
+          "linear.rgba32f": "a0ca1609a81041ee762ac06b1366d26672c935a68e159856e53002ae0b4d09cf",
+          "display.png": "305aacf144e8cc2fa1eb49cb396334153a66e0d0f1978f82debbb774282241d6",
+          "thessa.png": "a0c799e4605bf73ed646a1993997d9bc2b9b2798b68bc196db94de8694f08f1b",
+          "scene.json": "247788cc9279858fb9589a94822fb662bc8cd524e247adcd302a0aa34aae09f6",
+          "scene.blend": "0c4b13685d7bd7466e18b6dea5a7741f9afddf30eb4f6f2b5adf4df97a00391d"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3110,
+          "pre_exposed_linear_rgb_mae": 2.582285547400313e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0001771569900535443,
+          "relative_l2_against_thessa": 0.0324389225306289,
+          "top_10_pixels_fraction_of_squared_error": 0.3545908411639793,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "thin-full": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3667,
+          "pre_exposed_linear_rgb_mae": 0.0002206263624973039,
+          "pre_exposed_linear_rgb_rmse": 0.0016695176470924986,
+          "relative_l2_against_thessa": 0.03984169522676672,
+          "top_10_pixels_fraction_of_squared_error": 0.5896152165526063,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.3917248845100403,
+          0.18035118281841278,
+          0.11108911782503128,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "086546bfbbd4632a21fd4d33360984694ef6493958e2c00e366fa2c5041a5a4e",
+          "linear.rgba32f": "7433f6fc757574476f4b6f8e2515923afc4a4b79cb39bd456762094ae23375c6",
+          "display.png": "f40f62a71d557759685e12a95527f884ea31021e735f2a11f6fa057c4e595a47",
+          "thessa.png": "b7c1b8ff50c382a8037c01595fffb7166a1a0daaae60cf32b9d4721e8f779f02",
+          "scene.json": "e0db5a4c7f36351492819fad365ffa7c277ec3a49577d7933c1b3ccb0d4a0410",
+          "scene.blend": "eb1ee320d407dbe55d8b1bb3b6ff644a2a0ab15380dbcb346a9b9b261ee5d4c1"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3667,
+          "pre_exposed_linear_rgb_mae": 0.0002208841523622119,
+          "pre_exposed_linear_rgb_rmse": 0.001685131911325553,
+          "relative_l2_against_thessa": 0.040167854928793545,
+          "top_10_pixels_fraction_of_squared_error": 0.5935355798883636,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "thin-half": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3836,
+          "pre_exposed_linear_rgb_mae": 9.419360665989037e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0006652712135681331,
+          "relative_l2_against_thessa": 0.03844188537500497,
+          "top_10_pixels_fraction_of_squared_error": 0.5486355759933391,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.13526222109794617,
+          0.06227606162428856,
+          0.038361676037311554,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "7467082c29dddff5f413f90e50fdf5e63278592b615ce23d972292154266ef12",
+          "linear.rgba32f": "c6fd7dea885acd03c947a45b7ee7ddfad4765428d1952109864acd4db54abe81",
+          "display.png": "e98db5594b44bd284e37cd39aeba0c118dda53e950d622c63bc4908bcd2871c0",
+          "thessa.png": "aed1cf8036ac1b253baa63f343fe063f3dca26f027dc085faad5af850c49647b",
+          "scene.json": "c914a6b9230a7a32dbfea14c0de3f4e75ff608d8437e24e68bbc41d573069717",
+          "scene.blend": "460acf4ff0bb8fc7151f6d7d5a90549d4711cbb9e649989da81ee873d940c8ee"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 3836,
+          "pre_exposed_linear_rgb_mae": 9.425760239019356e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0006697112592329057,
+          "relative_l2_against_thessa": 0.038650338748265144,
+          "top_10_pixels_fraction_of_squared_error": 0.5491817379607908,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "matched-axial": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 723,
+          "pre_exposed_linear_rgb_mae": 4.142938225392339e-05,
+          "pre_exposed_linear_rgb_rmse": 0.00045641423202873903,
+          "relative_l2_against_thessa": 0.023388633860461264,
+          "top_10_pixels_fraction_of_squared_error": 0.2665894256638165,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.7543119192123413,
+          0.45927658677101135,
+          0.529737651348114,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "ca844295eba734fbad1c1b64b15d4fda773bc4ec98c369a194ca6f2a0f1fc04e",
+          "linear.rgba32f": "da03603d7818852925cb3baad7b00e87a751a2014ebc98dee0dab03e87ecaedb",
+          "display.png": "cbe13398a4406b68ccad378e7adcb9f7299920320f33e688d5d6015c590be92c",
+          "thessa.png": "b95af6686be2422e61d0b292ba643abb9cb93aa9bc59852db19499a78ca332ee",
+          "scene.json": "53a77cfc4073bfac5d5ebe4ce62de9e6d4fccca2d03ada7394a74e3f79a92666",
+          "scene.blend": "85012f0e1a1f1556c8a7c716889ef14564b648a28285893ca25aa3cbf7258be1"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 723,
+          "pre_exposed_linear_rgb_mae": 3.662621461886509e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0004040706152241027,
+          "relative_l2_against_thessa": 0.02059480771810127,
+          "top_10_pixels_fraction_of_squared_error": 0.31269986191996785,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "matched-inside": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 16641,
+          "pre_exposed_linear_rgb_mae": 0.0002723903002786507,
+          "pre_exposed_linear_rgb_rmse": 0.0004083619020658817,
+          "relative_l2_against_thessa": 0.008307819715594456,
+          "top_10_pixels_fraction_of_squared_error": 0.014569873312002057,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.13885459303855896,
+          0.06272486597299576,
+          0.03573180362582207,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "d83655ed40cb04486bf2c4742b2b857216cfede3e9dab62133a52e45950d1295",
+          "linear.rgba32f": "fea14a87adc7531936b149e76a249fd0b9ba81d2c7d4fe3f9fccbd348192620e",
+          "display.png": "e63f3ffee2d60b2b2b21b48af6e0df5c7a9be599b42c945f5f80b530f113f4c6",
+          "thessa.png": "59ae75fc2bb675b914b37dd1213be0bab4af822a7ba70e58d95a2dc9912f6adb",
+          "scene.json": "be339e9731804875f5abec0ddc553009ebbd6d5ff77c42031bed5c7fa03a0abe",
+          "scene.blend": "038b0e9e062b2c514f57cda66a95945e0b41057e0b49026486ecc4715b374246"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 16641,
+          "pre_exposed_linear_rgb_mae": 0.00026328737352379855,
+          "pre_exposed_linear_rgb_rmse": 0.00039442998534664994,
+          "relative_l2_against_thessa": 0.008018544038745218,
+          "top_10_pixels_fraction_of_squared_error": 0.015247451557664646,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      },
+      "matched-oblique": {
+        "metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 2576,
+          "pre_exposed_linear_rgb_mae": 6.488781616665472e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0003899332063605897,
+          "relative_l2_against_thessa": 0.026366047557464495,
+          "top_10_pixels_fraction_of_squared_error": 0.2110844575723337,
+          "interpretation": "Native raster/midpoint/half-float versus Cycles stochastic volume transport and pixel reconstruction; diagnostic only"
+        },
+        "center_linear_rgba": [
+          0.09615136682987213,
+          0.044433820992708206,
+          0.027738817036151886,
+          1.0
+        ],
+        "actual_camera": {
+          "world_from_view_rows": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "vertical_fov_rad": 0.8999999761581421,
+          "near_m": 9.999999974752427e-07,
+          "far_m": 1000000.0
+        },
+        "carrier_triangles": 12,
+        "axial_representation": "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+        "material_node": "ShaderNodeVolumeCoefficients",
+        "scatter_coefficients": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "artifacts_sha256": {
+          "radiance.exr": "0166d97e63c1bda2196ba90c78269c939046a3af5c3175cc054c90ae1f89c90f",
+          "linear.rgba32f": "73694acd52925744b5053551011ba6a83f273a35fcc00cecce6686bc62decebf",
+          "display.png": "034cfc31bfe0f01de8465d111bd776f4c55bba8267bae6f223c93d37c0b8dbf5",
+          "thessa.png": "5412911163567bc5338b0a306e557677f79cad02ed11b06788ef862c12ba2e42",
+          "scene.json": "20fe783110b82f1f8ccd6e9742a404ae99f438a94fd38ca91e1128f7ace7e84d",
+          "scene.blend": "50dfead301a9609b30f4346395ad32ca7db46cca8d8bd3dc627cfc3695a0332b"
+        },
+        "steps16_metrics": {
+          "rgb_components": 49923,
+          "foreground_union_pixels": 2576,
+          "pre_exposed_linear_rgb_mae": 6.479755545157012e-05,
+          "pre_exposed_linear_rgb_rmse": 0.0003902889292947984,
+          "relative_l2_against_thessa": 0.026360153164815756,
+          "top_10_pixels_fraction_of_squared_error": 0.21194695667775051,
+          "interpretation": "Whole-frame diagnostic including AA/silhouette and BRDF differences; no pass threshold or parity claim."
+        }
+      }
+    },
+    "acceptance": {
+      "physical": "frozen field transport only; model-generated engine cases are not optical calibration",
+      "visual": "not evaluated",
+      "performance": "not comparable",
+      "temporal": "not evaluated"
+    }
+  },
+  "software": {
+    "capture_sha256": "afb823e7d120f01cc0c1093f525f738f2a4d6553596b7e027c02ec39887c4608",
+    "envelope": ".002*abs(RADV)+2e-6 per RGBA component",
+    "max_absolute_rgba_error": 0.0001220703125
+  },
+  "ab_cases": {
+    "sea-full": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": false,
+      "max_ab_rgba_error": 0.0352783203125
+    },
+    "sea-half": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": false,
+      "max_ab_rgba_error": 0.01727294921875
+    },
+    "matched-full": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": true,
+      "max_ab_rgba_error": 0.0
+    },
+    "matched-half": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": true,
+      "max_ab_rgba_error": 0.0
+    },
+    "thin-full": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": false,
+      "max_ab_rgba_error": 0.06005859375
+    },
+    "thin-half": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": false,
+      "max_ab_rgba_error": 0.029296875
+    },
+    "matched-axial": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": true,
+      "max_ab_rgba_error": 0.0
+    },
+    "matched-inside": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": true,
+      "max_ab_rgba_error": 0.0
+    },
+    "matched-oblique": {
+      "unchanged_source_stations_camera": true,
+      "uniform_radial_identical": true,
+      "max_ab_rgba_error": 0.0
+    }
+  },
+  "analytic_controls": "All four unchanged HDR bytes against doc 100 shipping controls",
+  "numerical_oracles": {
+    "cpu": "10001 radii against independent 32-term f64 J0 series; absolute error <5.3e-7",
+    "gpu": "2268 queries on RADV and llvmpipe; maximum absolute multiplier error 1.564897441e-6; scaled envelope (1+abs(axial-1))*1e-6"
+  },
+  "cost": {
+    "scope": "Ten fixed 1280x720 HDR plume-only views, 100 frames/run (20 warmup, 80 measured), release ABBA uniform/radial/radial/uniform; no compilers during runs",
+    "runs": {
+      "0": {
+        "0": {
+          "p50": 0.33171025358963013,
+          "p95": 0.3354593769704819,
+          "p99": 0.33894079170158387
+        },
+        "1": {
+          "p50": 0.5423304345417024,
+          "p95": 0.5528003274679184,
+          "p99": 0.5564713023656847
+        },
+        "2": {
+          "p50": 0.30227432496070866,
+          "p95": 0.3105420337097168,
+          "p99": 0.3148169561152268
+        },
+        "3": {
+          "p50": 0.473940492805481,
+          "p95": 0.5016711814573289,
+          "p99": 0.5045891255873108
+        },
+        "4": {
+          "p50": 0.3220318645305634,
+          "p95": 0.342374515819931,
+          "p99": 0.3556838036315916
+        },
+        "5": {
+          "p50": 0.6180743489170075,
+          "p95": 0.6441579080022812,
+          "p99": 0.6526055586431122
+        },
+        "6": {
+          "p50": 0.3557759787654877,
+          "p95": 0.3702274367145539,
+          "p99": 0.38253722546562197
+        },
+        "7": {
+          "p50": 0.595030565443039,
+          "p95": 0.6082436705062867,
+          "p99": 0.6239779658623124
+        },
+        "8": {
+          "p50": 0.11778379066085816,
+          "p95": 0.1347880990573883,
+          "p99": 0.1399783606186294
+        },
+        "9": {
+          "p50": 0.67542331265831,
+          "p95": 0.6932872543687821,
+          "p99": 0.70102635876297
+        }
+      },
+      "1": {
+        "0": {
+          "p50": 0.31415690200424196,
+          "p95": 0.3182767297279358,
+          "p99": 0.3387500292505646
+        },
+        "1": {
+          "p50": 0.5242761311416626,
+          "p95": 0.5511531979013444,
+          "p99": 0.5542879539767074
+        },
+        "2": {
+          "p50": 0.30143272591209413,
+          "p95": 0.31066827356700905,
+          "p99": 0.3131117161381531
+        },
+        "3": {
+          "p50": 0.4943392506980896,
+          "p95": 0.5046728847307205,
+          "p99": 0.5099829739660263
+        },
+        "4": {
+          "p50": 0.3738703583106995,
+          "p95": 0.4014748071052551,
+          "p99": 0.4107315951171112
+        },
+        "5": {
+          "p50": 0.6279130425567627,
+          "p95": 0.6457028433986665,
+          "p99": 0.6578130529467773
+        },
+        "6": {
+          "p50": 0.3503857372398377,
+          "p95": 0.363168023742485,
+          "p99": 0.37587496709220874
+        },
+        "7": {
+          "p50": 0.6028253756790163,
+          "p95": 0.626237859688568,
+          "p99": 0.635022149948845
+        },
+        "8": {
+          "p50": 0.12984671035766604,
+          "p95": 0.14217613641986845,
+          "p99": 0.14671035148464198
+        },
+        "9": {
+          "p50": 0.6970443929786683,
+          "p95": 0.7129786682991028,
+          "p99": 0.7226181834973526
+        }
+      },
+      "2": {
+        "0": {
+          "p50": 0.31439735887527465,
+          "p95": 0.3186273959981918,
+          "p99": 0.333419501181221
+        },
+        "1": {
+          "p50": 0.5219917908668519,
+          "p95": 0.5234465549365998,
+          "p99": 0.525025955817833
+        },
+        "2": {
+          "p50": 0.28726580859375006,
+          "p95": 0.3014066764177323,
+          "p99": 0.3067311930653
+        },
+        "3": {
+          "p50": 0.47644525187873843,
+          "p95": 0.49146378728199014,
+          "p99": 0.49843623501903533
+        },
+        "4": {
+          "p50": 0.3337340989208222,
+          "p95": 0.3579681439064026,
+          "p99": 0.3674465530010605
+        },
+        "5": {
+          "p50": 0.544915345905304,
+          "p95": 0.555024553524971,
+          "p99": 0.5636709818458556
+        },
+        "6": {
+          "p50": 0.31379621669769286,
+          "p95": 0.3345797055839539,
+          "p99": 0.3357863983150864
+        },
+        "7": {
+          "p50": 0.5185051662368774,
+          "p95": 0.5350205456623077,
+          "p99": 0.5382326486978531
+        },
+        "8": {
+          "p50": 0.12115018685531617,
+          "p95": 0.12564272272911073,
+          "p99": 0.12597174788097382
+        },
+        "9": {
+          "p50": 0.6819557243213654,
+          "p95": 0.6843382511518479,
+          "p99": 0.6993187142171859
+        }
+      },
+      "3": {
+        "0": {
+          "p50": 0.33064823574256896,
+          "p95": 0.33645526917800905,
+          "p99": 0.3418407015662384
+        },
+        "1": {
+          "p50": 0.5186053565998078,
+          "p95": 0.5428013292474747,
+          "p99": 0.5496651706311035
+        },
+        "2": {
+          "p50": 0.2849413921737671,
+          "p95": 0.28619377171039584,
+          "p99": 0.29913756507808686
+        },
+        "3": {
+          "p50": 0.4718966094017029,
+          "p95": 0.47326721356658935,
+          "p99": 0.4811445806616211
+        },
+        "4": {
+          "p50": 0.3807033410625458,
+          "p95": 0.4005390291154861,
+          "p99": 0.401174636777916
+        },
+        "5": {
+          "p50": 0.621961734998703,
+          "p95": 0.6355776053209305,
+          "p99": 0.6480961907883453
+        },
+        "6": {
+          "p50": 0.3567378062496186,
+          "p95": 0.3715659799633026,
+          "p99": 0.3803025796108246
+        },
+        "7": {
+          "p50": 0.6000200455169677,
+          "p95": 0.6146157775886536,
+          "p99": 0.6272397633178711
+        },
+        "8": {
+          "p50": 0.11768360029792785,
+          "p95": 0.12609959078407287,
+          "p99": 0.1371065040555954
+        },
+        "9": {
+          "p50": 0.6760044167633057,
+          "p95": 0.6785011606075287,
+          "p99": 0.6972824452809906
+        }
+      }
+    },
+    "stations": "All ten publications byte-identical across four runs; repeat HDR exact within each variant",
+    "baseline_binary_sha256": "8d6c809d81510b3705813cd52d6a334596ba8046620122314d16b48dd0f613b0",
+    "radial_binary_sha256": "0e357b9bc954cbe8ade6c17b700b278f1d2254faedc78ad0389e51c70a8b0ada",
+    "interpretation": "Different optical fields: fidelity-cost measurement, not equal-output speedup or client FPS"
+  },
+  "validation": [
+    "36 plume-core and 40 render-wgpu lib tests passed; 23 hardware/cost tests ignored in ordinary lib run",
+    "40 Python tests passed",
+    "2 selected lib GPU tests and 6 integration GPU tests on each RADV/llvmpipe passed",
+    "Naga validates entire retained WESL body with only imported Bevy types stubbed; not full live Bevy material rendering",
+    "Strict all-target plume-core/render-wgpu Clippy passed",
+    "terrain-native cargo check passed",
+    "Architecture gate: 44 packages, 20 guarded foundations passed",
+    "cargo fmt and git diff --check passed"
+  ],
+  "raw_output_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ksa-audit-2026-10-31",
+  "limits": [
+    "Weak pressure-mode-shaped optical approximation; no nonlinear Mach disk, Rankine-Hugoniot temperature jump or calibrated combustion spectrum",
+    "Same declared field in Cycles validates integration, not plume physics or superiority to KSA",
+    "Provisional native source/mount and authored hue ramps remain; F03/F04 open",
+    "No new buffers, dependencies, settings, sample-budget or authority changes; TAA remains default-off",
+    "Capture patch precedes addition of retained-material body validation only; production source hashes in record identify the exact captured math"
+  ]
+}

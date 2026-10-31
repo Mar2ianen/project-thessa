@@ -299,6 +299,14 @@ The graphics `mach_diamonds` toggle controls only visible shock-cell
 modulation; it never changes simulated engine or plume physics. Normal quality
 settings change representation cost/fidelity, not physical source state.
 
+The current CPU/native/retained volume field uses the first circular radial
+mode `J0(j01*r/R)` to shape the existing axial optical perturbation, with an
+unmodulated skirt outside the core. This removes uniform whole-slice shock
+modulation, without claiming nonlinear Mach-disk or calibrated combustion
+physics. Native/Cycles controls, independent Bessel oracles and measured cost
+are recorded in [doc 104](104_KSA_AUDIT_AND_RADIAL_SHOCK.md), alongside the
+October KSA/BRUTAL reference audit. The Low impostor remains a fallback.
+
 ## 10. Turbulence and advection
 
 Do not model plume instability as whole-plume brightness flicker. The current

@@ -49,6 +49,8 @@ def validate_scene(scene):
             or scene["steps"] != 14 or scene["erosion"] != 0 or scene["tail_dissolve"]
             or not scene["diamonds"]):
         raise ValueError("only frozen, unanimated volume controls are supported")
+    if scene.get("pixel_filter", "adaptive-box-v1") != "adaptive-box-v1" or scene.get("pixel_grid", 1) not in (1, 2, 4, 8):
+        raise ValueError("unknown pixel filter or unsupported grid")
     sampling=scene.get("axial_sampling","uniform-v1")
     if sampling not in ("uniform-v1","quadratic-v1"): raise ValueError("unknown axial sampling")
     cells=scene.get("shock_cells",[0,1,1,0])
@@ -166,7 +168,9 @@ def native_pixels(directory, filename="linear.rgba16f"):
     return values
 
 
-def capture(output, profile, allow_dirty, suite="analytic"):
+def capture(output, profile, allow_dirty, suite="analytic", pixel_grid=1):
+    if pixel_grid not in (1, 8) or (pixel_grid != 1 and suite == "analytic"):
+        raise ValueError("capture supports point controls or High compiled/motion box filter")
     identity = {"analytic":ID, "compiled":ENGINE_ID, "motion":MOTION_ID}[suite]
     cases = cases_for(identity)
     source = source_state(ROOT)
@@ -183,7 +187,9 @@ def capture(output, profile, allow_dirty, suite="analytic"):
                    and m.get("target",{}).get("name")=="plume" and m.get("executable")]
     if len(executables) != 1: raise ValueError("one native plume test executable required")
     binary = Path(executables[0]); binary_hash = sha256(binary)
-    command = [str(binary),{ID:"frozen_plume_volume_reference",ENGINE_ID:"frozen_compiled_plume_reference",MOTION_ID:"frozen_curved_plume_reference"}[identity],"--ignored","--nocapture","--test-threads","1"]
+    test_name = {ID:"frozen_plume_volume_reference",ENGINE_ID:"frozen_compiled_plume_reference",MOTION_ID:"frozen_curved_plume_reference"}[identity]
+    if pixel_grid == 8: test_name = test_name.replace("frozen_", "frozen_filtered_", 1)
+    command = [str(binary),test_name,"--ignored","--nocapture","--test-threads","1"]
     import os
     env = {**os.environ,"THESSA_BENCH_OUTPUT":str(output/"native")}
     with (output/"native.log").open("w") as log:
@@ -233,10 +239,11 @@ def load_inputs(directory):
     return record
 
 
-def cycles(directory, output, samples):
+def cycles(directory, output, samples, pixel_filter="BLACKMAN_HARRIS"):
     import bpy
     from mathutils import Matrix
 
+    if pixel_filter not in ("BLACKMAN_HARRIS", "BOX"): raise ValueError("unsupported pixel filter")
     if not 1 <= samples <= 2048: raise ValueError("samples must be in 1..2048")
     directory = directory.resolve(); record = load_inputs(directory)
     identity = sha256(directory/"capture.json"); source = source_state(ROOT)
@@ -247,6 +254,8 @@ def cycles(directory, output, samples):
         destination = output/case; destination.mkdir()
         bpy.ops.wm.read_factory_settings(use_empty=True)
         scene = bpy.context.scene; scene.render.engine = "CYCLES"; scene.cycles.device = "CPU"
+        scene.cycles.pixel_filter_type = pixel_filter
+        scene.cycles.filter_width = 1.0 if pixel_filter == "BOX" else 1.5
         scene.cycles.samples = samples; scene.cycles.seed = 0; scene.cycles.use_animated_seed = False
         scene.cycles.use_denoising = False; scene.cycles.use_adaptive_sampling = False
         scene.cycles.max_bounces = 2; scene.cycles.volume_bounces = 0
@@ -415,7 +424,7 @@ def cycles(directory, output, samples):
         raise ValueError("adapter source or native inputs changed during comparison")
     report={"id":record["id"],"engine":{"name":"Blender/Cycles","version":bpy.app.version_string,"build_hash":bpy.app.build_hash.decode()},
             "source":source,"tool_sha256":sha256(Path(__file__)),"native_capture_sha256":identity,"native_source":record["source"],
-            "settings":{"device":"CPU","samples":samples,"seed":0,"volume_step_rate":0.1,"volume_max_steps":4096,"volume_biased":False,"scattering":0,
+            "settings":{"device":"CPU","samples":samples,"pixel_filter":pixel_filter,"filter_width":scene.cycles.filter_width,"seed":0,"volume_step_rate":0.1,"volume_max_steps":4096,"volume_biased":False,"scattering":0,
                         "volume_ray_start":"native optical camera (t0=0); Cycles minimum clip_start=1e-6 m, not opaque projection near=0.1 m",
                         "alpha_comparison":"RGB only; Cycles opaque film alpha is not transmittance","display":"shared Reinhard/sRGB, gain=1; native raster vs Cycles pixel reconstruction"},
             "cases":reports,"acceptance":{"physical":"frozen field transport only; model-generated engine cases are not optical calibration","visual":"not evaluated","performance":"not comparable","temporal":"not evaluated"}}
@@ -429,6 +438,8 @@ if __name__=="__main__":
     native.add_argument("--profile",choices=("dev","release"),default="dev");native.add_argument("--allow-dirty",action="store_true");native.add_argument("--suite",choices=("analytic","compiled","motion"),default="analytic")
     external=commands.add_parser("cycles");external.add_argument("capture",type=Path);external.add_argument("--output",type=Path,required=True)
     external.add_argument("--samples",type=int,default=256)
+    external.add_argument("--pixel-filter",choices=("BLACKMAN_HARRIS","BOX"),default="BLACKMAN_HARRIS")
+    native.add_argument("--pixel-grid",choices=(1,8),type=int,default=1)
     args=parser.parse_args(sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else None)
-    if args.command=="capture":capture(args.output,args.profile,args.allow_dirty,args.suite)
-    else:cycles(args.capture,args.output,args.samples)
+    if args.command=="capture":capture(args.output,args.profile,args.allow_dirty,args.suite,args.pixel_grid)
+    else:cycles(args.capture,args.output,args.samples,args.pixel_filter)

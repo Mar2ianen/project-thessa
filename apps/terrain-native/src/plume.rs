@@ -243,6 +243,11 @@ impl Cache {
             Arc::from([])
         };
         Some(PlumeFrame::Volume(VolumeDraw {
+            pixel_grid: if settings.plume_quality == Quality::High {
+                8
+            } else {
+                4
+            },
             radial_reference: (nozzle_rotation * DVec3::X).as_vec3().to_array(),
             centerline,
             origin_len: nozzle.extend(field.profile.length_m as f32).to_array(),
@@ -441,6 +446,7 @@ mod tests {
             panic!()
         };
         assert_eq!((a.animation[0], b.animation[0]), (8.0, 14.0));
+        assert_eq!((a.pixel_grid, b.pixel_grid), (4, 8));
         assert_eq!(a.animation[1], 0.0);
         assert!(!b.diamonds);
         settings.plume_quality = Quality::Low;
@@ -619,6 +625,7 @@ mod tests {
                 "craft_rotation_xyzw":craft.to_array(),"camera_m":camera.to_array(),
                 "world_from_view":view.world_from_view.to_cols_array(),"origin_len":draw.origin_len,
                 "centerline":&*draw.centerline,"radial_reference":draw.radial_reference,
+                "pixel_filter":"adaptive-box-v1","pixel_grid":draw.pixel_grid,
                     "axis_radius":draw.axis_radius,"animation":draw.animation,"diamonds":draw.diamonds,
                     "shock_cells":draw.shock_cells,"tail_dissolve":draw.tail_dissolve,"clip_from_view":view.clip_from_view.to_cols_array()}),
             );

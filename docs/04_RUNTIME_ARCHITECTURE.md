@@ -398,3 +398,12 @@ gamma. Mean profiles use quadratic axial coordinates with physical linear
 interpolation. Motion/profile publications retain their existing owners, and
 physical state remains read-only. [Doc 106](106_SPATIAL_SHOCK_FIELD.md) records
 field semantics, quality limits and the unresolved radiometric lighting contract.
+
+
+Native plume finite-pixel sampling is a renderer representation policy under
+resolved quality, not semantic gas state. Medium/High cap compression grids
+at 4/8 per axis, smooth skirts at 2, and resolved detail at 1. Subray radiance
+and opacity are averaged after transport. The grid occupies existing uniform
+padding; Draw stays 112 bytes and Frame 160 bytes. No simulation, wire, clock,
+force, TAA-default or global render-mode change is required. See
+[doc 107](107_PLUME_PIXEL_FOOTPRINT.md) for accuracy, cost and single-depth limits.

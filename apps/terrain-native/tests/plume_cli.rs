@@ -57,6 +57,14 @@ fn native_plume_tiers_render_without_mutating_flight_or_opening_audio() {
             "march_step_limit={}",
             if steps > 0 { 64 } else { 0 }
         )));
+        assert!(error.contains(&format!(
+            "pixel_ray_limit={}",
+            match name {
+                "medium" => 16,
+                "high" => 64,
+                _ => 0,
+            }
+        )));
         let stdout = String::from_utf8_lossy(&output.stdout);
         let state = stdout
             .lines()

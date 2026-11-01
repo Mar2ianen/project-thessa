@@ -6,7 +6,8 @@ and Medium/High volume consumer. The native consumer reads the actual axial
 stations and scene depth; native Medium/High also has a kinematic 3D centerline
 and nozzle-frame shell motion ([doc 105](105_PLUME_3D_MOTION.md)). Spatial compression
 cells, quadratic mean stations, stable core/animated skirt and bounded
-shock-aware sampling are described in [doc 106](106_SPATIAL_SHOCK_FIELD.md). Only the legacy
+shock-aware sampling are described in [doc 106](106_SPATIAL_SHOCK_FIELD.md).
+Native finite-pixel filtering is described in [doc 107](107_PLUME_PIXEL_FOOTPRINT.md). Only the legacy
 client has a field-derived nozzle light.
 Wiring live compiled engine/nozzle state into the client, adaptive residual
 rendering, and ray-traced lighting remain future work. The rest of this document
@@ -552,7 +553,7 @@ key replaces the retained adapter's saturating `p / (.02*p+50)` key. Rendering
 never feeds back into flight or creates a simulation clock.
 
 Low uses the retained 32x256 sRGB bake on a single-wound, 32-sector unit cone;
-the game supplies its physical fallback scale. Medium/High interpolate station
+the game supplies its legacy fallback scale. Medium/High interpolate station
 radius, extinction and emission directly; spatial compression is independent
 of station resolution. A tangent-warped base budget and compression-support
 refinement resolve thin slices of the long bound; integration always uses
@@ -568,8 +569,9 @@ terrain/mesh and sky before display mapping. Opaque depth truncates rays even
 at hits inside a plume. Disabled settings clear the producer and release the
 GPU consumer; absent sources never allocate it. An inactive retained consumer
 submits no pass or uploads. There are no timestamp queries outside opt-in
-measurement. Resource bounds per allocated consumer are two pipelines,
-160-byte camera + 80-byte draw buffers, a 2048-byte station buffer, a 32 KiB
+measurement. Resource bounds per allocated consumer are three pipelines,
+160-byte camera + 112-byte draw buffers, a 2048-byte station buffer, a 528-byte
+centerline buffer, a 32 KiB
 impostor and unit-cone vertices. Counters report submitted draws, march budget
 and frame/profile/texture upload bytes, not visible-pixel counts or GPU times.
 The headless diagnostic prints them as `native_plume`.
@@ -683,3 +685,22 @@ throttle multiplier is removed; `jet_kinetic_power_w` separately provides
 historical `radiant_power` proxy omits radial/shock integration and is not a
 valid radiometric volume integral or light-sampling PDF. Native RT lighting
 still needs a declared emission convention and integration of this same field.
+
+
+[Doc 107](107_PLUME_PIXEL_FOOTPRINT.md) adds spatial box filtering to native
+Medium/High without history or a global renderer-mode change. Projected feature
+size selects one ray for resolved detail, at most 2 by 2 for the smooth skirt,
+and at most 4 by 4 / 8 by 8 for unresolved compression sheets. Each subray
+transports the existing medium separately before radiance/opacity averaging.
+A local Gaussian filtering envelope avoids refining distant empty capsule
+coverage; it does not clip the medium or skip its point transport. The grid
+uses existing draw padding, so the ABI sizes above are unchanged.
+`pixel_ray_limit` is a maximum work counter, not actual samples or GPU time.
+Single-sample opaque depth and capped local adaptation remain approximations.
+
+The frozen same-field Cycles BOX comparisons resolve most of the previously
+large thin-core image discrepancy. They do not calibrate gas optics or establish
+photo parity. Low's retained unit-range impostor is still too dim at daylight
+exposure; its darkening-only CLI contribution is an open fallback defect, not
+accepted photometric parity. Full CLI screenshots can also vary with terrain
+residency and are not used as blind pairs.

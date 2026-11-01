@@ -1220,11 +1220,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         let plume = renderer.plume_stats();
         eprintln!(
-            "native_plume allocated={} draws={} march_steps={} march_step_limit={} centerline_segments={} centerline_upload_bytes={} frame_upload_bytes={} profile_upload_bytes={} texture_upload_bytes={} nozzle_light=unavailable",
+            "native_plume allocated={} draws={} march_steps={} march_step_limit={} pixel_ray_limit={} centerline_segments={} centerline_upload_bytes={} frame_upload_bytes={} profile_upload_bytes={} texture_upload_bytes={} nozzle_light=unavailable",
             renderer.plume_allocated(),
             plume.draw_calls,
             plume.march_steps,
             plume.march_step_limit,
+            plume.pixel_ray_limit,
             plume.centerline_segments,
             plume.centerline_upload_bytes,
             plume.frame_upload_bytes,

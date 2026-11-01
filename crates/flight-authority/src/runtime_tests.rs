@@ -170,6 +170,77 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
 }
 
 #[test]
+fn accepted_nozzle_outlets_follow_burn_and_manual_transfer_com_frames() {
+    let (ephemeris, starter) = fixture();
+    let mut vehicle = vehicle_with_resource_test_rocket(&starter.vehicle, [1.0, 0.0, 0.0]);
+    vehicle.mass_properties = starter.vehicle.mass_properties;
+    vehicle.tanks[0].position_body_m = [2.0, 0.0, 0.5];
+    let mut receiver = vehicle.tanks[0].clone();
+    receiver.name = "receiver".into();
+    receiver.position_body_m = [-2.0, 0.0, -0.5];
+    receiver.initial_propellant_kg = Some(0.0);
+    vehicle.tanks.push(receiver);
+    vehicle.bake_engine_masses().unwrap();
+    vehicle.bake_tank_masses().unwrap();
+    let mut flight =
+        FlightAuthority::new_with_vehicle(&ephemeris, starter.reference_body, vehicle).unwrap();
+    let throat_before = DVec3::from_array(flight.vehicle.engines[0].position_body_m);
+    flight.set_engine_throttle("main", 1.0).unwrap();
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .unwrap();
+    let throat_after = DVec3::from_array(flight.vehicle.engines[0].position_body_m);
+    assert!(
+        (throat_after - throat_before).length() > 1e-8,
+        "fixture must move COM during the burn"
+    );
+    let (time, obs) = flight.last_propulsion_observation.as_ref().unwrap();
+    assert_eq!(*time, SimTime(flight.flight_time_s));
+    let accepted = obs.nozzles.as_ref().unwrap()[0];
+    assert!(
+        (DVec3::from_array(accepted.outlet.unwrap().position_body_m)
+            - (throat_after - DVec3::X * 0.9))
+            .length()
+            < 1e-12
+    );
+    assert_eq!(
+        accepted.state.unwrap().mass_flow_kg_s,
+        obs.engines[0].unwrap().point.mass_flow_kg_s
+    );
+    let outlet_before = DVec3::from_array(accepted.outlet.unwrap().position_body_m);
+    let world_before = flight.state.position_inertial_m
+        + flight.state.orientation_body_to_inertial * outlet_before;
+    let velocity_before = flight.state.velocity_inertial_mps
+        + flight.state.orientation_body_to_inertial
+            * flight.state.angular_velocity_body_rps.cross(outlet_before);
+    let time_before = flight.flight_time_s;
+    flight
+        .transfer_propellant("main-tank", "receiver", 1.0)
+        .unwrap();
+    let moved = flight
+        .last_propulsion_observation
+        .as_ref()
+        .unwrap()
+        .1
+        .nozzles
+        .as_ref()
+        .unwrap()[0];
+    let shift = DVec3::from_array(flight.vehicle.engines[0].position_body_m) - throat_after;
+    assert!(shift.length() > 1e-8);
+    let outlet_after = DVec3::from_array(moved.outlet.unwrap().position_body_m);
+    assert!((outlet_after - outlet_before - shift).length() < 1e-12);
+    assert_eq!(flight.flight_time_s, time_before);
+    assert_eq!(moved.state, accepted.state);
+    let world_after =
+        flight.state.position_inertial_m + flight.state.orientation_body_to_inertial * outlet_after;
+    let velocity_after = flight.state.velocity_inertial_mps
+        + flight.state.orientation_body_to_inertial
+            * flight.state.angular_velocity_body_rps.cross(outlet_after);
+    assert!((world_after - world_before).length() < 0.001);
+    assert!((velocity_after - velocity_before).length() < 1e-8);
+}
+
+#[test]
 fn rejected_endpoint_does_not_commit_propellant_or_mass_properties() {
     let (ephemeris, starter) = fixture();
     let vehicle = vehicle_with_resource_test_rocket(&starter.vehicle, [1.0, 0.0, 0.0]);

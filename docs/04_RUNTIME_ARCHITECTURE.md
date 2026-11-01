@@ -415,3 +415,12 @@ scale flicker and independent cone geometry are removed from the native
 producer. The backend's generic cone API and legacy client remain compatible.
 Field/profile/source state and pre-exposure conventions do not depend on
 quality. No new capability, simulation path or graphics setting is added.
+
+
+Accepted rocket observations now include definition-local nozzle IDs, optional
+physical circular outlets, gamma and already-allocated plume states (doc 109).
+The existing allocation remains the sole operating-point producer; authority
+publishes after acceptance and translates outlet coordinates with physical COM
+shifts, including manual transfers. Optional legacy metadata does not fabricate
+geometry. No wire fields are added: vehicle/frame-revision binding and native/
+remote consumption remain open F03 work.

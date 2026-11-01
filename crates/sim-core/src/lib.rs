@@ -134,3 +134,7 @@ pub use thessa_vehicle_core::{
 
 #[cfg(test)]
 mod tests;
+
+// Read-only accepted rocket-nozzle handoff.
+pub use thessa_propulsion::NozzleOutlet;
+pub use thessa_vehicle_core::{RocketNozzleId, RocketNozzleObservation};

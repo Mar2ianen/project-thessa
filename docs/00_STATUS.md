@@ -75,7 +75,13 @@ remain open; no full-scene performance win is inferred.
 chamber operating observations without another physics solve. Resource-limited,
 shutdown and partial-tick solid cases are covered, and the existing 32-engine
 release allocation fixture retains bit-identical physical outputs. Live F03
-nozzle/frame extraction and remote/render consumption remain open.
+owner/revision binding and remote/render consumption remain open.
+
+[Doc 109](109_ACCEPTED_NOZZLE_OUTLETS.md) retains authored solid/chamber nozzle
+geometry and accepted per-nozzle plume state, with postburn/manual-transfer COM
+rebasing and explicit unknown legacy outlets. The 32-engine allocation A/B
+retains bit-identical physics at +0.414 us median batch cost; native rendering
+and wire publication are unchanged. F03 remains partial.
 
 [Doc 102](102_COMPILED_PLUME_GALLERY.md) adds nine actual native/Cycles
 compiled-engine transport controls and fixes reference-camera near clipping.

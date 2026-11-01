@@ -27,8 +27,14 @@ Accepted liquid/solid and multi-chamber operating points are retained by the
 existing resource allocation and published at the accepted interval end by
 FlightAuthority. Partial-tick solids retain their active fraction; rejected
 ticks preserve the previous observation. This rocket-only readout does not
-change dynamics or add another solve. Live renderer/wire extraction remains
-open; see [doc 101](../101_ACCEPTED_PROPULSION_OBSERVATIONS.md).
+change dynamics or add another solve. Fresh compiled solids and system chambers
+now retain authored nozzle length (and chamber contour); legacy JSON missing
+those optional fields stays loadable with unknown outlet geometry. Accepted
+per-nozzle observations combine circular exits, gamma and already-allocated
+plume state, with outlet coordinates rebased through physical COM shifts.
+Live renderer/wire extraction remains open; see
+[doc 101](../101_ACCEPTED_PROPULSION_OBSERVATIONS.md) and
+[doc 109](../109_ACCEPTED_NOZZLE_OUTLETS.md).
 
 ## 1. Design goal
 

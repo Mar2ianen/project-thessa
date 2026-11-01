@@ -659,9 +659,13 @@ light.
 
 [Doc 101](101_ACCEPTED_PROPULSION_OBSERVATIONS.md) retains the actual installed
 liquid/solid/chamber points and publishes them only after a tick is accepted.
-This is read-only source data, not another propulsion solve. The native fixed
-engine deck remains provisional: accepted nozzle poses/frame revisions, remote
-transport and multi-nozzle consumption are still required before F03 is done.
+This is read-only source data, not another propulsion solve.
+[Doc 109](109_ACCEPTED_NOZZLE_OUTLETS.md) now retains authored circular outlets,
+physical gamma and already-allocated plume state, rebasing outlet positions
+with postburn/manual-transfer COM changes. Legacy/annular geometry remains
+explicitly unavailable. The native fixed engine deck remains provisional:
+owner/frame-revision binding, remote transport and multi-nozzle consumption
+are still required before F03 is done.
 Already-allocated flow must not receive the requested throttle a second time.
 
 [Doc 102](102_COMPILED_PLUME_GALLERY.md) adds nine frozen compiled-engine

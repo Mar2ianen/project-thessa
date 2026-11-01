@@ -29,6 +29,25 @@ pub struct EngineOperatingSample {
     pub active_fraction: f64,
 }
 
+/// Definition-local identity; consumers also bind the owning vehicle/frame epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RocketNozzleId {
+    Engine(usize),
+    Chamber { system: usize, chamber: usize },
+}
+
+/// One nozzle during an accepted physical interval, not an endpoint burn promise.
+/// Geometry is None for legacy/unsupported exits; state is None for inactive solids.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RocketNozzleObservation {
+    pub id: RocketNozzleId,
+    pub outlet: Option<crate::NozzleOutlet>,
+    pub gamma: f64,
+    pub state: Option<crate::EnginePlumeState>,
+    /// Fraction of the interval represented by state; never a second throttle.
+    pub active_fraction: f64,
+}
+
 /// Read-only outputs of the same liquid/solid/chamber solves used for dynamics.
 /// Slots follow the installed definition. A solid slot is absent before
 /// ignition/after burnout; liquid off points retain their actual zero flow.
@@ -39,6 +58,28 @@ pub struct VehiclePropulsionObservation {
     pub duration_s: f64,
     pub engines: Vec<Option<EngineOperatingSample>>,
     pub systems: Vec<crate::SystemOperatingPoint>,
+    /// Definition-ordered engines, then system chambers. Old observations can
+    /// deserialize as unknown; Some(empty) explicitly means no rocket nozzles.
+    #[serde(default)]
+    pub nozzles: Option<Vec<RocketNozzleObservation>>,
+}
+
+impl VehiclePropulsionObservation {
+    /// Rebase accepted/tentative outlet metadata with the same physical COM
+    /// translation as the vehicle. Thermal/flow samples and axes are unchanged.
+    pub fn shift_nozzle_frame(&mut self, shift: DVec3) {
+        if let Some(nozzles) = &mut self.nozzles {
+            for nozzle in nozzles {
+                if let Some(mut outlet) = nozzle.outlet {
+                    let position = DVec3::from_array(outlet.position_body_m) + shift;
+                    nozzle.outlet = position.is_finite().then(|| {
+                        outlet.position_body_m = position.to_array();
+                        outlet
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Live, server-authoritative resource state for one compiled vehicle.
@@ -1346,6 +1387,43 @@ impl VehicleDefinition {
                 .any(|consumer| consumer.scale < 1.0 - 1.0e-10);
             plan.consumers
         };
+        let mut nozzles = Vec::with_capacity(
+            self.engines.len()
+                + self
+                    .systems
+                    .iter()
+                    .map(|s| s.system.chambers.len())
+                    .sum::<usize>(),
+        );
+        for (index, (mount, sample)) in self.engines.iter().zip(&engine_points).enumerate() {
+            nozzles.push(RocketNozzleObservation {
+                id: RocketNozzleId::Engine(index),
+                outlet: mount.nozzle_outlet(),
+                gamma: match &mount.engine {
+                    CompiledEngine::Liquid(e) => e.gamma,
+                    CompiledEngine::Solid(e) => e.gamma,
+                },
+                state: sample.as_ref().map(|s| mount.engine.plume_state(&s.point)),
+                active_fraction: sample.as_ref().map_or(0.0, |s| s.active_fraction),
+            });
+        }
+        for (system, (mount, point)) in self.systems.iter().zip(&system_points).enumerate() {
+            for (chamber, (geometry, state)) in mount
+                .system
+                .chambers
+                .iter()
+                .zip(mount.system.plume_states(point))
+                .enumerate()
+            {
+                nozzles.push(RocketNozzleObservation {
+                    id: RocketNozzleId::Chamber { system, chamber },
+                    outlet: geometry.nozzle_outlet(),
+                    gamma: mount.system.gamma,
+                    state: Some(state),
+                    active_fraction: 1.0,
+                });
+            }
+        }
         let tank_draw_kg: f64 = tank_draw.iter().sum();
         Ok(VehiclePropulsionAllocation {
             force_body_n: force,
@@ -1362,6 +1440,7 @@ impl VehicleDefinition {
                 duration_s: dt_s,
                 engines: engine_points,
                 systems: system_points,
+                nozzles: Some(nozzles),
             },
             additional_resource_consumers,
         })
@@ -2859,6 +2938,80 @@ mod tests {
     }
 
     #[test]
+    fn nozzle_outlets_use_authored_geometry_and_body_axes_not_asset_scale() {
+        let mount = EngineMount {
+            name: "probe".into(),
+            engine: compiled_engine(),
+            position_body_m: [2.0, -3.0, 4.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        let outlet = mount.nozzle_outlet().unwrap();
+        assert_eq!(outlet.position_body_m, [1.1, -3.0, 4.0]);
+        assert_eq!(outlet.exhaust_axis_body, [-1.0, 0.0, 0.0]);
+        let q = glam::DQuat::from_rotation_y(0.73) * glam::DQuat::from_rotation_z(-1.21);
+        let translation = DVec3::new(10.0, 20.0, -30.0);
+        let mut transformed = mount.clone();
+        transformed.position_body_m =
+            (q * DVec3::from_array(mount.position_body_m) + translation).to_array();
+        transformed.thrust_axis_body = (q * DVec3::X).to_array();
+        let actual = transformed.nozzle_outlet().unwrap();
+        let expected = q * DVec3::from_array(outlet.position_body_m) + translation;
+        assert!((DVec3::from_array(actual.position_body_m) - expected).length() < 1e-12);
+        assert!((DVec3::from_array(actual.exhaust_axis_body) - q * DVec3::NEG_X).length() < 1e-12);
+        assert_eq!(actual.radius_m, outlet.radius_m);
+        let CompiledEngine::Liquid(ref mut e) = transformed.engine else {
+            panic!()
+        };
+        e.contour = NozzleContour::Aerospike;
+        assert!(transformed.nozzle_outlet().is_none());
+        let CompiledEngine::Liquid(ref mut e) = transformed.engine else {
+            panic!()
+        };
+        e.contour = NozzleContour::Bell;
+        e.nozzle_length_m = f64::NAN;
+        assert!(transformed.nozzle_outlet().is_none());
+    }
+
+    #[test]
+    fn old_observations_remain_unknown_and_metadata_rebases_without_recomputing_flow() {
+        let v = vehicle(
+            vec![tank(
+                "fuel",
+                TankResource::Pair(Propellant::LoxRp1),
+                800.0,
+                1.0,
+                DVec3::ZERO,
+            )],
+            1,
+        );
+        let plan = v
+            .plan_propulsion_step(&v.initial_resource_state(), &[0.5], &[], 101325.0, 0.1)
+            .unwrap();
+        let original = plan.observation;
+        let mut rebased = original.clone();
+        let shift = DVec3::new(0.125, -0.25, 0.5);
+        rebased.shift_nozzle_frame(shift);
+        assert_eq!(rebased.engines, original.engines);
+        assert_eq!(rebased.systems, original.systems);
+        let a = original.nozzles.as_ref().unwrap()[0];
+        let b = rebased.nozzles.as_ref().unwrap()[0];
+        assert_eq!(a.state, b.state);
+        assert_eq!(a.gamma, b.gamma);
+        assert_eq!(a.id, b.id);
+        assert_eq!(
+            DVec3::from_array(b.outlet.unwrap().position_body_m),
+            DVec3::from_array(a.outlet.unwrap().position_body_m) + shift
+        );
+        let mut json = serde_json::to_value(&original).unwrap();
+        json.as_object_mut().unwrap().remove("nozzles");
+        let legacy: VehiclePropulsionObservation = serde_json::from_value(json).unwrap();
+        assert!(legacy.nozzles.is_none());
+        assert_eq!(legacy.engines, original.engines);
+        rebased.shift_nozzle_frame(DVec3::splat(f64::NAN));
+        assert!(rebased.nozzles.unwrap()[0].outlet.is_none());
+    }
+
+    #[test]
     fn generic_multireactant_consumers_share_one_scale_and_update_mass_frame() {
         let capacity_kg = std::f64::consts::PI / 6.0 * 0.5_f64.powi(3) * 1_000.0;
         let deuterium = tank(
@@ -3770,6 +3923,18 @@ mod tests {
         assert_eq!(allocation.observation.duration_s, dt_s);
         assert_eq!(allocation.observation.engines[0].unwrap().point, point_a);
         assert_eq!(allocation.observation.engines[1].unwrap().point, point_b);
+        let nozzles = allocation.observation.nozzles.as_ref().unwrap();
+        assert_eq!(nozzles.len(), 2);
+        for (i, p) in [point_a, point_b].iter().enumerate() {
+            assert_eq!(nozzles[i].id, RocketNozzleId::Engine(i));
+            assert_eq!(
+                nozzles[i].state,
+                Some(vehicle.engines[i].engine.plume_state(p))
+            );
+            assert_eq!(nozzles[i].outlet.unwrap().position_body_m, [-0.9, 0.0, 0.0]);
+            assert_eq!(nozzles[i].active_fraction, 1.0);
+        }
+
         assert_eq!(
             allocation.observation.engines[0].unwrap().active_fraction,
             1.0
@@ -3852,6 +4017,42 @@ mod tests {
             .unwrap();
         assert!(plan.observation.engines.is_empty());
         assert_eq!(plan.observation.systems, vec![point]);
+        let nozzles = plan.observation.nozzles.as_ref().unwrap();
+        assert_eq!(nozzles.len(), 2);
+        for (i, nozzle) in nozzles.iter().enumerate() {
+            let chamber = &vehicle.systems[0].system.chambers[i];
+            assert_eq!(chamber.nozzle_length_m, Some(0.9));
+            assert_eq!(chamber.contour, Some(NozzleContour::Bell));
+            assert_eq!(
+                nozzle.id,
+                RocketNozzleId::Chamber {
+                    system: 0,
+                    chamber: i
+                }
+            );
+            assert_eq!(
+                nozzle.state.unwrap().mass_flow_kg_s,
+                plan.observation.systems[0].chambers[i].mass_flow_kg_s
+            );
+            assert_eq!(nozzle.gamma, vehicle.systems[0].system.gamma);
+            let mut expected = chamber.position_body_m;
+            expected[0] -= 0.9;
+            assert_eq!(nozzle.outlet.unwrap().position_body_m, expected);
+        }
+        let mut legacy = serde_json::to_value(&vehicle.systems[0].system).unwrap();
+        for chamber in legacy["chambers"].as_array_mut().unwrap() {
+            chamber.as_object_mut().unwrap().remove("nozzle_length_m");
+            chamber.as_object_mut().unwrap().remove("contour");
+        }
+        let legacy: crate::CompiledPropulsionSystem = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.chambers.iter().all(|c| c.nozzle_outlet().is_none()));
+        assert_eq!(
+            legacy
+                .operating_point(&plan.system_chamber_throttles[0], 101325.0)
+                .unwrap(),
+            plan.observation.systems[0]
+        );
+
         assert!(
             plan.observation.systems[0].chambers[0].mass_flow_kg_s
                 > plan.observation.systems[0].chambers[1].mass_flow_kg_s
@@ -3868,6 +4069,15 @@ mod tests {
                 .all(|p| p.mass_flow_kg_s == 0.0)
         );
         assert_eq!(starved.force_body_n, DVec3::ZERO);
+        assert!(
+            starved
+                .observation
+                .nozzles
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|n| n.state.unwrap().mass_flow_kg_s == 0.0)
+        );
     }
 
     #[test]
@@ -4220,10 +4430,32 @@ mod tests {
         let mut state = vehicle.initial_resource_state();
         let initial_mass = vehicle.mass_properties.mass_kg;
         let dt_s = motor.burn_time_s / 100.0;
+        assert_eq!(motor.nozzle_length_m, Some(0.9));
+        let mut legacy = serde_json::to_value(&motor).unwrap();
+        legacy.as_object_mut().unwrap().remove("nozzle_length_m");
+        let legacy: crate::CompiledSolid = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.nozzle_length_m.is_none());
+        let mut legacy_mount = vehicle.engines[0].clone();
+        legacy_mount.engine = CompiledEngine::Solid(legacy);
+        assert!(legacy_mount.nozzle_outlet().is_none());
+        legacy_mount.validate().unwrap();
+        assert_eq!(
+            legacy_mount.engine.operating_point(1.0, 0.0, dt_s).unwrap(),
+            vehicle.engines[0]
+                .engine
+                .operating_point(1.0, 0.0, dt_s)
+                .unwrap()
+        );
+
         let cold = vehicle
             .plan_propulsion_step(&state, &[0.0], &[], 0.0, dt_s)
             .unwrap();
         assert_eq!(cold.observation.engines, vec![None]);
+        let nozzle = cold.observation.nozzles.as_ref().unwrap()[0];
+        assert!(nozzle.outlet.is_some());
+        assert!(nozzle.state.is_none());
+        assert_eq!(nozzle.active_fraction, 0.0);
+
         let allocation = vehicle
             .plan_propulsion_step(&state, &[1.0], &[], 0.0, dt_s)
             .expect("plan solid burn");
@@ -4252,6 +4484,13 @@ mod tests {
             .plan_propulsion_step(&state, &[0.0], &[], 0.0, dt_s)
             .unwrap();
         let sample = tail.observation.engines[0].unwrap();
+        let nozzle = tail.observation.nozzles.as_ref().unwrap()[0];
+        assert_eq!(
+            nozzle.state,
+            Some(vehicle.engines[0].engine.plume_state(&sample.point))
+        );
+        assert_eq!(nozzle.active_fraction, sample.active_fraction);
+
         assert!((sample.active_fraction - 0.25).abs() < 1e-10);
         let midpoint = 0.5 * (state.solid_burn_time_s[0] + tail.solid_burn_time_s[0]);
         assert_eq!(

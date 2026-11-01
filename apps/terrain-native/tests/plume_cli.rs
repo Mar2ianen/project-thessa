@@ -11,12 +11,12 @@ fn native_plume_tiers_render_without_mutating_flight_or_opening_audio() {
     let mut images = Vec::new();
     for (name, enabled, tier, steps) in [
         ("off", false, "medium", 0),
-        ("low", true, "low", 0),
+        ("low", true, "low", 6),
         ("medium", true, "medium", 8),
         ("high", true, "high", 14),
     ] {
         let graphics = scratch.join(format!("{name}.toml"));
-        std::fs::write(&graphics, format!("version=1\npreset=\"custom\"\n[renderer]\nray_tracing=\"off\"\nhdr=false\n[atmosphere]\nenabled=false\nsky_dome=false\nstars=false\n[upper_atmosphere]\naurora=false\nairglow=false\n[clouds]\nenabled=false\n[ocean]\nenabled=false\n[shadows]\nenabled=false\n[engine_plume]\nenabled={enabled}\nquality=\"{tier}\"\nflicker=false\n")).unwrap();
+        std::fs::write(&graphics, format!("version=1\npreset=\"custom\"\n[renderer]\nray_tracing=\"off\"\nhdr=false\nexposure_ev100=13.0\n[atmosphere]\nenabled=false\nsky_dome=false\nstars=false\n[upper_atmosphere]\naurora=false\nairglow=false\n[clouds]\nenabled=false\n[ocean]\nenabled=false\n[shadows]\nenabled=false\n[engine_plume]\nenabled={enabled}\nquality=\"{tier}\"\nflicker=false\n")).unwrap();
         let image = scratch.join(format!("{name}.png"));
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_thessa-terrain-native"))
             .current_dir(root.join("../.."))
@@ -60,6 +60,7 @@ fn native_plume_tiers_render_without_mutating_flight_or_opening_audio() {
         assert!(error.contains(&format!(
             "pixel_ray_limit={}",
             match name {
+                "low" => 1,
                 "medium" => 16,
                 "high" => 64,
                 _ => 0,
@@ -87,13 +88,17 @@ fn native_plume_tiers_render_without_mutating_flight_or_opening_audio() {
         images.push(pixels);
     }
     for (i, name) in ["low", "medium", "high"].into_iter().enumerate() {
-        let changed = images[0]
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(images[i + 1].as_chunks::<4>().0)
-            .filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(a, b)| a.abs_diff(*b) > 4))
-            .count();
+        // Fixed nozzle ROI and positive emission: a darkening-only impostor
+        // or unrelated terrain residency must not satisfy this regression.
+        let mut changed = 0;
+        for y in 60..90 {
+            for x in 50..115 {
+                let index = (y * 320 + x) * 4;
+                if images[i + 1][index + 2] > images[0][index + 2].saturating_add(15) {
+                    changed += 1;
+                }
+            }
+        }
         assert!(
             changed > 15,
             "{name}: no visible plume contribution ({changed} pixels)"

@@ -1,9 +1,9 @@
 # Engine Plume Rendering Architecture
 
 Status: partially implemented. `thessa-plume-core` provides the backend-neutral
-analytic profile/optics/medium model. Both clients have a Low-quality impostor
-and Medium/High volume consumer. The native consumer reads the actual axial
-stations and scene depth; native Medium/High also has a kinematic 3D centerline
+analytic profile/optics/medium model. Native Low/Medium/High use the same volume
+with 6/8/14 base steps; the legacy client retains its Low impostor and
+Medium/High volume. Native reads actual axial stations and scene depth, with a kinematic 3D centerline
 and nozzle-frame shell motion ([doc 105](105_PLUME_3D_MOTION.md)). Spatial compression
 cells, quadratic mean stations, stable core/animated skirt and bounded
 shock-aware sampling are described in [doc 106](106_SPATIAL_SHOCK_FIELD.md).
@@ -14,8 +14,9 @@ rendering, and ray-traced lighting remain future work. The rest of this document
 records the architecture and acceptance targets for those follow-ups.
 
 The original CPU-baked cone from commit `33e58cd25abf82c17ffc2467edc0ebed23274dd2`
-(`feat/atmospheric-beauty`) remains as the Low-quality fallback, not the default
-representation for every quality level.
+(`feat/atmospheric-beauty`) remains as the legacy client Low fallback. Native
+Low now shares the optical volume; [doc 108](108_NATIVE_LOW_PLUME_FIELD.md)
+records the daylight correction, cost and remaining Low sampling error.
 
 The active plume/planet fidelity and performance backlog, including Large CBT
 whole-system acceptance, is [doc 98](98_GRAPHICS_PARITY_ROADMAP.md).
@@ -25,9 +26,9 @@ whole-system acceptance, is [doc 98](98_GRAPHICS_PARITY_ROADMAP.md).
 The original engine-plume implementation was a CPU-baked `32x256` RGBA texture
 mapped onto a Bevy cone, with fixed Mach-diamond bands, throttle-driven cone
 scale, flicker, emissive color, and a point light. That path remains as the
-Low-quality fallback. Medium/High now use the analytic plume profile and a
-camera-facing volume ribbon whose shader marches view rays through the plume
-cross-section.
+legacy Low-quality fallback. All native qualities and legacy Medium/High use
+the analytic plume profile. Native marches view rays through its bounded 3D
+field; the legacy client uses a cylindrical billboard for volume coverage.
 
 The shipped volume path still reads provisional rocket/nozzle values and an
 X-15 nozzle offset from the client adapter; it is not yet driven by compiled
@@ -71,7 +72,7 @@ The plume renderer is not authoritative propulsion physics. Thrust, mass flow, t
 The backend-neutral plume core is implemented in `crates/plume-core`. It
 provides `PlumeSource`, `PlumeEnvironment`, analytic axial profiles, optical
 materials, and CPU medium/ray integration. Native source extraction and the
-GPL Low optical bake live in `apps/terrain-native/src/plume.rs`; the MIT
+GPL native producer live in `apps/terrain-native/src/plume.rs`; the MIT
 GPU transport/integrator lives in `crates/render-wgpu/src/plume.rs` and its
 WGSL files. The retained Bevy adapter is `apps/client/src/plume.rs`, with
 `assets/shaders/plume_volume.wesl`. This remains a thinner arrangement than the fuller optional
@@ -284,7 +285,7 @@ A short Beer-Lambert integration is sufficient for the first implementation. The
 
 The shipped tiers use representation budgets, not different physical models:
 
-- Low: baked cone impostor;
+- Native Low: the same field-volume integration, 6 base steps, one pixel ray and up to 9 centerline points; legacy Low retains the baked cone;
 - Medium: field-volume integration, 8 steps per merged ray interval, up to 9 native centerline points;
 - High: the same field-volume integration, 14 steps per interval, up to 17 native centerline points;
 - future tiers: adaptive residual budget and ray-traced lighting/transmittance.
@@ -293,7 +294,9 @@ Native coverage is a conservative projected box around the straight cylinder
 or swept centerline, with full-screen coverage for near-plane/inside crossings.
 Curved ray intervals come from rotation-invariant capsules and are merged before
 integration; the fixed step budget applies per distinct interval, giving at most
-64/224 cells for native Medium/High's 8/16 segments. The legacy consumer uses a
+48/64/224 base cells per ray for native Low/Medium/High's 8/8/16 segments.
+Compression refinement can reach 64 cells per interval (up to 512/512/1024
+per ray), before Medium/High spatial subrays. The legacy consumer uses a
 cylindrical billboard. The current Medium/High path does not yet traverse RCBT residuals or use
 temporal reuse/jitter. Those remain architecture targets.
 
@@ -320,7 +323,8 @@ Nonlinear Mach-reflection topology and thermochemical calibration remain open.
 Historical axial publications and the retained Bevy shader keep the circular
 J0 modulation described in [doc 104](104_KSA_AUDIT_AND_RADIAL_SHOCK.md). The
 legacy volume has not acquired the native spatial field, delayed mixing law,
-or motion consumer. Low remains the documented impostor fallback.
+or motion consumer. Legacy Low remains an impostor; native Low uses the
+same medium and motion with a reduced budget (doc 108).
 
 ## 10. Turbulence and advection
 
@@ -444,16 +448,16 @@ Physical state such as pressure ratio, shock formation, nozzle expansion, conden
 
 Original staged plan (completed items and remaining work):
 
-1. **Done:** retain the cone impostor as the Low fallback.
+1. **Done:** retain the legacy cone fallback; native Low now consumes the same optical volume (doc 108).
 2. **Partial:** `thessa-plume-core` owns semantic nozzle/environment/profile
    types, while the client adapter still constructs provisional source data.
 3. **Partial:** native extraction uses explicit starter identity, not an entity
    name lookup. Remove the legacy lookup and both provisional nozzle offsets;
    extract live plume sources from compiled vehicle/engine state.
 4. **Done:** implement the analytic pressure-aware mean plume and axial profile.
-5. **Done:** add the Medium/High view-ray volume pass and keep the cone fallback.
-6. **Partial:** Medium/High shock modulation uses pressure/Mach-derived
-   spacing and amplitude; the Low impostor retains fixed texture bands.
+5. **Done:** add the view-ray volume pass, including native Low, and retain the legacy cone fallback.
+6. **Partial:** all native qualities and legacy Medium/High use pressure/Mach-derived
+   compression; the legacy Low impostor retains fixed texture bands.
 7. Add RCBT binary 3D topology with analytic-only leaves first.
 8. Add sparse `4x4x4` residual bricks and conservative node aggregates.
 9. Move turbulence/mixing-layer detail into advected residuals; remove whole-plume sine flicker from normal/high paths.
@@ -552,9 +556,10 @@ throttle / logarithmic approximately 2% pressure bands. The logarithmic pressure
 key replaces the retained adapter's saturating `p / (.02*p+50)` key. Rendering
 never feeds back into flight or creates a simulation clock.
 
-Low uses the retained 32x256 sRGB bake on a single-wound, 32-sector unit cone;
-the game supplies its legacy fallback scale. Medium/High interpolate station
-radius, extinction and emission directly; spatial compression is independent
+All native qualities interpolate station radius, extinction and emission
+directly; Low uses six base steps and one spatial ray. The legacy client and
+generic cone API retain the 32x256 bake; native no longer creates or uploads it.
+For the native field, spatial compression is independent
 of station resolution. A tangent-warped base budget and compression-support
 refinement resolve thin slices of the long bound; integration always uses
 each bin's physical path length. There is no hard radial skirt clip, averaged
@@ -700,7 +705,8 @@ Single-sample opaque depth and capped local adaptation remain approximations.
 
 The frozen same-field Cycles BOX comparisons resolve most of the previously
 large thin-core image discrepancy. They do not calibrate gas optics or establish
-photo parity. Low's retained unit-range impostor is still too dim at daylight
-exposure; its darkening-only CLI contribution is an open fallback defect, not
-accepted photometric parity. Full CLI screenshots can also vary with terrain
-residency and are not used as blind pairs.
+photo parity. Doc 107 identified native Low's darkening-only unit-range
+impostor. [Doc 108](108_NATIVE_LOW_PLUME_FIELD.md) replaces it with the shared
+volume at a smaller sample budget, verifies positive day/night emission and
+measures Low/Medium cost. Legacy Low photometric parity remains open. Full
+CLI screenshots can also vary with terrain residency and are not blind pairs.

@@ -46,11 +46,13 @@ def validate_scene(scene):
         raise ValueError("unknown radial shock model")
     if (scene["case"] not in cases or scene["extent"] != [129,129]
             or scene["units"] != "metres" or scene["exposure_gain"] != 1
-            or scene["steps"] != 14 or scene["erosion"] != 0 or scene["tail_dissolve"]
+            or scene["steps"] not in (6,14) or scene["erosion"] != 0 or scene["tail_dissolve"]
             or not scene["diamonds"]):
         raise ValueError("only frozen, unanimated volume controls are supported")
     if scene.get("pixel_filter", "adaptive-box-v1") != "adaptive-box-v1" or scene.get("pixel_grid", 1) not in (1, 2, 4, 8):
         raise ValueError("unknown pixel filter or unsupported grid")
+    if scene["steps"]==6 and (identity==ID or scene.get("pixel_grid",1)!=1):
+        raise ValueError("Low controls require compiled/motion field and point pixels")
     sampling=scene.get("axial_sampling","uniform-v1")
     if sampling not in ("uniform-v1","quadratic-v1"): raise ValueError("unknown axial sampling")
     cells=scene.get("shock_cells",[0,1,1,0])
@@ -168,8 +170,8 @@ def native_pixels(directory, filename="linear.rgba16f"):
     return values
 
 
-def capture(output, profile, allow_dirty, suite="analytic", pixel_grid=1):
-    if pixel_grid not in (1, 8) or (pixel_grid != 1 and suite == "analytic"):
+def capture(output, profile, allow_dirty, suite="analytic", pixel_grid=1, low=False):
+    if pixel_grid not in (1, 8) or (pixel_grid != 1 and suite == "analytic") or (low and (suite=="analytic" or pixel_grid!=1)):
         raise ValueError("capture supports point controls or High compiled/motion box filter")
     identity = {"analytic":ID, "compiled":ENGINE_ID, "motion":MOTION_ID}[suite]
     cases = cases_for(identity)
@@ -189,6 +191,7 @@ def capture(output, profile, allow_dirty, suite="analytic", pixel_grid=1):
     binary = Path(executables[0]); binary_hash = sha256(binary)
     test_name = {ID:"frozen_plume_volume_reference",ENGINE_ID:"frozen_compiled_plume_reference",MOTION_ID:"frozen_curved_plume_reference"}[identity]
     if pixel_grid == 8: test_name = test_name.replace("frozen_", "frozen_filtered_", 1)
+    if low: test_name = test_name.replace("frozen_", "frozen_low_", 1)
     command = [str(binary),test_name,"--ignored","--nocapture","--test-threads","1"]
     import os
     env = {**os.environ,"THESSA_BENCH_OUTPUT":str(output/"native")}
@@ -440,6 +443,7 @@ if __name__=="__main__":
     external.add_argument("--samples",type=int,default=256)
     external.add_argument("--pixel-filter",choices=("BLACKMAN_HARRIS","BOX"),default="BLACKMAN_HARRIS")
     native.add_argument("--pixel-grid",choices=(1,8),type=int,default=1)
+    native.add_argument("--low",action="store_true",help="six-step Low control; compiled/motion point pixels only")
     args=parser.parse_args(sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else None)
-    if args.command=="capture":capture(args.output,args.profile,args.allow_dirty,args.suite,args.pixel_grid)
+    if args.command=="capture":capture(args.output,args.profile,args.allow_dirty,args.suite,args.pixel_grid,args.low)
     else:cycles(args.capture,args.output,args.samples,args.pixel_filter)

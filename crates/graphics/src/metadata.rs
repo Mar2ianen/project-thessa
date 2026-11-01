@@ -782,7 +782,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: false,
-            description: "Low textured impostor; Medium/High integrate the same axial field with 8/14 samples and native opaque-depth clipping.",
+            description: "Native qualities share the optical volume; Low trades spatial/integration accuracy for cost. The legacy client retains its Low textured impostor.",
         },
         SettingMeta {
             path: "engine_plume.mach_diamonds",
@@ -804,7 +804,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: false,
             restart_required: false,
-            description: "Low cone flicker or Medium/High advected shell deformation; off keeps the native field representation steady.",
+            description: "Native advected shell deformation; the legacy Low cone retains scale flicker. Off keeps the native field representation steady.",
         },
         SettingMeta {
             path: "engine_plume.light",

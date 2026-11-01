@@ -262,7 +262,7 @@ The checked-in vertical slice currently contains:
         reflection consumers remain missing: **not** complete PBR/Bevy parity.
        Seasonal regressions use actual Thessa/Nereid/BC ephemerides: distant
        visible B, and A hidden by Thessa while B/C still light native terrain.
-      `[engine_plume]` now selects native Low impostor / Medium 8-step / High
+      `[engine_plume]` now selects native Low 6-step / Medium 8-step / High
       14-step actual-profile volume rendering with opaque-depth clipping and
       resource-free disable. The starter nozzle deck remains provisional;
       native nozzle lighting is explicitly unavailable ([doc 38](docs/38_ENGINE_PLUME_RENDERING.md)).
@@ -903,4 +903,11 @@ Cycles BOX reference; the curved control improves from 55.6% to 1.6%.
 Resolved controls retain point sampling. Fine grids target compression sheets;
 the smooth skirt has a cheaper budget. Pass cost and rejected over-refinement
 are documented separately from accuracy. TAA remains default-off. Photo parity,
-general temporal acceptance and Low's daylight brightness remain open.
+general temporal acceptance and legacy Low brightness remain open.
+
+[Native Low now shares the optical volume](docs/108_NATIVE_LOW_PLUME_FIELD.md)
+instead of a unit-range texture: 6 base steps, one pixel ray and the same
+pressure-dependent shape, absorption, photometric emission and 3D motion.
+Daylight emission is visible without an exposure-only gain. In the measured
+straight/curved controls it costs about 23–33% less than Medium; finer Medium/High
+sampling remains necessary for thin-feature and axial-view accuracy.

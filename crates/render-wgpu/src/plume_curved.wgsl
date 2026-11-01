@@ -99,10 +99,11 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
             intervals[merged - 1u].y = max(intervals[merged - 1u].y, intervals[j].y);
         } else { intervals[merged] = intervals[j]; merged += 1u; }
     }
-    let steps = u32(clamp(draw.controls.y, 1.0, 16.0));
+    let base_steps = u32(clamp(draw.controls.y, 1.0, 16.0));
     var transmission = 1.0; var rgb = vec3(0.0);
     for (var interval = 0u; interval < merged; interval += 1u) {
         let t0 = intervals[interval].x; let t1 = intervals[interval].y;
+        var steps = base_steps;
         var closest = (t0 + t1) * 0.5;
         var nearest2 = 1e30; var closest_z = 0.0;
         // Closest point between the view ray and each finite center segment.
@@ -119,7 +120,15 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
                 closest_z = mix(a.w,b.w,fraction);
             }
         }
-        let warp_radius = max(2.0*sample_station(closest_z).geometry.y,1e-4);
+        var warp_radius = max(2.0*sample_station(closest_z).geometry.y,1e-4);
+        if draw.flow.y > 0.0 && draw.shock_cells.x > 0.0 && draw.shock_cells.z > 1.0
+            && nearest2 < 1.44*draw.shock_cells.y*draw.shock_cells.y {
+            // Midpoint error scales as amplitude/N^2. Collisional
+        // contrast scales as C^2, so N scales with compression C.
+        let radial_budget = u32(clamp(ceil(draw.controls.y*draw.shock_cells.z),1.0,64.0));
+            steps = max(radial_budget,u32(clamp(ceil((t1-t0)/draw.shock_cells.x*8.0),1.0,64.0)));
+            warp_radius = min(warp_radius,draw.shock_cells.y);
+        }
         let angle0 = atan((t0-closest)/warp_radius);
         let angle1 = atan((t1-closest)/warp_radius);
         for (var i = 0u; i < steps; i += 1u) {
@@ -130,7 +139,8 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
             if !local.valid { continue; }
             let station = sample_station(local.z);
             let local_radius = max(station.geometry.y,1e-6);
-            var r = length(local.radial);
+            let core_r = length(local.radial);
+            var r = core_r;
             if draw.controls.w > 0.0 {
                 let u1 = transported_radial_reference(local.axis); let u2 = cross(local.axis,u1);
                 let az = atan2(dot(local.radial,u2),dot(local.radial,u1)+1e-6);
@@ -139,15 +149,18 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
                 r += n*draw.controls.w*local_radius*smoothstep(0.1,0.9,r/local_radius);
             }
             let u = abs(r)/local_radius;
-            var weight = (exp(-2.2*u*u)+0.18*exp(-0.7*u*u))*local.metric;
+            let core_u = core_r/local_radius;
+            var weight = (exp(-2.2*core_u*core_u)+0.18*exp(-0.7*u*u))*local.metric;
             if draw.flow.z > 0.0 { weight *= 1.0-smoothstep(0.70,1.0,local.z/draw.origin_len.w); }
             var shock = 1.0;
-            if draw.flow.y > 0.0 { shock = shock_multiplier(station.geometry.w,u); }
-            let extinction = max(station.geometry.z*weight*shock,0.0);
+            if draw.flow.y > 0.0 { shock = shock_multiplier(station.geometry.w,core_u); }
+            var cells = vec2(1.0);
+            if draw.flow.y > 0.0 { cells = spatial_shock(local.z,core_r,draw.shock_cells); }
+            let extinction = max(station.geometry.z*weight*shock*cells.x,0.0);
             let tau = extinction*dt; let absorb = exp(-tau);
             var emission_length = dt*(1.0-tau*(0.5-tau/6.0));
             if tau >= 0.01 { emission_length = (1.0-absorb)/extinction; }
-            rgb += transmission*max(station.emission.rgb*weight*shock,vec3(0.0))*emission_length;
+            rgb += transmission*max(station.emission.rgb*weight*shock*cells.y,vec3(0.0))*emission_length;
             transmission *= absorb;
         }
     }

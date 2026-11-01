@@ -24,6 +24,7 @@ fn volume(steps: f32) -> VolumeDraw {
         origin_len: [0.0, -2.0, -10.0, 4.0],
         axis_radius: [0.0, 1.0, 0.0, 1.6],
         animation: [steps, 0.0, 0.0, 0.0],
+        shock_cells: [0.0; 4],
         diamonds: true,
         tail_dissolve: false,
         profile: vec![
@@ -370,7 +371,9 @@ fn compiled_reference(curved: bool) {
         min_throttle: None,
         restartable: true,
     };
-    let engine = CompiledEngine::Liquid(spec.compile().unwrap());
+    let compiled = spec.compile().unwrap();
+    let gamma = compiled.gamma;
+    let engine = CompiledEngine::Liquid(compiled);
     let backend = Backend::bring_up().unwrap();
     let target = OffscreenTarget::new(&backend, 129, 129).unwrap();
     let hdr = hdr_target(&backend, 129, 129);
@@ -408,6 +411,7 @@ fn compiled_reference(curved: bool) {
             state.exit_pressure_pa,
             state.exit_temp_k,
             state.exit_mach,
+            gamma,
             1.0,
             PropellantFamily::Methalox,
         );
@@ -472,6 +476,12 @@ fn compiled_reference(curved: bool) {
             origin_len: [origin[0], origin[1], origin[2], len],
             axis_radius: [axis[0], axis[1], axis[2], radius],
             animation: [14.0, 0.0, 0.0, 0.0],
+            shock_cells: [
+                profile.cells.spacing_m as f32,
+                profile.cells.radius_m as f32,
+                profile.cells.compression as f32,
+                profile.cells.phase as f32,
+            ],
             diamonds: true,
             tail_dissolve: false,
             profile: profile
@@ -515,7 +525,7 @@ fn compiled_reference(curved: bool) {
             .unwrap();
         }
         let metadata = serde_json::json!({
-            "id":if curved {"curved-plume-volume-v1"} else {"compiled-plume-volume-v1"}, "case":name, "shock_radial_mode":"axisymmetric-j0-v1", "radial_weight_mode":"gaussian-v2", "extent":[129,129], "units":"metres",
+            "id":if curved {"curved-plume-volume-v1"} else {"compiled-plume-volume-v1"}, "case":name, "shock_radial_mode":"axisymmetric-j0-v1", "shock_cells":draw.shock_cells, "axial_sampling":"quadratic-v1", "radial_weight_mode":"gaussian-v2", "extent":[129,129], "units":"metres",
             "origin_len":draw.origin_len, "axis_radius":draw.axis_radius, "profile":&*draw.profile,
             "centerline":&*draw.centerline,
             "curve_metric":"emitted-length-v1",
@@ -523,7 +533,7 @@ fn compiled_reference(curved: bool) {
             "steps":14, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
             "world_from_view":camera.world_from_view.to_cols_array(), "clip_from_view":camera.clip_from_view.to_cols_array(),
             "engine_spec":spec, "operating_point":point, "effective_throttle":throttle,
-            "source_throttle":source.throttle, "exit_radius_m":state.exit_radius_m,
+            "gas_gamma":source.gamma,"source_throttle":source.throttle, "exit_radius_m":state.exit_radius_m,
             "ambient_pressure_pa":ambient, "ambient_temperature_k":env.temperature_k,
             "model_regime":format!("{:?}", profile.regime), "backend":format!("{:?}",backend.adapter.get_info().backend)
         });
@@ -557,6 +567,7 @@ fn volume_energy_matches_cpu_slab_with_depth_and_camera_lifecycle() {
         shock: 1.0,
     };
     let profile = AxialProfile {
+        cells: thessa_plume_core::shock::ShockCells::NONE,
         stations: vec![station(0.0), station(4.0)],
         regime: ExpansionRegime::Matched,
         length_m: 4.0,
@@ -690,7 +701,7 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
     let camera = view(DVec3::ZERO, DQuat::IDENTITY);
     let mut plume = PlumeRenderer::new(&backend, OffscreenTarget::FORMAT, true).unwrap();
     let mut max_error = 0.0_f64;
-    for pressure_pa in [101_325.0, 5000.0, 0.0] {
+    for pressure_pa in [101_325.0, 120_000.0, 5000.0, 1000.0, 0.0] {
         for throttle in [0.05, 0.3, 1.0] {
             let source = PlumeSource {
                 nozzle_to_vehicle: RigidTransform::IDENTITY,
@@ -700,6 +711,7 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
                 exit_pressure_pa: 120_000.0,
                 exit_temperature_k: 1850.0,
                 exit_mach: 3.5,
+                gamma: 1.2,
                 throttle,
                 exhaust: ExhaustFamily::Methalox,
             };
@@ -711,71 +723,87 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
                 flow_velocity_local_mps: [0.0; 3],
             };
             let mut profile = build_axial_profile(&source, &env, 48).unwrap();
-            let z = profile.length_m * 0.25;
-            let bound = profile
-                .stations
-                .iter()
-                .map(|s| s.radius_m)
-                .fold(0.0, f64::max)
-                * 1.6;
-            let (_, reference) = integrate_ray(&profile, z, bound, 256);
-            // Common radiometric normalization prevents SDR saturation from
-            // hiding errors in the vacuum cases. Geometry/transport unchanged.
-            let normalization = 0.25 / reference.into_iter().fold(0.0, f64::max).max(1e-20);
-            for s in &mut profile.stations {
-                s.emission_rgb = s.emission_rgb.map(|v| v * normalization);
-            }
-            let (_, expected) = integrate_ray(&profile, z, bound, 256);
-            let transport: std::sync::Arc<[[f32; 8]]> = profile
-                .stations
-                .iter()
-                .map(|s| {
-                    [
-                        s.z_m as f32,
-                        s.radius_m as f32,
-                        s.extinction_per_m as f32,
-                        s.shock as f32,
-                        s.emission_rgb[0] as f32,
-                        s.emission_rgb[1] as f32,
-                        s.emission_rgb[2] as f32,
-                        0.0,
-                    ]
-                })
-                .collect();
-            for steps in [8.0, 14.0] {
-                let draw = VolumeDraw {
-                    radial_reference: [1.0, 0.0, 0.0],
-                    centerline: std::sync::Arc::from([]),
-                    origin_len: [
-                        0.0,
-                        -z as f32,
-                        -(bound * 4.0) as f32,
-                        profile.length_m as f32,
-                    ],
-                    axis_radius: [0.0, 1.0, 0.0, bound as f32],
-                    animation: [steps, 0.0, 0.0, 0.0],
-                    diamonds: true,
-                    tail_dissolve: false,
-                    profile: transport.clone(),
-                };
-                plume
-                    .update(&backend, &camera, Some(PlumeFrame::Volume(draw)))
-                    .unwrap();
-                let actual = render(&backend, &plume, &target, 1.0);
-                let center = (32 * 65 + 32) * 4;
-                for c in 0..3 {
-                    let error = (linear(actual[center + c]) - expected[c]).abs();
-                    max_error = max_error.max(error);
-                    assert!(
-                        error < 0.02,
-                        "p={pressure_pa} throttle={throttle} steps={steps} c={c} error={error}"
-                    );
+            let cell = profile.cells.spacing_m.max(2.0 * source.exit_radius_m);
+            for z in [cell * 0.05, cell * 0.5, cell, profile.length_m * 0.25] {
+                let bound = profile
+                    .stations
+                    .iter()
+                    .map(|s| s.radius_m)
+                    .fold(0.0, f64::max)
+                    * 1.6;
+                let (_, reference) = integrate_ray(&profile, z, bound, 8192);
+                // Common radiometric normalization prevents SDR saturation from
+                // hiding errors in the vacuum cases. Geometry/transport unchanged.
+                let normalization = 0.25 / reference.into_iter().fold(0.0, f64::max).max(1e-20);
+                for s in &mut profile.stations {
+                    s.emission_rgb = s.emission_rgb.map(|v| v * normalization);
+                }
+                let (_, expected) = integrate_ray(&profile, z, bound, 8192);
+                let (_, half_dense) = integrate_ray(&profile, z, bound, 4096);
+                assert!(
+                    expected
+                        .iter()
+                        .zip(half_dense)
+                        .all(|(a, b)| (a - b).abs() < 1e-4),
+                    "converged CPU reference required"
+                );
+                let transport: std::sync::Arc<[[f32; 8]]> = profile
+                    .stations
+                    .iter()
+                    .map(|s| {
+                        [
+                            s.z_m as f32,
+                            s.radius_m as f32,
+                            s.extinction_per_m as f32,
+                            s.shock as f32,
+                            s.emission_rgb[0] as f32,
+                            s.emission_rgb[1] as f32,
+                            s.emission_rgb[2] as f32,
+                            0.0,
+                        ]
+                    })
+                    .collect();
+                for steps in [8.0, 14.0] {
+                    let draw = VolumeDraw {
+                        radial_reference: [1.0, 0.0, 0.0],
+                        centerline: std::sync::Arc::from([]),
+                        origin_len: [
+                            0.0,
+                            -z as f32,
+                            -(bound * 4.0) as f32,
+                            profile.length_m as f32,
+                        ],
+                        axis_radius: [0.0, 1.0, 0.0, bound as f32],
+                        animation: [steps, 0.0, 0.0, 0.0],
+                        shock_cells: [
+                            profile.cells.spacing_m as f32,
+                            profile.cells.radius_m as f32,
+                            profile.cells.compression as f32,
+                            profile.cells.phase as f32,
+                        ],
+                        diamonds: true,
+                        tail_dissolve: false,
+                        profile: transport.clone(),
+                    };
+                    plume
+                        .update(&backend, &camera, Some(PlumeFrame::Volume(draw)))
+                        .unwrap();
+                    let actual = render(&backend, &plume, &target, 1.0);
+                    let center = (32 * 65 + 32) * 4;
+                    for c in 0..3 {
+                        let error = (linear(actual[center + c]) - expected[c]).abs();
+                        max_error = max_error.max(error);
+                        assert!(
+                            error < 0.02,
+                            "p={pressure_pa} throttle={throttle} z={z} steps={steps} c={c} error={error}"
+                        );
+                    }
                 }
             }
         }
     }
     eprintln!(
-        "plume_profile_oracle max_absolute_linear_rgb_error={max_error:.6} envelope=0.02 cases=18"
+        "plume_profile_oracle max_absolute_linear_rgb_error={max_error:.6} envelope=0.02 cases=120"
     );
 }
 
@@ -967,6 +995,7 @@ fn profile_cost(curved: bool) {
             exit_pressure_pa: 120_000.0,
             exit_temperature_k: 1850.0,
             exit_mach: 3.5,
+            gamma: 1.2,
             throttle: 1.0,
             exhaust: ExhaustFamily::Methalox,
         };
@@ -1047,6 +1076,12 @@ fn profile_cost(curved: bool) {
             origin_len: [0.0, -z as f32, -distance as f32, profile.length_m as f32],
             axis_radius: [0.0, 1.0, 0.0, radius as f32],
             animation: [steps, 0.0, 0.0, 0.0],
+            shock_cells: [
+                profile.cells.spacing_m as f32,
+                profile.cells.radius_m as f32,
+                profile.cells.compression as f32,
+                profile.cells.phase as f32,
+            ],
             diamonds: true,
             tail_dissolve: false,
             profile: publication,
@@ -1114,6 +1149,16 @@ fn profile_cost(curved: bool) {
 #[test]
 #[ignore = "hardware: curved 3D field from six rotations vs independent dense world-space ray integration"]
 fn curved_volume_matches_dense_world_space_integration() {
+    dense_curved_oracle(false);
+}
+
+#[test]
+#[ignore = "hardware: spatial shock field vs dense f64 transport, rotations and opaque depth"]
+fn spatial_shock_volume_matches_dense_world_space_integration() {
+    dense_curved_oracle(true);
+}
+
+fn dense_curved_oracle(shocks: bool) {
     let backend = Backend::bring_up().unwrap();
     let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
     let texture = hdr_target(&backend, 65, 65);
@@ -1128,6 +1173,16 @@ fn curved_volume_matches_dense_world_space_integration() {
         DVec3::new(-0.1, 2.0, 0.7),
     ];
     let profile = AxialProfile {
+        cells: if shocks {
+            thessa_plume_core::shock::ShockCells {
+                spacing_m: 1.8,
+                radius_m: 0.55,
+                compression: 2.0,
+                phase: 0.0,
+            }
+        } else {
+            thessa_plume_core::shock::ShockCells::NONE
+        },
         length_m: 4.0,
         regime: ExpansionRegime::Matched,
         stations: [0.0, 4.0]
@@ -1184,6 +1239,12 @@ fn curved_volume_matches_dense_world_space_integration() {
             })
             .collect();
         let mut draw = volume(14.0);
+        draw.shock_cells = [
+            profile.cells.spacing_m as f32,
+            profile.cells.radius_m as f32,
+            profile.cells.compression as f32,
+            profile.cells.phase as f32,
+        ];
         draw.centerline = centers.clone().into();
         draw.origin_len = [centers[0][0], centers[0][1], centers[0][2], 4.0];
         draw.profile = vec![

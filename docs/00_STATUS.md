@@ -106,6 +106,20 @@ contention regression also fixes loss of a sole PRIMARY pose/stop publication.
 Hardware nozzle extraction, accepted history, calibrated optics and local light
 remain open.
 
+[Doc 106](106_SPATIAL_SHOCK_FIELD.md) moves compression cells out of the axial
+table, adds quadratic mean sampling, physical gamma input, geometric emission
+dilution and stable-core/moving-skirt sampling. Native refinement follows
+compression support with an explicit per-interval limit. Primary Dhawan-III
+and Aeon R observations guide the optical revision. A converged 120-case
+CPU/GPU control, curved probes, stock Cycles diagnostics and measured cost
+separate numerical fidelity from appearance. Momentum flux is no longer called
+power: kinetic W and legacy HDR normalization have distinct contracts. Native
+emission now has a Planck/CIE-Y photometric brightness reference compatible
+with daylight surface exposure; this authored-color graybody approximation
+is not calibrated non-LTE combustion.
+Nonlinear Mach disk, calibrated emission, native volume lighting and visual
+acceptance remain open; the legacy Bevy volume retains its older approximation.
+
 ## Simulation and physics
 
 | Doc | Status | Implemented | Future |
@@ -839,3 +853,9 @@ Native depth vertex streams (2026-10-28): [85 — Depth streams and physical GPU
 Native opaque sidedness and immutable demand (2026-10-28): [86 — Sidedness and demand reuse](86_NATIVE_OPAQUE_SIDEDNESS.md) uses fixed-function material sidedness with a shared explicit frame/material/shadow/ray layout and memoizes identical immutable geometry-selection inputs. The observed CBT work converged; no topology invalidation was removed. Exact CPU/physical colour-depth regressions remain separate from live-stream native profiling and reference acceptance.
 
 Native cloud cost and Fresnel endpoints (2026-10-29): [87 — Cloud cost and finite Fresnel](87_NATIVE_CLOUD_COST_AND_FRESNEL.md) clamps the shared physical cosine domain before Schlick evaluation. GPU endpoint regressions cover the observed normalized-dot NaN. Average-reflectance tables, invariant hoisting and zero-support cloud branches were rejected after target measurements. No cloud quality reduction or reference acceptance is inferred.
+
+The contrast-aware plume quadrature cuts the near High curved control from
+17.27–17.33 to 8.84–9.50 ms at the same declared error bound, with smaller
+regressions in some light cases. These are isolated pass timings. Stock Cycles
+thin-jet image differences remain large and visual parity is not accepted;
+[doc 106](106_SPATIAL_SHOCK_FIELD.md) records all cases and limits.

@@ -4,7 +4,9 @@ Status: partially implemented. `thessa-plume-core` provides the backend-neutral
 analytic profile/optics/medium model. Both clients have a Low-quality impostor
 and Medium/High volume consumer. The native consumer reads the actual axial
 stations and scene depth; native Medium/High also has a kinematic 3D centerline
-and nozzle-frame shell motion ([doc 105](105_PLUME_3D_MOTION.md)). Only the legacy
+and nozzle-frame shell motion ([doc 105](105_PLUME_3D_MOTION.md)). Spatial compression
+cells, quadratic mean stations, stable core/animated skirt and bounded
+shock-aware sampling are described in [doc 106](106_SPATIAL_SHOCK_FIELD.md). Only the legacy
 client has a field-derived nozzle light.
 Wiring live compiled engine/nozzle state into the client, adaptive residual
 rendering, and ray-traced lighting remain future work. The rest of this document
@@ -128,6 +130,7 @@ pub struct PlumeSource {
     pub exit_pressure_pa: f64,
     pub exit_temperature_k: f64,
     pub exit_mach: f64,
+    pub gamma: f64, // physical heat-capacity ratio, 1 < gamma <= 2
     pub throttle: f64,
     pub exhaust: ExhaustFamily,
 }
@@ -307,13 +310,16 @@ The graphics `mach_diamonds` toggle controls only visible shock-cell
 modulation; it never changes simulated engine or plume physics. Normal quality
 settings change representation cost/fidelity, not physical source state.
 
-The current CPU/native/retained volume field uses the first circular radial
-mode `J0(j01*r/R)` to shape the existing axial optical perturbation, with an
-unmodulated skirt outside the core. This removes uniform whole-slice shock
-modulation, without claiming nonlinear Mach-disk or calibrated combustion
-physics. Native/Cycles controls, independent Bessel oracles and measured cost
-are recorded in [doc 104](104_KSA_AUDIT_AND_RADIAL_SHOCK.md), alongside the
-October KSA/BRUTAL reference audit. The Low impostor remains a fallback.
+The CPU/native field now evaluates a separate analytic spatial compression
+field, documented with its assumptions and primary observations in
+[doc 106](106_SPATIAL_SHOCK_FIELD.md). Generated mean stations carry no shock
+oscillation; density and collisional-emission multipliers differ. Exactly
+matched flow and true vacuum do not acquire a decorative diamond train.
+Nonlinear Mach-reflection topology and thermochemical calibration remain open.
+Historical axial publications and the retained Bevy shader keep the circular
+J0 modulation described in [doc 104](104_KSA_AUDIT_AND_RADIAL_SHOCK.md). The
+legacy volume has not acquired the native spatial field, delayed mixing law,
+or motion consumer. Low remains the documented impostor fallback.
 
 ## 10. Turbulence and advection
 
@@ -479,12 +485,14 @@ screenshots alone:
 
 Visual captures remain useful for regression, but numeric field/transmittance comparisons should be the primary correctness oracle.
 
-### Native consumer verification (2026-10-20)
+### Native consumer verification (updated 2026-11-01)
 
 The GPU tests in `crates/render-wgpu/tests/plume.rs` cover the actual publication:
 
 - 48-station atmospheric/upper-atmosphere/vacuum profiles at 5%, 30% and full
-  throttle, 8/14 steps, compared with `integrate_ray(..., 256)`. Shared radiometric
+  throttle and 8/14 base steps. The current expanded oracle covers 120
+  combinations, including near-nozzle slices and matched flow, against
+  converged 4096/8192-bin integration (doc 106). Shared radiometric
   normalization avoids SDR clipping hiding vacuum errors. The absolute linear-RGB
   envelope is **0.02** for these undeformed, untapered central-chord fixtures,
   not a universal bound on animated/oblique/tail views.
@@ -545,8 +553,9 @@ never feeds back into flight or creates a simulation clock.
 
 Low uses the retained 32x256 sRGB bake on a single-wound, 32-sector unit cone;
 the game supplies its physical fallback scale. Medium/High interpolate station
-radius, extinction, emission and shock directly. A tangent-warped fixed sample
-budget resolves thin slices of the long vacuum bound; integration always uses
+radius, extinction and emission directly; spatial compression is independent
+of station resolution. A tangent-warped base budget and compression-support
+refinement resolve thin slices of the long bound; integration always uses
 each bin's physical path length. There is no hard radial skirt clip, averaged
 extinction, near-camera opacity fudge or parallel-ray rejection. The integration
 bound is 1.6 times the largest published radius. Artistic shell deformation and
@@ -653,3 +662,24 @@ pressure/throttle/view comparisons with actual Cycles. It documents the
 operating-point throttle-one handoff and corrects the reference near-plane
 ray-origin mismatch for inside views. No runtime source or sampling budget
 is changed; these controls do not calibrate the optical templates.
+
+
+### Spatial field revision and optical units (2026-11-01)
+
+[Doc 106](106_SPATIAL_SHOCK_FIELD.md) records the current native spatial cells,
+quadratic mean publication, gamma input, geometric emission dilution and
+stable-core/skirt split. The existing 8/14 base budget is refined to at most
+64 bins per merged interval only for rays intersecting compression support;
+`march_step_limit` reports the bound. Native draw uniforms are 112 bytes.
+No new graphics toggle or authoritative physics path is introduced.
+
+Native profile emission now uses a Planck/CIE-Y photometric brightness
+reference in RGB cd/m3, with authored hue and provisional mass optical
+coefficients. This graybody envelope fixes the daylight unit mismatch; it is
+not calibrated non-LTE gas radiation. Pre-exposure remains camera-owned.
+The legacy Bevy `emission_gain` is normalized momentum flux, not megawatts. Its duplicate
+throttle multiplier is removed; `jet_kinetic_power_w` separately provides
+`0.5*mdot*throttle*Ve^2` in W without assigning it to emitted radiance. The
+historical `radiant_power` proxy omits radial/shock integration and is not a
+valid radiometric volume integral or light-sampling PDF. Native RT lighting
+still needs a declared emission convention and integration of this same field.

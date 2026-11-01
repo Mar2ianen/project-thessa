@@ -97,6 +97,8 @@ pub struct PlumeSource {
     pub exit_temperature_k: f64,
     /// Exit Mach number (> 1 for a choked supersonic nozzle).
     pub exit_mach: f64,
+    /// Frozen heat-capacity ratio of exhaust (1 < gamma <= 2).
+    pub gamma: f64,
     /// 0..=1, 0 is off.
     pub throttle: f64,
     pub exhaust: ExhaustFamily,
@@ -138,6 +140,9 @@ pub fn pressure_ratio(source: &PlumeSource, env: &PlumeEnvironment) -> f64 {
 pub fn validation_error(source: &PlumeSource, env: &PlumeEnvironment) -> Option<&'static str> {
     if !source.exit_radius_m.is_finite() || !(source.exit_radius_m > 0.0) {
         return Some("exit_radius_m must be > 0");
+    }
+    if !source.gamma.is_finite() || source.gamma <= 1.0 || source.gamma > 2.0 {
+        return Some("gamma must be finite in (1,2]");
     }
     if !source.exit_mach.is_finite() || !(source.exit_mach > 1.0) {
         return Some("exit_mach must be > 1 for a supersonic nozzle");
@@ -199,6 +204,7 @@ pub fn engine_plume_source(
     exit_pressure_pa: f64,
     exit_temperature_k: f64,
     exit_mach: f64,
+    gamma: f64,
     throttle: f64,
     family: PropellantFamily,
 ) -> PlumeSource {
@@ -210,6 +216,7 @@ pub fn engine_plume_source(
         exit_pressure_pa,
         exit_temperature_k,
         exit_mach,
+        gamma,
         throttle,
         exhaust: ExhaustFamily::from(family),
     }
@@ -244,6 +251,7 @@ pub mod tests {
             exit_pressure_pa: 68_000.0,
             exit_temperature_k: 1900.0,
             exit_mach: 3.4,
+            gamma: 1.2,
             throttle: 1.0,
             exhaust: ExhaustFamily::Methalox,
         }
@@ -256,6 +264,15 @@ pub mod tests {
             temperature_k: 288.15,
             oxygen_fraction: 0.21,
             flow_velocity_local_mps: [0.0; 3],
+        }
+    }
+
+    #[test]
+    fn heat_capacity_ratio_is_a_validated_physical_input() {
+        for gamma in [f64::NAN, f64::INFINITY, 0.0, 1.0, 2.1] {
+            let mut source = sample_source();
+            source.gamma = gamma;
+            assert!(validation_error(&source, &sample_env_sea_level()).is_some());
         }
     }
 
@@ -338,10 +355,12 @@ pub mod tests {
                 68_000.0,
                 1900.0,
                 3.4,
+                1.2,
                 1.0,
                 family,
             );
             assert_eq!(source.exhaust, expected);
+            assert_eq!(source.gamma, 1.2);
             assert_eq!(validation_error(&source, &sample_env_sea_level()), None);
         }
     }

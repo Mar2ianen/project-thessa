@@ -53,6 +53,10 @@ fn native_plume_tiers_render_without_mutating_flight_or_opening_audio() {
             )),
             "{error}"
         );
+        assert!(error.contains(&format!(
+            "march_step_limit={}",
+            if steps > 0 { 64 } else { 0 }
+        )));
         let stdout = String::from_utf8_lossy(&output.stdout);
         let state = stdout
             .lines()

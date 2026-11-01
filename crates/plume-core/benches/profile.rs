@@ -15,6 +15,7 @@ fn main() {
         exit_pressure_pa: 68_000.0,
         exit_temperature_k: 1900.0,
         exit_mach: 3.4,
+        gamma: 1.2,
         throttle: 1.0,
         exhaust: ExhaustFamily::Methalox,
     };

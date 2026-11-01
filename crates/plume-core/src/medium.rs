@@ -6,8 +6,8 @@
 //! (doc section 17). The GPU mirrors this math; it must never fork it.
 //!
 //! Radial model (documented reduced form): a hot Gaussian core plus a cooler
-//! mixing-layer skirt. Shock modulation comes from the axial profile, so
-//! diamonds emerge from the volume rather than from a decal.
+//! mixing-layer skirt. Independent spatial compression cells modulate
+//! density and collisional emission; historical axial controls remain readable.
 
 use crate::profile::AxialProfile;
 
@@ -54,8 +54,9 @@ pub fn shock_multiplier(axial_shock: f64, radius_fraction: f64) -> f64 {
 
 /// Medium at axial `z_m` / radial `r_m`: axial interpolation from the
 /// profile, then the radial weight. Station emission already carries
-/// material hues (shared ramp); only weight and the shared shock factor
-/// apply here. Empty profile (engine off) is vacuum with zero emission.
+/// material hues and photometric scale. Spatial compression applies separate
+/// density/emission factors; historical axial controls remain supported.
+/// Empty profile (engine off) is vacuum with zero emission.
 pub fn sample_medium(profile: &AxialProfile, z_m: f64, r_m: f64) -> MediumSample {
     let Some(station) = profile.evaluate(z_m) else {
         return MediumSample {
@@ -67,19 +68,21 @@ pub fn sample_medium(profile: &AxialProfile, z_m: f64, r_m: f64) -> MediumSample
     // mode modulates core emission/extinction together, with a quiet skirt.
     let w = radial_weight(r_m, station.radius_m);
     let shock = shock_multiplier(station.shock, r_m / station.radius_m);
+    let cells = profile.cells.sample(z_m, r_m);
     MediumSample {
-        extinction_per_m: (station.extinction_per_m * w * shock).max(0.0),
+        extinction_per_m: (station.extinction_per_m * w * shock * cells[0]).max(0.0),
         emission_rgb: [
-            (station.emission_rgb[0] * w * shock).max(0.0),
-            (station.emission_rgb[1] * w * shock).max(0.0),
-            (station.emission_rgb[2] * w * shock).max(0.0),
+            (station.emission_rgb[0] * w * shock * cells[1]).max(0.0),
+            (station.emission_rgb[1] * w * shock * cells[1]).max(0.0),
+            (station.emission_rgb[2] * w * shock * cells[1]).max(0.0),
         ],
     }
 }
 
-/// Total radiant power proxy (linear RGB): emission integrated over the
-/// plume volume, `sum(emission * pi * R^2 * dz)`. Lighting proxies derive
-/// from this field integral (doc section 13), never from bare throttle.
+/// Historical unmodulated cross-section proxy in arbitrary linear RGB:
+/// `sum(emission * pi * R^2 * dz)`. Retained for legacy lighting. It omits
+/// radial/shock structure, is not the integral of `sample_medium`, and has
+/// no calibrated watt convention. Do not use it as a native volume-light PDF.
 pub fn radiant_power(profile: &AxialProfile) -> [f64; 3] {
     let mut total = [0.0; 3];
     for window in profile.stations.windows(2) {
@@ -97,6 +100,7 @@ pub fn radiant_power(profile: &AxialProfile) -> [f64; 3] {
 /// emission attenuated by running transmittance. Returns
 /// `(transmittance, rgb)`. This is the oracle the GPU must match within
 /// representation error; `steps` is a budget, not physics (tested).
+/// Up to 16,384 bins are available for offline convergence oracles.
 // Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
 // suggested `x <= 0.0` would accept it. The negated form is deliberate.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -106,7 +110,7 @@ pub fn integrate_ray(
     half_chord_m: f64,
     steps: u32,
 ) -> (f64, [f64; 3]) {
-    let steps = steps.clamp(1, 256) as usize;
+    let steps = steps.clamp(1, 16_384) as usize;
     if !(half_chord_m > 0.0) || profile.is_empty() {
         return (1.0, [0.0; 3]);
     }
@@ -218,6 +222,7 @@ mod tests {
         // far boundary violates this identity, especially in thick cells.
         for extinction in [1e-8, 0.1, 1.0, 100.0] {
             let mut profile = live_profile();
+            profile.cells = crate::shock::ShockCells::NONE;
             for s in &mut profile.stations {
                 s.extinction_per_m = extinction;
                 s.emission_rgb = [4.0, 2.0, 1.0].map(|v| v * extinction);
@@ -250,7 +255,7 @@ mod tests {
         let profile = live_profile();
         let z = profile.length_m * 0.2;
         let (_, fine) = integrate_ray(&profile, z, 2.0, 64);
-        let (_, coarse) = integrate_ray(&profile, z, 2.0, 4);
+        let (_, coarse) = integrate_ray(&profile, z, 2.0, 8);
         for channel in 0..3 {
             let denom = fine[channel].abs().max(0.02);
             let rel = (fine[channel] - coarse[channel]).abs() / denom;

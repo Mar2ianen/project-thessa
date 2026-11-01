@@ -3,8 +3,9 @@
 //!
 //! The mean field stays analytic and cheap. A backend precomputes a small
 //! axial profile when nozzle state changes materially; the GPU interpolates
-//! plus an analytic radial falloff. Residual 3D structure (turbulence,
-//! crosswind, condensation) belongs in the later RCBT residual, not here.
+//! its smooth mean plus analytic radial and spatial compression fields. The
+//! motion module handles the reduced centerline; unresolved mixing and
+//! condensation remain candidates for a later RCBT residual.
 //!
 //! Reduced-model notes (all provisional, direction-tested, never absolute
 //! truth claims):
@@ -17,9 +18,8 @@
 //! - Plume length scales with `D * M * sqrt(Pi)` (momentum vs ambient).
 //!   The leading constant is provisional and flagged for calibration
 //!   against reference firings; tests pin direction, not metres.
-//! - Throttle scales mass flow and exhaust velocity linearly from the
-//!   full-throttle deck values. Real engine decks are nonlinear; engine-sim
-//!   owns the true curve when it lands.
+//! - Throttle scales input mass flow once; supplied exhaust speed remains
+//!   the operating value. Engine-sim owns real throttle-dependent decks.
 
 use crate::optics::optical_material;
 use crate::source::{PlumeEnvironment, PlumeSource, pressure_ratio, validation_error};
@@ -90,17 +90,21 @@ pub struct AxialStation {
     pub center_temp_k: f64,
     /// Extinction coefficient (1/m, >= 0).
     pub extinction_per_m: f64,
-    /// Emission RGB, linear, HDR-capable (>= 0 each).
+    /// Photometric RGB emission per metre, cd/m^3 (>= 0 each).
+    /// Graybody brightness reference with authored chromaticity, not a gas spectrum.
     pub emission_rgb: [f64; 3],
-    /// Shock compression multiplier, ~0.6..1.6 (1 = no modulation).
+    /// Legacy axial modulation; generated mean profiles publish one.
+    /// Retained for externally supplied historical optical controls.
     pub shock: f64,
 }
 
-/// Mean axial profile: `2..=64` stations, endpoints exact.
+/// Smooth mean axial profile: `2..=64` quadratic-spaced stations.
+/// Spatial shock cells are evaluated analytically, never interpolated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxialProfile {
     pub stations: Vec<AxialStation>,
     pub regime: ExpansionRegime,
+    pub cells: crate::shock::ShockCells,
     /// Visible length (m): last station position.
     pub length_m: f64,
 }
@@ -111,6 +115,7 @@ impl AxialProfile {
         Self {
             stations: Vec::new(),
             regime,
+            cells: crate::shock::ShockCells::NONE,
             length_m: 0.0,
         }
     }
@@ -158,14 +163,20 @@ impl AxialProfile {
     }
 }
 
-/// Emission scale shared by the CPU builder and GPU uniform fill (single
-/// source of truth): material luminosity times throttle-scaled jet power in
-/// megawatts, clamped. The GPU must use this, never its own gain formula.
+/// Effective kinetic power (W), excluding gas enthalpy/chemical energy.
+/// The supplied exhaust speed is already an operating value; throttle
+/// scales mass flow once and never silently changes that speed.
+pub fn jet_kinetic_power_w(source: &PlumeSource) -> f64 {
+    0.5 * source.mass_flow_kg_s * source.throttle * source.exhaust_velocity_mps.powi(2)
+}
+
+/// Legacy Bevy HDR gain, normalized by a 1 MN momentum flux. This is NOT
+/// power in watts, an emission coefficient with radiometric units, or a
+/// calibrated conversion of kinetic power into visible radiation.
 pub fn emission_gain(source: &PlumeSource) -> f64 {
     let material = optical_material(source.exhaust);
-    let power =
-        source.mass_flow_kg_s * source.throttle * source.exhaust_velocity_mps * source.throttle;
-    material.luminosity * (power / 1.0e6).clamp(0.0, 40.0)
+    let momentum_flux_n = source.mass_flow_kg_s * source.throttle * source.exhaust_velocity_mps;
+    material.luminosity * (momentum_flux_n / 1.0e6).clamp(0.0, 40.0)
 }
 
 /// Near-lip expansion-fan factor 0..1.2 from the pressure ratio: matched
@@ -231,36 +242,51 @@ pub fn build_axial_profile(
 
     let spread = spread_rate(pi);
     let fan = expansion_fan(pi);
-    let cell = shock_cell_spacing_m(diameter, source.exit_mach, pi);
-    let amp = shock_amplitude(pi);
+    let cells = crate::shock::ShockCells::from_source(source, env);
     let material = optical_material(source.exhaust);
-    // Emission scale: mass flow x throttle x thermal content x material.
-    let lum = emission_gain(source);
+    // Photometric reference shared with the native surface-light convention.
+    // This graybody brightness envelope is not combustion spectral calibration.
+    let exit_density = mass_flow
+        / (source.exhaust_velocity_mps * std::f64::consts::PI * source.exit_radius_m.powi(2))
+            .max(1e-9);
+    let lum = crate::optics::thermal_luminance_cd_m2(exit_temp)
+        * exit_density
+        * (0.5 + material.soot)
+        * material.luminosity;
+    if !lum.is_finite() {
+        return Err("photometric plume reference is not representable");
+    }
 
     let mut stations = Vec::with_capacity(samples);
     for i in 0..samples {
-        let z = length * i as f64 / (samples - 1) as f64;
+        let fraction = i as f64 / (samples - 1) as f64;
+        let z = length * fraction * fraction;
         let zn = z / length;
-        let radius = mean_radius(source.exit_radius_m, spread, fan, z);
+        // The hot potential core does not acquire the developed mixing
+        // slope at the exit. Reuse the cell-coherence length as the smooth
+        // mixing onset; this remains a provisional reduced jet closure.
+        let core_length = if cells.spacing_m > 0.0 {
+            3.0 * cells.spacing_m
+        } else {
+            diameter * source.exit_mach
+        };
+        let mixing_offset = core_length * -(-z / core_length).exp_m1();
+        let radius = mean_radius(source.exit_radius_m, spread, fan, z)
+            - source.exit_radius_m * spread * mixing_offset / diameter;
         let decay = 1.0 / (1.0 + 6.0 * zn * zn);
         let density = (mass_flow
             / (source.exhaust_velocity_mps * std::f64::consts::PI * radius * radius).max(1e-9))
         .max(0.0);
         let temp = env.temperature_k + (exit_temp - env.temperature_k).max(0.0) * decay;
-        let shock = if cell > 0.0 {
-            1.0 + amp
-                * 0.55
-                * (2.0 * std::f64::consts::PI * z / cell).cos()
-                * (-z / (3.0 * cell.max(length * 0.05))).exp()
-        } else {
-            1.0
-        };
         let heat = (temp / exit_temp.max(1.0)).clamp(0.0, 1.0);
         // Station emission carries hue (shared ramp) and decay, but NOT the
         // shock factor: shock applies once downstream (sampler / shader),
         // never squared by baking it here too. Hues are normalized by the
         // shared divisor so absolute brightness lives only in `e`.
-        let e = lum * (0.15 + 0.85 * heat) * decay.max(0.02);
+        // Optically thin collisional emission scales with density squared.
+        // Mean density falls as area^-1; keep that geometric dilution in j.
+        let dilution = (source.exit_radius_m / radius).powi(4);
+        let e = lum * (0.15 + 0.85 * heat) * decay * dilution;
         let hue = crate::optics::ramp_rgb(material, zn);
         let inv_divisor = 1.0 / crate::optics::hue_divisor(material);
         stations.push(AxialStation {
@@ -274,7 +300,7 @@ pub fn build_axial_profile(
                 (hue[1] * inv_divisor * e).max(0.0),
                 (hue[2] * inv_divisor * e).max(0.0),
             ],
-            shock,
+            shock: 1.0,
         });
     }
     // Anchor the nozzle station exactly (radius/temperature boundary).
@@ -286,6 +312,7 @@ pub fn build_axial_profile(
     Ok(AxialProfile {
         stations,
         regime,
+        cells,
         length_m: length,
     })
 }
@@ -294,6 +321,40 @@ pub fn build_axial_profile(
 mod tests {
     use super::*;
     use crate::source::tests::{sample_env_sea_level, sample_source};
+
+    #[test]
+    fn shock_phase_survives_coarse_and_long_profiles() {
+        let source = sample_source();
+        for pressure in [101325.0, 1000.0, 1.0] {
+            let mut env = sample_env_sea_level();
+            env.pressure_pa = pressure;
+            let coarse = build_axial_profile(&source, &env, 2).unwrap();
+            let fine = build_axial_profile(&source, &env, 64).unwrap();
+            assert_eq!(coarse.cells, fine.cells);
+            assert!(fine.stations.iter().all(|s| s.shock == 1.0));
+            let cells = fine.cells;
+            for i in 0..1000 {
+                let z = f64::from(i) / 100.0 * cells.spacing_m;
+                assert_eq!(
+                    coarse.cells.sample(z, source.exit_radius_m * 0.4),
+                    cells.sample(z, source.exit_radius_m * 0.4)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kinetic_power_has_velocity_squared_and_single_flow_scaling() {
+        let mut source = sample_source();
+        source.mass_flow_kg_s = 2.0;
+        source.exhaust_velocity_mps = 10.0;
+        source.throttle = 0.5;
+        assert_eq!(jet_kinetic_power_w(&source), 50.0);
+        source.exhaust_velocity_mps *= 2.0;
+        assert_eq!(jet_kinetic_power_w(&source), 200.0);
+        source.throttle = 0.0;
+        assert_eq!(jet_kinetic_power_w(&source), 0.0);
+    }
 
     #[test]
     fn regime_moves_with_pressure_ratio() {

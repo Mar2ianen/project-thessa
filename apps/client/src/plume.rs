@@ -1,29 +1,16 @@
-//! Engine plume renderer: field-first, mesh-last (`docs/38`).
+//! Retained Bevy plume adapter (`docs/38`).
 //!
-//! Rule: exhaust is a compact world-space participating-medium field.
-//! Meshes, lights, and future ray queries consume that field, never the
-//! source of its shape.
+//! Low uses the legacy baked cone; Medium/High use the older analytic
+//! volume ribbon, averaged extinction and axial/J0 optical approximation.
+//! This shader does not implement the native spatial compression field or
+//! its photometric brightness reference. The CPU profile is shared, but
+//! native transport fidelity must not be claimed for this retained shader.
+//! The nozzle light uses the historical unmodulated cross-section proxy;
+//! it is not direct sampling of an emissive volume or a calibrated watt integral.
 //!
-//! Paths by quality (same physical input, representation differs):
-//!
-//! - Low: `PlumeBackend::Impostor`, the old CPU-baked cone (fixed bands,
-//!   throttle scale, sine flicker). Documented fallback artifact.
-//! - Medium/High: analytic-volume ribbon. A camera-facing quad is COVERAGE
-//!   ONLY; every pixel marches a view ray through the round cross-section
-//!   and Beer-Lambert-integrates the `plume-core` mean field (8 evals on
-//!   Medium, 14 on High). Shock diamonds emerge from the volume via the
-//!   same shock factor as the CPU oracle, never from a decal. Turbulence
-//!   spans the azimuth (fixed frame from the axis) and hard-clips outside
-//!   the true barrel, so the bound cylinder can never render as a milky
-//!   sheet wider than the plume.
-//!
-//! Lighting proxies derive from the field integral (`radiant_power`), not
-//! from bare throttle (doc section 13).
-//!
-//! Inputs: `EnginePlumeInput` (thin craft-state read; engine-sim will grow
-//! it) plus ambient pressure from the same atmosphere model as the flight
-//! model. Nozzle deck values are explicitly provisional until compiled
-//! vehicle/engine data lands (see `provisional_rocket_source`).
+//! Inputs remain a read-only craft state and provisional nozzle deck.
+//! Motion history, accepted compiled-nozzle hardware and the native field
+//! consumer are future adapter work, not force/clock writes here.
 
 use super::*;
 use bevy::{
@@ -92,6 +79,7 @@ fn provisional_rocket_source(throttle: f64) -> PlumeSource {
         exit_pressure_pa: 120_000.0,
         exit_temperature_k: 1850.0,
         exit_mach: 3.5,
+        gamma: 1.2,
         throttle: throttle.clamp(0.0, 1.0),
         exhaust: ExhaustFamily::Methalox,
     }

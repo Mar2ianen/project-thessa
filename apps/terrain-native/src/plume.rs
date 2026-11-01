@@ -1,7 +1,7 @@
 //! Direct native port of the starter X-15 plume producer. This provisional
 //! methalox deck is a visualization fixture, not calibrated propulsion data.
 //! Nothing here writes authoritative state, forces, clocks, or mesh poses.
-use glam::{DQuat, DVec3, Mat4};
+use glam::{DQuat, DVec3};
 use std::sync::Arc;
 use thessa_graphics::{Quality, ResolvedGraphicsSettings};
 use thessa_plume_core::{
@@ -9,7 +9,7 @@ use thessa_plume_core::{
     profile::build_axial_profile,
 };
 use thessa_render_core::mesh::MeshInstance;
-use thessa_render_wgpu::plume::{ConeDraw, PlumeFrame, ProfileStation, VolumeDraw};
+use thessa_render_wgpu::plume::{PlumeFrame, ProfileStation, VolumeDraw};
 
 #[derive(Clone, Copy)]
 pub struct Input {
@@ -66,13 +66,11 @@ struct Field {
 #[derive(Default)]
 pub struct Cache {
     field: Option<Field>,
-    impostor: Option<(bool, Arc<[u8]>)>,
 }
 
 impl Cache {
     pub fn clear(&mut self) {
         self.field = None;
-        self.impostor = None;
     }
 
     pub fn frame(
@@ -158,36 +156,6 @@ impl Cache {
         } else {
             0.0
         };
-        if settings.plume_quality == Quality::Low {
-            if self
-                .impostor
-                .as_ref()
-                .is_none_or(|(diamonds, _)| *diamonds != settings.plume_diamonds)
-            {
-                self.impostor = Some((
-                    settings.plume_diamonds,
-                    impostor_bake(settings.plume_diamonds).into(),
-                ));
-            }
-            let flick = if settings.plume_flicker {
-                flicker(input.sim_time_s, amount)
-            } else {
-                1.0
-            };
-            let len = ((2.0 + 6.5 * amount) * flick) as f32;
-            let girth = ((0.35 + 0.65 * amount) * flick.clamp(0.8, 1.2)) as f32;
-            let x = (craft * DVec3::X).as_vec3();
-            return Some(PlumeFrame::Cone(ConeDraw {
-                texture: self.impostor.as_ref()?.1.clone(),
-                model: Mat4::from_cols(
-                    (x * (girth * 1.1)).extend(0.0),
-                    (exhaust * len).extend(0.0),
-                    (x.cross(exhaust) * (girth * 1.1)).extend(0.0),
-                    (nozzle + exhaust * (len * 0.5)).extend(1.0),
-                )
-                .to_cols_array(),
-            }));
-        }
         let nozzle_rotation = craft * DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2);
         let offset = craft * NOZZLE_M;
         let mut motion_env = env;
@@ -243,10 +211,10 @@ impl Cache {
             Arc::from([])
         };
         Some(PlumeFrame::Volume(VolumeDraw {
-            pixel_grid: if settings.plume_quality == Quality::High {
-                8
-            } else {
-                4
+            pixel_grid: match settings.plume_quality {
+                Quality::Low => 1,
+                Quality::Medium => 4,
+                Quality::High => 8,
             },
             radial_reference: (nozzle_rotation * DVec3::X).as_vec3().to_array(),
             centerline,
@@ -263,10 +231,10 @@ impl Cache {
                 )
                 .to_array(),
             animation: [
-                if settings.plume_quality == Quality::High {
-                    14.0
-                } else {
-                    8.0
+                match settings.plume_quality {
+                    Quality::Low => 6.0,
+                    Quality::Medium => 8.0,
+                    Quality::High => 14.0,
                 },
                 time,
                 if settings.plume_flicker { 0.4 } else { 0.0 },
@@ -283,40 +251,6 @@ impl Cache {
             profile: field.gpu_profile.clone(),
         }))
     }
-}
-
-fn flicker(time: f64, throttle: f64) -> f64 {
-    1.0 + 0.10 * (time * 37.0).sin() * throttle + 0.06 * (time * 61.0 + 1.3).sin() * throttle
-        - 0.04 * throttle
-}
-
-/// Direct GPL-to-GPL port of the retained game's 32x256 fallback bake.
-fn impostor_bake(diamonds: bool) -> Vec<u8> {
-    let mut px = Vec::with_capacity(32 * 256 * 4);
-    for y in 0..256 {
-        let v = y as f64 / 255.0;
-        let width = (1.0 - v * 0.75).max(0.15);
-        for x in 0..32 {
-            let u = (x as f64 + 0.5) / 32.0 * 2.0 - 1.0;
-            let r = (u.abs() / width).min(1.0);
-            let body = (1.0 - r * r).max(0.0);
-            let mut bright = body * (-v * 3.2).exp();
-            if diamonds {
-                let cells = (0.5 + 0.5 * (v * 5.0 * std::f64::consts::TAU).sin()).powi(2);
-                bright *= 0.55 + 0.45 * cells * (-v * 2.0).exp();
-            }
-            let core = (bright * 1.6).min(1.0);
-            for c in [
-                (0.35 + core).min(1.0),
-                0.85 * core + 0.15 * body,
-                0.55 * core * core,
-                (bright * 1.25).clamp(0.0, 1.0),
-            ] {
-                px.push((c.clamp(0.0, 1.0) * 255.0) as u8);
-            }
-        }
-    }
-    px
 }
 
 #[cfg(test)]
@@ -450,10 +384,15 @@ mod tests {
         assert_eq!(a.animation[1], 0.0);
         assert!(!b.diamonds);
         settings.plume_quality = Quality::Low;
-        assert!(matches!(
-            cache.frame(input(), env, &mesh, camera, &settings),
-            Some(PlumeFrame::Cone(_))
-        ));
+        let Some(PlumeFrame::Volume(low)) = cache.frame(input(), env, &mesh, camera, &settings)
+        else {
+            panic!("all native qualities must consume the optical field")
+        };
+        assert_eq!((low.animation[0], low.pixel_grid), (6.0, 1));
+        assert!(Arc::ptr_eq(&a.profile, &low.profile));
+        assert_eq!(low.origin_len, a.origin_len);
+        assert_eq!(low.axis_radius, a.axis_radius);
+        assert_eq!(low.shock_cells, a.shock_cells);
         assert_eq!(cache.field.as_ref().unwrap().key, key);
         assert_eq!(cache.field.as_ref().unwrap().profile, profile);
         assert_eq!(environment(Some([f64::NAN, 1.0, 280.0])), environment(None));
@@ -515,19 +454,6 @@ mod tests {
         moving.air_velocity_render_mps = DVec3::NAN;
         assert!(cache.frame(moving, env, &mesh, camera, &settings).is_none());
         assert!(cache.field.is_none());
-    }
-
-    #[test]
-    fn low_bake_has_symmetric_transparent_edges_and_a_dissolving_tail() {
-        for diamonds in [false, true] {
-            let texture = impostor_bake(diamonds);
-            assert_eq!(texture.len(), 32 * 256 * 4);
-            let alpha = |x, y| texture[((y * 32 + x) * 4 + 3) as usize];
-            assert!(alpha(16, 0) > alpha(16, 255) * 4);
-            for y in 0..256 {
-                assert_eq!(alpha(0, y), alpha(31, y));
-            }
-        }
     }
 
     #[test]
@@ -678,6 +604,140 @@ mod tests {
         eprintln!(
             "native_motion_gallery adapter={:?} frames=32 extent=640x360 profile_uploads=1",
             backend.adapter_name
+        );
+    }
+
+    #[test]
+    #[ignore = "hardware: actual native qualities at day/night exposure; new output required"]
+    fn plume_quality_exposure_reference() {
+        use thessa_render_wgpu::{
+            Backend, plume::PlumeRenderer, terrain::OffscreenTarget, view::ViewParams,
+        };
+        let out = std::path::PathBuf::from(std::env::var_os("THESSA_BENCH_OUTPUT").unwrap());
+        std::fs::create_dir(&out).unwrap();
+        let backend = Backend::bring_up().unwrap();
+        let target = OffscreenTarget::new(&backend, 129, 129).unwrap();
+        let hdr = backend.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("native-quality-exposure"),
+            size: wgpu::Extent3d {
+                width: 129,
+                height: 129,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let color = hdr.create_view(&Default::default());
+        let mut renderer =
+            PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+        let mesh = instance(DVec3::ZERO, DQuat::IDENTITY, 1.0);
+        let mut records = Vec::new();
+        for pressure in [101325.0, 1000.0, 0.0] {
+            let env = environment(Some([pressure, pressure / (287.05 * 288.15), 288.15]));
+            let profile = build_axial_profile(&source(input().throttle), &env, 48).unwrap();
+            let window = (2.5 * profile.cells.spacing_m)
+                .max(8.0 * source(1.0).exit_radius_m)
+                .min(profile.length_m);
+            let aim = NOZZLE_M + DVec3::NEG_Y * window * 0.4;
+            let camera = aim + DVec3::Z * window * 1.5;
+            let mut cache = Cache::default();
+            let mut published = None;
+            for quality in [Quality::Low, Quality::Medium, Quality::High] {
+                let settings = ResolvedGraphicsSettings {
+                    plume_quality: quality,
+                    plume_flicker: false,
+                    ..settings()
+                };
+                for ev in [13.0, 5.0] {
+                    let view = ViewParams {
+                        world_from_view: glam::dcamera::rh::view::look_at_mat4(
+                            camera,
+                            aim,
+                            DVec3::Y,
+                        )
+                        .inverse(),
+                        world_position_m: camera,
+                        clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                            0.9, 1.0, 0.1, 1e6,
+                        ),
+                        exposure: thessa_render_core::display::manual_exposure(ev),
+                    };
+                    let frame = cache.frame(input(), env, &mesh, camera, &settings).unwrap();
+                    let PlumeFrame::Volume(ref draw) = frame else {
+                        panic!("native qualities share volume optics")
+                    };
+                    if let Some(ref p) = published {
+                        assert!(Arc::ptr_eq(p, &draw.profile));
+                    } else {
+                        published = Some(draw.profile.clone());
+                    }
+                    let name = format!("p{pressure:.0}-{quality:?}-ev{ev:.0}");
+                    records.push(serde_json::json!({"name":name,"pressure_pa":pressure,"quality":quality,
+                        "ev100":ev,"exposure_gain":view.exposure,"extent":[129,129],"origin_len":draw.origin_len,
+                        "axis_radius":draw.axis_radius,"profile":&*draw.profile,"shock_cells":draw.shock_cells,
+                        "centerline":&*draw.centerline,"steps":draw.animation[0],"pixel_grid":draw.pixel_grid,
+                        "camera_m":camera.to_array(),"world_from_view":view.world_from_view.to_cols_array(),
+                        "clip_from_view":view.clip_from_view.to_cols_array()}));
+                    renderer.update(&backend, &view, Some(frame)).unwrap();
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    {
+                        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &color,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: &target.depth,
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(1.0),
+                                        store: wgpu::StoreOp::Store,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                    renderer.encode(&mut encoder, &color, &target.depth);
+                    backend.queue.submit([encoder.finish()]);
+                    let pixels = thessa_render_wgpu::readback::read_color(&backend, &hdr).unwrap();
+                    assert!(
+                        pixels
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .all(|b| u16::from_le_bytes(*b) & 0x7c00 != 0x7c00)
+                    );
+                    assert!(
+                        pixels
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
+                            .any(|p| u16::from_le_bytes([p[4], p[5]]) & 0x7fff > 0)
+                    );
+                    std::fs::write(out.join(format!("{name}.rgba16f")), pixels).unwrap();
+                }
+            }
+        }
+        std::fs::write(
+            out.join("scenes.json"),
+            serde_json::to_vec_pretty(&records).unwrap(),
+        )
+        .unwrap();
+        eprintln!(
+            "native_quality_exposure adapter={:?} records={} field=shared exposure=13/5",
+            backend.adapter_name,
+            records.len()
         );
     }
 

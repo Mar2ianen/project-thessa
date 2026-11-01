@@ -553,7 +553,7 @@ impl Default for GasGiantSettings {
     }
 }
 
-/// Engine plume quality and optional effects. Low uses the impostor cone;
+/// Engine plume quality and optional effects. Native tiers share the volume;
 /// Medium/High integrate the analytic field through a volume ribbon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnginePlumeSettings {
@@ -561,7 +561,7 @@ pub struct EnginePlumeSettings {
     pub enabled: bool,
     #[serde(default)]
     pub quality: Quality,
-    /// Enable field-derived shock diamonds (and bands on the Low impostor).
+    /// Enable field-derived shock diamonds (legacy Low retains texture bands).
     #[serde(default = "default_true")]
     pub mach_diamonds: bool,
     /// Enable plume animation; off freezes the field-time input.

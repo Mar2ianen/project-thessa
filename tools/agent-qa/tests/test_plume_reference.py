@@ -27,7 +27,7 @@ class PlumeReferenceTests(unittest.TestCase):
         self.assertEqual(bounds(s),([0,0,-10],[1.6,2,1.6]))
 
     def test_unsupported_fields_and_nonfinite_cameras_fail(self):
-        for key,value in [("exposure_gain",2),("erosion",0.1),("tail_dissolve",True),("extent",[128,128])]:
+        for key,value in [("exposure_gain",2),("erosion",0.1),("tail_dissolve",True),("extent",[128,128]),("steps",6), ("steps",4)]:
             s=fixture();s[key]=value
             with self.assertRaises(ValueError):validate_scene(s)
         for key,index in [("axis_radius",0),("world_from_view",1),("clip_from_view",5)]:
@@ -85,6 +85,9 @@ class PlumeReferenceTests(unittest.TestCase):
         for i,p in enumerate(quadratic["profile"]): p[0]=4*(i/47)**2
         quadratic["shock_cells"]=[5,0.55,3,0]
         validate_scene(quadratic)
+        low=copy.deepcopy(quadratic);low.update(steps=6,pixel_grid=1);validate_scene(low)
+        low["pixel_grid"]=8
+        with self.assertRaises(ValueError):validate_scene(low)
         for cells in ([5,0,3,0],[-1,1,3,0],[5,1,math.nan,0],[5,1,0.5,0]):
             bad=copy.deepcopy(quadratic);bad["shock_cells"]=cells
             with self.assertRaises(ValueError):validate_scene(bad)

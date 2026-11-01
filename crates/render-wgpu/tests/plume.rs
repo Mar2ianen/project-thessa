@@ -333,28 +333,40 @@ fn frozen_plume_volume_reference() {
 #[test]
 #[ignore = "hardware: compiled-engine pressure/throttle/view gallery; new THESSA_BENCH_OUTPUT required"]
 fn frozen_compiled_plume_reference() {
-    compiled_reference(false, 1);
+    compiled_reference(false, 1, 14);
 }
 
 #[test]
 #[ignore = "hardware: three curved compiled-engine controls for stock Cycles; new output required"]
 fn frozen_curved_plume_reference() {
-    compiled_reference(true, 1);
+    compiled_reference(true, 1, 14);
 }
 
 #[test]
 #[ignore = "hardware: box-filtered compiled gallery; new output directory required"]
 fn frozen_filtered_compiled_plume_reference() {
-    compiled_reference(false, 8);
+    compiled_reference(false, 8, 14);
 }
 
 #[test]
 #[ignore = "hardware: box-filtered curved gallery; new output directory required"]
 fn frozen_filtered_curved_plume_reference() {
-    compiled_reference(true, 8);
+    compiled_reference(true, 8, 14);
 }
 
-fn compiled_reference(curved: bool, pixel_grid: u32) {
+#[test]
+#[ignore = "hardware: Low six-step compiled gallery; new output required"]
+fn frozen_low_compiled_plume_reference() {
+    compiled_reference(false, 1, 6);
+}
+
+#[test]
+#[ignore = "hardware: Low six-step curved compiled gallery; new output required"]
+fn frozen_low_curved_plume_reference() {
+    compiled_reference(true, 1, 6);
+}
+
+fn compiled_reference(curved: bool, pixel_grid: u32, base_steps: u32) {
     use thessa_plume_core::{
         PlumeEnvironment, RigidTransform,
         source::{PropellantFamily, engine_plume_source},
@@ -489,7 +501,7 @@ fn compiled_reference(curved: bool, pixel_grid: u32) {
             centerline,
             origin_len: [origin[0], origin[1], origin[2], len],
             axis_radius: [axis[0], axis[1], axis[2], radius],
-            animation: [14.0, 0.0, 0.0, 0.0],
+            animation: [base_steps as f32, 0.0, 0.0, 0.0],
             shock_cells: [
                 profile.cells.spacing_m as f32,
                 profile.cells.radius_m as f32,
@@ -517,7 +529,7 @@ fn compiled_reference(curved: bool, pixel_grid: u32) {
         };
         let directory = out.join(name);
         std::fs::create_dir(&directory).unwrap();
-        for steps in [14, 16] {
+        for steps in [base_steps, 16] {
             let mut current = draw.clone();
             current.animation[0] = steps as f32;
             renderer
@@ -527,7 +539,7 @@ fn compiled_reference(curved: bool, pixel_grid: u32) {
             clear(&mut encoder, &color, &target.depth, 1.0);
             renderer.encode(&mut encoder, &color, &target.depth);
             backend.queue.submit([encoder.finish()]);
-            let name = if steps == 14 {
+            let name = if steps == base_steps {
                 "linear.rgba16f"
             } else {
                 "steps16.rgba16f"
@@ -544,7 +556,7 @@ fn compiled_reference(curved: bool, pixel_grid: u32) {
             "centerline":&*draw.centerline,
             "curve_metric":"emitted-length-v1",
             "motion":if curved { serde_json::json!({"angular_velocity_nozzle_rps":[0.8,1.2,0.4],"air_velocity_nozzle_mps":[450.0,-180.0,0.0],"ambient_density_kg_m3":env.density_kg_m3}) } else {serde_json::Value::Null},
-            "steps":14, "pixel_filter":"adaptive-box-v1", "pixel_grid":pixel_grid, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
+            "steps":base_steps, "pixel_filter":"adaptive-box-v1", "pixel_grid":pixel_grid, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
             "world_from_view":camera.world_from_view.to_cols_array(), "clip_from_view":camera.clip_from_view.to_cols_array(),
             "engine_spec":spec, "operating_point":point, "effective_throttle":throttle,
             "gas_gamma":source.gamma,"source_throttle":source.throttle, "exit_radius_m":state.exit_radius_m,
@@ -558,7 +570,7 @@ fn compiled_reference(curved: bool, pixel_grid: u32) {
         .unwrap();
     }
     eprintln!(
-        "compiled_plume_reference adapter={:?} curved={curved} cases=9-or-3 extent=129x129 steps=14/16 calibration=none",
+        "compiled_plume_reference adapter={:?} curved={curved} cases=9-or-3 extent=129x129 steps={base_steps}/16 calibration=none",
         backend.adapter_name
     );
 }
@@ -599,7 +611,7 @@ fn volume_energy_matches_cpu_slab_with_depth_and_camera_lifecycle() {
             )
             .is_err()
     );
-    for steps in [8.0, 14.0] {
+    for steps in [6.0, 8.0, 14.0] {
         let draw = volume(steps);
         for position in [DVec3::ZERO, DVec3::new(1e12, -2e12, 3e12)] {
             plume
@@ -777,7 +789,7 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
                         ]
                     })
                     .collect();
-                for steps in [8.0, 14.0] {
+                for steps in [6.0, 8.0, 14.0] {
                     let draw = VolumeDraw {
                         pixel_grid: 1,
                         radial_reference: [1.0, 0.0, 0.0],
@@ -809,7 +821,7 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
                         let error = (linear(actual[center + c]) - expected[c]).abs();
                         max_error = max_error.max(error);
                         assert!(
-                            error < 0.02,
+                            error < if steps == 6.0 { 0.025 } else { 0.02 },
                             "p={pressure_pa} throttle={throttle} z={z} steps={steps} c={c} error={error}"
                         );
                     }
@@ -818,7 +830,7 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
         }
     }
     eprintln!(
-        "plume_profile_oracle max_absolute_linear_rgb_error={max_error:.6} envelope=0.02 cases=120"
+        "plume_profile_oracle max_absolute_linear_rgb_error={max_error:.6} envelope_low=0.025 envelope_medium_high=0.02 cases=180"
     );
 }
 
@@ -911,7 +923,7 @@ fn plume_gpu_cost() {
     camera.clip_from_view =
         glam::dcamera::rh::proj::directx::perspective(0.9, 1280.0 / 720.0, 0.1, 1e6);
     let mut plume = PlumeRenderer::new(&backend, OffscreenTarget::FORMAT, true).unwrap();
-    for steps in [8.0, 14.0] {
+    for steps in [6.0, 8.0, 14.0] {
         plume
             .update(&backend, &camera, Some(PlumeFrame::Volume(volume(steps))))
             .unwrap();
@@ -1001,7 +1013,10 @@ fn profile_cost(curved: bool) {
         (101_325.0, 2, 0.5, 14.0),
         (101_325.0, 64, 0.5, 14.0),
     ];
-    for (case, (pressure_pa, count, center_fraction, steps)) in cases.into_iter().enumerate() {
+    for (case, (pressure_pa, count, center_fraction, mut steps)) in cases.into_iter().enumerate() {
+        if let Ok(value) = std::env::var("THESSA_PLUME_MARCH_STEPS") {
+            steps = value.parse().unwrap();
+        }
         let source = PlumeSource {
             nozzle_to_vehicle: RigidTransform::IDENTITY,
             exit_radius_m: 0.55,

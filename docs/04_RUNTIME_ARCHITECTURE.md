@@ -407,3 +407,11 @@ and opacity are averaged after transport. The grid occupies existing uniform
 padding; Draw stays 112 bytes and Frame 160 bytes. No simulation, wire, clock,
 force, TAA-default or global render-mode change is required. See
 [doc 107](107_PLUME_PIXEL_FOOTPRINT.md) for accuracy, cost and single-depth limits.
+
+
+Native Low now consumes that same cached volume with six base steps, one pixel
+ray and up to nine centerline points (doc 108). The game-owned Low texture,
+scale flicker and independent cone geometry are removed from the native
+producer. The backend's generic cone API and legacy client remain compatible.
+Field/profile/source state and pre-exposure conventions do not depend on
+quality. No new capability, simulation path or graphics setting is added.

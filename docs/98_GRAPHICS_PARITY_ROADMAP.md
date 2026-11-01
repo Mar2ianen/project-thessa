@@ -42,7 +42,7 @@ console-level paper timings are not measurements of Thessa on 880M.
   emission, Cycles diagnostics and actual Unreal HDR B05 (docs 92–97).
 - [x] Order-preserving transparent instance batching with exact HDR and fixed-work
   Radeon ABBA, [doc 96](96_TRANSPARENT_INSTANCE_RUNS.md). Coastal speedup unmeasured.
-- [x] Neutral analytic plume profile/optics, Low impostor, native Medium/High
+- [x] Neutral analytic plume profile/optics, legacy Low impostor, native Low/Medium/High
   volume integration and opaque-depth clipping, [doc 38](38_ENGINE_PLUME_RENDERING.md).
   Current color ramps and client engine deck are provisional, not calibrated.
 - [x] Native plume shared pre-exposure correction and a five-candidate lookup
@@ -82,7 +82,7 @@ Each row is a bounded change in existing owners, not a new generic framework.
 | --- | --- | --- |
 | F01 / measured, closed | `render-wgpu` plume lookup scans up to 64 stations per sample | Five exact-output alternatives rejected after release ABBA on ten views; retain linear lookup. [Doc 99](99_PLUME_EXPOSURE_AND_LOOKUP_AUDIT.md) records p50/p95/p99 and hashes. Reopen only with a changed workload or a new measured reason |
 | F02 / partial, P0 | Pre-exposure and finite-cell emission fixed; four constant-axial controls (doc 100) and nine compiled-methalox pressure/throttle/view controls (doc 102) have actual Cycles comparisons; the reference inside-camera ray start is corrected; the radial mode and 3D motion have independent/stock Cycles controls (docs 104–105), including eight discrete views and a prescribed native motion preview; spatial compression and near-nozzle dense controls now exist (doc 106); finite-pixel filtering and explicit same-filter Cycles controls resolve dominant thin-core aliasing (doc 107) | Extend the frozen gallery to continuous camera/time trajectories, more engine families and general heterogeneous-field convergence. Include continuous axial/side/inside motion, depth occlusion and astronomical origin changes. Existing chord tests do not certify arbitrary animated views |
-| F09 / P0 | Low uses a unit-range optical bake and only darkens pixels at daylight exposure (doc 107); the old CLI whole-image difference counter did not distinguish this from emission | Derive the fallback brightness from the same declared optical field, retain its cheap representation and resolved quality/Off pipeline, and test positive emission at day/night exposure without fitting a display-only gain. Separate terrain-residency differences from plume visibility; retain depth and unchanged authoritative flight state |
+| F09 / native implemented | Native Low consumes the same optical volume at 6 base steps / 1 spatial ray, with the same source/profile and up to 9 motion points. Positive daylight emission, EV13/5 scaling, opaque depth, unchanged authority and lower cost than Medium are verified in doc 108 | Legacy Low remains a separate texture path. Low point sampling still aliases unresolved compression sheets; general angular/temporal/optical calibration is not complete (F02/F04). Preserve the measured accuracy/cost boundary when refining it |
 | F03 / P0 | `terrain-native/src/plume.rs` uses fixed radius, flow, exhaust state and mount; body/rotating-air kinematics now drive 3D motion (doc 105), while environment assumes oxygen | Publish accepted per-nozzle operating points/mounts from the existing resource allocation into presentation; accepted scalar liquid/solid/chamber observations are now retained without another solve ([doc 101](101_ACCEPTED_PROPULSION_OBSERVATIONS.md)). Bind actual nozzle poses/frame revisions and publish/consume them, rather than recomputing from a requested throttle. Use composition/flow queries. Pin SI/frame transforms and inactive/starved engines; no renderer writes to forces, mass flow or clocks |
 | P01 / partial, P0 | Frozen production ground→orbit→ground, closedness, canonical arithmetic and overload recovery now pass; land-only scratch optimization has exact-output release ABBA ([doc 103](103_CBT_FLIGHT_AND_SCRATCH.md)) | Extend to dense equal-error geometry and production multi-level residency, astronomical/body-frame shifts and close soil. Profile shared update/raster/shadow/ocean/RT separately under the same source/error. The fixed six-root-page control is not full Large CBT parity |
 | F04 / P1 | Optical templates are authored RGB ramps; absolute spectral/radiometric calibration absent | Separate regular cells from Mach reflection/Mach-disk topology using consistent nozzle/stagnation inputs, not an arbitrary exit-to-ambient pressure threshold. Calibrate declared exhaust families against physical input ranges and primary observations; preserve pressure-dependent expansion and throttling. Separate model uncertainty from integration error. Do not equate pretty bloom with validated chemistry |
@@ -99,7 +99,7 @@ Each row is a bounded change in existing owners, not a new generic framework.
 | F08 / P1 | Swept-volume nearest-segment queries and near-camera High remain expensive (doc 105) | Reuse existing bounded region/query owners for hierarchical support/segment rejection. Hold the entire optical field, pose trajectory and representation error fixed; use release ABBA plus independent geometry/transport probes. Do not gain speed by dropping motion or density |
 | S04 / P2 | Moving-camera temporal acceptance open; TAA default-off | Use disocclusion/thin-foliage/plume trajectories, frozen exposure and independent reviewers. Do not enable history to hide topology, coverage or transport errors |
 
-F01 yielded diagnostics rather than an accepted optimization. F02/F03/F09 and P01
+F01 yielded diagnostics rather than an accepted optimization. F02/F03 and P01
 are the next substantive plume/planet acceptance tasks. Native B02 and Godot
 remain useful controls, but do not displace the user's plume/planet priorities.
 Reinhard/PBR-neutral tone mapping, automatic exposure and bloom already exist;
@@ -134,3 +134,10 @@ acceptance. The initial unconstrained smooth-skirt supersampling regressed the
 far curved vacuum control; the retained feature budgets and measured costs
 are documented there. Do not reuse historical point-sampling pass times as
 current whole-frame performance.
+
+
+Doc 108 completes native F09 without a fitted display gain: all native tiers
+share the optical field and differ in representation budget. Six steps pass
+180 normalized chord controls; the four-step candidate was rejected. Low
+remains less accurate than Medium/High in axial and subpixel controls, and the
+legacy client still has independent Low optics. This does not close F02/F04.

@@ -18,8 +18,8 @@
 //!
 //! Deliberately NOT modeled here: combustion chemistry, CFD turbulence,
 //! vehicle/propulsion state (owned by simulation), and any renderer. The
-//! client consumes this profile in its Medium/High volume path; the older
-//! cone impostor remains the Low-quality fallback.
+//! native client consumes this profile at every quality with different sampling
+//! budgets; the legacy client retains a cone impostor at Low quality.
 
 #![forbid(unsafe_code)]
 

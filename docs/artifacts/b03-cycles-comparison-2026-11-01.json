@@ -10,8 +10,8 @@
   },
   "adapter": {
     "script": "tools/agent-qa/cycles_b03.py",
-    "sha256": "3a517c0b46a09b10e00629d816c5a509c5291b36f96e8a04878de28c0144c7e3",
-    "commit": "d6eed1d"
+    "sha256": "4eb72b3a21e2ad555732faf769946a65df8df22e0ad1243a192c6ae67c62da0f",
+    "commit": "8e59eaf"
   },
   "reference_scene": {
     "scene_glb_sha256": "e8d3847e20bf0ea855b1791709b1ea267a88098d4d6a5fa2a48c99ecedfb50a4",
@@ -37,16 +37,16 @@
       "interpretation": "Direct-to-Cycles PBR procedural ground comparison using calibrated soil (0.72), moss (1.55 grade factor), and silt/mud (0.85 damp absorption)."
     },
     "golden_sunset_photo_parity": {
-      "command": "python3 tools/agent-qa/cycles_b03.py data/reference-scenes/b03-canonical-coast --output /tmp/cycles_golden_v18 --samples 128 --golden --denoise",
+      "command": "python3 tools/agent-qa/cycles_b03.py data/reference-scenes/b03-canonical-coast --output /tmp/cycles_golden_v26 --samples 128 --golden --denoise",
       "samples": 128,
       "denoiser": "OpenImageDenoise",
       "metrics": {
-        "golden_overall_srgb_mae": 16.732234954833984,
-        "golden_ground_srgb_mae": 15.405571937561035,
-        "golden_sky_srgb_mae": 13.258626937866211,
-        "golden_right_srgb_mae": 17.488525390625,
-        "golden_left_srgb_mae": 19.92890739440918,
-        "cycles_ground_mean_rgb": [101.7, 81.9, 44.4],
+        "golden_overall_srgb_mae": 16.845239639282227,
+        "golden_ground_srgb_mae": 15.38165283203125,
+        "golden_sky_srgb_mae": 12.930560111999512,
+        "golden_right_srgb_mae": 17.6695613861084,
+        "golden_left_srgb_mae": 19.99287986755371,
+        "cycles_ground_mean_rgb": [101.6, 82.0, 44.7],
         "target_ground_mean_rgb": [100.0, 78.4, 43.4]
       },
       "tone_mapping": {

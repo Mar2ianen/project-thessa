@@ -415,7 +415,7 @@ def render_cycles(
         w_bg_cam.inputs["Strength"].default_value = 1.0
 
         w_bg_diffuse = wnodes.new("ShaderNodeBackground")
-        w_bg_diffuse.inputs["Color"].default_value = (0.94, 0.82, 0.67, 1.0)
+        w_bg_diffuse.inputs["Color"].default_value = (0.91, 0.83, 0.72, 1.0)
         w_bg_diffuse.inputs["Strength"].default_value = 8500.0 * rad_scale
 
         wlinks.new(w_lightpath.outputs["Is Camera Ray"], w_mix_cam.inputs[0])
@@ -493,10 +493,10 @@ def render_cycles(
         sun_dir_blender = (0.44169 * right_b + 0.19944 * up_b + 0.87472 * forward_b).normalized()
         sun_obj.rotation_euler = (-sun_dir_blender).to_track_quat("-Z", "Y").to_euler()
 
-        # Fill light from the opposite side to soften shadow contrast
+        # Fill light from the opposite side to soften shadow contrast and supply twilight sky tint
         fill_data = bpy.data.lights.new("Golden Fill", "SUN")
-        fill_data.color = (0.87, 0.84, 0.77)
-        fill_data.energy = 18000.0
+        fill_data.color = (0.88, 0.85, 0.83)
+        fill_data.energy = 19000.0
         fill_data.angle = math.radians(50.0)
         fill_data.use_shadow = False
         fill_obj = bpy.data.objects.new("Golden Fill", fill_data)
@@ -539,24 +539,38 @@ def render_cycles(
         haze_vol.inputs["Color"].default_value = (0.98, 0.78, 0.68, 1.0)
         haze_vol.inputs["Anisotropy"].default_value = 0.68
 
-        # Height falloff: ground mist below 9m, perfectly clear sky above 9m
+        # Atmospheric horizon falloff: ground mist below horizon, smooth angular falloff across distant tree line, zero in sky
         geom = haze_mat.node_tree.nodes.new("ShaderNodeNewGeometry")
         dot_up = haze_mat.node_tree.nodes.new("ShaderNodeVectorMath")
         dot_up.operation = "DOT_PRODUCT"
         dot_up.inputs[1].default_value = (up_b.x, up_b.y, up_b.z)
         haze_mat.node_tree.links.new(geom.outputs["Position"], dot_up.inputs[0])
 
+        vec_len = haze_mat.node_tree.nodes.new("ShaderNodeVectorMath")
+        vec_len.operation = "LENGTH"
+        haze_mat.node_tree.links.new(geom.outputs["Position"], vec_len.inputs[0])
+
+        add_eps = haze_mat.node_tree.nodes.new("ShaderNodeMath")
+        add_eps.operation = "ADD"
+        add_eps.inputs[1].default_value = 0.01
+        haze_mat.node_tree.links.new(vec_len.outputs["Value"], add_eps.inputs[0])
+
+        div_sin = haze_mat.node_tree.nodes.new("ShaderNodeMath")
+        div_sin.operation = "DIVIDE"
+        haze_mat.node_tree.links.new(dot_up.outputs["Value"], div_sin.inputs[0])
+        haze_mat.node_tree.links.new(add_eps.outputs["Value"], div_sin.inputs[1])
+
         ramp_fog = haze_mat.node_tree.nodes.new("ShaderNodeMapRange")
         ramp_fog.inputs["From Min"].default_value = 0.0
-        ramp_fog.inputs["From Max"].default_value = 8.0
+        ramp_fog.inputs["From Max"].default_value = 0.082
         ramp_fog.inputs["To Min"].default_value = 1.0
         ramp_fog.inputs["To Max"].default_value = 0.0
         ramp_fog.clamp = True
-        haze_mat.node_tree.links.new(dot_up.outputs["Value"], ramp_fog.inputs["Value"])
+        haze_mat.node_tree.links.new(div_sin.outputs["Value"], ramp_fog.inputs["Value"])
 
         math_dens = haze_mat.node_tree.nodes.new("ShaderNodeMath")
         math_dens.operation = "MULTIPLY"
-        math_dens.inputs[1].default_value = 0.00040
+        math_dens.inputs[1].default_value = 0.00038
         haze_mat.node_tree.links.new(ramp_fog.outputs["Result"], math_dens.inputs[0])
         haze_mat.node_tree.links.new(math_dens.outputs["Value"], haze_vol.inputs["Density"])
     else:
@@ -631,15 +645,15 @@ def render_cycles(
                         mat.node_tree.links.new(from_socket, warm_mix.inputs[6])
                         # Fern fronds get golden-amber highlights, trees get sunset warmth
                         if material_index in {0, 2, 4, 16, 18, 20}:
-                            warm_mix.inputs[7].default_value = (1.38, 1.20, 0.90, 1.0)
-                            trans_fac = 0.35
+                            warm_mix.inputs[7].default_value = (1.44, 1.25, 0.94, 1.0)
+                            trans_fac = 0.38
                         elif material_index in {8, 11, 14, 23, 26, 29}:
                             # Tree crowns catch intense sunset rim and backlight
-                            warm_mix.inputs[7].default_value = (1.52, 1.34, 1.02, 1.0)
-                            trans_fac = 0.45
+                            warm_mix.inputs[7].default_value = (1.60, 1.40, 1.08, 1.0)
+                            trans_fac = 0.48
                         else:
-                            warm_mix.inputs[7].default_value = (1.32, 1.18, 0.88, 1.0)
-                            trans_fac = 0.32
+                            warm_mix.inputs[7].default_value = (1.34, 1.20, 0.90, 1.0)
+                            trans_fac = 0.34
 
                         # Re-link principled Base Color through warm grade
                         mat.node_tree.links.new(warm_mix.outputs[2], principled.inputs["Base Color"])
@@ -668,7 +682,7 @@ def render_cycles(
                             bark_mix.blend_type = "MULTIPLY"
                             bark_mix.inputs[0].default_value = 1.0
                             mat.node_tree.links.new(bc.links[0].from_socket, bark_mix.inputs[6])
-                            bark_mix.inputs[7].default_value = (2.50, 2.10, 1.65, 1.0)
+                            bark_mix.inputs[7].default_value = (2.75, 2.30, 1.80, 1.0)
                             mat.node_tree.links.new(bark_mix.outputs[2], bc)
                 elif material_index in wood_mat_indices:
                     # Untextured wood stems and tree branches
@@ -678,10 +692,10 @@ def render_cycles(
                         r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
                         if material_index in {9, 12, 15, 24, 27, 30}:
                             # Tree branches in canopy
-                            bc.default_value = (min(1.0, r0 * 3.2 + 0.05), min(1.0, g0 * 2.5 + 0.04), min(1.0, b0 * 1.9 + 0.03), 1.0)
+                            bc.default_value = (min(1.0, r0 * 3.6 + 0.07), min(1.0, g0 * 2.8 + 0.055), min(1.0, b0 * 2.1 + 0.04), 1.0)
                         else:
                             # Fern stems
-                            bc.default_value = (min(1.0, r0 * 2.4 + 0.035), min(1.0, g0 * 1.9 + 0.03), min(1.0, b0 * 1.5 + 0.02), 1.0)
+                            bc.default_value = (min(1.0, r0 * 2.2 + 0.030), min(1.0, g0 * 1.8 + 0.024), min(1.0, b0 * 1.4 + 0.018), 1.0)
                 elif material_index in pebble_mat_indices:
                     # Wet coastal pebbles
                     principled.inputs["Roughness"].default_value = 0.28 if golden else 0.72

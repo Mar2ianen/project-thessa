@@ -147,6 +147,35 @@ def compare_hdr(native_path: Path, cycles_rgba: list[float]) -> dict:
     }
 
 
+def invert_tonemap_pbr_neutral(srgb: np.ndarray, max_peak_clamp: float = 0.985) -> np.ndarray:
+    """Exact mathematical inverse of Khronos PBR Neutral tonemapping + sRGB OETF."""
+    import numpy as np
+    c_out = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
+    start_compression = 0.8 - 0.04
+    desaturation = 0.15
+    d = 1.0 - start_compression
+
+    new_peak = np.max(c_out, axis=-1, keepdims=True)
+    mask = new_peak >= start_compression
+
+    safe_new_peak = np.clip(new_peak, 0.0, max_peak_clamp)
+    peak = np.where(mask, start_compression - d + (d * d) / (1.0 - safe_new_peak), new_peak)
+
+    g_desat = np.where(mask, 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0), 0.0)
+    c_scaled = np.where(mask & (1.0 - g_desat > 1e-5), (c_out - new_peak * g_desat) / np.maximum(1e-5, 1.0 - g_desat), c_out)
+
+    scale = np.where(mask & (peak > 1e-7), new_peak / np.maximum(1e-7, peak), 1.0)
+    c = np.where(mask, c_scaled / np.maximum(1e-7, scale), c_out)
+
+    c_min = np.min(c, axis=-1, keepdims=True)
+    c_min_clamped = np.maximum(0.0, c_min)
+    offset_low = np.sqrt(c_min_clamped / 6.25) - c_min_clamped
+    offset = np.where(c_min < 0.04, offset_low, 0.04)
+
+    rgb_linear = c + offset
+    return np.maximum(0.0, rgb_linear)
+
+
 def ensure_reference_radiance_exr(scene_dir: Path, output_dir: Path, exposure_ev100: float = 11.95, golden: bool = False) -> Path | None:
     """Convert pre-exposed linear HDR reference buffer into radiance EXR for Blender Cycles."""
     exposure_gain = 1.0 / (1.2 * (2.0 ** exposure_ev100))
@@ -164,22 +193,8 @@ def ensure_reference_radiance_exr(scene_dir: Path, output_dir: Path, exposure_ev
             import OpenEXR, Imath
 
             img = Image.open(golden_jpg).resize((1280, 720), Image.Resampling.LANCZOS)
-            from PIL import ImageFilter
-            sky_crop = img.crop((0, 0, 1280, 320)).filter(ImageFilter.GaussianBlur(radius=0.75))
-            img.paste(sky_crop, (0, 0))
-
             srgb = np.array(img).astype(np.float32) / 255.0
-            c_scaled = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
-            start_compression = 0.8 - 0.04
-            d = 1.0 - start_compression
-            new_peak = np.max(c_scaled, axis=-1, keepdims=True)
-            np_safe = np.clip(new_peak, 0.0, 0.955)
-            peak = np.where(new_peak >= start_compression,
-                            start_compression - d + (d * d) / (1.0 - np_safe),
-                            new_peak)
-            scale = np.where(peak > 1e-6, new_peak / np.maximum(1e-6, peak), 1.0)
-            c = np.where(new_peak >= start_compression, c_scaled / np.maximum(1e-6, scale), c_scaled)
-            v_pre = np.where(c < 0.04, np.sqrt(np.maximum(0.0, c) / 6.25), c + 0.04)
+            v_pre = invert_tonemap_pbr_neutral(srgb, max_peak_clamp=0.985)
             radiance = v_pre / exposure_gain
 
             header = OpenEXR.Header(1280, 720)
@@ -396,7 +411,7 @@ def render_cycles(
         w_bg_cam.inputs["Strength"].default_value = 1.0
 
         w_bg_diffuse = wnodes.new("ShaderNodeBackground")
-        w_bg_diffuse.inputs["Color"].default_value = (0.96, 0.72, 0.45, 1.0)
+        w_bg_diffuse.inputs["Color"].default_value = (0.94, 0.82, 0.67, 1.0)
         w_bg_diffuse.inputs["Strength"].default_value = 8500.0 * rad_scale
 
         wlinks.new(w_lightpath.outputs["Is Camera Ray"], w_mix_cam.inputs[0])
@@ -464,7 +479,7 @@ def render_cycles(
     sun_data = bpy.data.lights.new("Thessa Sun", "SUN")
     if golden:
         sun_data.color = (1.0, 0.82, 0.50)
-        sun_data.energy = 28000.0
+        sun_data.energy = 32000.0
         sun_data.angle = math.radians(2.5)
         sun_data.use_shadow = True
 
@@ -476,9 +491,9 @@ def render_cycles(
 
         # Fill light from the opposite side to soften shadow contrast
         fill_data = bpy.data.lights.new("Golden Fill", "SUN")
-        fill_data.color = (0.90, 0.78, 0.60)
-        fill_data.energy = 20000.0
-        fill_data.angle = math.radians(60.0)
+        fill_data.color = (0.87, 0.84, 0.77)
+        fill_data.energy = 18000.0
+        fill_data.angle = math.radians(50.0)
         fill_data.use_shadow = False
         fill_obj = bpy.data.objects.new("Golden Fill", fill_data)
         scene.collection.objects.link(fill_obj)
@@ -517,10 +532,10 @@ def render_cycles(
 
     haze_vol = haze_mat.node_tree.nodes.new("ShaderNodeVolumeScatter")
     if golden:
-        haze_vol.inputs["Color"].default_value = (0.96, 0.86, 0.70, 1.0)
-        haze_vol.inputs["Anisotropy"].default_value = 0.82
+        haze_vol.inputs["Color"].default_value = (0.98, 0.78, 0.68, 1.0)
+        haze_vol.inputs["Anisotropy"].default_value = 0.68
 
-        # Height falloff: ground mist below 10m, perfectly clear sky above 10m
+        # Height falloff: ground mist below 9m, perfectly clear sky above 9m
         geom = haze_mat.node_tree.nodes.new("ShaderNodeNewGeometry")
         dot_up = haze_mat.node_tree.nodes.new("ShaderNodeVectorMath")
         dot_up.operation = "DOT_PRODUCT"
@@ -529,7 +544,7 @@ def render_cycles(
 
         ramp_fog = haze_mat.node_tree.nodes.new("ShaderNodeMapRange")
         ramp_fog.inputs["From Min"].default_value = 0.0
-        ramp_fog.inputs["From Max"].default_value = 10.0
+        ramp_fog.inputs["From Max"].default_value = 8.0
         ramp_fog.inputs["To Min"].default_value = 1.0
         ramp_fog.inputs["To Max"].default_value = 0.0
         ramp_fog.clamp = True
@@ -537,7 +552,7 @@ def render_cycles(
 
         math_dens = haze_mat.node_tree.nodes.new("ShaderNodeMath")
         math_dens.operation = "MULTIPLY"
-        math_dens.inputs[1].default_value = 0.00065
+        math_dens.inputs[1].default_value = 0.00040
         haze_mat.node_tree.links.new(ramp_fog.outputs["Result"], math_dens.inputs[0])
         haze_mat.node_tree.links.new(math_dens.outputs["Value"], haze_vol.inputs["Density"])
     else:
@@ -582,7 +597,24 @@ def render_cycles(
                     if inp_name in principled.inputs:
                         principled.inputs[inp_name].default_value = 0.0
 
-                is_foliage_leaf = principled.inputs["Base Color"].is_linked
+                material_index = None
+                if mat.name.startswith("plant_material_"):
+                    try:
+                        material_index = int(mat.name.rsplit("_", 1)[1])
+                    except ValueError:
+                        material_index = None
+
+                # In scene.glb, foliage leaf materials with green texture atlas are mats 0, 2, 4, 6, 8, 11, 14, 16, 18, 20, 23, 26, 29
+                foliage_mat_indices = {0, 2, 4, 6, 8, 11, 14, 16, 18, 20, 23, 26, 29}
+                bark_mat_indices = {7, 10, 13, 22, 25, 28}
+                wood_mat_indices = {1, 3, 5, 9, 12, 15, 17, 19, 21, 24, 27, 30}
+                pebble_mat_indices = {31, 32, 33}
+                cliff_mat_indices = {34, 35, 36}
+
+                is_foliage_leaf = principled.inputs["Base Color"].is_linked and (
+                    material_index in foliage_mat_indices if material_index is not None else True
+                )
+
                 if is_foliage_leaf:
                     from_socket = principled.inputs["Base Color"].links[0].from_socket
 
@@ -591,38 +623,75 @@ def render_cycles(
                         warm_mix = mat.node_tree.nodes.new("ShaderNodeMix")
                         warm_mix.data_type = "RGBA"
                         warm_mix.blend_type = "MULTIPLY"
-                        warm_mix.inputs[0].default_value = 0.35
+                        warm_mix.inputs[0].default_value = 1.0
                         mat.node_tree.links.new(from_socket, warm_mix.inputs[6])
-                        warm_mix.inputs[7].default_value = (1.10, 0.90, 0.70, 1.0)
+                        # Fern fronds get golden-amber highlights, trees get sunset warmth
+                        if material_index in {0, 2, 4, 16, 18, 20}:
+                            warm_mix.inputs[7].default_value = (1.38, 1.20, 0.90, 1.0)
+                            trans_fac = 0.35
+                        elif material_index in {8, 11, 14, 23, 26, 29}:
+                            # Tree crowns catch intense sunset rim and backlight
+                            warm_mix.inputs[7].default_value = (1.52, 1.34, 1.02, 1.0)
+                            trans_fac = 0.45
+                        else:
+                            warm_mix.inputs[7].default_value = (1.32, 1.18, 0.88, 1.0)
+                            trans_fac = 0.32
+
                         # Re-link principled Base Color through warm grade
                         mat.node_tree.links.new(warm_mix.outputs[2], principled.inputs["Base Color"])
                         leaf_color_socket = warm_mix.outputs[2]
+                        principled.inputs["Roughness"].default_value = 0.35
                     else:
                         leaf_color_socket = from_socket
+                        trans_fac = 0.16
 
                     translucent = mat.node_tree.nodes.new("ShaderNodeBsdfTranslucent")
                     mat.node_tree.links.new(leaf_color_socket, translucent.inputs["Color"])
 
                     mix_trans = mat.node_tree.nodes.new("ShaderNodeMixShader")
-                    mix_trans.inputs[0].default_value = 0.22 if golden else 0.16
+                    mix_trans.inputs[0].default_value = trans_fac
                     mat.node_tree.links.new(principled.outputs["BSDF"], mix_trans.inputs[1])
                     mat.node_tree.links.new(translucent.outputs["BSDF"], mix_trans.inputs[2])
                     mat.node_tree.links.new(mix_trans.outputs["Shader"], out_node.inputs["Surface"])
-                elif has_textures:
-                    # Solid opaque tree trunks and bark
-                    principled.inputs["Roughness"].default_value = 0.85
+                elif material_index in bark_mat_indices:
+                    # Solid opaque tree trunks and textured bark
+                    principled.inputs["Roughness"].default_value = 0.86
                     if golden:
-                        # Brighten bark in golden mode — warm ambient bounce on trunks
                         bc = principled.inputs["Base Color"]
-                        if not bc.is_linked:
-                            r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
-                            bc.default_value = (min(1.0, r0 * 2.5 + 0.02), min(1.0, g0 * 2.2 + 0.015), min(1.0, b0 * 1.8 + 0.01), 1.0)
-                else:
-                    principled.inputs["Roughness"].default_value = 0.32 if golden else 0.72
+                        if bc.is_linked:
+                            bark_mix = mat.node_tree.nodes.new("ShaderNodeMix")
+                            bark_mix.data_type = "RGBA"
+                            bark_mix.blend_type = "MULTIPLY"
+                            bark_mix.inputs[0].default_value = 1.0
+                            mat.node_tree.links.new(bc.links[0].from_socket, bark_mix.inputs[6])
+                            bark_mix.inputs[7].default_value = (2.50, 2.10, 1.65, 1.0)
+                            mat.node_tree.links.new(bark_mix.outputs[2], bc)
+                elif material_index in wood_mat_indices:
+                    # Untextured wood stems and tree branches
+                    principled.inputs["Roughness"].default_value = 0.80 if golden else 0.72
                     if golden and not principled.inputs["Base Color"].is_linked:
                         bc = principled.inputs["Base Color"]
                         r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
-                        bc.default_value = (min(1.0, r0 * 1.8 + 0.01), min(1.0, g0 * 1.6 + 0.01), min(1.0, b0 * 1.3 + 0.005), 1.0)
+                        if material_index in {9, 12, 15, 24, 27, 30}:
+                            # Tree branches in canopy
+                            bc.default_value = (min(1.0, r0 * 3.2 + 0.05), min(1.0, g0 * 2.5 + 0.04), min(1.0, b0 * 1.9 + 0.03), 1.0)
+                        else:
+                            # Fern stems
+                            bc.default_value = (min(1.0, r0 * 2.4 + 0.035), min(1.0, g0 * 1.9 + 0.03), min(1.0, b0 * 1.5 + 0.02), 1.0)
+                elif material_index in pebble_mat_indices:
+                    # Wet coastal pebbles
+                    principled.inputs["Roughness"].default_value = 0.28 if golden else 0.72
+                    if golden and not principled.inputs["Base Color"].is_linked:
+                        bc = principled.inputs["Base Color"]
+                        r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
+                        bc.default_value = (min(1.0, r0 * 1.2 + 0.01), min(1.0, g0 * 1.1 + 0.01), min(1.0, b0 * 1.0 + 0.005), 1.0)
+                else:
+                    # Cliffs / other
+                    principled.inputs["Roughness"].default_value = 0.85 if golden else 0.72
+                    if golden and not principled.inputs["Base Color"].is_linked:
+                        bc = principled.inputs["Base Color"]
+                        r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
+                        bc.default_value = (min(1.0, r0 * 2.0 + 0.03), min(1.0, g0 * 1.7 + 0.025), min(1.0, b0 * 1.4 + 0.02), 1.0)
 
         # Coastal terrain material: faithful radiance from canonical reference (fallback: photogrammetric PBR)
         if "terrain" in mat.name.lower():

@@ -7,10 +7,26 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cycles_b03 import compare_hdr, display_png, load_inputs, sha256
+from cycles_b03 import compare_hdr, display_png, load_inputs, sha256, invert_tonemap_pbr_neutral, tonemap_pbr_neutral
 
 
 class CyclesB03Test(unittest.TestCase):
+    def test_invert_tonemap_pbr_neutral_roundtrip(self):
+        import numpy as np
+        test_rgbs = [
+            [0.1, 0.1, 0.1],
+            [0.39, 0.31, 0.17],  # ground tone
+            [0.63, 0.56, 0.51],  # sky tone
+            [0.85, 0.80, 0.75],  # bright highlight
+        ]
+        for srgb_in in test_rgbs:
+            arr = np.array([[srgb_in]], dtype=np.float32)
+            v_pre = invert_tonemap_pbr_neutral(arr)
+            out = tonemap_pbr_neutral(list(v_pre[0, 0]) + [1.0])
+            expected = [int(round(c * 255.0)) for c in srgb_in]
+            for o, e in zip(out[:3], expected):
+                self.assertLessEqual(abs(o - e), 1)
+
     def test_shared_display_convention_and_finite_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "display.png"

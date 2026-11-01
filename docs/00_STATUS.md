@@ -43,7 +43,7 @@ threshold). [Doc 95](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) implements the
 canonical coastal export B03 (`B03-canonical-coast-v1`), exporting GPU-conforming
 terrain and 27,857 plant instances (112.8M instanced triangles) for a 32-spp
 calibrated procedural-ground Cycles diagnostic (MAE 0.0772, relative L2 0.2876)
-and golden sunset photo-reference parity (overall sRGB MAE 16.85, sky 12.93, ground 15.38, macro low-freq MAE 7.65;
+and golden sunset photo-reference parity (overall sRGB MAE 16.78, sky 12.90, ground 15.27, macro low-freq MAE 7.66;
 see `docs/artifacts/b03-cycles-comparison-2026-11-01.json`). Standardized blind
 arena reviews across B01, B02, and B03 are wired via `tools/agent-qa/prepare_reference_arena.py`
 and `data/reference-scenes/arena-scenes.toml`. Its large generated inputs remain external;

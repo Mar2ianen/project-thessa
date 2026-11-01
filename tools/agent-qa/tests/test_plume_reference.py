@@ -48,6 +48,14 @@ class PlumeReferenceTests(unittest.TestCase):
             bad=copy.deepcopy(scene);bad[key]="fitted"
             with self.assertRaises(ValueError):validate_scene(bad)
 
+    def test_unknown_pixel_filter_and_unsupported_grid_are_rejected(self):
+        for key, value in (("pixel_filter", "blur"), ("pixel_grid", 0), ("pixel_grid", 3)):
+            scene=fixture(); scene[key]=value
+            with self.assertRaises(ValueError): validate_scene(scene)
+        for grid in (1, 2, 4, 8):
+            scene=fixture(); scene.update(pixel_filter="adaptive-box-v1", pixel_grid=grid)
+            validate_scene(scene)
+
     def test_native_artifact_identity_is_verified_before_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);cases={}

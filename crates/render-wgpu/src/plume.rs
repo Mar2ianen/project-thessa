@@ -21,6 +21,9 @@ pub type ProfileStation = [f32; 8];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VolumeDraw {
+    /// Maximum box-filter grid per axis: 1, 2, 4 or 8. Resolved quality
+    /// selects the budget; projected local feature size selects actual work.
+    pub pixel_grid: u32,
     /// Unit nozzle-radial axis, perpendicular to the exhaust direction.
     /// Carries roll into advected 3D shell modes; never derived from camera.
     pub radial_reference: [f32; 3],
@@ -66,6 +69,8 @@ pub struct PlumeStats {
     pub march_steps: u32,
     /// Maximum steps per interval after analytic shock-resolution demand.
     pub march_step_limit: u32,
+    /// Maximum spatial rays per pixel; actual demand is view dependent.
+    pub pixel_ray_limit: u32,
     /// Swept segments; zero denotes the unchanged straight consumer.
     pub centerline_segments: u32,
     pub frame_upload_bytes: u64,
@@ -137,7 +142,7 @@ impl PlumeRenderer {
                 uniform(0, FRAME_BYTES),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -364,7 +369,8 @@ impl PlumeRenderer {
         );
         let draw_bytes = match &frame {
             PlumeFrame::Volume(draw) => {
-                if !(2..=MAX_STATIONS).contains(&draw.profile.len())
+                if ![1, 2, 4, 8].contains(&draw.pixel_grid)
+                    || !(2..=MAX_STATIONS).contains(&draw.profile.len())
                     || !draw
                         .origin_len
                         .iter()
@@ -430,6 +436,7 @@ impl PlumeRenderer {
                     } else {
                         self.stats.march_steps
                     };
+                self.stats.pixel_ray_limit = draw.pixel_grid * draw.pixel_grid;
                 self.stats.centerline_segments = draw.centerline.len().saturating_sub(1) as u32;
                 bytes(
                     rect.into_iter()
@@ -448,7 +455,7 @@ impl PlumeRenderer {
                             draw.centerline.len() as f32,
                         ])
                         .chain(draw.radial_reference)
-                        .chain([0.0])
+                        .chain([draw.pixel_grid as f32])
                         .chain(draw.shock_cells),
                 )
             }
@@ -701,6 +708,7 @@ mod tests {
         };
         let view = ViewUniformBlock::new(&camera).unwrap();
         let mut draw = VolumeDraw {
+            pixel_grid: 1,
             radial_reference: [1.0, 0.0, 0.0],
             centerline: std::sync::Arc::from([]),
             origin_len: [1000.0, 0.0, -10.0, 4.0],

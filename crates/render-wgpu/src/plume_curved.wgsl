@@ -68,7 +68,7 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
     return vec2(near,far);
 }
 
-@fragment fn curved_fragment(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
+fn trace_curved(pixel: vec2<f32>) -> vec4<f32> {
     let ro = frame.camera.xyz;
     let rd = normalize(unproject(pixel.xy, 0.5) - ro);
     let depth = textureLoad(scene_depth, vec2<i32>(pixel.xy), 0);
@@ -92,7 +92,7 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
         }
         intervals[slot] = hit; used += 1u;
     }
-    if used == 0u { discard; }
+    if used == 0u { return vec4(0.0); }
     var merged = 1u;
     for (var j = 1u; j < used; j += 1u) {
         if intervals[j].x <= intervals[merged - 1u].y {
@@ -124,8 +124,8 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
         if draw.flow.y > 0.0 && draw.shock_cells.x > 0.0 && draw.shock_cells.z > 1.0
             && nearest2 < 1.44*draw.shock_cells.y*draw.shock_cells.y {
             // Midpoint error scales as amplitude/N^2. Collisional
-        // contrast scales as C^2, so N scales with compression C.
-        let radial_budget = u32(clamp(ceil(draw.controls.y*draw.shock_cells.z),1.0,64.0));
+            // contrast scales as C^2, so N scales with compression C.
+            let radial_budget = u32(clamp(ceil(draw.controls.y*draw.shock_cells.z),1.0,64.0));
             steps = max(radial_budget,u32(clamp(ceil((t1-t0)/draw.shock_cells.x*8.0),1.0,64.0)));
             warp_radius = min(warp_radius,draw.shock_cells.y);
         }
@@ -165,4 +165,33 @@ fn curve_capsule_interval(ro: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f3
         }
     }
     return vec4(rgb*frame.exposure.x,clamp(1.0-transmission,0.0,1.0));
+}
+
+@fragment fn curved_fragment(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
+    var grid = 1u;
+    if draw.radial_reference.w > 1.0 {
+        let ro = frame.camera.xyz;
+        let rd = normalize(unproject(pixel.xy,0.5)-ro);
+        var nearest = 1e30;
+        var point = centers[0].xyz; var z = 0.0;
+        for (var j = 0u; j+1u < u32(draw.flow.w); j += 1u) {
+            let a = centers[j]; let b = centers[j+1u]; let ab = b.xyz-a.xyz;
+            let lateral = ab-rd*dot(ab,rd); let offset = a.xyz-ro;
+            let fraction = clamp(-dot(offset-rd*dot(offset,rd),lateral)/max(dot(lateral,lateral),1e-12),0.0,1.0);
+            let candidate = mix(a.xyz,b.xyz,fraction);
+            let delta = candidate-ro-rd*max(dot(candidate-ro,rd),0.0);
+            if dot(delta,delta) < nearest {
+                nearest = dot(delta,delta); point = candidate; z = mix(a.w,b.w,fraction);
+            }
+        }
+        grid = pixel_grid(pixel.xy,point,z);
+    }
+    var sum = vec4(0.0);
+    for (var y = 0u; y < grid; y += 1u) {
+        for (var x = 0u; x < grid; x += 1u) {
+            let offset = (vec2<f32>(f32(x),f32(y))+0.5)/f32(grid)-0.5;
+            sum += trace_curved(pixel.xy+offset);
+        }
+    }
+    return sum/f32(grid*grid);
 }

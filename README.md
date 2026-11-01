@@ -893,6 +893,14 @@ gain; the graybody envelope is not calibrated blue-gas radiation.
 
 The contrast-aware plume quadrature cuts the near High curved control from
 17.27–17.33 to 8.84–9.50 ms at the same declared error bound, with smaller
-regressions in some light cases. These are isolated pass timings. Stock Cycles
-thin-jet image differences remain large and visual parity is not accepted;
+regressions in some light cases. These are dated isolated pass timings before spatial filtering;
 [doc 106](docs/106_SPATIAL_SHOCK_FIELD.md) records all cases and limits.
+
+[Finite-pixel plume filtering](docs/107_PLUME_PIXEL_FOOTPRINT.md) now averages
+transported radiance and opacity over unresolved features. The fixed-field
+thin-full diagnostic improves from 58.2% to 1.7% RGB L2 against an explicit
+Cycles BOX reference; the curved control improves from 55.6% to 1.6%.
+Resolved controls retain point sampling. Fine grids target compression sheets;
+the smooth skirt has a cheaper budget. Pass cost and rejected over-refinement
+are documented separately from accuracy. TAA remains default-off. Photo parity,
+general temporal acceptance and Low's daylight brightness remain open.

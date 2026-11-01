@@ -16,7 +16,14 @@ struct Station { geometry: vec4<f32>, emission: vec4<f32>, }
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     let corners = array<vec2<f32>, 6>(vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
         vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
-    return vec4<f32>(mix(draw.rect.xy, draw.rect.zw, corners[index]), 0.0, 1.0);
+    var rect = draw.rect;
+    if draw.radial_reference.w > 1.0 {
+        // Include pixels whose footprint overlaps the conservative support,
+        // even when their centre lies outside its projected rectangle.
+        let pad = 2.0 / vec2<f32>(textureDimensions(scene_depth));
+        rect = vec4(rect.xy-pad,rect.zw+pad);
+    }
+    return vec4<f32>(mix(rect.xy, rect.zw, corners[index]), 0.0, 1.0);
 }
 
 fn sample_station(z: f32) -> Station {
@@ -42,7 +49,7 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
     return normalize(radial+cross(v,radial)+cross(v,cross(v,radial))/denominator);
 }
 
-@fragment fn fragment(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
+fn trace_straight(pixel: vec2<f32>) -> vec4<f32> {
     let ro = frame.camera.xyz;
     let rd = normalize(unproject(pixel.xy, 0.5) - ro);
     let axis = draw.axis_radius.xyz;
@@ -59,16 +66,16 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
     let c = dot(lateral_origin, lateral_origin) - rmax * rmax;
     var t0 = 0.0; var t1 = 1e20;
     if a < 1e-12 {
-        if c > 0.0 { discard; }
+        if c > 0.0 { return vec4(0.0); }
     } else {
         let disc = b * b - a * c;
-        if disc <= 0.0 { discard; }
+        if disc <= 0.0 { return vec4(0.0); }
         let root = sqrt(disc);
         t0 = max(t0, (-b - root) / a);
         t1 = min(t1, (-b + root) / a);
     }
     if abs(da) < 1e-7 {
-        if oa < 0.0 || oa > len { discard; }
+        if oa < 0.0 || oa > len { return vec4(0.0); }
     } else {
         let ta = -oa / da; let tb = (len - oa) / da;
         t0 = max(t0, min(ta, tb)); t1 = min(t1, max(ta, tb));
@@ -77,7 +84,7 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
     // opaque object lies inside the field. No proxy-plane depth shortcut.
     let depth = textureLoad(scene_depth, vec2<i32>(pixel.xy), 0);
     if depth < 1.0 { t1 = min(t1, dot(unproject(pixel.xy, depth) - ro, rd)); }
-    if t1 <= t0 { discard; }
+    if t1 <= t0 { return vec4(0.0); }
     var steps = u32(clamp(draw.controls.y, 1.0, 16.0));
     // Warp the fixed sample budget toward the closest approach to the jet
     // axis. Uniform steps over the far-tail bound miss thin local slices of
@@ -151,4 +158,63 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
         transmission *= absorb;
     }
     return vec4<f32>(rgb * frame.exposure.x, clamp(1.0 - transmission, 0.0, 1.0));
+}
+
+// Finite sensor footprint. Average transported radiance and opacity, never
+// medium coefficients before the nonlinear Beer-Lambert integration.
+fn pixel_span(pixel: vec2<f32>, distance: f32) -> f32 {
+    let ro = frame.camera.xyz;
+    let rd = normalize(unproject(pixel,0.5)-ro);
+    let dx = normalize(unproject(pixel+vec2(1.0,0.0),0.5)-ro)-rd;
+    let dy = normalize(unproject(pixel+vec2(0.0,1.0),0.5)-ro)-rd;
+    return max(length(dx),length(dy))*distance;
+}
+
+fn pixel_grid(pixel: vec2<f32>, point: vec3<f32>, z: f32) -> u32 {
+    let span = pixel_span(pixel,length(point-frame.camera.xyz));
+    let rd = normalize(unproject(pixel,0.5)-frame.camera.xyz);
+    let offset = point-frame.camera.xyz;
+    let separation = length(offset-rd*dot(offset,rd));
+    let radius = max(sample_station(z).geometry.y,1e-6);
+    // Beyond 4R the Gaussian skirt is below 2.5e-6 of its axial weight.
+    // Keep point transport there; do not supersample a distant narrow
+    // segment merely because a broad conservative capsule covers this ray.
+    let shell_margin = 0.5*max(draw.controls.w,0.0);
+    if separation > (4.0+shell_margin)*radius+span { return 1u; }
+    var feature = radius*0.5;
+    // Spend the fine grid on sharp compression sheets. The smooth skirt
+    // uses at most four rays, including in a long curved vacuum barrel.
+    var budget = min(2u,u32(draw.radial_reference.w));
+    if draw.flow.y > 0.0 && draw.shock_cells.x > 0.0 && draw.shock_cells.z > 1.0
+        && separation < 1.2*draw.shock_cells.y+span {
+        feature = min(feature,0.08*draw.shock_cells.y);
+        budget = u32(draw.radial_reference.w);
+    }
+    let demand = span/max(feature,1e-6);
+    var grid = 1u;
+    if demand > 1.0 { grid = 2u; }
+    if demand > 2.0 { grid = 4u; }
+    if demand > 4.0 { grid = 8u; }
+    return min(grid,budget);
+}
+
+@fragment fn fragment(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
+    var grid = 1u;
+    if draw.radial_reference.w > 1.0 {
+        let ro = frame.camera.xyz;
+        let rd = normalize(unproject(pixel.xy,0.5)-ro);
+        let ab = draw.axis_radius.xyz*draw.origin_len.w;
+        let offset = draw.origin_len.xyz-ro;
+        let lateral = ab-rd*dot(ab,rd);
+        let fraction = clamp(-dot(offset-rd*dot(offset,rd),lateral)/max(dot(lateral,lateral),1e-12),0.0,1.0);
+        grid = pixel_grid(pixel.xy,draw.origin_len.xyz+ab*fraction,draw.origin_len.w*fraction);
+    }
+    var sum = vec4(0.0);
+    for (var y = 0u; y < grid; y += 1u) {
+        for (var x = 0u; x < grid; x += 1u) {
+            let offset = (vec2<f32>(f32(x),f32(y))+0.5)/f32(grid)-0.5;
+            sum += trace_straight(pixel.xy+offset);
+        }
+    }
+    return sum/f32(grid*grid);
 }

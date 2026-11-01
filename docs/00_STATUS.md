@@ -117,6 +117,14 @@ power: kinetic W and legacy HDR normalization have distinct contracts. Native
 emission now has a Planck/CIE-Y photometric brightness reference compatible
 with daylight surface exposure; this authored-color graybody approximation
 is not calibrated non-LTE combustion.
+
+[Doc 107](107_PLUME_PIXEL_FOOTPRINT.md) implements finite-pixel native plume
+filtering under existing Medium/High quality resolution. Dense f64 box
+quadrature and explicit stock Cycles BOX controls separate point aliasing from
+transport/model error. The 12 frozen camera/field controls, release pass
+measurements, native CLI and independent-backend checks remain narrower than
+photo or whole-frame acceptance. Fine grids target unresolved compression;
+Low's non-photometric daylight fallback remains an explicit open defect.
 Nonlinear Mach disk, calibrated emission, native volume lighting and visual
 acceptance remain open; the legacy Bevy volume retains its older approximation.
 

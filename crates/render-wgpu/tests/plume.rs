@@ -19,6 +19,7 @@ fn view(position: DVec3, rotation: DQuat) -> ViewParams {
 
 fn volume(steps: f32) -> VolumeDraw {
     VolumeDraw {
+        pixel_grid: 1,
         radial_reference: [1.0, 0.0, 0.0],
         centerline: std::sync::Arc::from([]),
         origin_len: [0.0, -2.0, -10.0, 4.0],
@@ -332,16 +333,28 @@ fn frozen_plume_volume_reference() {
 #[test]
 #[ignore = "hardware: compiled-engine pressure/throttle/view gallery; new THESSA_BENCH_OUTPUT required"]
 fn frozen_compiled_plume_reference() {
-    compiled_reference(false);
+    compiled_reference(false, 1);
 }
 
 #[test]
 #[ignore = "hardware: three curved compiled-engine controls for stock Cycles; new output required"]
 fn frozen_curved_plume_reference() {
-    compiled_reference(true);
+    compiled_reference(true, 1);
 }
 
-fn compiled_reference(curved: bool) {
+#[test]
+#[ignore = "hardware: box-filtered compiled gallery; new output directory required"]
+fn frozen_filtered_compiled_plume_reference() {
+    compiled_reference(false, 8);
+}
+
+#[test]
+#[ignore = "hardware: box-filtered curved gallery; new output directory required"]
+fn frozen_filtered_curved_plume_reference() {
+    compiled_reference(true, 8);
+}
+
+fn compiled_reference(curved: bool, pixel_grid: u32) {
     use thessa_plume_core::{
         PlumeEnvironment, RigidTransform,
         source::{PropellantFamily, engine_plume_source},
@@ -471,6 +484,7 @@ fn compiled_reference(curved: bool) {
             std::sync::Arc::from([])
         };
         let draw = VolumeDraw {
+            pixel_grid,
             radial_reference: [1.0, 0.0, 0.0],
             centerline,
             origin_len: [origin[0], origin[1], origin[2], len],
@@ -530,7 +544,7 @@ fn compiled_reference(curved: bool) {
             "centerline":&*draw.centerline,
             "curve_metric":"emitted-length-v1",
             "motion":if curved { serde_json::json!({"angular_velocity_nozzle_rps":[0.8,1.2,0.4],"air_velocity_nozzle_mps":[450.0,-180.0,0.0],"ambient_density_kg_m3":env.density_kg_m3}) } else {serde_json::Value::Null},
-            "steps":14, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
+            "steps":14, "pixel_filter":"adaptive-box-v1", "pixel_grid":pixel_grid, "exposure_gain":1.0, "erosion":0, "tail_dissolve":false, "diamonds":true,
             "world_from_view":camera.world_from_view.to_cols_array(), "clip_from_view":camera.clip_from_view.to_cols_array(),
             "engine_spec":spec, "operating_point":point, "effective_throttle":throttle,
             "gas_gamma":source.gamma,"source_throttle":source.throttle, "exit_radius_m":state.exit_radius_m,
@@ -765,6 +779,7 @@ fn published_profile_matches_cpu_without_fitted_extinction_or_hue() {
                     .collect();
                 for steps in [8.0, 14.0] {
                     let draw = VolumeDraw {
+                        pixel_grid: 1,
                         radial_reference: [1.0, 0.0, 0.0],
                         centerline: std::sync::Arc::from([]),
                         origin_len: [
@@ -1071,6 +1086,9 @@ fn profile_cost(curved: bool) {
             std::sync::Arc::from([])
         };
         let draw = VolumeDraw {
+            pixel_grid: std::env::var("THESSA_PLUME_PIXEL_GRID")
+                .map(|s| s.parse().unwrap())
+                .unwrap_or(1),
             radial_reference: [1.0, 0.0, 0.0],
             centerline,
             origin_len: [0.0, -z as f32, -distance as f32, profile.length_m as f32],
@@ -1448,4 +1466,156 @@ fn curved_turbulence_uses_the_nozzle_frame() {
         "curved_turbulence adapter={:?} common_rotation_max_rgba_error={max_error}",
         backend.adapter_name
     );
+}
+
+/// Offline pixel-footprint diagnostic. Reuses the neutral optical sampler,
+/// but intersects and integrates camera rays independently in f64.
+#[test]
+#[ignore = "offline: frozen straight scene vs dense point and box-pixel integration"]
+fn frozen_plume_pixel_integral() {
+    use thessa_plume_core::{sample_medium, shock::ShockCells};
+    let input = std::path::PathBuf::from(std::env::var_os("THESSA_PLUME_INPUT").unwrap());
+    let out = std::path::PathBuf::from(std::env::var_os("THESSA_BENCH_OUTPUT").unwrap());
+    std::fs::create_dir(&out).unwrap();
+    let scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&input).unwrap()).unwrap();
+    assert!(scene["centerline"].as_array().unwrap().is_empty());
+    assert_eq!(scene["erosion"], 0);
+    assert_eq!(scene["tail_dissolve"], false);
+    let vector = |name: &str| {
+        scene[name]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let origin = vector("origin_len");
+    let axis = vector("axis_radius");
+    let cells = vector("shock_cells");
+    let axis3 = DVec3::from_slice(&axis);
+    let oc = -DVec3::from_slice(&origin);
+    let projection = vector("clip_from_view");
+    assert_eq!(vector("world_from_view"), DMat4::IDENTITY.to_cols_array());
+    let profile = AxialProfile {
+        length_m: origin[3],
+        regime: ExpansionRegime::Matched,
+        cells: ShockCells {
+            spacing_m: cells[0],
+            radius_m: cells[1],
+            compression: cells[2],
+            phase: cells[3],
+        },
+        stations: scene["profile"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                let v: Vec<_> = row
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect();
+                // Density and temperature are not part of the frozen optical
+                // publication and are not used by sample_medium.
+                AxialStation {
+                    z_m: v[0],
+                    radius_m: v[1],
+                    center_density_kg_m3: 0.0,
+                    center_temp_k: 0.0,
+                    extinction_per_m: v[2],
+                    shock: v[3],
+                    emission_rgb: [v[4], v[5], v[6]],
+                }
+            })
+            .collect(),
+    };
+    let ray = |px: f64, py: f64, steps: usize| {
+        let rd = DVec3::new(
+            (2.0 * px / 129.0 - 1.0) / projection[0],
+            (1.0 - 2.0 * py / 129.0) / projection[5],
+            -1.0,
+        )
+        .normalize();
+        let da = rd.dot(axis3);
+        let oa = oc.dot(axis3);
+        let lateral = rd - axis3 * da;
+        let offset = oc - axis3 * oa;
+        let a = lateral.length_squared();
+        let b = lateral.dot(offset);
+        let c = offset.length_squared() - axis[3] * axis[3];
+        let (mut near, mut far) = (0.0_f64, 1e20_f64);
+        if a < 1e-14 {
+            if c > 0.0 {
+                return [0.0; 4];
+            }
+        } else {
+            let disc = b * b - a * c;
+            if disc <= 0.0 {
+                return [0.0; 4];
+            }
+            let root = disc.sqrt();
+            near = near.max((-b - root) / a);
+            far = far.min((-b + root) / a);
+        }
+        if da.abs() < 1e-12 {
+            if oa < 0.0 || oa > origin[3] {
+                return [0.0; 4];
+            }
+        } else {
+            let lo = -oa / da;
+            let hi = (origin[3] - oa) / da;
+            near = near.max(lo.min(hi));
+            far = far.min(lo.max(hi));
+        }
+        if far <= near {
+            return [0.0; 4];
+        }
+        let dt = (far - near) / steps as f64;
+        let mut t = 1.0;
+        let mut rgb = [0.0; 3];
+        for i in 0..steps {
+            let p = oc + rd * (near + (i as f64 + 0.5) * dt);
+            let z = p.dot(axis3);
+            let sample = sample_medium(&profile, z, (p - axis3 * z).length());
+            let tau = sample.extinction_per_m * dt;
+            let emission_length = if sample.extinction_per_m > 0.0 {
+                -(-tau).exp_m1() / sample.extinction_per_m
+            } else {
+                dt
+            };
+            for (c, v) in rgb.iter_mut().enumerate() {
+                *v += t * sample.emission_rgb[c] * emission_length;
+            }
+            t *= (-tau).exp();
+        }
+        [rgb[0], rgb[1], rgb[2], 1.0 - t]
+    };
+    let mut records = Vec::new();
+    for grid in [1, 2, 4, 8, 16, 32] {
+        let mut pixels = Vec::new();
+        for y in 94..112 {
+            for x in 61..68 {
+                if grid > 8 && !(x == 64 && [105, 106, 107].contains(&y)) {
+                    continue;
+                }
+                let mut sum = [0.0; 4];
+                for sy in 0..grid {
+                    for sx in 0..grid {
+                        let value = ray(
+                            x as f64 + (sx as f64 + 0.5) / grid as f64,
+                            y as f64 + (sy as f64 + 0.5) / grid as f64,
+                            8192,
+                        );
+                        for c in 0..4 {
+                            sum[c] += value[c] / f64::from(grid * grid);
+                        }
+                    }
+                }
+                pixels.push(serde_json::json!({"x":x,"y":y,"rgba":sum}));
+            }
+        }
+        records.push(serde_json::json!({"grid":grid,"pixels":pixels}));
+    }
+    std::fs::write(out.join("pixels.json"),serde_json::to_vec_pretty(&serde_json::json!({"input":input,"dense_steps":8192,"records":records,"scope":"f64 point/box quadrature of frozen optical field, no camera filter or CFD calibration"})).unwrap()).unwrap();
 }

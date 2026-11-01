@@ -1,0 +1,31 @@
+# Canonical Reference Scenes Arena Manifest
+# Paired blind comparisons between Thessa Native (Vulkan) and Blender Cycles 5.2.2 LTS.
+# Prepared via tools/agent-qa/prepare_reference_arena.py
+
+[[scene]]
+id = "b01-material-lab"
+first = "frames/b01_thessa.png"
+first_label = "Thessa Native (Vulkan)"
+second = "frames/b01_cycles.png"
+second_label = "Blender Cycles 5.2.2 LTS"
+
+[[scene]]
+id = "b02-vegetation-cutout"
+first = "frames/b02_thessa.png"
+first_label = "Thessa Native (Vulkan)"
+second = "frames/b02_cycles.png"
+second_label = "Blender Cycles 5.2.2 LTS"
+
+[[scene]]
+id = "b03-canonical-coast"
+first = "frames/b03_thessa.png"
+first_label = "Thessa Native (Vulkan)"
+second = "frames/b03_cycles.png"
+second_label = "Blender Cycles 5.2.2 LTS"
+
+[[scene]]
+id = "b03-golden-sunset"
+first = "frames/b03_golden_ref.png"
+first_label = "Golden Sunset Target Reference"
+second = "frames/b03_golden_cycles.png"
+second_label = "Blender Cycles 5.2.2 LTS (Golden)"

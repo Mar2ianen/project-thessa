@@ -50,6 +50,7 @@ fn source(throttle: f64) -> PlumeSource {
         exit_pressure_pa: 120_000.0,
         exit_temperature_k: 1850.0,
         exit_mach: 3.5,
+        gamma: 1.2,
         throttle,
         exhaust: ExhaustFamily::Methalox,
     }
@@ -265,6 +266,12 @@ impl Cache {
                 time,
                 if settings.plume_flicker { 0.4 } else { 0.0 },
                 field.source.exhaust_velocity_mps as f32 * 0.1,
+            ],
+            shock_cells: [
+                field.profile.cells.spacing_m as f32,
+                field.profile.cells.radius_m as f32,
+                field.profile.cells.compression as f32,
+                field.profile.cells.phase as f32,
             ],
             diamonds: settings.plume_diamonds,
             tail_dissolve: true,
@@ -520,6 +527,21 @@ mod tests {
     #[test]
     #[ignore = "hardware: actual cached native producer orbit/motion HDR preview; new THESSA_BENCH_OUTPUT required"]
     fn plume_motion_gallery() {
+        motion_gallery(false);
+    }
+
+    #[test]
+    #[ignore = "hardware: close native shock-cell orbit at declared 30 kPa ambient"]
+    fn plume_shock_gallery() {
+        motion_gallery(true);
+    }
+
+    fn cache_window(env: &PlumeEnvironment) -> f64 {
+        let profile = build_axial_profile(&source(1.0), env, 48).unwrap();
+        (profile.cells.spacing_m * 2.5).min(profile.length_m)
+    }
+
+    fn motion_gallery(close: bool) {
         use thessa_render_wgpu::{
             Backend, plume::PlumeRenderer, terrain::OffscreenTarget, view::ViewParams,
         };
@@ -546,24 +568,27 @@ mod tests {
         let color = hdr.create_view(&Default::default());
         let mut renderer =
             PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, true).unwrap();
+        let exposure = thessa_render_core::display::manual_exposure(13.0);
         let settings = ResolvedGraphicsSettings {
             plume_quality: Quality::High,
             ..settings()
         };
-        let env = environment(Some([1000.0, 1000.0 / (287.05 * 288.15), 288.15]));
+        let pressure = if close { 30_000.0 } else { 1000.0 };
+        let env = environment(Some([pressure, pressure / (287.05 * 288.15), 288.15]));
         let mut cache = Cache::default();
         let length = build_axial_profile(&source(1.0), &env, 48)
             .unwrap()
             .length_m;
+        let window = if close { cache_window(&env) } else { length };
         let mut records = Vec::new();
         for index in 0..32 {
             let time = f64::from(index) / 20.0;
             let craft = DQuat::from_rotation_z(0.35 * time);
             let position = DVec3::X * (120.0 * time);
             let mesh = instance(position, craft, 1.0);
-            let target = position + craft * (NOZZLE_M + DVec3::NEG_Y * (0.45 * length));
+            let target = position + craft * (NOZZLE_M + DVec3::NEG_Y * (0.45 * window));
             let yaw = time * 1.4;
-            let camera = target + DVec3::new(yaw.sin(), 0.0, yaw.cos()) * (length * 1.25);
+            let camera = target + DVec3::new(yaw.sin(), 0.0, yaw.cos()) * (window * 1.25);
             let view = ViewParams {
                 world_from_view: glam::dcamera::rh::view::look_at_mat4(camera, target, DVec3::Y)
                     .inverse(),
@@ -574,7 +599,7 @@ mod tests {
                     0.1,
                     1e6,
                 ),
-                exposure: 1.0,
+                exposure,
             };
             let input = Input {
                 throttle: 1.0,
@@ -595,7 +620,7 @@ mod tests {
                 "world_from_view":view.world_from_view.to_cols_array(),"origin_len":draw.origin_len,
                 "centerline":&*draw.centerline,"radial_reference":draw.radial_reference,
                     "axis_radius":draw.axis_radius,"animation":draw.animation,"diamonds":draw.diamonds,
-                    "tail_dissolve":draw.tail_dissolve,"clip_from_view":view.clip_from_view.to_cols_array()}),
+                    "shock_cells":draw.shock_cells,"tail_dissolve":draw.tail_dissolve,"clip_from_view":view.clip_from_view.to_cols_array()}),
             );
             renderer.update(&backend, &view, Some(frame)).unwrap();
             if index > 0 {
@@ -637,9 +662,10 @@ mod tests {
         }
         std::fs::write(out.join("scene.json"),serde_json::to_vec_pretty(&serde_json::json!({
             "scope":"Actual native Cache/PlumeRenderer; prescribed kinematic preview, not calibrated firing or authority replay",
-            "extent":[640,360],"frames":records,"settings":settings,"exposure_gain":1.0,
+            "extent":[640,360],"frames":records,"settings":settings,"exposure_gain":exposure,
+            "emission_units":"RGB cd/m^3; graybody reference, authored hue",
             "profile":&*cache.field.as_ref().unwrap().gpu_profile,
-            "ambient_pressure_pa":1000.0,"ambient_density_kg_m3":env.density_kg_m3,
+            "ambient_pressure_pa":pressure,"view_window_m":window,"ambient_density_kg_m3":env.density_kg_m3,
             "air_velocity_render_mps":[-120.0,0.0,0.0],"angular_velocity_render_rps":[0.0,0.0,0.35]
         })).unwrap()).unwrap();
         eprintln!(

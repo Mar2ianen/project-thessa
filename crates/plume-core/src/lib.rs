@@ -28,6 +28,7 @@ pub mod medium;
 pub mod motion;
 pub mod optics;
 pub mod profile;
+pub mod shock;
 pub mod source;
 
 pub use cbt_volume::{

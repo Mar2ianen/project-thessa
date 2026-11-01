@@ -12,7 +12,7 @@ use wgpu::util::DeviceExt;
 const MAX_STATIONS: usize = 64;
 const MAX_CENTERS: usize = 33;
 const FRAME_BYTES: u64 = 160;
-const DRAW_BYTES: u64 = 96;
+const DRAW_BYTES: u64 = 112;
 const COMMON: &str = include_str!("plume_common.wgsl");
 
 /// GPU transport: axial distance/radius/extinction/shock, then emission RGB
@@ -34,6 +34,9 @@ pub struct VolumeDraw {
     pub axis_radius: [f32; 4],
     /// March steps, simulation time, shell erosion strength, advection speed.
     pub animation: [f32; 4],
+    /// Analytic cell spacing, coherent core radius, density jump, phase.
+    /// Zero spacing preserves publications without a spatial shock model.
+    pub shock_cells: [f32; 4],
     pub diamonds: bool,
     pub tail_dissolve: bool,
     /// Finite stations in nondecreasing axial order; immutable publication,
@@ -61,6 +64,8 @@ pub struct PlumeStats {
     pub draw_calls: u32,
     /// Steps per merged ray interval (one for a straight cylinder).
     pub march_steps: u32,
+    /// Maximum steps per interval after analytic shock-resolution demand.
+    pub march_step_limit: u32,
     /// Swept segments; zero denotes the unchanged straight consumer.
     pub centerline_segments: u32,
     pub frame_upload_bytes: u64,
@@ -107,7 +112,8 @@ fn uniform(binding: u32, size: u64) -> wgpu::BindGroupLayoutEntry {
 
 pub fn volume_shader_source() -> String {
     format!(
-        "{COMMON}\n{}\n{}",
+        "{COMMON}\n{}\n{}\n{}",
+        include_str!("plume_shock.wgsl"),
         include_str!("plume_volume.wgsl"),
         include_str!("plume_curved.wgsl")
     )
@@ -365,7 +371,11 @@ impl PlumeRenderer {
                         .chain(draw.axis_radius.iter())
                         .chain(draw.animation.iter())
                         .chain(draw.radial_reference.iter())
+                        .chain(draw.shock_cells.iter())
                         .all(|v| v.is_finite())
+                    || draw.shock_cells[0] < 0.0
+                    || (draw.shock_cells[0] > 0.0
+                        && (draw.shock_cells[1] <= 0.0 || draw.shock_cells[2] < 1.0))
                     || draw.origin_len[3] <= 0.0
                     || draw.axis_radius[3] <= 0.0
                     || (Vec3::from_slice(&draw.axis_radius).length_squared() - 1.0).abs() > 1e-3
@@ -414,6 +424,12 @@ impl PlumeRenderer {
                     return Ok(());
                 };
                 self.stats.march_steps = draw.animation[0].clamp(1.0, 16.0) as u32;
+                self.stats.march_step_limit =
+                    if draw.diamonds && draw.shock_cells[0] > 0.0 && draw.shock_cells[2] > 1.0 {
+                        64
+                    } else {
+                        self.stats.march_steps
+                    };
                 self.stats.centerline_segments = draw.centerline.len().saturating_sub(1) as u32;
                 bytes(
                     rect.into_iter()
@@ -432,7 +448,8 @@ impl PlumeRenderer {
                             draw.centerline.len() as f32,
                         ])
                         .chain(draw.radial_reference)
-                        .chain([0.0]),
+                        .chain([0.0])
+                        .chain(draw.shock_cells),
                 )
             }
             PlumeFrame::Cone(draw) => {
@@ -689,6 +706,7 @@ mod tests {
             origin_len: [1000.0, 0.0, -10.0, 4.0],
             axis_radius: [0.0, 1.0, 0.0, 1.0],
             animation: [8.0, 0.0, 0.0, 0.0],
+            shock_cells: [0.0; 4],
             diamonds: false,
             tail_dissolve: false,
             profile: Arc::from([]),
@@ -930,7 +948,7 @@ mod tests {
                             usage,
                         })
                 };
-                let mut draw = [0.0; 24];
+                let mut draw = [0.0; 28];
                 draw[12] = count as f32;
                 let draw = upload(bytes(draw), wgpu::BufferUsages::UNIFORM);
                 let station_buffer = upload(

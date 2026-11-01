@@ -390,3 +390,11 @@ It does not claim that the complete game loop, factory, thermal/structural
 failure, production persistence, internet multiplayer, or web client already
 exists. Those systems belong in the roadmap and design documents until their
 crate/API/test paths land in the workspace.
+
+
+The native plume consumer carries independent spatial compression parameters
+and a 112-byte draw uniform; the backend-neutral source adds validated exhaust
+gamma. Mean profiles use quadratic axial coordinates with physical linear
+interpolation. Motion/profile publications retain their existing owners, and
+physical state remains read-only. [Doc 106](106_SPATIAL_SHOCK_FIELD.md) records
+field semantics, quality limits and the unresolved radiometric lighting contract.

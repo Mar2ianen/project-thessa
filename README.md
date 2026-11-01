@@ -878,3 +878,21 @@ stock Cycles checks plus an actual native orbit/motion preview. High near-camera
 cost remains material; actual nozzle hardware, motion history, optical calibration
 and local illumination are still open. Sole PRIMARY snapshots now survive
 short queue contention using the existing bounded receive path.
+
+
+[Spatial plume compression cells](docs/106_SPATIAL_SHOCK_FIELD.md) now remain
+independent of mean-profile resolution. Quadratic stations, delayed mixing,
+geometric emission dilution and stable-core/skirt sampling address the blurred
+cone and unstable nozzle structure. Real Dhawan-III/Aeon R observations guide
+the methalox revision. Dense numerical oracles and stock Cycles diagnostics
+are separate from visual acceptance. Mach-reflection topology, calibrated
+radiometry, live nozzle hardware and native volumetric local lighting remain
+open. Native emission uses a temperature-derived photometric brightness
+reference with authored chromaticity, distinct from kinetic W and legacy HDR
+gain; the graybody envelope is not calibrated blue-gas radiation.
+
+The contrast-aware plume quadrature cuts the near High curved control from
+17.27–17.33 to 8.84–9.50 ms at the same declared error bound, with smaller
+regressions in some light cases. These are isolated pass timings. Stock Cycles
+thin-jet image differences remain large and visual parity is not accepted;
+[doc 106](docs/106_SPATIAL_SHOCK_FIELD.md) records all cases and limits.

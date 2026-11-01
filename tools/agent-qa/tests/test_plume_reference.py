@@ -44,7 +44,7 @@ class PlumeReferenceTests(unittest.TestCase):
         scene=fixture();validate_scene(scene)
         scene["shock_radial_mode"]="axisymmetric-j0-v1";validate_scene(scene)
         scene["radial_weight_mode"]="gaussian-v2";validate_scene(scene)
-        for key in ("shock_radial_mode","radial_weight_mode","curve_metric"):
+        for key in ("shock_radial_mode","radial_weight_mode","curve_metric","axial_sampling"):
             bad=copy.deepcopy(scene);bad[key]="fitted"
             with self.assertRaises(ValueError):validate_scene(bad)
 
@@ -73,6 +73,13 @@ class PlumeReferenceTests(unittest.TestCase):
                      ambient_pressure_pa=101325,ambient_temperature_k=288.15,
                      operating_point={"mass_flow_kg_s":10,"exit_temp_k":1000})
         validate_scene(scene)
+        quadratic=copy.deepcopy(scene);quadratic["axial_sampling"]="quadratic-v1"
+        for i,p in enumerate(quadratic["profile"]): p[0]=4*(i/47)**2
+        quadratic["shock_cells"]=[5,0.55,3,0]
+        validate_scene(quadratic)
+        for cells in ([5,0,3,0],[-1,1,3,0],[5,1,math.nan,0],[5,1,0.5,0]):
+            bad=copy.deepcopy(quadratic);bad["shock_cells"]=cells
+            with self.assertRaises(ValueError):validate_scene(bad)
         with self.assertRaises(ValueError):analytic_pixels(scene)
         for key,value in [("source_throttle",0.5),("effective_throttle",0.1),("case","../other"),
                           ("ambient_pressure_pa",math.nan)]:

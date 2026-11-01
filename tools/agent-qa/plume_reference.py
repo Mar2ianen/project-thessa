@@ -49,6 +49,12 @@ def validate_scene(scene):
             or scene["steps"] != 14 or scene["erosion"] != 0 or scene["tail_dissolve"]
             or not scene["diamonds"]):
         raise ValueError("only frozen, unanimated volume controls are supported")
+    sampling=scene.get("axial_sampling","uniform-v1")
+    if sampling not in ("uniform-v1","quadratic-v1"): raise ValueError("unknown axial sampling")
+    cells=scene.get("shock_cells",[0,1,1,0])
+    if (len(cells)!=4 or not all(math.isfinite(v) for v in cells)
+            or cells[0]<0 or cells[1]<=0 or cells[2]<1):
+        raise ValueError("invalid spatial compression cells")
     origin, axis, profile = scene["origin_len"], scene["axis_radius"], scene["profile"]
     world, projection = scene["world_from_view"], scene["clip_from_view"]
     if (len(origin) != 4 or len(axis) != 4 or len(profile) != (2 if identity == ID else 48)
@@ -72,7 +78,7 @@ def validate_scene(scene):
                 or not all(math.isfinite(v) for v in scene["operating_point"].values())
                 or scene["operating_point"]["mass_flow_kg_s"] <= 0
                 or not math.isclose(axis[3],1.6*max(p[1] for p in profile),rel_tol=2e-7)
-                or any(abs(p[0]-origin[3]*i/47) > origin[3]*2e-7 for i,p in enumerate(profile))):
+                or any(abs(p[0]-origin[3]*(i/47)**(2 if sampling=="quadratic-v1" else 1)) > origin[3]*2e-7 for i,p in enumerate(profile))):
             raise ValueError("compiled operating source and uniformly spaced f32 stations required")
     centers = scene.get("centerline", [])
     if identity == MOTION_ID:
@@ -304,7 +310,14 @@ def cycles(directory, output, samples):
             # Float textures are only a stock node-graph representation of the
             # frozen uniform axial samples. No baked color/shape or fitted gain.
             count = len(field["profile"])
-            u = scalar("DIVIDE",scalar("ADD",scalar("MULTIPLY",scalar("DIVIDE",z,field["origin_len"][3]),count-1),0.5),count)
+            normalized=scalar("DIVIDE",z,field["origin_len"][3])
+            index=scalar("MULTIPLY",normalized,count-1)
+            if field.get("axial_sampling","uniform-v1")=="quadratic-v1":
+                lo=scalar("MINIMUM",scalar("FLOOR",scalar("MULTIPLY",scalar("SQRT",scalar("MAXIMUM",normalized,0)),count-1)),count-2)
+                a=scalar("POWER",scalar("DIVIDE",lo,count-1),2)
+                b=scalar("POWER",scalar("DIVIDE",scalar("ADD",lo,1),count-1),2)
+                index=scalar("ADD",lo,scalar("DIVIDE",scalar("SUBTRACT",normalized,a),scalar("SUBTRACT",b,a)))
+            u=scalar("DIVIDE",scalar("ADD",index,0.5),count)
             uv = nodes.new("ShaderNodeCombineXYZ"); assign(uv.inputs["X"],u); uv.inputs["Y"].default_value=0.5
             def table(name, values):
                 image=bpy.data.images.new(name,width=count,height=1,alpha=True,float_buffer=True)
@@ -331,13 +344,33 @@ def cycles(directory, output, samples):
             mode=scalar("MULTIPLY",scalar("MINIMUM",scalar("MAXIMUM",mode,0),1),scalar("LESS_THAN",u2,1))
             shock=scalar("MAXIMUM",scalar("ADD",1,scalar("MULTIPLY",scalar("SUBTRACT",shock,1),mode)),0.15)
         weight=scalar("MULTIPLY",scalar("MULTIPLY",scalar("MULTIPLY",weight,support),shock),metric)
+        density_factor=emission_factor=1
+        cells=field.get("shock_cells",[0,1,1,0])
+        if cells[0]>0 and cells[2]>1:
+            def smooth(lo,hi,x):
+                t=scalar("MINIMUM",scalar("MAXIMUM",scalar("DIVIDE",scalar("SUBTRACT",x,lo),scalar("SUBTRACT",hi,lo)),0),1)
+                return scalar("MULTIPLY",scalar("MULTIPLY",t,t),scalar("SUBTRACT",3,scalar("MULTIPLY",2,t)))
+            shock_z=scalar("MAXIMUM",z,0)
+            x=scalar("DIVIDE",shock_z,cells[0]); r=scalar("DIVIDE",scalar("SQRT",radius_squared),cells[1])
+            phase=scalar("FRACT",scalar("ADD",x,cells[3]))
+            width=scalar("SUBTRACT",1,scalar("ABSOLUTE",scalar("SUBTRACT",scalar("MULTIPLY",phase,2),1)))
+            softness=scalar("ADD",0.08,scalar("MULTIPLY",0.04,x))
+            section=scalar("MAXIMUM",width,softness)
+            axial=scalar("SUBTRACT",scalar("MULTIPLY",phase,2),1)
+            body=scalar("EXPONENT",scalar("MULTIPLY",-2,scalar("ADD",scalar("POWER",scalar("DIVIDE",r,section),2),scalar("MULTIPLY",axial,axial))))
+            distance=scalar("DIVIDE",scalar("SUBTRACT",r,scalar("ABSOLUTE",axial)),softness)
+            incident=scalar("EXPONENT",scalar("MULTIPLY",-0.5,scalar("MULTIPLY",distance,distance)))
+            density=scalar("ADD",1/cells[2],scalar("MULTIPLY",cells[2]-1/cells[2],scalar("MAXIMUM",body,incident)))
+            amount=scalar("MULTIPLY",scalar("SUBTRACT",1,smooth(0.8,1.2,r)),scalar("MULTIPLY",scalar("EXPONENT",scalar("DIVIDE",x,-3)),scalar("SUBTRACT",1,scalar("EXPONENT",scalar("DIVIDE",shock_z,-cells[1])))))
+            density_factor=scalar("ADD",1,scalar("MULTIPLY",amount,scalar("SUBTRACT",density,1)))
+            emission_factor=scalar("ADD",1,scalar("MULTIPLY",amount,scalar("SUBTRACT",scalar("MULTIPLY",density,density),1)))
         volume=nodes.new("ShaderNodeVolumeCoefficients")
         volume.inputs["Scatter Coefficients"].default_value=(0,0,0)
-        absorb=scalar("MULTIPLY",extinction,weight)
+        absorb=scalar("MULTIPLY",scalar("MULTIPLY",extinction,weight),density_factor)
         absorb_rgb=nodes.new("ShaderNodeCombineXYZ")
         for component in ("X","Y","Z"):assign(absorb_rgb.inputs[component],absorb)
         links.new(absorb_rgb.outputs["Vector"],volume.inputs["Absorption Coefficients"])
-        links.new(vector("SCALE",emission,weight),volume.inputs["Emission Coefficients"])
+        links.new(vector("SCALE",emission,scalar("MULTIPLY",weight,emission_factor)),volume.inputs["Emission Coefficients"])
         links.new(volume.outputs["Volume"],nodes.new("ShaderNodeOutputMaterial").inputs["Volume"])
         mesh.materials.append(material)
         camera=bpy.data.objects.new("captured camera",bpy.data.cameras.new("captured camera"));scene.collection.objects.link(camera)
@@ -373,7 +406,7 @@ def cycles(directory, output, samples):
         center_index=(64*129+64)*4
         reports[case]={"metrics":metrics,"center_linear_rgba":list(rgba[center_index:center_index+4]),
                        "actual_camera":actual_camera,"carrier_triangles":len(mesh.loop_triangles),
-                       "axial_representation":"constant coefficients" if field["id"] == ID else "48 frozen f32 samples in two packed linear Non-Color float textures; uniform-coordinate spacing differs from rounded native z by at most 2e-7 of length",
+                       "axial_representation":"constant coefficients" if field["id"] == ID else "48 frozen f32 samples in two packed linear Non-Color float textures; tagged uniform/quadratic coordinates interpolate in axial metres, with native z rounding at most 2e-7 of length",
                        "material_node":"ShaderNodeVolumeCoefficients","scatter_coefficients":list(volume.inputs["Scatter Coefficients"].default_value),
                        "artifacts_sha256":{p.name:sha256(p) for p in destination.iterdir() if p.is_file()}}
         if field["id"] in (ENGINE_ID, MOTION_ID):

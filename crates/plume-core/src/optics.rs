@@ -3,8 +3,8 @@
 //! These are RENDER HUES, not physics: compact RGB approximations that let
 //! hydrolox, kerolox, methalox, solids, nuclear-thermal, cold gas, and ion
 //! beams share one plume architecture without sharing one look. Values are
-//! linear-space, HDR-capable (core entries exceed 1 for bloom), loosely
-//! calibrated against reference test-firing photography. They must never
+//! linear-space, HDR-capable (core entries exceed 1 for bloom), qualitatively
+//! inspired by test-firing photography, without radiometric calibration. They must never
 //! feed back into thrust, heating, or dynamics.
 
 use crate::source::ExhaustFamily;
@@ -24,6 +24,41 @@ pub struct OpticalMaterial {
     pub soot: f64,
     /// Smoke/condensate fraction 0..=1 (downstream sheath strength).
     pub smoke: f64,
+}
+
+/// Blackbody photopic luminance reference in cd/m^2, not a gas spectrum.
+/// Planck's SI spectral radiance integrated against the CIE 1931 Y fit from
+/// Wyman/Sloan/Shirley (JCGT 2013, Eq.4/Table1), 380..780 nm, 5 nm midpoint bins.
+/// The authored exhaust RGB shape remains a non-LTE optical approximation.
+pub fn thermal_luminance_cd_m2(temperature_k: f64) -> f64 {
+    if !temperature_k.is_finite() || temperature_k <= 0.0 {
+        return 0.0;
+    }
+    let mut luminance = 0.0;
+    for bin in 0..80 {
+        let nm = 382.5 + 5.0 * f64::from(bin);
+        let wavelength = nm * 1e-9;
+        let planck = 2.0 * 6.626_070_15e-34 * 299_792_458.0_f64.powi(2)
+            / (wavelength.powi(5)
+                * (6.626_070_15e-34 * 299_792_458.0
+                    / (wavelength * 1.380_649e-23 * temperature_k))
+                    .exp_m1());
+        luminance += planck * photopic_y(nm) * 5e-9 * 683.0;
+    }
+    luminance
+}
+
+fn photopic_y(nm: f64) -> f64 {
+    [
+        (0.821, 568.8, 0.0213, 0.0247),
+        (0.286, 530.9, 0.0613, 0.0322),
+    ]
+    .into_iter()
+    .map(|(a, center, left, right)| {
+        let t = (nm - center) * if nm < center { left } else { right };
+        a * (-0.5 * t * t).exp()
+    })
+    .sum()
 }
 
 /// Axial hue ramp shared by the CPU builder and the GPU volume pass
@@ -85,10 +120,11 @@ pub fn optical_material(family: ExhaustFamily) -> OpticalMaterial {
             smoke: 0.9,
         },
         ExhaustFamily::Methalox => OpticalMaterial {
-            // Blue-white diamond core (Raptor-like), pink-orange mid-body.
+            // Qualitative Dhawan-III methalox test reference: blue/purple
+            // cells and a faint violet skirt; no spectral calibration.
             core_rgb: [1.4, 1.5, 2.8],
-            mid_rgb: [2.4, 1.05, 0.55],
-            edge_rgb: [0.60, 0.30, 0.18],
+            mid_rgb: [0.9, 0.65, 2.0],
+            edge_rgb: [0.32, 0.22, 0.55],
             luminosity: 1.2,
             soot: 0.25,
             smoke: 0.55,
@@ -161,6 +197,27 @@ mod tests {
     }
 
     #[test]
+    fn photopic_reference_converges_against_dense_planck_integration() {
+        for temperature in [800.0, 1437.0, 1850.0, 3000.0, 6000.0] {
+            let mut reference = 0.0;
+            for bin in 0..4000 {
+                let nm = 380.05 + 0.1 * f64::from(bin);
+                let wavelength = nm * 1e-9;
+                let x = 0.014_387_768_775_039_337 / (wavelength * temperature);
+                let radiance = 1.191_042_972_397_188_4e-16 / (wavelength.powi(5) * x.exp_m1());
+                reference += radiance * photopic_y(nm) * 683.0 * 1e-10;
+            }
+            let actual = thermal_luminance_cd_m2(temperature);
+            assert!(
+                (actual / reference - 1.0).abs() < 2e-4,
+                "T={temperature} actual={actual} dense={reference}"
+            );
+        }
+        assert_eq!(thermal_luminance_cd_m2(0.0), 0.0);
+        assert!(thermal_luminance_cd_m2(1850.0) > 100_000.0);
+    }
+
+    #[test]
     fn every_family_has_finite_non_negative_optics() {
         for family in all_families() {
             let m = optical_material(family);
@@ -192,10 +249,10 @@ mod tests {
     }
 
     #[test]
-    fn methalox_core_is_blue_and_mid_is_warm() {
+    fn methalox_test_reference_keeps_blue_cells_downstream() {
         let m = optical_material(ExhaustFamily::Methalox);
         assert!(m.core_rgb[2] > m.core_rgb[0]);
-        assert!(m.mid_rgb[0] > m.mid_rgb[2]);
+        assert!(m.mid_rgb[2] > m.mid_rgb[0]);
     }
 
     #[test]

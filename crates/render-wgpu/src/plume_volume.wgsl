@@ -7,6 +7,7 @@ struct Draw {
     // advection speed, diamonds, tail dissolve, reserved
     flow: vec4<f32>,
     radial_reference: vec4<f32>,
+    shock_cells: vec4<f32>,
 }
 struct Station { geometry: vec4<f32>, emission: vec4<f32>, }
 @group(1) @binding(0) var<uniform> draw: Draw;
@@ -29,16 +30,6 @@ fn sample_station(z: f32) -> Station {
     let b = stations[lo + 1u];
     let t = clamp((z - a.geometry.x) / max(b.geometry.x - a.geometry.x, 1e-9), 0.0, 1.0);
     return Station(mix(a.geometry, b.geometry, t), mix(a.emission, b.emission, t));
-}
-
-// First circular-jet pressure mode, matching plume-core::shock_multiplier.
-// Degree-six J0 polynomial has <5.3e-7 absolute truncation error on the core.
-fn shock_multiplier(axial: f32, u: f32) -> f32 {
-    if u >= 1.0 || axial == 1.0 { return 1.0; }
-    let q = 1.4457964907366962 * u * u;
-    let mode = 1.0 + q * (-1.0 + q * (0.25 + q * (-1.0 / 36.0
-        + q * (1.0 / 576.0 + q * (-1.0 / 14400.0 + q / 518400.0)))));
-    return max(1.0 + (max(axial, 0.15) - 1.0) * clamp(mode, 0.0, 1.0), 0.15);
 }
 
 // Shortest-arc transport of the nozzle frame; no world-up pole switch.
@@ -87,21 +78,38 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
     let depth = textureLoad(scene_depth, vec2<i32>(pixel.xy), 0);
     if depth < 1.0 { t1 = min(t1, dot(unproject(pixel.xy, depth) - ro, rd)); }
     if t1 <= t0 { discard; }
-    let steps = u32(clamp(draw.controls.y, 1.0, 16.0));
+    var steps = u32(clamp(draw.controls.y, 1.0, 16.0));
     // Warp the fixed sample budget toward the closest approach to the jet
     // axis. Uniform steps over the far-tail bound miss thin local slices of
     // a long vacuum barrel. Every bin still spans its actual physical dt.
     var closest = (t0 + t1) * 0.5;
     if a > 1e-8 { closest = clamp(-b / a, t0, t1); }
     let z_closest = clamp(oa + da * closest, 0.0, len);
-    let warp_radius = max(sample_station(z_closest).geometry.y * 2.0, 1e-4);
+    let closest_point = oc+rd*closest;
+    let core_offset = closest_point-axis*clamp(dot(closest_point,axis),0.0,len);
+    let refine = draw.flow.y > 0.0 && draw.shock_cells.x > 0.0 && draw.shock_cells.z > 1.0
+        && dot(core_offset,core_offset) < 1.44*draw.shock_cells.y*draw.shock_cells.y;
+    var warp_radius = max(sample_station(z_closest).geometry.y * 2.0, 1e-4);
+    if refine {
+        // Midpoint error scales as amplitude/N^2. Collisional
+        // contrast scales as C^2, so N scales with compression C.
+        let radial_budget = u32(clamp(ceil(draw.controls.y*draw.shock_cells.z),1.0,64.0));
+        steps = max(radial_budget,u32(clamp(ceil(abs(da)*(t1-t0)/draw.shock_cells.x*8.0),1.0,64.0)));
+        warp_radius = min(warp_radius,draw.shock_cells.y);
+    }
+    var warp = a > 1e-8;
+    if refine && a < 0.05 {
+        closest = t0;
+        warp_radius = max(draw.shock_cells.x,1e-4);
+        warp = true;
+    }
     let angle0 = atan((t0 - closest) / warp_radius);
     let angle1 = atan((t1 - closest) / warp_radius);
     var transmission = 1.0; var rgb = vec3<f32>(0.0);
     for (var i = 0u; i < steps; i += 1u) {
         var begin = mix(t0, t1, f32(i) / f32(steps));
         var end = mix(t0, t1, f32(i + 1u) / f32(steps));
-        if a > 1e-8 {
+        if warp {
             begin = closest + warp_radius * tan(mix(angle0, angle1, f32(i) / f32(steps)));
             end = closest + warp_radius * tan(mix(angle0, angle1, f32(i + 1u) / f32(steps)));
         }
@@ -111,7 +119,8 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
         let station = sample_station(z);
         let radial = p - axis * z;
         let radius = max(station.geometry.y, 1e-6);
-        var r = length(radial);
+        let core_r = length(radial);
+        var r = core_r;
         if draw.controls.w > 0.0 {
             let u1 = draw.radial_reference.xyz; let u2 = cross(axis, u1);
             // Independent zero-mean modal shell representation; no copied
@@ -122,20 +131,23 @@ fn transported_radial_reference(axis: vec3<f32>) -> vec3<f32> {
             r += n * draw.controls.w * radius * smoothstep(0.1, 0.9, r / radius);
         }
         let u = abs(r) / radius;
-        var weight = exp(-2.2 * u * u) + 0.18 * exp(-0.7 * u * u);
+        let core_u = core_r / radius;
+        var weight = exp(-2.2 * core_u * core_u) + 0.18 * exp(-0.7 * u * u);
         // No hard radial skirt clip or fitted mean extinction. Optical
         // integration is the CPU sampler over the same bounded chord.
         if draw.flow.z > 0.0 { weight *= 1.0 - smoothstep(0.70, 1.0, z / len); }
         var shock = 1.0;
-        if draw.flow.y > 0.0 { shock = shock_multiplier(station.geometry.w, u); }
-        let extinction = max(station.geometry.z * weight * shock, 0.0);
+        if draw.flow.y > 0.0 { shock = shock_multiplier(station.geometry.w, core_u); }
+        var cells = vec2(1.0);
+        if draw.flow.y > 0.0 { cells = spatial_shock(z,core_r,draw.shock_cells); }
+        let extinction = max(station.geometry.z * weight * shock * cells.x, 0.0);
         let tau = extinction * dt;
         let absorb = exp(-tau);
         // Integral exp(-sigma*s) ds. The thin-cell series avoids cancellation;
         // its omitted relative term is <= 4.2e-8 below tau=0.01, before f32 error.
         var emission_length = dt * (1.0 - tau * (0.5 - tau / 6.0));
         if tau >= 0.01 { emission_length = (1.0 - absorb) / extinction; }
-        rgb += transmission * max(station.emission.rgb * weight * shock, vec3(0.0)) * emission_length;
+        rgb += transmission * max(station.emission.rgb * weight * shock * cells.y, vec3(0.0)) * emission_length;
         transmission *= absorb;
     }
     return vec4<f32>(rgb * frame.exposure.x, clamp(1.0 - transmission, 0.0, 1.0));

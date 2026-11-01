@@ -684,7 +684,7 @@ def render_cycles(
     haze_vol = haze_mat.node_tree.nodes.new("ShaderNodeVolumeScatter")
     if golden:
         haze_vol.inputs["Color"].default_value = (0.98, 0.78, 0.68, 1.0)
-        haze_vol.inputs["Anisotropy"].default_value = 0.68
+        haze_vol.inputs["Anisotropy"].default_value = 0.50
 
         # Atmospheric horizon falloff: ground mist below horizon, smooth angular falloff across distant tree line, zero in sky
         geom = haze_mat.node_tree.nodes.new("ShaderNodeNewGeometry")
@@ -802,10 +802,36 @@ def render_cycles(
                             warm_mix.inputs[7].default_value = (1.40, 1.24, 0.92, 1.0)
                             trans_fac = 0.38
 
-                        # Re-link principled Base Color through warm grade
-                        mat.node_tree.links.new(warm_mix.outputs[2], principled.inputs["Base Color"])
-                        leaf_color_socket = warm_mix.outputs[2]
+                        # Per-instance chromatic nuance: modulate Hue (0.490..0.510) and Value (0.95..1.05)
+                        obj_info = mat.node_tree.nodes.new("ShaderNodeObjectInfo")
+                        hsv_node = mat.node_tree.nodes.new("ShaderNodeHueSaturation")
+
+                        map_hue = mat.node_tree.nodes.new("ShaderNodeMapRange")
+                        map_hue.inputs["From Min"].default_value = 0.0
+                        map_hue.inputs["From Max"].default_value = 1.0
+                        map_hue.inputs["To Min"].default_value = 0.490
+                        map_hue.inputs["To Max"].default_value = 0.510
+                        mat.node_tree.links.new(obj_info.outputs["Random"], map_hue.inputs["Value"])
+                        mat.node_tree.links.new(map_hue.outputs["Result"], hsv_node.inputs["Hue"])
+
+                        map_val = mat.node_tree.nodes.new("ShaderNodeMapRange")
+                        map_val.inputs["From Min"].default_value = 0.0
+                        map_val.inputs["From Max"].default_value = 1.0
+                        map_val.inputs["To Min"].default_value = 0.95
+                        map_val.inputs["To Max"].default_value = 1.05
+                        mat.node_tree.links.new(obj_info.outputs["Random"], map_val.inputs["Value"])
+                        mat.node_tree.links.new(map_val.outputs["Result"], hsv_node.inputs["Value"])
+
+                        mat.node_tree.links.new(warm_mix.outputs[2], hsv_node.inputs["Color"])
+                        mat.node_tree.links.new(hsv_node.outputs["Color"], principled.inputs["Base Color"])
+                        leaf_color_socket = hsv_node.outputs["Color"]
                         principled.inputs["Roughness"].default_value = 0.34
+
+                        # Waxy cuticle sheen: golden rim specular
+                        if "Sheen Weight" in principled.inputs:
+                            principled.inputs["Sheen Weight"].default_value = 0.35
+                            if "Sheen Tint" in principled.inputs:
+                                principled.inputs["Sheen Tint"].default_value = (1.0, 0.85, 0.55, 1.0)
                     else:
                         leaf_color_socket = from_socket
                         trans_fac = 0.16

@@ -68,10 +68,10 @@ The current default procedural run (`cycles_metrics.json`) gives:
 | Metric | Value |
 | --- | ---: |
 | Samples | 32 |
-| Linear RGB MAE | 0.080588 |
-| Linear RGB RMSE | 0.111143 |
-| Relative L2 against native | 0.303041 |
-| Top-10 pixels' squared-error fraction | 0.000989 (0.10%) |
+| Linear RGB MAE | 0.077244 |
+| Linear RGB RMSE | 0.105474 |
+| Relative L2 against native | 0.287584 |
+| Top-10 pixels' squared-error fraction | 0.002479 (0.25%) |
 
 These values are a whole-frame diagnostic. They mix terrain-material mismatch,
 plant opacity/transmission approximation, sky and haze approximations, and

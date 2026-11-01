@@ -287,9 +287,9 @@ def ensure_ground_textures(output_dir: Path) -> dict[str, Path]:
             h16 = (pixels[:, :, 4].astype(np.uint16) | (pixels[:, :, 5].astype(np.uint16) << 8))
 
             if name == "forest-ground-04":
-                # Damp coastal soil absorption (0.78 linear reflectance)
+                # Damp coastal soil absorption (0.72 linear reflectance)
                 diff_f = rgb.astype(np.float32) / 255.0
-                diff_lin = np.where(diff_f <= 0.04045, diff_f / 12.92, ((diff_f + 0.055) / 1.055) ** 2.4) * 0.78
+                diff_lin = np.where(diff_f <= 0.04045, diff_f / 12.92, ((diff_f + 0.055) / 1.055) ** 2.4) * 0.72
                 srgb = np.where(diff_lin <= 0.0031308, diff_lin * 12.92, 1.055 * (diff_lin ** (1.0 / 2.4)) - 0.055)
                 Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8)).save(targets["soil_diff"])
                 Image.fromarray(rough).save(targets["soil_rough"])
@@ -300,14 +300,18 @@ def ensure_ground_textures(output_dir: Path) -> dict[str, Path]:
                 diff_f = rgb.astype(np.float32) / 255.0
                 diff_lin = np.where(diff_f <= 0.04045, diff_f / 12.92, ((diff_f + 0.055) / 1.055) ** 2.4)
                 grade = np.array([0.180, 0.350, 0.220], dtype=np.float32)
-                moss_lin = diff_lin * grade * 1.70
+                moss_lin = diff_lin * grade * 1.55
                 srgb = np.where(moss_lin <= 0.0031308, moss_lin * 12.92, 1.055 * (moss_lin ** (1.0 / 2.4)) - 0.055)
                 Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8)).save(targets["moss_diff"])
                 Image.fromarray(rough).save(targets["moss_rough"])
                 Image.fromarray((h16 // 256).astype(np.uint8)).save(targets["moss_disp"])
 
             elif name == "mud-litter-01":
-                Image.fromarray(rgb).save(targets["mud_diff"])
+                # Damp coastal mud and silt absorption
+                diff_f = rgb.astype(np.float32) / 255.0
+                diff_lin = np.where(diff_f <= 0.04045, diff_f / 12.92, ((diff_f + 0.055) / 1.055) ** 2.4) * 0.85
+                srgb = np.where(diff_lin <= 0.0031308, diff_lin * 12.92, 1.055 * (diff_lin ** (1.0 / 2.4)) - 0.055)
+                Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8)).save(targets["mud_diff"])
                 Image.fromarray(rough).save(targets["mud_rough"])
 
         return targets

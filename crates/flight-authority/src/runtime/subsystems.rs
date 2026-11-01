@@ -45,6 +45,9 @@ impl FlightAuthority {
         if let Some(origin) = &mut self.starter_render_origin_body_m {
             *origin += frame_shift_body_m;
         }
+        if let Some((_, observation)) = &mut self.last_propulsion_observation {
+            observation.shift_nozzle_frame(frame_shift_body_m);
+        }
         Ok(())
     }
 

@@ -78,7 +78,7 @@ pub use fusion::{
 pub use jet::{CompiledJet, JetCommand, JetMount};
 pub use liquid::{CompiledLiquid, LiquidEngineSpec};
 pub use material::{ChamberMaterial, CoolingMode};
-pub use mount::{EngineMount, GimbalEffector};
+pub use mount::{EngineMount, GimbalEffector, NozzleOutlet};
 pub use nozzle::{
     NozzleContour, NozzleExitState, characteristic_velocity, mach_from_area_ratio,
     thrust_coefficient,

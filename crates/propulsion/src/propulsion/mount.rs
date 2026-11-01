@@ -5,6 +5,47 @@ use serde::{Deserialize, Serialize};
 
 use super::{CompiledEngine, PropulsionError};
 
+/// Physical circular exit in the vehicle's current COM-relative body frame.
+/// No renderer, asset scale, camera or requested throttle participates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NozzleOutlet {
+    pub position_body_m: [f64; 3],
+    pub exhaust_axis_body: [f64; 3],
+    pub radius_m: f64,
+}
+
+impl NozzleOutlet {
+    pub(crate) fn from_throat(
+        position: [f64; 3],
+        thrust_axis: [f64; 3],
+        length: f64,
+        radius: f64,
+        contour: super::NozzleContour,
+    ) -> Option<Self> {
+        use glam::DVec3;
+        let position = DVec3::from_array(position);
+        let axis = DVec3::from_array(thrust_axis);
+        // An aerospike needs annular/plug geometry, not a fabricated disk.
+        if contour == super::NozzleContour::Aerospike
+            || !position.is_finite()
+            || !axis.is_finite()
+            || (axis.length_squared() - 1.0).abs() > 2e-9
+            || !length.is_finite()
+            || length <= 0.0
+            || !radius.is_finite()
+            || radius <= 0.0
+        {
+            return None;
+        }
+        let exit = position - axis * length;
+        exit.is_finite().then_some(Self {
+            position_body_m: exit.to_array(),
+            exhaust_axis_body: (-axis).to_array(),
+            radius_m: radius,
+        })
+    }
+}
+
 /// One gimbal control effector for the flight allocator. A normalized
 /// command in [-1, 1] spans the gimbal range about `gimbal_axis`
 /// (right-hand rule); force/moment scale linearly with the command.
@@ -31,6 +72,22 @@ pub struct EngineMount {
 }
 
 impl EngineMount {
+    /// Exit plane from the authored throat station. Missing legacy geometry
+    /// and unsupported plug/annular exits stay unavailable; no length fit.
+    pub fn nozzle_outlet(&self) -> Option<NozzleOutlet> {
+        let (length, radius, contour) = match &self.engine {
+            CompiledEngine::Liquid(e) => (e.nozzle_length_m, e.exit_radius_m, e.contour),
+            CompiledEngine::Solid(e) => (e.nozzle_length_m?, e.exit_radius_m, e.contour),
+        };
+        NozzleOutlet::from_throat(
+            self.position_body_m,
+            self.thrust_axis_body,
+            length,
+            radius,
+            contour,
+        )
+    }
+
     /// Validate mount data (NaN fails closed; axis must be unit).
     pub fn validate(&self) -> Result<(), PropulsionError> {
         if self.name.trim().is_empty() {

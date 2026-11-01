@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "milestone_date": "2026-11-01",
+  "source_base": "65c92dbc6245d20b206e9f339aaf5455573be897",
+  "integrated_base": "8b86ecec695893e4414cbc34a067c9858dc8d269",
+  "scope": "Read-only accepted rocket outlet geometry and already-allocated plume state; F03 producer slice only. No renderer, wire, force integration, clocks or settings change.",
+  "source_sha256": {
+    "crates/flight-authority/src/runtime/advance.rs": "1bfdac78d8089e813765379c78969cc08a68a84e6f6620ee878f9e2238be2288",
+    "crates/flight-authority/src/runtime/subsystems.rs": "55acba02d1dd71bac1f3ef561ec58e01ff7be028804778cb8127da33fd435a7e",
+    "crates/flight-authority/src/runtime_tests.rs": "37a9d81c26166e1430544ea75103ece986e34adb0461aa01a09d2e07f10c42f4",
+    "crates/propulsion/src/propulsion/engine.rs": "bf32fcea284771af4eb000e97495a21d9db5204fe188b0c6594dc1f82528382e",
+    "crates/propulsion/src/propulsion/mod.rs": "7cbe905f0acc5c52727417e84ecc76f020efdcd8bf3f24ba4886da4f6bb513fb",
+    "crates/propulsion/src/propulsion/mount.rs": "8f1959ec13ea2b2bfe8c13c3f2575d2abaa935fa6d4ebcbaa20691698988026f",
+    "crates/propulsion/src/propulsion/solid.rs": "79e9ca2e99ab4be962152b00e83b89814f5c8cd7336d5dea4b110ee73602ded0",
+    "crates/propulsion/src/propulsion/system.rs": "2de81c446f14d2c9da57f093f4a2176d466fea595773402a890632d773d96db7",
+    "crates/sim-core/src/lib.rs": "16a9ce7494cee6fac69da46abba45fa750f6be0f36764e1a3eb62bdc685556f9",
+    "crates/vehicle-core/src/lib.rs": "a05ba0c016e227933bd0aca4a16ed9ff277499e789f77caee22a3971eb7e9723",
+    "crates/vehicle-core/src/resources.rs": "2728448dcf2e9280beb3caab835f1a827a83eabc278b5177c28638cd736849ad",
+    "crates/flight-authority/benches/resource_allocation.rs": "7902f1efa76599c3e2965db50f04d04cda94dac95c3d5500766d9b082df74902"
+  },
+  "identities": {
+    "source_base": "65c92dbc6245d20b206e9f339aaf5455573be897",
+    "baseline": {
+      "frozen_identity": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/engine-boundaries-2026-10-29/nozzle-observation/candidate-identity.json",
+      "binary_sha256": "d40d4cccf9b9cc1877b9d6648aacae6bc628f218b81967fa7846270ead338359",
+      "numeric_source_matches_current_head": true,
+      "source_comparison_commit": "a775d74",
+      "paths_checked": [
+        "crates/propulsion",
+        "crates/vehicle-core",
+        "crates/sim-core",
+        "crates/flight-authority",
+        "crates/collision",
+        "crates/flight-control",
+        "tools/worldgen-rocky",
+        "crates/aero-core",
+        "crates/celestial",
+        "crates/trajectory"
+      ]
+    },
+    "candidate": {
+      "binary_sha256": "0ca12006d6263ea4541f2955324e3d7f1e6594308e97208c4e8a0506c2d849bd",
+      "cargo_artifact": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/horizon-perf-target/release/deps/resource_allocation-b0befd1b14e9fbbe",
+      "build_command": "cargo bench --offline --locked -p thessa-flight-authority --bench resource_allocation --no-run --message-format=json",
+      "source_sha256": {
+        "crates/flight-authority/src/runtime/advance.rs": "1bfdac78d8089e813765379c78969cc08a68a84e6f6620ee878f9e2238be2288",
+        "crates/flight-authority/src/runtime/subsystems.rs": "55acba02d1dd71bac1f3ef561ec58e01ff7be028804778cb8127da33fd435a7e",
+        "crates/flight-authority/src/runtime_tests.rs": "37a9d81c26166e1430544ea75103ece986e34adb0461aa01a09d2e07f10c42f4",
+        "crates/propulsion/src/propulsion/engine.rs": "bf32fcea284771af4eb000e97495a21d9db5204fe188b0c6594dc1f82528382e",
+        "crates/propulsion/src/propulsion/mod.rs": "7cbe905f0acc5c52727417e84ecc76f020efdcd8bf3f24ba4886da4f6bb513fb",
+        "crates/propulsion/src/propulsion/mount.rs": "8f1959ec13ea2b2bfe8c13c3f2575d2abaa935fa6d4ebcbaa20691698988026f",
+        "crates/propulsion/src/propulsion/solid.rs": "79e9ca2e99ab4be962152b00e83b89814f5c8cd7336d5dea4b110ee73602ded0",
+        "crates/propulsion/src/propulsion/system.rs": "2de81c446f14d2c9da57f093f4a2176d466fea595773402a890632d773d96db7",
+        "crates/sim-core/src/lib.rs": "16a9ce7494cee6fac69da46abba45fa750f6be0f36764e1a3eb62bdc685556f9",
+        "crates/vehicle-core/src/lib.rs": "a05ba0c016e227933bd0aca4a16ed9ff277499e789f77caee22a3971eb7e9723",
+        "crates/vehicle-core/src/resources.rs": "2728448dcf2e9280beb3caab835f1a827a83eabc278b5177c28638cd736849ad",
+        "crates/flight-authority/benches/resource_allocation.rs": "7902f1efa76599c3e2965db50f04d04cda94dac95c3d5500766d9b082df74902"
+      }
+    },
+    "benchmark_sha256": "7902f1efa76599c3e2965db50f04d04cda94dac95c3d5500766d9b082df74902"
+  },
+  "benchmark": {
+    "cpu": "AMD Ryzen AI 9 H 365 w/ Radeon 880M",
+    "scenario": "32 liquid engines / 64 tanks; fixed initial inventory; 1/120 s; all full throttle; 101325 Pa",
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "warmup": 64,
+    "iterations_per_batch": 20000,
+    "batches_per_process": 5,
+    "batch_means_ns": {
+      "0-baseline.log": [
+        4959.4,
+        4925.3,
+        3908.4,
+        3425.2,
+        3492.1
+      ],
+      "1-candidate.log": [
+        4005.7,
+        3949.5,
+        3891.6,
+        3905.5,
+        3923.0
+      ],
+      "2-candidate.log": [
+        4125.2,
+        3884.3,
+        3871.8,
+        3878.2,
+        3910.4
+      ],
+      "3-baseline.log": [
+        3755.5,
+        3473.2,
+        3496.1,
+        3492.0,
+        3486.3
+      ]
+    },
+    "baseline_median_ns": 3494.1,
+    "candidate_median_ns": 3907.95,
+    "delta_ns": 413.8499999999999,
+    "delta_percent": 11.84425173864514,
+    "physical_allocation_bits_identical": true,
+    "physical_allocation_line_sha256": "3aa79367d018234fcb5b45044d8713721543b36ff2bcd7e9540f34b29fc9f24a",
+    "scope": "Batch means, not frame latency percentiles. Solid/system branches tested, not timed. Baseline is verified frozen doc101 accepted-observation binary, same numeric/allocator source as current HEAD; unchanged benchmark."
+  },
+  "tests": {
+    "command": "cargo test -p thessa-propulsion -p thessa-vehicle-core -p thessa-flight-authority -p thessa-sim-core --lib",
+    "passed": {
+      "flight_authority": 115,
+      "propulsion": 128,
+      "sim_core": 152,
+      "vehicle_core": 159
+    },
+    "ignored": {
+      "flight_authority": 2,
+      "sim_core": 1
+    },
+    "strict_clippy": "thessa-propulsion thessa-vehicle-core thessa-sim-core thessa-flight-authority --all-targets -- -D warnings",
+    "consumer_compile": "cargo check -p thessa-flight-net -p thessa-server -p thessa-vehicle-baker --all-targets",
+    "architecture": {
+      "packages": 44,
+      "guarded_foundations": 20,
+      "harness_tests": 13
+    },
+    "regressions": [
+      "authored throat-to-exit geometry; arbitrary rotated/translated mount; unsupported aerospike and invalid metadata unavailable",
+      "legacy solid/chamber JSON retains identical operating points; missing metadata remains None",
+      "all liquid/system nozzle IDs, exact allocated flows and zero-flow shutdown",
+      "solid inactive and partial-tick burnout retain state/fraction without a second throttle",
+      "postburn COM outlet agreement <1e-12 m in body axes",
+      "same-time manual fuel transfer preserves outlet world position <1e-3 m and point velocity <1e-8 m/s; body rebase error <1e-12 m",
+      "existing rejection tests preserve entire last accepted observation including outlets"
+    ]
+  },
+  "format_audit": {
+    "vehicle_baker": "Named JSON via serde_json::to_string_pretty(&vehicle), tools/vehicle-baker/src/main.rs",
+    "legacy_metadata": "serde(default) optional compiled solid length / chamber length and contour; optional nozzles in observation JSON. No claim of compatibility with old binary Serde layouts.",
+    "wire": "No VehicleDefinition/operating observation fields added to flight-net; protocol remains v10. Future wire publication needs an explicit version update."
+  },
+  "limitations": [
+    "Native renderer still consumes its provisional deck; this is no visual parity result.",
+    "Definition-local nozzle IDs require owner vehicle and geometry/frame revision before transport.",
+    "Accepted end timestamp refers to the sampled interval; partial solid burnout is not an endpoint burning promise.",
+    "No active gimbal pose is fabricated; current physical mount axes are used.",
+    "Annular/aerospike and legacy missing outlets remain None.",
+    "Multi-nozzle optical overlap and remote consumption remain open; no GPU capture or whole-frame speed claim."
+  ],
+  "raw_evidence": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/accepted-nozzle-outlets-2026-11-01"
+}

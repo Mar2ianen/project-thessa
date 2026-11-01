@@ -733,6 +733,7 @@ impl SolidMotorSpec {
             throat_radius_m: self.throat_radius_m,
             expansion_ratio: self.expansion_ratio,
             exit_radius_m,
+            nozzle_length_m: Some(self.nozzle_length_m),
             divergence_factor: divergence,
             gamma: thermo.gamma,
             chamber_temp_k: thermo.chamber_temp_k,
@@ -796,6 +797,9 @@ pub struct CompiledSolid {
     pub throat_radius_m: f64,
     pub expansion_ratio: f64,
     pub exit_radius_m: f64,
+    /// Authored throat-to-exit length; missing in legacy bakes.
+    #[serde(default)]
+    pub nozzle_length_m: Option<f64>,
     pub divergence_factor: f64,
     pub gamma: f64,
     pub chamber_temp_k: f64,

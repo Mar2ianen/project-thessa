@@ -40,7 +40,7 @@ pub struct ChamberSpec {
     pub expansion_ratio: f64,
     pub nozzle_length_m: f64,
     pub contour: NozzleContour,
-    /// Chamber/nozzle station in vehicle body metres.
+    /// Mount/throat station in vehicle body metres.
     pub position_body_m: [f64; 3],
     /// Unit thrust direction in vehicle body axes.
     pub thrust_axis_body: [f64; 3],
@@ -78,6 +78,12 @@ pub struct CompiledChamber {
     pub throat_radius_m: f64,
     pub expansion_ratio: f64,
     pub exit_radius_m: f64,
+    /// Authored throat-to-exit length; missing in legacy bakes.
+    #[serde(default)]
+    pub nozzle_length_m: Option<f64>,
+    /// Contour is absent in legacy bakes, so an exit cannot be inferred.
+    #[serde(default)]
+    pub contour: Option<NozzleContour>,
     pub exit_area_m2: f64,
     pub divergence_factor: f64,
     pub exit_mach: f64,
@@ -354,6 +360,8 @@ impl PropulsionSystemSpec {
                 throat_radius_m: chamber.throat_radius_m,
                 expansion_ratio: chamber.expansion_ratio,
                 exit_radius_m,
+                nozzle_length_m: Some(chamber.nozzle_length_m),
+                contour: Some(chamber.contour),
                 exit_area_m2,
                 divergence_factor: divergence,
                 exit_mach: exit.exit_mach,
@@ -476,6 +484,19 @@ impl PropulsionSystemSpec {
             spool_tau_s: limits.spool_tau_s,
             restartable: self.restartable,
         })
+    }
+}
+
+impl CompiledChamber {
+    /// Circular exit geometry only. Legacy/annular outlets remain explicit None.
+    pub fn nozzle_outlet(&self) -> Option<super::mount::NozzleOutlet> {
+        super::mount::NozzleOutlet::from_throat(
+            self.position_body_m,
+            self.thrust_axis_body,
+            self.nozzle_length_m?,
+            self.exit_radius_m,
+            self.contour?,
+        )
     }
 }
 

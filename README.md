@@ -849,8 +849,10 @@ validation, with engine calibration and live per-nozzle extraction still open.
 
 [Accepted rocket observations](docs/101_ACCEPTED_PROPULSION_OBSERVATIONS.md)
 now retain the liquid/solid/chamber points used by resource allocation, published
-only after an accepted physical tick. The fixed native plume deck is unchanged;
-per-nozzle geometry, remote publication and live consumption remain F03 work.
+only after an accepted physical tick. [Accepted nozzle outlets](docs/109_ACCEPTED_NOZZLE_OUTLETS.md)
+now retain authored circular exits and allocated plume state through COM shifts,
+with missing legacy geometry explicit. The fixed native plume deck is unchanged;
+owner/revision binding, remote publication and live consumption remain F03 work.
 
 [Compiled plume gallery](docs/102_COMPILED_PLUME_GALLERY.md) compares nine
 pressure/throttle/view controls with stock Cycles at 256/2048 samples. Matching

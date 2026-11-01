@@ -1848,9 +1848,11 @@ impl FlightAuthority {
             self.last_propellant_flow_kg_s = 0.0;
             self.fuel_limited = installed_resource_step.resource_limited;
         }
-        self.last_propulsion_observation = installed_resource_step
-            .propulsion
-            .map(|allocation| (next_time, allocation.observation));
+        self.last_propulsion_observation = installed_resource_step.propulsion.map(|allocation| {
+            let mut observation = allocation.observation;
+            observation.shift_nozzle_frame(propulsion_frame_shift);
+            (next_time, observation)
+        });
         self.electrical_power_state = installed_resource_step.electrical_power_state;
         self.electrical_power_telemetry = Some(installed_resource_step.electrical_power_telemetry);
         self.reaction_wheel_power_fraction = installed_resource_step.reaction_wheel_power_fraction;

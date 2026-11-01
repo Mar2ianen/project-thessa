@@ -180,6 +180,13 @@ impl CompiledEngine {
                 Ok(())
             }
             Self::Solid(engine) => {
+                if let Some(length) = engine.nozzle_length_m
+                    && (!length.is_finite() || length <= 0.0)
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "solid nozzle length must be finite and positive when present".into(),
+                    ));
+                }
                 require_positive(engine.throat_area_m2, "engine throat area")?;
                 require_positive(engine.gas_constant_j_kg_k, "engine gas constant")?;
                 require_positive(engine.chamber_temp_k, "engine chamber temperature")?;

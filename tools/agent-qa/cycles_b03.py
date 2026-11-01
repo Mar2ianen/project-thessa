@@ -324,8 +324,9 @@ def enrich_golden_vegetation(scene, camera_obj, forward_b, up_b, right_b):
     """Enrich vegetation density and botanical fullness for golden reference match.
 
     Duplicates needle layers on visible tree crowns to close excessive sky holes,
-    adds a mature framing pine tree on the right bank, and densifies coastal
-    understory (ferns and shrubs) along the shoreline.
+    adds a mature framing pine tree on the right bank, establishes a multi-tiered
+    understory (giant 4.4m coastal fern clumps, standard ferns, rock ferns, dwarf
+    ferns, upright shrubs), and scatters wet waterline pebbles along the shore.
     """
     import bpy
     from mathutils import Vector, Matrix
@@ -338,6 +339,7 @@ def enrich_golden_vegetation(scene, camera_obj, forward_b, up_b, right_b):
         return
 
     bvh = BVHTree.FromObject(terrain, bpy.context.evaluated_depsgraph_get())
+    rng = np.random.RandomState(42)
 
     # 1. Reinforce crown needle clusters on mature pine trees in camera frustum
     mature_foliage_objs = [
@@ -350,82 +352,116 @@ def enrich_golden_vegetation(scene, camera_obj, forward_b, up_b, right_b):
         if 0.0 <= co.x <= 1.0 and 0.0 <= co.y <= 1.0 and co.z > 0:
             fill_o = bpy.data.objects.new(o.name + "_fill", o.data)
             scene.collection.objects.link(fill_o)
-            fill_o.location = o.location
             rot_m = Matrix.Rotation(math.radians(35.0), 4, up_b)
             fill_o.matrix_world = rot_m @ o.matrix_world
             fill_o.scale = o.scale * 1.03
             added_crowns += 1
 
-    # 2. Add framing pine tree on the right bank
+    # 2. Add framing pine tree on the right bank (calibrated to frame border without occluding sun)
     mesh_bark = bpy.data.meshes.get("botany_prototype_10")
     mesh_foliage = bpy.data.meshes.get("botany_prototype_11")
     mesh_twigs = bpy.data.meshes.get("botany_prototype_12")
 
     if mesh_bark and mesh_foliage and mesh_twigs:
-        p_above = 26.0 * forward_b + 16.5 * right_b + 15.0 * up_b
+        p_above = 26.0 * forward_b + 17.5 * right_b + 18.0 * up_b
         loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
         if loc:
             scale = 1.25
             rot_m = Matrix.Rotation(math.radians(30.0), 4, up_b)
+            t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
             for part_name, m in [("bark", mesh_bark), ("foliage", mesh_foliage), ("twigs", mesh_twigs)]:
                 tree_part = bpy.data.objects.new(f"golden_framing_tree_{part_name}", m)
                 scene.collection.objects.link(tree_part)
-                tree_part.matrix_world = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
+                tree_part.matrix_world = t_mat
 
-    # 3. Enrich understory ferns and shrubs on right and left banks
-    fern_pairs = [
-        ("botany_prototype_0", "botany_prototype_1"),
-        ("botany_prototype_2", "botany_prototype_3"),
-        ("botany_prototype_16", "botany_prototype_17"),
-        ("botany_prototype_18", "botany_prototype_19"),
+    # 3. Enrich multi-tiered understory (giant fern clumps, standard ferns, rock ferns, shrubs)
+    # Prototypes in scene.glb:
+    # P04/P05: Giant coastal fern clump (4.4m wide)
+    # P00/P01: Large fern (2.6m wide)
+    # P16/P17: Mid fern
+    # P02/P03: Compact rock fern
+    # P18/P19: Dwarf fern
+    fern_tiers = [
+        ("botany_prototype_4", "botany_prototype_5", 1.05),
+        ("botany_prototype_0", "botany_prototype_1", 0.92),
+        ("botany_prototype_16", "botany_prototype_17", 0.85),
+        ("botany_prototype_2", "botany_prototype_3", 0.75),
+        ("botany_prototype_18", "botany_prototype_19", 0.65),
     ]
     shrub_mesh = bpy.data.meshes.get("botany_prototype_6")
 
-    rng = np.random.RandomState(42)
-    # Right bank understory (ferns + shrubs)
-    for i in range(20):
-        fwd = rng.uniform(7.0, 24.0)
-        r_off = rng.uniform(5.5, 15.0)
+    # Right bank: 28 dense understory plants (calibrated density, slope elevation > 1.2m)
+    for i in range(28):
+        fwd = rng.uniform(7.5, 25.0)
+        r_off = rng.uniform(6.5, 16.0)
         p_above = fwd * forward_b + r_off * right_b + 15.0 * up_b
         loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
-        if loc and norm.dot(up_b) > 0.70:
+        if loc and norm.dot(up_b) > 0.65:
             elev = loc.dot(up_b) + 7.5
             if elev > 1.2:
-                scale = rng.uniform(0.70, 1.10)
                 rot_m = Matrix.Rotation(math.radians(rng.uniform(0, 360)), 4, up_b)
-                t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
-                if rng.rand() < 0.30 and shrub_mesh:
-                    sh = bpy.data.objects.new(f"golden_understory_shrub_{i}", shrub_mesh)
+                if rng.rand() < 0.22 and shrub_mesh:
+                    scale = rng.uniform(0.70, 1.10)
+                    sh = bpy.data.objects.new(f"golden_rb_shrub_{i}", shrub_mesh)
                     scene.collection.objects.link(sh)
-                    sh.matrix_world = t_mat
+                    sh.matrix_world = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
                 else:
-                    pair = fern_pairs[rng.randint(0, len(fern_pairs))]
-                    f_frond = bpy.data.objects.new(f"golden_understory_frond_r_{i}", bpy.data.meshes[pair[0]])
-                    f_stem = bpy.data.objects.new(f"golden_understory_stem_r_{i}", bpy.data.meshes[pair[1]])
+                    t_idx = rng.choice([0, 1, 1, 2, 2, 3])
+                    pair = fern_tiers[t_idx]
+                    scale = pair[2] * rng.uniform(0.85, 1.15)
+                    t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
+                    m_frond = bpy.data.meshes.get(pair[0])
+                    m_stem = bpy.data.meshes.get(pair[1])
+                    if m_frond and m_stem:
+                        f_frond = bpy.data.objects.new(f"golden_rb_frond_{i}", m_frond)
+                        f_stem = bpy.data.objects.new(f"golden_rb_stem_{i}", m_stem)
+                        scene.collection.objects.link(f_frond)
+                        scene.collection.objects.link(f_stem)
+                        f_frond.matrix_world = t_mat
+                        f_stem.matrix_world = t_mat
+
+    # Left bank: 16 lush ferns placed safely on the left bank without covering inlet water
+    for i in range(16):
+        fwd = rng.uniform(8.0, 24.0)
+        max_r = -(6.5 + 0.35 * fwd)
+        r_off = rng.uniform(-16.0, max_r)
+        p_above = fwd * forward_b + r_off * right_b + 15.0 * up_b
+        loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
+        if loc and norm.dot(up_b) > 0.65:
+            elev = loc.dot(up_b) + 7.5
+            if elev > 1.2:
+                rot_m = Matrix.Rotation(math.radians(rng.uniform(0, 360)), 4, up_b)
+                t_idx = rng.choice([0, 1, 1, 2, 3])
+                pair = fern_tiers[t_idx]
+                scale = pair[2] * rng.uniform(0.85, 1.20)
+                t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
+                m_frond = bpy.data.meshes.get(pair[0])
+                m_stem = bpy.data.meshes.get(pair[1])
+                if m_frond and m_stem:
+                    f_frond = bpy.data.objects.new(f"golden_lb_frond_{i}", m_frond)
+                    f_stem = bpy.data.objects.new(f"golden_lb_stem_{i}", m_stem)
                     scene.collection.objects.link(f_frond)
                     scene.collection.objects.link(f_stem)
                     f_frond.matrix_world = t_mat
                     f_stem.matrix_world = t_mat
 
-    # Left bank understory (ferns)
-    for i in range(12):
-        fwd = rng.uniform(8.0, 24.0)
-        r_off = rng.uniform(-13.0, -5.5)
-        p_above = fwd * forward_b + r_off * right_b + 15.0 * up_b
+    # 4. Waterline pebbles & boulders along the shore
+    pebble_meshes = [bpy.data.meshes.get(f"botany_prototype_{p}") for p in [31, 32, 33]]
+    for i in range(16):
+        fwd = rng.uniform(7.0, 23.0)
+        r_off = rng.uniform(4.5, 7.5)
+        p_above = fwd * forward_b + r_off * right_b + 10.0 * up_b
         loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
-        if loc and norm.dot(up_b) > 0.70:
+        if loc:
             elev = loc.dot(up_b) + 7.5
-            if elev > 1.2:
-                scale = rng.uniform(0.70, 1.10)
-                rot_m = Matrix.Rotation(math.radians(rng.uniform(0, 360)), 4, up_b)
-                t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
-                pair = fern_pairs[rng.randint(0, len(fern_pairs))]
-                f_frond = bpy.data.objects.new(f"golden_understory_frond_l_{i}", bpy.data.meshes[pair[0]])
-                f_stem = bpy.data.objects.new(f"golden_understory_stem_l_{i}", bpy.data.meshes[pair[1]])
-                scene.collection.objects.link(f_frond)
-                scene.collection.objects.link(f_stem)
-                f_frond.matrix_world = t_mat
-                f_stem.matrix_world = t_mat
+            if 0.8 <= elev <= 1.8:
+                pm = pebble_meshes[rng.randint(0, len(pebble_meshes))]
+                if pm:
+                    peb = bpy.data.objects.new(f"golden_waterline_peb_{i}", pm)
+                    scene.collection.objects.link(peb)
+                    scale = rng.uniform(0.7, 1.3)
+                    rot_m = Matrix.Rotation(math.radians(rng.uniform(0, 360)), 4, up_b)
+                    peb.matrix_world = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
 
 
 def render_cycles(
@@ -756,20 +792,20 @@ def render_cycles(
                         mat.node_tree.links.new(from_socket, warm_mix.inputs[6])
                         # Fern fronds get golden-amber highlights, trees get sunset warmth
                         if material_index in {0, 2, 4, 16, 18, 20}:
-                            warm_mix.inputs[7].default_value = (1.44, 1.25, 0.94, 1.0)
-                            trans_fac = 0.38
+                            warm_mix.inputs[7].default_value = (1.56, 1.34, 0.98, 1.0)
+                            trans_fac = 0.44
                         elif material_index in {8, 11, 14, 23, 26, 29}:
                             # Tree crowns catch intense sunset rim and backlight
-                            warm_mix.inputs[7].default_value = (1.60, 1.40, 1.08, 1.0)
-                            trans_fac = 0.48
+                            warm_mix.inputs[7].default_value = (1.68, 1.45, 1.10, 1.0)
+                            trans_fac = 0.50
                         else:
-                            warm_mix.inputs[7].default_value = (1.34, 1.20, 0.90, 1.0)
-                            trans_fac = 0.34
+                            warm_mix.inputs[7].default_value = (1.40, 1.24, 0.92, 1.0)
+                            trans_fac = 0.38
 
                         # Re-link principled Base Color through warm grade
                         mat.node_tree.links.new(warm_mix.outputs[2], principled.inputs["Base Color"])
                         leaf_color_socket = warm_mix.outputs[2]
-                        principled.inputs["Roughness"].default_value = 0.35
+                        principled.inputs["Roughness"].default_value = 0.34
                     else:
                         leaf_color_socket = from_socket
                         trans_fac = 0.16
@@ -808,14 +844,14 @@ def render_cycles(
                             bc.default_value = (min(1.0, r0 * 3.6 + 0.07), min(1.0, g0 * 2.8 + 0.055), min(1.0, b0 * 2.1 + 0.04), 1.0)
                         else:
                             # Fern stems
-                            bc.default_value = (min(1.0, r0 * 2.2 + 0.030), min(1.0, g0 * 1.8 + 0.024), min(1.0, b0 * 1.4 + 0.018), 1.0)
+                            bc.default_value = (min(1.0, r0 * 2.4 + 0.035), min(1.0, g0 * 1.9 + 0.028), min(1.0, b0 * 1.5 + 0.020), 1.0)
                 elif material_index in pebble_mat_indices:
                     # Wet coastal pebbles
-                    principled.inputs["Roughness"].default_value = 0.28 if golden else 0.72
+                    principled.inputs["Roughness"].default_value = 0.25 if golden else 0.72
                     if golden and not principled.inputs["Base Color"].is_linked:
                         bc = principled.inputs["Base Color"]
                         r0, g0, b0 = bc.default_value[0], bc.default_value[1], bc.default_value[2]
-                        bc.default_value = (min(1.0, r0 * 1.2 + 0.01), min(1.0, g0 * 1.1 + 0.01), min(1.0, b0 * 1.0 + 0.005), 1.0)
+                        bc.default_value = (min(1.0, r0 * 1.25 + 0.015), min(1.0, g0 * 1.15 + 0.012), min(1.0, b0 * 1.05 + 0.008), 1.0)
                 else:
                     # Cliffs / other
                     principled.inputs["Roughness"].default_value = 0.85 if golden else 0.72

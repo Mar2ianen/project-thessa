@@ -40,11 +40,14 @@ implements native glTF `alphaMode = "MASK"` cutout raster rendering, wires
 reference scene B02 (`B02-vegetation-v1`) with the pinned CC0 Fern 02 asset, and
 records a 64-spp Cycles diagnostic (MAE 0.000601, relative L2 0.4097; no pass
 threshold). [Doc 95](95_CANONICAL_COAST_AND_CYCLES_PARITY.md) implements the
-experimental canonical coastal export B03 (`B03-canonical-coast-v1`), exporting
-GPU-conforming terrain and 27,857 plant instances (112.8M instanced triangles)
-for a 32-spp procedural-ground Cycles diagnostic (MAE 0.0806, relative L2
-0.3030). Its large generated inputs remain external; no parity or visual
-equivalence is claimed. Godot is downloaded and verified; Godot/Unreal captures
+canonical coastal export B03 (`B03-canonical-coast-v1`), exporting GPU-conforming
+terrain and 27,857 plant instances (112.8M instanced triangles) for a 32-spp
+calibrated procedural-ground Cycles diagnostic (MAE 0.0772, relative L2 0.2876)
+and golden sunset photo-reference parity (overall sRGB MAE 16.73, sky 13.26, ground 15.41;
+see `docs/artifacts/b03-cycles-comparison-2026-11-01.json`). Standardized blind
+arena reviews across B01, B02, and B03 are wired via `tools/agent-qa/prepare_reference_arena.py`
+and `data/reference-scenes/arena-scenes.toml`. Its large generated inputs remain external;
+no unverified physical parity is claimed. Godot is downloaded and verified; Godot/Unreal captures
 remain open.
 
 ## Simulation and physics

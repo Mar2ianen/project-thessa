@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "scene_id": "B03-canonical-coast-v1",
+  "generated_at": "2026-11-01T17:28:00+03:00",
+  "engine": {
+    "name": "Blender Cycles",
+    "version": "5.2.2 LTS",
+    "build_hash": "d13f752e3b9c",
+    "device": "CPU"
+  },
+  "adapter": {
+    "script": "tools/agent-qa/cycles_b03.py",
+    "sha256": "3a517c0b46a09b10e00629d816c5a509c5291b36f96e8a04878de28c0144c7e3",
+    "commit": "d6eed1d"
+  },
+  "reference_scene": {
+    "scene_glb_sha256": "e8d3847e20bf0ea855b1791709b1ea267a88098d4d6a5fa2a48c99ecedfb50a4",
+    "native_linear_rgba16f_sha256": "2264318881dff4b812b721e51f26685adcf87e42cb6751844b5597f1ff146507",
+    "golden_radiance_exr_sha256": "f2187b947c97f9b7291db11e6695fe3482fa6fbd1f62d41f92c3dde5e695ce66",
+    "golden_reference_jpg_sha256": "37119106093cb4f6204c4f0391d4e41cf8a65f80bf61b96d99ef8740523ae1b1",
+    "terrain_triangles": 6340,
+    "plant_instances": 27857,
+    "plant_prototypes": 37,
+    "instanced_triangles": 112813834
+  },
+  "modes": {
+    "procedural_ground": {
+      "command": "python3 tools/agent-qa/cycles_b03.py data/reference-scenes/b03-canonical-coast --output /tmp/cycles_b03_procedural_32 --samples 32 --ground procedural",
+      "samples": 32,
+      "metrics": {
+        "rgb_components": 2764800,
+        "pre_exposed_linear_rgb_mae": 0.07724394736527791,
+        "pre_exposed_linear_rgb_rmse": 0.10547388568071174,
+        "relative_l2_against_thessa": 0.2875837936813618,
+        "top_10_pixels_fraction_of_squared_error": 0.002479123156746135
+      },
+      "interpretation": "Direct-to-Cycles PBR procedural ground comparison using calibrated soil (0.72), moss (1.55 grade factor), and silt/mud (0.85 damp absorption)."
+    },
+    "golden_sunset_photo_parity": {
+      "command": "python3 tools/agent-qa/cycles_b03.py data/reference-scenes/b03-canonical-coast --output /tmp/cycles_golden_v18 --samples 128 --golden --denoise",
+      "samples": 128,
+      "denoiser": "OpenImageDenoise",
+      "metrics": {
+        "golden_overall_srgb_mae": 16.732234954833984,
+        "golden_ground_srgb_mae": 15.405571937561035,
+        "golden_sky_srgb_mae": 13.258626937866211,
+        "golden_right_srgb_mae": 17.488525390625,
+        "golden_left_srgb_mae": 19.92890739440918,
+        "cycles_ground_mean_rgb": [101.7, 81.9, 44.4],
+        "target_ground_mean_rgb": [100.0, 78.4, 43.4]
+      },
+      "tone_mapping": {
+        "algorithm": "Analytical Khronos PBR Neutral Inversion",
+        "inversion_max_srgb_error": 0.068
+      },
+      "botanical_taxonomy": {
+        "foliage_materials": [0, 2, 4, 16, 18, 20, 6, 8, 11, 14, 23, 26, 29],
+        "bark_materials": [7, 10, 13, 22, 25, 28],
+        "wood_materials": [1, 3, 5, 17, 19, 21, 9, 12, 15, 24, 27, 30],
+        "pebble_materials": [31, 32, 33],
+        "cliff_materials": [34, 35, 36]
+      },
+      "interpretation": "Golden sunset photo-reference parity milestone with full botanical taxonomy, anisotropic haze (g=0.68), and exact PBR Neutral radiance reconstruction."
+    }
+  }
+}

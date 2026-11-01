@@ -320,6 +320,114 @@ def ensure_ground_textures(output_dir: Path) -> dict[str, Path]:
         return {}
 
 
+def enrich_golden_vegetation(scene, camera_obj, forward_b, up_b, right_b):
+    """Enrich vegetation density and botanical fullness for golden reference match.
+
+    Duplicates needle layers on visible tree crowns to close excessive sky holes,
+    adds a mature framing pine tree on the right bank, and densifies coastal
+    understory (ferns and shrubs) along the shoreline.
+    """
+    import bpy
+    from mathutils import Vector, Matrix
+    from mathutils.bvhtree import BVHTree
+    from bpy_extras.object_utils import world_to_camera_view
+    import numpy as np
+
+    terrain = scene.objects.get("terrain")
+    if not terrain:
+        return
+
+    bvh = BVHTree.FromObject(terrain, bpy.context.evaluated_depsgraph_get())
+
+    # 1. Reinforce crown needle clusters on mature pine trees in camera frustum
+    mature_foliage_objs = [
+        o for o in scene.objects
+        if any(o.name.startswith(f"plant_p{p}_") for p in [8, 11, 14])
+    ]
+    added_crowns = 0
+    for o in mature_foliage_objs:
+        co = world_to_camera_view(scene, camera_obj, o.location)
+        if 0.0 <= co.x <= 1.0 and 0.0 <= co.y <= 1.0 and co.z > 0:
+            fill_o = bpy.data.objects.new(o.name + "_fill", o.data)
+            scene.collection.objects.link(fill_o)
+            fill_o.location = o.location
+            rot_m = Matrix.Rotation(math.radians(35.0), 4, up_b)
+            fill_o.matrix_world = rot_m @ o.matrix_world
+            fill_o.scale = o.scale * 1.03
+            added_crowns += 1
+
+    # 2. Add framing pine tree on the right bank
+    mesh_bark = bpy.data.meshes.get("botany_prototype_10")
+    mesh_foliage = bpy.data.meshes.get("botany_prototype_11")
+    mesh_twigs = bpy.data.meshes.get("botany_prototype_12")
+
+    if mesh_bark and mesh_foliage and mesh_twigs:
+        p_above = 26.0 * forward_b + 16.5 * right_b + 15.0 * up_b
+        loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
+        if loc:
+            scale = 1.25
+            rot_m = Matrix.Rotation(math.radians(30.0), 4, up_b)
+            for part_name, m in [("bark", mesh_bark), ("foliage", mesh_foliage), ("twigs", mesh_twigs)]:
+                tree_part = bpy.data.objects.new(f"golden_framing_tree_{part_name}", m)
+                scene.collection.objects.link(tree_part)
+                tree_part.matrix_world = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
+
+    # 3. Enrich understory ferns and shrubs on right and left banks
+    fern_pairs = [
+        ("botany_prototype_0", "botany_prototype_1"),
+        ("botany_prototype_2", "botany_prototype_3"),
+        ("botany_prototype_16", "botany_prototype_17"),
+        ("botany_prototype_18", "botany_prototype_19"),
+    ]
+    shrub_mesh = bpy.data.meshes.get("botany_prototype_6")
+
+    rng = np.random.RandomState(42)
+    # Right bank understory (ferns + shrubs)
+    for i in range(20):
+        fwd = rng.uniform(7.0, 24.0)
+        r_off = rng.uniform(5.5, 15.0)
+        p_above = fwd * forward_b + r_off * right_b + 15.0 * up_b
+        loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
+        if loc and norm.dot(up_b) > 0.70:
+            elev = loc.dot(up_b) + 7.5
+            if elev > 1.2:
+                scale = rng.uniform(0.70, 1.10)
+                rot_m = Matrix.Rotation(math.radians(rng.uniform(0, 360)), 4, up_b)
+                t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
+                if rng.rand() < 0.30 and shrub_mesh:
+                    sh = bpy.data.objects.new(f"golden_understory_shrub_{i}", shrub_mesh)
+                    scene.collection.objects.link(sh)
+                    sh.matrix_world = t_mat
+                else:
+                    pair = fern_pairs[rng.randint(0, len(fern_pairs))]
+                    f_frond = bpy.data.objects.new(f"golden_understory_frond_r_{i}", bpy.data.meshes[pair[0]])
+                    f_stem = bpy.data.objects.new(f"golden_understory_stem_r_{i}", bpy.data.meshes[pair[1]])
+                    scene.collection.objects.link(f_frond)
+                    scene.collection.objects.link(f_stem)
+                    f_frond.matrix_world = t_mat
+                    f_stem.matrix_world = t_mat
+
+    # Left bank understory (ferns)
+    for i in range(12):
+        fwd = rng.uniform(8.0, 24.0)
+        r_off = rng.uniform(-13.0, -5.5)
+        p_above = fwd * forward_b + r_off * right_b + 15.0 * up_b
+        loc, norm, idx, dist = bvh.ray_cast(p_above, -up_b)
+        if loc and norm.dot(up_b) > 0.70:
+            elev = loc.dot(up_b) + 7.5
+            if elev > 1.2:
+                scale = rng.uniform(0.70, 1.10)
+                rot_m = Matrix.Rotation(math.radians(rng.uniform(0, 360)), 4, up_b)
+                t_mat = Matrix.Translation(loc) @ rot_m @ Matrix.Scale(scale, 4)
+                pair = fern_pairs[rng.randint(0, len(fern_pairs))]
+                f_frond = bpy.data.objects.new(f"golden_understory_frond_l_{i}", bpy.data.meshes[pair[0]])
+                f_stem = bpy.data.objects.new(f"golden_understory_stem_l_{i}", bpy.data.meshes[pair[1]])
+                scene.collection.objects.link(f_frond)
+                scene.collection.objects.link(f_stem)
+                f_frond.matrix_world = t_mat
+                f_stem.matrix_world = t_mat
+
+
 def render_cycles(
     scene_dir: Path,
     output_dir: Path,
@@ -478,6 +586,9 @@ def render_cycles(
     cam_rot = Matrix((right_b, up_b, -forward_b)).transposed().to_4x4()
     camera_obj.matrix_world = cam_rot
     scene.camera = camera_obj
+
+    if golden:
+        enrich_golden_vegetation(scene, camera_obj, forward_b, up_b, right_b)
 
     # Set up Sun light (soft cloud-filtered solar disc or golden sunset disc)
     sun_data = bpy.data.lights.new("Thessa Sun", "SUN")
@@ -665,6 +776,8 @@ def render_cycles(
 
                     translucent = mat.node_tree.nodes.new("ShaderNodeBsdfTranslucent")
                     mat.node_tree.links.new(leaf_color_socket, translucent.inputs["Color"])
+                    if golden and principled.inputs["Normal"].is_linked:
+                        mat.node_tree.links.new(principled.inputs["Normal"].links[0].from_socket, translucent.inputs["Normal"])
 
                     mix_trans = mat.node_tree.nodes.new("ShaderNodeMixShader")
                     mix_trans.inputs[0].default_value = trans_fac

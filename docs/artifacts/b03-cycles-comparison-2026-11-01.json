@@ -37,17 +37,27 @@
       "interpretation": "Direct-to-Cycles PBR procedural ground comparison using calibrated soil (0.72), moss (1.55 grade factor), and silt/mud (0.85 damp absorption)."
     },
     "golden_sunset_photo_parity": {
-      "command": "python3 tools/agent-qa/cycles_b03.py data/reference-scenes/b03-canonical-coast --output /tmp/cycles_golden_v30_256 --samples 256 --golden --denoise",
+      "command": "python3 tools/agent-qa/cycles_b03.py data/reference-scenes/b03-canonical-coast --output /tmp/cycles_golden_v31_256 --samples 256 --golden",
       "samples": 256,
       "denoiser": "OpenImageDenoise",
       "metrics": {
-        "golden_overall_srgb_mae": 16.78147315979004,
-        "golden_ground_srgb_mae": 15.26773452758789,
-        "golden_sky_srgb_mae": 12.904626846313477,
-        "golden_right_srgb_mae": 17.62235450744629,
-        "golden_left_srgb_mae": 19.91404151916504,
-        "cycles_ground_mean_rgb": [101.6, 82.0, 44.7],
+        "golden_overall_srgb_mae": 18.30,
+        "golden_ground_srgb_mae": 14.97,
+        "golden_sky_srgb_mae": 15.34,
+        "golden_right_srgb_mae": 19.04,
+        "golden_left_srgb_mae": 20.02,
+        "canopy_foliage_coverage_pct": 63.23,
+        "canopy_foliage_target_pct": 65.59,
+        "canopy_sky_gaps_pct": 36.77,
+        "canopy_sky_gaps_target_pct": 34.41,
+        "cycles_ground_mean_rgb": [100.3, 80.8, 43.9],
         "target_ground_mean_rgb": [100.0, 78.4, 43.4]
+      },
+      "vegetation_enrichment": {
+        "crown_needle_reinforcement": "Rotated complementary needle tier (+35 deg, 1.03 scale) filling canopy holes",
+        "right_bank_framing_pine": "Mature pine tree at 26m distance on right bank framing sunset sky",
+        "understory_groundcover": "32 coastal fern and shrub clusters rooted on shoreline terrain",
+        "translucent_normal_mapping": true
       },
       "tone_mapping": {
         "algorithm": "Analytical Khronos PBR Neutral Inversion",

@@ -335,7 +335,7 @@
     "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-identities.json",
     "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6-identities.json"
   ],
-  "source_note": "frozen source snapshots pin executed code; final subsequent edits add evidence/docs and correct the native opaque/MASK telemetry label only; standalone diagnostic profile added with identical parsed settings",
+  "source_note": "Frozen source snapshots pin the executed milestone. A later exact-zero delivered-energy receiver gate is separately recorded in zero-energy-shadow-gate-2026-11-02.json; old full captures are not relabeled as that newer source. The standalone diagnostic profile has identical parsed settings.",
   "raw_rejected_attempts_preserved": true,
   "open": [
     "native multiple scattering",

@@ -85,9 +85,9 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
     var visibility:array<f32,3>;
     var sunlight:array<vec3<f32>,3>;
     for (var i=0u;i<3u;i++) {
-        if (any(light.colors[i].rgb>vec3(0.0))) {
+        sunlight[i]=env_sunlight(in.position,light.directions[i].xyz,light.colors[i].rgb);
+        if (any(sunlight[i]>vec3(0.0))) {
             let cosines=mesh_diffuse_cosines(normal,receiver_normal,light.directions[i].xyz);
-            sunlight[i]=env_sunlight(in.position,light.directions[i].xyz,light.colors[i].rgb);
             let shadow_normal=select(receiver_normal,-receiver_normal,dot(receiver_normal,light.directions[i].xyz)<0.0);
             visibility[i]=surface_visibility(in.position,shadow_normal,i);
             let fwd=(1.0-transmission)*cosines.x;
@@ -123,7 +123,7 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
     if (material.reflections!=0u) {
         radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
         for (var i=0u;i<3u;i++) {
-            if (any(light.colors[i].rgb>vec3(0.0)) && dot(receiver_normal,light.directions[i].xyz)>0.0) {
+            if (any(sunlight[i]>vec3(0.0)) && dot(receiver_normal,light.directions[i].xyz)>0.0) {
                 radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,sunlight[i],roughness,f0)*visibility[i];
             }
         }

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "base": "8a6ffd47cb5cc83e62a7c64772d1292d5365340f",
+  "status": "exact zero-delivered-energy query gate; no whole-frame speedup claimed",
+  "implementation": "terrain, primary mesh and ray-hit direct lighting evaluate solar transport before visibility; exactly zero delivered RGB skips shadow lookup/rays and direct BRDF work",
+  "approximation_threshold": null,
+  "geometry_population_quality_changed": false,
+  "new_buffers_or_passes": false,
+  "not_implemented_by_this_change": [
+    "CSM caster culling/cache",
+    "tile classifier",
+    "SSR",
+    "finite-source shadow sampling"
+  ],
+  "cpu_core_passed": 75,
+  "gpu_checks": [
+    {
+      "name": "zero-sun-mesh_cutouts",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "c94ec32e927dffb3cbd7a552816dff7b9cb4fbf0d4152416aa7220dd650faa39",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-mesh_cutouts-command.json",
+      "binary_sha256": "203f2b2c0cd50022555ab67ed2422ca877a30197ba1632097bbc1279cb819918"
+    },
+    {
+      "name": "zero-sun-primary_shadows",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "3aff24feabd9d94e647d5ef4423fe16441b132c0a9a67a5690f2412a6a870ed6",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-primary_shadows-command.json",
+      "binary_sha256": "2eeffcb0fcb2e3caba99f9732465e3d262f1528ac7805a4bba0e2a2e3cece8fd"
+    },
+    {
+      "name": "zero-sun-ray_scene",
+      "passed": 30,
+      "failed": 0,
+      "ignored": 4,
+      "log_sha256": "fe9938c772927ae3f5c7aa634146933de5acd5be757662f4c502617242319db8",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-ray_scene-command.json",
+      "binary_sha256": "6687171f36be4691cf361ab82c09ab6d8e98fee53ef34bdc8175fcf4c0595c72"
+    },
+    {
+      "name": "zero-sun-surface_lighting",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "log_sha256": "dd6ec6ec88d48456367be8c2da75742ddb4a37478ddf53a5785d764b10385b31",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-surface_lighting-command.json",
+      "binary_sha256": "e739613dfcbee497a905f7c3f8df52a7e01df6f2bcad9925e9ef2c6b31e19431"
+    },
+    {
+      "name": "zero-sun-thessa_render_wgpu-solar",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "68795888be850929ba71cfcd3a3346047accd1eee6ccdeee8e151b5ba857efe9",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-thessa_render_wgpu-solar-command.json",
+      "binary_sha256": "b90463bba80414671c3aed97c82f9a688572a4c6985069ea80f17f15c3eacb97"
+    },
+    {
+      "name": "zero-sun-thessa_render_wgpu",
+      "passed": 43,
+      "failed": 0,
+      "ignored": 25,
+      "log_sha256": "665fa3921fe58fb420e911801085f7ac15d13dd7829aa76fb5e47b8185f13e10",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-thessa_render_wgpu-command.json",
+      "binary_sha256": "b90463bba80414671c3aed97c82f9a688572a4c6985069ea80f17f15c3eacb97"
+    }
+  ],
+  "native_full_scene_followup": "not re-executed for an unequal-residency timing claim; prior full native MASK run is pinned by doc112",
+  "performance_claimed": false,
+  "strict_clippy": "rcbt-core/render-wgpu/terrain-native all targets passed",
+  "native_release_binary": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/zero-sun-native-compiled.bin",
+    "sha256": "8888e731b1b759529085b2c171266d4cfc9e395cac3bddf45e97fea0c535ad2a",
+    "status": "compiled; not executed for a new full-scene timing"
+  }
+}

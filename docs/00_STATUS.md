@@ -32,6 +32,8 @@ and full-scene visual/performance acceptance remain open. The complete user
 critique is tracked in doc 112's integrated-scene table.
 [Doc 113](113_RENDER_RESEARCH_INTAKE.md) records the new downloaded research,
 80-source catalogue, exact diagnostic-image identity and applied/pending slices.
+Direct receiver shadow queries now also skip exactly extinguished solar RGB;
+this adds no approximate light threshold or caster-cache claim.
 
 ## Current native integration checkpoint
 

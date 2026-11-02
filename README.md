@@ -226,7 +226,7 @@ The checked-in vertical slice currently contains:
    reflection, normal/metallic-roughness/AO maps and a memory-bounded three-star
     cascade shadow atlas shared with terrain. Scene meshes can use negotiated
     ray-query BLAS/TLAS reflections; `[atmosphere]` enables a quality-tiered
-    shared single-scattering sky field for mesh reflections/RT misses and
+    shared optical sky field with optional isotropic higher orders for mesh reflections/RT misses and
     derived diffuse ambient (see doc 39's environment-radiance checkpoint).
     Regular/conforming terrain also integrate that sky through rough GGX, with
     resolved 4/8/16 clear-sky directions, cheaper reflected-cloud columns and
@@ -414,8 +414,9 @@ The checked-in vertical slice currently contains:
       and depth-clipped clouds. Shared cloud weather/transport also feeds direct
       terrain/mesh/ocean visibility and reflected rays; auroral emission feeds the
       common sky environment and a depth-clipped primary volume with ordered
-      cloud extinction, including orbital foreground terrain. Atmosphere/cloud
-      multiple scattering and wider visual/platform acceptance remain open.
+      cloud extinction, including orbital foreground terrain. Native atmospheric higher orders now use an optional isotropic closure
+      ([doc 114](docs/114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md)); cloud/ground
+      bounce and wider visual/platform acceptance remain open.
       Primary terrain uses a [datum-aware cloud receiver](docs/74_COASTAL_CLOUD_RECEIVERS.md)
       to avoid false planetary self-shadowing on chord-meshed water; generic
       volume/mesh interior rejection remains strict.
@@ -931,9 +932,15 @@ CSM/ray coverage, MSAA foliage coverage and correct double-sided normal mapping.
 One cached optical table supplies sunlight to surfaces, sky and clouds;
 `--scene b03-sunset` selects a baked-ephemeris four-degree descending sun.
 AMD Hybrid Shadows is audited; its receiver buffers/tile queue/denoiser remain
-open, as do BLEND rays, multiple scattering and full coastal quality/cost parity.
+open, as do BLEND rays and full coastal quality/cost parity.
 
 [Research intake](docs/113_RENDER_RESEARCH_INTAKE.md) reconciles the user's new
 handoff and 80-source catalogue against current owners and records what was
 applied versus still open. Full-population MASK RT now runs on RADV; this is
 functional coverage evidence, not affordable coastal parity.
+
+[Native higher-order sky and resolution checks](docs/114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md)
+activate the existing multiple-scattering flag through a cached isotropic source.
+Numerical and frozen native Off/On/Off controls pass. Actual FHD/QHD and old
+Cycles/art references still expose major horizon, ground and composition gaps;
+no affordable coastal parity or resolution speedup is claimed.

@@ -3684,6 +3684,98 @@ mod tests {
 
     #[test]
     #[ignore = "requires a wgpu adapter"]
+    fn multiple_scattering_reaches_frozen_native_terrain_and_mesh_and_round_trips() {
+        let backend = Backend::bring_up().unwrap();
+        let mut requested = thessa_graphics::RequestedGraphics::default();
+        requested.atmosphere.enabled = true;
+        requested.atmosphere.quality = thessa_graphics::Quality::Low;
+        requested.atmosphere.multiple_scattering = false;
+        requested.shadows.enabled = false;
+        requested.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+        let mut scene = Scene::load(requested).unwrap();
+        scene.enable_vehicle_preview().unwrap();
+        let target = thessa_render_wgpu::terrain::OffscreenTarget::new(&backend, 257, 257).unwrap();
+        let mut terrain = scene
+            .renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap();
+        let mut meshes = scene
+            .mesh_renderer(
+                &backend,
+                thessa_render_wgpu::terrain::OffscreenTarget::FORMAT,
+            )
+            .unwrap()
+            .unwrap();
+        let exposure = crate::manual_exposure(13.0);
+        let camera = scene.view(257, 257, exposure).world_position_m;
+        let geometry = terrain.read_vertices(&backend).unwrap();
+        let epoch = meshes.temporal_epoch();
+        let sample_time = scene.sample.time;
+        let direct = scene.sample.lighting;
+        let render = |scene: &mut Scene,
+                      terrain: &mut TerrainRenderer,
+                      meshes: &mut SceneMeshes,
+                      enabled| {
+            scene.requested.atmosphere.multiple_scattering = enabled;
+            let resolved = backend.resolve_graphics(&scene.requested);
+            scene
+                .environment
+                .as_mut()
+                .unwrap()
+                .set_budget(crate::environment::EnvironmentBudget::resolve(&resolved));
+            scene.update_environment(camera);
+            scene.publish_presentation(&backend, terrain).unwrap();
+            terrain
+                .update_view(&backend, &scene.view(257, 257, exposure))
+                .unwrap();
+            scene
+                .update_mesh(&backend, meshes, 257, 257, exposure)
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            // No streaming tick or surface-dispatch refinement between A/B/A.
+            terrain.encode(&mut encoder, &target.color, &target.depth);
+            meshes.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()
+        };
+        let before = render(&mut scene, &mut terrain, &mut meshes, false);
+        let ambient = scene.lighting().ambient_lux;
+        let mut mesh_work = meshes.draw_stats();
+        mesh_work.frame_upload_bytes = 0;
+        let on = render(&mut scene, &mut terrain, &mut meshes, true);
+        assert!(scene.environment_stats().unwrap().multiple_scattering);
+        assert_ne!(scene.lighting().ambient_lux, ambient);
+        let mut after_work = meshes.draw_stats();
+        after_work.frame_upload_bytes = 0;
+        assert_eq!(after_work, mesh_work);
+        assert_eq!(terrain.read_vertices(&backend).unwrap(), geometry);
+        assert_eq!(meshes.temporal_epoch(), epoch);
+        assert_eq!(scene.sample.time, sample_time);
+        assert_eq!(scene.sample.lighting, direct);
+        assert!(
+            before
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(on.as_chunks::<4>().0.iter())
+                .filter(|(a, b)| a != b)
+                .count()
+                > 100,
+            "shared higher-order source did not reach native pixels"
+        );
+        let restored = render(&mut scene, &mut terrain, &mut meshes, false);
+        assert_eq!(
+            restored, before,
+            "disabled must restore the same native image"
+        );
+        assert_eq!(scene.environment_stats().unwrap().multiple_storage_bytes, 0);
+        assert_eq!(terrain.read_vertices(&backend).unwrap(), geometry);
+    }
+
+    #[test]
+    #[ignore = "requires a wgpu adapter"]
     fn unchanged_sky_uploads_once_and_disable_releases_mesh_grid() {
         let backend = Backend::bring_up().unwrap();
         let mut scene = Scene::load(Default::default()).unwrap();

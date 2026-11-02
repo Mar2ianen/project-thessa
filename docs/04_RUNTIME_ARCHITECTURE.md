@@ -445,3 +445,8 @@ and render-wgpu transports it through the existing environment publication.
 No simulation clock, authoritative world geometry or second generic tracer is
 introduced. AMD-style visible-receiver buffers and compact ray dispatch remain
 future pass-graph work, with explicit disabled/capability/budget requirements.
+
+[Doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) extends that same
+neutral optical owner with a cached isotropic higher-order source. Native
+consumes the existing resolved flag and publishes through the existing sky/SH
+grid; no GPU pass, alternate atmosphere or new authoritative state is added.

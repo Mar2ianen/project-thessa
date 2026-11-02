@@ -629,7 +629,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         chart_dx, input.material_chart.z > 0.0);
     let address_dy = select(material_face_uv(direction + dpdy(direction), address.face) - address.uv,
         chart_dy, input.material_chart.z > 0.0);
-    var detail_weight = 1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m);
+    var detail_weight = 1.0 - smoothstep(globe_texel_m * 2.0, globe_texel_m * 8.0, footprint_m);
     // A material texel must cover the same physical footprint regardless of
     // which geometry leaf happens to rasterize it. Trilinear page levels are
     // chosen in screen space rather than inheriting a coarse mesh page.
@@ -678,7 +678,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if (TERRAIN_DEBUG_VIEW == 10u) { return vec4(vec3(clamp(footprint_m, 0.0, 10.0) / 10.0), 1.0); }
     if (TERRAIN_DEBUG_VIEW == 11u) { return vec4(vec3(material_lod / MATERIAL_MAX_LEVEL), 1.0); }
     if (TERRAIN_DEBUG_VIEW == 12u) {
-        let weight = (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m)) * (1.0 - water_material);
+        let weight = (1.0 - smoothstep(globe_texel_m * 2.0, globe_texel_m * 8.0, footprint_m)) * (1.0 - water_material);
         let height_coverage = mix(coarse.height_coverage, fine.height_coverage, fract(material_lod)) * weight;
         return vec4(vec3(height_coverage), 1.0);
     }
@@ -686,10 +686,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // coverage and the same globe transition as albedo rather than magnifying
     // a tiny resident normal contribution to full strength.
     var tangent = mix(coarse.normal, fine.normal, fract(material_lod))
-        * (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m));
+        * (1.0 - smoothstep(globe_texel_m * 2.0, globe_texel_m * 8.0, footprint_m));
     var shaded_normal = material_perturb_normal(normal, address, tangent * (1.0 - water_material), render_from_body);
     if(GROUND_RELIEF_GEOMETRY) {
-        let weight=(1.0-smoothstep(globe_texel_m,globe_texel_m*2.0,footprint_m))*(1.0-water_material);
+        let weight=(1.0-smoothstep(globe_texel_m * 2.0, globe_texel_m * 8.0, footprint_m))*(1.0-water_material);
         let base=mix(coarse.base_normal,fine.base_normal,fract(material_lod));
         let height_coverage=mix(coarse.height_coverage,fine.height_coverage,fract(material_lod))*weight;
         shaded_normal=material_height_field_normal(shaded_normal,address,(mix(coarse.normal,fine.normal,fract(material_lod))+base)*weight,height_coverage,render_from_body);
@@ -734,7 +734,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
     let sun_present=any(sunlight[0]>vec3(0.0));
     let canopy_sky=select(1.0,mix(0.52,1.0,visibility[0]),sun_present);
-    let ground_bounce=select(vec3(0.0),sunlight[0]*(0.10*albedo)*(1.0-visibility[0]),sun_present);
+    let ground_bounce=select(vec3(0.0),sunlight[0]*(0.16*albedo)*(1.0-visibility[0]),sun_present);
     let understory_ambient=select(surface_ambient,surface_ambient*canopy_sky+ground_bounce,any(lighting.ambient_lux.rgb>vec3(0.0)));
     if (TERRAIN_DEBUG_VIEW == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
     if (TERRAIN_DEBUG_VIEW == 14u) { return vec4(understory_ambient * view.exposure / OCEAN_PI, 1.0); }

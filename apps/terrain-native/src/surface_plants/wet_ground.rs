@@ -241,11 +241,19 @@ pub(super) fn append(
         let mut water = blank(material);
         let mut centers: Vec<DVec3> = vec![];
         let side = 17;
-        let radius = 1.25;
+        let radius = 1.35;
         let spacing = radius * 2.0 / (side - 1) as f64;
-        for d in sites
+        let mut pool_sites = sites.clone();
+        pool_sites.sort_by_cached_key(|item| {
+            let distance2 =
+                (DVec3::from(item.direction) * field.params.radius_m - anchor).length_squared();
+            let rank = rng::hash01(field.params.seed, 7291, item.id.0 as i64, 0)
+                * (1.0 + distance2 / half_span.powi(2));
+            (rank.to_bits(), item.id)
+        });
+        for d in pool_sites
             .iter()
-            .filter(|d| rng::hash01(field.params.seed, 7200, d.id.0 as i64, 0) < 0.10)
+            .filter(|d| rng::hash01(field.params.seed, 7200, d.id.0 as i64, 0) < 0.30)
             .take(256)
         {
             if stats.ground_puddles >= pool_limit {
@@ -255,7 +263,7 @@ pub(super) fn append(
             let center = up * field.params.radius_m;
             if centers
                 .iter()
-                .any(|p| p.distance_squared(center) < (radius * 2.0_f64).powi(2))
+                .any(|p| p.distance_squared(center) < (radius * 1.5_f64).powi(2))
             {
                 continue;
             }

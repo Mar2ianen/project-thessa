@@ -100,7 +100,7 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
     if(material.quality!=0u){ambient=(1.0-transmission)*env_diffuse_irradiance(normal,ambient)+transmission*env_diffuse_irradiance(-normal,ambient);}
     let sun_present=any(sunlight[0]>vec3(0.0));
     let canopy_sky=select(1.0,mix(0.55,1.0,visibility[0]),sun_present);
-    let mesh_ground_bounce=select(vec3(0.0),sunlight[0]*(0.08*albedo)*(1.0-visibility[0]),sun_present);
+    let mesh_ground_bounce=select(vec3(0.0),sunlight[0]*(0.14*albedo)*(1.0-visibility[0]),sun_present);
     let understory_ambient=select(ambient,ambient*canopy_sky+mesh_ground_bounce,env_enabled()&&any(ambient>vec3(0.0)));
     let amb_up=understory_ambient*ao;
     let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;

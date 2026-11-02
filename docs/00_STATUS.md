@@ -44,14 +44,16 @@ water/height/distance/material/geometry diagnostics. The current sampled soil
 has zero water weight; the horizon band is conforming terrain with changing
 height-data coverage. A parent-chain candidate was rejected after the old policy
 also recovered with longer prestream; no unproven residency fix is shipped.
-[Doc 116](116_GROUND_DETAIL_NORMAL_CONTINUITY_AND_WATER_SEPARATION.md) repairs
-macro normal gradient continuity beyond ~5m (`xy = channels.rg` preserved on macro
-pages, `shaded_normal` fallback in height field operator), separates open-water
-classification from wet soil, adds `footprint`, `material_lod`, and `relief_weight`
-diagnostics, and validates 16x anisotropy on High quality.
-[Doc 117](117_UNDERSTORY_GROUND_BOUNCE_AND_CANOPY_TRANSPORT.md) implements physical
-canopy sky occlusion and warm golden ground bounce in terrain and mesh understory paths,
-and calibrates botanical diffuse transmission (0.24–0.28) for thin fronds and crowns.
+[Doc 116](116_GROUND_DETAIL_NORMAL_CONTINUITY_AND_WATER_SEPARATION.md) retains
+macro normal gradients/fallback and adds source diagnostics. Its narrowed water
+predicate remains a heuristic, not independent material presence.
+[Doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md) reviews the later Gemini changes:
+source-slot-dependent synthetic bounce/sky dimming is removed, documented
+specular-disable behavior restored, and unsupported global fade tuning reverted.
+Frozen GPU controls pass; real indirect visibility/GI, a water-presence contract,
+frozen whole-scene replay, source-error bounds and affordable visual parity
+remain open. Docs 117/118 are historical appearance-tuning records, not accepted
+physical calibration.
 
 ## Current native integration checkpoint
 

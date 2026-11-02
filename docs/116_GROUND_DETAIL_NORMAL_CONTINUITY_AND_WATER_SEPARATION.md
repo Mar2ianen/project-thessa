@@ -1,6 +1,8 @@
 # 116 — Ground detail normal continuity and water separation
 
-Status: implemented and verified on RADV/native headless renderer. 2026-11-02.
+Status: macro-normal changes retained; water threshold narrowing is not semantic
+water separation. Later audit and current limits: [doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md).
+2026-11-02.
 Addresses user investigation regarding ground degradation beyond ~5 metres, wet
 soil semantic confusion with ocean water, and anisotropic filtering.
 
@@ -14,9 +16,10 @@ Initial speculation suggested the footprint fade:
 ```wgsl
 weight = (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m)) * (1.0 - water_material);
 ```
-was extinguishing ground relief too early at grazing angles. Diagnostic inspection
-of `globe_texel_m` established that planetary globe texels are ~20 km, meaning
-`footprint_m` in the 5–50 m range is orders of magnitude smaller than `globe_texel_m`.
+was extinguishing ground relief too early at grazing angles. The earlier investigation assumed a 512-high map (about 20 km per globe texel).
+The later source audit found that native actually binds a 1×1 fallback, giving
+about 10 million metres per texel at this radius. In either case, `footprint_m`
+in the 5–50 m range is orders of magnitude smaller than `globe_texel_m`.
 This predicate did not trigger the 5 m degradation.
 
 ### B. The True Cause: Erased Macro Normal Gradients and Unperturbed Normal Fallback
@@ -68,9 +71,9 @@ Because wet soil lowers roughness to ~0.45, any wet ground near elevation 0–0.
 received ~45% water weight. This caused wet land to sample ocean wave normals, receive
 specular ocean reflection transport, and appear unnaturally slick and slimy.
 
-### Contract Correction
-Open water bodies have low roughness (≤ 0.18–0.22) and rest at or below datum (≤ 0.25 m).
-The classification was narrowed to:
+### Threshold adjustment (legacy heuristic)
+The legacy classification was narrowed to the following selected roughness/height
+band. This is not a general physical definition of open water:
 ```wgsl
 var water_material = (1.0 - smoothstep(0.18, 0.22, roughness))
     * (1.0 - smoothstep(0.0, 0.25, input.height_m));
@@ -78,7 +81,8 @@ var water_material = (1.0 - smoothstep(0.18, 0.22, roughness))
 Wet soil on land (roughness ≥ 0.22 or elevation > 0.25 m) strictly receives 0.0
 water weight, preserving dielectric land PBR shading. Test suite in
 `crates/render-wgpu/tests/terrain_environment.rs` explicitly asserts 0% water weight
-for wet soil (roughness 115/255).
+for the selected wet-soil roughness (115/255). Smooth dry land still aliases to
+water and rough water can be rejected; independent presence/depth remains open.
 
 ---
 

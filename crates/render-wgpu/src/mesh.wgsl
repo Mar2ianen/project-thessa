@@ -98,11 +98,7 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
     }
     var ambient=light.ambient.rgb;
     if(material.quality!=0u){ambient=(1.0-transmission)*env_diffuse_irradiance(normal,ambient)+transmission*env_diffuse_irradiance(-normal,ambient);}
-    let sun_present=any(sunlight[0]>vec3(0.0));
-    let canopy_sky=select(1.0,mix(0.55,1.0,visibility[0]),sun_present);
-    let mesh_ground_bounce=select(vec3(0.0),sunlight[0]*(0.28*albedo)*(1.0-visibility[0]),sun_present);
-    let understory_ambient=select(ambient,ambient*canopy_sky+mesh_ground_bounce,env_enabled()&&any(ambient>vec3(0.0)));
-    let amb_up=understory_ambient*ao;
+    let amb_up=ambient*ao;
     let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;
     let diffuse_ambient=albedo*amb_up/OCEAN_PI;
     let diffuse_total=diffuse_ambient+diffuse_direct;
@@ -119,20 +115,18 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
         // Split it across the two tangent axes; preserve existing mip storage.
         normal_variance=0.5*max(0.0,1.0-dot(map_normal,map_normal))*material.factors.z*material.factors.z;
     }
-    if(material.quality!=0u){roughness=surface_filtered_roughness_variance(roughness,dpdx(normal),dpdy(normal),normal_variance);}
+    if(material.quality!=0u && material.reflections!=0u){roughness=surface_filtered_roughness_variance(roughness,dpdx(normal),dpdy(normal),normal_variance);}
     let f0=mix(vec3(material.optical.y),albedo,metallic);
     var fresnel=f0;
     if (material.quality!=0u) { fresnel=surface_schlick_fresnel(f0,dot(normal,eye)); }
     var radiance=(vec3(1.0)-fresnel)*(1.0-metallic)*diffuse_total;
-    if (material.quality!=0u) {
+    if (material.reflections!=0u) {
+        radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
         for (var i=0u;i<3u;i++) {
             if (any(sunlight[i]>vec3(0.0)) && dot(receiver_normal,light.directions[i].xyz)>0.0) {
                 radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,sunlight[i],roughness,f0)*visibility[i];
             }
         }
-    }
-    if (material.reflections!=0u) {
-        radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
     }
     radiance=env_local_haze(in.position,radiance+material.emission.rgb,light.ambient.rgb);
     return mesh_fragment_output(radiance,base_sample.a*material.color.a);

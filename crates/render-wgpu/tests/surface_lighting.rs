@@ -824,3 +824,158 @@ fn fixed_source_shadow_frame_cost() {
         }
     }
 }
+
+#[test]
+#[ignore = "GPU: source-slot permutation must not change independent sky illumination"]
+fn stellar_slot_permutation_keeps_frozen_sky_and_shadowed_mesh_radiance() {
+    use thessa_render_core::environment::EnvironmentRadiance;
+    let backend = Backend::bring_up().unwrap();
+    let mut request = RequestedGraphics::default();
+    request.shadows.cascades = 1;
+    request.shadows.map_size = 512;
+    request.shadows.max_distance_m = 10.0;
+    request.shadows.normal_bias_m = 0.005;
+    request.renderer.ray_tracing = thessa_graphics::RayTracingRequest::Off;
+    let settings = backend.resolve_graphics(&request);
+    let page = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &[TerrainPatch {
+            anchor: TileAnchor::new(TileKey::new(0, 0, 0, 0).unwrap(), 1000.).unwrap(),
+            page: &page,
+        }],
+        OffscreenTarget::FORMAT,
+        TerrainCapacity {
+            patches: 1,
+            height_grid_size: 2,
+            material_layers: 1,
+        },
+        Some(&settings),
+    )
+    .unwrap();
+    terrain.publish_partition(&backend, &[]).unwrap();
+    let mut mesh = MeshRenderer::with_surface(
+        &backend,
+        &source(),
+        thessa_render_wgpu::mesh::SurfaceSettings {
+            format: OffscreenTarget::FORMAT,
+            capacity: 1,
+            quality: Quality::Low,
+            reflections: false,
+            shadows: terrain.shadows(),
+            ray_tracing: None,
+        },
+    )
+    .unwrap();
+    let field = EnvironmentRadiance::new(2, 2, vec![[0.05, 0.1, 0.2]; 4]).unwrap();
+    mesh.update_environment(&backend, Some(&field));
+    let view = camera(DVec3::ZERO);
+    terrain.update_view(&backend, &view).unwrap();
+    let mut reference = None;
+    for slot in 0..3 {
+        let mut lights = SurfaceLighting {
+            ambient_lux: [
+                field.ambient_lux()[0],
+                field.ambient_lux()[1],
+                field.ambient_lux()[2],
+                0.,
+            ],
+            ..Default::default()
+        };
+        lights.directions[slot] = DVec3::new(1., 0., 1.)
+            .normalize()
+            .as_vec3()
+            .extend(0.)
+            .to_array();
+        lights.colors_lux[slot] = [std::f32::consts::PI, 0., 0., 0.];
+        terrain
+            .update_shadows(&backend, DVec3::ZERO, &lights)
+            .unwrap();
+        mesh.update(
+            &backend,
+            &view,
+            &lights,
+            &[MeshInstance {
+                position_m: DVec3::ZERO,
+                rotation: DQuat::IDENTITY,
+                scale: 1.,
+            }],
+        )
+        .unwrap();
+        let pixels = draw(&backend, &mut mesh, Some(&mut terrain));
+        let blocked = &pixels[(64 * 129 + 36) * 4..][..3];
+        eprintln!("stellar_slot={slot} blocked_rgb={blocked:?}");
+        if let Some(before) = &reference {
+            assert!(
+                &pixels == before,
+                "moving the SAME star to slot {slot} changed sky/bounce or shadow response"
+            );
+        } else {
+            reference = Some(pixels);
+        }
+    }
+}
+
+#[test]
+#[ignore = "GPU: disabled specular must disable stellar as well as environment reflection"]
+fn disabled_specular_keeps_direct_diffuse_independent_of_roughness() {
+    let backend = Backend::bring_up().unwrap();
+    let view = camera(DVec3::ZERO);
+    let lights = SurfaceLighting {
+        directions: [[0., 0., 1., 0.], [0.; 4], [0.; 4]],
+        colors_lux: [[0.1 * std::f32::consts::PI; 4], [0.; 4], [0.; 4]],
+        ..Default::default()
+    };
+    for quality in [Quality::Medium, Quality::High] {
+        let mut reference = None;
+        for roughness in [0.2, 1.0] {
+            let asset = MeshAsset {
+                primitives: vec![quad(0., -4., 3.)],
+                materials: vec![Material {
+                    metallic: 0.,
+                    roughness,
+                    ..Default::default()
+                }],
+                textures: vec![],
+                images: vec![],
+            };
+            let mut mesh = MeshRenderer::with_surface(
+                &backend,
+                &asset,
+                thessa_render_wgpu::mesh::SurfaceSettings {
+                    format: OffscreenTarget::FORMAT,
+                    capacity: 1,
+                    quality,
+                    reflections: false,
+                    shadows: None,
+                    ray_tracing: None,
+                },
+            )
+            .unwrap();
+            mesh.update(
+                &backend,
+                &view,
+                &lights,
+                &[MeshInstance {
+                    position_m: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.,
+                }],
+            )
+            .unwrap();
+            let image = draw(&backend, &mut mesh, None);
+            assert!(
+                image.as_chunks::<4>().0.iter().any(|p| p[0] > 20),
+                "receiver is invisible"
+            );
+            if let Some(before) = &reference {
+                assert!(
+                    &image == before,
+                    "{quality:?}: disabled reflection still depends on roughness"
+                );
+            } else {
+                reference = Some(image);
+            }
+        }
+    }
+}

@@ -947,7 +947,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: true,
             restart_required: true,
-            description: "Native primary terrain only; raw linear HDR contains diagnostic values. None preserves ordinary shading. Land-only suppresses terrain water optics without changing geometry.",
+            description: "Native primary terrain only. Geometric/material data are unexposed; direct/ambient are irradiance-over-PI source views and specular is a pre-mix land reflection, using current exposure rather than exact final HDR components. None preserves ordinary shading. Land-only suppresses terrain water optics without changing geometry.",
         },
         SettingMeta {
             path: "debug.show_rt_proxies",

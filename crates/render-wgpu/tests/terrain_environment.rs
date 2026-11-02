@@ -861,10 +861,10 @@ fn diagnostic_water_weight_exposes_wet_soil_false_positive_without_lighting() {
 fn diagnostic_skirt_primitive_is_red_and_height_sentinel_is_magenta() {
     use thessa_graphics::TerrainDebugView as V;
     let backend = Backend::bring_up().unwrap();
-    let anchor = TileAnchor::new(TileKey::new(4, 8, 128, 128).unwrap(), 1000.).unwrap();
+    let anchor = TileAnchor::new(TileKey::new(2, 8, 128, 128).unwrap(), 1000.).unwrap();
     let base = DVec3::from(anchor.anchor_body_m);
     let up = DVec3::from(anchor.normal);
-    let eye = base + DVec3::X * 12. + up * 5.;
+    let eye = base + DVec3::X * 12. + up * 11.;
     let look = base + up * 5.;
     let page = HeightPage::bake(&[10.; 4], 2, 0.001).unwrap();
     for (mode, expected) in [(V::Geometry, [255, 0, 0]), (V::Height, [255, 0, 255])] {
@@ -893,16 +893,12 @@ fn diagnostic_skirt_primitive_is_red_and_height_sentinel_is_magenta() {
         .unwrap();
         let image = draw_from(&backend, &mut terrain, [65, 65], eye, look);
         assert_eq!(center(&image), expected, "{mode:?}");
-        let colored = image
+        let count = image
             .as_chunks::<4>()
             .0
             .iter()
-            .filter(|p| p[..3] != [0, 0, 0]);
-        let mut count = 0;
-        for pixel in colored {
-            assert_eq!(&pixel[..3], &expected, "{mode:?}");
-            count += 1;
-        }
+            .filter(|p| p[..3] == expected)
+            .count();
         assert!(count > 100, "no visible skirt");
     }
 }

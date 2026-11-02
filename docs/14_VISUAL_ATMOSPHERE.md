@@ -842,3 +842,10 @@ the shared resolver (default `none`); see [doc 115](115_TERRAIN_DIAGNOSTICS_AND_
 for raw-HDR semantics, native-only scope, observed transient height coverage
 and the rejected parent-chain candidate. These views do not close the missing
 full transport-component decomposition or visual/cost acceptance.
+
+[Render causal-contract audit](119_RENDER_CAUSAL_CONTRACT_AUDIT.md)
+rejects the later primary-sun bounce/sky-occlusion heuristic with a frozen
+source-slot permutation control, restores specular-disable semantics and
+reverts an unsupported global fade change. Water classification is still a
+roughness/height heuristic; stable frame replay, source accuracy and actual
+indirect transport remain the foundation work before more appearance tuning.

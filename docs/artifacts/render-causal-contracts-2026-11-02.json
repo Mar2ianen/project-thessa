@@ -1,0 +1,185 @@
+{
+  "review_started_local": "2026-11-02",
+  "verification_continued_local": "2026-11-03",
+  "status": "source-slot invariance and specular-disable corrected; unsupported fade tuning reverted; no GI, frozen whole-scene replay, water-semantics fix, speedup or aesthetic parity claimed",
+  "base_commit": "bf8635a5feaaaa48c5aec2a1a1b4b559cab02c4f",
+  "reviewed_commits": [
+    "6064cc0",
+    "977c3f8",
+    "7961c7d",
+    "87fe9b3",
+    "4681672",
+    "ca9c0ad",
+    "a26e045",
+    "bf8635a"
+  ],
+  "original_user_edits_committed_as": "a2527af",
+  "isolated_worktree": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit",
+  "branch": "fix/render-causal-contracts",
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02",
+  "final_source_patch_sha256": "825eafbea4509a1a810824ec72348a5be20e0e00efa8a982db62be815ccde5b3",
+  "source_files": {
+    "crates/rcbt-core/src/shaders.rs": "f8c95af71cde1d745818944dcdfc9a233e6d8cb154edf09b7e7d32cec5d00f6f",
+    "crates/render-wgpu/src/mesh.wgsl": "2487326f6b4b6caf813ef1fd869b5cdf180e46079a2d6f6735a6a510d1d00054",
+    "crates/render-wgpu/tests/surface_lighting.rs": "c1e6b79cd076df18627fa119e493dfa959345af2002b5b862aaf05e6dc56dae5",
+    "crates/render-wgpu/tests/terrain_environment.rs": "a7bdcacb5683b97d17acc3391e985b4b21fbe6ea57484b28edce0c0f8d3e2268",
+    "crates/graphics/src/metadata.rs": "c71e7b68119de19767aed8c1ec399c9f5a8ad73ceb4ccce9f85bd926b03c80e1"
+  },
+  "backend_routing": {
+    "separate_cloud_worktree_commit": "7e588be",
+    "inspected_scope": "consumer routing only, not the full separate cloud implementation",
+    "bevy_cloud_source": "assets/shaders/cloud_volume.wesl",
+    "bevy_consumer": "apps/client/src/beauty.rs",
+    "native_source": "crates/render-wgpu/src/clouds.wgsl",
+    "native_consumer": "apps/terrain-native/src/sky_layers.rs",
+    "automatic_native_integration": false
+  },
+  "slot_control": {
+    "fixture": "static 129x129 mesh/atlas, shared constant environment, same one star moved between 3 slots; no streaming or topology changes",
+    "red_log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/slot-permutation-red.log",
+    "red_exit_code": 101,
+    "red_pixel_by_slot": {
+      "0": [
+        150,
+        58,
+        83
+      ],
+      "1": [
+        141,
+        63,
+        89
+      ]
+    },
+    "green_pixel_by_slot": {
+      "0": [
+        141,
+        63,
+        89
+      ],
+      "1": [
+        141,
+        63,
+        89
+      ],
+      "2": [
+        141,
+        63,
+        89
+      ]
+    },
+    "green_full_images": "byte-identical",
+    "red_binary_sha256": "fa6d9dcc7d43c1d73281ac065fd49626fa257e41d1b966e7089bddbcc638c98f",
+    "final_binary_sha256": "281dec43f98cfe6957af5e67248199a363865f60d8e4b0caec95fa0322f61621",
+    "removed": "primary terrain/mesh first-source shadow-scaled invented bounce and sky dimming",
+    "retained_fallback": "existing environment irradiance and existing material AO; no real scene GI or sky visibility newly implemented"
+  },
+  "specular_control": {
+    "quality": [
+      "Medium",
+      "High"
+    ],
+    "roughness": [
+      0.2,
+      1.0
+    ],
+    "reflections": false,
+    "expected": "identical visible direct-diffuse images; no hidden stellar specular",
+    "result": "pass on software Vulkan and RADV"
+  },
+  "fade_audit": {
+    "native_globe_texture_height": 1,
+    "radius_m": 3200000.0,
+    "globe_texel_m": 10053096.491487337,
+    "old_tuning_range_m": [
+      20106192.982974675,
+      80424771.9318987
+    ],
+    "restored_range_m": [
+      10053096.491487337,
+      20106192.982974675
+    ],
+    "hypothetical_512_high_map_texel_m": 19634.954084936206,
+    "claim": "global footprint threshold cannot explain a five-metre cutoff; no close-ground improvement credited to reverting it"
+  },
+  "water_heuristic_counterexamples": [
+    {
+      "semantic_material": "smooth dry land",
+      "height_m": 0.1,
+      "roughness": 0.1,
+      "expected_water_presence": 0.0,
+      "current_predicate": 0.6479999999999999
+    },
+    {
+      "semantic_material": "water with rough surface",
+      "height_m": 0.0,
+      "roughness": 0.3,
+      "expected_water_presence": 1.0,
+      "current_predicate": 0.0
+    }
+  ],
+  "water_contract_fixed": false,
+  "skirt_fixture": {
+    "initial_failure": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/software-skirt-contract.log",
+    "reason": "old test sampled background with camera below the substrate/incompatible face-up setup, not a demonstrated renderer regression",
+    "correction": "face +Y, camera above 10m substrate, actual visible skirt; center red/height magenta and sufficient skirt pixels; normal surface pixels allowed elsewhere",
+    "production_geometry_change": false,
+    "final_binary_sha256": "2c9d10c13a8055672f96deaf52a7707c3add56f0b16637d022a3367c48a7a39e"
+  },
+  "checks": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/thessa-causal-clippy.log",
+      "sha256": "e2cd86ca7999275fcd80db6c3ab46cd91394c1d610d8820ca71c145cd23397cd"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/thessa-causal-clippy-final.log",
+      "sha256": "96d7edcf4dcf73db3f496827a5a30bc1810fe7d5459a09efe8f6941b1baab77f"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/thessa-causal-cpu.log",
+      "sha256": "026be161972ff6497a373d4f512b35ecda586dea209d7cccfc2f37f2d9a9c6dc"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/thessa-causal-client.log",
+      "sha256": "31d182dbbfd34adbd4d3f50be4bc46fd554138c9b13ca3b4369eababe1d9d41a"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/thessa-causal-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/thessa-causal-skirt-clippy.log",
+      "sha256": "a65d0baabf02f609c9f998246686b3fb030c8ca22f18915848f20ccd7dbd953c"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/software-surface-contracts.log",
+      "sha256": "5d748c82c9e44ce6c5d8da6d314c11b3a94c4030c6698e018fecff83804a8a4a",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/software-surface-contracts-command.json"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/software-skirt-v2.log",
+      "sha256": "613af8d0316a67ffa447f7619f700a38d37b239bab4386000356c10eac393f8a",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/software-skirt-v2-command.json"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/radv-surface-contracts.log",
+      "sha256": "8971389f0297710de37ab28cd4582a5bdd8a1c79a1f009cc2029e33846a901bf",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/radv-surface-contracts-command.json"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/radv-skirt-v2.log",
+      "sha256": "728fdfea2837bb86341fd12e704f17c3e28447884b979af2c2a37688e1a44d7c",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-causal-audit-2026-11-02/radv-skirt-v2-command.json"
+    }
+  ],
+  "acceptance_limits": [
+    "No full-forest appearance or performance acceptance",
+    "No independent indirect bounce or canopy sky visibility",
+    "No actual water presence/depth channel",
+    "No exact final HDR component decomposition",
+    "No frozen whole-scene residency/topology replay",
+    "Macro-normal continuity retained; partial-coverage source consistency still needs controls",
+    "Art/content/weather/profile edits retained without physical-calibration or whole-change validation claims",
+    "Another backend cloud rewrite not merged or claimed as native evidence"
+  ],
+  "main_merged": false
+}

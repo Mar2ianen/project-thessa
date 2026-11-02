@@ -1,9 +1,10 @@
 # 117 — Understory ground bounce, canopy occlusion and calibrated foliage transport
 
-Status: implemented and verified on RADV/native headless renderer. 2026-11-02.
-Branch: `feat/terrain-ground-detail-and-water-contract`.
-Addresses physical understory lighting, ground bounce, canopy sky occlusion,
-and botanical diffuse transmission towards the golden sunset reference.
+Status: historical appearance-tuning checkpoint, superseded by
+[doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md). Its primary-sun indirect-light
+heuristic and unsupported global fade change are removed after audit. The
+measurements below are historical art comparisons, not accepted physical
+calibration, exact transport validation or full renderer parity.
 
 ## 1. Physical Diagnosis: The Cold Shadow & Monotony Gap
 

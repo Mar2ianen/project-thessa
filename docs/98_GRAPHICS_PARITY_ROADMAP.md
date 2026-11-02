@@ -170,3 +170,10 @@ views. Actual FHD controls distinguish a flawed near-datum water predicate from
 the current sampled dry ground and identify transient coarse height coverage
 at the horizon. The ancestry experiment is retained as rejected evidence;
 full frozen capture, transport decomposition and reference acceptance remain open.
+
+[Render causal-contract audit](119_RENDER_CAUSAL_CONTRACT_AUDIT.md)
+rejects the later primary-sun bounce/sky-occlusion heuristic with a frozen
+source-slot permutation control, restores specular-disable semantics and
+reverts an unsupported global fade change. Water classification is still a
+roughness/height heuristic; stable frame replay, source accuracy and actual
+indirect transport remain the foundation work before more appearance tuning.

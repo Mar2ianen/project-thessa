@@ -1,6 +1,10 @@
 # 118 — Ground detail fade extension, reflective puddle network, and true AI reference parity
 
-Status: implemented, verified, and committed on `feat/terrain-ground-detail-and-water-contract`. 2026-11-02.
+Status: historical appearance-tuning checkpoint, superseded by
+[doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md). Its primary-sun indirect-light
+heuristic and unsupported global fade change are removed after audit. The
+measurements below are historical art comparisons, not accepted physical
+calibration, exact transport validation or full renderer parity.
 
 ## 1. Physical Diagnosis: Ground Detail Degradation Beyond 5m
 

@@ -818,3 +818,14 @@ special-case eclipse brightness multiplier
 ```
 
 The atmosphere should be visually rich, warp-safe, multi-star aware, and ready for hybrid ray tracing without turning Project Thessa into a climate or radiative-transfer simulator.
+
+
+## Native primary shadow correction continuation
+
+[Doc 111](111_FASTRT_PRIMARY_SHADOW_RECEIVERS.md) records optional
+`raytracing.primary_shadows = true`: native primary ground and spectral water
+query the existing scene after raster/cloud visibility. It defaults false;
+RT and shadows must both be enabled. It does not implement SSR or replace
+cloud/atmosphere transport, and the coastal correction is not yet an affordable
+production setting. Direct atmospheric sunlight and full sunset-reference
+acceptance remain separate open work.

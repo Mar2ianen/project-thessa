@@ -427,3 +427,12 @@ accepted samples to wire v11 and a bounded primary snapshot/geometry pair inbox.
 Native primary nozzles consume the accepted flow once in planet-body scene axes;
 multiple fields share joint emission/extinction transport. Secondary fleet
 rendering, calibrated optics, plume illumination and cloud overlap remain open.
+
+
+Native primary ground/water can now borrow the existing mesh-scene TLAS for
+visibility correction ([doc 111](111_FASTRT_PRIMARY_SHADOW_RECEIVERS.md)). The
+shared graphics flag `raytracing.primary_shadows` defaults false and requires
+both shadows and RT. The same FastRT scalar query gate serves mesh and primary
+consumers. No second acceleration owner, depth prepass or physics path exists.
+The primary ABI is capability-gated; source/scene/camera mismatch keeps raster
+visibility. Renderer captures expose allocation and last-use counters.

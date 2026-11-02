@@ -25,17 +25,10 @@ fn rt_trace(origin:vec3<f32>,direction:vec3<f32>,t_min:f32,t_max:f32,flags:u32)-
     return result;
 }
 
-// Keep the raster atlas for terrain and other non-RT casters. Neither source
-// can unshadow the other. No rays when the resolved shadow effect is disabled.
-fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32 {
-    let atlas=shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);
-    let cosine=dot(normal,light.directions[sun].xyz);
-    if (!RT_SHADOWS || atlas<=0.0 || cosine<=0.0) { return atlas; }
-    // Keep the physical stellar line and configured normal-distance exclusion.
-    // Camera distance is not an intersection-error bound; arbitrary cosine/t
-    // clamps can restore self hits or skip a nearby real blocker.
-    let min_t=RT_BIAS/cosine;
-    if (min_t>=RT_TMAX) { return atlas; }
-    let hit=rt_trace(position,light.directions[sun].xyz,min_t,RT_TMAX,RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-    return select(atlas,0.0,hit.hit);
+// A valid cheaper occlusion remains final; do not trace already-dark or backlit samples.
+fn rt_visibility(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,visibility:f32,bias:f32,max_distance:f32)->f32 {
+    let min_t=fastrt_visibility_min_distance(visibility,dot(normal,direction),bias,max_distance);
+    if(min_t<0.0) { return visibility; }
+    let hit=rt_trace(position,direction,min_t,max_distance,RAY_FLAG_TERMINATE_ON_FIRST_HIT);
+    return select(visibility,0.0,hit.hit);
 }

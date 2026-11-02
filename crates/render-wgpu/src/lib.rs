@@ -52,6 +52,7 @@ mod sky;
 pub mod temporal_resolve;
 pub mod terrain;
 pub mod terrain_ray;
+mod terrain_shadow;
 mod terrain_topology;
 pub mod timing;
 pub mod view;

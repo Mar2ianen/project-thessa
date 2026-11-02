@@ -665,11 +665,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);
     }
     var direct = vec3(0.0);
+    var visibility: array<f32,3>;
     var land_direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
         if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
+            visibility[i] = cbt_shadow_visibility(input.render_position, receiver_normal, i);
             let incoming = lighting.colors_lux[i].rgb * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
-                * cbt_shadow_visibility(input.render_position, receiver_normal, i);
+                * visibility[i];
             direct += incoming;
             if (cbt_specular_enabled() && water_material < 1.0 && any(incoming > vec3(0.0))) {
                 land_direct += incoming * cbt_land_transmission(shaded_normal,lighting.directions[i].xyz,roughness);
@@ -707,7 +709,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
                 land_reflection += ocean_sun_reflection(shaded_normal, eye, lighting.directions[i].xyz,
                     lighting.colors_lux[i].rgb, roughness, 0.04)
-                    * cbt_shadow_visibility(input.render_position, receiver_normal, i);
+                    * visibility[i];
             }
         }
         let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
@@ -744,7 +746,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             sky * vec3(0.015, 0.018, 0.015)) * fresnel;
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
-    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m);
+    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m,visibility);
     radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a);
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no

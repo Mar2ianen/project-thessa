@@ -104,6 +104,13 @@ pub struct NightLightsStats {
     pub storage_bytes: u64,
 }
 
+/// Primary terrain/water receiver; acceleration structures remain mesh-scene owned.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PrimaryShadowStats {
+    pub allocated: bool,
+    pub active: bool,
+}
+
 #[derive(PartialEq)]
 struct ShadowCacheKey {
     receiver_view: Option<[u32; 16]>,
@@ -181,6 +188,8 @@ pub struct TerrainRenderer {
     classify: [wgpu::ComputePipeline; 3],
     classify_bind: wgpu::BindGroup,
     raster: wgpu::RenderPipeline,
+    primary_shadow: Option<crate::terrain_shadow::PrimaryShadow>,
+    primary_shadow_used: std::cell::Cell<bool>,
     raster_bind: wgpu::BindGroup,
     night_mask: Option<wgpu::Texture>,
     night_intensity: f32,
@@ -718,7 +727,7 @@ impl TerrainRenderer {
             "fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec4<f32>{return vec4(0.0);}\nfn cbt_land_transmission(n:vec3<f32>,l:vec3<f32>,r:f32)->f32{return 1.0;}\nfn cbt_land_ambient_transmission(r:f32)->f32{return 1.0;}\n".into()
         });
         hooks.push_str(if ocean.is_some(){include_str!("ocean_raster.wgsl")}else{
-            "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32)->vec4<f32>{return vec4(0.0);}"
+            "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32,v:array<f32,3>)->vec4<f32>{return vec4(0.0);}"
         });
         if ocean.is_some() {
             hooks.push_str(&crate::ocean::shader(2));
@@ -802,50 +811,14 @@ impl TerrainRenderer {
                 .into(),
             ),
         });
-        let raster = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cbt-raster"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vertex"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("CBT_CONFORMING", f64::from(topology.is_some()))],
-                    ..Default::default()
-                },
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: if topology.is_some() {
-                    Some(wgpu::Face::Back)
-                } else {
-                    None
-                },
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: settings.map_or(1, |s| s.raster_msaa_samples),
-                ..Default::default()
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fragment"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let raster = crate::terrain_shadow::raster_pipeline(
+            device,
+            &module,
+            None,
+            format,
+            settings.map_or(1, |s| s.raster_msaa_samples),
+            topology.is_some(),
+        );
         // Globe asset loading and effect settings remain in the client.
         let globe = solid_texture(backend, FALLBACK_ALBEDO, false);
         let roughness = solid_texture(backend, [255; 4], false);
@@ -940,21 +913,32 @@ impl TerrainRenderer {
             entries: &entries,
         });
         let environment = crate::environment::EnvironmentBinding::new(device);
+        let mut environment_entries = ocean
+            .as_ref()
+            .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
+        if raster_environment {
+            environment_entries.extend(environment.entries());
+        } else {
+            environment_entries.extend(environment.cloud_entries());
+        }
         let ocean_bind = Some({
-            let mut entries = ocean
-                .as_ref()
-                .map_or_else(Vec::new, |field| field.binding().entries().to_vec());
-            if raster_environment {
-                entries.extend(environment.entries());
-            } else {
-                entries.extend(environment.cloud_entries());
-            }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ocean-raster"),
                 layout: &raster.get_bind_group_layout(2),
-                entries: &entries,
+                entries: &environment_entries,
             })
         });
+        let primary_shadow = settings.filter(|s| s.rt_primary_shadows && s.shadow_enabled && s.ray_tracing.is_active())
+            .filter(|_| backend.device.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY))
+            .filter(|_| crate::terrain_shadow::supported(&backend.device.limits(),ocean.is_some(),raster_environment))
+            .and(shadows.as_ref()).map(|atlas| {
+                let source = raster_source.replace(
+                    "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 { return shadow_visibility(p,n,sun)*cloud_terrain_sun_visibility(p,sun); }",
+                    crate::terrain_shadow::SHADOW_HOOK);
+                crate::terrain_shadow::PrimaryShadow::new(backend,&source,format,
+                    settings.map_or(1,|s|s.raster_msaa_samples),topology.is_some(),&entries,
+                    atlas,&environment_entries,ocean.is_some(),raster_environment)
+            });
         let ocean_environment = Some(environment);
         let ocean_geometry = if let Some(field) = &ocean
             && ocean_settings.geometry_patches > 0
@@ -1075,6 +1059,8 @@ impl TerrainRenderer {
             classify_bind,
             raster,
             raster_bind,
+            primary_shadow,
+            primary_shadow_used: std::cell::Cell::new(false),
             night_mask,
             night_intensity: settings.map_or(0.0, |s| s.night_lights_intensity),
             night_uploaded_bytes: 0,
@@ -1200,6 +1186,13 @@ impl TerrainRenderer {
             glam::DVec3::from_array(self.camera).length() + self.body_radius_m.abs() + extent;
         let error = 128.0 * f64::from(f32::EPSILON) * magnitude;
         error.is_finite().then_some(error)
+    }
+
+    pub fn primary_shadow_stats(&self) -> PrimaryShadowStats {
+        PrimaryShadowStats {
+            allocated: self.primary_shadow.is_some(),
+            active: self.primary_shadow_used.get(),
+        }
     }
 
     pub fn shadows(&self) -> Option<&crate::shadows::ShadowAtlas> {
@@ -1769,6 +1762,9 @@ impl TerrainRenderer {
                         entries: &entries,
                     }),
             );
+            if let Some(primary) = &mut self.primary_shadow {
+                primary.rebind_environment(&backend.device, &entries);
+            }
             self.ocean_environment = Some(environment);
         }
         if let Some(environment) = environment.filter(|field| field.enabled() && self.sky_visible) {
@@ -2216,13 +2212,27 @@ impl TerrainRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.raster);
-        pass.set_bind_group(0, &self.raster_bind, &[]);
-        if let Some(receiver) = &self.shadow_receiver {
-            pass.set_bind_group(1, receiver, &[]);
-        }
-        if let Some(ocean) = &self.ocean_bind {
-            pass.set_bind_group(2, ocean, &[]);
+        self.primary_shadow_used.set(false);
+        if let Some((primary, scene)) = self
+            .primary_shadow
+            .as_ref()
+            .zip(mesh.and_then(|m| m.primary_shadow(self.camera)))
+        {
+            self.primary_shadow_used.set(true);
+            pass.set_pipeline(&primary.pipeline);
+            pass.set_bind_group(0, &primary.geometry, &[]);
+            pass.set_bind_group(1, &primary.atlas, &[]);
+            pass.set_bind_group(2, &primary.environment, &[]);
+            pass.set_bind_group(3, scene, &[]);
+        } else {
+            pass.set_pipeline(&self.raster);
+            pass.set_bind_group(0, &self.raster_bind, &[]);
+            if let Some(receiver) = &self.shadow_receiver {
+                pass.set_bind_group(1, receiver, &[]);
+            }
+            if let Some(ocean) = &self.ocean_bind {
+                pass.set_bind_group(2, ocean, &[]);
+            }
         }
         if let Some(topology) = &self.topology {
             if topology.surface.publication().revision != 0 {
@@ -2503,7 +2513,10 @@ fn solid_texture(backend: &Backend, rgba: [u8; 4], array: bool) -> wgpu::Texture
     })
 }
 
-fn read_buffer(backend: &Backend, source: &wgpu::Buffer) -> Result<Vec<u8>, BackendError> {
+pub(crate) fn read_buffer(
+    backend: &Backend,
+    source: &wgpu::Buffer,
+) -> Result<Vec<u8>, BackendError> {
     let staging = backend.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("cbt-diagnostic-readback"),
         size: source.size(),

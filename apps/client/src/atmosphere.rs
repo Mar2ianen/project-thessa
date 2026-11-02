@@ -280,6 +280,8 @@ fn toggle_ray_tracing(
     };
     resolved.rt_terrain = on && requested.0.raytracing.terrain;
     resolved.rt_vehicles = on && requested.0.raytracing.vehicles;
+    resolved.rt_primary_shadows =
+        on && requested.0.raytracing.primary_shadows && resolved.shadow_enabled;
     resolved.rt_landmarks = on && requested.0.raytracing.landmarks;
     resolved.rt_atmosphere_queries = on && requested.0.raytracing.atmosphere;
     resolved.rt_clouds = on && requested.0.raytracing.clouds;

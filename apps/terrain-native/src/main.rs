@@ -1256,6 +1256,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         {
             eprintln!("accepted_rocket_sample={}", serde_json::to_string(&sample)?);
         }
+        eprintln!(
+            "primary_rt_shadows={:?}; shared mesh-scene TLAS, raster/cloud fallback retained",
+            renderer.primary_shadow_stats()
+        );
         let plume_stats = renderer.plume_stats();
         eprintln!(
             "native_plumes allocated={} sources={} draws={} steps={} pixel_ray_limit={} profile_upload_bytes={}",

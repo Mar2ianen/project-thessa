@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 publish = false
-description = "Backend-neutral sparse ray-tracing classification for FastRT (Stage 1: proxy policy, no accelerator yet)"
+description = "Backend-neutral FastRT geometry classification and visibility-query policy; no accelerator"
 
 [[bench]]
 name = "classify"

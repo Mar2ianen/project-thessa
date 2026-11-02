@@ -299,6 +299,8 @@ pub struct ResolvedGraphicsSettings {
     pub instruments: ResolvedInstruments,
     pub ocean: crate::settings::OceanSettings,
     pub ocean_size: u32,
+    #[serde(default)]
+    pub rt_primary_shadows: bool,
     pub rt_scene_memory_bytes: u64,
     pub rt_max_instances: u32,
     pub rt_reflection_bounces: u32,
@@ -934,6 +936,9 @@ impl ResolvedGraphicsSettings {
                 Quality::High => 128,
             },
             preset_label: requested.effective_preset_label().to_string(),
+            rt_primary_shadows: requested.raytracing.primary_shadows
+                && requested.shadows.enabled
+                && ray_tracing.is_active(),
             rt_scene_memory_bytes: u64::from(requested.raytracing.scene_memory_mib.clamp(1, 128))
                 * 1024
                 * 1024,
@@ -1434,6 +1439,10 @@ impl ResolvedGraphicsSettings {
             "rt_reflection_bounces".to_string(),
             self.rt_reflection_bounces.to_string(),
         );
+        map.insert(
+            "rt_primary_shadows".into(),
+            self.rt_primary_shadows.to_string(),
+        );
         map.insert("shadows".to_string(), self.shadow_enabled.to_string());
         map.insert(
             "shadow_mesh_command_budget_bytes".into(),
@@ -1510,6 +1519,26 @@ impl ResolvedGraphicsSettings {
 mod tests {
     use super::*;
     use crate::settings::RequestedGraphics;
+
+    #[test]
+    fn primary_shadow_corrections_are_opt_in_and_require_both_effects() {
+        let mut request = RequestedGraphics::default();
+        let resolve = |r: &RequestedGraphics| {
+            ResolvedGraphicsSettings::from_requested(r, &Capabilities::unknown())
+        };
+        assert!(!resolve(&request).rt_primary_shadows);
+        request.raytracing.primary_shadows = true;
+        request.renderer.ray_tracing = RayTracingRequest::Local;
+        assert!(resolve(&request).rt_primary_shadows);
+        request.shadows.enabled = false;
+        assert!(!resolve(&request).rt_primary_shadows);
+        request.shadows.enabled = true;
+        request.renderer.ray_tracing = RayTracingRequest::Off;
+        assert!(!resolve(&request).rt_primary_shadows);
+        let decoded =
+            RequestedGraphics::from_toml("[raytracing]\nprimary_shadows = true\n").unwrap();
+        assert!(decoded.raytracing.primary_shadows);
+    }
 
     #[test]
     fn msaa_is_explicit_capability_resolved_and_disabled_by_default() {

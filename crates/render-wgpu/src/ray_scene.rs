@@ -106,6 +106,7 @@ pub struct Plan {
     textures: Vec<(usize, bool)>,
     quality: Quality,
     shadow_rays: bool,
+    primary_shadows: bool,
     reflections: bool,
     vertex_stride: u64,
     triangles: u64,
@@ -352,6 +353,12 @@ fn plan_inner(
             16 + 4
         }
     };
+    let bytes = bytes
+        + if resolved.shadow_enabled && resolved.rt_primary_shadows {
+            16
+        } else {
+            0
+        };
     if bytes > resolved.rt_scene_memory_bytes {
         return Enable::Unavailable(format!(
             "RT scene needs {bytes} bytes, budget is {}",
@@ -375,6 +382,7 @@ fn plan_inner(
         textures,
         quality,
         shadow_rays: resolved.shadow_enabled,
+        primary_shadows: resolved.rt_primary_shadows,
         reflections,
         vertex_stride,
         triangles,
@@ -582,7 +590,10 @@ pub fn shader(plan: &Plan) -> String {
         plan.quality == Quality::Low,
         plan.shadow_rays,
         sampling,
-        include_str!("ray_query.wgsl"),
+        format_args!(
+            "{}\n{QUERY_SHADER}\n{MESH_SHADOW_SHADER}",
+            thessa_fastrt::visibility::QUERY_POLICY_WGSL
+        ),
         if plan.reflections {
             &hit_shader
         } else {
@@ -590,6 +601,14 @@ pub fn shader(plan: &Plan) -> String {
         },
     )
 }
+
+pub(crate) const QUERY_SHADER: &str = include_str!("ray_query.wgsl");
+const MESH_SHADOW_SHADER: &str =
+    "fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32 {
+let visibility=shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);
+if(!RT_SHADOWS){return visibility;}
+return rt_visibility(position,normal,light.directions[sun].xyz,visibility,RT_BIAS,RT_TMAX);
+}";
 
 /// The same roughness-aware environment hook is used by raster fallback and
 /// primary RT misses. Querying geometry must not change an unobstructed sky.
@@ -617,6 +636,7 @@ pub struct RayScene {
     sizes: Vec<wgpu::BlasTriangleGeometrySizeDescriptor>,
     tlas: wgpu::Tlas,
     bind: wgpu::BindGroup,
+    primary_shadow: Option<wgpu::BindGroup>,
     positions: wgpu::Buffer,
     indices: wgpu::Buffer,
     vertex_stride: u64,
@@ -853,6 +873,27 @@ impl RayScene {
             layout,
             entries: &entries,
         });
+        let primary_shadow = (plan.shadow_rays && plan.primary_shadows).then(|| {
+            let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("primary-shadow-parameters"),
+                contents: &f32_bytes([plan.bias_m, plan.max_distance_m, 0.0, 0.0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("primary-shadow-shared-scene"),
+                layout: &crate::terrain_shadow::scene_layout(device),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::AccelerationStructure(&tlas),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: params.as_entire_binding(),
+                    },
+                ],
+            })
+        });
         Ok(Self {
             mesh_enabled: plan.mesh_enabled,
             terrain,
@@ -867,6 +908,7 @@ impl RayScene {
             sizes,
             tlas,
             bind,
+            primary_shadow,
             positions,
             indices,
             vertex_stride: plan.vertex_stride,
@@ -888,6 +930,12 @@ impl RayScene {
 
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind
+    }
+
+    pub(crate) fn primary_shadow(&self, camera: [f64; 3]) -> Option<&wgpu::BindGroup> {
+        (self.built && !self.transforms.is_empty() && self.camera_m.to_array() == camera)
+            .then_some(self.primary_shadow.as_ref())
+            .flatten()
     }
 
     pub fn stats(&self) -> RayStats {

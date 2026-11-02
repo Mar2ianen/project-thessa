@@ -29,9 +29,22 @@ fn snapshot(scene: &Scene, time: f64) -> Snapshot {
         rails_advanced_s: 0.0,
         reaction_wheel_torque_body_nm: [0.0; 3],
         parachutes: Vec::new(),
+        rocket_plumes: None,
         wake_notice: None,
         flight_error: None,
     }
+}
+
+// A complete primary publication includes its exact geometry revision.
+fn primary_wire(snapshot: &Snapshot) -> Vec<u8> {
+    let geometry = thessa_flight_net::geometry::FleetGeometry {
+        revision: snapshot.geometry_revision,
+        primary: None,
+        vehicles: Vec::new(),
+    };
+    let mut wire = thessa_flight_net::geometry::encode_fleet_geometry(&geometry).unwrap();
+    wire.extend(thessa_flight_net::encode_snapshot(snapshot).unwrap());
+    wire
 }
 
 fn replica() -> Scene {
@@ -45,6 +58,7 @@ fn replica() -> Scene {
         snapshots: 0,
         last_tick: None,
         parachutes: None,
+        rocket_plumes: None,
         fleet: FleetObserver::default(),
     });
     scene
@@ -617,8 +631,7 @@ fn authoritative_stop_keeps_the_link_for_bounded_remote_relaunch() {
     scene.setup_flight().unwrap();
     let mut stopped = snapshot(&scene, 2.0);
     stopped.flight_error = Some("fixture: authoritative physics stopped".into());
-    let bytes = thessa_flight_net::encode_snapshot(&stopped)
-        .unwrap()
+    let bytes = primary_wire(&stopped)
         .iter()
         .map(|byte| format!("\\{byte:03o}"))
         .collect::<String>();
@@ -635,6 +648,7 @@ fn authoritative_stop_keeps_the_link_for_bounded_remote_relaunch() {
         last_tick: None,
         fleet: Default::default(),
         parachutes: None,
+        rocket_plumes: None,
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.server_snapshot_count() == Some(0) {
@@ -711,8 +725,7 @@ fn maneuver_kick_is_one_typed_wire_intent_without_local_steps_or_fabricated_burn
             thessa_sim_core::SimTime(2.0),
         )
         .unwrap();
-    let bytes: String = thessa_flight_net::encode_snapshot(&good)
-        .unwrap()
+    let bytes: String = primary_wire(&good)
         .iter()
         .map(|byte| format!("\\{byte:03o}"))
         .collect();
@@ -782,8 +795,7 @@ fn maneuver_kick_waits_for_motion_and_never_fires_on_a_stopped_replica() {
     let mut stopped = rest.clone();
     // Co-rotating craft: no prograde direction exists yet, so the kick waits.
     stopped.state.velocity_inertial_mps = body.velocity_inertial;
-    let bytes: String = thessa_flight_net::encode_snapshot(&stopped)
-        .unwrap()
+    let bytes: String = primary_wire(&stopped)
         .iter()
         .map(|byte| format!("\\{byte:03o}"))
         .collect();
@@ -817,8 +829,7 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
     let mut scene = Scene::load(Default::default()).unwrap();
     scene.setup_flight().unwrap();
     let good = snapshot(&scene, 5.0);
-    let bytes: String = thessa_flight_net::encode_snapshot(&good)
-        .unwrap()
+    let bytes: String = primary_wire(&good)
         .iter()
         .map(|byte| format!("\\{byte:03o}"))
         .collect();
@@ -835,6 +846,7 @@ fn received_snapshot_silence_uses_reader_age_and_preserves_the_published_scene()
         last_tick: None,
         fleet: FleetObserver::default(),
         parachutes: None,
+        rocket_plumes: None,
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.server_snapshot_count() == Some(0) {
@@ -883,7 +895,13 @@ fn fleet_silence_does_not_reuse_primary_age_or_infer_despawn() {
     };
     let path = peer(&format!(
         "printf '{}'; while :; do printf '{}'; sleep 0.01; done",
-        bytes(thessa_flight_net::encode_fleet_snapshot(&wire_fleet).unwrap()),
+        bytes({
+            let catalogue = geometry(&scene, &[1], 1);
+            let mut initial =
+                thessa_flight_net::geometry::encode_fleet_geometry(&catalogue).unwrap();
+            initial.extend(thessa_flight_net::encode_fleet_snapshot(&wire_fleet).unwrap());
+            initial
+        }),
         bytes(thessa_flight_net::encode_snapshot(&primary).unwrap())
     ));
     let link =
@@ -898,6 +916,7 @@ fn fleet_silence_does_not_reuse_primary_age_or_infer_despawn() {
         last_tick: None,
         fleet: FleetObserver::default(),
         parachutes: None,
+        rocket_plumes: None,
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while scene.remote.as_ref().unwrap().fleet.updates == 0

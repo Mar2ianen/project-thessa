@@ -184,7 +184,21 @@ impl Sim {
         vacuum: bool,
         drift: bool,
     ) -> Result<Self, String> {
-        let mut authority = FlightAuthority::new(&ephemeris, reference_body)
+        Self::new_with_vehicle(ephemeris, reference_body, vacuum, drift, None)
+    }
+
+    pub(super) fn new_with_vehicle(
+        ephemeris: BakedEphemeris,
+        reference_body: BodyId,
+        vacuum: bool,
+        drift: bool,
+        vehicle: Option<thessa_sim_core::VehicleDefinition>,
+    ) -> Result<Self, String> {
+        let authority = match vehicle {
+            Some(vehicle) => FlightAuthority::new_with_vehicle(&ephemeris, reference_body, vehicle),
+            None => FlightAuthority::new(&ephemeris, reference_body),
+        };
+        let mut authority = authority
             .map_err(|e| format!("authority init: {e}"))?
             .with_bake_queue(Box::new(ThreadBakeQueue::new()));
         // Drift rides above the atmosphere top (declared vacuum) so
@@ -1022,6 +1036,8 @@ impl Sim {
             self.effective_warp(),
             self.compute_s,
             self.wall_s(),
+            &self.ephemeris,
+            VehicleId::PRIMARY,
         )
     }
 
@@ -1031,6 +1047,8 @@ impl Sim {
         effective_warp: f64,
         compute_s: f64,
         wall_s: f64,
+        ephemeris: &thessa_sim_core::BakedEphemeris,
+        vehicle_id: VehicleId,
     ) -> Snapshot {
         Snapshot {
             geometry_revision: 0,
@@ -1048,6 +1066,9 @@ impl Sim {
             rails_advanced_s: authority.rails_advanced_this_frame,
             reaction_wheel_torque_body_nm: authority.reaction_wheel_telemetry().to_array(),
             parachutes: authority.parachute_telemetry().to_vec(),
+            rocket_plumes: thessa_flight_net::plume::RocketPlumeSample::from_authority(
+                authority, ephemeris, vehicle_id,
+            ),
             wake_notice: authority.wake_notice.clone(),
             flight_error: authority.flight_error.clone(),
         }
@@ -1073,6 +1094,8 @@ impl Sim {
                         effective_warp,
                         compute_s,
                         wall_s,
+                        &self.ephemeris,
+                        VehicleId::new(*id),
                     ),
                 })
                 .collect(),

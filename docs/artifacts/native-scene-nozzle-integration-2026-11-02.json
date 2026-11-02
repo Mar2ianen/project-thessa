@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "status": "partial integration; parity/performance goal incomplete",
+  "base_commit": "5715435d15c2355310d8f082f985cf7e828e200a",
+  "merged_gemini_commit": "3e9e30c04cf353b4d5b91ffc9541132580f33eba",
+  "raw_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/render-integration-2026-11-02",
+  "evidence": {
+    "merge-audit.json": {
+      "bytes": 1360,
+      "sha256": "e22a07d2c9dc8135f57bf2776fae7f26d6dd3a7962ef25386063df672a3f857e"
+    },
+    "body-frame-identities.json": {
+      "bytes": 6011,
+      "sha256": "0791d445e4202c37d540d9a1bb028781f579ec701ae6afb1f3ab0183a85a20fd"
+    },
+    "integrated-identities.json": {
+      "bytes": 6404,
+      "sha256": "b175d481026891e7e2ffdf0347f2785de4a25adccfeb54ae7246c62d35b7cfd2"
+    },
+    "coast-build-identity.json": {
+      "bytes": 4056,
+      "sha256": "33cfbba75ca2e5518b799c7e2b5f646649a54245520fb5235398f6c047613f66"
+    },
+    "cycles-frozen-source-identity.json": {
+      "bytes": 446,
+      "sha256": "13ebf6bcd40d53581240b1189bcd89052293690dbfaf034b58bacc530178def0"
+    },
+    "b03-cycles-8/metrics.json": {
+      "bytes": 567,
+      "sha256": "51da0e8154de1e8a090f3f2b7cef9ece84d22bb19ecc78044a227df5849ecd7d"
+    },
+    "b03-bounded.png": {
+      "bytes": 309621,
+      "sha256": "5f07aec8e5a516b07cefaf08cf82a9fb8cf62029cb3bc95559d468d921d80e88"
+    },
+    "b03-bounded.rgba16f": {
+      "bytes": 1843200,
+      "sha256": "7516b6abd4bd95c550a0b714777e04fc149cc1627c651c8ffd36a63810e946d1"
+    },
+    "b03-bounded-export/scene.glb": {
+      "bytes": 22025668,
+      "sha256": "e3855e988f2ac71dd2a491ced771c600abce366f5d141c032415b1949384b2e5"
+    },
+    "b03-bounded-export/scene.json": {
+      "bytes": 1372,
+      "sha256": "c8268b1f4ce3b904e070cac879c94101fff68a963673dbbfdf9141ef87c5a314"
+    },
+    "b03-cycles-8/cycles_display.png": {
+      "bytes": 577416,
+      "sha256": "606a844f1c84ba8b89ddf28e581bcfb066e8ab10f20ce86d17f2935041b8e03b"
+    },
+    "rocket-body-frame.png": {
+      "bytes": 50023,
+      "sha256": "2a351d9015d087831930e918f57597a0415c0117c187776bfd59b6cbebab9335"
+    },
+    "rocket-body-frame.rgba16f": {
+      "bytes": 1843200,
+      "sha256": "8c231ac53a57732baef4dd61922dba84bbe1dd4342ad62bf12d115ef69a0eb1b"
+    },
+    "rocket-body-frame.log": {
+      "bytes": 9922,
+      "sha256": "2c6bc335940d777fcef90c86f5ff5b078a57aa7c57ebe576c2e5c82e4f032365"
+    },
+    "rocket-body-frame-command.json": {
+      "bytes": 2176,
+      "sha256": "13a2f608b2e3bc697e2a65af10a6456473951911013e213105bcb6d67b971aa2"
+    },
+    "b03-full-native.log": {
+      "bytes": 1427,
+      "sha256": "af5dbe267989eb48191d395d3c7a47b40a4d61860b864b3f70c1b805f7eaaba9"
+    },
+    "b03-full-near-v2.log": {
+      "bytes": 1425,
+      "sha256": "112b037f05764e73ba67952b52437e3be5b3b3f6962758dbaf669b2eb7502396"
+    },
+    "b03-full-near-lod4.log": {
+      "bytes": 1425,
+      "sha256": "1a5a8863765cb86b8363e4d96c43768bc9abce0057968ee8f4475949157df1ab"
+    },
+    "cap-gpu-results.json": {
+      "bytes": 946,
+      "sha256": "c4e0150890fad853a3033abf4db1aaef8fe4b6e36b33f758e6abafb6e55c6e6d"
+    },
+    "cap-radv-joint.log": {
+      "bytes": 283,
+      "sha256": "9bd7b635a8a7d57633a6d655900cbef56c8fb6130c6451c3c81e4156b06d4d7d"
+    },
+    "cap-software-joint.log": {
+      "bytes": 277,
+      "sha256": "5df2c6b25f9e1364dfd30d5fd0d3557d2410455a1c2a3f71d1b2d1928711142a"
+    },
+    "cap-radv-ray_scene.log": {
+      "bytes": 2969,
+      "sha256": "1d2307fb187db92ac393ea7feee5090d0b6fbcb608418f7ec00c0783289f199b"
+    },
+    "cap-radv-surface_lighting.log": {
+      "bytes": 779,
+      "sha256": "a15722697292d26871a2679eca7940894bbd976d52108aef6e31a7d7c7094029"
+    },
+    "cap-radv-render-lib.log": {
+      "bytes": 7721,
+      "sha256": "d511f3caf46b4e21c76927063971b2c7bbbceba2c789db92e6d1c341f8630866"
+    },
+    "final-tests-v3.jsonl": {
+      "bytes": 373293,
+      "sha256": "b4b6cfc493ab5ad5a0f60df1c072ceba6360b4b50f308540863570576440ab7e"
+    },
+    "final-native-server.log": {
+      "bytes": 26531,
+      "sha256": "bfa663586d69ade4bab4f85de80627058c8802700f968f0eab7e5e7e6a02417a"
+    },
+    "final-server-replica-tests.log": {
+      "bytes": 3095,
+      "sha256": "c4812fda8f547fc993fc77db40d0d02c2e43ccce62d62f4c1f21a11a79b6dbb9"
+    },
+    "final-client-check.log": {
+      "bytes": 2198,
+      "sha256": "a0ae35f25fc3726a8bfa3fe5429294e1084b0aa1c1b4616517fc12516103f028"
+    },
+    "final-python-tests.log": {
+      "bytes": 268,
+      "sha256": "7467bb92bdcdb00b79cf0b20d3ebd2db007b836f79d590eaeacd04d8cef8ec67"
+    },
+    "final-architecture.log": {
+      "bytes": 310,
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    "final-clippy.log": {
+      "bytes": 689,
+      "sha256": "34c018cec5c2a790deb5e84e75a927d85ba07bf9ac9dcaa62be204afea821766"
+    },
+    "final-rest-render-results.json": {
+      "bytes": 167,
+      "sha256": "f8b369b58a3261aae1e983b5bd7f2845f23bee6b03c8684a82460af68f833cb0"
+    },
+    "publish-clippy.log": {
+      "bytes": 491,
+      "sha256": "2e78f2d71050254b87663da6bbd5a7374db23e005322c5d4941de6b8179f6ed5"
+    },
+    "publish-architecture.log": {
+      "bytes": 310,
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    "publish-python.log": {
+      "bytes": 268,
+      "sha256": "949f959ac55793421c8af916bb68927f8598883add7b8ba70fb55ca95861356f"
+    },
+    "final-native-cli.log": {
+      "bytes": 2164,
+      "sha256": "cd7f33735a002320d62f5fef46360f3fbd819d68ce266ffd7fa65434ddd4a993"
+    },
+    "final-new-cli-validation.log": {
+      "bytes": 789,
+      "sha256": "e28dc575ab7b9b441666313c6d882a2ccc95632a7b27486d1aa97d0002772ded"
+    },
+    "final-fleet-epoch-test-v2.log": {
+      "bytes": 4913,
+      "sha256": "d32eaf769f669069e9bccebb30f35b85c5219aec7ebe80239f3b796d0fde0283"
+    }
+  },
+  "wire_version": 11,
+  "joint_capacity": 64,
+  "joint_gpu_results": [
+    {
+      "case": "cap-radv-joint",
+      "binary_sha256": "c75ab707f032b64f222a14262aae78a7325e13930e7899741f59e7ea14fcb076",
+      "exit_code": 0,
+      "elapsed_s": 0.4254169010091573
+    },
+    {
+      "case": "cap-radv-ray_scene",
+      "binary_sha256": "5738c07a5cfd1ce348348e4a0f460f43c64e3974fb26485b1b74f287e2f46f64",
+      "exit_code": 0,
+      "elapsed_s": 8.674463199000456
+    },
+    {
+      "case": "cap-radv-surface_lighting",
+      "binary_sha256": "638a57d8fb8b4315b8bbc96f9fce2caf96df45ae3bff4f044f79597854fbee24",
+      "exit_code": 0,
+      "elapsed_s": 1.4494388659950346
+    },
+    {
+      "case": "cap-radv-render-lib",
+      "binary_sha256": "6ad47279f57691e9a797b84959c57dfadd57b57306365d094a0bdeb9b12cf761",
+      "exit_code": 0,
+      "elapsed_s": 1.7446494670002721
+    },
+    {
+      "case": "cap-software-joint",
+      "binary_sha256": "c75ab707f032b64f222a14262aae78a7325e13930e7899741f59e7ea14fcb076",
+      "exit_code": 0,
+      "elapsed_s": 0.7748845379974227
+    }
+  ],
+  "checks": {
+    "flight_net": "51 passed after fleet owner/interval epoch validation; doc tests0",
+    "protocol": "5 passed",
+    "reference_scenes": "3 passed",
+    "server": "62 passed, 1 ignored",
+    "native": "137 regular cases covered across runs:136 in full run, failing mock fixed and all15 server-replica cases pass;46 ignored",
+    "render_lib": "41 passed,23 ignored",
+    "radv_ray_scene": "28 passed,4 ignored; rejected GGX-fit test changes removed together with rejected shader fit",
+    "radv_surface_lighting": "6 passed,1 ignored",
+    "radv_sky": "5 passed,1 ignored",
+    "joint_volume": "actual RADV and llvmpipe:1 oracle each,coincident+partial overlap,offaxis,order,opaque depth,collinear swept endpoints,capacity",
+    "python": "52 passed",
+    "architecture": "44 packages,20 guarded foundations",
+    "strict_all_target_clippy": "5 changed crates passed",
+    "bevy_client": "cargo check --tests passed",
+    "native_cli": "6 passed in capture/presentation/server CLI suites; new baked-definition/reference-asset/export guards covered"
+  },
+  "b03_bounded": {
+    "extent": [
+      640,
+      360
+    ],
+    "plant_quality": "low",
+    "understory": false,
+    "shadow_cascades": 1,
+    "stellar_shadow_layers": 3,
+    "shadow_distance_m": 500,
+    "plant_ground_instances": 8013,
+    "rt_instances": 8077,
+    "rt_triangles": 384104,
+    "cycles": {
+      "scenario": "B03-canonical-coast",
+      "ground_mode": "procedural",
+      "independent_reference": true,
+      "comparison_scope": "independent material approximation",
+      "samples": 8,
+      "import_duration_s": 1.4556945570075186,
+      "render_duration_s": 9.187387172001763,
+      "objects": 8017,
+      "metrics": {
+        "rgb_components": 691200,
+        "pre_exposed_linear_rgb_mae": 0.10885008195803628,
+        "pre_exposed_linear_rgb_rmse": 0.1394590792950077,
+        "relative_l2_against_thessa": 0.31511611561308656,
+        "top_10_pixels_fraction_of_squared_error": 0.0012357765608019798
+      }
+    }
+  },
+  "b03_full_rejected": {
+    "admission_limit_mesh_triangles": 20000000,
+    "full_high_4cascade": 207471832,
+    "one_cascade_100m_error1texel": 61857162,
+    "one_cascade_100m_error4texel": 47726996,
+    "scope": "admission rejected before shadow stage; not a speed measurement"
+  },
+  "live_accepted_run": {
+    "fields": 2,
+    "draw_calls": 1,
+    "throttle": 0.6,
+    "mass_flow_per_engine_kg_s": 31.125265707191325,
+    "exit_temperature_k": 1437.4551080861597,
+    "trace_median_ms": 106.812,
+    "game_fps": false,
+    "visible_flame_acceptance": false,
+    "binary_scope": "body-frame identities before joint flat-endpoint quadrature correction; final corrected consumer tested separately by cap GPU identities"
+  },
+  "known_gaps": [
+    "full High B03 shadow cost",
+    "native/Cycles material/sky/lighting mismatch",
+    "real-source chemiluminescence and calibration",
+    "fleet plume rendering",
+    "active gimbal geometry",
+    "field-derived plume illumination",
+    "accepted nozzle history",
+    "cloud/plume shared medium",
+    "primary terrain/ocean scene-object RT receivers",
+    "water force/fluid physics not added"
+  ],
+  "rejected": [
+    "roughness-only GGX multiscatter fit",
+    "target-photo projection as independent or blind parity evidence",
+    "higher unsafe shadow admission without a bounded workload"
+  ],
+  "physics": "read-only accepted observations, no second solve/throttle/clock/forces",
+  "performance_claim": "none; capture timings are trace-fenced and quality variants differ",
+  "blind_votes": 0,
+  "main_merge": false,
+  "foreign_wip": "original eight user/Gemini files preserved by separate verified-tree integration",
+  "integration_product_source_sha256": {
+    "apps/client/src/pilot.rs": "70944ae1defb220fc454b3fe75f360314a0dc73cb89f7e954a117636f8f473e9",
+    "apps/server/Cargo.toml": "2fcef13c5adf22c70301c870fdb81aeccc2e1ad1f89a72a58c5517acb5772690",
+    "apps/server/src/main.rs": "55c8cfb7c8b136de7fb8318bdce2783547e06dfcfc6784ce3a12ce7e89717e79",
+    "apps/server/src/sim.rs": "3f18963443c63d7808de87283a42ac930a4fdc9f06e40780aa89adf8da50bf08",
+    "apps/server/src/tests.rs": "f25f876ea34a0ec7fb306f90b6124b24c1f6561834192679dece7ca3ac94b447",
+    "apps/terrain-native/src/canonical_export.rs": "4202125959edd2ccb202d577f6daeb630831b5c6370cb15eea1f713ed1c4e4f1",
+    "apps/terrain-native/src/fleet_mesh.rs": "e90dea73880e3530b86eb89bb1a7e6341f672f4eeac51a607135a1bb7db2fd42",
+    "apps/terrain-native/src/main.rs": "a5548e891ae5399b722a69ed6261aa3fd170fb4f9836bdd43a74344094b98545",
+    "apps/terrain-native/src/plume.rs": "77abe35383e33f602b9a0c6f678e1c8cef7c7e4227408fc02c69e39388780279",
+    "apps/terrain-native/src/reference.rs": "3809b42d5ee9c916afb93409fa60c20cf99f32eacae7ca9dd574d406ad9e200b",
+    "apps/terrain-native/src/scene.rs": "d64914f88f6c8e0126f245a4fa77f4d009bd19770ca03788251ac16ecb7da1c3",
+    "apps/terrain-native/src/scene_server_tests.rs": "e548bf0e5377f4cd11d3efc913596760095bbb5fdcc8969db8c9b634d2a2b5b4",
+    "apps/terrain-native/tests/presentation_args.rs": "b67d0dea7d722b6221d551817e4aa7fa60ca03d719698c10f486214d1b7529ee",
+    "crates/flight-net/src/embedded.rs": "29a4ed81f3ed41678a492ff2827580a528c8fcde26418b5fcb331c48439bfc60",
+    "crates/flight-net/src/lib.rs": "fe92304d3ce3f558ce027c99c3b4ab3a994965526343a3289e3fff87b76e6916",
+    "crates/flight-net/src/plume.rs": "3792bb008de2f7f9f9e1af52da7c69b0ff3c53618a49157a507bedec9794e5f0",
+    "crates/flight-net/src/presentation.rs": "a22f7498b43eb94502cfac36f53c99e3e265c0305debd5aae762f4ff9edced4f",
+    "crates/protocol/src/lib.rs": "38a89ed7467b11c80a95859c8a2367c819201799d53d3b2f30f10cb79a37f8d7",
+    "crates/rcbt-wgpu/src/sphere.rs": "674f98fec9d351a983d1646b44c160b824647c05456756902c3c5cb546b0269f",
+    "crates/reference-scenes/src/lib.rs": "198b3a93750c10f87365a0400465070cd67dcf6267ebabf12f57ef9d394709e2",
+    "crates/render-wgpu/src/plume.rs": "232094f94898ebbb9c8eae2e58e5a9870335d3b4b4aea1b397e22c436c3e94c9",
+    "crates/render-wgpu/src/plume_multi.rs": "fe61dad0f6ea71de913ab73588e99d13565fca005463bd78fa802c188b0d1f9f",
+    "crates/render-wgpu/src/plume_multi.wgsl": "e7f1de7354536a96c1a45b604cc6672decfa960e5eadabfc0ed64a7cc5e0a868",
+    "crates/render-wgpu/src/terrain.rs": "de52ded049e080fb8d38260e74ed5e542972633ac6a91d4782e4c7bb079d7a17",
+    "crates/render-wgpu/tests/plume.rs": "536bdd680f77b420bf56b90253674d67d781460a6360f211eedb21108e26b61d",
+    "data/reference-scenes/arena-scenes.toml": "b4ef1b052bbaacad7e4f4cbb54716626c383b754f6615837570e543c4a023f04",
+    "data/reference-scenes/b02-capture.toml": "e3b4e5c9c199d863f21ff008c368ecbfd9afed3e2fd9e302afacea63cbade4d1",
+    "data/reference-scenes/b02-graphics.toml": "4bf4ae1c122bc97d1ac7c38a44daba26656f491da9851b91841f83e4fac1568e",
+    "data/vehicles/reference_twin_rocket.toml": "e508aa5d3b961736385f2d42fea07576f8249c83fd04b9fb41e1ce86a3fb42cd",
+    "tools/agent-qa/cycles_b02.py": "c994d65ffd71006d79976aae0c54362d96a9adada4303c700710d37381e1bd02",
+    "tools/agent-qa/cycles_b03.py": "b7ffb2ac63c84894e9cc129d0ae57a9e888a2a351953269fd066c9029d5d464a",
+    "tools/agent-qa/prepare_reference_arena.py": "bb37fa1ac6c34a12a375efb6cb2016a5ea5680e05a40cd2c3077879490266eb1",
+    "tools/agent-qa/tests/test_cycles_b02.py": "2ab4335737e36f9d52d289346be3e863da244c80ff0b1f886bcba1dedb813d33",
+    "tools/agent-qa/tests/test_cycles_b03.py": "fe5675b3ed26ae49a58a08825b3d9e632d0052cbcb8f70b32e18ea2b35ef8e5d",
+    "tools/agent-qa/tests/test_prepare_reference_arena.py": "7b5bac97d28044ed7e493b93af8851df1d4a3a6785ab419a3dc7d517382dd357"
+  }
+}

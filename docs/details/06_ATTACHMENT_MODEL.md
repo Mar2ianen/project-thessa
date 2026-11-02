@@ -208,8 +208,9 @@ The server owns the fleet above that scene. `Sim` keeps the primary
 command (root-body cluster keeps the source id, every authority shares one
 server clock and warp). Every input packet and typed guidance command carries
 the targeted vehicle id (introduced in wire v7, primary by default; current
-wire v10 separates retained mesh payloads from v8/v9's revisioned contact/appearance
-descriptors and adds revision-paired PRIMARY appearance): continuous controls,
+wire v11 retains v10's separation of mesh payloads from v8/v9's contact/appearance
+descriptors and revision-paired PRIMARY appearance, adding accepted rocket
+observations in v11; see doc 110): continuous controls,
 part/engine/stage commands, typed guidance, and maneuver/burn plans all route
 to the targeted vehicle, which keeps its own control mode, guidance, and
 maneuver/burn executors and serves them on the shared tick. Graphs, scripts,

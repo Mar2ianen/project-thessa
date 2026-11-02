@@ -1,6 +1,7 @@
 # 90 — Deterministic reference-scene data
 
-Status: B01/B05 data and native/Cycles captures implemented; B02 asset ingestion implemented, native B02 pending.
+Status: B01/B05 data and native/Cycles captures implemented; native B02 and B03
+export/control integration are now implemented with limits in doc 110.
 Capture infrastructure is operational ([doc 89](89_REFERENCE_CAPTURE.md)).
 
 ## Ownership
@@ -186,3 +187,13 @@ blind-preference and full-scene performance acceptance.
 medium controls through the opt-in native GPU fixture and stock Cycles Volume
 Coefficients. These are source-bound field datasets, not new MaterialLab/GLB
 CLI cases or calibrated rocket engines.
+
+## B02/B03 native continuation
+
+[Doc 110](110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md) records the shared native
+B02 launcher and B03 canonical scene/export, including actual bounded RADV and
+Cycles evidence. Earlier pending-B02 statements are milestone history. B03
+exports actual extent, projection and gain, with exclusive destinations and
+explicit game-geometry licensing. Terrain/sky/material matching and High scene
+cost remain open. The optional Cycles target-photo projection is an art study
+excluded from the default blind manifest, never independent parity evidence.

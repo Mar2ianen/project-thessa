@@ -88,14 +88,11 @@ impl<T: Clone> SnapshotInbox<T> {
     }
 }
 
-impl SnapshotInbox<Snapshot> {
-    /// Interpolate one wall-frame behind the newest received snapshot. The
-    /// authoritative state is still returned by `latest`; this copy is only
-    /// for presentation, so a future prediction can never become server truth.
-    fn interpolated(&self) -> Option<Snapshot> {
+impl<T: Clone> SnapshotInbox<T> {
+    fn interpolated_by(&self, select: impl Fn(&T) -> &Snapshot) -> Option<Snapshot> {
         let latest = self.latest.as_ref()?;
         let Some(previous) = self.previous.as_ref() else {
-            return Some(latest.snapshot.clone());
+            return Some(select(&latest.snapshot).clone());
         };
         let interval = latest
             .received_at
@@ -107,10 +104,16 @@ impl SnapshotInbox<Snapshot> {
             1.0
         };
         Some(interpolate_snapshot(
-            &previous.snapshot,
-            &latest.snapshot,
+            select(&previous.snapshot),
+            select(&latest.snapshot),
             alpha,
         ))
+    }
+}
+
+impl SnapshotInbox<Snapshot> {
+    fn interpolated(&self) -> Option<Snapshot> {
+        self.interpolated_by(|s| s)
     }
 }
 
@@ -233,9 +236,18 @@ fn merge_commands(
     queued
 }
 
-/// Live link to an embedded server child. Dropping kills the child.
+/// One read-thread-resolved visual transaction. A later descriptor cannot
+/// replace the geometry belonging to this snapshot's COM frame.
+#[derive(Debug, Clone)]
+pub struct PrimaryFrame {
+    pub snapshot: Snapshot,
+    pub geometry: Arc<crate::geometry::FleetGeometry>,
+}
+
+/// Live link to an embedded server child. Dropping kills and reaps the child.
 pub struct EmbeddedLink {
     snapshots: std::sync::Mutex<SnapshotInbox>,
+    primary_frames: Mutex<SnapshotInbox<PrimaryFrame>>,
     fleets: std::sync::Mutex<SnapshotInbox<FleetSnapshot>>,
     geometries: std::sync::Mutex<SnapshotInbox<Arc<crate::geometry::FleetGeometry>>>,
     inputs: std::sync::Arc<InputMailbox>,
@@ -296,7 +308,19 @@ impl EmbeddedLink {
         server: &std::path::Path,
         handshake_timeout: Duration,
     ) -> Result<Self, String> {
+        Self::spawn_server_with_vehicle(server, handshake_timeout, None)
+    }
+
+    /// The optional baked definition is one process argument, never shell text.
+    pub fn spawn_server_with_vehicle(
+        server: &std::path::Path,
+        handshake_timeout: Duration,
+        definition: Option<&std::path::Path>,
+    ) -> Result<Self, String> {
         let mut command = Command::new(server);
+        if let Some(path) = definition {
+            command.arg("--vehicle-definition").arg(path);
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -312,6 +336,7 @@ impl EmbeddedLink {
         let mut startup = StartupChild::new(child);
 
         let (snapshots, snapshots_writer) = SnapshotInbox::new();
+        let (primary_frames, primary_frames_writer) = SnapshotInbox::new();
         let (fleets, fleets_writer) = SnapshotInbox::new();
         let (geometries, geometries_writer) = SnapshotInbox::new();
         let (welcomed_tx, welcomed_rx) = channel::<()>();
@@ -333,6 +358,9 @@ impl EmbeddedLink {
             let mut buffer = [0u8; 65536];
             let mut welcomed = false;
             let mut geometry_receiver = crate::geometry::GeometryReceiver::default();
+            let mut geometry_history: VecDeque<Arc<crate::geometry::FleetGeometry>> =
+                VecDeque::with_capacity(2);
+            let mut pending_primary: Option<ReceivedSnapshot> = None;
             'read: loop {
                 match child_out.read(&mut buffer) {
                     Ok(0) => break,
@@ -355,6 +383,25 @@ impl EmbeddedLink {
                                 ) {
                                     match geometry_receiver.accept(&envelope) {
                                         Ok(Some(geometry)) => {
+                                            if geometry_history.len() == 2 {
+                                                geometry_history.pop_front();
+                                            }
+                                            geometry_history.push_back(geometry.clone());
+                                            if pending_primary.as_ref().is_some_and(|p| {
+                                                p.snapshot.geometry_revision == geometry.revision
+                                            }) {
+                                                let pending = pending_primary.take().unwrap();
+                                                if !primary_frames_writer.push(ReceivedSnapshot {
+                                                    snapshot: PrimaryFrame {
+                                                        snapshot: pending.snapshot,
+                                                        geometry: geometry.clone(),
+                                                    },
+                                                    received_at: pending.received_at,
+                                                    generation: 0,
+                                                }) {
+                                                    break 'read;
+                                                }
+                                            }
                                             if !geometries_writer.push(ReceivedSnapshot {
                                                 snapshot: geometry,
                                                 received_at: std::time::Instant::now(),
@@ -400,6 +447,32 @@ impl EmbeddedLink {
                                     continue;
                                 }
                                 if let Ok(snapshot) = crate::decode_payload::<Snapshot>(&envelope) {
+                                    let received_at = std::time::Instant::now();
+                                    pending_primary = None;
+                                    if let Some(geometry) = geometry_history
+                                        .iter()
+                                        .find(|g| g.revision == snapshot.geometry_revision)
+                                        && !primary_frames_writer.push(ReceivedSnapshot {
+                                            snapshot: PrimaryFrame {
+                                                snapshot: snapshot.clone(),
+                                                geometry: geometry.clone(),
+                                            },
+                                            received_at,
+                                            generation: 0,
+                                        })
+                                    {
+                                        break 'read;
+                                    }
+                                    if !geometry_history
+                                        .iter()
+                                        .any(|g| g.revision == snapshot.geometry_revision)
+                                    {
+                                        pending_primary = Some(ReceivedSnapshot {
+                                            snapshot: snapshot.clone(),
+                                            received_at,
+                                            generation: 0,
+                                        });
+                                    }
                                     let accepted = snapshots_writer.push(ReceivedSnapshot {
                                         snapshot,
                                         received_at: std::time::Instant::now(),
@@ -465,6 +538,7 @@ impl EmbeddedLink {
 
         Ok(Self {
             snapshots: std::sync::Mutex::new(snapshots),
+            primary_frames: Mutex::new(primary_frames),
             fleets: std::sync::Mutex::new(fleets),
             geometries: std::sync::Mutex::new(geometries),
             inputs,
@@ -497,6 +571,23 @@ impl EmbeddedLink {
     /// This is not a heartbeat: a live but stalled peer needs host timeouts.
     pub fn is_closed(&self) -> bool {
         self.inputs.closed.load(Ordering::Acquire)
+    }
+
+    /// Drain complete PRIMARY visual transactions using the same bounded inbox.
+    /// Unknown/missing geometry does not replace the last complete frame.
+    pub fn latest_primary_frame(&self) -> Option<PrimaryFrame> {
+        self.primary_frames.lock().ok()?.latest()
+    }
+
+    pub fn primary_frame_age(&self) -> Option<Duration> {
+        self.primary_frames.lock().ok()?.age()
+    }
+
+    pub fn interpolated_primary_snapshot(&self) -> Option<Snapshot> {
+        self.primary_frames
+            .lock()
+            .ok()?
+            .interpolated_by(|f| &f.snapshot)
     }
 
     /// Drain snapshots, keeping the newest. `None` when nothing arrived.
@@ -542,7 +633,7 @@ mod tests {
     use glam::{DQuat, DVec3};
     use thessa_sim_core::RigidBodyState;
 
-    fn snapshot(position: DVec3, angle: f64, time: f64) -> Snapshot {
+    pub(super) fn snapshot(position: DVec3, angle: f64, time: f64) -> Snapshot {
         Snapshot {
             geometry_revision: 1,
             appearance_frame_revision: 1,
@@ -565,6 +656,7 @@ mod tests {
             rails_advanced_s: 0.0,
             reaction_wheel_torque_body_nm: [0.0; 3],
             parachutes: Vec::new(),
+            rocket_plumes: None,
             wake_notice: None,
             flight_error: None,
         }
@@ -960,7 +1052,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn assert_startup_child_gone(pid_path: &std::path::Path) {
+    pub(super) fn assert_startup_child_gone(pid_path: &std::path::Path) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let pid = loop {
             if let Ok(pid) = std::fs::read_to_string(pid_path)
@@ -1047,7 +1139,9 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn welcomed_server(after_welcome: &str) -> (std::process::Command, std::path::PathBuf) {
+    pub(super) fn welcomed_server(
+        after_welcome: &str,
+    ) -> (std::process::Command, std::path::PathBuf) {
         injected_server(&format!("printf '{}'; {after_welcome}", welcome_bytes()))
     }
 
@@ -1117,5 +1211,92 @@ mod tests {
         assert!(link.inputs.pending.lock().unwrap().is_none());
         drop(link);
         assert_startup_child_gone(&pid_path);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod paired_primary_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_before_geometry_retains_original_arrival_and_exact_revision() {
+        let primary = super::tests::snapshot(glam::DVec3::Y, 0.0, 3.0);
+        let geometry = crate::geometry::FleetGeometry {
+            revision: primary.geometry_revision,
+            primary: None,
+            vehicles: vec![],
+        };
+        let octal = |wire: Vec<u8>| {
+            wire.into_iter()
+                .map(|byte| format!("\\{byte:03o}"))
+                .collect::<String>()
+        };
+        let script = format!(
+            "printf '{}'; sleep 0.1; printf '{}'; exec sleep 30",
+            octal(crate::encode_snapshot(&primary).unwrap()),
+            octal(crate::geometry::encode_fleet_geometry(&geometry).unwrap())
+        );
+        let (command, pid) = super::tests::welcomed_server(&script);
+        let link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let pair = loop {
+            if let Some(pair) = link.latest_primary_frame() {
+                break pair;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert_eq!(pair.snapshot, primary);
+        assert_eq!(*pair.geometry, geometry);
+        assert!(
+            link.primary_frame_age().unwrap() >= Duration::from_millis(90),
+            "late geometry must not refresh an old physics sample"
+        );
+        drop(link);
+        super::tests::assert_startup_child_gone(&pid);
+    }
+
+    #[test]
+    fn newer_geometry_does_not_steal_an_already_received_primary_frame() {
+        let primary = super::tests::snapshot(glam::DVec3::Y, 0.0, 3.0);
+        let first = crate::geometry::FleetGeometry {
+            revision: 1,
+            primary: None,
+            vehicles: vec![],
+        };
+        let second = crate::geometry::FleetGeometry {
+            revision: 2,
+            primary: None,
+            vehicles: vec![],
+        };
+        let wire: String = crate::geometry::encode_fleet_geometry(&first)
+            .unwrap()
+            .into_iter()
+            .chain(crate::encode_snapshot(&primary).unwrap())
+            .chain(crate::geometry::encode_fleet_geometry(&second).unwrap())
+            .map(|byte| format!("\\{byte:03o}"))
+            .collect();
+        let (command, pid) =
+            super::tests::welcomed_server(&format!("printf '{wire}'; exec sleep 30"));
+        let link = EmbeddedLink::spawn_command(command, Duration::from_secs(5)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if link
+                .latest_fleet_geometry()
+                .is_some_and(|g| g.revision == 2)
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let pair = link
+            .latest_primary_frame()
+            .expect("the first frame remains complete");
+        assert_eq!(pair.snapshot, primary);
+        assert_eq!(*pair.geometry, first);
+        assert_eq!(link.interpolated_primary_snapshot(), Some(primary));
+        drop(link);
+        super::tests::assert_startup_child_gone(&pid);
     }
 }

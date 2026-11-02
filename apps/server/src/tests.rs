@@ -2843,3 +2843,64 @@ fn guidance_and_maneuver_execution_are_per_vehicle() {
     driver.sim.advance_chunk(0.05).expect("advance");
     assert!(driver.sim.fleet.get(&1).expect("secondary").flight_time_s > t0);
 }
+
+#[test]
+fn accepted_rocket_snapshot_retains_allocated_flow_outlet_and_read_only_physics() {
+    let (mut driver, _) = test_driver();
+    install_resource_test_vehicle(&mut driver.sim);
+    driver
+        .sim
+        .authority
+        .set_engine_throttle("main-engine", 0.5)
+        .unwrap();
+    driver
+        .sim
+        .authority
+        .advance(&driver.sim.ephemeris, ControlMode::Direct, 1.0 / 120.0)
+        .unwrap();
+    let authority = &driver.sim.authority;
+    let before = (
+        authority.state,
+        authority.resource_state.clone(),
+        authority.world_tick,
+        authority.flight_time_s,
+        authority.vehicle.mass_properties,
+    );
+    let snapshot = driver.sim.snapshot();
+    let sample = snapshot
+        .rocket_plumes
+        .as_ref()
+        .expect("accepted installed source");
+    sample.validate(VehicleId::PRIMARY).unwrap();
+    assert_eq!(sample.interval_end.0, snapshot.flight_time_s);
+    let observation = &authority.last_propulsion_observation.as_ref().unwrap().1;
+    assert_eq!(
+        sample.nozzles,
+        observation.nozzles.as_ref().unwrap().as_slice()
+    );
+    assert_eq!(
+        sample.nozzles[0].outlet,
+        authority.vehicle.engines[0].nozzle_outlet()
+    );
+    assert_eq!(
+        sample.nozzles[0].state.unwrap().mass_flow_kg_s,
+        observation.engines[0].unwrap().point.mass_flow_kg_s
+    );
+    assert!(sample.nozzles[0].state.unwrap().mass_flow_kg_s > 0.0);
+    let bytes = thessa_flight_net::encode_snapshot(&snapshot).unwrap();
+    let frame = FrameDecoder::new().push(&bytes).unwrap().remove(0);
+    let decoded: Snapshot =
+        thessa_flight_net::decode_payload(&thessa_flight_net::decode_frame(&frame).unwrap())
+            .unwrap();
+    assert_eq!(decoded, snapshot);
+    assert_eq!(
+        before,
+        (
+            authority.state,
+            authority.resource_state.clone(),
+            authority.world_tick,
+            authority.flight_time_s,
+            authority.vehicle.mass_properties
+        )
+    );
+}

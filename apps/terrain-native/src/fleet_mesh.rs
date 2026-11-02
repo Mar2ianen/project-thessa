@@ -410,6 +410,10 @@ impl SceneMeshes {
         }
         Ok(())
     }
+    pub fn plants(&self) -> Option<&crate::surface_plants::Prepared> {
+        self.plants.as_ref()
+    }
+
     pub fn encode_rt(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(inner) = &mut self.inner {
             inner.encode_rt(encoder);
@@ -1123,6 +1127,7 @@ mod tests {
             snapshots: 1,
             last_tick: Some(0),
             parachutes: None,
+            rocket_plumes: None,
             fleet: FleetObserver {
                 rows: vec![thessa_flight_net::presentation::FleetPose {
                     vehicle_id: VehicleId::new(1),
@@ -1569,6 +1574,7 @@ mod tests {
             snapshots: 1,
             last_tick: Some(0),
             parachutes: None,
+            rocket_plumes: None,
             fleet: FleetObserver {
                 rows,
                 updates: 1,

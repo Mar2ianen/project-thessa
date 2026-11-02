@@ -1,6 +1,7 @@
 //! Migration viewer: canonical terrain, owned compute/raster/materials,
 //! winit presentation/input and optional egui HUD. No Bevy or full client parity.
 #![forbid(unsafe_code)]
+mod canonical_export;
 mod celestial;
 #[cfg(feature = "hud")]
 mod contact_preview;
@@ -30,6 +31,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut headless = None;
     let mut reference_scene = None;
+    let mut scene_preset = None;
+    let mut reference_asset = None;
+    let mut export_canonical_coast = None;
     let mut parsed_options = Vec::new();
     let mut perf_capture = None;
     let mut linear_hdr = None;
@@ -48,6 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut live_flight = false;
     let mut server_flight = false;
     let mut server_path = None;
+    let mut vehicle_definition = None;
     let mut server_timeout = 5.0_f64;
     let mut chase = false;
     let mut survey_site = None;
@@ -104,6 +109,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .ok_or("--warp requires a factor")?
                         .parse::<f64>()?,
                 )
+            }
+            "--vehicle-definition" => {
+                vehicle_definition = Some(std::path::PathBuf::from(
+                    args.next()
+                        .ok_or("--vehicle-definition requires baked JSON")?,
+                ));
+            }
+            "--scene" => {
+                scene_preset = Some(args.next().ok_or("--scene requires b03")?);
+            }
+            "--reference-asset" => {
+                reference_asset = Some(std::path::PathBuf::from(
+                    args.next().ok_or("--reference-asset requires a GLB path")?,
+                ));
+            }
+            "--export-canonical-coast" => {
+                export_canonical_coast = Some(std::path::PathBuf::from(
+                    args.next()
+                        .ok_or("--export-canonical-coast requires a new directory")?,
+                ));
             }
             "--reference-scene" => {
                 reference_scene = Some(args.next().ok_or("--reference-scene requires b01 or b05")?)
@@ -245,7 +270,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
                 );
                 println!(
-                    "--reference-scene b01|b05 uses the independent generated material labs; requires --headless/--perf-capture and the matching data/reference-scenes/b01-graphics.toml or b05-graphics.toml. No canonical game Scene is loaded.\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
+                    "--reference-scene b01|b02|b05 uses the independent generated material labs; requires --headless/--perf-capture and the matching data/reference-scenes/b01-graphics.toml or b05-graphics.toml. No canonical game Scene is loaded. --reference-asset PATH supplies b02 GLB.\n--export-canonical-coast NEW_DIRECTORY exports the final canonical survey geometry/camera/light (B03); requires --headless.\n--linear-hdr PATH writes raw tightly packed pre-exposed RGBA16Float alongside --headless; no file when native HDR is unavailable.\n--perf-capture PATH.json requires --headless; writes thessa-perf JSON/CSV (last 1800 measured frames). Opt-in GPU command timestamps when supported, otherwise explicit unavailable. No profiler queries/buffers in normal runs. Mapping/capture writing excluded from frame samples; diagnostic scheduling can still perturb performance."
                 );
                 println!(
                     "--gpu-trace NEW.toml requires --headless and excludes --perf-capture. Crash-durable CPU submission-intent/GPU-completion records with serial stage fences; changes scheduling and is not a performance capture. --gpu-trace-mesh-triangle-limit N sets positive per-stage mesh admission (default1000000); rejection submits no stage. This count is not a GPU-duration bound."
@@ -254,13 +279,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--flight runs the existing local FlightAuthority from canonical COAST launch with Navball attitude hold and tracking orbit camera. No complete controller-UI parity. Requires --sim-time 0 --sim-step 0, incompatible with --vehicle-preview.\nHeadless --flight-step SECONDS (default 1/60, finite 0<step<=0.1) requests simulation elapsed per frame, including 30 warmup frames; pre-stream stays frozen. Window uses elapsed wall demand clamped to 0.1s and the old local client's 8ms work budget; no new physics dt or warp."
                 );
                 println!(
-                    "--server-flight flies PRIMARY on the shared embedded stdio server (mutually exclusive with --flight/--vehicle-preview). --server PATH selects the executable; default: thessa-server beside the viewer. --server-timeout SECONDS (default 5, 0<seconds<=60) bounds handshake and snapshot silence. No local physics or fallback; a failed session freezes the last complete presentation. Scene time is receive-time interpolated; instruments show the newest authoritative sample. Server mode uses wall time, including headless runs; --flight-step is local-only."
+                    "--server-flight flies PRIMARY on the shared embedded stdio server (mutually exclusive with --flight/--vehicle-preview). --server PATH selects the executable; default: thessa-server beside the viewer. --server-timeout SECONDS (default 5, 0<seconds<=60) bounds handshake and snapshot silence. No local physics or fallback; a failed session freezes the last complete presentation. Scene time is receive-time interpolated; instruments show the newest authoritative sample. Server mode uses wall time, including headless runs; --flight-step is local-only. --vehicle-definition BAKED_JSON loads actual compiled craft/nozzles on that server; absent render geometry stays absent."
                 );
                 println!(
                     "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight, --server-flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
                 );
                 println!(
-                    "Survey: --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                    "Survey: --scene b03 loads the canonical coastal camera/profile in the native window or headless; individual survey flags override its defaults. --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
                 );
                 println!(
                     "Fixed survey: --survey-lat -90..90 --survey-lon -180..180 (east-positive, required together, conflicts with --site) sets a numeric terrain target, not a launch site. --survey-eye-agl 2..2000000 places the eye exactly above canonical ground/sea datum at its actual direction (1m height sampling), instead of distance-based elevation/5m clearance; 2m uses a 0.1m near plane. Survey-only; incompatible with flight, preview, docking and map. Bookmark selection clears both overrides. --perf-capture records the final resolved survey camera/source, not a trajectory or coastal acceptance."
@@ -293,6 +318,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if vehicle_definition.is_some() && !server_flight {
+        return Err("--vehicle-definition requires --server-flight; the server owns compiled vehicle simulation".into());
+    }
+    if let Some(preset) = scene_preset {
+        if preset != "b03" {
+            return Err(format!("unknown native scene: {preset}").into());
+        }
+        if reference_scene.is_some()
+            || live_flight
+            || server_flight
+            || vehicle_preview
+            || docking
+            || map_open
+        {
+            return Err("--scene b03 is a canonical survey; incompatible with reference labs/flight/docking/map".into());
+        }
+        if !parsed_options.iter().any(|v| v == "--graphics") {
+            graphics_path = "data/graphics/surface-showcase.toml".into();
+        }
+        survey_lat.get_or_insert(thessa_reference_scenes::B03_SURFACE_SHOWCASE_LAT_DEG);
+        survey_lon.get_or_insert(thessa_reference_scenes::B03_SURFACE_SHOWCASE_LON_DEG);
+        survey_distance
+            .get_or_insert(thessa_reference_scenes::B03_SURFACE_SHOWCASE_DISTANCE_M as f32);
+        survey_eye_agl.get_or_insert(thessa_reference_scenes::B03_SURFACE_SHOWCASE_EYE_AGL_M);
     }
     if linear_hdr.is_some() && headless.is_none() {
         return Err(
@@ -504,14 +554,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("--hud requires the hud Cargo feature (enabled by default)".into());
     }
     let started = Instant::now();
+    if export_canonical_coast.is_some() && headless.is_none() {
+        return Err("--export-canonical-coast requires --headless".into());
+    }
+    if reference_asset.is_some() && reference_scene.as_deref() != Some("b02") {
+        return Err("--reference-asset requires --reference-scene b02".into());
+    }
+    if export_canonical_coast.as_ref().is_some_and(|p| p.exists()) {
+        return Err("canonical export directory already exists; choose a new directory".into());
+    }
     let requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
     if let Some(id) = reference_scene {
-        if !["b01", "b05"].contains(&id.as_str()) {
+        if !["b01", "b02", "b05"].contains(&id.as_str()) {
             return Err(format!("unknown reference scene: {id}").into());
         }
         let supported = [
             "--reference-scene",
+            "--reference-asset",
             "--graphics",
             "--headless",
             "--perf-capture",
@@ -526,6 +586,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             .find(|flag| !supported.contains(&flag.as_str()))
         {
             return Err(format!("{option} is unavailable in the fixed material-lab capture; use its explicit reference graphics profile").into());
+        }
+        if id == "b02" {
+            return reference::vegetation_lab(
+                reference_asset.as_deref(),
+                &requested,
+                std::path::Path::new(
+                    headless
+                        .as_deref()
+                        .ok_or("--reference-scene requires --headless")?,
+                ),
+                perf_capture
+                    .as_deref()
+                    .ok_or("--reference-scene requires --perf-capture")?,
+                linear_hdr.as_deref().map(std::path::Path::new),
+                [width, height],
+                frame_limit.unwrap_or(60),
+            );
+        }
+        if reference_asset.is_some() {
+            return Err("--reference-asset is only supported by b02".into());
         }
         return reference::material_lab(
             &requested,
@@ -569,10 +649,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         scene.enable_vehicle_preview()?;
     }
     if server_flight {
-        scene.enable_server_flight(
-            server_path.as_deref(),
-            std::time::Duration::from_secs_f64(server_timeout),
-        )?;
+        let timeout = std::time::Duration::from_secs_f64(server_timeout);
+        if vehicle_definition.is_some() {
+            scene.enable_server_flight_with_vehicle(
+                server_path.as_deref(),
+                timeout,
+                vehicle_definition.as_deref(),
+            )?;
+        } else {
+            scene.enable_server_flight(server_path.as_deref(), timeout)?;
+        }
     } else if live_flight {
         scene.enable_live_flight()?;
     }
@@ -1102,6 +1188,84 @@ fn main() -> Result<(), Box<dyn Error>> {
                 eprintln!("linear_hdr=unavailable: native HDR target is disabled or unsupported");
             }
         }
+        if let Some(export_dir) = &export_canonical_coast {
+            let terrain_mesh = renderer.read_conforming_mesh(&backend)?;
+            if let Some(mesh_ref) = &mesh_renderer {
+                if let Some(plants) = mesh_ref.plants() {
+                    let view = scene.view(width, height, exposure);
+                    let camera_m = view.world_position_m;
+                    let mut instance_matrices: Vec<Vec<glam::Mat4>> =
+                        Vec::with_capacity(plants.asset.primitives.len());
+                    for range in &plants.ranges {
+                        let mut mats = Vec::with_capacity(range.len());
+                        for inst in &plants.instances[range.start as usize..range.end as usize] {
+                            if let Some(mat) = inst.camera_relative_matrix(camera_m) {
+                                mats.push(mat);
+                            }
+                        }
+                        instance_matrices.push(mats);
+                    }
+                    let fov_y = 2.0 * (1.0 / view.clip_from_view.y_axis.y).atan();
+                    let lighting = scene.lighting();
+                    let linear_bytes = if let Some(texture) = display.scene_texture() {
+                        Some(thessa_render_wgpu::readback::read_color(&backend, texture)?)
+                    } else {
+                        None
+                    };
+                    let export_input = canonical_export::CanonicalExportInput {
+                        terrain: terrain_mesh.as_ref(),
+                        plants_asset: &plants.asset,
+                        instance_matrices: &instance_matrices,
+                        view: &view,
+                        lighting: &lighting,
+                        camera_m,
+                        fov_y_rad: fov_y,
+                        near_m: view.clip_from_view.w_axis.z / view.clip_from_view.z_axis.z,
+                        far_m: view.clip_from_view.w_axis.z / (view.clip_from_view.z_axis.z + 1.0),
+                        width,
+                        height,
+                    };
+                    canonical_export::export_canonical_scene(
+                        export_dir,
+                        &export_input,
+                        if std::path::absolute(&path)?
+                            == std::path::absolute(export_dir.join("display.png"))?
+                        {
+                            None
+                        } else {
+                            Some(&pixels)
+                        },
+                        if linear_hdr.as_ref().is_some_and(|p| {
+                            std::path::absolute(p).ok()
+                                == std::path::absolute(export_dir.join("linear.rgba16f")).ok()
+                        }) {
+                            None
+                        } else {
+                            linear_bytes.as_deref()
+                        },
+                    )?;
+                } else {
+                    return Err("canonical coast export requires prepared plants".into());
+                }
+            } else {
+                return Err("canonical coast export requires a mesh renderer".into());
+            }
+        }
+        if gpu_trace.is_some()
+            && let Some(sample) = scene.rocket_plume_sample()
+        {
+            eprintln!("accepted_rocket_sample={}", serde_json::to_string(&sample)?);
+        }
+        let plume_stats = renderer.plume_stats();
+        eprintln!(
+            "native_plumes allocated={} sources={} draws={} steps={} pixel_ray_limit={} profile_upload_bytes={}",
+            renderer.plume_allocated(),
+            plume_stats.source_count,
+            plume_stats.draw_calls,
+            plume_stats.march_steps,
+            plume_stats.pixel_ray_limit,
+            plume_stats.profile_upload_bytes
+        );
         let topology_state = renderer.read_topology_state(&backend)?;
         let drawn_triangles = if let Some(state) = topology_state {
             state[8] / 3

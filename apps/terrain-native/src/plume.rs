@@ -1,5 +1,5 @@
-//! Direct native port of the starter X-15 plume producer. This provisional
-//! methalox deck is a visualization fixture, not calibrated propulsion data.
+//! Native consumers of accepted compiled-nozzle observations. The legacy
+//! scalar X-15 retains an explicit provisional visualization deck.
 //! Nothing here writes authoritative state, forces, clocks, or mesh poses.
 use glam::{DQuat, DVec3};
 use std::sync::Arc;
@@ -16,10 +16,10 @@ pub struct Input {
     pub throttle: f64,
     pub engine_active: bool,
     pub sim_time_s: f64,
-    /// Ambient air minus COM velocity, inertial-aligned render axes (m/s).
-    pub air_velocity_render_mps: DVec3,
-    pub angular_velocity_render_rps: DVec3,
-    pub air_rotation_render_rps: DVec3,
+    /// Ambient air minus COM velocity in native scene axes (m/s).
+    pub air_velocity_scene_mps: DVec3,
+    pub angular_velocity_scene_rps: DVec3,
+    pub air_rotation_scene_rps: DVec3,
 }
 
 /// SI craft-space station (nose +Y); deliberately not scaled a second time
@@ -60,6 +60,8 @@ struct Field {
     key: (i64, i64),
     source: PlumeSource,
     profile: AxialProfile,
+    environment: PlumeEnvironment,
+    physical: bool,
     gpu_profile: Arc<[ProfileStation]>,
 }
 
@@ -85,9 +87,9 @@ impl Cache {
             self.clear();
             return None;
         }
-        if !input.air_velocity_render_mps.is_finite()
-            || !input.angular_velocity_render_rps.is_finite()
-            || !input.air_rotation_render_rps.is_finite()
+        if !input.air_velocity_scene_mps.is_finite()
+            || !input.angular_velocity_scene_rps.is_finite()
+            || !input.air_rotation_scene_rps.is_finite()
         {
             self.clear();
             return None;
@@ -108,7 +110,11 @@ impl Cache {
             (amount * 50.0).round().max(1.0) as i64,
             (env.pressure_pa / 50.0).ln_1p().div_euclid(1.02_f64.ln()) as i64,
         );
-        if self.field.as_ref().is_none_or(|f| f.key != key) {
+        if self
+            .field
+            .as_ref()
+            .is_none_or(|f| f.physical || f.key != key)
+        {
             let source = source(amount);
             let profile = build_axial_profile(&source, &env, 48).ok()?;
             let gpu_profile = profile
@@ -131,126 +137,275 @@ impl Cache {
                 key,
                 source,
                 profile,
+                environment: env,
+                physical: false,
                 gpu_profile,
             });
         }
-        let field = self.field.as_ref()?;
-        if field.profile.is_empty() {
-            return None;
-        }
-        // Match the mesh's body-axis, camera-relative convention. Remove
-        // asset->craft rotation but not the craft's presentation rotation.
         instance.camera_relative_matrix(camera_m)?;
         let craft = instance.rotation
             * thessa_flight_authority::presentation::x15_asset_to_craft_rotation()
                 .as_dquat()
                 .normalize()
                 .conjugate();
-        let nozzle = ((instance.position_m - camera_m) + craft * NOZZLE_M).as_vec3();
-        let exhaust = (craft * DVec3::NEG_Y).as_vec3().normalize();
-        if !nozzle.is_finite() || !exhaust.is_finite() {
+        draw_field(
+            self.field.as_ref()?,
+            input,
+            env,
+            Placement {
+                position_m: instance.position_m,
+                rotation: craft,
+                nozzle_m: NOZZLE_M,
+                nozzle_rotation: DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2),
+            },
+            camera_m,
+            settings,
+        )
+    }
+
+    /// Actual accepted flow has already been throttled by resource allocation.
+    /// Missing legacy outlets stay absent; no scalar-X15 deck is substituted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accepted_frame(
+        &mut self,
+        nozzle: &thessa_sim_core::RocketNozzleObservation,
+        pose: thessa_flight_authority::presentation::FlightPose,
+        frame: thessa_render_core::BodyFrame,
+        input: Input,
+        env: PlumeEnvironment,
+        camera_m: DVec3,
+        settings: &ResolvedGraphicsSettings,
+    ) -> Option<PlumeFrame> {
+        if !settings.plume_enabled
+            || !input.sim_time_s.is_finite()
+            || !input.air_velocity_scene_mps.is_finite()
+            || !input.angular_velocity_scene_rps.is_finite()
+            || !input.air_rotation_scene_rps.is_finite()
+        {
+            self.clear();
             return None;
         }
-        let time = if settings.plume_flicker {
-            input.sim_time_s as f32
-        } else {
-            0.0
+        let Some(outlet) = nozzle.outlet else {
+            self.clear();
+            return None;
         };
-        let nozzle_rotation = craft * DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2);
-        let offset = craft * NOZZLE_M;
-        let mut motion_env = env;
-        motion_env.flow_velocity_local_mps = (nozzle_rotation.conjugate()
-            * (input.air_velocity_render_mps
-                + (input.air_rotation_render_rps - input.angular_velocity_render_rps)
-                    .cross(offset)))
-        .to_array();
-        let angular = (nozzle_rotation.conjugate() * input.angular_velocity_render_rps).to_array();
-        let deformed = angular[0] != 0.0
-            || angular[1] != 0.0
-            || (motion_env.density_kg_m3 > 0.0
-                && (motion_env.flow_velocity_local_mps[0] != 0.0
-                    || motion_env.flow_velocity_local_mps[1] != 0.0));
-        let points = if deformed {
-            thessa_plume_core::motion::centerline(
-                &field.source,
-                &motion_env,
-                angular,
-                field.profile.length_m,
-                if settings.plume_quality == Quality::High {
-                    17
-                } else {
-                    9
-                },
-            )
-            .ok()?
-        } else {
-            Vec::new()
+        let Some(state) = nozzle.state else {
+            self.clear();
+            return None;
         };
-        // The exact straight field remains the cheaper path below 0.1 mm
-        // transverse displacement; this is a representation tolerance only.
-        let bent = points
-            .iter()
-            .any(|p| p[0].hypot(p[1]) > 1e-4 || (p[2] - p[3]).abs() > 1e-4);
-        let centerline = if bent {
-            points
+        if state.mass_flow_kg_s <= 0.0 || nozzle.active_fraction <= 0.0 {
+            self.clear();
+            return None;
+        }
+        let axis = DVec3::from_array(outlet.exhaust_axis_body);
+        if !axis.is_finite() || (axis.length_squared() - 1.0).abs() > 2e-9 {
+            self.clear();
+            return None;
+        }
+        let nozzle_rotation = DQuat::from_rotation_arc(DVec3::Z, axis);
+        use thessa_sim_core::Propellant;
+        let exhaust = match state.propellant {
+            Propellant::LoxRp1 => ExhaustFamily::Kerolox,
+            Propellant::LoxMethane => ExhaustFamily::Methalox,
+            Propellant::LoxHydrogen => ExhaustFamily::Hydrolox,
+            Propellant::NtoMmh | Propellant::MonopropHydrazine => ExhaustFamily::Hypergolic,
+            Propellant::ColdGasNitrogen | Propellant::ColdGasHelium => ExhaustFamily::ColdGas,
+            Propellant::SolidApcp => ExhaustFamily::Solid,
+        };
+        let source = PlumeSource {
+            nozzle_to_vehicle: RigidTransform {
+                translation_m: outlet.position_body_m,
+                rotation_xyzw: nozzle_rotation.to_array(),
+            },
+            exit_radius_m: outlet.radius_m,
+            mass_flow_kg_s: state.mass_flow_kg_s,
+            exhaust_velocity_mps: state.exhaust_velocity_mps,
+            exit_pressure_pa: state.exit_pressure_pa,
+            exit_temperature_k: state.exit_temp_k,
+            exit_mach: state.exit_mach,
+            gamma: nozzle.gamma,
+            throttle: 1.0,
+            exhaust,
+        };
+        let optical_source = PlumeSource {
+            nozzle_to_vehicle: RigidTransform::IDENTITY,
+            ..source
+        };
+        if self.field.as_ref().is_none_or(|f| {
+            let previous = PlumeSource {
+                nozzle_to_vehicle: RigidTransform::IDENTITY,
+                ..f.source
+            };
+            !f.physical || previous != optical_source || f.environment != env
+        }) {
+            let profile = build_axial_profile(&source, &env, 48).ok()?;
+            let gpu_profile = profile
+                .stations
                 .iter()
-                .map(|p| {
-                    let center = (instance.position_m - camera_m)
-                        + offset
-                        + nozzle_rotation * DVec3::new(p[0], p[1], p[2]);
+                .map(|s| {
                     [
-                        center.x as f32,
-                        center.y as f32,
-                        center.z as f32,
-                        p[3] as f32,
+                        s.z_m as f32,
+                        s.radius_m as f32,
+                        s.extinction_per_m as f32,
+                        s.shock as f32,
+                        s.emission_rgb[0] as f32,
+                        s.emission_rgb[1] as f32,
+                        s.emission_rgb[2] as f32,
+                        0.0,
                     ]
                 })
-                .collect::<Vec<_>>()
-                .into()
-        } else {
-            Arc::from([])
-        };
-        Some(PlumeFrame::Volume(VolumeDraw {
-            pixel_grid: match settings.plume_quality {
-                Quality::Low => 1,
-                Quality::Medium => 4,
-                Quality::High => 8,
+                .collect();
+            self.field = Some(Field {
+                key: (0, 0),
+                source,
+                profile,
+                gpu_profile,
+                environment: env,
+                physical: true,
+            });
+        }
+        // A COM rebase changes placement, not the optical field or uploads.
+        self.field.as_mut()?.source = source;
+        draw_field(
+            self.field.as_ref()?,
+            input,
+            env,
+            Placement {
+                position_m: frame.render_to_body_point(pose.render_position_m()),
+                rotation: frame.rotation().inverse()
+                    * DQuat::from_rotation_x(-std::f64::consts::FRAC_PI_2)
+                    * pose.orientation_body_to_inertial(),
+                nozzle_m: DVec3::from_array(outlet.position_body_m),
+                nozzle_rotation,
             },
-            radial_reference: (nozzle_rotation * DVec3::X).as_vec3().to_array(),
-            centerline,
-            origin_len: nozzle.extend(field.profile.length_m as f32).to_array(),
-            axis_radius: exhaust
-                .extend(
-                    field
-                        .profile
-                        .stations
-                        .iter()
-                        .map(|s| s.radius_m)
-                        .fold(0.0, f64::max) as f32
-                        * 1.6,
-                )
-                .to_array(),
-            animation: [
-                match settings.plume_quality {
-                    Quality::Low => 6.0,
-                    Quality::Medium => 8.0,
-                    Quality::High => 14.0,
-                },
-                time,
-                if settings.plume_flicker { 0.4 } else { 0.0 },
-                field.source.exhaust_velocity_mps as f32 * 0.1,
-            ],
-            shock_cells: [
-                field.profile.cells.spacing_m as f32,
-                field.profile.cells.radius_m as f32,
-                field.profile.cells.compression as f32,
-                field.profile.cells.phase as f32,
-            ],
-            diamonds: settings.plume_diamonds,
-            tail_dissolve: true,
-            profile: field.gpu_profile.clone(),
-        }))
+            camera_m,
+            settings,
+        )
     }
+}
+
+struct Placement {
+    position_m: DVec3,
+    rotation: DQuat,
+    nozzle_m: DVec3,
+    nozzle_rotation: DQuat,
+}
+
+fn draw_field(
+    field: &Field,
+    input: Input,
+    env: PlumeEnvironment,
+    placement: Placement,
+    camera_m: DVec3,
+    settings: &ResolvedGraphicsSettings,
+) -> Option<PlumeFrame> {
+    if field.profile.is_empty() {
+        return None;
+    }
+    let nozzle =
+        ((placement.position_m - camera_m) + placement.rotation * placement.nozzle_m).as_vec3();
+    let nozzle_rotation = placement.rotation * placement.nozzle_rotation;
+    let exhaust = (nozzle_rotation * DVec3::Z).as_vec3().normalize();
+    if !nozzle.is_finite() || !exhaust.is_finite() {
+        return None;
+    }
+    let time = if settings.plume_flicker {
+        input.sim_time_s as f32
+    } else {
+        0.0
+    };
+    let offset = placement.rotation * placement.nozzle_m;
+    let mut motion_env = env;
+    motion_env.flow_velocity_local_mps = (nozzle_rotation.conjugate()
+        * (input.air_velocity_scene_mps
+            + (input.air_rotation_scene_rps - input.angular_velocity_scene_rps).cross(offset)))
+    .to_array();
+    let angular = (nozzle_rotation.conjugate() * input.angular_velocity_scene_rps).to_array();
+    let deformed = angular[0] != 0.0
+        || angular[1] != 0.0
+        || (motion_env.density_kg_m3 > 0.0
+            && (motion_env.flow_velocity_local_mps[0] != 0.0
+                || motion_env.flow_velocity_local_mps[1] != 0.0));
+    let points = if deformed {
+        thessa_plume_core::motion::centerline(
+            &field.source,
+            &motion_env,
+            angular,
+            field.profile.length_m,
+            if settings.plume_quality == Quality::High {
+                17
+            } else {
+                9
+            },
+        )
+        .ok()?
+    } else {
+        Vec::new()
+    };
+    // The exact straight field remains the cheaper path below 0.1 mm
+    // transverse displacement; this is a representation tolerance only.
+    let bent = points
+        .iter()
+        .any(|p| p[0].hypot(p[1]) > 1e-4 || (p[2] - p[3]).abs() > 1e-4);
+    let centerline = if bent {
+        points
+            .iter()
+            .map(|p| {
+                let center = (placement.position_m - camera_m)
+                    + offset
+                    + nozzle_rotation * DVec3::new(p[0], p[1], p[2]);
+                [
+                    center.x as f32,
+                    center.y as f32,
+                    center.z as f32,
+                    p[3] as f32,
+                ]
+            })
+            .collect::<Vec<_>>()
+            .into()
+    } else {
+        Arc::from([])
+    };
+    Some(PlumeFrame::Volume(VolumeDraw {
+        pixel_grid: match settings.plume_quality {
+            Quality::Low => 1,
+            Quality::Medium => 4,
+            Quality::High => 8,
+        },
+        radial_reference: (nozzle_rotation * DVec3::X).as_vec3().to_array(),
+        centerline,
+        origin_len: nozzle.extend(field.profile.length_m as f32).to_array(),
+        axis_radius: exhaust
+            .extend(
+                field
+                    .profile
+                    .stations
+                    .iter()
+                    .map(|s| s.radius_m)
+                    .fold(0.0, f64::max) as f32
+                    * 1.6,
+            )
+            .to_array(),
+        animation: [
+            match settings.plume_quality {
+                Quality::Low => 6.0,
+                Quality::Medium => 8.0,
+                Quality::High => 14.0,
+            },
+            time,
+            if settings.plume_flicker { 0.4 } else { 0.0 },
+            field.source.exhaust_velocity_mps as f32 * 0.1,
+        ],
+        shock_cells: [
+            field.profile.cells.spacing_m as f32,
+            field.profile.cells.radius_m as f32,
+            field.profile.cells.compression as f32,
+            field.profile.cells.phase as f32,
+        ],
+        diamonds: settings.plume_diamonds,
+        tail_dissolve: true,
+        profile: field.gpu_profile.clone(),
+    }))
 }
 
 #[cfg(test)]
@@ -279,9 +434,9 @@ mod tests {
             throttle: 0.5,
             engine_active: true,
             sim_time_s: 12.0,
-            air_velocity_render_mps: DVec3::ZERO,
-            angular_velocity_render_rps: DVec3::ZERO,
-            air_rotation_render_rps: DVec3::ZERO,
+            air_velocity_scene_mps: DVec3::ZERO,
+            angular_velocity_scene_rps: DVec3::ZERO,
+            air_rotation_scene_rps: DVec3::ZERO,
         }
     }
 
@@ -406,8 +561,8 @@ mod tests {
         let mut settings = settings();
         settings.plume_flicker = false;
         let mut moving = input();
-        moving.air_velocity_render_mps = DVec3::new(180.0, -90.0, 30.0);
-        moving.angular_velocity_render_rps = DVec3::new(0.5, -0.7, 0.2);
+        moving.air_velocity_scene_mps = DVec3::new(180.0, -90.0, 30.0);
+        moving.angular_velocity_scene_rps = DVec3::new(0.5, -0.7, 0.2);
         let mut cache = Cache::default();
         let mut baseline = None;
         for shift in [DVec3::ZERO, DVec3::new(1e12, -2e12, 3e12)] {
@@ -451,7 +606,7 @@ mod tests {
         };
         assert!(rest.centerline.is_empty());
         assert!(Arc::ptr_eq(&profile, &rest.profile));
-        moving.air_velocity_render_mps = DVec3::NAN;
+        moving.air_velocity_scene_mps = DVec3::NAN;
         assert!(cache.frame(moving, env, &mesh, camera, &settings).is_none());
         assert!(cache.field.is_none());
     }
@@ -537,9 +692,9 @@ mod tests {
                 throttle: 1.0,
                 engine_active: true,
                 sim_time_s: time,
-                air_velocity_render_mps: -DVec3::X * 120.0,
-                angular_velocity_render_rps: DVec3::Z * 0.35,
-                air_rotation_render_rps: DVec3::ZERO,
+                air_velocity_scene_mps: -DVec3::X * 120.0,
+                angular_velocity_scene_rps: DVec3::Z * 0.35,
+                air_rotation_scene_rps: DVec3::ZERO,
             };
             let frame = cache.frame(input, env, &mesh, camera, &settings).unwrap();
             let PlumeFrame::Volume(ref draw) = frame else {
@@ -599,7 +754,7 @@ mod tests {
             "emission_units":"RGB cd/m^3; graybody reference, authored hue",
             "profile":&*cache.field.as_ref().unwrap().gpu_profile,
             "ambient_pressure_pa":pressure,"view_window_m":window,"ambient_density_kg_m3":env.density_kg_m3,
-            "air_velocity_render_mps":[-120.0,0.0,0.0],"angular_velocity_render_rps":[0.0,0.0,0.35]
+            "air_velocity_scene_mps":[-120.0,0.0,0.0],"angular_velocity_scene_rps":[0.0,0.0,0.35]
         })).unwrap()).unwrap();
         eprintln!(
             "native_motion_gallery adapter={:?} frames=32 extent=640x360 profile_uploads=1",
@@ -764,5 +919,138 @@ mod tests {
         eprintln!(
             "native_plume_cpu sources=1 stations=48 iterations={count} cached_us={cached_us:.6} rebuild_us={rebuild_us:.6}"
         );
+    }
+}
+
+#[cfg(test)]
+mod accepted_tests {
+    use super::*;
+    use thessa_sim_core::{
+        ChamberMaterial, CompiledEngine, CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec,
+        NozzleContour, Propellant, RocketNozzleId, RocketNozzleObservation, SimTime,
+    };
+
+    #[test]
+    fn accepted_flow_and_body_outlet_ignore_pilot_command_and_reuse_field_on_com_rebase() {
+        let liquid = LiquidEngineSpec {
+            name: "accepted-native".into(),
+            propellant: Propellant::LoxMethane,
+            cycle: EngineCycle::GasGenerator,
+            chamber_pressure_pa: 9.7e6,
+            throat_radius_m: 0.08,
+            expansion_ratio: 18.0,
+            nozzle_length_m: 0.9,
+            contour: NozzleContour::Bell,
+            chamber_material: ChamberMaterial::nickel_superalloy(),
+            cooling: CoolingMode::Regenerative,
+            mixture_ratio: None,
+            characteristic_length_m: None,
+            gimbal_range_rad: 0.0,
+            min_throttle: None,
+            restartable: true,
+        }
+        .compile()
+        .unwrap();
+        let gamma = liquid.gamma;
+        let mount = EngineMount {
+            name: "actual".into(),
+            engine: CompiledEngine::Liquid(liquid),
+            position_body_m: [-2.0, 1.0, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        let point = mount.engine.operating_point(0.5, 100000.0, 0.0).unwrap();
+        let mut nozzle = RocketNozzleObservation {
+            id: RocketNozzleId::Engine(0),
+            outlet: mount.nozzle_outlet(),
+            gamma,
+            state: Some(mount.engine.plume_state(&point)),
+            active_fraction: 1.0,
+        };
+        let orientation = DQuat::from_rotation_y(0.73) * DQuat::from_rotation_z(-1.21);
+        let position = DVec3::new(1e8, 2e8, -3e8);
+        let pose = thessa_flight_authority::presentation::FlightPose::new(
+            SimTime(12.0),
+            position,
+            orientation,
+        )
+        .unwrap();
+        let frame = thessa_render_core::BodyFrame::new(
+            DVec3::splat(1e12),
+            DQuat::from_rotation_y(0.67),
+            DVec3::splat(1e12),
+        )
+        .unwrap();
+        let camera =
+            frame.render_to_body_point(pose.render_position_m()) + DVec3::new(10.0, 20.0, 30.0);
+        let settings = ResolvedGraphicsSettings {
+            plume_enabled: true,
+            ..Default::default()
+        };
+        let env = environment(Some([100000.0, 1.2, 290.0]));
+        let mut input = Input {
+            throttle: 0.1,
+            engine_active: false,
+            sim_time_s: 12.0,
+            air_velocity_scene_mps: DVec3::ZERO,
+            angular_velocity_scene_rps: DVec3::ZERO,
+            air_rotation_scene_rps: DVec3::ZERO,
+        };
+        let mut cache = Cache::default();
+        let PlumeFrame::Volume(first) = cache
+            .accepted_frame(&nozzle, pose, frame, input, env, camera, &settings)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let source = cache.field.as_ref().unwrap().source;
+        assert_eq!(source.throttle, 1.0);
+        assert_eq!(source.mass_flow_kg_s, point.mass_flow_kg_s);
+        assert_eq!(source.gamma, gamma);
+        let rotation = frame.rotation().inverse()
+            * DQuat::from_rotation_x(-std::f64::consts::FRAC_PI_2)
+            * orientation;
+        let expected = frame.render_to_body_point(pose.render_position_m()) - camera
+            + rotation * DVec3::from_array(nozzle.outlet.unwrap().position_body_m);
+        assert!((glam::Vec3::from_slice(&first.origin_len).as_dvec3() - expected).length() < 1e-5);
+        input.throttle = 1.0;
+        input.engine_active = true;
+        let PlumeFrame::Volume(second) = cache
+            .accepted_frame(&nozzle, pose, frame, input, env, camera, &settings)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            first, second,
+            "pilot command must not re-throttle accepted flow"
+        );
+        let shift = DVec3::new(0.125, -0.25, 0.5);
+        let outlet = nozzle.outlet.as_mut().unwrap();
+        outlet.position_body_m = (DVec3::from_array(outlet.position_body_m) + shift).to_array();
+        let rebased = thessa_flight_authority::presentation::FlightPose::new(
+            SimTime(12.0),
+            position - orientation * shift,
+            orientation,
+        )
+        .unwrap();
+        let PlumeFrame::Volume(third) = cache
+            .accepted_frame(&nozzle, rebased, frame, input, env, camera, &settings)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(Arc::ptr_eq(&first.profile, &third.profile));
+        assert!(
+            (glam::Vec3::from_slice(&first.origin_len) - glam::Vec3::from_slice(&third.origin_len))
+                .length()
+                < 1e-5
+        );
+        nozzle.outlet = None;
+        assert!(
+            cache
+                .accepted_frame(&nozzle, pose, frame, input, env, camera, &settings)
+                .is_none()
+        );
+        assert!(cache.field.is_none());
     }
 }

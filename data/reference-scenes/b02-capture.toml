@@ -1,0 +1,23 @@
+schema_version = 1
+id = "B02-vegetation-v1"
+width = 640
+height = 480
+frames = 60
+native_args = ["--reference-scene", "b02", "--graphics", "data/reference-scenes/b02-graphics.toml"]
+
+[[assets]]
+id = "vegetation-fern-02-core-cutout-v1"
+source = "https://polyhaven.com/a/fern_02"
+license = "CC0-1.0"
+license_notice = "data/reference-scenes/licenses/CC0-1.0.txt"
+upstream_revision_or_version = "unversioned 1K source snapshot 2026-10-29; original artifact SHA-256 pinned"
+source_sha256 = "1bfb6e12d805cc97035c8cbd051187ca6db650e3157fd8884afcf66a6c4e78eb"
+converted_sha256 = "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26"
+sha256 = "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26"
+path = "polyhaven/fern_02/core-cutout-v1/fern_02.glb"
+conversion_tool_version = "Blender 5.2.2 LTS d13f752e3b9c; core-cutout-v1; converter SHA-256 pinned below"
+asset_format = "glTF 2.0 GLB, embedded 1K PNG images, explicit core-PBR/MASK derived material variant"
+unit_scale = 1.0
+coordinate_convention = "metres, right-handed Y-up via Blender exporter; authored world transforms retained"
+texture_color_spaces = "base_color: sRGB, alpha: linear, normal: linear, metallic_roughness: linear"
+geometry_lod = "full evaluated four source fern clumps; no decimation"

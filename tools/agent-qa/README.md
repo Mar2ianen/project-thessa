@@ -200,3 +200,14 @@ Cycles uses its minimum 1e−6 m near clip to match native volume integration
 from the optical camera. [Doc 102](../../docs/102_COMPILED_PLUME_GALLERY.md)
 records the actual comparisons, near-clip control, sampling differences and
 remaining calibration/motion/live-source limits.
+
+## Native B02/B03 integration
+
+[Doc 110](../../docs/110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md) records the
+reviewed native B02 launcher, canonical B03 exporter and actual Cycles control.
+`cycles_b03.py` consumes the export's camera extent/gain. Its `golden_photo`
+mode is explicitly a target-projection art study, excluded from the default
+blind arena manifest. No independent visual parity follows from its metric.
+The native joint-plume GPU oracle is
+`joint_plumes_match_homogeneous_overlap_and_depth`; it validates coefficient
+transport/order/depth, not combustion appearance or game-frame performance.

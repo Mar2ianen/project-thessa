@@ -5,6 +5,18 @@ use std::process::Command;
 fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
     for (args, message) in [
         (
+            vec!["--vehicle-definition", "unused.json"],
+            "--vehicle-definition requires --server-flight",
+        ),
+        (
+            vec!["--export-canonical-coast", "unused-export"],
+            "--export-canonical-coast requires --headless",
+        ),
+        (
+            vec!["--reference-asset", "unused.glb"],
+            "--reference-asset requires --reference-scene b02",
+        ),
+        (
             vec!["--sim-time", "NaN"],
             "presentation sample times must be finite",
         ),

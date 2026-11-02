@@ -1,0 +1,38 @@
+version = 1
+preset = "custom"
+[renderer]
+ray_tracing = "off"
+msaa_samples = 1
+resolution_scale = 1.0
+surface_quality = "high"
+specular_reflections = true
+hdr = true
+auto_exposure = false
+bloom = false
+exposure_ev100 = 12.0
+tone_mapping = "reinhard"
+[atmosphere]
+enabled = false
+[clouds]
+enabled = false
+[night_lights]
+enabled = false
+[upper_atmosphere]
+airglow = false
+aurora = false
+[gas_giant]
+enabled = false
+[engine_plume]
+enabled = false
+[shadows]
+enabled = false
+[ocean]
+enabled = false
+[surface_plants]
+enabled = false
+[terrain_topology]
+enabled = false
+[temporal]
+taa = false
+motion_vectors = false
+jitter = false

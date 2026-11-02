@@ -210,7 +210,7 @@ inference from the stable ID or name. Full designs/resources and
 prediction/reconciliation remain absent. The old Bevy host still ignores fleet
 observations.
 
-Wire v10 separates `FleetGeometry` descriptors (kind 10) from bounded immutable
+Wire v11 separates `FleetGeometry` descriptors (kind 10) from bounded immutable
 active mesh payload epochs (`FleetMeshes`, kind 11). Both `Snapshot` (PRIMARY)
 and `FleetSnapshot` reference the exact descriptor `geometry_revision`;
 v7/v8/v9 peers fail version checking. The complete, sorted
@@ -422,5 +422,8 @@ physical circular outlets, gamma and already-allocated plume states (doc 109).
 The existing allocation remains the sole operating-point producer; authority
 publishes after acceptance and translates outlet coordinates with physical COM
 shifts, including manual transfers. Optional legacy metadata does not fabricate
-geometry. No wire fields are added: vehicle/frame-revision binding and native/
-remote consumption remain open F03 work.
+geometry. [Doc 110](110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md) adds optional
+accepted samples to wire v11 and a bounded primary snapshot/geometry pair inbox.
+Native primary nozzles consume the accepted flow once in planet-body scene axes;
+multiple fields share joint emission/extinction transport. Secondary fleet
+rendering, calibrated optics, plume illumination and cloud overlap remain open.

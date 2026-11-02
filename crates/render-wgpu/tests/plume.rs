@@ -1634,3 +1634,156 @@ fn frozen_plume_pixel_integral() {
     }
     std::fs::write(out.join("pixels.json"),serde_json::to_vec_pretty(&serde_json::json!({"input":input,"dense_steps":8192,"records":records,"scope":"f64 point/box quadrature of frozen optical field, no camera filter or CFD calibration"})).unwrap()).unwrap();
 }
+
+#[test]
+#[ignore = "GPU: overlapping fields sum coefficients before transport; order and opaque clipping"]
+fn joint_plumes_match_homogeneous_overlap_and_depth() {
+    let backend = Backend::bring_up().unwrap();
+    let target = OffscreenTarget::new(&backend, 1, 1).unwrap();
+    let hdr = hdr_target(&backend, 1, 1);
+    let color = hdr.create_view(&Default::default());
+    let camera = view(DVec3::ZERO, DQuat::from_rotation_y(std::f64::consts::PI));
+    let make = |sigma: f32, emission: [f32; 3]| VolumeDraw {
+        pixel_grid: 1,
+        radial_reference: [1., 0., 0.],
+        centerline: [].into(),
+        origin_len: [0., 0., 1., 2.],
+        axis_radius: [0., 0., 1., 10.],
+        animation: [16., 0., 0., 0.],
+        shock_cells: [0.; 4],
+        diamonds: false,
+        tail_dissolve: false,
+        profile: [0., 2.]
+            .map(|z| [z, 10., sigma, 1., emission[0], emission[1], emission[2], 0.])
+            .into(),
+    };
+    let a = make(0.4, [1., 0., 0.]);
+    let b = make(0.6, [0., 0.25, 0.5]);
+    let mut renderer =
+        PlumeRenderer::new(&backend, wgpu::TextureFormat::Rgba16Float, false).unwrap();
+    for (depth_m, length) in [(None, 2.), (Some(2.), 1.), (Some(0.5), 0.)] {
+        let depth = depth_m.map_or(1., |z| {
+            let u = thessa_render_wgpu::view::ViewUniformBlock::new(&camera).unwrap();
+            let p = u.clip_from_world * glam::Vec4::new(0., 0., z, 1.);
+            p.z / p.w
+        });
+        let mut outputs = Vec::new();
+        for sources in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
+            renderer
+                .update(&backend, &camera, Some(PlumeFrame::Volumes(sources.into())))
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            clear(&mut encoder, &color, &target.depth, depth);
+            renderer.encode(&mut encoder, &color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            let bytes = thessa_render_wgpu::readback::read_color(&backend, &hdr).unwrap();
+            let rgba: Vec<_> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| half(u16::from_le_bytes([b[0], b[1]])))
+                .collect();
+            let opacity = 1. - (-1.18_f64 * length).exp();
+            let expected = [opacity, opacity * 0.25, opacity * 0.5, opacity];
+            for (actual, expected) in rgba.iter().zip(expected) {
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "adapter={} depth={depth_m:?} rgba={rgba:?} expected={expected}",
+                    backend.adapter_name
+                );
+            }
+            outputs.push(bytes);
+        }
+        assert_eq!(
+            outputs[0], outputs[1],
+            "source order must not determine gas transport"
+        );
+    }
+    // Partial overlap and separated gas columns have distinct boundary events.
+    // Off-axis Gaussian weights remain constant along each cylinder chord.
+    for curved in [false, true] {
+        let mut left = make(0.4, [1., 0., 0.]);
+        let mut right = make(0.6, [0., 0.25, 0.5]);
+        for (draw, x, z) in [(&mut left, 0.3, 1.), (&mut right, -0.2, 2.)] {
+            draw.origin_len = [x, 0., z, 2.];
+            draw.axis_radius[3] = 1.6;
+            draw.profile = [0., 2.]
+                .map(|distance| {
+                    let mut station = draw.profile[0];
+                    station[0] = distance;
+                    station[1] = 1.;
+                    station
+                })
+                .into();
+            if curved {
+                // Two collinear control points must preserve the same field.
+                draw.centerline = [[x, 0., z, 0.], [x, 0., z + 2., 2.]].into();
+            }
+        }
+        for opaque_m in [5., 2.5, 0.5] {
+            let block = thessa_render_wgpu::view::ViewUniformBlock::new(&camera).unwrap();
+            let p = block.clip_from_world * glam::Vec4::new(0., 0., opaque_m as f32, 1.);
+            let mut expected = [0.; 4];
+            let mut transmission = 1.;
+            let weight = |x: f64| (-2.2 * x * x).exp() + 0.18 * (-0.7 * x * x).exp();
+            for (start, end, active_left, active_right) in [
+                (1., 2., true, false),
+                (2., 3., true, true),
+                (3., 4., false, true),
+            ] {
+                let length = (f64::min(end, opaque_m) - start).max(0.);
+                let a = if active_left { weight(0.3) } else { 0. };
+                let b = if active_right { weight(0.2) } else { 0. };
+                let sigma = 0.4 * a + 0.6 * b;
+                let attenuation = (-sigma * length).exp();
+                let path = (1. - attenuation) / sigma;
+                for (channel, emission) in [a, 0.25 * b, 0.5 * b].into_iter().enumerate() {
+                    expected[channel] += transmission * emission * path;
+                }
+                transmission *= attenuation;
+            }
+            expected[3] = 1. - transmission;
+            let mut outputs = Vec::new();
+            for sources in [
+                vec![left.clone(), right.clone()],
+                vec![right.clone(), left.clone()],
+            ] {
+                renderer
+                    .update(&backend, &camera, Some(PlumeFrame::Volumes(sources.into())))
+                    .unwrap();
+                assert_eq!(renderer.stats().source_count, 2);
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                clear(&mut encoder, &color, &target.depth, p.z / p.w);
+                renderer.encode(&mut encoder, &color, &target.depth);
+                backend.queue.submit([encoder.finish()]);
+                let bytes = thessa_render_wgpu::readback::read_color(&backend, &hdr).unwrap();
+                let rgba: Vec<_> = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| half(u16::from_le_bytes(*b)))
+                    .collect();
+                for (actual, want) in rgba.iter().zip(expected) {
+                    assert!(
+                        (actual - want).abs() < 0.002,
+                        "curved={curved} depth={opaque_m} actual={rgba:?} expected={expected:?}"
+                    );
+                }
+                outputs.push(bytes);
+            }
+            assert_eq!(outputs[0], outputs[1]);
+        }
+    }
+    renderer.update(&backend, &camera, None).unwrap();
+    assert_eq!(renderer.stats().source_count, 0);
+    let excess = vec![a.clone(); thessa_render_wgpu::plume::MAX_JOINT_FIELDS + 1];
+    assert!(
+        renderer
+            .update(&backend, &camera, Some(PlumeFrame::Volumes(excess.into())))
+            .is_err()
+    );
+    eprintln!(
+        "joint_plumes_overlap adapter={} passed order/depth/Beer-Lambert controls",
+        backend.adapter_name
+    );
+}

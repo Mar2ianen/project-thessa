@@ -87,6 +87,7 @@ const MAX_WARP: f64 = thessa_flight_net::MAX_TIME_WARP;
 
 struct Args {
     system_path: Option<String>,
+    vehicle_definition: Option<String>,
     tcp_addr: Option<String>,
     /// Batch throughput probe: advance this many sim-seconds flat out,
     /// print the effective warp, exit. No IO after setup.
@@ -100,6 +101,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         system_path: None,
+        vehicle_definition: None,
         tcp_addr: None,
         measure_s: None,
         vacuum: false,
@@ -108,6 +110,12 @@ fn parse_args() -> Result<Args, String> {
     let mut rest = std::env::args().skip(1);
     while let Some(arg) = rest.next() {
         match arg.as_str() {
+            "--vehicle-definition" => {
+                args.vehicle_definition = Some(
+                    rest.next()
+                        .ok_or("--vehicle-definition needs a baked JSON path")?,
+                );
+            }
             "--system" => {
                 args.system_path = Some(rest.next().ok_or("--system needs a path")?);
             }
@@ -129,7 +137,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: thessa-server [--system PATH] [--measure SIM_S] [--vacuum] [--drift] [--tcp ADDR:PORT]\n\
+                    "usage: thessa-server [--system PATH] [--vehicle-definition BAKED_JSON] [--measure SIM_S] [--vacuum] [--drift] [--tcp ADDR:PORT]\n\
                      default: stdio wire server (frames on stdin/stdout, logs on stderr)"
                 );
                 std::process::exit(0);
@@ -258,7 +266,28 @@ fn run() -> Result<(), String> {
     let system_path = find_system(args.system_path)?;
     eprintln!("[server] system: {system_path}");
     let (ephemeris, reference_body) = load_system(&system_path)?;
-    let sim = Sim::new(ephemeris, reference_body, args.vacuum, args.drift)?;
+    let vehicle = args
+        .vehicle_definition
+        .map(
+            |path| -> Result<thessa_sim_core::VehicleDefinition, String> {
+                serde_json::from_str(
+                    &std::fs::read_to_string(&path)
+                        .map_err(|e| format!("read vehicle {path}: {e}"))?,
+                )
+                .map_err(|e| format!("decode vehicle {path}: {e}"))
+            },
+        )
+        .transpose()?;
+    let sim = match vehicle {
+        Some(vehicle) => Sim::new_with_vehicle(
+            ephemeris,
+            reference_body,
+            args.vacuum,
+            args.drift,
+            Some(vehicle),
+        )?,
+        None => Sim::new(ephemeris, reference_body, args.vacuum, args.drift)?,
+    };
     match args.measure_s {
         Some(target_s) => run_measure(sim, target_s),
         None => match args.tcp_addr {

@@ -26,7 +26,8 @@ impl ProtocolVersion {
     // v9 adds retained appearance to the same bounded on-change catalogue.
     // v10 separates immutable mesh payload epochs from contact/pose descriptors
     // and pairs authoritative PRIMARY appearance with its snapshot COM frame.
-    pub const CURRENT: Self = Self(10);
+    // v11 adds accepted, owner-bound rocket intervals to Snapshot.
+    pub const CURRENT: Self = Self(11);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -263,7 +264,7 @@ mod tests {
 
     #[test]
     fn foreign_version_is_rejected() {
-        for version in [7, 8, 9, 999] {
+        for version in [7, 8, 9, 10, 999] {
             let envelope = Envelope {
                 version: ProtocolVersion(version),
                 kind: kind::HELLO,

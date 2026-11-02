@@ -12,6 +12,8 @@ mod emission;
 mod lights;
 mod optics;
 mod scattering;
+mod transmittance_lut;
+pub use transmittance_lut::TransmittanceLut;
 
 pub use clouds::{
     CloudSlab, SlabError, ambient_rgb, beer_powder, clip_to_planet, dual_lobe_phase, erode_density,
@@ -29,5 +31,5 @@ pub use optics::{
 };
 pub use scattering::{
     SkyResult, aerial_perspective, airglow_radiance, hg_phase, rayleigh_phase, sky_radiance,
-    transmittance,
+    sky_radiance_lut, transmittance,
 };

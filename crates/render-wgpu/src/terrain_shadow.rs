@@ -89,6 +89,13 @@ pub(crate) fn supported(limits: &wgpu::Limits, ocean: bool, sky: bool) -> bool {
 
 pub(crate) struct PrimaryShadow {
     pub pipeline: wgpu::RenderPipeline,
+    device: std::sync::Arc<wgpu::Device>,
+    source: String,
+    format: wgpu::TextureFormat,
+    samples: u32,
+    conforming: bool,
+    layouts: [wgpu::BindGroupLayout; 3],
+    masked: std::cell::RefCell<Option<(String, wgpu::RenderPipeline)>>,
     pub geometry: wgpu::BindGroup,
     pub atlas: wgpu::BindGroup,
     pub environment: wgpu::BindGroup,
@@ -195,6 +202,7 @@ impl PrimaryShadow {
                 "{}\n{}",
                 thessa_fastrt::visibility::QUERY_POLICY_WGSL,
                 crate::ray_scene::QUERY_SHADER
+                    .replace("// CANDIDATE_TRAVERSAL", "rayQueryProceed(&query);")
             ),
             crate::shadows::receiver_shader(1)
         );
@@ -214,11 +222,67 @@ impl PrimaryShadow {
             entries: environment,
         });
         Self {
+            device: backend.device.clone(),
+            source: raster_source.to_owned(),
+            format,
+            samples,
+            conforming,
+            layouts: [geometry_layout, atlas_layout.clone(), environment_layout],
+            masked: std::cell::RefCell::new(None),
             pipeline,
             geometry,
             environment,
             atlas: atlas.receiver(backend, &atlas_layout),
         }
+    }
+
+    pub fn masked_pipeline(
+        &self,
+        schema: Option<&crate::ray_scene::PrimarySchema>,
+    ) -> std::cell::Ref<'_, Option<(String, wgpu::RenderPipeline)>> {
+        if let Some(schema) = schema {
+            let mut cached = self.masked.borrow_mut();
+            if cached.as_ref().is_none_or(|(key, _)| key != &schema.shader) {
+                let source = format!(
+                    "enable wgpu_ray_query;\n{}\n{}\n{}\n{}",
+                    schema.shader,
+                    PARAMS.replace(
+                        "@binding(1)",
+                        &format!("@binding({})", schema.params_binding)
+                    ),
+                    crate::shadows::receiver_shader(1),
+                    self.source
+                );
+                let module = self
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("masked-primary-shadow"),
+                        source: wgpu::ShaderSource::Wgsl(source.into()),
+                    });
+                let layout = self
+                    .device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("masked-primary-shadow"),
+                        bind_group_layouts: &[
+                            Some(&self.layouts[0]),
+                            Some(&self.layouts[1]),
+                            Some(&self.layouts[2]),
+                            Some(&schema.layout),
+                        ],
+                        immediate_size: 0,
+                    });
+                let pipeline = raster_pipeline(
+                    &self.device,
+                    &module,
+                    Some(&layout),
+                    self.format,
+                    self.samples,
+                    self.conforming,
+                );
+                *cached = Some((schema.shader.clone(), pipeline));
+            }
+        }
+        self.masked.borrow()
     }
 
     pub fn rebind_environment(

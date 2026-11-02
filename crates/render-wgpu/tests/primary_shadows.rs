@@ -16,11 +16,28 @@ use thessa_render_wgpu::{
 #[test]
 #[ignore = "GPU: ray-query adapter, actual primary ground receives existing scene visibility"]
 fn primary_ground_uses_shared_rays_with_exact_raster_fallback() {
-    run_case(false);
-    run_case(true);
+    run_case(false, None);
+    run_case(true, None);
 }
 
-fn run_case(water: bool) {
+#[test]
+#[ignore = "GPU: shared MASK scene supplies primary ground/water alpha visibility"]
+fn primary_masked_ground_and_water_use_the_same_material_coverage() {
+    for water in [false, true] {
+        for values in [
+            [0., 1., 0.5],
+            [255., 1., 0.5],
+            [255., 0.5, 0.5],
+            [128., 0.5, 0.5],
+            [0., 1., 0.],
+            [255., 1., 1.1],
+        ] {
+            run_case(water, Some(values));
+        }
+    }
+}
+
+fn run_case(water: bool, alpha: Option<[f32; 3]>) {
     let mut request = RequestedGraphics::default();
     request.renderer.ray_tracing = RayTracingRequest::Local;
     request.raytracing.primary_shadows = true;
@@ -47,7 +64,7 @@ fn run_case(water: bool) {
     let normal = light_direction;
     let u = normal.any_orthonormal_vector() * 0.2;
     let v = normal.cross(u);
-    let asset = MeshAsset {
+    let mut asset = MeshAsset {
         primitives: vec![Primitive {
             vertices: [-u - v, u - v, u + v, -u + v]
                 .map(|p| Vertex {
@@ -68,6 +85,24 @@ fn run_case(water: bool) {
         textures: vec![],
         images: vec![],
     };
+    let blocks = alpha.is_none_or(|[value, factor, cutoff]| value / 255. * factor >= cutoff);
+    if let Some([value, factor, cutoff]) = alpha {
+        asset.materials[0].alpha_mode = AlphaMode::Mask;
+        asset.materials[0].alpha_cutoff = cutoff;
+        asset.materials[0].base_color[3] = factor;
+        asset.materials[0].base_texture = Some(0);
+        asset.images.push(Image {
+            width: 1,
+            height: 1,
+            rgba8: vec![255, 255, 255, value as u8],
+        });
+        asset.textures.push(Texture {
+            image: 0,
+            wrap: [Wrap::Clamp; 2],
+            linear: false,
+            min_linear: false,
+        });
+    }
     let camera = center + up * 10.;
     let view = ViewParams {
         world_from_view: glam::dcamera::rh::view::look_at_mat4(camera, center, right).inverse(),
@@ -202,7 +237,7 @@ fn run_case(water: bool) {
             assert_eq!(samples[0], samples[1]);
             assert_eq!(samples[0], samples[3]);
             assert!(!mesh.rt_stats().active);
-        } else {
+        } else if blocks {
             assert!(
                 samples[1][0] > samples[0][0] + 40,
                 "actual occluder must darken ground"
@@ -214,6 +249,12 @@ fn run_case(water: bool) {
             assert_eq!(
                 samples[1], samples[3],
                 "empty scene cannot retain old shadows"
+            );
+        }
+        if !blocks {
+            assert_eq!(
+                samples[0], samples[1],
+                "alpha holes must transmit the red star, water={water} alpha={alpha:?}"
             );
         }
         outputs.push(samples);

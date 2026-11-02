@@ -130,6 +130,7 @@ pub struct EnvironmentStats {
 /// Sky radiance field plus its bounded refresh policy.
 pub struct EnvironmentField {
     optics: AtmosphereOptics,
+    sunlight: Option<std::sync::Arc<thessa_atmosphere::TransmittanceLut>>,
     budget: Option<EnvironmentBudget>,
     grid: Option<EnvironmentRadiance>,
     background: Option<EnvironmentRadiance>,
@@ -156,6 +157,7 @@ impl EnvironmentField {
         let base = build_optics(body_radius_m, body_mu, atmosphere, 1.0)?;
         Some(Self {
             optics: base,
+            sunlight: None,
             budget: None,
             grid: None,
             background: None,
@@ -224,6 +226,8 @@ impl EnvironmentField {
             return self.grid.as_ref();
         }
         let started = std::time::Instant::now();
+        self.sunlight_lut()
+            .expect("validated native atmospheric table");
         let evaluated = self.evaluate_components_at(camera_body_m, lights, sim_time_s);
         (self.grid, self.background) =
             evaluated.map_or((None, None), |(grid, background)| (Some(grid), background));
@@ -303,14 +307,26 @@ impl EnvironmentField {
                         elevation.sin(),
                         elevation.cos() * azimuth.sin(),
                     );
-                    let sky = sky_radiance(
-                        &optics,
-                        camera_body_m,
-                        direction,
-                        lights,
-                        budget.view_steps,
-                        budget.sun_steps,
-                    );
+                    let sky = if let Some(table) = &self.sunlight {
+                        thessa_atmosphere::sky_radiance_lut(
+                            &optics,
+                            camera_body_m,
+                            direction,
+                            lights,
+                            budget.view_steps,
+                            table,
+                        )
+                        .expect("sky and sunlight share optical state")
+                    } else {
+                        sky_radiance(
+                            &optics,
+                            camera_body_m,
+                            direction,
+                            lights,
+                            budget.view_steps,
+                            budget.sun_steps,
+                        )
+                    };
                     *texel = sky.radiance_rgb.map(|c| (c * LUX_PER_W_M2) as f32);
                 }
             });
@@ -392,6 +408,31 @@ impl EnvironmentField {
         }
         optics.emission.aurora = Some(aurora_params(budget.aurora_intensity));
         Some((optics, budget.aurora_steps, budget.aurora_animate))
+    }
+
+    pub fn sunlight_lut(
+        &mut self,
+    ) -> Result<Option<std::sync::Arc<thessa_atmosphere::TransmittanceLut>>, String> {
+        let Some(optics) = self.star_optics() else {
+            self.sunlight = None;
+            return Ok(None);
+        };
+        let budget = self.budget.expect("star optics require a budget");
+        let (width, height, steps) = match budget.width {
+            0..=8 => (128, 32, 64),
+            9..=16 => (192, 48, 96),
+            _ => (256, 64, 128),
+        };
+        if !self
+            .sunlight
+            .as_ref()
+            .is_some_and(|t| t.matches(&optics, width, height, steps))
+        {
+            self.sunlight = Some(std::sync::Arc::new(
+                thessa_atmosphere::TransmittanceLut::build(&optics, width, height, steps)?,
+            ));
+        }
+        Ok(self.sunlight.clone())
     }
 
     pub fn star_optics(&self) -> Option<AtmosphereOptics> {

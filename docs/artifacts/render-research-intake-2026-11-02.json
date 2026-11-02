@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "status": "reviewed and partially applied; full handoff incomplete",
+  "audited_original_head": "566cc6f1a3cb59664a2462efd1cce0162e1e6e62",
+  "working_base": "631d6f199788fe2d00b2f69af49736684a45c7f0",
+  "base_trees_equal": true,
+  "raw_input_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/user-render-research-2026-11-02",
+  "inputs": {
+    "fessa_render_handoff_2026-11-02.md": {
+      "bytes": 42780,
+      "sha256": "5bc5104a7351b1600faa34b49ccfc26699218a81196987a45ac0609956345dd0"
+    },
+    "fessa_external_references_2026-11-02.md": {
+      "bytes": 44381,
+      "sha256": "e16fb169c33ec1bad532ed2556446da07f625ae3bb9d8efa6ca4688555bf95da"
+    },
+    "fessa_external_sources_2026-11-02.json": {
+      "bytes": 36302,
+      "sha256": "533fefa496ab979d7393d6d371caa4bee3b66bd0a6eef386cf2bd254d6a4dc7a"
+    },
+    "fessa_external_sources_2026-11-02.tsv": {
+      "bytes": 24151,
+      "sha256": "a55473da6242a286302073b74e3cfd9eb6c9f6fc9d9e60c9437704f16783fb24"
+    },
+    "fessa_render_reference_2026-11-02.png": {
+      "bytes": 1447010,
+      "sha256": "129dc51931e6d77cc4c92aa50ec1992b16dd7e5bf543890cb287c709ab7d7809"
+    },
+    "fessa_render_handoff_research_bundle_2026-11-02.zip": {
+      "bytes": 1498468,
+      "sha256": "2c4076bba7d8ba0f014ed3e9239bf8d8355b58b7922ac23793b9d4f5d0979efe"
+    }
+  },
+  "reference_catalogue_count": 80,
+  "catalogue": "render-external-sources-2026-11-02.json",
+  "decoded_png_identity": {
+    "same_pixels_as": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/b03-sunset-foliage-v1.png",
+    "rgba_sha256": "fe14232d7907947664f565f3da6ed850307151ed9aca67dc58c9a81926a99673",
+    "role": "actual earlier native diagnostic, not the photographic quality target"
+  },
+  "newly_applied": [
+    "bounded capability-based RT texture/sampler/storage negotiation; actual full native MASK scene active",
+    "source discs now share existing surface/sky/cloud solar LUT; body occultation independent, no double extinction"
+  ],
+  "already_in_progress": [
+    "solar lookup and source integration",
+    "native CC0 foliage / alpha shadows / MASK ray candidate traversal",
+    "per-layer trace admission and source-bound raw evidence"
+  ],
+  "not_implemented": [
+    "diagnostic material/direct/ambient buffers",
+    "water/wet-soil semantic separation",
+    "static/dynamic shadow depth cache",
+    "sparse tile classifier and denoiser",
+    "SSR confidence",
+    "native multiple scattering"
+  ],
+  "external_catalogue_independently_reproduced": false,
+  "main_changed": false,
+  "existing_user_edits_preserved_count": 8
+}

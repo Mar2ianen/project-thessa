@@ -27,6 +27,9 @@ struct EnvMeta {
     // Camera radial up; w selects directional (1) or isotropic (0) source.
     haze_up: vec4<f32>,
     diffuse: array<vec4<f32>,9>,
+    sun_table: vec4<u32>, // offset, width, height, enabled
+    sun_domain: vec4<f32>, // radius, atmosphere thickness, camera altitude
+    sun_up: vec4<f32>,
 }
 
 @group(0) @binding(3) var<uniform> env_meta: EnvMeta;

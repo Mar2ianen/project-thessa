@@ -2624,3 +2624,199 @@ fn thin_diffuse_partition_matches_front_back_and_secondary_hit_radiance() {
         }
     }
 }
+
+#[test]
+fn masked_ray_candidates_use_material_alpha_and_continue_to_opaque_geometry() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    for quality in [
+        thessa_graphics::Quality::Low,
+        thessa_graphics::Quality::High,
+    ] {
+        let mut request = requested(RayTracingRequest::Local);
+        request.renderer.surface_quality = quality;
+        let settings = backend.resolve_graphics(&request);
+        for (alpha, factor, cutoff) in [
+            (0, 1., 0.5),
+            (255, 1., 0.5),
+            (128, 0.5, 0.5),
+            (255, 0.5, 0.5),
+            (0, 1., 0.),
+            (255, 1., 1.1),
+        ] {
+            let mut asset = textured_target();
+            let id = map(&mut asset, 1, 1, vec![255, 255, 255, alpha], false);
+            asset.materials[1].base_texture = Some(id);
+            asset.materials[1].base_color[3] = factor;
+            asset.materials[1].alpha_mode = AlphaMode::Mask;
+            asset.materials[1].alpha_cutoff = cutoff;
+            let accepted = f32::from(alpha) / 255. * factor >= cutoff;
+            let actual = reflected_sample(
+                &backend,
+                &settings,
+                &asset,
+                &instances(),
+                &lighting([0.; 3]),
+            );
+            let mut expected = asset.clone();
+            expected.materials[1].alpha_mode = AlphaMode::Opaque;
+            let mut placed = instances();
+            if !accepted {
+                placed[1].position_m.y += 100.;
+            }
+            let control =
+                reflected_sample(&backend, &settings, &expected, &placed, &lighting([0.; 3]));
+            assert_eq!(
+                actual, control,
+                "{quality:?} alpha={alpha} factor={factor} cutoff={cutoff}"
+            );
+        }
+        // A rejected near leaf must not terminate traversal before a farther solid emitter.
+        let mut asset = textured_target();
+        asset.primitives.push(asset.primitives[1].clone());
+        asset.primitives[2].material = 2;
+        asset.materials.push(Material {
+            emission_rgb: [0., 1., 0.],
+            base_color: [0., 0., 0., 1.],
+            ..Default::default()
+        });
+        asset.materials[1].alpha_mode = AlphaMode::Mask;
+        asset.materials[1].base_color[3] = 0.;
+        let mut placed = instances();
+        let mut farther = placed[1];
+        farther.position_m.x -= 1.;
+        placed.push(farther);
+        let mut mesh = MeshRenderer::with_surface(
+            &backend,
+            &asset,
+            SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 3,
+                quality,
+                reflections: true,
+                shadows: None,
+                ray_tracing: Some(&settings),
+            },
+        )
+        .unwrap();
+        for origin in [DVec3::ZERO, DVec3::new(1e12, -1e12, 1e12)] {
+            let mut shifted = placed.clone();
+            for instance in &mut shifted {
+                instance.position_m += origin;
+            }
+            let pixel = center(&draw_at(
+                &backend,
+                &mut mesh,
+                &shifted,
+                &[0..1, 1..2, 2..3],
+                &SurfaceLighting::default(),
+                &camera(origin),
+            ));
+            assert!(mesh.rt_stats().active, "{:?}", mesh.rt_reason());
+            assert_rgb_near(pixel, [0., 0.5, 0.]);
+        }
+    }
+}
+
+#[test]
+fn reflected_mask_uv_holes_match_cut_geometry_and_minified_alpha_is_stable() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let mut request = requested(RayTracingRequest::Local);
+    request.renderer.surface_quality = thessa_graphics::Quality::High;
+    let settings = backend.resolve_graphics(&request);
+    let render = |asset: &MeshAsset, view: &ViewParams| {
+        let mut mesh = MeshRenderer::with_surface(
+            &backend,
+            asset,
+            SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 2,
+                quality: settings.surface_quality,
+                reflections: true,
+                shadows: None,
+                ray_tracing: Some(&settings),
+            },
+        )
+        .unwrap();
+        let pixels = draw_at(
+            &backend,
+            &mut mesh,
+            &instances(),
+            &[0..1, 1..2],
+            &lighting([0.; 3]),
+            view,
+        );
+        assert!(mesh.rt_stats().active, "{:?}", mesh.rt_reason());
+        pixels
+    };
+    let mut masked = textured_target();
+    let id = map(
+        &mut masked,
+        2,
+        1,
+        vec![255, 255, 255, 0, 255, 255, 255, 255],
+        false,
+    );
+    masked.materials[1].base_texture = Some(id);
+    masked.materials[1].alpha_mode = AlphaMode::Mask;
+    let mut cut = masked.clone();
+    cut.materials[1].alpha_mode = AlphaMode::Opaque;
+    cut.primitives[1].vertices[0].position[0] = 0.;
+    cut.primitives[1].vertices[3].position[0] = 0.;
+    let a = render(&masked, &camera(DVec3::ZERO));
+    let b = render(&cut, &camera(DVec3::ZERO));
+    let differences = a
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differences <= SIZE as usize,
+        "only the one-pixel split boundary may differ, got {differences}"
+    );
+    assert!(a.as_chunks::<4>().0.iter().any(|p| p[0] > 100));
+    // The distant patterned lamina has exactly half its area covered. Its
+    // transported pixel cone must select the shared alpha mips before cutoff.
+    let mut checker = textured_target();
+    let image = (0..256 * 256)
+        .flat_map(|i| {
+            [
+                255,
+                255,
+                255,
+                if (i % 256 + i / 256) % 2 == 0 { 0 } else { 255 },
+            ]
+        })
+        .collect();
+    let id = map(&mut checker, 256, 256, image, true);
+    checker.textures[id].wrap = [Wrap::Repeat; 2];
+    checker.materials[1].base_texture = Some(id);
+    checker.materials[1].alpha_mode = AlphaMode::Mask;
+    for vertex in &mut checker.primitives[1].vertices {
+        vertex.uv = vertex.uv.map(|u| u * 31.3 + 0.013);
+    }
+    let mut solid = checker.clone();
+    solid.materials[1].alpha_mode = AlphaMode::Opaque;
+    let reference = center(&render(&solid, &camera(DVec3::ZERO)));
+    for shift in [-0.002, -0.001, 0., 0.001, 0.002] {
+        assert_eq!(
+            center(&render(&checker, &camera(DVec3::new(0., shift, 0.)))),
+            reference,
+            "shift={shift}"
+        );
+    }
+    let mut exhausted = settings.clone();
+    exhausted.rt_scene_memory_bytes = 1;
+    assert!(
+        matches!(thessa_render_wgpu::ray_scene::plan(&backend,&masked,Some(&exhausted),2,settings.surface_quality,true),thessa_render_wgpu::ray_scene::Enable::Unavailable(reason) if reason.contains("budget"))
+    );
+    masked.materials[1].alpha_mode = AlphaMode::Blend;
+    assert!(
+        matches!(thessa_render_wgpu::ray_scene::plan(&backend,&masked,Some(&settings),2,settings.surface_quality,true),thessa_render_wgpu::ray_scene::Enable::Unavailable(reason) if reason.contains("BLEND"))
+    );
+}

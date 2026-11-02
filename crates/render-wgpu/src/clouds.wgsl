@@ -1,3 +1,4 @@
+fn cloud_solar_source(point:vec3<f32>,direction:vec3<f32>,source:vec3<f32>)->vec3<f32>{return source;}
 // One native density/transport implementation for primary, shadow and reflected rays.
 struct CloudFrame { camera_radius:vec4<f32>, deck:vec4<f32>, wind:vec4<f32>, viewport:vec4<f32>, directions:array<vec4<f32>,3>, colors:array<vec4<f32>,3>, ambient:vec4<f32> }
 @group(0) @binding(5) var<uniform> cloud_frame:CloudFrame;
@@ -110,7 +111,7 @@ fn cloud_source(point:vec3<f32>,direction:vec3<f32>,sun_steps:u32)->vec3<f32> {
         if(cloud_planet_stop(point,light,1e30)<1e30){continue;}
         let taps=min(sun_steps,u32(cloud_frame.wind.z));var tau=0.0;if(taps>0u){tau=cloud_optical_depth(point,light,taps);}
         let c=dot(direction,light);let phase=0.7*cloud_hg(0.76,c)+0.3*cloud_hg(-0.30,c);
-        source+=cloud_frame.colors[sun].rgb*exp(-tau)*phase;
+        source+=cloud_solar_source(point,light,cloud_frame.colors[sun].rgb)*exp(-tau)*phase;
     }
     return source;
 }

@@ -14,40 +14,6 @@
 // sRGB base colour and linear MR/normal/AO. Medium/High carry a pixel cone;
 // Low retains the point-sampled material fallback.
 
-struct RtMaterial {
-    // rgb = linear base color, w = metallic.
-    color: vec4<f32>,
-    // x = roughness, y = normal scale, z = AO strength, w = diffuse transmission.
-    factors: vec4<f32>,
-    // Base colour, metallic/roughness, normal, AO; UINT_MAX means absent.
-    textures: vec4<u32>,
-    optical: vec4<f32>,
-}
-
-struct RtVertex { position:vec4<f32>, normal:vec4<f32>, uv:vec4<f32> }
-
-struct RtRange {
-    // x = first index into rt_indices, y = first vertex into rt_positions,
-    // z = index count of the primitive, w unused.
-    words: vec4<u32>,
-}
-
-struct RtPair {
-    // x = primitive (range and material record), yzw unused.
-    words: vec4<u32>,
-    // Rows of the instance's camera-relative 3x4 transform, in the same
-    // order the renderer builds them.
-    row0: vec4<f32>,
-    row1: vec4<f32>,
-    row2: vec4<f32>,
-}
-
-@group(3) @binding(1) var<storage, read> rt_materials: array<RtMaterial>;
-@group(3) @binding(2) var<storage, read> rt_ranges: array<RtRange>;
-@group(3) @binding(3) var<storage, read> rt_vertices: array<RtVertex>;
-@group(3) @binding(4) var<storage, read> rt_indices: array<u32>;
-@group(3) @binding(5) var<storage, read> rt_pairs: array<RtPair>;
-
 struct RtSurface {
     position: vec3<f32>,
     normal: vec3<f32>,
@@ -59,38 +25,6 @@ struct RtSurface {
     dielectric:f32,
     transmission:f32,
     emission:vec3<f32>,
-}
-
-// Barycentrics land in the primitive's own asset-local space; the pair rows
-// move the point and its normal into the camera-relative space the primary
-// surface, the lights and the shadow atlas live in.
-fn rt_vector(pair:RtPair, vector:vec3<f32>)->vec3<f32> {
-    return vec3(dot(pair.row0.xyz,vector),dot(pair.row1.xyz,vector),dot(pair.row2.xyz,vector));
-}
-
-// Project a full pixel-width cone onto the actual hit triangle, including
-// grazing incidence. No screen derivatives are evaluated inside ray traversal.
-fn rt_hit_footprint(direction:vec3<f32>,geometry:vec3<f32>,width:f32)->mat2x3<f32> {
-    let axis=select(vec3(0.0,1.0,0.0),vec3(1.0,0.0,0.0),abs(direction.y)>0.9);
-    let x=normalize(cross(direction,axis));
-    let y=cross(direction,x);
-    let cosine=dot(direction,geometry);
-    // shortcut: cap the tangent projection at 10,000x at grazing silhouettes;
-    // exact visibility/curved-surface filtering needs additional ray samples.
-    let denominator=select(-1.0,1.0,cosine>=0.0)*max(abs(cosine),0.0001);
-    return mat2x3<f32>((x-direction*(dot(x,geometry)/denominator))*width,
-        (y-direction*(dot(y,geometry)/denominator))*width);
-}
-
-fn rt_uv_delta(delta:vec3<f32>,e1:vec3<f32>,e2:vec3<f32>,u1:vec2<f32>,u2:vec2<f32>)->vec2<f32> {
-    // Scale before forming area squared: centimetre blades and large instances
-    // must not underflow/overflow the same UV Jacobian.
-    let scale=max(length(e1),length(e2));
-    if(scale<=0.0){return vec2(0.0);}
-    let a=e1/scale;let b=e2/scale;let d=delta/scale;
-    let n=cross(a,b);let area=dot(n,n);
-    if(area<=1e-20){return vec2(0.0);}
-    return (u1*dot(cross(d,b),n)+u2*dot(cross(a,d),n))/area;
 }
 
 fn rt_surface(hit: RtHit, ray_direction: vec3<f32>,cone_width:f32) -> RtSurface {
@@ -125,11 +59,12 @@ fn rt_surface(hit: RtHit, ray_direction: vec3<f32>,cone_width:f32) -> RtSurface 
     let uv_dy=rt_uv_delta(footprint[1],e1,e2,v1.uv.xy-v0.uv.xy,v2.uv.xy-v0.uv.xy);
     var shading = ocean_safe_normalize(rt_vector(pair,
         v0.normal.xyz*bary.x+v1.normal.xyz*bary.y+v2.normal.xyz*bary.z),geometry);
-    shading = select(shading,-shading,dot(shading,geometry)<0.0);
+    shading = select(shading,-shading,dot(shading,normal)<0.0);
     if (material.textures.z != 0xffffffffu) {
         shading = surface_map_normal(shading,rt_sample(material.textures.z,uv,uv_dx,uv_dy).xyz*2.0-1.0,
             material.factors.y,rt_vector(pair,p1-p0),rt_vector(pair,p2-p0),v1.uv.xy-v0.uv.xy,v2.uv.xy-v0.uv.xy);
     }
+    shading=select(shading,-shading,dot(normal,ray_direction)>0.0);
     let mr = rt_sample(material.textures.y,uv,uv_dx,uv_dy);
     var surface: RtSurface;
     surface.position = position;
@@ -175,7 +110,7 @@ fn rt_reflection(
     var origin = position + normal * RT_BIAS;
     var direction = reflect(-eye, normal);
     for (var bounce = 0u; bounce < RT_BOUNCES; bounce++) {
-        let hit = rt_trace(origin, direction, RT_BIAS, RT_TMAX, 0u);
+        let hit = rt_trace(origin, direction, RT_BIAS, RT_TMAX, 0u,cone_width,cone_spread);
         if !hit.hit {
             if (bounce==0u) { return env; }
             // The miss contributes the environment radiance of that direction
@@ -194,13 +129,15 @@ fn rt_reflection(
         if(!RT_LOW_QUALITY){ambient=(1.0-surface.transmission)*env_diffuse_irradiance(surface.normal,ambient)+surface.transmission*env_diffuse_irradiance(-surface.normal,ambient);}
         var illuminance = ambient;
         var visibility:array<f32,3>;
+        var sunlight:array<vec3<f32>,3>;
         for (var i = 0u; i < 3u; i++) {
             if any(light.colors[i].rgb > vec3(0.0)) {
+                sunlight[i]=env_sunlight(surface.position,light.directions[i].xyz,light.colors[i].rgb);
                 let shadow_normal=select(surface.geometry,-surface.geometry,dot(surface.geometry,light.directions[i].xyz)<0.0);
                 visibility[i]=surface_visibility(surface.position,shadow_normal,i);
                 let cosines=mesh_diffuse_cosines(surface.normal,surface.geometry,light.directions[i].xyz);
                 illuminance +=
-                    light.colors[i].rgb
+                    sunlight[i]
                     * ((1.0-surface.transmission)*cosines.x+surface.transmission*cosines.y)
                     * visibility[i];
             }
@@ -216,7 +153,7 @@ fn rt_reflection(
         for (var i=0u;i<3u;i++) {
             if (any(light.colors[i].rgb>vec3(0.0)) && dot(surface.geometry,light.directions[i].xyz)>0.0) {
                 radiance += throughput*surface_sun_reflection(surface.normal,-direction,light.directions[i].xyz,
-                    light.colors[i].rgb,surface.roughness,hit_f0)*visibility[i];
+                    sunlight[i],surface.roughness,hit_f0)*visibility[i];
             }
         }
         let reflected = reflect(direction,surface.normal);

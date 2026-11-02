@@ -1,0 +1,267 @@
+{
+  "variant": "core-cutout-v1",
+  "asset": "fern_02",
+  "source_blend_sha256": "1bfb6e12d805cc97035c8cbd051187ca6db650e3157fd8884afcf66a6c4e78eb",
+  "blender_version": "5.2.2 LTS",
+  "blender_build_hash": "d13f752e3b9c",
+  "frame": 1,
+  "source_unit_scale": 1.0,
+  "coordinate_conversion": "Blender Z-up to glTF right-handed Y-up; metres; existing object world transforms retained",
+  "material_policy": "Explicit derived core metallic-roughness/cutout variant, not the original Blender shader graph. Raw scanned base-color/roughness/normal/alpha maps; default glTF dielectric IOR 1.5 and specular response; source translucency/mix/add/hue graph omitted and declared unavailable. Dithered coverage replaced by MASK using the stored 0.5 alpha threshold, not original dithered-render equivalence.",
+  "tangent_policy": "No authored TANGENT accessor exported; UVs and vertex normals retained. Native per-fragment UV-derivative tangent basis; Blender/MikkTSpace equivalence not claimed.",
+  "objects": [
+    {
+      "source_object": "fern_02_b",
+      "triangles": 2384,
+      "vertices": 1590,
+      "uv_layers": [
+        "UVMap"
+      ],
+      "world_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          -4.76837158203125e-07
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          5.960464477539062e-07
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_object": "fern_02_c",
+      "triangles": 2248,
+      "vertices": 1500,
+      "uv_layers": [
+        "UVMap"
+      ],
+      "world_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          1.0000009536743164
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          1.1920928955078125e-07
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_object": "fern_02_a",
+      "triangles": 784,
+      "vertices": 525,
+      "uv_layers": [
+        "UVMap"
+      ],
+      "world_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          -1.1920928955078125e-07
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          -1.0000001192092896
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_object": "fern_02_d",
+      "triangles": 816,
+      "vertices": 545,
+      "uv_layers": [
+        "UVMap"
+      ],
+      "world_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          -0.9999995827674866
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "source_principled_parameters": [
+        {
+          "Base Color": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            1.0
+          ],
+          "Metallic": 0.0,
+          "Roughness": 0.5,
+          "IOR": 1.4500000476837158,
+          "Alpha": 1.0,
+          "Specular IOR Level": 0.5,
+          "Transmission Weight": 0.0,
+          "Subsurface Weight": 0.0
+        }
+      ],
+      "source": "fern_02",
+      "derived": "fern_02__B02_CoreCutoutV1",
+      "source_render_method": "DITHERED",
+      "source_alpha_threshold": 0.5,
+      "normal_scale": 1.0,
+      "dielectric_ior": 1.5,
+      "specular_ior_level": 0.5,
+      "metallic": 0.0,
+      "roughness_factor": 1.0,
+      "double_sided": true
+    }
+  ],
+  "source_images": [
+    {
+      "path": "textures/fern_02_diff_1k.jpg",
+      "sha256": "a828a6e7b4c01c826911e2eac4b3afc7457dab7b3b392a31c681ed88b7d50029",
+      "color_space": "sRGB",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "decoded_channel_min": 0.0,
+      "decoded_channel_max": 1.0
+    },
+    {
+      "path": "textures/fern_02_rough_1k.exr",
+      "sha256": "6bde0113a818f78ebcce524fe417b9617a8aadf2873a1948fdbb200cc27eaf3c",
+      "color_space": "Non-Color",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "decoded_channel_min": 0.29931640625,
+      "decoded_channel_max": 1.0
+    },
+    {
+      "path": "textures/fern_02_nor_gl_1k.exr",
+      "sha256": "318209d70836a9b078c395a2df26bcc732dae3df248ecd5d827005da7c8ff174",
+      "color_space": "Non-Color",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "decoded_channel_min": 0.0394287109375,
+      "decoded_channel_max": 1.0263671875
+    },
+    {
+      "path": "textures/fern_02_alpha_1k.png",
+      "sha256": "ea3c64284c7ebdeedf484d2d816eae92825ec526140c3bb83859ddc7a64001f9",
+      "color_space": "Non-Color",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "decoded_channel_min": 0.0,
+      "decoded_channel_max": 1.0
+    }
+  ],
+  "export_options": {
+    "filepath": "fern_02.glb",
+    "export_format": "GLB",
+    "use_selection": true,
+    "export_apply": false,
+    "export_yup": true,
+    "export_normals": true,
+    "export_texcoords": true,
+    "export_tangents": false,
+    "export_materials": "EXPORT",
+    "export_image_format": "AUTO",
+    "export_extras": false
+  },
+  "exporter_material_delta": [
+    {
+      "material": "fern_02__B02_CoreCutoutV1",
+      "exported_alpha_mode": "BLEND",
+      "benchmark_alpha_mode": "MASK",
+      "benchmark_cutoff": 0.5
+    }
+  ],
+  "triangles": 6232,
+  "glb_bytes": 4047388,
+  "glb_sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+  "source_geometry_expected_triangles": 6232,
+  "converter_sha256": "8e80192c0112018e0489218a5d479f9c0d8754fc09dee8c9b32f1773781b123c",
+  "images": [
+    {
+      "mime_type": "image/png",
+      "bytes": 2446119
+    },
+    {
+      "mime_type": "image/png",
+      "bytes": 1146221
+    },
+    {
+      "mime_type": "image/png",
+      "bytes": 274409
+    }
+  ]
+}

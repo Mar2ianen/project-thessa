@@ -285,7 +285,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--chase frames the vehicle with the shared pilot chase camera (follow craft attitude) instead of the survey orbit. Requires --flight, --server-flight or --vehicle-preview.\nWindow keys: Left/Right yaw orbit; Up/Down zoom; V chase toggle; Backquote reset camera; right-drag orbit; middle-drag pan; wheel zoom (all ignored while the HUD captures input). Esc exits."
                 );
                 println!(
-                    "Survey: --scene b03 loads the canonical coastal camera/profile in the native window or headless; individual survey flags override its defaults. --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
+                    "Survey: --scene b03-sunset selects the first baked-ephemeris descending 4-degree primary sun at B03 (explicit --sim-time overrides). --scene b03 loads the canonical coastal camera/profile in the native window or headless; individual survey flags override its defaults. --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
                 );
                 println!(
                     "Fixed survey: --survey-lat -90..90 --survey-lon -180..180 (east-positive, required together, conflicts with --site) sets a numeric terrain target, not a launch site. --survey-eye-agl 2..2000000 places the eye exactly above canonical ground/sea datum at its actual direction (1m height sampling), instead of distance-based elevation/5m clearance; 2m uses a 0.1m near plane. Survey-only; incompatible with flight, preview, docking and map. Bookmark selection clears both overrides. --perf-capture records the final resolved survey camera/source, not a trajectory or coastal acceptance."
@@ -322,8 +322,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if vehicle_definition.is_some() && !server_flight {
         return Err("--vehicle-definition requires --server-flight; the server owns compiled vehicle simulation".into());
     }
+    let sunset_preset = scene_preset.as_deref() == Some("b03-sunset");
     if let Some(preset) = scene_preset {
-        if preset != "b03" {
+        if preset != "b03" && preset != "b03-sunset" {
             return Err(format!("unknown native scene: {preset}").into());
         }
         if reference_scene.is_some()
@@ -641,6 +642,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         // not silently overwritten by bookmark framing.
         scene.survey.set_distance_m(distance);
     }
+    if sunset_preset && !parsed_options.iter().any(|v| v == "--sim-time") {
+        sim_time = scene.sunset_epoch()?.0;
+        eprintln!("b03-sunset descending_sun_elevation_deg=4 presentation_sim_time_s={sim_time}");
+    }
     scene.set_presentation_time(thessa_sim_core::SimTime(sim_time))?;
     if docking {
         scene.enable_docking(docking_time.unwrap_or(0.0))?;
@@ -802,7 +807,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             msaa.as_ref().map_or(0, |s| s.target_bytes())
         );
         let mut renderer = scene.renderer(&backend, display.scene_format())?;
-        let sky_layers = scene.sky_layers(&backend, display.scene_format(), &mut renderer);
+        let mut sky_layers = scene.sky_layers(&backend, display.scene_format(), &mut renderer);
         println!(
             "native_sky_layers enabled={} storage_bytes={}",
             sky_layers.enabled(),
@@ -950,7 +955,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             renderer.update_view_jittered(&backend, &view, [width, height], jitter)?;
             renderer.update_ocean(&backend, scene.sample.time.0)?;
             scene.update_plume(&backend, &mut renderer, width, height, exposure)?;
-            scene.update_sky_layers(&backend, &sky_layers, width, height, exposure)?;
+            scene.update_sky_layers(&backend, &mut sky_layers, width, height, exposure)?;
             renderer.update_shadows(
                 &backend,
                 scene.view(width, height, exposure).world_position_m,
@@ -977,20 +982,29 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(trace) = &mut gpu_trace {
                 trace.checkpoint(&backend, &mut encoder, frame, "surface", 0)?;
             }
-            renderer.encode_shadows(
-                &mut encoder,
-                mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
-            );
             if let Some(trace) = &mut gpu_trace {
-                let stats = renderer.last_shadow_draws();
-                trace.event(frame, "shadows", "encoded", &format!("{stats:?}"))?;
-                trace.checkpoint(
-                    &backend,
+                let layers = renderer.shadows().map_or(0, |s| s.layer_count());
+                for layer in 0..layers {
+                    let stats = renderer.encode_shadow_layer_for_diagnostics(
+                        &mut encoder,
+                        mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
+                        layer,
+                    );
+                    let stage = format!("shadows.layer-{layer}");
+                    trace.event(frame, &stage, "encoded", &format!("{stats:?}"))?;
+                    trace.checkpoint(
+                        &backend,
+                        &mut encoder,
+                        frame,
+                        &stage,
+                        stats.mesh_submitted_triangles,
+                    )?;
+                }
+            } else {
+                renderer.encode_shadows(
                     &mut encoder,
-                    frame,
-                    "shadows",
-                    stats.mesh_submitted_triangles,
-                )?;
+                    mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
+                );
             }
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 1);
@@ -1415,7 +1429,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let stats = mesh.rt_stats();
             if stats.active {
                 println!(
-                    "ray_tracing=active tlas_instances={} traced_triangles={} rt_bytes={} as_builds={} terrain_instances={} terrain_blas_builds={}; resident selected terrain + opaque meshes; raster atlas retained",
+                    "ray_tracing=active tlas_instances={} traced_triangles={} rt_bytes={} as_builds={} terrain_instances={} terrain_blas_builds={}; resident selected terrain + opaque/MASK meshes; raster atlas retained",
                     stats.instances,
                     stats.triangles,
                     stats.bytes,

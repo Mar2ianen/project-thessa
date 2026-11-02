@@ -80,6 +80,51 @@ impl CelestialPresentation {
         })
     }
 
+    /// Locate a descending solar elevation using the baked ephemeris and the
+    /// existing body spin. This selects a reproducible presentation epoch only.
+    pub fn descending_sun_epoch(&self, up: DVec3, elevation_rad: f64) -> Result<SimTime, String> {
+        if !up.is_finite()
+            || (up.length_squared() - 1.0).abs() > 1e-8
+            || !elevation_rad.is_finite()
+            || !(0.0..std::f64::consts::FRAC_PI_2).contains(&elevation_rad)
+        {
+            return Err("invalid sunset search coordinates".into());
+        }
+        let target = elevation_rad.sin();
+        let elevation = |t| -> Result<f64, String> {
+            let sample = self.sample(SimTime(t))?;
+            if sample.lighting.colors_lux[0][..3].iter().all(|v| *v <= 0.0) {
+                return Err("sunset requires a stellar source".into());
+            }
+            let d = sample.lighting.directions[0];
+            Ok(up.dot(DVec3::new(
+                f64::from(d[0]),
+                f64::from(d[1]),
+                f64::from(d[2]),
+            )) - target)
+        };
+        let mut previous = elevation(0.0)?;
+        for i in 1..=384 {
+            let end = self.period_s * 2.0 * f64::from(i) / 384.0;
+            let current = elevation(end)?;
+            if previous >= 0.0 && current <= 0.0 {
+                let mut lo = self.period_s * 2.0 * f64::from(i - 1) / 384.0;
+                let mut hi = end;
+                for _ in 0..48 {
+                    let mid = (lo + hi) * 0.5;
+                    if elevation(mid)? > 0.0 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                return Ok(SimTime((lo + hi) * 0.5));
+            }
+            previous = current;
+        }
+        Err("no descending solar crossing in two body rotations".into())
+    }
+
     pub fn sample(&self, time: SimTime) -> Result<Sample, String> {
         if !time.0.is_finite() {
             return Err("non-finite presentation simulation time".into());
@@ -152,6 +197,43 @@ impl CelestialPresentation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sunset_search_samples_existing_ephemeris_and_descending_spin() {
+        let system: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = system.bake().unwrap();
+        let body = ephemeris.body_id("thessa").unwrap();
+        let p = CelestialPresentation::new(&system, ephemeris, body).unwrap();
+        let lat = thessa_reference_scenes::B03_SURFACE_SHOWCASE_LAT_DEG.to_radians();
+        let lon = thessa_reference_scenes::B03_SURFACE_SHOWCASE_LON_DEG.to_radians();
+        let up = DVec3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin());
+        let target = 4.0_f64.to_radians();
+        let time = p.descending_sun_epoch(up, target).unwrap();
+        let cosine = |t| {
+            let d = p.sample(t).unwrap().lighting.directions[0];
+            up.dot(DVec3::new(
+                f64::from(d[0]),
+                f64::from(d[1]),
+                f64::from(d[2]),
+            ))
+        };
+        assert!((cosine(time) - target.sin()).abs() < 1e-6);
+        assert!(cosine(SimTime(time.0 - 1.0)) > cosine(SimTime(time.0 + 1.0)));
+        assert_eq!(time, p.descending_sun_epoch(up, target).unwrap());
+        for degrees in [4., 8., 12.] {
+            let epoch = p
+                .descending_sun_epoch(up, f64::to_radians(degrees))
+                .unwrap();
+            eprintln!(
+                "B03 solar_elevation_deg={degrees} presentation_sim_time_s={}",
+                epoch.0
+            );
+            assert!((cosine(epoch) - f64::to_radians(degrees).sin()).abs() < 1e-6);
+        }
+        assert!(p.descending_sun_epoch(DVec3::ZERO, target).is_err());
+        eprintln!("B03 descending 4-degree sun epoch_s={}", time.0);
+    }
+
     #[test]
     fn canonical_translation_spin_and_lighting_follow_the_same_simulation_sample() {
         let system: SystemConfig =

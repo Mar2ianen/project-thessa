@@ -22,8 +22,16 @@ and structured blue/gold sky at affordable cost. Low-density captures are only
 bounded diagnostics. [Doc 111](111_FASTRT_PRIMARY_SHADOW_RECEIVERS.md) adds the
 executed FastRT scalar visibility gate and optional primary ground/water RT
 shadow receiver using the existing scene. It defaults off after the expensive
-coastal trace; SSR/contact traces, static-caster depth caching, atmospheric
-sunlight and full-scene visual/performance acceptance remain open.
+coastal trace. [Doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md) now adds
+pinned CC0 fern laminae, alpha-aware raster shadows and shared MASK ray
+traversal, MSAA coverage, corrected backface normal maps, cached atmospheric
+sunlight for surfaces/sky/clouds, and a physical B03 sunset epoch. RADV material/
+visibility controls pass. SSR/contact receiver buffers, AMD-style tile queues,
+static-caster depth caching, native multiple scattering, BLEND ray transport
+and full-scene visual/performance acceptance remain open. The complete user
+critique is tracked in doc 112's integrated-scene table.
+[Doc 113](113_RENDER_RESEARCH_INTAKE.md) records the new downloaded research,
+80-source catalogue, exact diagnostic-image identity and applied/pending slices.
 
 ## Current native integration checkpoint
 

@@ -924,3 +924,16 @@ now share the existing scene with ground and spectral water, behind explicit
 primary ground/water GPU controls pass; querying every lit sample remains too
 expensive for the coastal target. The next appearance/cost work uses the full
 sunset forest composition, atmospheric sunlight and cheaper cached/screen data.
+
+[Native foliage and sunlight](docs/112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md)
+replace unresolved procedural laminae with pinned CC0 fern forms and add MASK
+CSM/ray coverage, MSAA foliage coverage and correct double-sided normal mapping.
+One cached optical table supplies sunlight to surfaces, sky and clouds;
+`--scene b03-sunset` selects a baked-ephemeris four-degree descending sun.
+AMD Hybrid Shadows is audited; its receiver buffers/tile queue/denoiser remain
+open, as do BLEND rays, multiple scattering and full coastal quality/cost parity.
+
+[Research intake](docs/113_RENDER_RESEARCH_INTAKE.md) reconciles the user's new
+handoff and 80-source catalogue against current owners and records what was
+applied versus still open. Full-population MASK RT now runs on RADV; this is
+functional coverage evidence, not affordable coastal parity.

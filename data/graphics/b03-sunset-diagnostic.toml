@@ -1,0 +1,144 @@
+# B03 full-population solar/MASK diagnostic, not accepted reference quality.
+# Same plant density as High; shadows explicitly use one 100m cascade/1024 map.
+# This is a cheaper shadow tier, not an equal-quality High performance baseline.
+# Use the existing isolated headless + per-stage trace admission workflow.
+version = 1
+preset = "high"
+
+[renderer]
+msaa_samples = 4
+tone_mapping = "pbr_neutral"
+terrain_ground_detail = true
+terrain_ground_puddles = true
+surface_quality = "high"
+terrain_normal_maps = true
+specular_reflections = true
+shadow_memory_mib = 64
+backend = "auto"
+ray_tracing = "off"
+terrain = "gpu_auto"
+terrain_mesh_cells = 24
+material_storage = "rgba_array"
+resolution_scale = 1.0
+vsync = false
+hdr = true
+bloom = false
+auto_exposure = false
+exposure_ev100 = 9.0
+fleet_meshes = true
+fleet_quality = "high"
+
+[terrain_topology]
+enabled = true
+quality = "high"
+
+[atmosphere]
+enabled = true
+quality = "high"
+aerial_perspective = true
+local_haze_extinction_per_m = 0.00078
+local_haze_height_m = 480.0
+density_scale = 1.42
+multiple_scattering = true
+eclipses = true
+multi_star = true
+limb_scattering = true
+sky_dome = true
+stars = true
+stars_quality = "high"
+ray_steps = 32
+
+[clouds]
+enabled = true
+quality = "high"
+volumetric = true
+integrator = "march"
+ray_steps = 24
+cast_shadows = true
+layers = 2
+coverage = 0.38
+opacity = 0.42
+animate = true
+
+[night_lights]
+enabled = true
+quality = "medium"
+intensity = 1.0
+
+[upper_atmosphere]
+airglow = true
+aurora = true
+aurora_quality = "low"
+aurora_lighting = false
+aurora_intensity = 1.0
+aurora_animate = true
+
+[gas_giant]
+enabled = true
+quality = "medium"
+animate_bands = true
+limb_darkening = true
+
+[engine_plume]
+enabled = true
+quality = "medium"
+mach_diamonds = true
+flicker = true
+light = true
+
+[instruments]
+enabled = true
+quality = "high"
+layout = "aircraft"
+navball_renderer = "auto"
+
+[ocean]
+enabled = true
+quality = "high"
+wind_speed_m_s = 10.0
+wind_direction_rad = 0.0
+significant_height_m = 2.0
+depth_m = 100.0
+seed = 17
+geometry_patches = 32
+geometry_distance_m = 300.0
+
+[raytracing]
+terrain = true
+vehicles = true
+landmarks = false
+atmosphere = true
+clouds = false
+max_distance_m = 500000.0
+scene_memory_mib = 64
+max_instances = 32768
+reflection_bounces = 1
+ray_bias_m = 0.0001
+
+[shadows]
+receiver_culling = true
+raster_sample_culling = true
+mesh_lod_error_texels = 8.0
+first_cascade_distance_m = 25.0
+enabled = true
+quality = "high"
+cascades = 1
+max_distance_m = 100.0
+map_size = 1024
+normal_bias_m = 0.001
+
+[debug]
+show_atmosphere_bounds = false
+show_rt_proxies = false
+
+[surface_plants]
+enabled = true
+quality = "high"
+understory = true
+detail_distance_m = 48
+
+[temporal]
+taa = false
+quality = "high"
+motion_vectors = false
+jitter = false

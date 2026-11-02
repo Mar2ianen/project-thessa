@@ -373,7 +373,7 @@ impl State {
         )?;
         scene.update_sky_layers(
             &self.backend,
-            &self.sky_layers,
+            &mut self.sky_layers,
             self.config.width,
             self.config.height,
             self.exposure,

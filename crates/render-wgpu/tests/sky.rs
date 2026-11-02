@@ -200,7 +200,7 @@ fn primary_clear_field_does_not_replace_total_indirect_radiance() {
         total.ambient_lux(),
         "primary emission must not be removed from indirect light"
     );
-    assert_eq!(binding.storage_bytes(), 32 * 16 + 8 * 16 + 208);
+    assert_eq!(binding.storage_bytes(), 32 * 16 + 8 * 16 + 256);
     binding.update_background(&backend, None);
     terrain.share_environment(&backend, Some(&binding));
     let pixels = draw(&backend, &mut terrain, &target, &camera);

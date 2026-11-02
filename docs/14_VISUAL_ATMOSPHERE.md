@@ -827,5 +827,9 @@ The atmosphere should be visually rich, warp-safe, multi-star aware, and ready f
 query the existing scene after raster/cloud visibility. It defaults false;
 RT and shadows must both be enabled. It does not implement SSR or replace
 cloud/atmosphere transport, and the coastal correction is not yet an affordable
-production setting. Direct atmospheric sunlight and full sunset-reference
-acceptance remain separate open work.
+production setting. [Doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md)
+now supplies atmospheric direct sunlight through the existing model's cached
+radial/chord table, shared by surfaces, sky evaluation and cloud sources.
+The native sky remains single scattering even when the requested multiple-
+scattering flag is true. Higher-order coupling and full sunset-reference
+acceptance remain open.

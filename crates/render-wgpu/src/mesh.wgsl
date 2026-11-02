@@ -1,7 +1,6 @@
 struct View { clip:mat4x4<f32>, unjittered:mat4x4<f32>, inverse_clip:mat4x4<f32>,
     world_from_view:mat4x4<f32>, view_from_world:mat4x4<f32>, projection:mat4x4<f32>, inverse_projection:mat4x4<f32>, camera:vec3<f32>, exposure:f32 }
 struct Lighting { ambient:vec4<f32>, directions:array<vec4<f32>,3>, colors:array<vec4<f32>,3> }
-struct Material { color:vec4<f32>, double_sided:u32, quality:u32, reflections:u32, pad:u32, factors:vec4<f32>, optical:vec4<f32>, emission:vec4<f32> }
 @group(0) @binding(0) var<uniform> view:View;
 @group(0) @binding(1) var<uniform> light:Lighting;
 @group(0) @binding(2) var<storage,read> instances:array<mat4x4<f32>>;
@@ -58,14 +57,15 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
 }
 @fragment fn fragment(in:Output,@builtin(front_facing) front:bool)->@location(0) vec4<f32> {
     if (!MESH_ALL_DOUBLE_SIDED && !front && material.double_sided==0u) { discard; }
-    var normal=normalize(in.normal)*select(-1.0,1.0,front);
+    let face_sign=select(-1.0,1.0,front);
+    var normal=normalize(in.normal);
     let dx=dpdx(in.position); let dy=dpdy(in.position);
     // Match terrain receivers: PCF depth gradients and normal offsets follow
     // the raster triangle plane, never smooth or normal-mapped shading normals.
     let plane=cross(dx,dy);
-    var receiver_normal=normal;
+    var receiver_normal=normal*face_sign;
     if (dot(plane,plane)>0.0) {
-        receiver_normal=normalize(plane)*select(-1.0,1.0,dot(plane,normal)>=0.0);
+        receiver_normal=normalize(plane)*select(-1.0,1.0,dot(plane,receiver_normal)>=0.0);
     }
     let du=dpdx(in.uv); let dv=dpdy(in.uv);
     let map_normal=textureSample(normal_texture,normal_sampler,in.uv).xyz*2.0-1.0;
@@ -74,6 +74,8 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
     if (material.quality==2u && material.pad!=0u) {
         normal=surface_map_normal(normal,map_normal,material.factors.z,dx,dy,du,dv);
     }
+    // Reverse the complete mapped normal, including its tangent components.
+    normal*=face_sign;
     let base_sample=textureSample(color_texture,color_sampler,in.uv);
     let albedo=base_sample.rgb*material.color.rgb;
     // MESH_CUTOUT_COVERAGE
@@ -81,15 +83,17 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
     var direct_reflect=vec3(0.0);
     var direct_transmit=vec3(0.0);
     var visibility:array<f32,3>;
+    var sunlight:array<vec3<f32>,3>;
     for (var i=0u;i<3u;i++) {
         if (any(light.colors[i].rgb>vec3(0.0))) {
             let cosines=mesh_diffuse_cosines(normal,receiver_normal,light.directions[i].xyz);
+            sunlight[i]=env_sunlight(in.position,light.directions[i].xyz,light.colors[i].rgb);
             let shadow_normal=select(receiver_normal,-receiver_normal,dot(receiver_normal,light.directions[i].xyz)<0.0);
             visibility[i]=surface_visibility(in.position,shadow_normal,i);
             let fwd=(1.0-transmission)*cosines.x;
             let bwd=transmission*cosines.y;
-            direct_reflect+=light.colors[i].rgb*fwd*visibility[i];
-            direct_transmit+=light.colors[i].rgb*bwd*visibility[i];
+            direct_reflect+=sunlight[i]*fwd*visibility[i];
+            direct_transmit+=sunlight[i]*bwd*visibility[i];
         }
     }
     var ambient=light.ambient.rgb;
@@ -120,7 +124,7 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
         radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
         for (var i=0u;i<3u;i++) {
             if (any(light.colors[i].rgb>vec3(0.0)) && dot(receiver_normal,light.directions[i].xyz)>0.0) {
-                radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,light.colors[i].rgb,roughness,f0)*visibility[i];
+                radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,sunlight[i],roughness,f0)*visibility[i];
             }
         }
     }

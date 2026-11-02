@@ -1,0 +1,808 @@
+{
+  "date": "2026-11-02",
+  "project": "Mar2ianen/project-thessa",
+  "branch": "feat/surface-visual-engineering",
+  "audited_head": "566cc6f1a3cb59664a2462efd1cce0162e1e6e62",
+  "sources": [
+    {
+      "id": "X001",
+      "group": "Horizon Rust",
+      "priority": "P1",
+      "name": "horizon-rust/horizon — repository",
+      "url": "https://github.com/horizon-rust/horizon",
+      "kind": "MIT source",
+      "why": "Native Rust/wgpu renderer, benchmark and differential-testing approach.",
+      "caveat": "Different voxel workloads; do not transfer FPS claims to Fessa."
+    },
+    {
+      "id": "X002",
+      "group": "Horizon Rust",
+      "priority": "P0",
+      "name": "Horizon performance methodology",
+      "url": "https://playhorizon.dev/docs/performance",
+      "kind": "author documentation",
+      "why": "Worker split, vertex arena, indirect multi-draw and explicit FPS/1% low baselines.",
+      "caveat": "Their internal gains are not relative to vanilla."
+    },
+    {
+      "id": "X003",
+      "group": "Horizon Rust",
+      "priority": "P0",
+      "name": "Horizon graphics settings and performance",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/docs/graphics.md",
+      "kind": "author documentation",
+      "why": "Performance budgets, shadow cache, foliage cutout mip dither, far LOD, debug metrics and GPU timing.",
+      "caveat": "Several shadow-cache paths are shader-pack-related, not drop-in Fessa CSM caching."
+    },
+    {
+      "id": "X004",
+      "group": "Horizon Rust",
+      "priority": "P0",
+      "name": "Horizon flattened indirect terrain draws",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client-render/src/gfx/flat.rs",
+      "kind": "inspected Rust source",
+      "why": "Compute compacts visible per-section indices into arena-page runs; one draw per run when multi-draw unavailable.",
+      "caveat": "Flat voxel quads; Fessa CBT indexed geometry needs separate geometry/identity invariants."
+    },
+    {
+      "id": "X005",
+      "group": "Horizon Rust",
+      "priority": "P1",
+      "name": "Horizon mipmap alpha-coverage preservation",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client-render/src/mipmap.rs",
+      "kind": "inspected Rust source",
+      "why": "Cutout mips preserve alpha-test coverage instead of thinning leaf/flower silhouettes at distance.",
+      "caveat": "Fessa currently uses opaque generated pinnules; apply only to actual MASK inputs, not blindly to geometry."
+    },
+    {
+      "id": "X006",
+      "group": "Horizon Rust",
+      "priority": "P1",
+      "name": "Horizon renderer graphics policy",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client-render/src/graphics.rs",
+      "kind": "inspected Rust source",
+      "why": "Explicit advanced graphics capability tiers and optional upload/refresh limits, with HDR startup rollback marker.",
+      "caveat": "Do not interpret user-set quality budgets as equal-work speedup."
+    },
+    {
+      "id": "X007",
+      "group": "Horizon Rust",
+      "priority": "P1",
+      "name": "Horizon terrain WGSL",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client-render/src/terrain.wgsl",
+      "kind": "inspected WGSL source",
+      "why": "WGSL light/fog/terrain uniforms and cutout paths under wgpu.",
+      "caveat": "Vanilla-compatible lighting is not a physical atmospheric model."
+    },
+    {
+      "id": "X008",
+      "group": "Horizon Rust",
+      "priority": "P2",
+      "name": "Horizon shader API design",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/docs/api/shaders.md",
+      "kind": "design documentation",
+      "why": "Stable WGSL renderer-stage hooks; documentation distinguishes shipped renderer from planned shader API.",
+      "caveat": "Shader API is a design, not necessarily deployed."
+    },
+    {
+      "id": "X009",
+      "group": "Horizon Rust",
+      "priority": "P2",
+      "name": "Horizon post/pack graph",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client-render/src/gfx/pack_post.rs",
+      "kind": "inspected Rust source",
+      "why": "Ping-pong render targets, depth layers, and explicit resource staging/ownership.",
+      "caveat": "Shader-pack integration specifics may change; no rationale to replicate it wholesale."
+    },
+    {
+      "id": "X010",
+      "group": "Horizon Rust",
+      "priority": "P0",
+      "name": "Horizon reproducible benchmark",
+      "url": "https://playhorizon.dev/benchmarks",
+      "kind": "author benchmark",
+      "why": "Includes where vanilla is faster; methodology holds path, settings and devices explicit.",
+      "caveat": "Avoid projected estimates as physical measurements."
+    },
+    {
+      "id": "X011",
+      "group": "Horizon Rust",
+      "priority": "P1",
+      "name": "Horizon graphics profiling notes",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/docs/profiling.md",
+      "kind": "author documentation",
+      "why": "Separates profiler sampling and actual timing; helps design clean before/after controls.",
+      "caveat": "JFR section primarily for Java comparison."
+    },
+    {
+      "id": "X012",
+      "group": "Horizon Rust",
+      "priority": "P2",
+      "name": "Horizon roadmap",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/ROADMAP.md",
+      "kind": "author roadmap",
+      "why": "Current/frame-pacing/worker scheduling tradeoffs and known open problems.",
+      "caveat": "Proposals are not verified implementations."
+    },
+    {
+      "id": "X013",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P0",
+      "name": "Adventures with Deferred Texturing in Horizon Forbidden West",
+      "url": "https://www.guerrilla-games.com/read/adventures-with-deferred-texturing-in-horizon-forbidden-west",
+      "kind": "Guerrilla technical talk",
+      "why": "Foliage/alpha-tested visibility prepass, loose tiling, compute material shading, software VRS.",
+      "caveat": "Algorithmic architecture only: proprietary Decima code not distributed on page."
+    },
+    {
+      "id": "X014",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P0",
+      "name": "SIGGRAPH 2022 Decima real-time live",
+      "url": "https://www.guerrilla-games.com/read/siggraph-live-decima",
+      "kind": "Guerrilla technical talk",
+      "why": "System-level composition of a large outdoor environment under hard performance budgets.",
+      "caveat": "Showcase; not numeric proof of Fessa gains."
+    },
+    {
+      "id": "X015",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P0",
+      "name": "Nubis 2015 — Real-time Volumetric Cloudscapes",
+      "url": "https://www.guerrilla-games.com/read/the-real-time-volumetric-cloudscapes-of-horizon-zero-dawn",
+      "kind": "Guerrilla SIGGRAPH talk",
+      "why": "Cloud profiles, ray-march budgets, directional light scattering under PS4 target.",
+      "caveat": "2015-era method; Fessa already has clouds; audit integration, not replacement."
+    },
+    {
+      "id": "X016",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P0",
+      "name": "Nubis 2017 — authoring in Decima",
+      "url": "https://www.guerrilla-games.com/read/nubis-authoring-real-time-volumetric-cloudscapes-with-the-decima-engine",
+      "kind": "Guerrilla SIGGRAPH talk",
+      "why": "Weather map, shape layers, authoring, improved lighting/time-of-day.",
+      "caveat": "Opaque proprietary engine; abstract algorithms only."
+    },
+    {
+      "id": "X017",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P0",
+      "name": "Nubis Evolved 2022",
+      "url": "https://www.guerrilla-games.com/read/nubis-evolved",
+      "kind": "Guerrilla SIGGRAPH talk",
+      "why": "Cloud flythrough and speed-sensitive rendering without relying on temporal upscale.",
+      "caveat": "Higher cost for full 3D immersive clouds; prioritize B03 ground sky first."
+    },
+    {
+      "id": "X018",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P1",
+      "name": "Nubis cubed 2023",
+      "url": "https://www.guerrilla-games.com/read/nubis-cubed",
+      "kind": "Guerrilla SIGGRAPH talk",
+      "why": "Compressed SDF skipping, voxel detail upscaling, lighting acceleration, dark-edge/inner-glow.",
+      "caveat": "Voxel-cloud pipeline is not a direct replacement of existing 2.5D cloud field."
+    },
+    {
+      "id": "X019",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P1",
+      "name": "Rendering Water in Horizon Forbidden West",
+      "url": "https://advances.realtimerendering.com/s2022/index.html",
+      "kind": "SIGGRAPH technical talk",
+      "why": "Localized deformations and breaking waves; references physically and artistically complex water.",
+      "caveat": "Primarily breaking ocean waves, not shallow static puddles."
+    },
+    {
+      "id": "X020",
+      "group": "Decima / Horizon Forbidden West",
+      "priority": "P1",
+      "name": "Nubis-like Vulkan implementation: Meteoros",
+      "url": "https://github.com/AmanSachan1/Meteoros",
+      "kind": "MIT Vulkan source",
+      "why": "Readable procedural clouds, reprojection, and raymarch cost breakdown.",
+      "caveat": "Student implementation; do not copy its FPS claim to 880M."
+    },
+    {
+      "id": "X021",
+      "group": "Other production engines",
+      "priority": "P1",
+      "name": "Ghost of Tsushima — Procedural Grass",
+      "url": "https://gdcvault.com/play/1027214/Advanced-Graphics-Summit-Procedural-Grass",
+      "kind": "GDC technical talk",
+      "why": "GPU per-blade generation, culling and indirect instance counts for lush grass.",
+      "caveat": "Authored production solution; do not alter Fessa authoritative scatter IDs."
+    },
+    {
+      "id": "X022",
+      "group": "Other production engines",
+      "priority": "P1",
+      "name": "Ghost of Tsushima — Wind simulation",
+      "url": "https://www.gdcvault.com/play/1027350/Blowing-from-the-West-Simulating",
+      "kind": "GDC technical talk",
+      "why": "Multi-scale shared wind, gust coherence across plants/particles; inexpensive dynamics.",
+      "caveat": "Add only if motion becomes an explicit visual goal."
+    },
+    {
+      "id": "X023",
+      "group": "Other production engines",
+      "priority": "P1",
+      "name": "Ghost of Tsushima — visual effects",
+      "url": "https://blog.playstation.com/?p=345372",
+      "kind": "developer post",
+      "why": "Natural field coherence, foliage response and wind interactions at landscape scale.",
+      "caveat": "Primarily artistic/engine design, not a scientific lighting oracle."
+    },
+    {
+      "id": "X024",
+      "group": "Other production engines",
+      "priority": "P0",
+      "name": "Far Cry 6 — Simulating Tropical Weather",
+      "url": "https://www.gdcvault.com/play/1027725/",
+      "kind": "GDC technical talk",
+      "why": "Wetness/puddles, sunlight, fog, volumetric clouds, wind and day-night consistency in one environment.",
+      "caveat": "No license to copy closed engine code; use conceptual checks."
+    },
+    {
+      "id": "X025",
+      "group": "Atmosphere / clouds",
+      "priority": "P0",
+      "name": "Hillaire — A Scalable and Production Ready Sky and Atmosphere Rendering Technique",
+      "url": "https://diglib.eg.org/items/8a3e5350-18b3-46bd-9274-3add5af88c75",
+      "kind": "peer-reviewed EGSR paper",
+      "why": "Ground-to-space transport, transmittance, multiple scattering, sky-view/aerial perspective LUTs.",
+      "caveat": "Avoid replacing existing atmosphere owner; compare numerical invariants first."
+    },
+    {
+      "id": "X026",
+      "group": "Atmosphere / clouds",
+      "priority": "P0",
+      "name": "Bruneton — Precomputed Atmospheric Scattering documentation",
+      "url": "https://ebruneton.github.io/precomputed_atmospheric_scattering/index.html",
+      "kind": "author technical documentation",
+      "why": "Strong reference for radiance/transmittance formulae, unit safety, planet-generalized functions, regression tests.",
+      "caveat": "LUT parameterizations differ from Fessa; formula reference not direct architecture mandate."
+    },
+    {
+      "id": "X027",
+      "group": "Atmosphere / clouds",
+      "priority": "P0",
+      "name": "Bruneton — reference implementation",
+      "url": "https://github.com/ebruneton/precomputed_atmospheric_scattering",
+      "kind": "BSD source",
+      "why": "GLSL/CPU reference oracles for TOA → surface RGB and long paths.",
+      "caveat": "BSD notice required if source copied; graphics simulation models may differ."
+    },
+    {
+      "id": "X028",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Fewes MinimalAtmosphere",
+      "url": "https://github.com/Fewes/MinimalAtmosphere",
+      "kind": "MIT shader source",
+      "why": "Small readable Rayleigh/Mie/ozone example; object shader attenuates directional sunlight.",
+      "caveat": "Unoptimized education code only, not production reference timing."
+    },
+    {
+      "id": "X029",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Hillaire implementation in OpenGL",
+      "url": "https://github.com/Itex34/HillaireAtmosphereOpenGL",
+      "kind": "open source code",
+      "why": "Code-level approximation and high-level comparison with Bruneton; verify upstream licensing.",
+      "caveat": "Third-party port, check exact license and provenance before reuse."
+    },
+    {
+      "id": "X030",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Gigi Hillaire pipeline implementation",
+      "url": "https://github.com/nemjit001/atmosphere-rendering",
+      "kind": "MIT source",
+      "why": "Explicit transmittance, multiple scattering, sky-view and aerial-perspective passes.",
+      "caveat": "Different renderer bindings and resolution budgets."
+    },
+    {
+      "id": "X031",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "PBRT 4 — volume transmittance",
+      "url": "https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance",
+      "kind": "academic textbook",
+      "why": "Correct segment transmittance laws; source visibility and medium attenuation separate.",
+      "caveat": "Physically rigorous reference but not a 1:1 real-time algorithm."
+    },
+    {
+      "id": "X032",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "PBRT 4 — volume scattering",
+      "url": "https://www.pbr-book.org/4ed/Volume_Scattering",
+      "kind": "academic textbook",
+      "why": "Separates scattering, absorption, phase function, volume path transmittance.",
+      "caveat": "Heavy Monte Carlo is oracle, not 880M primary solution."
+    },
+    {
+      "id": "X033",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Unity HDRP clouds and fog architecture",
+      "url": "https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Documentation~/HDRP-Features.md",
+      "kind": "official engine documentation",
+      "why": "Cloud/sky integration, Beer shadow maps, environment lighting, fog and surface shading contracts.",
+      "caveat": "HDRP graphics package licensing must be checked per component before copying."
+    },
+    {
+      "id": "X034",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Unity HDRP volumetric clouds implementation entry",
+      "url": "https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Documentation~/create-realistic-clouds-volumetric-clouds.md",
+      "kind": "official engine docs",
+      "why": "Shadow and fog interactions; verify current cloud vs ground coupling.",
+      "caveat": "Component docs, not matching physical data."
+    },
+    {
+      "id": "X035",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Unity HDRP custom cloud effects",
+      "url": "https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Documentation~/create-custom-cloud-effects.md",
+      "kind": "official engine docs",
+      "why": "Separate cloud transport policy from host pipeline, reusing the same sky light.",
+      "caveat": "Implementation detail may require Unity-specific pipeline."
+    },
+    {
+      "id": "X036",
+      "group": "Atmosphere / clouds",
+      "priority": "P1",
+      "name": "Godot rendering architecture",
+      "url": "https://github.com/godotengine/godot-docs/blob/master/engine_details/architecture/internal_rendering_architecture.rst",
+      "kind": "official engine documentation",
+      "why": "Froxel volumetric fog and concrete Godot engine source paths for shaders and C++.",
+      "caveat": "Godot passes are not Fessa planetary medium."
+    },
+    {
+      "id": "X037",
+      "group": "Atmosphere / clouds",
+      "priority": "P2",
+      "name": "Kirme — Volumetric Clouds",
+      "url": "https://github.com/Kirme/volumetric-clouds",
+      "kind": "research implementation",
+      "why": "Adaptive raymarch and temporal cloud budgets; HLSL-to-WGSL conceptual comparison.",
+      "caveat": "Unity HLSL graduate demo; not benchmark-equivalent."
+    },
+    {
+      "id": "X038",
+      "group": "Shadows / vegetation",
+      "priority": "P0",
+      "name": "AMD FidelityFX Hybrid Shadows",
+      "url": "https://gpuopen.com/fidelityfx-hybrid-shadows/",
+      "kind": "official AMD technical sample",
+      "why": "Shadow-map visibility classification, reject lit/dark, ray interval reduction, denoising.",
+      "caveat": "Port GLSL/HLSL policy to WGSL; hardware capability and tile overhead vary."
+    },
+    {
+      "id": "X039",
+      "group": "Shadows / vegetation",
+      "priority": "P0",
+      "name": "AMD Hybrid Shadows open sample",
+      "url": "https://github.com/GPUOpen-Effects/Hybrid-Shadows",
+      "kind": "MIT source",
+      "why": "Concrete classifier passes, ray-tracing integration, debug tiles.",
+      "caveat": "Original sample targets DXR; more recent SDK notes Vulkan support."
+    },
+    {
+      "id": "X040",
+      "group": "Shadows / vegetation",
+      "priority": "P0",
+      "name": "AMD FidelityFX Shadow Classifier 1.3",
+      "url": "https://gpuopen.com/manuals/fidelityfx_sdk/techniques/classifier/",
+      "kind": "official AMD docs",
+      "why": "8×4 tile ray masks, classification input/interval contracts.",
+      "caveat": "Fessa current gate does NOT implement tile classification."
+    },
+    {
+      "id": "X041",
+      "group": "Shadows / vegetation",
+      "priority": "P0",
+      "name": "Unreal Virtual Shadow Maps & static/dynamic caching",
+      "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/virtual-shadow-maps-in-unreal-engine",
+      "kind": "official Epic documentation",
+      "why": "Page invalidation, separate cached static vs dynamic depth and correct debug views.",
+      "caveat": "Do not rewrite Fessa as full UE VSM; first split static caster depth for current cascades."
+    },
+    {
+      "id": "X042",
+      "group": "Shadows / vegetation",
+      "priority": "P0",
+      "name": "Unreal Nanite foliage / aggregate geometry",
+      "url": "https://dev.epicgames.com/documentation/unreal-engine/working-with-naniteenabled-content",
+      "kind": "official Epic docs",
+      "why": "Thin/disjoint foliage breaks occlusion and area preservation; warns on overdraw.",
+      "caveat": "Preserve Area is only idea to test, no blanket silhouette inflation."
+    },
+    {
+      "id": "X043",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Meshoptimizer — official library",
+      "url": "https://github.com/zeux/meshoptimizer",
+      "kind": "MIT source",
+      "why": "Meshlets, simplification with coverage-area concerns; potential per-shadow LOD or hierarchical cluster admission.",
+      "caveat": "Need validate Fessa area, topology and silhouette error, not triangles-only."
+    },
+    {
+      "id": "X044",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Meshoptimizer foliage border dilation",
+      "url": "https://github.com/zeux/meshoptimizer/blob/master/demo/clusterlod.h",
+      "kind": "source code",
+      "why": "Cluster border dilation explicitly addresses foliage projected-area loss.",
+      "caveat": "This mutates positions; clone in tests and prove budget/area error."
+    },
+    {
+      "id": "X045",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Meshoptimizer release and coverage analysis",
+      "url": "https://github.com/zeux/meshoptimizer/releases",
+      "kind": "upstream changelog",
+      "why": "Coverage analysis, clusterlod updates, and disjoint-component handling.",
+      "caveat": "Experimental library APIs change, pin source versions."
+    },
+    {
+      "id": "X046",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Hashed Alpha Testing (Wyman/McGuire)",
+      "url": "https://research.nvidia.com/publication/2017-02_hashed-alpha-testing",
+      "kind": "research paper",
+      "why": "Stable probabilistic alpha coverage for distant MASK, shadow casters and foliage.",
+      "caveat": "Opaque geometric pinnules not alpha cards; use only in MASK path."
+    },
+    {
+      "id": "X047",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Improved Alpha Testing Using Hashed Sampling",
+      "url": "https://research.nvidia.com/labs/rtr/publication/wyman2019improved/",
+      "kind": "research paper",
+      "why": "Analysis of filtered alpha, alpha-to-coverage and temporal stability.",
+      "caveat": "Does not fix real geometric thin-triangle raster coverage."
+    },
+    {
+      "id": "X048",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Horizon Rust cutout mips",
+      "url": "https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client-render/src/mipmap.rs",
+      "kind": "inspected MIT source",
+      "why": "Practical coverage-preserving mip generation for alpha-tested foliage.",
+      "caveat": "Not a substitute for shadow/RT alpha semantics."
+    },
+    {
+      "id": "X049",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Sascha Willems Vulkan indirect drawing",
+      "url": "https://github.com/SaschaWillems/Vulkan/blob/master/examples/indirectdraw/README.md",
+      "kind": "MIT Vulkan example",
+      "why": "Example literally batches different foliage/tree meshes into indirect draw calls.",
+      "caveat": "CPU/GPU submission bottleneck only; does not reduce pixel or triangle cost."
+    },
+    {
+      "id": "X050",
+      "group": "Shadows / vegetation",
+      "priority": "P1",
+      "name": "Ghost grass GPU generation and clumping",
+      "url": "https://gdcvault.com/play/1027214/Advanced-Graphics-Summit-Procedural-Grass",
+      "kind": "GDC talk",
+      "why": "Decouple spatial clump field from random per-blade variation to avoid synthetic uniformity.",
+      "caveat": "Changing scatter is a content change, not render-only A/B."
+    },
+    {
+      "id": "X051",
+      "group": "Reflections / materials",
+      "priority": "P0",
+      "name": "AMD FidelityFX SSSR sample docs",
+      "url": "https://gpuopen.com/manuals/fidelityfx_sdk/samples/stochastic-screen-space-reflections/",
+      "kind": "official AMD docs",
+      "why": "Hi-Z traversal, roughness and variance-driven ray budget, disocclusion, denoising.",
+      "caveat": "Screen space misses offscreen/occluded; fallback cannot be assumed correct."
+    },
+    {
+      "id": "X052",
+      "group": "Reflections / materials",
+      "priority": "P0",
+      "name": "AMD FidelityFX SSSR source",
+      "url": "https://github.com/GPUOpen-Effects/FidelityFX-SSSR",
+      "kind": "MIT source",
+      "why": "Operational hierarchical depth traversal, ray compaction and denoising.",
+      "caveat": "Need actual depth, normals, roughness and history: not yet available to Fessa path."
+    },
+    {
+      "id": "X053",
+      "group": "Reflections / materials",
+      "priority": "P0",
+      "name": "AMD FidelityFX SSSR technique",
+      "url": "https://gpuopen.com/manuals/fidelityfx_sdk/techniques/stochastic-screen-space-reflections/",
+      "kind": "official AMD docs",
+      "why": "Variance-guided rays per quad and roughness cutoff/fallback semantics.",
+      "caveat": "Port data contract rather than copy entire framework."
+    },
+    {
+      "id": "X054",
+      "group": "Reflections / materials",
+      "priority": "P0",
+      "name": "Filament physically based shading",
+      "url": "https://github.com/google/filament/blob/main/docs/Filament.md.html",
+      "kind": "open source engine technical paper",
+      "why": "GGX, energy preservation, IBL, F0, roughness, and specular aliasing.",
+      "caveat": "Avoid replacing verified existing Fessa direct GGX kernel."
+    },
+    {
+      "id": "X055",
+      "group": "Reflections / materials",
+      "priority": "P1",
+      "name": "Filament material system",
+      "url": "https://google.github.io/filament/main/materials.html",
+      "kind": "official engine docs",
+      "why": "Material layering masks, normals and physically meaningful wet/dry blends.",
+      "caveat": "Wet soil and puddles are distinct layers; no roughness-as-water classifier."
+    },
+    {
+      "id": "X056",
+      "group": "Reflections / materials",
+      "priority": "P1",
+      "name": "Toksvig — Mipmapping Normal Maps",
+      "url": "https://www.tandfonline.com/doi/abs/10.1080/2151237X.2005.10129203",
+      "kind": "peer-reviewed paper",
+      "why": "Normal variance and mipmap anti-aliasing for sparkling ground and leaves.",
+      "caveat": "Fessa has roughness filtering; compare before adding redundant technique."
+    },
+    {
+      "id": "X057",
+      "group": "Reflections / materials",
+      "priority": "P1",
+      "name": "Water in Horizon Forbidden West",
+      "url": "https://advances.realtimerendering.com/s2022/index.html",
+      "kind": "SIGGRAPH talk",
+      "why": "Breaking wave/rendering material features and localized surface deformation.",
+      "caveat": "Mostly sea-wave feature scope; not first priority for B03 puddles."
+    },
+    {
+      "id": "X058",
+      "group": "Reflections / materials",
+      "priority": "P1",
+      "name": "Unity HDRP water and volumetric clouds",
+      "url": "https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Documentation~/HDRP-Features.md",
+      "kind": "engine source/docs",
+      "why": "Wetness, water, caustics, reflections and environmental response in one quality policy.",
+      "caveat": "No immediate need for a new ocean simulation."
+    },
+    {
+      "id": "X059",
+      "group": "Reflections / materials",
+      "priority": "P2",
+      "name": "Ocean Simulation JONSWAP/TMA",
+      "url": "https://github.com/Mozobo/Ocean-Simulation/",
+      "kind": "open-source Unity implementation",
+      "why": "JONSWAP/TMA, IFFT, near-shore rendering and water shader optics.",
+      "caveat": "Ocean waves only after B03 shallow water optical acceptance."
+    },
+    {
+      "id": "X060",
+      "group": "Reflections / materials",
+      "priority": "P2",
+      "name": "WGSL WebGPU FFT ocean",
+      "url": "https://github.com/Majkejl/fft_water_sim",
+      "kind": "WebGPU/WGSL source",
+      "why": "Read WGSL GPU FFT stages, slopes, water normals, reflective sampling.",
+      "caveat": "Student project; may not reproduce wave physics of Fessa."
+    },
+    {
+      "id": "X061",
+      "group": "Reflections / materials",
+      "priority": "P2",
+      "name": "Abyssal ocean spectral sample",
+      "url": "https://github.com/squall01337/abyssal-ocean",
+      "kind": "MIT shader source",
+      "why": "Layered spectrum, physical-looking twilight, sky-water shared illumination, Jacobian foam.",
+      "caveat": "Different JS/WebGL renderer and custom authored optics."
+    },
+    {
+      "id": "X062",
+      "group": "Hybrid RT / validation",
+      "priority": "P1",
+      "name": "Kajiya (Embark Studios) — Rust/Vulkan hybrid GI",
+      "url": "https://github.com/EmbarkStudios/kajiya",
+      "kind": "MIT/Apache Rust source",
+      "why": "Render graph with raster+compute+RT, temporal reprojection, simple physically based path-traced ground truth.",
+      "caveat": "Experimental renderer with unsafe budgets and insufficient resource lifetime rigor."
+    },
+    {
+      "id": "X063",
+      "group": "Hybrid RT / validation",
+      "priority": "P1",
+      "name": "Kajiya — GI overview",
+      "url": "https://github.com/EmbarkStudios/kajiya/blob/main/docs/gi-overview.md",
+      "kind": "author architecture",
+      "why": "Irradiance cache + raytraced final gather and path-traced oracle.",
+      "caveat": "RTX/6800XT hardware results not transferable to 880M."
+    },
+    {
+      "id": "X064",
+      "group": "Hybrid RT / validation",
+      "priority": "P1",
+      "name": "NVIDIA RTXPT reference path tracer",
+      "url": "https://github.com/NVIDIA-RTX/RTXPT",
+      "kind": "source/sample",
+      "why": "Compare hybrid raster path to explicit path-traced oracle; material/opacity/visibility semantics.",
+      "caveat": "RTX-specific denoisers/features; do not make a required runtime dependency."
+    },
+    {
+      "id": "X065",
+      "group": "Hybrid RT / validation",
+      "priority": "P2",
+      "name": "NVIDIA RTXDI / ReSTIR",
+      "url": "https://github.com/NVIDIA-RTX/RTXDI",
+      "kind": "SDK source",
+      "why": "Spatial/temporal reuse of expensive light samples and visibility.",
+      "caveat": "Likely overkill for 3 stellar source slots; study only for many emissive sources."
+    },
+    {
+      "id": "X066",
+      "group": "Hybrid RT / validation",
+      "priority": "P2",
+      "name": "RTXDI algorithm integration reference",
+      "url": "https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/Integration.md",
+      "kind": "vendor technical docs",
+      "why": "Separation of light candidate sampling and geometry-dependent visibility.",
+      "caveat": "Not a magic replacement for deterministic shadow-map data."
+    },
+    {
+      "id": "X067",
+      "group": "Hybrid RT / validation",
+      "priority": "P2",
+      "name": "Rust GPU current organization",
+      "url": "https://github.com/rust-gpu",
+      "kind": "organization/active project",
+      "why": "Future Rust-to-SPIR-V experimentation if architecture merits it.",
+      "caveat": "Existing Fessa WGSL is valid; do not mandate a shader-language rewrite."
+    },
+    {
+      "id": "X068",
+      "group": "GPU performance / safety",
+      "priority": "P0",
+      "name": "Mesa: Debugging GPU hangs with RADV",
+      "url": "https://docs.mesa3d.org/drivers/amd/hang-debugging.html",
+      "kind": "upstream driver documentation",
+      "why": "Obtain SPIR-V/trace/command markers and distinguish hang from GPU workload.",
+      "caveat": "Do NOT use recovery-disabled instructions on working desktop; no sysfs permission relaxation."
+    },
+    {
+      "id": "X069",
+      "group": "GPU performance / safety",
+      "priority": "P0",
+      "name": "Mesa general GPU crash debugging",
+      "url": "https://docs.mesa3d.org/graphics-debugging/debugging-misrenderings-crashes.html",
+      "kind": "upstream driver documentation",
+      "why": "Captures, devcoredumps, reproduction safety and root-cause discipline.",
+      "caveat": "First use CPU admission and isolated GPU, never crash user Niri."
+    },
+    {
+      "id": "X070",
+      "group": "GPU performance / safety",
+      "priority": "P0",
+      "name": "AMD RDNA performance guide",
+      "url": "https://gpuopen.com/learn/rdna-performance-guide/",
+      "kind": "GPU vendor documentation",
+      "why": "Wave occupancy, ALU/memory/front-end bottleneck, async scheduling considerations.",
+      "caveat": "Architecture generations and power budgets matter, measure 880M."
+    },
+    {
+      "id": "X071",
+      "group": "GPU performance / safety",
+      "priority": "P1",
+      "name": "Radeon GPU Profiler",
+      "url": "https://gpuopen.com/rgp/",
+      "kind": "AMD GPU profiling",
+      "why": "Pipeline timing, cache stalls, wavefront and barrier diagnostics.",
+      "caveat": "Official Linux support lists Ubuntu 24.04, Arch compatibility not assumed; safety gates apply."
+    },
+    {
+      "id": "X072",
+      "group": "GPU performance / safety",
+      "priority": "P1",
+      "name": "RGP manual",
+      "url": "https://gpuopen.com/manuals/rgp_manual/",
+      "kind": "AMD tool docs",
+      "why": "GPU queue timeline separate from CPU encode/fence timing.",
+      "caveat": "Tool availability and RADV driver configuration must be checked."
+    },
+    {
+      "id": "X073",
+      "group": "GPU performance / safety",
+      "priority": "P1",
+      "name": "AMD concurrent async queues",
+      "url": "https://gpuopen.com/learn/concurrent-execution-asynchronous-queues/",
+      "kind": "GPU vendor article",
+      "why": "Shadows/depth and compute overlap only if actual complementary bottleneck.",
+      "caveat": "Async compute may REGRESS frame time due to cache thrash and barriers."
+    },
+    {
+      "id": "X074",
+      "group": "GPU performance / safety",
+      "priority": "P1",
+      "name": "Vulkan foliage indirect sample",
+      "url": "https://github.com/SaschaWillems/Vulkan/blob/master/examples/indirectdraw/README.md",
+      "kind": "Vulkan sample",
+      "why": "Reduce command overhead of repeated botanical prototypes.",
+      "caveat": "Only compare at same submitted geometry and shadow coverage."
+    },
+    {
+      "id": "X075",
+      "group": "GPU performance / safety",
+      "priority": "P2",
+      "name": "AMD GPU tools index",
+      "url": "https://gpuopen.com/tools/",
+      "kind": "vendor tools index",
+      "why": "Find profiler/visualizer/support, confirm OS/version before use.",
+      "caveat": "Radeon GPU Detective release is Windows-focused, do not prescribe it on Arch."
+    },
+    {
+      "id": "X076",
+      "group": "GPU performance / safety",
+      "priority": "P2",
+      "name": "Horizon performance methodology",
+      "url": "https://playhorizon.dev/docs/performance",
+      "kind": "benchmark guide",
+      "why": "Frame pacing, main-thread competition, streaming vs GPU rendering split.",
+      "caveat": "Cross-game fps not comparable."
+    },
+    {
+      "id": "X077",
+      "group": "Fessa existing code",
+      "priority": "P0",
+      "name": "Fessa baseline handoff audit source",
+      "url": "https://github.com/Mar2ianen/project-thessa/tree/feat/surface-visual-engineering",
+      "kind": "user project branch",
+      "why": "Audit existing ownership and tests before any port.",
+      "caveat": "Observed SHA 566cc6f; require agent to recheck HEAD."
+    },
+    {
+      "id": "X078",
+      "group": "Fessa existing code",
+      "priority": "P0",
+      "name": "Existing FastRT primary receivers specification",
+      "url": "https://github.com/Mar2ianen/project-thessa/blob/feat/surface-visual-engineering/docs/111_FASTRT_PRIMARY_SHADOW_RECEIVERS.md",
+      "kind": "user docs",
+      "why": "Single TLAS, default-off, correct raster fallback, current cost failures.",
+      "caveat": "Does not yet implement confidence or sparse tiles."
+    },
+    {
+      "id": "X079",
+      "group": "Fessa existing code",
+      "priority": "P0",
+      "name": "Existing renderer roadmap",
+      "url": "https://github.com/Mar2ianen/project-thessa/blob/feat/surface-visual-engineering/docs/98_GRAPHICS_PARITY_ROADMAP.md",
+      "kind": "user docs",
+      "why": "Sequence C01/P04/S01 and existing test contracts.",
+      "caveat": "Do not overwrite roadmap evidence with untested design."
+    },
+    {
+      "id": "X080",
+      "group": "Fessa existing code",
+      "priority": "P0",
+      "name": "Existing native scene/nozzle integration",
+      "url": "https://github.com/Mar2ianen/project-thessa/blob/feat/surface-visual-engineering/docs/110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md",
+      "kind": "user docs",
+      "why": "B03 reference scenario, 207M shadow triangle rejection, available 880M captures.",
+      "caveat": "Bounded diagnostic is not full High B03."
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+Fern 02 by Poly Haven — CC0-1.0
+Source: https://polyhaven.com/a/fern_02
+License: https://polyhaven.com/license
+
+The embedded glTF is the existing B02 core-cutout-v1 conversion of the CC0
+fern_02 1k Blender asset. It contains four scanned botanical growth forms,
+base colour with alpha, roughness and tangent-space normal maps. The conversion
+record is fern-02-conversion.json. Original source shader translucency/mix/hue
+nodes are not reproduced; native leaf transmission is an authored parameter.
+Native procedural crown placement/warping is a presentation derivative, not
+an identified fossil species or a botanical growth simulation.
+No reference photograph or generated target image is projected onto the scene.

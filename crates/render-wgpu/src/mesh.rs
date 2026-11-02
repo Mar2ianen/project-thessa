@@ -10,15 +10,26 @@ use thessa_rcbt_core::lighting::SurfaceLighting;
 use thessa_render_core::mesh::{AlphaMode, MeshAsset, MeshInstance, Wrap};
 use wgpu::util::DeviceExt;
 
-fn primary_shader(mode: AlphaMode, motion_invalid: bool) -> String {
-    let mut source = include_str!("mesh.wgsl").to_owned();
+fn primary_shader(mode: AlphaMode, motion_invalid: bool, coverage_msaa: bool) -> String {
+    let mut source = format!(
+        "{}\n{}",
+        include_str!("mesh_material.wgsl"),
+        include_str!("mesh.wgsl")
+    );
     if mode == AlphaMode::Mask {
         // All implicit texture/normal derivatives precede coverage rejection.
-        // Shadow and ray-query coverage are separate unsupported capabilities.
+        // Ray-query coverage is a separate unsupported capability.
         source = source.replace(
             "// MESH_CUTOUT_COVERAGE",
             "let mask_dx=dpdx(normal);let mask_dy=dpdy(normal);\nif(base_sample.a*material.color.a<material.optical.z){discard;}",
         ).replace("dpdx(normal),dpdy(normal)", "mask_dx,mask_dy");
+    }
+    if mode == AlphaMode::Mask && coverage_msaa {
+        // Standard binary foliage masks retain area-filtered coverage on MSAA
+        // samples. Nonstandard cutoffs/factors preserve their hard-mask contract.
+        source=source.replace("if(base_sample.a*material.color.a<material.optical.z){discard;}",
+            "if(!(material.optical.z==0.5 && material.color.a==1.0) && base_sample.a*material.color.a<material.optical.z){discard;}\nif(material.optical.z==0.5 && material.color.a==1.0 && base_sample.a<=0.0){discard;}");
+        source=source.replace("radiance*view.exposure,1.0)","radiance*view.exposure,select(1.0,alpha,material.optical.z==0.5 && material.color.a==1.0))");
     }
     if mode == AlphaMode::Blend {
         source = source.replace(
@@ -153,6 +164,7 @@ pub struct MeshRenderer {
     pipeline: wgpu::RenderPipeline,
     single_sided_pipeline: Option<wgpu::RenderPipeline>,
     masked_pipeline: Option<wgpu::RenderPipeline>,
+    masked_shadow_pipeline: Option<wgpu::RenderPipeline>,
     masked_single_sided_pipeline: Option<wgpu::RenderPipeline>,
     blended_pipeline: Option<wgpu::RenderPipeline>,
     blended_single_sided_pipeline: Option<wgpu::RenderPipeline>,
@@ -321,7 +333,10 @@ impl MeshRenderer {
         )
     }
 
-    pub(crate) fn primary_shadow(&self, camera: [f64; 3]) -> Option<&wgpu::BindGroup> {
+    pub(crate) fn primary_shadow(
+        &self,
+        camera: [f64; 3],
+    ) -> Option<(&wgpu::BindGroup, Option<&crate::ray_scene::PrimarySchema>)> {
         self.rt.as_ref()?.primary_shadow(camera)
     }
 
@@ -640,9 +655,9 @@ impl MeshRenderer {
             .materials
             .iter()
             .any(|m| m.alpha_mode == AlphaMode::Mask);
-        if (has_cutouts || has_blends) && shadows.is_some() {
+        if has_blends && shadows.is_some() {
             return Err(fail(
-                "MASK shadow/BLEND shadow coverage is unsupported; use an explicit shadows-off baseline",
+                "BLEND shadow coverage is unsupported; use an explicit shadows-off baseline",
             ));
         }
         // Feasibility (device feature, scene sizes, RT memory budget) is
@@ -702,6 +717,9 @@ impl MeshRenderer {
             crate::ray_scene::Enable::Ready(plan) => crate::ray_scene::shader(plan),
             _ => crate::ray_scene::fallback_shader(),
         };
+        let coverage_msaa = ray_tracing.is_some_and(|s| {
+            s.raster_msaa_samples > 1 && !s.temporal_taa && !s.temporal_motion_vectors
+        });
         let make_module = |mode| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(match mode {
@@ -724,7 +742,8 @@ impl MeshRenderer {
                         primary_shader(
                             mode,
                             !static_geometry
-                                && ray_tracing.is_some_and(|s| s.temporal_motion_vectors)
+                                && ray_tracing.is_some_and(|s| s.temporal_motion_vectors),
+                            coverage_msaa
                         )
                     )
                     .into(),
@@ -806,6 +825,7 @@ impl MeshRenderer {
                 }),
                 multisample: wgpu::MultisampleState {
                     count: ray_tracing.map_or(1, |settings| settings.raster_msaa_samples),
+                    alpha_to_coverage_enabled: mode == AlphaMode::Mask && coverage_msaa,
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -1139,6 +1159,9 @@ impl MeshRenderer {
             pipeline,
             single_sided_pipeline,
             masked_pipeline,
+            masked_shadow_pipeline: shadows
+                .filter(|_| has_cutouts)
+                .map(|atlas| atlas.masked_mesh_pipeline(device)),
             masked_single_sided_pipeline,
             blended_pipeline,
             blended_single_sided_pipeline,
@@ -1661,6 +1684,11 @@ impl MeshRenderer {
             let Some(p) = self.primitives.get(lod.primitive) else {
                 return Err(fail("shadow LOD primitive out of range"));
             };
+            if p.masked {
+                return Err(fail(
+                    "position-only shadow LOD cannot preserve MASK coverage",
+                ));
+            }
             if !seen.insert((lod.primitive, lod.indices.len()))
                 || !lod.max_error_m.is_finite()
                 || lod.max_error_m < 0.0
@@ -1860,11 +1888,17 @@ impl MeshRenderer {
                             .flat_map(u32::to_le_bytes),
                     );
                 } else {
-                    pass.set_pipeline(if lod > 0 {
+                    pass.set_pipeline(if p.masked {
+                        self.masked_shadow_pipeline.as_ref().unwrap()
+                    } else if lod > 0 {
                         atlas.mesh_lod_pipeline.as_ref().unwrap()
                     } else {
                         &atlas.mesh_pipeline
                     });
+                    if p.masked {
+                        pass.set_bind_group(2, &self.materials[p.material], &[]);
+                        pass.set_vertex_buffer(1, p.attributes.as_ref().unwrap().slice(..));
+                    }
                     pass.set_vertex_buffer(0, vertices.slice(..));
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..count, 0, start..end);
@@ -1947,11 +1981,17 @@ impl MeshRenderer {
                 } else {
                     (&p.vertices, &p.indices)
                 };
-                pass.set_pipeline(if *lod > 0 {
+                pass.set_pipeline(if p.masked {
+                    self.masked_shadow_pipeline.as_ref().unwrap()
+                } else if *lod > 0 {
                     atlas.mesh_lod_pipeline.as_ref().unwrap()
                 } else {
                     &atlas.mesh_pipeline
                 });
+                if p.masked {
+                    pass.set_bind_group(2, &self.materials[p.material], &[]);
+                    pass.set_vertex_buffer(1, p.attributes.as_ref().unwrap().slice(..));
+                }
                 pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.multi_draw_indexed_indirect(

@@ -1,5 +1,10 @@
 # 94 — Explicit mesh cutout coverage
 
+Current native continuation: [doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md)
+adds pinned CC0 laminae, MASK raster shadows/rays, MSAA coverage and corrected
+backface mapping. The older evidence below retains its dated scope. BLEND ray/
+shadow transmission and full coastal quality/cost acceptance remain open.
+
 Status: opaque/MASK raster materials implemented; alpha blending and emission are the next milestone.
 
 The neutral `Material` now records glTF `AlphaMode` and a finite nonnegative

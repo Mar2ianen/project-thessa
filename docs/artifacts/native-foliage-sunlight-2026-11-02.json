@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "base": "631d6f199788fe2d00b2f69af49736684a45c7f0",
+  "status": "implemented foliage/solar/MASK coverage; full reference quality and cost incomplete",
+  "raw_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02",
+  "primary_rt_default": false,
+  "taa_default": false,
+  "visual_parity_accepted": false,
+  "blind_review": "not performed",
+  "performance_speedup_claimed": false,
+  "shared_owner": "existing RayScene and environment/atmosphere, no duplicate AS",
+  "tests": [
+    {
+      "name": "verified-thessa_render_wgpu",
+      "passed": 43,
+      "failed": 0,
+      "ignored": 25,
+      "log_sha256": "754ddd6637f7cf00904940183e0fa6d1e17dad5d06faa4e35692a37f0180d3c2",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-thessa_render_wgpu-command.json",
+      "command_sha256": "585106acf587eb02315022bb76b5a65a80216d985cffc783e5b4957a89ae7f65",
+      "binary_sha256": "0ae92f0b2983814b1f75260abcb7fb6abc064ed820b6ecf46f36b95934b8cc2f"
+    },
+    {
+      "name": "verified-thessa_render_wgpu-solar",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "9f263509a4501b6b23e5d54442d7103dd9d1e8efb654cab577b008a1871955c4",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-thessa_render_wgpu-solar-command.json",
+      "command_sha256": "3e493cb22a92fbb92e4d8e53665d85be22f7b50c3aa9bdc1d06a943063a2f7da",
+      "binary_sha256": "0ae92f0b2983814b1f75260abcb7fb6abc064ed820b6ecf46f36b95934b8cc2f"
+    },
+    {
+      "name": "verified-ray_scene",
+      "passed": 30,
+      "failed": 0,
+      "ignored": 4,
+      "log_sha256": "749bbc393a1ffe7ba849b1eb992524ec0c82b21491ff54221f0c542da5f46374",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-ray_scene-command.json",
+      "command_sha256": "cc391bb848c6eb7ded1ffc1f5cd770f8487517015f875f2003d31abd08d6fe35",
+      "binary_sha256": "b929b587d7612a44a14564430a5b5bb4ad1783b3963bc9163f008d233bde9020"
+    },
+    {
+      "name": "verified-primary_shadows",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "58e6685f1f3493b2c41af3dba31732c0cac804af0eb275efaef1d6729f4e7d87",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-primary_shadows-command.json",
+      "command_sha256": "0497d880bbb3884be5113fe602e3d278a58ac9ae0773de7ea2373abddac52a59",
+      "binary_sha256": "c1249ab38ca8418d0bda50e87afda94e06bf2bd47537f779185e82204a0140b6"
+    },
+    {
+      "name": "verified-mesh_cutouts",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "a7ef9c47295b17445da6072e6432eca88d190e604b17012895ad219423ae7267",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-mesh_cutouts-command.json",
+      "command_sha256": "22a986dcfc3a5389fe1f4db80b0f4d7e99aa9c1d3ca44d01b6458a9392f47582",
+      "binary_sha256": "70ca71e76051f5bc44c5715493427df412b46452b09f7e49a14d554460747111"
+    },
+    {
+      "name": "verified-sky",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1,
+      "log_sha256": "906f19be0ddb091fc8d1b039c8a99e51c45fa68026e03e281246c41c9fe31470",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-sky-command.json",
+      "command_sha256": "a0afd46f3b192536ca56784031c75e923ea3a9601ec654cf83bda74b0ef5a8f1",
+      "binary_sha256": "6ce453c6a05017874976fb8ef704430ebfe8579f2cacea5a52be14451537ec1f"
+    },
+    {
+      "name": "verified-surface_lighting",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "log_sha256": "bf46552effebeb7c47931abec481292e7d6491b0da89834814e012475fc61dab",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/verified-surface_lighting-command.json",
+      "command_sha256": "a73c2de5a43efa403eee4da85932686aba46b409089b4597e406c302f1748679",
+      "binary_sha256": "996537feb89da0fc08a6e95ec791aea821e1c9edb83fa89263175dc5ea4c6918"
+    },
+    {
+      "name": "software-verified-thessa_render_wgpu-solar",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "02411bd686806cf4afc447d76d26bf9b631097bbdd663a3afff682c240d7e981",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/software-verified-thessa_render_wgpu-solar-command.json",
+      "command_sha256": "996862a55010ef022ea380d6a61a8cb407ac290f267c94803b3646bb335981d6",
+      "binary_sha256": "0ae92f0b2983814b1f75260abcb7fb6abc064ed820b6ecf46f36b95934b8cc2f"
+    },
+    {
+      "name": "software-verified-mesh_cutouts",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "bd15900b9bb0c5dc38ec97a99d35276c882e4655b4bd8c701de901572e249335",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/software-verified-mesh_cutouts-command.json",
+      "command_sha256": "09cfdfcc597d492329bfad648200a7aee129caa03feb2f2f8595a3eb6abbc6c7",
+      "binary_sha256": "70ca71e76051f5bc44c5715493427df412b46452b09f7e49a14d554460747111"
+    }
+  ],
+  "cpu_checks": {
+    "atmosphere": 63,
+    "rcbt_core": 75,
+    "native_plants": 21,
+    "native_scaffold": 1,
+    "source_disc_table": 1,
+    "sky_transport_error_per_unit_E_max": 5.5240742802283197e-05,
+    "architecture": "44 packages /20 guarded foundations",
+    "python": 52,
+    "strict_clippy": "atmosphere/render-wgpu/terrain-native/worldgen-rocky all targets passed",
+    "client": "cargo check --tests passed"
+  },
+  "captures": [
+    {
+      "id": "native-foliage-v5-4deg",
+      "role": "appearance diagnostic; visual parity rejected",
+      "extent": [
+        1280,
+        720
+      ],
+      "frames": 3,
+      "trace_fenced_wall_median_ms": 573.046,
+      "not_gpu_timestamp": true,
+      "not_game_fps": true,
+      "not_equal_work_ab": true,
+      "resident_height_pages": 739,
+      "drawn_cbt_triangles": 6234,
+      "primary_rt_active": false,
+      "candidate_mesh_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "accepted_plants": 11320,
+      "near_understory": 9254,
+      "files": {
+        ".png": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-4deg.png",
+          "sha256": "8159e1198af258023547fbdb084e4398f30720b6ea85a60036eb60bb37d78d4e"
+        },
+        ".rgba16f": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-4deg.rgba16f",
+          "sha256": "4f716d87f89d8b741f82f7969a5780675f0914d5cd093b1342f381665bf497e8"
+        },
+        ".log": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-4deg.log",
+          "sha256": "a60dd4b842d256716cdfad36882e7d753babe9adadf9562eab507f839e29f49a"
+        },
+        "-command.json": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-4deg-command.json",
+          "sha256": "9b198ac09e7142c0101aacf9cfd017dc64f1c70e0ed99eeb88726a8792c3fa7e"
+        },
+        "-trace.toml": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-4deg-trace.toml",
+          "sha256": "2e5620ab0de92e6ddab1a18c6654d4b24e3eaccc8b14eca77dc1c85f04fec4a4"
+        }
+      }
+    },
+    {
+      "id": "native-foliage-v5-8deg",
+      "role": "appearance diagnostic; visual parity rejected",
+      "extent": [
+        1280,
+        720
+      ],
+      "frames": 3,
+      "trace_fenced_wall_median_ms": 563.268,
+      "not_gpu_timestamp": true,
+      "not_game_fps": true,
+      "not_equal_work_ab": true,
+      "resident_height_pages": 704,
+      "drawn_cbt_triangles": 6062,
+      "primary_rt_active": false,
+      "candidate_mesh_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "accepted_plants": 11320,
+      "near_understory": 9254,
+      "files": {
+        ".png": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-8deg.png",
+          "sha256": "b7a3266a864b45e5f6f9d9b730611122bc40c73716489b1deec2368458ed01e5"
+        },
+        ".rgba16f": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-8deg.rgba16f",
+          "sha256": "ac740e53ef64acb4984f2e1be14c9acc62e03645d2fedf1b71cbd20fd946a6ec"
+        },
+        ".log": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-8deg.log",
+          "sha256": "77c7d625766a80ca627b7786e0ad4cae4c5fcd7cac0dbb6a86b62fc03dc50901"
+        },
+        "-command.json": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-8deg-command.json",
+          "sha256": "b6a70104f201b895dd1b0ebdbabc72629593ade1a4c458dcc25c3090bac6cb99"
+        },
+        "-trace.toml": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-8deg-trace.toml",
+          "sha256": "fc28c4d9ab7f2496194d6ded80f4b3bb35da1c4d40fac0a9e8a504e47ca0db8c"
+        }
+      }
+    },
+    {
+      "id": "native-foliage-v5-12deg",
+      "role": "appearance diagnostic; visual parity rejected",
+      "extent": [
+        1280,
+        720
+      ],
+      "frames": 3,
+      "trace_fenced_wall_median_ms": 561.133,
+      "not_gpu_timestamp": true,
+      "not_game_fps": true,
+      "not_equal_work_ab": true,
+      "resident_height_pages": 712,
+      "drawn_cbt_triangles": 5978,
+      "primary_rt_active": false,
+      "candidate_mesh_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "accepted_plants": 11320,
+      "near_understory": 9254,
+      "files": {
+        ".png": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-12deg.png",
+          "sha256": "ae0bce870fe5b638155d75544fc726e9ef93cf5ae618b67b20d7e90d9672d99f"
+        },
+        ".rgba16f": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-12deg.rgba16f",
+          "sha256": "92afbf4e930e1c6d97b3ed8fe751224fc23b19050d6505b8052ec5c68e4fc245"
+        },
+        ".log": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-12deg.log",
+          "sha256": "05f3ea041c02ab9bf9efb9537f2ec25616793d1e66c33362765e6320801390d1"
+        },
+        "-command.json": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-12deg-command.json",
+          "sha256": "b0d783bb708b0ad3e43e0a2744b18b5b20d85512bac01f5e0b6e41216a44730a"
+        },
+        "-trace.toml": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-12deg-trace.toml",
+          "sha256": "42c235d3d56d3492c126e79f7403d345d77a3f16964f57b6bfd9c54a4c91e154"
+        }
+      }
+    },
+    {
+      "id": "native-masked-rt-v5",
+      "role": "appearance diagnostic; visual parity rejected",
+      "extent": [
+        640,
+        360
+      ],
+      "frames": 3,
+      "trace_fenced_wall_median_ms": 314.075,
+      "not_gpu_timestamp": true,
+      "not_game_fps": true,
+      "not_equal_work_ab": true,
+      "resident_height_pages": 772,
+      "drawn_cbt_triangles": 7050,
+      "primary_rt_active": false,
+      "candidate_mesh_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "accepted_plants": 11320,
+      "near_understory": 9254,
+      "files": {
+        ".png": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v5.png",
+          "sha256": "844c1e6e6e68d7cfc79120a6301d640fbdb6b7774f60da3d9e88bc615c11b110"
+        },
+        ".rgba16f": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v5.rgba16f",
+          "sha256": "1474d277a9a84ef7dd4c604142bb0e399291d9b92b5e23fdf3990d96d2ae5750"
+        },
+        ".log": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v5.log",
+          "sha256": "ef9dfd4f448493788f7462da26a92f3d95e1e654f4c7254fb726321eda9e834b"
+        },
+        "-command.json": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v5-command.json",
+          "sha256": "b2a8cf9c4759cb7a2747f01d746aefd8f39f51000c9cb31a9848889cb4507d30"
+        },
+        "-trace.toml": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v5-trace.toml",
+          "sha256": "3f3702aa455c6d4db41f7acc1a0004587d6927b6ff229ccb2b8d1b0fee85a8de"
+        }
+      },
+      "rt_status": "rejected by negotiated material-binding limits; not evidence of active rays"
+    },
+    {
+      "id": "native-masked-rt-v6",
+      "role": "appearance diagnostic; visual parity rejected",
+      "extent": [
+        640,
+        360
+      ],
+      "frames": 3,
+      "trace_fenced_wall_median_ms": 635.26,
+      "not_gpu_timestamp": true,
+      "not_game_fps": true,
+      "not_equal_work_ab": true,
+      "resident_height_pages": 763,
+      "drawn_cbt_triangles": 7342,
+      "primary_rt_active": true,
+      "candidate_mesh_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "accepted_plants": 11320,
+      "near_understory": 9254,
+      "files": {
+        ".png": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6.png",
+          "sha256": "cfb4ab1adef132ed2df1b39752aeac59d207d18378d672cdabef6852470c21e7"
+        },
+        ".rgba16f": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6.rgba16f",
+          "sha256": "f583aed5a78f4ec2c131c2dc86af64b76db436951bdce4913cd3d07a02b5a3b9"
+        },
+        ".log": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6.log",
+          "sha256": "27e04ce8a4bbc8d6080d6048bab2d272a669d00a83cd47c745ff495238648a11"
+        },
+        "-command.json": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6-command.json",
+          "sha256": "8b382d18749cb1984df193203c8540fd256ab354c333820538bd6a6e3904c65e"
+        },
+        "-trace.toml": {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6-trace.toml",
+          "sha256": "28fffb1a69793e598833825001446573196480f7d9baef428870e2d91b1eb288"
+        }
+      },
+      "rt_status": "active opaque/MASK + resident terrain, shared primary correction",
+      "tlas_instances": 19464,
+      "rt_triangles": 179236,
+      "rt_planning_bytes": 25874720
+    }
+  ],
+  "source_identity_records": [
+    "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-foliage-v5-identities.json",
+    "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/sunset-reference-2026-11-02/native-masked-rt-v6-identities.json"
+  ],
+  "source_note": "frozen source snapshots pin executed code; final subsequent edits add evidence/docs and correct the native opaque/MASK telemetry label only; standalone diagnostic profile added with identical parsed settings",
+  "raw_rejected_attempts_preserved": true,
+  "open": [
+    "native multiple scattering",
+    "water presence separate from roughness",
+    "material/direct/ambient/transport debug views",
+    "frozen-residency quality-locked GPU timestamp ABBA",
+    "static caster depth cache",
+    "AMD receiver/classifier/queue/denoiser",
+    "SSR and BLEND ray/refraction transport",
+    "composition/medium vegetation/close soil and independent moving/blind acceptance",
+    "canonical Cycles export still uses unattenuated directional input; not a matched new sunlight oracle"
+  ],
+  "reproduction_profile": "data/graphics/b03-sunset-diagnostic.toml",
+  "reproduction_profile_semantics": "full High botanical population, explicit cheaper 100m/1024/one-cascade shadow tier, RT Off"
+}

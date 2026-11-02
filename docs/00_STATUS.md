@@ -39,6 +39,11 @@ native isotropic higher-order atmosphere in the existing field, with numerical
 and frozen-geometry native Off/On/Off controls. FHD/QHD captures and preserved
 Cycles/art comparisons confirm that the artificial horizon and ground/sky/
 composition gaps remain; there is no accepted coastal speedup or visual parity.
+[Doc 115](115_TERRAIN_DIAGNOSTICS_AND_HEIGHT_ANCESTRY.md) adds native terrain
+water/height/distance/material/geometry diagnostics. The current sampled soil
+has zero water weight; the horizon band is conforming terrain with changing
+height-data coverage. A parent-chain candidate was rejected after the old policy
+also recovered with longer prestream; no unproven residency fix is shipped.
 
 ## Current native integration checkpoint
 

@@ -261,6 +261,8 @@ impl ResolvedTerrainTopology {
 /// Quality controls budgets (steps, LUT sizes), never physics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGraphicsSettings {
+    #[serde(default)]
+    pub terrain_debug_view: crate::settings::TerrainDebugView,
     /// Prepared survey-only plant policy. False must skip sampler, jobs and
     /// mesh work; resolving these values does not allocate instance resources.
     #[serde(default)]
@@ -935,6 +937,7 @@ impl ResolvedGraphicsSettings {
                 Quality::Medium => 64,
                 Quality::High => 128,
             },
+            terrain_debug_view: requested.debug.terrain_view,
             preset_label: requested.effective_preset_label().to_string(),
             rt_primary_shadows: requested.raytracing.primary_shadows
                 && requested.shadows.enabled
@@ -2616,5 +2619,41 @@ mod ground_pebble_tests {
         let fallback =
             ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
         assert_eq!(fallback.terrain_ground_relief_max_level, 22);
+    }
+}
+
+#[cfg(test)]
+mod terrain_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn terrain_debug_is_explicit_defaults_off_and_survives_resolution() {
+        use crate::TerrainDebugView as V;
+        assert_eq!(
+            ResolvedGraphicsSettings::default().terrain_debug_view,
+            V::None
+        );
+        for (name, mode, code) in [
+            ("none", V::None, 0),
+            ("water_weight", V::WaterWeight, 1),
+            ("height", V::Height, 2),
+            ("distance", V::Distance, 3),
+            ("normal", V::Normal, 4),
+            ("albedo", V::Albedo, 5),
+            ("roughness", V::Roughness, 6),
+            ("land_only", V::LandOnly, 7),
+            ("geometry", V::Geometry, 8),
+            ("height_page_level", V::HeightPageLevel, 9),
+        ] {
+            let requested =
+                RequestedGraphics::from_toml(&format!("[debug]\nterrain_view = \"{name}\"\n"))
+                    .unwrap();
+            assert_eq!(mode as u32, code);
+            assert_eq!(
+                ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown())
+                    .terrain_debug_view,
+                mode
+            );
+        }
+        assert!(RequestedGraphics::from_toml("[debug]\nterrain_view = \"water_guess\"\n").is_err());
     }
 }

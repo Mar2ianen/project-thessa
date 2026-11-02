@@ -26,6 +26,6 @@ pub use settings::{
     ConfigError, DebugSettings, EnginePlumeSettings, GasGiantSettings, InstrumentLayout,
     InstrumentSettings, MaterialStorageRequest, NavballRenderer, OceanSettings, Preset, Quality,
     RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
-    ShadowSettings, SurfacePlantsSettings, TerrainRenderRequest, TerrainTopologySettings,
-    ToneMapping, UpperAtmosphereSettings,
+    ShadowSettings, SurfacePlantsSettings, TerrainDebugView, TerrainRenderRequest,
+    TerrainTopologySettings, ToneMapping, UpperAtmosphereSettings,
 };

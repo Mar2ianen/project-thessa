@@ -163,3 +163,10 @@ and full multiple-scattering model accuracy remain open. FHD/QHD improve
 readability, but current captures still fail horizon/ground/composition parity.
 Generated artwork is valid visual direction; old unmatched Cycles renders and
 projected golden art studies cannot establish numeric or geometry parity.
+
+[Terrain diagnostic continuation](115_TERRAIN_DIAGNOSTICS_AND_HEIGHT_ANCESTRY.md)
+adds explicit native primary water/height/distance/material/geometry-kind/source-level
+views. Actual FHD controls distinguish a flawed near-datum water predicate from
+the current sampled dry ground and identify transient coarse height coverage
+at the horizon. The ancestry experiment is retained as rejected evidence;
+full frozen capture, transport decomposition and reference acceptance remain open.

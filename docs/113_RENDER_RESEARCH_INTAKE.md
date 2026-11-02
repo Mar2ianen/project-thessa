@@ -36,9 +36,9 @@ included or copied.
 
 | Research package | Current code/evidence | Remaining acceptance |
 | --- | --- | --- |
-| P0 / reproducible baseline and masks | Source/binary/profile hashes, exact commands, raw PNG/HDR, scene exports and per-stage trace records exist; new full-population frame identities are in doc 112 | Frozen residency/topology and matched GPU timestamp ABBA; separate material/direct/ambient/depth/transport diagnostic views still missing |
+| P0 / reproducible baseline and masks | Source/binary/profile hashes, exact commands, raw PNG/HDR, scene exports and per-stage trace records exist; new full-population frame identities are in doc 112 | Native primary terrain water/height/distance/normal/albedo/roughness/geometry-kind/source-level views now implemented (doc 115); frozen whole-scene topology/residency, matched GPU ABBA and exact light/transport component decomposition remain open |
 | P1 / coherent sunlight | One neutral optical LUT now serves sky, source discs, primary land/water, mesh/RT shading and primary/reflected cloud sources; CPU/GPU altitude/tangent/publication controls pass | Optional isotropic atmospheric higher orders now implemented and numerically/native validated ([doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md)); full vacuum/noon/grazing/post-sunset HDR scene matrix, general finite aerial transport and cloud/ground bounce remain open |
-| P2 / horizon and atmosphere | Removed use of skirt sentinel as physical solar altitude; actual newer horizon wall disappears | Cause is not isolated because height residency changed; explicit terrain/sea/sky/cloud/depth masks and fixed-input segment diagnosis remain necessary |
+| P2 / horizon and atmosphere | Removed use of skirt sentinel as physical solar altitude; actual newer horizon wall disappears | Doc 115 isolates a conforming terrain silhouette with transient L17/L7 data, and rejects an unproven parent-chain fix after the old policy also recovers with longer prestream. Controlled arrivals/source error and broader masks remain necessary |
 | P3 / soil and water | Existing basin solver, scanned substrate and water IOR/Fresnel retained; no replacement hydrology or roughness tuning added | Test smooth dry land, wet soil and true water independently; separate water presence from roughness/near-datum inference; then depth-aware water optics and confidence-checked SSR |
 | P4 / static shadows and sparse RT | MASK raster and candidate-ray coverage, conservative admission, material/UV/mip controls and actual full-population RT publication implemented; bounded capability negotiation removes artificial descriptor rejection | Static mesh depth cache with exact dynamic depth composition/invalidation, current-frame receivers, 8×4 queue, finite-source sampling and denoising; no classifier/cache speedup claimed |
 | P5 / botanical structure | Before receiving the research, the native adapter replaced unresolved needles with pinned CC0 scanned fronds attached to existing woody sockets; exact retained-wood and MASK controls exist | This is a declared content/representation change, not an equal-work renderer benchmark. Projected-area/motion/gallery and independent visual acceptance still required; future ecology changes stay separate |
@@ -74,10 +74,12 @@ tile classifier. Regression evidence is linked in doc 112.
 
 Follow the research's sequence rather than beginning every new subsystem:
 
-1. Finish explicit diagnostic views and equal-work capture control. Keep solar
+1. Extend doc 115's native terrain views with exact light/transport decomposition
+   and frozen whole-scene capture control. Keep solar
    units/epochs, density, EV, source identities and material/geometry errors
    fixed in comparisons. The 4°/8°/12° captures in doc 112 are not such an A/B.
-2. Diagnose water/soil classification using true material masks. Preserve basin
+2. Doc 115 reproduces the predicate defect but finds zero water weight on current
+   sampled soil. Diagnose true material presence before changing the contract. Preserve basin
    geometry and the canonical world source. A low roughness value is not proof
    of water. Implement the material contract only after a failing control.
 3. Separate static caster depth from changing CBT geometry using existing
@@ -100,3 +102,8 @@ The atmosphere follow-up (doc 114) independently implements Hillaire's
 isotropic closure after inspecting the author's publication/source.
 The original four-cascade full-High workload has not been executed here; all
 physical runs use isolated Vulkan and unchanged per-stage trace admission.
+
+[Doc 115](115_TERRAIN_DIAGNOSTICS_AND_HEIGHT_ANCESTRY.md) records the follow-up
+user audit, executed native terrain masks and rejected ancestry experiment.
+The current sampled soil has zero legacy water weight; the defect in that
+material contract remains distinct from the observed transient horizon.

@@ -760,6 +760,7 @@ impl TerrainRenderer {
             "return vec4(radiance * view.exposure, 1.0);".into()
         };
         let raster_source = shaders::CBT_RASTER_WGSL
+            .replace("const TERRAIN_DEBUG_VIEW: u32 = 0u;", &format!("const TERRAIN_DEBUG_VIEW: u32 = {}u;", settings.map_or(0, |s| s.terrain_debug_view as u32)))
             .replace("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;",&format!("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = {};",settings.is_some_and(|s|s.surface_quality!=thessa_graphics::Quality::Low)))
             .replace(
                 "const GROUND_RELIEF_GEOMETRY: bool = false;",

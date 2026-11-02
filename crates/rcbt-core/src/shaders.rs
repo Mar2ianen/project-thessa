@@ -371,6 +371,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/material_sample.wgsl"),
     include_str!("shaders/material_normal.wgsl"),
     r#"
+const TERRAIN_DEBUG_VIEW: u32 = 0u;
 const MATERIAL_MAX_LEVEL: f32 = 17.0;
 const GROUND_RELIEF_GEOMETRY: bool = false;
 const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;
@@ -432,6 +433,7 @@ struct VertexOutput {
     @location(6) material_chart: vec3<f32>,
     @location(7) @interpolate(flat) material_anchor: vec2<f32>,
     @location(8) @interpolate(flat) material_face: u32,
+    @location(9) @interpolate(flat) terrain_debug_data: vec2<u32>,
 };
 
 @group(0) @binding(6) var albedo_texture: texture_2d<f32>;
@@ -494,6 +496,8 @@ fn vertex(
         output.body_direction = material_direction(vec2<f32>(address.xy)/536870912.0,u32(normal.w));
         output.render_position = position.xyz;
         output.height_m = position.w;
+        // First-vertex height-page level, not bisector topology depth.
+        output.terrain_debug_data = vec2(select(3u,4u,address.z==0xffffffffu), address.w);
         output.material_slot = 0xffffffffu;
         let first = source_index - source_index % 3u;
         let a0 = bitcast<vec4<u32>>(generated_vertices[first * 3u + 2u]);
@@ -561,6 +565,8 @@ fn cbt_vertex(vertex_index: u32) -> VertexOutput {
     output.body_direction = body_direction;
     output.render_position = render_position.xyz;
     output.height_m = select(normal.w, 1e9, skirt);
+    let skirt_primitive = ((triangle.y | triangle.z | triangle.w) & 0x80000000u) != 0u;
+    output.terrain_debug_data = vec2(select(2u, 1u, skirt_primitive), (max(leaves[ordinal].z, 3u) - 3u) / 2u);
     let material = material_slots[ordinal];
     let tile_uv = vec2(f32(local % 33u), f32(local / 33u)) / 32.0;
     let chart = material_address(frame.geometry.raw_center.xyz);
@@ -647,8 +653,26 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             * (1.0 - detail_weight);
     }
     // Classify before material-normal perturbation: water owns its wave normal.
-    let water_material = (1.0 - smoothstep(0.22, 0.65, roughness))
+    var water_material = (1.0 - smoothstep(0.22, 0.65, roughness))
         * (1.0 - smoothstep(0.25, 1.0, input.height_m));
+    // Diagnostic outputs are unexposed linear values, before light/haze.
+    if (TERRAIN_DEBUG_VIEW == 1u) { return vec4(vec3(water_material), 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 2u) {
+        if (input.terrain_debug_data.x == 1u) { return vec4(1.0,0.0,1.0,1.0); }
+        return vec4(vec3(0.5 + input.height_m / 512.0), 1.0);
+    }
+    if (TERRAIN_DEBUG_VIEW == 3u) { return vec4(vec3(length(view.world_position-input.render_position) / 1024.0), 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 5u) { return vec4(albedo, 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 6u) { return vec4(vec3(roughness), 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 7u) { water_material = 0.0; }
+    if (TERRAIN_DEBUG_VIEW == 8u) {
+        var kind=vec3(0.0,0.0,1.0);
+        if(input.terrain_debug_data.x==1u){kind=vec3(1.0,0.0,0.0);}
+        if(input.terrain_debug_data.x==3u){kind=vec3(0.0,1.0,0.0);}
+        if(input.terrain_debug_data.x==4u){kind=vec3(1.0,0.5,0.0);}
+        return vec4(kind,1.0);
+    }
+    if (TERRAIN_DEBUG_VIEW == 9u) { return vec4(vec3(f32(input.terrain_debug_data.y)/24.0),1.0); }
     // Premultiplied surface gradients: uncovered weight is flat. Preserve
     // coverage and the same globe transition as albedo rather than magnifying
     // a tiny resident normal contribution to full strength.
@@ -664,6 +688,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if(MATERIAL_SPECULAR_FILTER_ENABLED && cbt_specular_enabled()) {
         roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);
     }
+    if (TERRAIN_DEBUG_VIEW == 4u) { return vec4(shaded_normal * 0.5 + 0.5, 1.0); }
     var direct = vec3(0.0);
     var visibility: array<f32,3>;
     var sunlight: array<vec3<f32>,3>;
@@ -750,7 +775,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
     let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m,visibility,sunlight);
-    radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a);
+    if (TERRAIN_DEBUG_VIEW != 7u) { radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a); }
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no
     // day-side masking is needed.

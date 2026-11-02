@@ -33,7 +33,26 @@ fn scene_with_haze(
     conforming: bool,
     haze: bool,
 ) -> TerrainRenderer {
-    let page = HeightPage::bake(&[10.0; 4], 2, 0.001).unwrap();
+    scene_with_diagnostic(
+        backend,
+        quality,
+        reflections,
+        conforming,
+        haze,
+        thessa_graphics::TerrainDebugView::None,
+        10.0,
+    )
+}
+fn scene_with_diagnostic(
+    backend: &Backend,
+    quality: Quality,
+    reflections: bool,
+    conforming: bool,
+    haze: bool,
+    diagnostic: thessa_graphics::TerrainDebugView,
+    height: f64,
+) -> TerrainRenderer {
+    let page = HeightPage::bake(&[height; 4], 2, 0.001).unwrap();
     let patches = (0..6)
         .map(|face| TerrainPatch {
             anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), 1000.0).unwrap(),
@@ -41,6 +60,7 @@ fn scene_with_haze(
         })
         .collect::<Vec<_>>();
     let mut settings = ResolvedGraphicsSettings {
+        terrain_debug_view: diagnostic,
         surface_quality: quality,
         local_haze_extinction_per_m: if haze { 0.002 } else { 0.0 },
         specular_reflections: reflections,
@@ -789,5 +809,103 @@ fn primary_local_haze_is_shared_and_releases_without_material_uploads() {
             binding.update_local_haze(&backend, None).unwrap();
             assert_eq!(center(&draw(&backend, &mut terrain, [65, 65])), clear);
         }
+    }
+}
+
+#[test]
+#[ignore = "GPU: native terrain classification diagnostic, regular/conforming"]
+fn diagnostic_water_weight_exposes_wet_soil_false_positive_without_lighting() {
+    let backend = Backend::bring_up().unwrap();
+    for conforming in [false, true] {
+        for height in [-1.0, 0.0, 2.0] {
+            let mut terrain = scene_with_diagnostic(
+                &backend,
+                Quality::Low,
+                false,
+                conforming,
+                false,
+                thessa_graphics::TerrainDebugView::WaterWeight,
+                height,
+            );
+            for roughness in [56u8, 115, 204] {
+                material(&backend, &mut terrain, roughness, 1 + u64::from(roughness));
+                let image = draw_from(
+                    &backend,
+                    &mut terrain,
+                    [65, 65],
+                    DVec3::Z * 1200.,
+                    DVec3::ZERO,
+                );
+                let rgb = center(&image);
+                let r = f64::from(roughness) / 255.;
+                let t = ((r - 0.22) / (0.65 - 0.22)).clamp(0., 1.);
+                let expected = if height >= 1. {
+                    0.
+                } else {
+                    1. - t * t * (3. - 2. * t)
+                };
+                for value in rgb {
+                    assert!(
+                        (f64::from(value) / 255. - expected).abs() < 0.015,
+                        "conforming={conforming} height={height} roughness={roughness} pixel={rgb:?} expected={expected}"
+                    );
+                }
+                // This pins the current defect; it is not the correct water-presence contract.
+                if height <= 0. && roughness == 115 {
+                    assert!(rgb[0] > 80 && rgb[0] < 150);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "GPU: diagnostic skirt classification includes mixed top/bottom vertices"]
+fn diagnostic_skirt_primitive_is_red_and_height_sentinel_is_magenta() {
+    use thessa_graphics::TerrainDebugView as V;
+    let backend = Backend::bring_up().unwrap();
+    let anchor = TileAnchor::new(TileKey::new(4, 8, 128, 128).unwrap(), 1000.).unwrap();
+    let base = DVec3::from(anchor.anchor_body_m);
+    let up = DVec3::from(anchor.normal);
+    let eye = base + DVec3::X * 12. + up * 5.;
+    let look = base + up * 5.;
+    let page = HeightPage::bake(&[10.; 4], 2, 0.001).unwrap();
+    for (mode, expected) in [(V::Geometry, [255, 0, 0]), (V::Height, [255, 0, 255])] {
+        let mut settings = ResolvedGraphicsSettings {
+            terrain_debug_view: mode,
+            shadow_enabled: false,
+            night_lights_enabled: false,
+            specular_reflections: false,
+            ..Default::default()
+        };
+        settings.ocean.enabled = false;
+        let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor,
+                page: &page,
+            }],
+            wgpu::TextureFormat::Rgba8Unorm,
+            TerrainCapacity {
+                patches: 1,
+                height_grid_size: 2,
+                material_layers: 1,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        let image = draw_from(&backend, &mut terrain, [65, 65], eye, look);
+        assert_eq!(center(&image), expected, "{mode:?}");
+        let colored = image
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[..3] != [0, 0, 0]);
+        let mut count = 0;
+        for pixel in colored {
+            assert_eq!(&pixel[..3], &expected, "{mode:?}");
+            count += 1;
+        }
+        assert!(count > 100, "no visible skirt");
     }
 }

@@ -944,3 +944,10 @@ activate the existing multiple-scattering flag through a cached isotropic source
 Numerical and frozen native Off/On/Off controls pass. Actual FHD/QHD and old
 Cycles/art references still expose major horizon, ground and composition gaps;
 no affordable coastal parity or resolution speedup is claimed.
+
+[Terrain diagnostic continuation](docs/115_TERRAIN_DIAGNOSTICS_AND_HEIGHT_ANCESTRY.md)
+adds explicit native primary water/height/distance/material/geometry-kind/source-level
+views. Actual FHD controls distinguish a flawed near-datum water predicate from
+the current sampled dry ground and identify transient coarse height coverage
+at the horizon. The ancestry experiment is retained as rejected evidence;
+full frozen capture, transport decomposition and reference acceptance remain open.

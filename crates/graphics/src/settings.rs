@@ -647,8 +647,28 @@ impl Default for RaytracingParticipation {
     }
 }
 
+/// Native terrain diagnostics. Numeric values are the shared WGSL contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u32)]
+pub enum TerrainDebugView {
+    #[default]
+    None = 0,
+    WaterWeight = 1,
+    Height = 2,
+    Distance = 3,
+    Normal = 4,
+    Albedo = 5,
+    Roughness = 6,
+    LandOnly = 7,
+    Geometry = 8,
+    HeightPageLevel = 9,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct DebugSettings {
+    #[serde(default)]
+    pub terrain_view: TerrainDebugView,
     #[serde(default)]
     pub show_atmosphere_bounds: bool,
     #[serde(default)]

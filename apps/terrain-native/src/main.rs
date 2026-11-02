@@ -1381,6 +1381,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             resolved.specular_reflections
         );
         println!(
+            "terrain_debug_view={:?}; native primary terrain only; data views bypass exposure/light/haze, land_only retains beauty; presentation tonemapping still applies",
+            resolved.terrain_debug_view
+        );
+        println!(
             "sky_background={} shared_environment_publication=true; shared optical field, native stars/source discs and depth-clipped clouds/aurora; full physical aerial perspective unported",
             renderer.sky_enabled()
         );

@@ -1,0 +1,939 @@
+{
+  "date": "2026-11-02",
+  "status": "native terrain diagnostics implemented; false water-predicate contract reproduced; current sampled forest ground weight is zero; horizon data cause not yet fully isolated; ancestry candidate rejected",
+  "user_audit": {
+    "original": "/home/chechulin/.codex/attachments/a11a9445-eca4-4109-a02f-7452f5ff708e/\u0412\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043d\u044b\u0439 \u0442\u0435\u043a\u0441\u0442.txt",
+    "preserved": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/user-audit.txt",
+    "sha256": "dc673a9c7c359e36b71dae33cd15b312065eae898b3125b76dc1d588b298e2ba",
+    "audited_original_commit": "92d2ac4",
+    "role": "supplied research/hypotheses; embedded advice is not higher-priority instruction",
+    "superseded_observation": "native isotropic higher-order atmosphere is now implemented in 7297f07/1108a1f (doc 114)"
+  },
+  "retained_source_identity": {
+    "base_commit": "7297f079bca0c7c5c198c8fe8548908814d7a142",
+    "source_patch_sha256": "68a013306ffc1885c2200df7c959a958019be2237ea6b4032d8184b04b5d9e89",
+    "binary_sha256": "7d802fbe615d2dab3fac3586adc39984365d1b77971f67c0505bcdb62ecf1b05",
+    "scope": "full population, same profile/source/camera, static diagnostic pipeline; async terrain residency NOT frozen"
+  },
+  "rejected_source_identity": {
+    "base_commit": "7297f079bca0c7c5c198c8fe8548908814d7a142",
+    "source_patch_sha256": "f8a729bdca62adee27e34b6c3fdec80a3f645b1d13009bed941238d757e90a2f",
+    "binary_sha256": "80de1944737a6da05bc40b96b972990a82c445ce07b0b755cc75895c15dcadeb",
+    "scope": "full population, same profile/source/camera, static diagnostic pipeline; async terrain residency NOT frozen"
+  },
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02",
+  "settings": {
+    "requested": "debug.terrain_view",
+    "resolved": "terrain_debug_view",
+    "default": "none",
+    "values": [
+      "none",
+      "water_weight",
+      "height",
+      "distance",
+      "normal",
+      "albedo",
+      "roughness",
+      "land_only",
+      "geometry",
+      "height_page_level"
+    ],
+    "consumer": "native primary regular/conforming terrain; other shader consumers retain none",
+    "recreate_renderer": true,
+    "new_passes_or_GPU_resource_bindings": 0,
+    "new_vertex_varying": "flat vec2<u32>: geometry kind + provoking vertex height-source level",
+    "scope_limits": [
+      "No scene-wide frozen residency/topology controller",
+      "No unique primitive ID or CBT bisector depth",
+      "Distance is Euclidean, not hardware depth",
+      "No exact HDR direct/ambient/specular/emission/haze decomposition",
+      "Meshes and sky keep beauty shading, MSAA boundary pixels mix samples",
+      "Data modes are unexposed linear HDR; PNG still has presentation transform",
+      "land_only keeps geometry and geometric water displacement; separate pools as meshes unchanged"
+    ]
+  },
+  "runs": [
+    {
+      "label": "water_weight",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/water_weight-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "7c1c481445dcb455fe9e360d73dfe432b7cb1f2e33f27683dd055af4884aab3d",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/water_weight.png",
+      "png_sha256": "140887a2927e8da251e3f917b45b511e5da4296a39c9ca8163985d5a30b8c3a7",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/water_weight.rgba16f",
+      "hdr_sha256": "63e2ba89c5277e835edc4028698b1683d4ad487ed21a3c1643aa3406ec80a7e1",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "1",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=254 drawn_triangles=6772 frames=1 median_ms=758.903 p95_ms=758.903 p99_ms=758.903 max_ms=758.903 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/water_weight.png",
+      "residency": "geometry_publications=31 regenerated_patches=254 cache_entries=(254, 108) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "geometry",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/geometry-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "ba0044bb5736fa2a7d6e8920bddb639ae2c8b3c7e4f2d7ef8f474cdd9250091f",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/geometry.png",
+      "png_sha256": "94bb87e18b64405a45c0b89be96cd4b1b19cbbb56a98c15e1bb66ef3623b8ea1",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/geometry.rgba16f",
+      "hdr_sha256": "1c71b8b933560986553f2114ed6e5d2373cf4e9c8fd1752b2d3da73ec7dbe6d1",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "1",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=254 drawn_triangles=6772 frames=1 median_ms=767.006 p95_ms=767.006 p99_ms=767.006 max_ms=767.006 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/geometry.png",
+      "residency": "geometry_publications=31 regenerated_patches=254 cache_entries=(254, 108) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "height",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "8787c08d3a94fff6aa9be22ce34e4ba50894b69b5380221bc8fd7a9f7ad58db9",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height.png",
+      "png_sha256": "c04e72995a5dada4e593742fbb8b28a8c62745f620928d1e2efc9bcd8d33f1c4",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height.rgba16f",
+      "hdr_sha256": "4c61cd6c703ec61c646bfd365bfee872cb4861a1af26f52f8da9b6f3fc507594",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "1",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=254 drawn_triangles=6772 frames=1 median_ms=762.586 p95_ms=762.586 p99_ms=762.586 max_ms=762.586 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height.png",
+      "residency": "geometry_publications=31 regenerated_patches=254 cache_entries=(254, 108) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "height_page_level",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height_page_level-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "ba889437014157fc9a688d51b50fb48d677c42433511d6a37388182cbe2cfb72",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height_page_level.png",
+      "png_sha256": "589f0e78b04954218c276d1050030258d0927d0a7c74a999c88eaa7c2c7473a9",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height_page_level.rgba16f",
+      "hdr_sha256": "4646c9dcd1262678161bda3a7f6ded65d59457908581ed04632f6f2493f58c7a",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "1",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=254 drawn_triangles=6772 frames=1 median_ms=762.340 p95_ms=762.340 p99_ms=762.340 max_ms=762.340 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/height_page_level.png",
+      "residency": "geometry_publications=31 regenerated_patches=254 cache_entries=(254, 108) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "distance",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/distance-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "8f8a1d077c0b784be16fd4988cd7db2cc8c43dec34554b58891b1ee5f0c6ae6e",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/distance.png",
+      "png_sha256": "c0c05675820add4e3406b5090df7ff23b7f77ce0705774db72664e0e7eafcdbf",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/distance.rgba16f",
+      "hdr_sha256": "78a90313e4f1ff1dc8a4ce842c6b0caa7fef3411c6812ae4608c60b92b3d62fc",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "1",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=254 drawn_triangles=6772 frames=1 median_ms=740.705 p95_ms=740.705 p99_ms=740.705 max_ms=740.705 reciprocal_median_fps=1.4 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/distance.png",
+      "residency": "geometry_publications=31 regenerated_patches=254 cache_entries=(254, 108) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "control5-retry-none",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-retry-none-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "787c63d5a2672e4dcdb77a14bc746432e965c5e4b5df06d8446a149522c70ab9",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-retry-none.png",
+      "png_sha256": "8d23b56062e17865a8abb12a4bbf4df4c445f9b3d3ca611ad2f64c420c1693ed",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-retry-none.rgba16f",
+      "hdr_sha256": "6cb5f702387cdc817e54ba96cbc1db848e3bd121c2393fc8a53e2395b1d39bea",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=855 drawn_triangles=9714 frames=1 median_ms=898.242 p95_ms=898.242 p99_ms=898.242 max_ms=898.242 reciprocal_median_fps=1.1 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-retry-none.png",
+      "residency": "geometry_publications=163 regenerated_patches=855 cache_entries=(855, 146) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "control5-albedo",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-albedo-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "9940cd11a5f02c0db4ad4e9b90646eacbff3b6a13fb9574919e6af48cf05dd04",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-albedo.png",
+      "png_sha256": "4ab08fdd2a6974d50864f3a83e2b78eacdf5f0b81906159742df4a8a4edf67a7",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-albedo.rgba16f",
+      "hdr_sha256": "7123d3e44f9ca12d541f24183b9fbabbd5c0f4977377042c917a733ea45f6ee6",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=865 drawn_triangles=9522 frames=1 median_ms=781.733 p95_ms=781.733 p99_ms=781.733 max_ms=781.733 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-albedo.png",
+      "residency": "geometry_publications=170 regenerated_patches=865 cache_entries=(865, 145) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "control5-roughness",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-roughness-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "4aef21989cc5fff0e3cd17ab2b8bd6134fe620d68c0111d333200e98dd34f826",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-roughness.png",
+      "png_sha256": "0027088b1176d423fba8f6765270881cb967a0828f0b83f2b4c8a71144a6770b",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-roughness.rgba16f",
+      "hdr_sha256": "2898cf97fad70f19396aa98d1158e6e7b91f825eea3552543b34148c7e7d11fb",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=853 drawn_triangles=9714 frames=1 median_ms=797.290 p95_ms=797.290 p99_ms=797.290 max_ms=797.290 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-roughness.png",
+      "residency": "geometry_publications=156 regenerated_patches=853 cache_entries=(853, 145) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "control5-normal",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-normal-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "75c9309dac4e89d51966ff813466d77cd55e740041dacaa6ca97d672018d865f",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-normal.png",
+      "png_sha256": "9b543b14aee041a4afdb55702ed4fd2765578d46cc8f2f33e200141820af7d04",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-normal.rgba16f",
+      "hdr_sha256": "cb46ec35d0d63175ed397f24e858888507d2ccdb5849ba9a8314dd6fcd38dba4",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=854 drawn_triangles=9714 frames=1 median_ms=770.835 p95_ms=770.835 p99_ms=770.835 max_ms=770.835 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-normal.png",
+      "residency": "geometry_publications=168 regenerated_patches=854 cache_entries=(854, 146) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "control5-land_only",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-land_only-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v2.bin",
+      "profile_sha256": "417ea1c6346b2b1d7e1efc0e7fec07f311b950e0b8ede4560d74020a67358b92",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-land_only.png",
+      "png_sha256": "c4559c7e786b72abb29f1e6caccc85f02e470601e370613865b18278c20caff3",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-land_only.rgba16f",
+      "hdr_sha256": "fe36b2519131b2ca5bdacda077fa7e5e02f4cb5a6f0829270233e29cf8d84099",
+      "source_policy": "retained original policy",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=862 drawn_triangles=9550 frames=1 median_ms=836.922 p95_ms=836.922 p99_ms=836.922 max_ms=836.922 reciprocal_median_fps=1.2 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/control5-land_only.png",
+      "residency": "geometry_publications=160 regenerated_patches=862 cache_entries=(862, 144) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "ancestry-none",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-none-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v3.bin",
+      "profile_sha256": "787c63d5a2672e4dcdb77a14bc746432e965c5e4b5df06d8446a149522c70ab9",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-none.png",
+      "png_sha256": "8ca59c8a86c03e6a0feb1362b2d0fc2561318e28971bbb72e99ee8f323197215",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-none.rgba16f",
+      "hdr_sha256": "03bdffef6630fcbc4e4af3867ba633df9d68a46185ff17e5fd9205ad25b70f1d",
+      "source_policy": "rejected full-ancestry candidate",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=891 drawn_triangles=7244 frames=1 median_ms=906.148 p95_ms=906.148 p99_ms=906.148 max_ms=906.148 reciprocal_median_fps=1.1 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-none.png",
+      "residency": "geometry_publications=161 regenerated_patches=891 cache_entries=(891, 145) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    },
+    {
+      "label": "ancestry-height_page_level",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-height_page_level-command.json",
+      "binary": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/native-v3.bin",
+      "profile_sha256": "ba889437014157fc9a688d51b50fb48d677c42433511d6a37388182cbe2cfb72",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-height_page_level.png",
+      "png_sha256": "cc81e1d28a7e4e9e13ef9060bcff0ac67cc73641dfbdd199149c0c1f333079f5",
+      "hdr": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-height_page_level.rgba16f",
+      "hdr_sha256": "75de0e7f7e2ea3753b6f7547bb50db7976e7d7a2b7bb97a44cf1f89e2aeb10a4",
+      "source_policy": "rejected full-ancestry candidate",
+      "prestream_seconds": "5",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=876 drawn_triangles=7436 frames=1 median_ms=773.199 p95_ms=773.199 p99_ms=773.199 max_ms=773.199 reciprocal_median_fps=1.3 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/ancestry-height_page_level.png",
+      "residency": "geometry_publications=157 regenerated_patches=876 cache_entries=(876, 146) pending_jobs=(8, 4) wanted=376; conforming mode counts height-page data here, without patch meshes",
+      "mesh": "mesh_submitted=MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19652948, draw_calls: 22, draw_commands: 2178, triangles: 2768212, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+      "performance_scope": "serial stage fences, one measured frame; NOT FPS, equal-work A/B or a GPU timestamp"
+    }
+  ],
+  "samples": {
+    "water_weight": [
+      {
+        "xy": [
+          1000,
+          510
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          490
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          520
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          400,
+          510
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "geometry": [
+      {
+        "xy": [
+          1000,
+          510
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          490
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          520
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          400,
+          510
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      }
+    ],
+    "height": [
+      {
+        "xy": [
+          1000,
+          510
+        ],
+        "linear_rgb": [
+          0.51220703125,
+          0.51220703125,
+          0.51220703125
+        ],
+        "shader_height_m": 6.25
+      },
+      {
+        "xy": [
+          1200,
+          490
+        ],
+        "linear_rgb": [
+          0.51611328125,
+          0.51611328125,
+          0.51611328125
+        ],
+        "shader_height_m": 8.25
+      },
+      {
+        "xy": [
+          1200,
+          520
+        ],
+        "linear_rgb": [
+          0.5107421875,
+          0.5107421875,
+          0.5107421875
+        ],
+        "shader_height_m": 5.5
+      },
+      {
+        "xy": [
+          400,
+          510
+        ],
+        "linear_rgb": [
+          0.51220703125,
+          0.51220703125,
+          0.51220703125
+        ],
+        "shader_height_m": 6.25
+      },
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.50927734375,
+          0.50927734375,
+          0.50927734375
+        ],
+        "shader_height_m": 4.75
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.50927734375,
+          0.50927734375,
+          0.50927734375
+        ],
+        "shader_height_m": 4.75
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.50927734375,
+          0.50927734375,
+          0.50927734375
+        ],
+        "shader_height_m": 4.75
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.50927734375,
+          0.50927734375,
+          0.50927734375
+        ],
+        "shader_height_m": 4.75
+      }
+    ],
+    "height_page_level": [
+      {
+        "xy": [
+          1000,
+          510
+        ],
+        "linear_rgb": [
+          0.29150390625,
+          0.29150390625,
+          0.29150390625
+        ],
+        "provoking_vertex_level_rounded": 7
+      },
+      {
+        "xy": [
+          1200,
+          490
+        ],
+        "linear_rgb": [
+          0.29150390625,
+          0.29150390625,
+          0.29150390625
+        ],
+        "provoking_vertex_level_rounded": 7
+      },
+      {
+        "xy": [
+          1200,
+          520
+        ],
+        "linear_rgb": [
+          0.7080078125,
+          0.7080078125,
+          0.7080078125
+        ],
+        "provoking_vertex_level_rounded": 17
+      },
+      {
+        "xy": [
+          400,
+          510
+        ],
+        "linear_rgb": [
+          0.29150390625,
+          0.29150390625,
+          0.29150390625
+        ],
+        "provoking_vertex_level_rounded": 7
+      },
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.7080078125,
+          0.7080078125,
+          0.7080078125
+        ],
+        "provoking_vertex_level_rounded": 17
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.7080078125,
+          0.7080078125,
+          0.7080078125
+        ],
+        "provoking_vertex_level_rounded": 17
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.7080078125,
+          0.7080078125,
+          0.7080078125
+        ],
+        "provoking_vertex_level_rounded": 17
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.7080078125,
+          0.7080078125,
+          0.7080078125
+        ],
+        "provoking_vertex_level_rounded": 17
+      }
+    ],
+    "distance": [
+      {
+        "xy": [
+          1000,
+          510
+        ],
+        "linear_rgb": [
+          0.1142578125,
+          0.1142578125,
+          0.1142578125
+        ],
+        "camera_distance_m": 117.0
+      },
+      {
+        "xy": [
+          1200,
+          490
+        ],
+        "linear_rgb": [
+          0.112548828125,
+          0.112548828125,
+          0.112548828125
+        ],
+        "camera_distance_m": 115.25
+      },
+      {
+        "xy": [
+          1200,
+          520
+        ],
+        "linear_rgb": [
+          0.09759521484375,
+          0.09759521484375,
+          0.09759521484375
+        ],
+        "camera_distance_m": 99.9375
+      },
+      {
+        "xy": [
+          400,
+          510
+        ],
+        "linear_rgb": [
+          0.1287841796875,
+          0.1287841796875,
+          0.1287841796875
+        ],
+        "camera_distance_m": 131.875
+      },
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.00774383544921875,
+          0.00774383544921875,
+          0.00774383544921875
+        ],
+        "camera_distance_m": 7.9296875
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.00739288330078125,
+          0.00739288330078125,
+          0.00739288330078125
+        ],
+        "camera_distance_m": 7.5703125
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.006053924560546875,
+          0.006053924560546875,
+          0.006053924560546875
+        ],
+        "camera_distance_m": 6.19921875
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.00616455078125,
+          0.00616455078125,
+          0.00616455078125
+        ],
+        "camera_distance_m": 6.3125
+      }
+    ],
+    "control5-albedo": [
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.057952880859375,
+          0.039794921875,
+          0.0282135009765625
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.033294677734375,
+          0.02130126953125,
+          0.014739990234375
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.046142578125,
+          0.03265380859375,
+          0.024078369140625
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.06915283203125,
+          0.0643310546875,
+          0.025787353515625
+        ]
+      }
+    ],
+    "control5-roughness": [
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.56982421875,
+          0.56982421875,
+          0.56982421875
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.53369140625,
+          0.53369140625,
+          0.53369140625
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.65966796875,
+          0.65966796875,
+          0.65966796875
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.78564453125,
+          0.78564453125,
+          0.78564453125
+        ]
+      }
+    ],
+    "control5-normal": [
+      {
+        "xy": [
+          600,
+          900
+        ],
+        "linear_rgb": [
+          0.04412841796875,
+          0.6708984375,
+          0.386474609375
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          900
+        ],
+        "linear_rgb": [
+          0.0499267578125,
+          0.65380859375,
+          0.345947265625
+        ]
+      },
+      {
+        "xy": [
+          1000,
+          1000
+        ],
+        "linear_rgb": [
+          0.10260009765625,
+          0.76220703125,
+          0.347412109375
+        ]
+      },
+      {
+        "xy": [
+          1200,
+          1000
+        ],
+        "linear_rgb": [
+          0.0970458984375,
+          0.7958984375,
+          0.5009765625
+        ]
+      }
+    ]
+  },
+  "sample_scope": "Separate native runs at same camera, epoch and profile; no identical full-raster correspondence claimed. Numeric values decoded from raw RGBA16F, not PNG. Individual points do not establish scene-wide masks.",
+  "conclusions": [
+    "The eight sampled terrain-interior points have zero legacy water weight; heights 4.75-8.25m exceed the classifier band.",
+    "Near-datum wet-soil false positives are real in the regular/conforming GPU fixture, but cannot explain the current sampled ground.",
+    "Elevated band remains conforming-surface green under unlit geometry output; not the regular skirt.",
+    "Some band points read L7 while near points read L17; sampled band distances about100-132m, foreground6-8m.",
+    "Both the original policy and ancestry candidate lose the band with 5s prestream; do not credit ancestry for its disappearance.",
+    "Albedo and normal views retain broad soil patterns; wet-ground normal/material transport still needs controlled source decomposition."
+  ],
+  "candidate": {
+    "retained_in_production": false,
+    "patch": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/rejected-height-ancestry.patch",
+    "patch_sha256": "1f1f43d21a4e3484c113f62c1b7064f01045aa3dca532f40d55010b240e410ea",
+    "experiment": "extend persistent height demand with all parent pages, same job/cache budgets; no sibling mesh partition",
+    "scheduler_control": "candidate-specific assertion failed old policy and passed the candidate; this alone does not prove production ancestry is required",
+    "candidate_tests_passed": 34,
+    "decision": "removed policy and candidate-specific test: same-prestream old-policy frame also recovers; no isolated quality/cost benefit demonstrated. Production streaming unchanged.",
+    "no_performance_claim": true
+  },
+  "rejected_attempts": [
+    {
+      "label": "software-water-control",
+      "result": "WGSL reserved identifier caught on isolated software Vulkan; renamed before hardware capture"
+    },
+    {
+      "label": "control5-none",
+      "result": "outer exec143, only scene_setup trace; no image or benchmark; retained successful control5-retry-none separately"
+    }
+  ],
+  "checks": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/thessa-terrain-debug-parse.log",
+      "sha256": "f155e3349ae70b066a97f615d884faa14785eb2178d1e425677eba9d18b30773"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/thessa-terrain-debug-graphics-final.log",
+      "sha256": "fd69d4bf9e1c8bc050ea0189330e1fc45b48bec97bf55f08e2ca0bb5d1d0b1f3"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/thessa-terrain-debug-core.log",
+      "sha256": "dbe187c50b446b5d591ae25cbb2805f3440acd3cc4467d8c4f88be01fdf6a148"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/thessa-terrain-debug-clippy-final.log",
+      "sha256": "20e19ff13550df4811077029286f6cb019d5a607e13823aa5c9b15bebf725d35"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/thessa-terrain-debug-client-final.log",
+      "sha256": "17f37924d60c68f506ef949b0cbb770e2be979070dfd29c06ab1cfa588cff6ba"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/thessa-terrain-debug-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/software-water-control-v2.log",
+      "sha256": "de9e0f75e75670d466f1b8b9cc20ed921a2c7998be95aca38e33ca0b97d18319",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/software-water-control-v2-command.json"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/radv-water-control.log",
+      "sha256": "ad781d8b520e1a6b45180f56a6995af79913df7becdea854ec96ceebb17436e7",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/terrain-diagnostic-2026-11-02/radv-water-control-command.json"
+    }
+  ],
+  "final_source_files": {
+    "apps/terrain-native/src/main.rs": "46b7db35746c713f48709ca6355b36f1f5e88140a3bbb9b02d2247cb11035746",
+    "crates/graphics/src/settings.rs": "95c87cc869b1cc97571fbd961742746449a2f6025f4aa2d8ee375eaf449363af",
+    "crates/graphics/src/resolve.rs": "79bf4480a147104fce3ff61bde3c46efb86dd85989bc7ca0e8037fb8502df200",
+    "crates/graphics/src/metadata.rs": "8279b6a053225027f60741d37ebc4fc9000ca11bda8a4f20b1818d5c9c50931d",
+    "crates/graphics/src/lib.rs": "642fd389d2e456cc79053edb7d3b07643176209ffedbaaaa4a61c68e20ef60f7",
+    "crates/rcbt-core/src/shaders.rs": "ee96887127f54316e1376577f74c32f5482a03f2740b20a7da3914e2386216cf",
+    "crates/render-wgpu/src/terrain.rs": "f9894b410457c825d8784d462303c1abd563b726deb957a78075eb337bfcc7cf",
+    "crates/render-wgpu/tests/terrain_environment.rs": "f7c9a07c7eb4dd498e23997226a73884a102469cc211c0a873f3ab591be6bf7f",
+    "graphics.toml": "995cc9658c7e3e4c742891e61f66f0b69b0276d30fbe5f26340c377f716c8588"
+  }
+}

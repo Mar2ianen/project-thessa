@@ -939,6 +939,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Origin offset for reflection rays; also the ray t-min, so surfaces never self-intersect at their own triangle.",
         },
         SettingMeta {
+            path: "debug.terrain_view",
+            label: "Native terrain diagnostic",
+            kind: SettingKind::Enum,
+            range: "none | water_weight | height | distance | normal | albedo | roughness | land_only | geometry | height_page_level",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Native primary terrain only; raw linear HDR contains diagnostic values. None preserves ordinary shading. Land-only suppresses terrain water optics without changing geometry.",
+        },
+        SettingMeta {
             path: "debug.show_rt_proxies",
             label: "Show RT proxies",
             kind: SettingKind::Bool,

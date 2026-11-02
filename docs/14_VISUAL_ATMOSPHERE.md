@@ -836,3 +836,9 @@ resolved multiple-scattering flag using a cached isotropic higher-order source
 in the shared CPU sky field. Black-ground/local-isotropy limits, synchronous
 startup cost and tested error envelope are explicit. Cloud/terrain bounce,
 general finite aerial transport and full sunset-reference acceptance remain open.
+
+Native primary terrain diagnostics are selected by `[debug] terrain_view` through
+the shared resolver (default `none`); see [doc 115](115_TERRAIN_DIAGNOSTICS_AND_HEIGHT_ANCESTRY.md)
+for raw-HDR semantics, native-only scope, observed transient height coverage
+and the rejected parent-chain candidate. These views do not close the missing
+full transport-component decomposition or visual/cost acceptance.

@@ -3475,3 +3475,10 @@ frozen-geometry native Off/On/Off coverage. FHD/QHD and full-population captures
 are retained alongside old Cycles and generated-art visual references. These
 still show an artificial horizon band, weak ground/water separation and
 composition/sky gaps; this is not reference parity or a coastal speedup.
+
+[Terrain diagnostic continuation](115_TERRAIN_DIAGNOSTICS_AND_HEIGHT_ANCESTRY.md)
+adds explicit native primary water/height/distance/material/geometry-kind/source-level
+views. Actual FHD controls distinguish a flawed near-datum water predicate from
+the current sampled dry ground and identify transient coarse height coverage
+at the horizon. The ancestry experiment is retained as rejected evidence;
+full frozen capture, transport decomposition and reference acceptance remain open.

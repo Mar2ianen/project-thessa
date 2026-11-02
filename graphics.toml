@@ -239,5 +239,7 @@ map_size = 4096 # per-cascade texel grid, power of two 512..=8192
 normal_bias_m = 1.5 # normal offset in metres against acne on 32 m mesh cells
 
 [debug]
+# Native primary terrain diagnostics; data views keep unexposed values in HDR.
+terrain_view = "none"
 show_atmosphere_bounds = false
 show_rt_proxies = false

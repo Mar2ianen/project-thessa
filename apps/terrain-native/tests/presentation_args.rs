@@ -5,6 +5,31 @@ use std::process::Command;
 fn rejects_nonfinite_or_window_stepped_samples_before_loading_graphics() {
     for (args, message) in [
         (
+            vec!["--terrain-diagnostic-sequence", "unused"],
+            "requires a static headless survey",
+        ),
+        (
+            vec![
+                "--terrain-diagnostic-sequence",
+                "unused",
+                "--headless",
+                "unused.png",
+                "--sim-step",
+                "1",
+            ],
+            "requires a static headless survey",
+        ),
+        (
+            vec![
+                "--terrain-diagnostic-sequence",
+                "unused",
+                "--headless",
+                "unused.png",
+                "--sweep",
+            ],
+            "requires a static headless survey",
+        ),
+        (
             vec!["--vehicle-definition", "unused.json"],
             "--vehicle-definition requires --server-flight",
         ),

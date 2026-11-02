@@ -10,7 +10,9 @@ explain the whole image. The original audit and hashes are retained with
 ## Explicit native diagnostic policy
 
 `[debug] terrain_view` is a typed requested/resolved setting, exposed in graphics
-metadata. It defaults to `none`; changing it requires recreating the renderer.
+metadata. It defaults to `none`. At this milestone changing it required
+renderer recreation; [doc 120](120_FROZEN_NATIVE_DIAGNOSTICS.md) subsequently
+adds runtime switching inside an explicitly configured diagnostic renderer.
 Native specializes the existing shared primary terrain shader. No new image,
 render pass, texture/storage binding, tracer or material representation is
 allocated. Other renderers retain the shared shader's default `none`; the

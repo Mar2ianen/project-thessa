@@ -372,6 +372,7 @@ pub const CBT_RASTER_WGSL: &str = concat!(
     include_str!("shaders/material_normal.wgsl"),
     r#"
 const TERRAIN_DEBUG_VIEW: u32 = 0u;
+fn cbt_terrain_debug_view()->u32 { return TERRAIN_DEBUG_VIEW; }
 const MATERIAL_MAX_LEVEL: f32 = 17.0;
 const GROUND_RELIEF_GEOMETRY: bool = false;
 const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;
@@ -658,26 +659,26 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var water_material = (1.0 - smoothstep(0.18, 0.22, roughness))
         * (1.0 - smoothstep(0.0, 0.25, input.height_m));
     // Diagnostic outputs are unexposed linear values, before light/haze.
-    if (TERRAIN_DEBUG_VIEW == 1u) { return vec4(vec3(water_material), 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 2u) {
+    if (cbt_terrain_debug_view() == 1u) { return vec4(vec3(water_material), 1.0); }
+    if (cbt_terrain_debug_view() == 2u) {
         if (input.terrain_debug_data.x == 1u) { return vec4(1.0,0.0,1.0,1.0); }
         return vec4(vec3(0.5 + input.height_m / 512.0), 1.0);
     }
-    if (TERRAIN_DEBUG_VIEW == 3u) { return vec4(vec3(length(view.world_position-input.render_position) / 1024.0), 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 5u) { return vec4(albedo, 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 6u) { return vec4(vec3(roughness), 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 7u) { water_material = 0.0; }
-    if (TERRAIN_DEBUG_VIEW == 8u) {
+    if (cbt_terrain_debug_view() == 3u) { return vec4(vec3(length(view.world_position-input.render_position) / 1024.0), 1.0); }
+    if (cbt_terrain_debug_view() == 5u) { return vec4(albedo, 1.0); }
+    if (cbt_terrain_debug_view() == 6u) { return vec4(vec3(roughness), 1.0); }
+    if (cbt_terrain_debug_view() == 7u) { water_material = 0.0; }
+    if (cbt_terrain_debug_view() == 8u) {
         var kind=vec3(0.0,0.0,1.0);
         if(input.terrain_debug_data.x==1u){kind=vec3(1.0,0.0,0.0);}
         if(input.terrain_debug_data.x==3u){kind=vec3(0.0,1.0,0.0);}
         if(input.terrain_debug_data.x==4u){kind=vec3(1.0,0.5,0.0);}
         return vec4(kind,1.0);
     }
-    if (TERRAIN_DEBUG_VIEW == 9u) { return vec4(vec3(f32(input.terrain_debug_data.y)/24.0),1.0); }
-    if (TERRAIN_DEBUG_VIEW == 10u) { return vec4(vec3(clamp(footprint_m, 0.0, 10.0) / 10.0), 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 11u) { return vec4(vec3(material_lod / MATERIAL_MAX_LEVEL), 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 12u) {
+    if (cbt_terrain_debug_view() == 9u) { return vec4(vec3(f32(input.terrain_debug_data.y)/24.0),1.0); }
+    if (cbt_terrain_debug_view() == 10u) { return vec4(vec3(clamp(footprint_m, 0.0, 10.0) / 10.0), 1.0); }
+    if (cbt_terrain_debug_view() == 11u) { return vec4(vec3(material_lod / MATERIAL_MAX_LEVEL), 1.0); }
+    if (cbt_terrain_debug_view() == 12u) {
         let weight = (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m)) * (1.0 - water_material);
         let height_coverage = mix(coarse.height_coverage, fine.height_coverage, fract(material_lod)) * weight;
         return vec4(vec3(height_coverage), 1.0);
@@ -697,7 +698,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if(MATERIAL_SPECULAR_FILTER_ENABLED && cbt_specular_enabled()) {
         roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);
     }
-    if (TERRAIN_DEBUG_VIEW == 4u) { return vec4(shaded_normal * 0.5 + 0.5, 1.0); }
+    if (cbt_terrain_debug_view() == 4u) { return vec4(shaded_normal * 0.5 + 0.5, 1.0); }
     var direct = vec3(0.0);
     var visibility: array<f32,3>;
     var sunlight: array<vec3<f32>,3>;
@@ -733,8 +734,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
     // Sky visibility/bounce must have their own transport, independent of stellar slot order.
-    if (TERRAIN_DEBUG_VIEW == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 14u) { return vec4(surface_ambient * view.exposure / OCEAN_PI, 1.0); }
+    if (cbt_terrain_debug_view() == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
+    if (cbt_terrain_debug_view() == 14u) { return vec4(surface_ambient * view.exposure / OCEAN_PI, 1.0); }
     var illuminance = surface_ambient + direct * shadow;
     let diffuse = albedo * illuminance / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
@@ -754,7 +755,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         }
         let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
         land_reflection += environment.rgb;
-        if (TERRAIN_DEBUG_VIEW == 15u) { return vec4(land_reflection * view.exposure, 1.0); }
+        if (cbt_terrain_debug_view() == 15u) { return vec4(land_reflection * view.exposure, 1.0); }
         var land_ambient = surface_ambient;
         if (any(land_ambient > vec3(0.0))) {
             land_ambient *= cbt_land_ambient_transmission(roughness);
@@ -763,7 +764,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         radiance = mix(diffuse, land_diffuse * (1.0 - environment.a) + land_reflection,
             1.0 - water_material);
     }
-    if (TERRAIN_DEBUG_VIEW == 15u) { return vec4(0.0, 0.0, 0.0, 1.0); }
+    if (cbt_terrain_debug_view() == 15u) { return vec4(0.0, 0.0, 0.0, 1.0); }
     if (cbt_specular_enabled() && water > 0.0) {
         let rotation = mat3x3<f32>(render_from_body[0].xyz, render_from_body[1].xyz, render_from_body[2].xyz);
         let up = normalize(rotation * direction);
@@ -789,7 +790,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
     let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m,visibility,sunlight);
-    if (TERRAIN_DEBUG_VIEW != 7u) { radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a); }
+    if (cbt_terrain_debug_view() != 7u) { radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a); }
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no
     // day-side masking is needed.

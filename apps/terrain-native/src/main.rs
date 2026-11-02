@@ -8,6 +8,7 @@ mod contact_preview;
 mod docking;
 mod environment;
 mod flyby;
+mod frozen_diagnostics;
 mod gpu_trace;
 #[cfg(feature = "hud")]
 mod hud;
@@ -40,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut gpu_trace_path = None;
     let mut gpu_trace_mesh_limit = None;
     let mut frame_sequence = None;
+    let mut terrain_diagnostic_sequence = None;
     let mut frame_limit = None;
     let mut graphics_path = "graphics.toml".to_string();
     let mut prestream_seconds = 3.0;
@@ -122,6 +124,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--reference-asset" => {
                 reference_asset = Some(std::path::PathBuf::from(
                     args.next().ok_or("--reference-asset requires a GLB path")?,
+                ));
+            }
+            "--terrain-diagnostic-sequence" => {
+                terrain_diagnostic_sequence = Some(std::path::PathBuf::from(
+                    args.next()
+                        .ok_or("--terrain-diagnostic-sequence requires a new directory")?,
                 ));
             }
             "--export-canonical-coast" => {
@@ -264,7 +272,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--docking-demo runs the retained isolated vacuum two-craft Rapier/DockingSession fixture with actual solved poses and D1 CAD rest surfaces. Not flight/fleet authority. Headless --docking-time 0..30 seeks a deterministic fixed-step replay before warmup; --docking-step 0..0.05 advances per frame (default 1/60, zero freezes). Window uses elapsed admission capped at 0.05s. Incompatible with flight/map/site/preview/time controls. Cabin impact is a diagnostic structural cue; vacuum exterior stays silent."
                 );
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --frame-sequence NEW_DIR writes frame-000000.png onward for measured frames only; requires a new directory and --headless. PNG readback/writes are outside frame samples but perturb streaming wall cadence; this is visual evidence, not performance-equivalent replay. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --terrain-diagnostic-sequence NEW_DIR replays 17 terrain views of the frozen final CBT frame, with depth/geometry/beauty A/B/A checks. Requires static survey, HDR, RT Off and temporal Off; replay readback is not production timing. --frame-sequence NEW_DIR writes frame-000000.png onward for measured frames only; requires a new directory and --headless. PNG readback/writes are outside frame samples but perturb streaming wall cadence; this is visual evidence, not performance-equivalent replay. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -384,6 +392,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     let docking_step = docking_step.unwrap_or(1.0 / 60.0);
+    if let Some(directory) = &terrain_diagnostic_sequence {
+        if headless.is_none()
+            || reference_scene.is_some()
+            || sweep
+            || sim_step != 0.0
+            || live_flight
+            || server_flight
+            || vehicle_preview
+            || docking
+            || hud_override == Some(true)
+            || perf_capture.is_some()
+        {
+            return Err("--terrain-diagnostic-sequence requires a static headless survey, no HUD/perf/flight/reference/sweep or sim-step".into());
+        }
+        if directory.exists() {
+            return Err("terrain diagnostic sequence requires a new directory".into());
+        }
+    }
     if frame_sequence.is_some() && headless.is_none() {
         return Err("--frame-sequence requires --headless".into());
     }
@@ -564,8 +590,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     if export_canonical_coast.as_ref().is_some_and(|p| p.exists()) {
         return Err("canonical export directory already exists; choose a new directory".into());
     }
-    let requested =
+    let mut requested =
         thessa_graphics::RequestedGraphics::from_toml(&std::fs::read_to_string(&graphics_path)?)?;
+    if terrain_diagnostic_sequence.is_some() {
+        if !requested.renderer.hdr
+            || requested.renderer.ray_tracing != thessa_graphics::RayTracingRequest::Off
+            || requested.temporal.taa
+            || requested.temporal.motion_vectors
+            || requested.temporal.jitter
+            || !requested.terrain_topology.enabled
+        {
+            return Err("terrain diagnostic sequence requires requested HDR, conforming CBT, RT Off and temporal Off".into());
+        }
+        if requested.debug.terrain_view == thessa_graphics::TerrainDebugView::None {
+            requested.debug.terrain_view = thessa_graphics::TerrainDebugView::WaterWeight;
+        }
+    }
     if let Some(id) = reference_scene {
         if !["b01", "b02", "b05"].contains(&id.as_str()) {
             return Err(format!("unknown reference scene: {id}").into());
@@ -785,6 +825,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let target = OffscreenTarget::new(&backend, width, height)?;
         let resolved = backend.resolve_graphics(&scene.requested);
+        if terrain_diagnostic_sequence.is_some()
+            && (!resolved.hdr || resolved.terrain_topology.capacity == 0)
+        {
+            return Err(
+                "frozen terrain diagnostics require resolved HDR and conforming CBT support".into(),
+            );
+        }
         if scene.requested.renderer.hdr && !resolved.hdr {
             eprintln!("native HDR target unsupported: using direct LDR fallback");
         }
@@ -1188,6 +1235,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "host_begin",
                 "reading final image and GPU diagnostics",
             )?;
+        }
+        if let Some(directory) = &terrain_diagnostic_sequence {
+            frozen_diagnostics::Capture {
+                backend: &backend,
+                scene: &scene,
+                renderer: &renderer,
+                meshes: mesh_renderer.as_ref(),
+                display: &display,
+                sky: &sky_layers,
+                msaa: msaa.as_ref(),
+                target: &target,
+                settings: &resolved,
+                exposure,
+                trace: gpu_trace.as_mut(),
+            }
+            .run(directory)?;
         }
         let pixels = target.read_rgba8(&backend)?;
         write_rgba_png(std::path::Path::new(&path), width, height, &pixels)?;

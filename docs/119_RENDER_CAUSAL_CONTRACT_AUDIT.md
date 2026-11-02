@@ -139,6 +139,10 @@ work plan, **not a claim that frozen replay, water semantics, GI or new receiver
 buffers are already implemented**. No further color/roughness/atmosphere tuning
 is substituted for those contracts in this milestone.
 
+Current continuation: [doc 120](120_FROZEN_NATIVE_DIAGNOSTICS.md) implements
+step 1 as an in-process published-frame replay, with a complete FHD sequence.
+Independent process restore and steps 2–5 remain open.
+
 ## Executed validation
 
 Eight bounded surface-lighting tests pass on isolated software Vulkan and

@@ -50,9 +50,11 @@ predicate remains a heuristic, not independent material presence.
 [Doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md) reviews the later Gemini changes:
 source-slot-dependent synthetic bounce/sky dimming is removed, documented
 specular-disable behavior restored, and unsupported global fade tuning reverted.
-Frozen GPU controls pass; real indirect visibility/GI, a water-presence contract,
-frozen whole-scene replay, source-error bounds and affordable visual parity
-remain open. Docs 117/118 are historical appearance-tuning records, not accepted
+Frozen GPU controls pass. [Doc 120](120_FROZEN_NATIVE_DIAGNOSTICS.md) closes
+in-process published-frame replay: 17 actual FHD terrain views preserve exact
+depth/geometry and beauty round-trip identity. Independent process restore, real
+indirect visibility/GI, water presence, source-error bounds and affordable visual
+parity remain open. Docs 117/118 are historical appearance-tuning records, not accepted
 physical calibration.
 
 ## Current native integration checkpoint

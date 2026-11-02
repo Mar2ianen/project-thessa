@@ -10,6 +10,26 @@ pub fn read_color(backend: &Backend, texture: &wgpu::Texture) -> Result<Vec<u8>,
         wgpu::TextureFormat::Rgba16Float => 8,
         _ => return Err(fail("color readback requires RGBA8 or RGBA16Float")),
     };
+    read_texture(backend, texture, bytes_per_pixel, wgpu::TextureAspect::All)
+}
+
+/// Raw resolved Depth32Float values, without a projection/linearization change.
+pub fn read_depth(backend: &Backend, texture: &wgpu::Texture) -> Result<Vec<u8>, BackendError> {
+    if texture.format() != wgpu::TextureFormat::Depth32Float {
+        return Err(BackendError::Device(
+            "depth readback requires Depth32Float".into(),
+        ));
+    }
+    read_texture(backend, texture, 4, wgpu::TextureAspect::DepthOnly)
+}
+
+fn read_texture(
+    backend: &Backend,
+    texture: &wgpu::Texture,
+    bytes_per_pixel: u32,
+    aspect: wgpu::TextureAspect,
+) -> Result<Vec<u8>, BackendError> {
+    let fail = |message: &str| BackendError::Device(message.into());
     let size = texture.size();
     if texture.dimension() != wgpu::TextureDimension::D2
         || size.depth_or_array_layers != 1
@@ -42,7 +62,10 @@ pub fn read_color(backend: &Backend, texture: &wgpu::Texture) -> Result<Vec<u8>,
     });
     let mut encoder = backend.device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
+        wgpu::TexelCopyTextureInfo {
+            aspect,
+            ..texture.as_image_copy()
+        },
         wgpu::TexelCopyBufferInfo {
             buffer: &staging,
             layout: wgpu::TexelCopyBufferLayout {

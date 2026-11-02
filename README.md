@@ -950,11 +950,14 @@ adds explicit native primary water/height/distance/material/geometry-kind/source
 views. Actual FHD controls distinguish a flawed near-datum water predicate from
 the current sampled dry ground and identify transient coarse height coverage
 at the horizon. The ancestry experiment is retained as rejected evidence;
-full frozen capture, transport decomposition and reference acceptance remain open.
+in-process frozen capture is now implemented in doc 120; transport decomposition
+and reference acceptance remain open.
 
 [Render causal-contract audit](docs/119_RENDER_CAUSAL_CONTRACT_AUDIT.md)
 rejects the later primary-sun bounce/sky-occlusion heuristic with a frozen
 source-slot permutation control, restores specular-disable semantics and
 reverts an unsupported global fade change. Water classification is still a
-roughness/height heuristic; stable frame replay, source accuracy and actual
-indirect transport remain the foundation work before more appearance tuning.
+roughness/height heuristic; source accuracy and actual indirect transport
+remain open. [Frozen native diagnostics](docs/120_FROZEN_NATIVE_DIAGNOSTICS.md) now
+replay 17 views of one published FHD frame with byte-identical depth and beauty
+round-trip checks; this is diagnostic evidence, not visual parity or FPS.

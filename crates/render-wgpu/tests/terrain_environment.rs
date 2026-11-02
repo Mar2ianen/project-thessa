@@ -902,3 +902,88 @@ fn diagnostic_skirt_primitive_is_red_and_height_sentinel_is_magenta() {
         assert!(count > 100, "no visible skirt");
     }
 }
+
+#[test]
+#[ignore = "GPU: dynamic diagnostic modes preserve frozen CBT and depth; disabled is free"]
+fn diagnostic_sequence_preserves_published_geometry_depth_and_round_trip() {
+    use thessa_graphics::TerrainDebugView as V;
+    let backend = Backend::bring_up().unwrap();
+    let mut request = thessa_graphics::RequestedGraphics::default();
+    let ordinary = scene(&backend, Quality::Low, false, true);
+    assert_eq!(ordinary.terrain_debug_storage_bytes(), 0);
+    request.debug.terrain_view = V::Height;
+    assert!(
+        ordinary
+            .set_terrain_debug_view(&backend, &backend.resolve_graphics(&request))
+            .is_err()
+    );
+    assert_eq!(ordinary.terrain_debug_storage_bytes(), 0);
+    let mut terrain = scene_with_diagnostic(
+        &backend,
+        Quality::Low,
+        false,
+        true,
+        false,
+        V::WaterWeight,
+        10.,
+    );
+    assert_eq!(terrain.terrain_debug_storage_bytes(), 16);
+    material(&backend, &mut terrain, 180, 1);
+    let _ = draw_from(
+        &backend,
+        &mut terrain,
+        [65, 65],
+        DVec3::Z * 1200.,
+        DVec3::ZERO,
+    );
+    let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+    let geometry = bits(terrain.read_vertices(&backend).unwrap());
+    let topology = terrain.read_topology_records(&backend).unwrap();
+    let epoch = terrain.temporal_epoch();
+    let target =
+        OffscreenTarget::with_format(&backend, 65, 65, wgpu::TextureFormat::Rgba8Unorm).unwrap();
+    let mut depth = None;
+    let mut first = None;
+    let mut different = false;
+    for mode in [
+        V::WaterWeight,
+        V::Height,
+        V::Normal,
+        V::None,
+        V::Geometry,
+        V::Direct,
+        V::Ambient,
+        V::Specular,
+        V::WaterWeight,
+    ] {
+        request.debug.terrain_view = mode;
+        terrain
+            .set_terrain_debug_view(&backend, &backend.resolve_graphics(&request))
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        // Deliberately no encode_surface or state/view/source updates.
+        terrain.encode_opaque_scene_ops(&mut encoder, &target.color, &target.depth, None, true);
+        backend.queue.submit([encoder.finish()]);
+        let image = target.read_rgba8(&backend).unwrap();
+        let current_depth =
+            thessa_render_wgpu::readback::read_depth(&backend, &target.depth_texture).unwrap();
+        if let Some(expected) = &depth {
+            assert_eq!(&current_depth, expected, "{mode:?} changed depth");
+        } else {
+            depth = Some(current_depth);
+        }
+        if let Some(expected) = &first {
+            if mode == V::WaterWeight {
+                assert_eq!(&image, expected, "diagnostic A/B/A differs");
+            } else {
+                different |= &image != expected;
+            }
+        } else {
+            first = Some(image);
+        }
+    }
+    assert!(different, "diagnostic control never reached pixels");
+    assert_eq!(bits(terrain.read_vertices(&backend).unwrap()), geometry);
+    assert_eq!(terrain.read_topology_records(&backend).unwrap(), topology);
+    assert_eq!(terrain.temporal_epoch(), epoch);
+}

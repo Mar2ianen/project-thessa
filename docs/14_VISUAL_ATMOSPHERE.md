@@ -847,5 +847,7 @@ full transport-component decomposition or visual/cost acceptance.
 rejects the later primary-sun bounce/sky-occlusion heuristic with a frozen
 source-slot permutation control, restores specular-disable semantics and
 reverts an unsupported global fade change. Water classification is still a
-roughness/height heuristic; stable frame replay, source accuracy and actual
-indirect transport remain the foundation work before more appearance tuning.
+roughness/height heuristic; source accuracy and actual indirect transport
+remain open. [Frozen native diagnostics](120_FROZEN_NATIVE_DIAGNOSTICS.md) now
+replay 17 views of one published FHD frame with byte-identical depth and beauty
+round-trip checks; this is diagnostic evidence, not visual parity or FPS.

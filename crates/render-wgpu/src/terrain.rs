@@ -179,6 +179,7 @@ pub struct TerrainRenderer {
     geometry: wgpu::ComputePipeline,
     geometry_bind: wgpu::BindGroup,
     params: wgpu::Buffer,
+    diagnostic_view: Option<wgpu::Buffer>,
     dirty: wgpu::Buffer,
     metadata: wgpu::Buffer,
     surface_source: Option<crate::conforming_surface::HeightSurfaceSource>,
@@ -759,8 +760,23 @@ impl TerrainRenderer {
         } else {
             "return vec4(radiance * view.exposure, 1.0);".into()
         };
+        let diagnostic_view = settings
+            .filter(|s| s.terrain_debug_view != thessa_graphics::TerrainDebugView::None)
+            .map(|s| {
+                upload(
+                    device,
+                    "terrain-diagnostic-view",
+                    &bytes([s.terrain_debug_view as u32, 0, 0, 0]),
+                    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                )
+            });
+        let diagnostic_hook = if diagnostic_view.is_some() {
+            "@group(0) @binding(21) var<uniform> native_terrain_debug:vec4<u32>;\nfn cbt_terrain_debug_view()->u32 { return native_terrain_debug.x; }"
+        } else {
+            "fn cbt_terrain_debug_view()->u32 { return TERRAIN_DEBUG_VIEW; }"
+        };
         let raster_source = shaders::CBT_RASTER_WGSL
-            .replace("const TERRAIN_DEBUG_VIEW: u32 = 0u;", &format!("const TERRAIN_DEBUG_VIEW: u32 = {}u;", settings.map_or(0, |s| s.terrain_debug_view as u32)))
+            .replace("fn cbt_terrain_debug_view()->u32 { return TERRAIN_DEBUG_VIEW; }", diagnostic_hook)
             .replace("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;",&format!("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = {};",settings.is_some_and(|s|s.surface_quality!=thessa_graphics::Quality::Low)))
             .replace(
                 "const GROUND_RELIEF_GEOMETRY: bool = false;",
@@ -866,7 +882,7 @@ impl TerrainRenderer {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
         let raster_layout = raster.get_bind_group_layout(0);
-        let entries = [
+        let mut entries = [
             (
                 0,
                 primary_view.as_ref().unwrap_or(&view).as_entire_binding(),
@@ -912,6 +928,12 @@ impl TerrainRenderer {
         .into_iter()
         .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource })
         .collect::<Vec<_>>();
+        if let Some(buffer) = &diagnostic_view {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 21,
+                resource: buffer.as_entire_binding(),
+            });
+        }
         let raster_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cbt-raster-bind"),
             layout: &raster_layout,
@@ -1054,6 +1076,7 @@ impl TerrainRenderer {
             geometry,
             geometry_bind,
             params,
+            diagnostic_view,
             dirty,
             metadata,
             surface_source,
@@ -1070,6 +1093,31 @@ impl TerrainRenderer {
             night_intensity: settings.map_or(0.0, |s| s.night_lights_intensity),
             night_uploaded_bytes: 0,
         })
+    }
+
+    /// Diagnostic-only dynamic selection. Ordinary None construction has no
+    /// buffer, binding or shader branch; enabling it requires reconstruction.
+    pub fn set_terrain_debug_view(
+        &self,
+        backend: &Backend,
+        settings: &thessa_graphics::ResolvedGraphicsSettings,
+    ) -> Result<(), BackendError> {
+        if let Some(buffer) = &self.diagnostic_view {
+            backend.queue.write_buffer(
+                buffer,
+                0,
+                &bytes([settings.terrain_debug_view as u32, 0, 0, 0]),
+            );
+            Ok(())
+        } else if settings.terrain_debug_view == thessa_graphics::TerrainDebugView::None {
+            Ok(())
+        } else {
+            Err(BackendError::Device("terrain diagnostic selection requires an explicitly configured diagnostic renderer".into()))
+        }
+    }
+
+    pub fn terrain_debug_storage_bytes(&self) -> u64 {
+        self.diagnostic_view.as_ref().map_or(0, |_| 16)
     }
 
     /// Publish a complete material snapshot with independent ordered demand.

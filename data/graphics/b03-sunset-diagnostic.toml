@@ -24,7 +24,7 @@ vsync = false
 hdr = true
 bloom = false
 auto_exposure = false
-exposure_ev100 = 9.5
+exposure_ev100 = 10.40
 fleet_meshes = true
 fleet_quality = "high"
 
@@ -36,9 +36,9 @@ quality = "high"
 enabled = true
 quality = "high"
 aerial_perspective = true
-local_haze_extinction_per_m = 0.00012
+local_haze_extinction_per_m = 0.00005
 local_haze_height_m = 480.0
-density_scale = 1.62
+density_scale = 2.0
 multiple_scattering = true
 eclipses = true
 multi_star = true
@@ -56,8 +56,8 @@ integrator = "march"
 ray_steps = 32
 cast_shadows = true
 layers = 2
-coverage = 0.62
-opacity = 0.88
+coverage = 0.58
+opacity = 0.92
 animate = true
 
 [night_lights]
@@ -95,9 +95,9 @@ navball_renderer = "auto"
 [ocean]
 enabled = true
 quality = "high"
-wind_speed_m_s = 10.0
+wind_speed_m_s = 2.0
 wind_direction_rad = 0.0
-significant_height_m = 2.0
+significant_height_m = 0.3
 depth_m = 100.0
 seed = 17
 geometry_patches = 32

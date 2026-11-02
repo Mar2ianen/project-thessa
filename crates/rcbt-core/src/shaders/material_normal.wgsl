@@ -60,9 +60,7 @@ fn material_at_level_raster_with_height_field(address:MaterialAddress,dx:vec2<f3
                     i32(normal_layer.x), dx * normal_footprint, dy * normal_footprint);
                 var xy=channels.rg;
                 if(reconstruct) {
-                    xy=vec2(0.0);
                     if((normal_layer.y & 0x40000000u)!=0u) {
-                        xy=channels.rg;
                         let base=channels.ba;
                         let base_z=sqrt(max(0.0001,1.0-dot(base,base)));
                         result.base_normal+=base/base_z*weight;

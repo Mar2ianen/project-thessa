@@ -2643,6 +2643,9 @@ mod terrain_diagnostic_tests {
             ("land_only", V::LandOnly, 7),
             ("geometry", V::Geometry, 8),
             ("height_page_level", V::HeightPageLevel, 9),
+            ("footprint", V::Footprint, 10),
+            ("material_lod", V::MaterialLod, 11),
+            ("relief_weight", V::ReliefWeight, 12),
         ] {
             let requested =
                 RequestedGraphics::from_toml(&format!("[debug]\nterrain_view = \"{name}\"\n"))

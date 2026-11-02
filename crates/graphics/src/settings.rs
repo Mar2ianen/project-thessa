@@ -663,6 +663,9 @@ pub enum TerrainDebugView {
     LandOnly = 7,
     Geometry = 8,
     HeightPageLevel = 9,
+    Footprint = 10,
+    MaterialLod = 11,
+    ReliefWeight = 12,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

@@ -32,5 +32,5 @@ fn ocean_spectral(position:vec3<f32>,radial:vec3<f32>,footprint_m:f32)->OceanSam
     return result;
 }
 fn ocean_material_weight(height:f32,roughness:f32)->f32 {
-    return (1.0-smoothstep(0.22,0.65,roughness))*(1.0-smoothstep(0.25,1.0,height));
+    return (1.0-smoothstep(0.18,0.22,roughness))*(1.0-smoothstep(0.0,0.25,height));
 }

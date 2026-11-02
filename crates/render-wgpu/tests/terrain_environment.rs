@@ -838,21 +838,18 @@ fn diagnostic_water_weight_exposes_wet_soil_false_positive_without_lighting() {
                 );
                 let rgb = center(&image);
                 let r = f64::from(roughness) / 255.;
-                let t = ((r - 0.22) / (0.65 - 0.22)).clamp(0., 1.);
-                let expected = if height >= 1. {
-                    0.
-                } else {
-                    1. - t * t * (3. - 2. * t)
-                };
+                let t = ((r - 0.18) / (0.22 - 0.18)).clamp(0., 1.);
+                let ht = (height / 0.25).clamp(0., 1.);
+                let expected = (1. - t * t * (3. - 2. * t)) * (1. - ht * ht * (3. - 2. * ht));
                 for value in rgb {
                     assert!(
                         (f64::from(value) / 255. - expected).abs() < 0.015,
                         "conforming={conforming} height={height} roughness={roughness} pixel={rgb:?} expected={expected}"
                     );
                 }
-                // This pins the current defect; it is not the correct water-presence contract.
-                if height <= 0. && roughness == 115 {
-                    assert!(rgb[0] > 80 && rgb[0] < 150);
+                // Wet soil (roughness 115 ~ 0.45) receives exactly 0 water weight on land.
+                if roughness >= 115 {
+                    assert_eq!(rgb[0], 0, "wet soil must not receive water weight");
                 }
             }
         }

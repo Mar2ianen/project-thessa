@@ -653,8 +653,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             * (1.0 - detail_weight);
     }
     // Classify before material-normal perturbation: water owns its wave normal.
-    var water_material = (1.0 - smoothstep(0.22, 0.65, roughness))
-        * (1.0 - smoothstep(0.25, 1.0, input.height_m));
+    // Ocean/water body has open-water roughness (< 0.22) and is at or below datum (height <= 0.25m).
+    // Wet soil on land (roughness >= 0.22 or height > 0.25m) remains dielectric land.
+    var water_material = (1.0 - smoothstep(0.18, 0.22, roughness))
+        * (1.0 - smoothstep(0.0, 0.25, input.height_m));
     // Diagnostic outputs are unexposed linear values, before light/haze.
     if (TERRAIN_DEBUG_VIEW == 1u) { return vec4(vec3(water_material), 1.0); }
     if (TERRAIN_DEBUG_VIEW == 2u) {
@@ -673,6 +675,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4(kind,1.0);
     }
     if (TERRAIN_DEBUG_VIEW == 9u) { return vec4(vec3(f32(input.terrain_debug_data.y)/24.0),1.0); }
+    if (TERRAIN_DEBUG_VIEW == 10u) { return vec4(vec3(clamp(footprint_m, 0.0, 10.0) / 10.0), 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 11u) { return vec4(vec3(material_lod / MATERIAL_MAX_LEVEL), 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 12u) {
+        let weight = (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m)) * (1.0 - water_material);
+        let height_coverage = mix(coarse.height_coverage, fine.height_coverage, fract(material_lod)) * weight;
+        return vec4(vec3(height_coverage), 1.0);
+    }
     // Premultiplied surface gradients: uncovered weight is flat. Preserve
     // coverage and the same globe transition as albedo rather than magnifying
     // a tiny resident normal contribution to full strength.
@@ -683,7 +692,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         let weight=(1.0-smoothstep(globe_texel_m,globe_texel_m*2.0,footprint_m))*(1.0-water_material);
         let base=mix(coarse.base_normal,fine.base_normal,fract(material_lod));
         let height_coverage=mix(coarse.height_coverage,fine.height_coverage,fract(material_lod))*weight;
-        shaded_normal=material_height_field_normal(normal,address,(mix(coarse.normal,fine.normal,fract(material_lod))+base)*weight,height_coverage,render_from_body);
+        shaded_normal=material_height_field_normal(shaded_normal,address,(mix(coarse.normal,fine.normal,fract(material_lod))+base)*weight,height_coverage,render_from_body);
     }
     if(MATERIAL_SPECULAR_FILTER_ENABLED && cbt_specular_enabled()) {
         roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);

@@ -44,6 +44,11 @@ water/height/distance/material/geometry diagnostics. The current sampled soil
 has zero water weight; the horizon band is conforming terrain with changing
 height-data coverage. A parent-chain candidate was rejected after the old policy
 also recovered with longer prestream; no unproven residency fix is shipped.
+[Doc 116](116_GROUND_DETAIL_NORMAL_CONTINUITY_AND_WATER_SEPARATION.md) repairs
+macro normal gradient continuity beyond ~5m (`xy = channels.rg` preserved on macro
+pages, `shaded_normal` fallback in height field operator), separates open-water
+classification from wet soil, adds `footprint`, `material_lod`, and `relief_weight`
+diagnostics, and validates 16x anisotropy on High quality.
 
 ## Current native integration checkpoint
 

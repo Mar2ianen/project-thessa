@@ -107,7 +107,7 @@ fn intersect_atmosphere(
     }
 
     let disc = b * b - c;
-    if disc >= 0.0 {
+    if disc > 0.0 {
         let surface_entry = -b - disc.sqrt();
         if surface_entry >= t0 && surface_entry < t1 {
             t1 = surface_entry;
@@ -139,6 +139,31 @@ pub fn transmittance(
     let Some((t0, t1)) = intersect_atmosphere(optics, camera_m, dir) else {
         return [1.0; 3];
     };
+    integrate_transmittance(optics, camera_m, dir, t0, t1, steps)
+}
+
+// LUT construction covers only unobstructed directions, including the limit
+// of a grazing ray. Geometry visibility remains the lookup caller's decision.
+pub(crate) fn unobstructed_transmittance(
+    optics: &AtmosphereOptics,
+    camera_m: DVec3,
+    dir: DVec3,
+    steps: u32,
+) -> [f64; 3] {
+    let Some((t0, t1)) = intersect_outer(optics, camera_m, dir) else {
+        return [1.; 3];
+    };
+    integrate_transmittance(optics, camera_m, dir, t0, t1, steps)
+}
+
+fn integrate_transmittance(
+    optics: &AtmosphereOptics,
+    camera_m: DVec3,
+    dir: DVec3,
+    t0: f64,
+    t1: f64,
+    steps: u32,
+) -> [f64; 3] {
     let n = steps.clamp(1, 512) as usize;
     let dt = ((t1 - t0) / n as f64).max(0.0);
     let mut tau = [0.0_f64; 3];
@@ -171,6 +196,60 @@ pub fn sky_radiance(
     view_steps: u32,
     sun_steps: u32,
 ) -> SkyResult {
+    sky_radiance_transport(optics, camera_m, view_dir, lights, view_steps, |p, d| {
+        transmittance(optics, p, d, sun_steps)
+    })
+}
+
+/// The same view integral with cached solar extinction; the table must match
+/// the optical domain. Emission remains owned by `optics`, not the cache.
+pub fn sky_radiance_lut(
+    optics: &AtmosphereOptics,
+    camera_m: DVec3,
+    view_dir: DVec3,
+    lights: &[CelestialLight],
+    view_steps: u32,
+    table: &crate::TransmittanceLut,
+) -> Option<SkyResult> {
+    if !table.optics_match(optics)
+        || !camera_m.is_finite()
+        || camera_m.length() > f64::MAX.sqrt() * 0.25
+        || !view_dir.is_finite()
+        || lights.iter().any(|light| {
+            !light.direction_to_star.is_finite() || !light.direction_to_star.length().is_finite()
+        })
+    {
+        return None;
+    }
+    Some(sky_radiance_transport(
+        optics,
+        camera_m,
+        view_dir,
+        lights,
+        view_steps,
+        |p, d| {
+            let radius = p.length();
+            if d == DVec3::ZERO {
+                return [1.; 3];
+            }
+            table
+                .sample(
+                    radius - optics.inner_radius_m,
+                    (p / radius).dot(d.normalize()).clamp(-1., 1.),
+                )
+                .expect("finite atmospheric integration point")
+        },
+    ))
+}
+
+fn sky_radiance_transport(
+    optics: &AtmosphereOptics,
+    camera_m: DVec3,
+    view_dir: DVec3,
+    lights: &[CelestialLight],
+    view_steps: u32,
+    solar: impl Fn(DVec3, DVec3) -> [f64; 3],
+) -> SkyResult {
     let dir = view_dir.normalize_or_zero();
     let mut result = SkyResult {
         radiance_rgb: [0.0; 3],
@@ -200,7 +279,7 @@ pub fn sky_radiance(
             if w == [0.0; 3] {
                 continue;
             }
-            let sun_t = transmittance(optics, p, light.direction_to_star, sun_steps);
+            let sun_t = solar(p, light.direction_to_star);
             let cos_theta = dir.dot(light.direction_to_star).clamp(-1.0, 1.0);
             let pr = rayleigh_phase(cos_theta);
             let pm = hg_phase(optics.mie.asymmetry_g, cos_theta);

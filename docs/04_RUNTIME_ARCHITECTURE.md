@@ -436,3 +436,12 @@ both shadows and RT. The same FastRT scalar query gate serves mesh and primary
 consumers. No second acceleration owner, depth prepass or physics path exists.
 The primary ABI is capability-gated; source/scene/camera mismatch keeps raster
 visibility. Renderer captures expose allocation and last-use counters.
+
+The [native foliage/solar continuation](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md)
+keeps one RayScene for opaque and MASK traversal; primary ground/water borrow
+its material/UV schema without another AS. Native owns the CC0 botanical adapter
+and sunset policy; backend-neutral atmosphere owns the cached optical model,
+and render-wgpu transports it through the existing environment publication.
+No simulation clock, authoritative world geometry or second generic tracer is
+introduced. AMD-style visible-receiver buffers and compact ray dispatch remain
+future pass-graph work, with explicit disabled/capability/budget requirements.

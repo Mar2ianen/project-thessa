@@ -666,11 +666,14 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     var direct = vec3(0.0);
     var visibility: array<f32,3>;
+    var sunlight: array<vec3<f32>,3>;
+    let radial_up=normalize(mat3x3<f32>(render_from_body[0].xyz,render_from_body[1].xyz,render_from_body[2].xyz)*direction);
     var land_direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
         if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
+            sunlight[i]=cbt_sunlight(input.render_position,radial_up,lighting.directions[i].xyz,lighting.colors_lux[i].rgb);
             visibility[i] = cbt_shadow_visibility(input.render_position, receiver_normal, i);
-            let incoming = lighting.colors_lux[i].rgb * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
+            let incoming = sunlight[i] * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
                 * visibility[i];
             direct += incoming;
             if (cbt_specular_enabled() && water_material < 1.0 && any(incoming > vec3(0.0))) {
@@ -708,7 +711,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         for (var i = 0u; i < 3u; i = i + 1u) {
             if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
                 land_reflection += ocean_sun_reflection(shaded_normal, eye, lighting.directions[i].xyz,
-                    lighting.colors_lux[i].rgb, roughness, 0.04)
+                    sunlight[i], roughness, 0.04)
                     * visibility[i];
             }
         }
@@ -734,9 +737,9 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         for (var i = 0u; i < 3u; i = i + 1u) {
             let light = lighting.directions[i].xyz;
             reflection += ocean_sun_reflection(wave_normal, eye, light,
-                lighting.colors_lux[i].rgb, max(roughness, 0.16), f0)
+                sunlight[i], max(roughness, 0.16), f0)
                 * cbt_shadow_visibility(input.render_position, normal, i);
-            sky_illuminance += lighting.colors_lux[i].rgb
+            sky_illuminance += sunlight[i]
                 * max(dot(up, light), 0.0) * lighting.ocean_appearance.y;
         }
         let sky = sky_illuminance / OCEAN_PI;
@@ -746,7 +749,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             sky * vec3(0.015, 0.018, 0.015)) * fresnel;
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
-    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m,visibility);
+    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m,visibility,sunlight);
     radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a);
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no

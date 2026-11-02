@@ -1185,8 +1185,16 @@ enum PlantDetail {
     Reduced,
     Shadow,
     ShadowFar,
+    ScaffoldFull,
+    ScaffoldReduced,
 }
 impl PlantDetail {
+    fn scaffold(self) -> bool {
+        matches!(self, Self::ScaffoldFull | Self::ScaffoldReduced)
+    }
+    fn reduced(self) -> bool {
+        !matches!(self, Self::Full | Self::ScaffoldFull)
+    }
     fn shadow(self) -> bool {
         matches!(self, Self::Shadow | Self::ShadowFar)
     }
@@ -1204,6 +1212,22 @@ pub fn plant_prototype_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
     static COARSE: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
     (if reduced { &COARSE } else { &FULL })
         .get_or_init(|| build_plant_forms(reduced.into()))
+        .clone()
+}
+
+/// Woody/reed scaffolds for a consumer publishing separate optical foliage.
+/// Fern rows intentionally have no geometry; no unused fine lamina or its AO is baked.
+pub fn plant_scaffold_forms(reduced: bool) -> Vec<(PlantMesh, u8)> {
+    static FULL: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
+    static REDUCED: std::sync::OnceLock<Vec<(PlantMesh, u8)>> = std::sync::OnceLock::new();
+    (if reduced { &REDUCED } else { &FULL })
+        .get_or_init(|| {
+            build_plant_forms(if reduced {
+                PlantDetail::ScaffoldReduced
+            } else {
+                PlantDetail::ScaffoldFull
+            })
+        })
         .clone()
 }
 
@@ -1227,7 +1251,10 @@ fn build_plant_forms(detail: PlantDetail) -> Vec<(PlantMesh, u8)> {
     let base = match detail {
         PlantDetail::Full => plant_prototypes(),
         PlantDetail::Reduced => reduced_plant_prototypes(),
-        PlantDetail::Shadow | PlantDetail::ShadowFar => build_plant_prototypes(detail),
+        PlantDetail::Shadow
+        | PlantDetail::ShadowFar
+        | PlantDetail::ScaffoldFull
+        | PlantDetail::ScaffoldReduced => build_plant_prototypes(detail),
     };
     let mut forms = Vec::new();
     for mesh in base {
@@ -1267,7 +1294,7 @@ fn build_plant_forms(detail: PlantDetail) -> Vec<(PlantMesh, u8)> {
                     *n = crate::lod::normalize(std::array::from_fn(|i| f64::from(n[i] / scale[i])))
                         .map(|v| v as f32);
                 }
-                if !detail.shadow() {
+                if !detail.shadow() && !variant.positions.is_empty() {
                     bake_plant_surface(&mut variant);
                 }
             }
@@ -1300,7 +1327,7 @@ fn bake_plant_surface(mesh: &mut PlantMesh) {
 
 fn build_plant_prototypes(detail: impl Into<PlantDetail>) -> Vec<PlantMesh> {
     let detail = detail.into();
-    let reduced = detail != PlantDetail::Full;
+    let reduced = detail.reduced();
     use crate::scatter::ScatterKind;
     [
         ScatterKind::FernClump,
@@ -1337,7 +1364,7 @@ fn build_plant_prototypes(detail: impl Into<PlantDetail>) -> Vec<PlantMesh> {
             _ => unreachable!(),
         }
         mesh.foliage_tones.resize(mesh.positions.len(), 0);
-        if !detail.shadow() {
+        if !detail.shadow() && !mesh.positions.is_empty() {
             bake_plant_surface(&mut mesh);
         }
         mesh
@@ -1355,6 +1382,9 @@ fn fern_clump(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>) {
 
 fn fern_clump_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form: u8) {
     let detail = detail.into();
+    if detail.scaffold() {
+        return;
+    }
     if form == 2 {
         // Form 2: Broad decumbent hero rosette with 21 layered fronds (4 juvenile upright,
         // 10 mature arching fountain fronds, 7 long ground-draping senescent skirts).
@@ -1493,6 +1523,24 @@ fn reed_clump(mesh: &mut PlantMesh, reduced: bool) {
     }
 }
 
+fn tree_terminals(form: u8) -> &'static [[f64; 3]] {
+    match form {
+        1 => &[[0.12, 8.45, 0.08]],
+        2 => &[[-0.85, 9.35, 0.30], [2.65, 6.35, -0.60]],
+        _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
+    }
+}
+
+/// Metre-local canopy sockets from the same authored woody generator. Includes
+/// growth-form scale; consumers must not infer sockets from renderer traversal.
+pub fn plant_crown_attachments(form: u8) -> Vec<[f32; 3]> {
+    let scale = plant_form_scale(form);
+    tree_terminals(form)
+        .iter()
+        .map(|p| std::array::from_fn(|i| p[i] as f32 * scale[i]))
+        .collect()
+}
+
 /// Authored forked arborescent silhouette with tiered radial crowns; optical
 /// reference geometry, not a taxonomic reconstruction of Cyathea / Dicksonia.
 fn lycopsid_tree(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>) {
@@ -1502,7 +1550,7 @@ fn lycopsid_tree(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>) {
 
 fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form: u8) {
     let detail = detail.into();
-    let reduced = detail != PlantDetail::Full;
+    let reduced = detail.reduced();
     const TRUNK_RINGS: [(f64, f64); 21] = [
         (0.00, 0.68),
         (0.18, 0.54),
@@ -1565,11 +1613,7 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form
             &trunk_rings[..]
         },
     );
-    let terminals: &[[f64; 3]] = match form {
-        1 => &[[0.12, 8.45, 0.08]],
-        2 => &[[-0.85, 9.35, 0.30], [2.65, 6.35, -0.60]],
-        _ => &[[-1.85, 8.05, -0.30], [1.85, 7.65, 0.30]],
-    };
+    let terminals = tree_terminals(form);
     let fork_base_y = match form {
         1 => 8.10,
         2 => 3.95,
@@ -1639,6 +1683,10 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form
         // Authored weathered stem reflectance, not a measured fossil spectrum.
         albedo_srgb: [0.18, 0.15, 0.11],
     });
+
+    if detail.scaffold() {
+        return;
+    }
 
     // Count, attachment height, reach, arch rise, terminal drop, azimuth.
     // Form 1 is a solitary monopodial crown (28 fronds on 1 terminal);
@@ -2161,7 +2209,7 @@ fn compound_pinna(
     detail: impl Into<PlantDetail>,
 ) -> usize {
     let detail = detail.into();
-    let reduced = detail != PlantDetail::Full;
+    let reduced = detail.reduced();
     const MAX_WING_BINS: usize = 12;
     let first = mesh.positions.len();
     let first_index = mesh.indices.len();
@@ -3793,6 +3841,47 @@ mod tests {
                 for visibility in mesh.ambient_visibility {
                     assert!((0.0..=1.0).contains(&visibility));
                     assert_eq!((visibility * 32.0).fract(), 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separate_foliage_scaffolds_retain_the_original_wood_geometry() {
+        use crate::scatter::ScatterKind;
+        for reduced in [false, true] {
+            let full = plant_prototype_forms(reduced);
+            let scaffolds = plant_scaffold_forms(reduced);
+            assert_eq!(full.len(), scaffolds.len());
+            for ((a, form), (b, other)) in full.iter().zip(scaffolds) {
+                assert_eq!(*form, other);
+                assert_eq!(a.kind, b.kind);
+                match a.kind {
+                    ScatterKind::LycopsidTree => {
+                        let count = a.stem.as_ref().unwrap().vertex_count as usize;
+                        assert_eq!(b.positions, a.positions[..count]);
+                        assert_eq!(b.normals, a.normals[..count]);
+                        let indices: Vec<_> = a
+                            .indices
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .filter(|t| t[0] < (count as u32))
+                            .flatten()
+                            .copied()
+                            .collect();
+                        assert_eq!(b.indices, indices);
+                        assert_eq!(b.stem, a.stem);
+                        assert!(b.ambient_visibility.iter().all(|v| (0.0..=1.0).contains(v)));
+                    }
+                    ScatterKind::FernClump => {
+                        assert!(b.positions.is_empty() && b.indices.is_empty())
+                    }
+                    ScatterKind::ReedClump => {
+                        assert_eq!(b.positions, a.positions);
+                        assert_eq!(b.indices, a.indices);
+                    }
+                    _ => unreachable!(),
                 }
             }
         }

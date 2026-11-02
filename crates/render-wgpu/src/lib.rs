@@ -23,8 +23,8 @@
 //! so no `unsafe` experimental-feature consent lives in the default path
 //! (this crate is `forbid(unsafe_code)`). The consent itself is isolated in
 //! `thessa-wgpu-exp`; [`Backend::bring_up_experimental`] negotiates exactly
-//! the adapter-exposed interesting subset through it. Limits stay default in
-//! this step; per-pipeline limit negotiation arrives with the pipeline cache.
+//! the adapter-exposed interesting subset through it. RT negotiates bounded
+//! hit-table/texture limits from capabilities; stable-only limits stay default.
 
 #![forbid(unsafe_code)]
 
@@ -95,14 +95,17 @@ pub struct Backend {
 
 /// Device limits for one bring-up. Byte-identical to `Limits::default()`
 /// unless ray tracing was negotiated, in which case the acceleration-structure
-/// budgets come from the adapter instead of staying at the zero-valued
-/// defaults (which would reject any RT pipeline at layout derivation).
+/// budgets and bounded material/receiver bindings come from the adapter.
+/// Negotiating capacity allocates no scene resources.
 fn limits_for(adapter: &wgpu::Adapter, features: wgpu::Features) -> wgpu::Limits {
+    limits_for_caps(&adapter.limits(), features)
+}
+
+fn limits_for_caps(caps: &wgpu::Limits, features: wgpu::Features) -> wgpu::Limits {
     let mut limits = wgpu::Limits::default();
     if !features.contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {
         return limits;
     }
-    let caps = adapter.limits();
     limits.max_acceleration_structures_per_shader_stage =
         caps.max_acceleration_structures_per_shader_stage;
     limits.max_blas_primitive_count = caps.max_blas_primitive_count;
@@ -112,7 +115,17 @@ fn limits_for(adapter: &wgpu::Adapter, features: wgpu::Features) -> wgpu::Limits
     // its material directory. Lesser devices retain the mesh-only RT path.
     limits.max_storage_buffers_per_shader_stage = caps
         .max_storage_buffers_per_shader_stage
-        .clamp(limits.max_storage_buffers_per_shader_stage, 9);
+        .clamp(limits.max_storage_buffers_per_shader_stage, 11);
+    // Opaque/MASK hit maps share raster images. The old default 16 textures
+    // rejected the full botanical scene despite sufficient adapter capacity.
+    limits.max_sampled_textures_per_shader_stage = caps
+        .max_sampled_textures_per_shader_stage
+        .min(32)
+        .max(limits.max_sampled_textures_per_shader_stage);
+    limits.max_samplers_per_shader_stage = caps
+        .max_samplers_per_shader_stage
+        .min(32)
+        .max(limits.max_samplers_per_shader_stage);
     limits.max_buffers_and_acceleration_structures_per_shader_stage = limits
         .max_buffers_and_acceleration_structures_per_shader_stage
         .max(caps.max_buffers_and_acceleration_structures_per_shader_stage);
@@ -529,6 +542,38 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ray_binding_negotiation_is_bounded_and_stable_only_is_unchanged() {
+        let caps = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 128,
+            max_samplers_per_shader_stage: 64,
+            max_storage_buffers_per_shader_stage: 32,
+            ..Default::default()
+        };
+        assert_eq!(
+            limits_for_caps(&caps, wgpu::Features::empty()),
+            wgpu::Limits::default()
+        );
+        let requested = limits_for_caps(&caps, wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+        assert_eq!(requested.max_sampled_textures_per_shader_stage, 32);
+        assert_eq!(requested.max_samplers_per_shader_stage, 32);
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 11);
+        let low = wgpu::Limits::default();
+        let requested = limits_for_caps(&low, wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+        assert_eq!(
+            requested.max_sampled_textures_per_shader_stage,
+            low.max_sampled_textures_per_shader_stage
+        );
+        assert_eq!(
+            requested.max_samplers_per_shader_stage,
+            low.max_samplers_per_shader_stage
+        );
+        assert_eq!(
+            requested.max_storage_buffers_per_shader_stage,
+            low.max_storage_buffers_per_shader_stage
+        );
+    }
 
     #[test]
     fn native_material_storage_reports_raw_instead_of_claiming_unused_compact_work() {

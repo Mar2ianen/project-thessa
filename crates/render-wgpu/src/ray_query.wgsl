@@ -9,11 +9,11 @@ struct RtHit {
     barycentrics:vec2<f32>,
 }
 
-fn rt_trace(origin:vec3<f32>,direction:vec3<f32>,t_min:f32,t_max:f32,flags:u32)->RtHit {
+fn rt_trace(origin:vec3<f32>,direction:vec3<f32>,t_min:f32,t_max:f32,flags:u32,cone_width:f32,cone_spread:f32)->RtHit {
     var result:RtHit;
     var query:ray_query;
     rayQueryInitialize(&query,rt_scene,RayDesc(flags,0xFFu,t_min,t_max,origin,direction));
-    rayQueryProceed(&query);
+    // CANDIDATE_TRAVERSAL
     let intersection=rayQueryGetCommittedIntersection(&query);
     result.hit=intersection.kind!=RAY_QUERY_INTERSECTION_NONE;
     if (result.hit) {
@@ -29,6 +29,6 @@ fn rt_trace(origin:vec3<f32>,direction:vec3<f32>,t_min:f32,t_max:f32,flags:u32)-
 fn rt_visibility(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,visibility:f32,bias:f32,max_distance:f32)->f32 {
     let min_t=fastrt_visibility_min_distance(visibility,dot(normal,direction),bias,max_distance);
     if(min_t<0.0) { return visibility; }
-    let hit=rt_trace(position,direction,min_t,max_distance,RAY_FLAG_TERMINATE_ON_FIRST_HIT);
+    let hit=rt_trace(position,direction,min_t,max_distance,RAY_FLAG_TERMINATE_ON_FIRST_HIT,0.0,0.0);
     return select(visibility,0.0,hit.hit);
 }

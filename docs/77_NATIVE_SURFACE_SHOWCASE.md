@@ -3452,3 +3452,17 @@ including aggregate preparation admission, strict Clippy, feature-off and
 architecture gates. WORLD155's 31 software frames/readback also complete; author
 inspection still rejects the bright yellow-green moss transfer. This is a fern
 and diagnostics checkpoint, not a final coastal ground/reference acceptance.
+
+## Filtered native laminae and physical sunset continuation (2026-11-02)
+
+[Doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md) records the current native
+CC0 B02 fern adapter, common woody sockets/scaffold path, filtered alpha/MSAA,
+MASK CSM/ray support, corrected backface mapping and shared solar extinction.
+It supersedes the older procedural-lamina and unsupported-MASK descriptions
+above for this native survey path. Original procedural producers remain as
+separate existing consumers/oracles. `--scene b03-sunset` selects the four-degree
+physical descending sun; explicit `--sim-time` overrides it. Full density,
+scanned close soil, existing pools and CBT remain the target. Earlier orange
+captures and rejected botanical specimens are retained, not acceptance. See
+doc 112 for all open composition/material/atmosphere/hybrid-shadow/performance
+gaps and the executed evidence.

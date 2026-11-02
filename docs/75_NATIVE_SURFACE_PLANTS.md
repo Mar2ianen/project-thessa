@@ -1,5 +1,10 @@
 # 75 — Native surface prototype plants (bounded consumer and prototype geometry)
 
+Current native continuation: [doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md)
+adds pinned CC0 laminae, MASK raster shadows/rays, MSAA coverage and corrected
+backface mapping. The older evidence below retains its dated scope. BLEND ray/
+shadow transmission and full coastal quality/cost acceptance remain open.
+
 The current compound-frond reconstruction follows the photographic morphology
 notes in `reference/COASTAL_FLORA_NOTES.md`. The incoming WORLD136 source was
 reviewed before continuation; WORLD139's scalloped single blades were rejected

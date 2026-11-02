@@ -685,7 +685,8 @@ impl TerrainRenderer {
         let reflections = settings.is_none_or(|s| s.specular_reflections);
         let directional_diffuse =
             settings.is_some_and(|s| s.surface_quality != thessa_graphics::Quality::Low);
-        let raster_environment = directional_diffuse
+        let raster_environment = settings.is_some_and(|s| s.atmosphere_enabled)
+            || directional_diffuse
             || ocean.is_some()
             || reflections
             || settings.is_some_and(|s| s.local_haze_extinction_per_m > 0.0);
@@ -720,6 +721,9 @@ impl TerrainRenderer {
         let mut hooks = format!(
             "fn cbt_shadow_visibility(p:vec3<f32>,n:vec3<f32>,sun:u32)->f32 {{ return shadow_visibility(p,n,sun)*cloud_terrain_sun_visibility(p,sun); }}\nfn cbt_specular_enabled()->bool {{ return {reflections}; }}\n"
         );
+        hooks.push_str(if raster_environment {
+            "fn cbt_sunlight(p:vec3<f32>,u:vec3<f32>,l:vec3<f32>,s:vec3<f32>)->vec3<f32>{return env_sunlight(p,l,s);}"
+        } else {"fn cbt_sunlight(p:vec3<f32>,u:vec3<f32>,l:vec3<f32>,s:vec3<f32>)->vec3<f32>{return s;}"});
         hooks.push_str(if directional_diffuse {"fn cbt_diffuse_environment(n:vec3<f32>,a:vec3<f32>)->vec3<f32>{return env_diffuse_irradiance(n,a);}"}else{"fn cbt_diffuse_environment(n:vec3<f32>,a:vec3<f32>)->vec3<f32>{return a;}"});
         hooks.push_str(&if reflections {
             format!("fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec4<f32>{{let response=env_specular_response(p,n,v,r,vec3(0.04),a,{land_environment_samples}u,vec3<u32>({cloud_directions}u,{cloud_steps}u,{cloud_sun_steps}u));return vec4(response.radiance,response.reflectance.r);}}\nfn cbt_land_transmission(n:vec3<f32>,l:vec3<f32>,r:f32)->f32{{return 1.0-env_directional_reflectance(n,l,r,vec3(0.04),{land_environment_samples}u).r;}}\nfn cbt_land_ambient_transmission(r:f32)->f32{{return 1.0-env_average_reflectance(r,vec3(0.04),{land_environment_samples}u).r;}}\n")
@@ -727,7 +731,7 @@ impl TerrainRenderer {
             "fn cbt_land_environment(p:vec3<f32>,n:vec3<f32>,v:vec3<f32>,r:f32,a:vec3<f32>)->vec4<f32>{return vec4(0.0);}\nfn cbt_land_transmission(n:vec3<f32>,l:vec3<f32>,r:f32)->f32{return 1.0;}\nfn cbt_land_ambient_transmission(r:f32)->f32{return 1.0;}\n".into()
         });
         hooks.push_str(if ocean.is_some(){include_str!("ocean_raster.wgsl")}else{
-            "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32,v:array<f32,3>)->vec4<f32>{return vec4(0.0);}"
+            "fn cbt_spectral_ocean(p:vec3<f32>,n:vec3<f32>,d:vec3<f32>,h:f32,r:f32,a:vec3<f32>,f:f32,v:array<f32,3>,s:array<vec3<f32>,3>)->vec4<f32>{return vec4(0.0);}"
         });
         if ocean.is_some() {
             hooks.push_str(&crate::ocean::shader(2));
@@ -1304,6 +1308,31 @@ impl TerrainRenderer {
             self.last_shadow_passes = shadows.active_passes();
             self.shadow_cache = Some(key);
         }
+    }
+
+    /// Trace-only partition of the same caster selection. The caller admits and
+    /// fences each layer independently; no aggregate workload limit is bypassed.
+    pub fn encode_shadow_layer_for_diagnostics(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        meshes: Option<&crate::mesh::MeshRenderer>,
+        layer: usize,
+    ) -> crate::shadows::ShadowDrawStats {
+        if layer == 0 {
+            self.last_shadow_passes = 0;
+            self.last_shadow_draws = Default::default();
+        }
+        self.shadow_cache = None;
+        let Some(atlas) = &self.shadows else {
+            return Default::default();
+        };
+        if !atlas.layer_active(layer) {
+            return Default::default();
+        }
+        let stats = atlas.encode_layer_for_diagnostics(encoder, self, meshes, layer, true);
+        self.last_shadow_passes += 1;
+        self.last_shadow_draws.accumulate(stats);
+        stats
     }
 
     /// Last encoded depth-layer draws (zero on an exact cached frame), unlike
@@ -2177,6 +2206,13 @@ impl TerrainRenderer {
                 }
             }
         }
+        let primary_scene = self
+            .primary_shadow
+            .as_ref()
+            .zip(mesh.and_then(|m| m.primary_shadow(self.camera)));
+        let primary_pipeline = primary_scene
+            .as_ref()
+            .map(|(primary, (_, schema))| primary.masked_pipeline(*schema));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("owned-unified-scene-frame"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2213,13 +2249,13 @@ impl TerrainRenderer {
             multiview_mask: None,
         });
         self.primary_shadow_used.set(false);
-        if let Some((primary, scene)) = self
-            .primary_shadow
-            .as_ref()
-            .zip(mesh.and_then(|m| m.primary_shadow(self.camera)))
-        {
+        if let Some((primary, (scene, schema))) = primary_scene {
             self.primary_shadow_used.set(true);
-            pass.set_pipeline(&primary.pipeline);
+            pass.set_pipeline(if schema.is_some() {
+                &primary_pipeline.as_ref().unwrap().as_ref().unwrap().1
+            } else {
+                &primary.pipeline
+            });
             pass.set_bind_group(0, &primary.geometry, &[]);
             pass.set_bind_group(1, &primary.atlas, &[]);
             pass.set_bind_group(2, &primary.environment, &[]);

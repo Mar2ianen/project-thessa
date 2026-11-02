@@ -8,6 +8,8 @@ pub struct CloudBinding {
     pub detail: wgpu::TextureView,
     pub detail_sampler: wgpu::Sampler,
 }
+pub const SOLAR_FALLBACK: &str = "fn cloud_solar_source(point:vec3<f32>,direction:vec3<f32>,source:vec3<f32>)->vec3<f32>{return source;}";
+pub const SOLAR_TRANSPORT: &str = "fn cloud_solar_source(point:vec3<f32>,direction:vec3<f32>,source:vec3<f32>)->vec3<f32>{return env_sunlight(point,direction,source);}";
 pub const SHADER: &str = include_str!("clouds.wgsl");
 impl CloudBinding {
     pub fn disabled(device: &wgpu::Device) -> Self {

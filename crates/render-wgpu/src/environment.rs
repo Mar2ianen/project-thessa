@@ -5,10 +5,12 @@
 //! A renderer always binds both entries; the field is enabled by a metadata
 //! flag instead of by rebuilding pipelines. Buffer growth or release rebuilds
 //! the frame bind group; same-size updates only write buffers.
+use std::sync::Arc;
+use thessa_atmosphere::TransmittanceLut;
 use thessa_render_core::environment::EnvironmentRadiance;
 
 /// Header, ambient, two local-layer vec4s and nine diffuse SH vec4s.
-const META_BYTES: u64 = 208;
+const META_BYTES: u64 = 256;
 /// `array<vec4<f32>>` texel stride.
 const TEXEL_BYTES: u64 = 16;
 /// Placeholder texel so the storage binding is always valid.
@@ -78,6 +80,7 @@ pub struct EnvironmentBinding {
     ambient_lux: [f32; 3],
     capacity_texels: u64,
     uploads: u64,
+    sunlight: Option<Arc<TransmittanceLut>>,
 }
 
 #[derive(Clone)]
@@ -108,6 +111,7 @@ impl EnvironmentBinding {
             ambient_lux: [0.0; 3],
             capacity_texels: PLACEHOLDER_TEXELS,
             uploads: 0,
+            sunlight: None,
         }
     }
 
@@ -121,12 +125,13 @@ impl EnvironmentBinding {
     ) -> bool {
         let Some(field) = field else {
             self.background = None;
-            if !self.enabled {
+            if !self.enabled && self.sunlight.is_none() {
                 return false;
             }
             backend
                 .queue
                 .write_buffer(&self.meta, 0, &meta_bytes(false, 0, 0, [0.0; 3]));
+            self.sunlight = None;
             self.enabled = false;
             self.width = 0;
             self.height = 0;
@@ -142,11 +147,17 @@ impl EnvironmentBinding {
             let capacity = required;
             self.texels = buffer(
                 &backend.device,
-                capacity * TEXEL_BYTES,
+                (capacity
+                    + self
+                        .sunlight
+                        .as_ref()
+                        .map_or(0, |s| s.texels().len() as u64))
+                    * TEXEL_BYTES,
                 "environment-texels",
             );
             self.capacity_texels = capacity;
             reallocated = true;
+            self.upload_sunlight(backend);
         }
         let mut staged = Vec::with_capacity(field.texels().len() * TEXEL_BYTES as usize);
         for texel in field.texels() {
@@ -174,6 +185,117 @@ impl EnvironmentBinding {
         self.ambient_lux = field.ambient_lux();
         self.uploads += 1;
         reallocated
+    }
+
+    fn upload_sunlight(&self, backend: &crate::Backend) {
+        if let Some(table) = &self.sunlight {
+            let data: Vec<u8> = table
+                .texels()
+                .iter()
+                .flat_map(|rgb| rgb.iter().copied().chain([0.0]))
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            backend
+                .queue
+                .write_buffer(&self.texels, self.capacity_texels * TEXEL_BYTES, &data);
+            let words = [
+                self.capacity_texels as u32,
+                table.width(),
+                table.height(),
+                0,
+            ];
+            let bytes: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+            backend.queue.write_buffer(&self.meta, 208, &bytes);
+        }
+    }
+
+    /// Publish a cached neutral optical table alongside the sky, using the same
+    /// storage binding. A changed handle requires consumers to re-adopt it.
+    pub fn update_sunlight(
+        &mut self,
+        backend: &crate::Backend,
+        table: Option<Arc<TransmittanceLut>>,
+    ) -> Result<bool, crate::BackendError> {
+        if self
+            .sunlight
+            .as_ref()
+            .zip(table.as_ref())
+            .is_some_and(|(a, b)| Arc::ptr_eq(a, b))
+            || (self.sunlight.is_none() && table.is_none())
+        {
+            return Ok(false);
+        }
+        let count = table.as_ref().map_or(0, |t| t.texels().len() as u64);
+        let bytes = (self.capacity_texels + count) * TEXEL_BYTES;
+        if bytes > backend.device.limits().max_storage_buffer_binding_size {
+            return Err(crate::BackendError::Device(
+                "solar lookup exceeds storage binding capacity".into(),
+            ));
+        }
+        let replacement = buffer(&backend.device, bytes, "environment-with-solar-transport");
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(
+            &self.texels,
+            0,
+            &replacement,
+            0,
+            self.capacity_texels * TEXEL_BYTES,
+        );
+        backend.queue.submit([encoder.finish()]);
+        self.texels = replacement;
+        self.sunlight = table;
+        backend.queue.write_buffer(&self.meta, 208, &[0; 48]);
+        self.upload_sunlight(backend);
+        Ok(true)
+    }
+
+    /// Borrow the same neutral table used by the GPU publication; no rebuild.
+    pub fn sunlight_table(&self) -> Option<std::sync::Arc<TransmittanceLut>> {
+        self.sunlight.clone()
+    }
+
+    /// Camera-relative altitude retains metre precision on planetary radii.
+    pub fn update_sunlight_camera(
+        &self,
+        backend: &crate::Backend,
+        camera_m: [f64; 3],
+    ) -> Result<(), crate::BackendError> {
+        let Some(table) = &self.sunlight else {
+            return Ok(());
+        };
+        let camera = glam::DVec3::from_array(camera_m);
+        let r = camera.length();
+        let limit = f64::from(f32::MAX).sqrt() * 0.25;
+        if !camera.is_finite()
+            || !r.is_finite()
+            || r <= 0.0
+            || r > limit
+            || table.inner_radius_m() > limit
+            || table.top_height_m() > limit
+            || !(table.inner_radius_m() as f32).is_normal()
+            || !(table.top_height_m() as f32).is_normal()
+        {
+            return Err(crate::BackendError::Device(
+                "invalid solar lookup camera/domain".into(),
+            ));
+        }
+        let up = camera / r;
+        let values = [
+            table.inner_radius_m() as f32,
+            table.top_height_m() as f32,
+            (r - table.inner_radius_m()) as f32,
+            0.0,
+            up.x as f32,
+            up.y as f32,
+            up.z as f32,
+            0.0,
+        ];
+        let bytes: Vec<u8> = values.into_iter().flat_map(f32::to_le_bytes).collect();
+        backend.queue.write_buffer(&self.meta, 224, &bytes);
+        backend
+            .queue
+            .write_buffer(&self.meta, 220, &1u32.to_le_bytes());
+        Ok(())
     }
 
     /// Update the per-camera local layer in the shared uniform. No allocations,
@@ -291,10 +413,16 @@ impl EnvironmentBinding {
         self.ambient_lux
     }
 
-    /// Reserved grid storage excluding the metadata and 16-byte placeholder.
+    /// Reserved grid/solar storage excluding common metadata; fully disabled
+    /// state excludes its 16-byte placeholder.
     pub fn storage_bytes(&self) -> u64 {
-        if self.enabled {
-            self.capacity_texels * TEXEL_BYTES
+        if self.enabled || self.sunlight.is_some() {
+            (self.capacity_texels
+                + self
+                    .sunlight
+                    .as_ref()
+                    .map_or(0, |t| t.texels().len() as u64))
+                * TEXEL_BYTES
                 + self
                     .background
                     .as_ref()
@@ -311,16 +439,35 @@ impl EnvironmentBinding {
     }
 }
 
+/// The same solar ABI and lookup without sky/cloud reflection dependencies.
+pub fn sunlight_shader(group: u32) -> String {
+    let source = include_str!("environment.wgsl");
+    let a = source.find("struct EnvMeta").unwrap();
+    let b = source.find("fn env_enabled()").unwrap();
+    format!("{}\n{}", &source[a..b], include_str!("sunlight.wgsl"))
+        .replace("@group(0)", &format!("@group({group})"))
+}
+
 pub(crate) fn shader(group: u32) -> String {
     format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         include_str!("environment.wgsl"),
+        include_str!("sunlight.wgsl"),
         crate::clouds::SHADER
     )
     .replace("@group(0)", &format!("@group({group})"))
+    .replace(
+        crate::clouds::SOLAR_FALLBACK,
+        crate::clouds::SOLAR_TRANSPORT,
+    )
 }
 
-fn meta_bytes(enabled: bool, width: u32, height: u32, ambient_lux: [f32; 3]) -> [u8; 208] {
+fn meta_bytes(
+    enabled: bool,
+    width: u32,
+    height: u32,
+    ambient_lux: [f32; 3],
+) -> [u8; META_BYTES as usize] {
     let mut bytes = [0_u8; META_BYTES as usize];
     let header = [u32::from(enabled), width, height, 0];
     for (index, word) in header.iter().enumerate() {
@@ -339,7 +486,8 @@ fn buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
         size: size.max(4),
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::UNIFORM
-            | wgpu::BufferUsages::COPY_DST,
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     })
 }
@@ -347,6 +495,118 @@ fn buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Vulkan: solar LUT, camera-relative altitude and buffer lifetime vs dense f64 transport"]
+    fn sunlight_matches_dense_transport_and_survives_environment_publication() {
+        use glam::DVec3;
+        let backend = crate::Backend::bring_up().unwrap();
+        eprintln!("solar lookup adapter={:?}", backend.adapter.get_info());
+        let optics =
+            thessa_atmosphere::nitrogen_oxygen_optics(3_200_000., 120_000., 16_300.).unwrap();
+        let table = Arc::new(TransmittanceLut::build(&optics, 256, 64, 128).unwrap());
+        let field = EnvironmentRadiance::new(8, 4, vec![[1.0, 2.0, 3.0]; 32]).unwrap();
+        let mut binding = EnvironmentBinding::new(&backend.device);
+        binding.update(&backend, Some(&field));
+        let clear_bytes = binding.storage_bytes();
+        let mut cases = Vec::new();
+        let mut body = String::new();
+        let camera = DVec3::new(0., 3_200_000.002, 0.);
+        for height in [-5., 0.002, 2., 500., 20_000., 100_000., 300_000.] {
+            for angle in [-90.0_f64, -15., -1., 0., 1., 4., 10., 45., 90.] {
+                let direction = DVec3::new(angle.to_radians().cos(), angle.to_radians().sin(), 0.);
+                let p = DVec3::Y * (optics.inner_radius_m + height) - camera;
+                let i = cases.len();
+                body.push_str(&format!("probe_out[{i}]=vec4(env_sunlight(vec3({:?},{:?},{:?}),vec3({:?},{:?},{:?}),vec3(1.0)),0.0);\n",p.x as f32,p.y as f32,p.z as f32,direction.x as f32,direction.y as f32,direction.z as f32));
+                let expected = thessa_atmosphere::transmittance(
+                    &optics,
+                    DVec3::Y * (optics.inner_radius_m + height.max(0.)),
+                    direction,
+                    512,
+                );
+                cases.push(expected);
+            }
+        }
+        body.push_str(&format!(
+            "probe_out[{}]=vec4(env_radiance(vec3(0.0,1.0,0.0),vec3(0.0)),0.0);",
+            cases.len()
+        ));
+        let source = format!(
+            "{}\n{}\n@group(1) @binding(0) var<storage,read_write> probe_out:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{{body}}}",
+            include_str!("../../rcbt-core/src/shaders/ocean.wgsl"),
+            shader(0)
+        );
+        let mut max_error = 0.0_f64;
+        for state in 0..6 {
+            match state {
+                0 => {
+                    assert!(
+                        binding
+                            .update_sunlight(&backend, Some(table.clone()))
+                            .unwrap()
+                    );
+                }
+                1 => {
+                    assert!(
+                        !binding
+                            .update_sunlight(&backend, Some(table.clone()))
+                            .unwrap()
+                    );
+                }
+                2 => {
+                    let larger =
+                        EnvironmentRadiance::new(16, 8, vec![[1.0, 2.0, 3.0]; 128]).unwrap();
+                    assert!(binding.update(&backend, Some(&larger)));
+                }
+                3 => {
+                    assert!(binding.update_sunlight(&backend, None).unwrap());
+                }
+                4 => {
+                    assert!(
+                        binding
+                            .update_sunlight(&backend, Some(table.clone()))
+                            .unwrap()
+                    );
+                }
+                _ => {
+                    assert!(binding.update(&backend, None));
+                    assert_eq!(binding.storage_bytes(), 0);
+                }
+            }
+            binding
+                .update_sunlight_camera(&backend, camera.to_array())
+                .unwrap();
+            let values = probe_entries(
+                &backend,
+                &binding.entries(),
+                source.clone(),
+                cases.len() as u64 + 1,
+                [1, 1, 1],
+            );
+            let active = state != 3 && state != 5;
+            for (actual, expected) in values.iter().zip(&cases) {
+                for c in 0..3 {
+                    let target = if active { expected[c] } else { 1.0 };
+                    let error = (f64::from(actual[c]) - target).abs();
+                    max_error = max_error.max(error);
+                    assert!(
+                        error < 0.001,
+                        "state={state} actual={actual:?} dense={expected:?}"
+                    );
+                }
+            }
+            let sky = values.last().unwrap();
+            if state != 5 {
+                assert_eq!(&sky[..3], &[1., 2., 3.]);
+            }
+            if state < 2 {
+                assert_eq!(binding.storage_bytes(), clear_bytes + 256 * 64 * 16);
+            }
+        }
+        eprintln!(
+            "solar GPU cases={} states=6 max_abs_error={max_error}",
+            cases.len()
+        );
+    }
 
     #[test]
     #[ignore = "hardware: SH9 diffuse and raster footprint roughness against analytic oracles"]
@@ -518,7 +778,7 @@ mod tests {
     #[test]
     fn meta_layout_matches_the_shader() {
         let bytes = meta_bytes(true, 32, 16, [1.0, 2.0, 3.0]);
-        assert_eq!(bytes.len(), 208);
+        assert_eq!(bytes.len(), 256);
         assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 32);
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 16);

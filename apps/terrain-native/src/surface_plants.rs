@@ -12,6 +12,7 @@ use thessa_worldgen_rocky::{
     sphere::enu_basis,
 };
 
+mod foliage;
 mod ground;
 mod wet_ground;
 
@@ -173,8 +174,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; scale-aware full/reduced leaf geometry / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path"
-            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; scale-aware full/reduced leaf geometry; canonical 32 m descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
+                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 B02 filtered fronds / full-reduced woody scaffolds / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path"
+            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; pinned CC0 B02 filtered fronds / full-reduced woody scaffolds; canonical 32 m descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }
@@ -671,6 +672,16 @@ fn collect_shadow_lods(
     prepared: &Prepared,
     original: bool,
 ) -> Vec<thessa_render_core::mesh::ShadowMeshLod> {
+    // Filtered fronds have their own alpha-aware caster; legacy position-only
+    // LODs certify different lamina. Low-poly scaffolds remain exact here.
+    if prepared
+        .asset
+        .materials
+        .iter()
+        .any(|m| m.alpha_mode == thessa_render_core::mesh::AlphaMode::Mask)
+    {
+        return Vec::new();
+    }
     let mut lods: Vec<thessa_render_core::mesh::ShadowMeshLod> = Vec::new();
     use thessa_worldgen_rocky::{offline::plant_form, plant_shadow, scatter::ScatterKind};
     for (primitive, (p, range)) in prepared
@@ -680,6 +691,11 @@ fn collect_shadow_lods(
         .zip(&prepared.ranges)
         .enumerate()
     {
+        if prepared.asset.materials[p.material].alpha_mode
+            != thessa_render_core::mesh::AlphaMode::Opaque
+        {
+            continue;
+        }
         let Some(item) = prepared.descriptors.get(range.start as usize) else {
             continue;
         };
@@ -798,7 +814,7 @@ fn convert_with_detail(
         local_ground_start: None,
     };
     let reduced = |item: &ScatterItem| {
-        item.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump
+        item.kind == thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree
             && detail.is_some_and(|(anchor, distance, uncertainty)| {
                 (DVec3::from(item.direction) * radius_m - anchor).length()
                     > distance
@@ -813,13 +829,13 @@ fn convert_with_detail(
                         + uncertainty
             })
     };
-    let full = thessa_worldgen_rocky::offline::plant_prototype_forms(false)
+    let full = thessa_worldgen_rocky::offline::plant_scaffold_forms(false)
         .into_iter()
         .map(|(p, form)| (p, false, form));
     let coarse = detail
         .into_iter()
-        .flat_map(|_| thessa_worldgen_rocky::offline::plant_prototype_forms(true))
-        .filter(|(p, _)| p.kind != thessa_worldgen_rocky::scatter::ScatterKind::ReedClump)
+        .flat_map(|_| thessa_worldgen_rocky::offline::plant_scaffold_forms(true))
+        .filter(|(p, _)| p.kind == thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree)
         .map(|(p, form)| (p, true, form));
     for (prototype, is_reduced, form) in full.chain(coarse) {
         let start = u32::try_from(prepared.instances.len()).map_err(|_| "plant range overflow")?;
@@ -848,8 +864,13 @@ fn convert_with_detail(
             (stem_end..dry_start, false, false),
             (dry_start..prototype.positions.len(), false, true),
         ];
+        let scanned = matches!(
+            prototype.kind,
+            thessa_worldgen_rocky::scatter::ScatterKind::FernClump
+                | thessa_worldgen_rocky::scatter::ScatterKind::LycopsidTree
+        );
         for (vertices, stem, dry) in parts {
-            if vertices.is_empty() {
+            if (scanned && !stem) || vertices.is_empty() {
                 continue;
             }
             let [base, normal, mr] =
@@ -955,6 +976,9 @@ fn convert_with_detail(
             prepared.ranges.push(start..end);
             prepared.reduced_primitives.push(is_reduced);
         }
+        if scanned {
+            foliage::append(&mut prepared, &prototype, form, is_reduced, start..end)?;
+        }
     }
     for primitive in &mut prepared.asset.primitives {
         compact_plant_vertices(primitive);
@@ -972,6 +996,9 @@ fn convert_with_detail(
 /// Share only bit-identical attributes within one organ/material primitive.
 /// Triangle order, hard edges, atlas seams and baked visibility stay exact.
 fn compact_plant_vertices(primitive: &mut Primitive) {
+    if primitive.ambient_visibility.is_empty() {
+        return;
+    }
     let mut unique = BTreeMap::new();
     let mut vertices = Vec::new();
     let mut visibility = Vec::new();
@@ -1283,7 +1310,17 @@ mod tests {
                         .iter()
                         .all(|d| thessa_worldgen_rocky::offline::plant_form(d.id, d.kind) == form)
                 );
-                let prototype = thessa_worldgen_rocky::offline::plant_prototype_forms(*reduced)
+                prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
+                    + primitive.indices.len() * std::mem::size_of::<u32>()
+                    + primitive.ambient_visibility.len() * std::mem::size_of::<f32>();
+                if prepared.asset.materials[primitive.material].alpha_mode
+                    == thessa_render_core::mesh::AlphaMode::Mask
+                {
+                    assert!(primitive.ambient_visibility.is_empty());
+                    assert!(primitive.indices.len() / 3 < 8000);
+                    continue;
+                }
+                let prototype = thessa_worldgen_rocky::offline::plant_scaffold_forms(*reduced)
                     .into_iter()
                     .find(|(p, f)| p.kind == group[0].kind && *f == form)
                     .unwrap()
@@ -1393,12 +1430,9 @@ mod tests {
                     );
                 }
                 seen.insert((group[0].kind as u8, *reduced, form), end);
-                prototype_payload += primitive.vertices.len() * std::mem::size_of::<Vertex>()
-                    + primitive.indices.len() * std::mem::size_of::<u32>()
-                    + primitive.ambient_visibility.len() * std::mem::size_of::<f32>();
             }
             for ((kind, reduced, form), end) in seen {
-                let prototype = thessa_worldgen_rocky::offline::plant_prototype_forms(reduced)
+                let prototype = thessa_worldgen_rocky::offline::plant_scaffold_forms(reduced)
                     .into_iter()
                     .find(|(p, f)| p.kind as u8 == kind && *f == form)
                     .unwrap()
@@ -1406,7 +1440,7 @@ mod tests {
                 assert_eq!(end, prototype.positions.len());
             }
             assert_eq!(stats.prototype_bytes, prototype_payload);
-            assert_eq!(stats.prototype_texture_bytes, 3_760_128);
+            assert_eq!(stats.prototype_texture_bytes, 16_343_040);
             prepared.asset.validate().unwrap();
             eprintln!("WORLD04 {quality:?}: {stats:?}");
             previous = prepared.descriptors;
@@ -1443,7 +1477,7 @@ mod tests {
             let window = survey_window(dir);
             assert!(window.face < 6 && window.x < 16384 && window.y < 16384);
         }
-        let prototypes = thessa_worldgen_rocky::offline::plant_prototype_forms(false);
+        let prototypes = thessa_worldgen_rocky::offline::plant_scaffold_forms(false);
         for (prototype, form) in prototypes {
             if form
                 != thessa_worldgen_rocky::offline::plant_form(
@@ -1467,6 +1501,8 @@ mod tests {
                     .asset
                     .primitives
                     .iter()
+                    .filter(|p| prepared.asset.materials[p.material].alpha_mode
+                        == thessa_render_core::mesh::AlphaMode::Opaque)
                     .map(|p| p.indices.len())
                     .sum::<usize>(),
                 prototype.indices.len()
@@ -1476,6 +1512,8 @@ mod tests {
                     .asset
                     .primitives
                     .iter()
+                    .filter(|p| prepared.asset.materials[p.material].alpha_mode
+                        == thessa_render_core::mesh::AlphaMode::Opaque)
                     .map(|p| p.vertices.len())
                     .sum::<usize>()
                     <= prototype.positions.len()
@@ -1488,10 +1526,12 @@ mod tests {
                 }));
             // The producer's fern fronds now meet the local ground plane
             // (they previously began at 0.1 m); the adapter still adds no offset.
-            let min_y = prototype
-                .positions
+            let min_y = prepared
+                .asset
+                .primitives
                 .iter()
-                .map(|p| p[1])
+                .flat_map(|p| &p.vertices)
+                .map(|v| v.position[1])
                 .fold(f32::INFINITY, f32::min);
             assert!(
                 (if prototype.kind == ScatterKind::LycopsidTree {
@@ -1556,18 +1596,18 @@ mod tests {
     }
 
     #[test]
-    fn leaf_lod_keeps_identity_scale_and_ground_and_prevents_wrong_source_reuse() {
+    fn scaffold_lod_keeps_identity_scale_and_ground_and_prevents_wrong_source_reuse() {
         // This is a same-form LOD oracle, independent of authored form weights.
         let ids: Vec<_> = (1..1000)
             .map(thessa_worldgen_rocky::scatter::ScatterId)
             .filter(|&id| {
-                thessa_worldgen_rocky::offline::plant_form(id, ScatterKind::FernClump) == 0
+                thessa_worldgen_rocky::offline::plant_form(id, ScatterKind::LycopsidTree) == 0
             })
             .take(3)
             .collect();
         let make = |id, metres: f64, scale| ScatterItem {
             id,
-            kind: ScatterKind::FernClump,
+            kind: ScatterKind::LycopsidTree,
             direction: DVec3::new(
                 (metres / 3_200_000.0).sin(),
                 (metres / 3_200_000.0).cos(),
@@ -1695,15 +1735,15 @@ mod tests {
         assert!(!fern_only.same_prototypes(&prepared));
         assert!(!prepared.rt_budget_fits(0));
         assert!(!prepared.rt_budget_fits(256));
-        assert!(!prepared.rt_budget_fits(449));
-        assert!(prepared.rt_budget_fits(450));
+        assert!(!prepared.rt_budget_fits(299));
+        assert!(prepared.rt_budget_fits(300));
         assert!(prepared.rt_budget_fits(4096));
         let mut settings = settings(thessa_graphics::Quality::High);
         settings.ray_tracing = thessa_graphics::ResolvedRayTracing::Local;
         settings.rt_vehicles = true;
         settings.rt_max_instances = 256;
         assert!(!prepared.rt_admitted(&settings));
-        settings.rt_max_instances = 450;
+        settings.rt_max_instances = 300;
         assert!(prepared.rt_admitted(&settings));
         settings.rt_max_instances = 0;
         settings.rt_vehicles = false;
@@ -1717,7 +1757,7 @@ mod tests {
         assert_eq!(prepared.descriptors.len(), 300);
         assert_eq!(prepared.instances.len(), 300);
         let demand: u32 = prepared.ranges.iter().map(|r| r.end - r.start).sum();
-        assert_eq!(demand, 450);
+        assert_eq!(demand, 300);
         let unique: std::collections::BTreeSet<_> =
             prepared.ranges.iter().map(|r| (r.start, r.end)).collect();
         assert_eq!(unique.iter().map(|(a, b)| b - a).sum::<u32>(), 300);

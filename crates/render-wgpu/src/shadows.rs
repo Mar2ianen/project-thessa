@@ -78,6 +78,7 @@ pub struct ShadowAtlas {
     pub(crate) terrain_pipeline: wgpu::RenderPipeline,
     pub(crate) conforming_pipeline: wgpu::RenderPipeline,
     pub(crate) mesh_layout: wgpu::BindGroupLayout,
+    matrix_layout: wgpu::BindGroupLayout,
     pub(crate) terrain_layout: wgpu::BindGroupLayout,
     pub(crate) conforming_layout: wgpu::BindGroupLayout,
     texture: wgpu::TextureView,
@@ -306,6 +307,7 @@ impl ShadowAtlas {
             terrain_pipeline,
             conforming_pipeline,
             mesh_layout,
+            matrix_layout,
             terrain_layout,
             conforming_layout,
             texture: depth.create_view(&wgpu::TextureViewDescriptor {
@@ -338,9 +340,91 @@ impl ShadowAtlas {
             depth_revision: 0,
         }))
     }
+    pub(crate) fn masked_mesh_pipeline(&self, device: &wgpu::Device) -> wgpu::RenderPipeline {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("coverage-aware-shadow-mesh"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    include_str!("mesh_material.wgsl"),
+                    include_str!("shadow_mask.wgsl")
+                )
+                .into(),
+            ),
+        });
+        let material = crate::mesh::layout::material_layout(device);
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("coverage-aware-shadow-layout"),
+            bind_group_layouts: &[
+                Some(&self.matrix_layout),
+                Some(&self.mesh_layout),
+                Some(&material),
+            ],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("coverage-aware-shadow-mesh"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vertex"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0=>Float32x3],
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 20,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 12,
+                            shader_location: 2,
+                        }],
+                    }),
+                ],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 1,
+                    slope_scale: 1.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fragment"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
     pub fn storage_bytes(&self) -> u64 {
         u64::from(self.size).pow(2) * self.layers.len() as u64 * 4
     }
+    /// Total addressable layers; inactive sources still reserve their slots.
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub(crate) fn layer_active(&self, layer: usize) -> bool {
+        layer < self.layers.len() && self.active[layer / self.radii.len()]
+    }
+
     pub fn active_passes(&self) -> usize {
         self.active.iter().filter(|&&a| a).count() * self.radii.len()
     }

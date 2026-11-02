@@ -497,7 +497,7 @@ pub fn export_canonical_scene(
 
     write_new(
         &directory.join("scene.LICENSE.txt"),
-        "Canonical Thessa coastal world scene geometry and textures.\nProcedural game geometry: GPL-3.0-or-later; see LICENSING.md. Third-party materials retain their own licenses.\n",
+        "Canonical Thessa coastal world scene geometry and textures.\nProcedural game geometry: GPL-3.0-or-later; see LICENSING.md. CC0 Fern 02 geometry/maps: https://polyhaven.com/a/fern_02 ; see assets/vegetation/fern-02.LICENSE.txt and fern-02-conversion.json. Third-party materials retain their own licenses.\n",
     )?;
 
     if let Some(pixels) = display_pixels {

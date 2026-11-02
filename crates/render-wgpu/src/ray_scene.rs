@@ -1,4 +1,4 @@
-//! Native ray-query scene for opaque object reflections.
+//! Native ray-query scene for opaque and alpha-masked object reflections.
 //!
 //! `mesh.wgsl` calls the named hook `rt_reflection(...)`. When ray tracing
 //! resolves on, the negotiated device carries `EXPERIMENTAL_RAY_QUERY`, and
@@ -108,6 +108,7 @@ pub struct Plan {
     shadow_rays: bool,
     primary_shadows: bool,
     reflections: bool,
+    masked: bool,
     vertex_stride: u64,
     triangles: u64,
     bytes: u64,
@@ -189,10 +190,10 @@ fn plan_inner(
     if source
         .materials
         .iter()
-        .any(|m| m.alpha_mode != thessa_render_core::mesh::AlphaMode::Opaque)
+        .any(|m| m.alpha_mode == thessa_render_core::mesh::AlphaMode::Blend)
     {
         return Enable::Unavailable(
-            "MASK/BLEND ray coverage is unsupported; using raster cutouts".into(),
+            "BLEND ray transmission is unsupported; using raster blending".into(),
         );
     }
     if !backend
@@ -264,13 +265,20 @@ fn plan_inner(
             limits.max_tlas_instance_count
         ));
     }
+    let masked = mesh_enabled
+        && source
+            .materials
+            .iter()
+            .any(|m| m.alpha_mode == thessa_render_core::mesh::AlphaMode::Mask);
+    let tables = reflections || masked;
+    if masked && limits.max_storage_buffers_per_shader_stage < 9 {
+        return Enable::Unavailable(
+            "MASK hit tables exceed fragment storage limits; using raster cutouts".into(),
+        );
+    }
     let mut textures = Vec::new();
     let mut records = Vec::new();
-    for primitive in source
-        .primitives
-        .iter()
-        .filter(|_| reflections && mesh_enabled)
-    {
+    for primitive in source.primitives.iter().filter(|_| tables && mesh_enabled) {
         let material = &source.materials[primitive.material];
         records.extend(f32_bytes([
             material.base_color[0],
@@ -289,7 +297,8 @@ fn plan_inner(
             material.occlusion_texture,
         ];
         for (channel, texture) in maps.into_iter().enumerate() {
-            let texture = texture.filter(|_| channel == 0 || quality == Quality::High);
+            let texture =
+                texture.filter(|_| channel == 0 || (reflections && quality == Quality::High));
             let index = texture.map_or(u32::MAX, |id| {
                 let key = (id, channel == 0);
                 if let Some(index) = textures.iter().position(|entry| *entry == key) {
@@ -320,17 +329,27 @@ fn plan_inner(
             textures.len()
         ));
     }
-    let vertex_stride = if reflections { VERTEX_BYTES } else { 16 };
-    let hit_table_bytes = if reflections {
+    if masked
+        && resolved.rt_primary_shadows
+        && (textures.len() as u32 + 9 + u32::from(resolved.ocean.enabled)
+            > limits.max_sampled_textures_per_shader_stage)
+    {
+        return Enable::Unavailable(
+            "MASK primary shadow material bindings exceed device limits; using raster cutouts"
+                .into(),
+        );
+    }
+    let vertex_stride = if tables { VERTEX_BYTES } else { 16 };
+    let hit_table_bytes = if tables {
         placements.len() as u64 * (16 + MATERIAL_BYTES)
     } else {
         0
     };
-    let pair_bytes = if reflections { PAIR_RECORD_BYTES } else { 0 };
+    let pair_bytes = if tables { PAIR_RECORD_BYTES } else { 0 };
     let storage_sizes = [
         vertices * vertex_stride,
         indices * 4,
-        placements.len() as u64 * 16 * u64::from(reflections && mesh_enabled),
+        placements.len() as u64 * 16 * u64::from(tables && mesh_enabled),
         records.len() as u64,
         instances as u64 * pair_bytes,
     ];
@@ -370,7 +389,16 @@ fn plan_inner(
     }
     let ranges = placements
         .iter()
-        .map(|p| [p.index_base, p.vertex_base, p.index_count, 0])
+        .zip(&source.primitives)
+        .map(|(p, primitive)| {
+            let m = &source.materials[primitive.material];
+            [
+                p.index_base,
+                p.vertex_base,
+                m.base_color[3].to_bits(),
+                m.alpha_cutoff.to_bits(),
+            ]
+        })
         .collect();
     Enable::Ready(Box::new(Plan {
         mesh_enabled,
@@ -384,6 +412,7 @@ fn plan_inner(
         shadow_rays: resolved.shadow_enabled,
         primary_shadows: resolved.rt_primary_shadows,
         reflections,
+        masked,
         vertex_stride,
         triangles,
         bytes,
@@ -430,8 +459,19 @@ pub fn plan_with_terrain(
             plan.terrain_reason =
                 Some("RT terrain has no instance/memory capacity; raster terrain fallback".into());
         } else if reflections
-            && (limits.max_storage_buffers_per_shader_stage < 9
-                || plan.textures.len() as u32 + 7 + u32::from(terrain.ocean.is_some())
+            && (limits.max_storage_buffers_per_shader_stage
+                < if plan.masked && plan.primary_shadows {
+                    11
+                } else {
+                    9
+                }
+                || plan.textures.len() as u32
+                    + if plan.masked && plan.primary_shadows {
+                        10 + u32::from(settings.ocean.enabled)
+                    } else {
+                        7
+                    }
+                    + u32::from(terrain.ocean.is_some())
                     > limits.max_sampled_textures_per_shader_stage
                 || plan.textures.len() as u32 + 7 + u32::from(terrain.ocean.is_some())
                     > limits.max_samplers_per_shader_stage)
@@ -484,9 +524,9 @@ impl Plan {
                 vertex_return: false,
             },
         )];
-        if self.reflections {
+        if self.reflections || self.masked {
             entries.extend((1..=5).map(|binding| buffer(binding, ShaderStages::FRAGMENT, false)));
-            if self.terrain.is_some() {
+            if self.reflections && self.terrain.is_some() {
                 entries.extend([
                     buffer(6, ShaderStages::FRAGMENT, false),
                     buffer(7, ShaderStages::FRAGMENT, false),
@@ -525,7 +565,7 @@ impl Plan {
 
 /// Shader include for the RT build: `enable` directive, resolved constants,
 /// then the hook implementation. Must be composed before any other WGSL.
-pub fn shader(plan: &Plan) -> String {
+fn sampling_shader(plan: &Plan) -> String {
     let mut sampling = String::new();
     let map_base = if plan.terrain.is_some() && plan.reflections {
         10
@@ -545,6 +585,12 @@ pub fn shader(plan: &Plan) -> String {
         sampling.push_str(&format!("case {index}u:{{return textureSampleGrad(rt_texture_{index},rt_sampler_{index},uv,dx,dy);}}\n"));
     }
     sampling.push_str("default:{return vec4(1.0);}}}\n");
+    sampling
+}
+
+pub fn shader(plan: &Plan) -> String {
+    let mut sampling = sampling_shader(plan);
+    let map_base = if plan.terrain.is_some() { 10 } else { 6 };
     if let Some((terrain, _)) = &plan.terrain
         && plan.reflections
     {
@@ -591,8 +637,14 @@ pub fn shader(plan: &Plan) -> String {
         plan.shadow_rays,
         sampling,
         format_args!(
-            "{}\n{QUERY_SHADER}\n{MESH_SHADOW_SHADER}",
-            thessa_fastrt::visibility::QUERY_POLICY_WGSL
+            "{}\n{}\n{}\n{MESH_SHADOW_SHADER}",
+            thessa_fastrt::visibility::QUERY_POLICY_WGSL,
+            if plan.reflections || plan.masked {
+                TABLE_SHADER
+            } else {
+                ""
+            },
+            query_shader(plan.masked)
         ),
         if plan.reflections {
             &hit_shader
@@ -603,6 +655,13 @@ pub fn shader(plan: &Plan) -> String {
 }
 
 pub(crate) const QUERY_SHADER: &str = include_str!("ray_query.wgsl");
+const TABLE_SHADER: &str = include_str!("ray_tables.wgsl");
+fn query_shader(masked: bool) -> String {
+    QUERY_SHADER.replace("// CANDIDATE_TRAVERSAL", if masked {
+        "while(rayQueryProceed(&query)){let candidate=rayQueryGetCandidateIntersection(&query);if(candidate.kind==RAY_QUERY_INTERSECTION_TRIANGLE && rt_accept_candidate(candidate.instance_custom_data,candidate.primitive_index,candidate.barycentrics,direction,cone_width+candidate.t*cone_spread)){rayQueryConfirmIntersection(&query);}}"
+    } else { "rayQueryProceed(&query);" })
+}
+
 const MESH_SHADOW_SHADER: &str =
     "fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32 {
 let visibility=shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);
@@ -618,6 +677,12 @@ pub fn fallback_shader() -> String {
     format!(
         "{REFLECTION_FALLBACK}fn surface_visibility(position:vec3<f32>,normal:vec3<f32>,sun:u32)->f32{{return shadow_visibility(position,normal,sun)*cloud_sun_visibility(position,sun);}}\n"
     )
+}
+
+pub(crate) struct PrimarySchema {
+    pub layout: wgpu::BindGroupLayout,
+    pub shader: String,
+    pub params_binding: u32,
 }
 
 /// Owned acceleration structures, hit tables, and the group-3 bind group.
@@ -637,6 +702,7 @@ pub struct RayScene {
     tlas: wgpu::Tlas,
     bind: wgpu::BindGroup,
     primary_shadow: Option<wgpu::BindGroup>,
+    primary_schema: Option<PrimarySchema>,
     positions: wgpu::Buffer,
     indices: wgpu::Buffer,
     vertex_stride: u64,
@@ -670,10 +736,10 @@ impl RayScene {
         if source
             .materials
             .iter()
-            .any(|m| m.alpha_mode != thessa_render_core::mesh::AlphaMode::Opaque)
+            .any(|m| m.alpha_mode == thessa_render_core::mesh::AlphaMode::Blend)
         {
             return Err(BackendError::Device(
-                "MASK/BLEND ray coverage is unsupported".into(),
+                "BLEND ray transmission is unsupported".into(),
             ));
         }
         let device = &backend.device;
@@ -719,7 +785,7 @@ impl RayScene {
             },
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
         });
-        let ranges = plan.reflections.then(|| {
+        let ranges = (plan.reflections || plan.masked).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("rt-ranges"),
                 contents: &if plan.mesh_enabled {
@@ -730,7 +796,7 @@ impl RayScene {
                 usage: wgpu::BufferUsages::STORAGE,
             })
         });
-        let materials = plan.reflections.then(|| {
+        let materials = (plan.reflections || plan.masked).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("rt-materials"),
                 contents: if plan.mesh_enabled {
@@ -745,16 +811,19 @@ impl RayScene {
             .placements
             .iter()
             .filter(|_| plan.mesh_enabled)
-            .map(|placement| wgpu::BlasTriangleGeometrySizeDescriptor {
+            .enumerate()
+            .map(|(i, placement)| wgpu::BlasTriangleGeometrySizeDescriptor {
                 vertex_format: wgpu::VertexFormat::Float32x3,
                 vertex_count: placement.vertex_count,
                 index_format: Some(wgpu::IndexFormat::Uint32),
                 index_count: Some(placement.index_count),
-                // A derived ray query has no any-hit stage, so a candidate
-                // intersection of non-opaque geometry is never committed and
-                // every traversal silently misses. Scene primitives are solid
-                // until alpha-tested materials join the trace.
-                flags: wgpu::AccelerationStructureGeometryFlags::OPAQUE,
+                flags: if source.materials[source.primitives[i].material].alpha_mode
+                    == thessa_render_core::mesh::AlphaMode::Mask
+                {
+                    wgpu::AccelerationStructureGeometryFlags::empty()
+                } else {
+                    wgpu::AccelerationStructureGeometryFlags::OPAQUE
+                },
             })
             .collect::<Vec<_>>();
         let blases = sizes
@@ -772,7 +841,7 @@ impl RayScene {
                 )
             })
             .collect::<Vec<_>>();
-        let pairs = plan.reflections.then(|| {
+        let pairs = (plan.reflections || plan.masked).then(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rt-pairs"),
                 size: plan.instances as u64 * PAIR_RECORD_BYTES,
@@ -793,6 +862,29 @@ impl RayScene {
                 crate::mesh::material_texture(backend, source, Some(id), [255; 4], srgb, textures)
             })
             .collect();
+        let primary_schema = (plan.masked && plan.shadow_rays && plan.primary_shadows).then(|| {
+            let mut entries = plan.layout_entries();
+            let params_binding = entries.iter().map(|e| e.binding).max().unwrap() + 1;
+            entries.push(crate::mesh::layout::buffer(
+                params_binding,
+                wgpu::ShaderStages::FRAGMENT,
+                true,
+            ));
+            PrimarySchema {
+                params_binding,
+                layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("masked-primary-scene"),
+                    entries: &entries,
+                }),
+                shader: format!(
+                    "const RT_PRIMARY_PARAMS_BINDING:u32={params_binding}u;\n{}\n{}\n{}\n{}",
+                    thessa_fastrt::visibility::QUERY_POLICY_WGSL,
+                    sampling_shader(&plan),
+                    TABLE_SHADER,
+                    query_shader(true)
+                ),
+            }
+        });
         let terrain = plan
             .terrain
             .map(|(source, capacity)| TerrainRays::new(device, source, capacity));
@@ -823,7 +915,9 @@ impl RayScene {
                     resource: pairs.as_entire_binding(),
                 },
             ]);
-            if let Some(terrain) = &terrain {
+            if let Some(terrain) = &terrain
+                && plan.reflections
+            {
                 entries.extend([
                     wgpu::BindGroupEntry {
                         binding: 6,
@@ -881,17 +975,29 @@ impl RayScene {
             });
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("primary-shadow-shared-scene"),
-                layout: &crate::terrain_shadow::scene_layout(device),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::AccelerationStructure(&tlas),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
+                layout: &primary_schema.as_ref().map_or_else(
+                    || crate::terrain_shadow::scene_layout(device),
+                    |s| s.layout.clone(),
+                ),
+                entries: &if plan.masked {
+                    let mut primary_entries = entries.clone();
+                    primary_entries.push(wgpu::BindGroupEntry {
+                        binding: primary_schema.as_ref().unwrap().params_binding,
                         resource: params.as_entire_binding(),
-                    },
-                ],
+                    });
+                    primary_entries
+                } else {
+                    vec![
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::AccelerationStructure(&tlas),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: params.as_entire_binding(),
+                        },
+                    ]
+                },
             })
         });
         Ok(Self {
@@ -909,6 +1015,7 @@ impl RayScene {
             tlas,
             bind,
             primary_shadow,
+            primary_schema,
             positions,
             indices,
             vertex_stride: plan.vertex_stride,
@@ -932,9 +1039,16 @@ impl RayScene {
         &self.bind
     }
 
-    pub(crate) fn primary_shadow(&self, camera: [f64; 3]) -> Option<&wgpu::BindGroup> {
+    pub(crate) fn primary_shadow(
+        &self,
+        camera: [f64; 3],
+    ) -> Option<(&wgpu::BindGroup, Option<&PrimarySchema>)> {
         (self.built && !self.transforms.is_empty() && self.camera_m.to_array() == camera)
-            .then_some(self.primary_shadow.as_ref())
+            .then(|| {
+                self.primary_shadow
+                    .as_ref()
+                    .map(|bind| (bind, self.primary_schema.as_ref()))
+            })
             .flatten()
     }
 

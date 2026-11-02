@@ -27,6 +27,7 @@ pub struct SkyLayers {
     active: Option<Active>,
 }
 struct Active {
+    solar_table: Option<std::sync::Arc<thessa_atmosphere::TransmittanceLut>>,
     view: wgpu::Buffer,
     frame: wgpu::Buffer,
     radius: f64,
@@ -35,6 +36,8 @@ struct Active {
     volume: Option<Volume>,
 }
 struct Volume {
+    sunlight: Option<thessa_render_wgpu::environment::EnvironmentBinding>,
+    solar_placeholder: thessa_render_wgpu::environment::EnvironmentBinding,
     pipeline: wgpu::RenderPipeline,
     emission: wgpu::Buffer,
     aurora: bool,
@@ -99,6 +102,7 @@ fn stellar_transmission(
     camera: DVec3,
     direction: DVec3,
     optics: Option<&thessa_atmosphere::AtmosphereOptics>,
+    table: Option<&thessa_atmosphere::TransmittanceLut>,
     steps: u32,
 ) -> [f64; 3] {
     // Solid-body occultation is independent of the atmosphere toggle and of
@@ -109,7 +113,17 @@ fn stellar_transmission(
         return [0.0; 3];
     }
     optics.map_or([1.0; 3], |o| {
-        thessa_atmosphere::transmittance(o, camera, direction, steps)
+        if let Some(table) = table.filter(|t| t.optics_match(o)) {
+            let radius = camera.length();
+            table
+                .sample(
+                    radius - o.inner_radius_m,
+                    (camera / radius).dot(direction).clamp(-1., 1.),
+                )
+                .expect("validated stellar camera/direction")
+        } else {
+            thessa_atmosphere::transmittance(o, camera, direction, steps)
+        }
     })
 }
 
@@ -141,8 +155,12 @@ impl SkyLayers {
             label: Some("native-stars-clouds"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}",
-                    thessa_render_wgpu::clouds::SHADER,
+                    "{}\n{}\n{}\n{}",
+                    thessa_render_wgpu::environment::sunlight_shader(1),
+                    thessa_render_wgpu::clouds::SHADER.replace(
+                        thessa_render_wgpu::clouds::SOLAR_FALLBACK,
+                        thessa_render_wgpu::clouds::SOLAR_TRANSPORT
+                    ),
                     thessa_atmosphere::AURORA_WGSL,
                     include_str!("sky_layers.wgsl")
                 )
@@ -284,7 +302,12 @@ impl SkyLayers {
         let volume = (clouds.is_some() || aurora).then(|| {
             let mut placeholder = thessa_render_wgpu::clouds::CloudBinding::disabled(device);
             placeholder.frame = frame.clone();
+            let mut solar_placeholder =
+                thessa_render_wgpu::environment::EnvironmentBinding::new(device);
+            solar_placeholder.set_clouds(placeholder.clone());
             Volume {
+                sunlight: None,
+                solar_placeholder,
                 pipeline: pipeline(false),
                 emission: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("native-aurora-optics"),
@@ -298,6 +321,7 @@ impl SkyLayers {
         });
         Self {
             active: Some(Active {
+                solar_table: None,
                 view,
                 frame,
                 radius,
@@ -366,6 +390,7 @@ impl SkyLayers {
                     view.world_position_m,
                     direction,
                     optics,
+                    active.solar_table.as_deref(),
                     stars.steps,
                 );
                 data.extend(bytes(
@@ -385,6 +410,7 @@ impl SkyLayers {
                     view.world_position_m,
                     direction,
                     optics,
+                    active.solar_table.as_deref(),
                     stars.steps,
                 );
                 let flux = source.weighted_rgb();
@@ -492,7 +518,7 @@ impl SkyLayers {
                 .as_ref()
                 .map_or(0, |_| u64::from(STAR_CAPACITY) * 32)
                 + a.clouds.as_ref().map_or(0, |c| c.bytes)
-                + u64::from(a.volume.is_some()) * 197
+                + u64::from(a.volume.is_some()) * (197 + 272)
         })
     }
     pub fn metadata(&self) -> std::collections::BTreeMap<String, String> {
@@ -561,6 +587,18 @@ impl SkyLayers {
         .map(|(key, value)| (key.into(), value))
         .collect()
     }
+    pub fn share_sunlight(
+        &mut self,
+        binding: Option<&thessa_render_wgpu::environment::EnvironmentBinding>,
+    ) {
+        if let Some(active) = &mut self.active {
+            active.solar_table = binding.and_then(|b| b.sunlight_table());
+            if let Some(volume) = &mut active.volume {
+                volume.sunlight = binding.cloned();
+            }
+        }
+    }
+
     pub fn encode(
         &self,
         backend: &Backend,
@@ -629,6 +667,17 @@ impl SkyLayers {
                     layout: &volume.pipeline.get_bind_group_layout(0),
                     entries: &entries,
                 });
+            let solar = backend
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("native-cloud-sunlight"),
+                    layout: &volume.pipeline.get_bind_group_layout(1),
+                    entries: &volume
+                        .sunlight
+                        .as_ref()
+                        .unwrap_or(&volume.solar_placeholder)
+                        .base_entries(),
+                });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("native-depth-clipped-clouds"),
                 color_attachments: &[attachment()],
@@ -636,6 +685,7 @@ impl SkyLayers {
             });
             pass.set_pipeline(&volume.pipeline);
             pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(1, &solar, &[]);
             pass.draw(0..3, 0..1);
         }
     }
@@ -706,6 +756,30 @@ mod tests {
     }
 
     #[test]
+    fn source_discs_reuse_surface_solar_table_without_double_extinction() {
+        let radius = 3_200_000.;
+        let optics = thessa_atmosphere::nitrogen_oxygen_optics(radius, 120_000., 16_300.).unwrap();
+        let table = thessa_atmosphere::TransmittanceLut::build(&optics, 256, 64, 128).unwrap();
+        for altitude in [2., 10_000., 100_000.] {
+            let camera = DVec3::Y * (radius + altitude);
+            for degrees in [-15.0_f64, 0., 4., 45., 90.] {
+                let angle = degrees.to_radians();
+                let direction = DVec3::new(angle.cos(), angle.sin(), 0.);
+                let actual =
+                    stellar_transmission(radius, camera, direction, Some(&optics), Some(&table), 8);
+                let dense = thessa_atmosphere::transmittance(&optics, camera, direction, 512);
+                for (a, b) in actual.into_iter().zip(dense) {
+                    assert!((a - b).abs() < 0.001);
+                }
+                assert_eq!(
+                    stellar_transmission(radius, camera, direction, None, Some(&table), 8),
+                    stellar_transmission(radius, camera, direction, None, None, 8)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn thessa_half_year_keeps_each_star_occlusion_independent_at_both_distance_extrema() {
         let seasons = seasonal_lights();
         assert!(seasons[0].1 - seasons[1].1 > 1.0e11);
@@ -716,8 +790,8 @@ mod tests {
             let separation = a.angle_between(b);
             // A-night midpoint, not a global eclipse scalar on all sources.
             let camera = -a * 3_201_000.0;
-            let ta = stellar_transmission(3_200_000.0, camera, a, None, 8);
-            let tb = stellar_transmission(3_200_000.0, camera, b, None, 8);
+            let ta = stellar_transmission(3_200_000.0, camera, a, None, None, 8);
+            let tb = stellar_transmission(3_200_000.0, camera, b, None, None, 8);
             assert_eq!(ta, [0.0; 3]);
             if index == 0 {
                 assert!(separation < 5.0f64.to_radians());
@@ -729,11 +803,11 @@ mod tests {
                 // star-facing hemisphere. Both A and the distant B stay visible.
                 let far_day = a * 3_201_000.0;
                 assert_eq!(
-                    stellar_transmission(3_200_000.0, far_day, a, None, 8),
+                    stellar_transmission(3_200_000.0, far_day, a, None, None, 8),
                     [1.0; 3]
                 );
                 assert_eq!(
-                    stellar_transmission(3_200_000.0, far_day, b, None, 8),
+                    stellar_transmission(3_200_000.0, far_day, b, None, None, 8),
                     [1.0; 3]
                 );
                 assert!(lights[1].irradiance_w_m2 > 0.0);
@@ -747,12 +821,25 @@ mod tests {
             let visible_camera = if index == 0 { a } else { -a } * 3_201_000.0;
             let up = visible_camera.normalize();
             for steps in [8, 16, 32] {
-                let b_trans =
-                    stellar_transmission(3_200_000.0, visible_camera, b, Some(&optics), steps);
+                let b_trans = stellar_transmission(
+                    3_200_000.0,
+                    visible_camera,
+                    b,
+                    Some(&optics),
+                    None,
+                    steps,
+                );
                 assert!(b_trans.into_iter().all(|t| t > 0.0 && t <= 1.0));
                 if index == 1 {
                     assert_eq!(
-                        stellar_transmission(3_200_000.0, visible_camera, a, Some(&optics), steps),
+                        stellar_transmission(
+                            3_200_000.0,
+                            visible_camera,
+                            a,
+                            Some(&optics),
+                            None,
+                            steps
+                        ),
                         [0.0; 3]
                     );
                     let full = thessa_atmosphere::sky_radiance(
@@ -936,8 +1023,12 @@ mod tests {
     #[test]
     fn shader_is_portable() {
         let source = format!(
-            "{}\n{}\n{}",
-            thessa_render_wgpu::clouds::SHADER,
+            "{}\n{}\n{}\n{}",
+            thessa_render_wgpu::environment::sunlight_shader(1),
+            thessa_render_wgpu::clouds::SHADER.replace(
+                thessa_render_wgpu::clouds::SOLAR_FALLBACK,
+                thessa_render_wgpu::clouds::SOLAR_TRANSPORT
+            ),
             thessa_atmosphere::AURORA_WGSL,
             include_str!("sky_layers.wgsl")
         );
@@ -965,11 +1056,11 @@ mod tests {
     fn solid_body_occults_stars_without_scattering() {
         let camera = DVec3::Z * 3_201_000.0;
         assert_eq!(
-            stellar_transmission(3_200_000.0, camera, -DVec3::Z, None, 8),
+            stellar_transmission(3_200_000.0, camera, -DVec3::Z, None, None, 8),
             [0.0; 3]
         );
         assert_eq!(
-            stellar_transmission(3_200_000.0, camera, DVec3::Z, None, 8),
+            stellar_transmission(3_200_000.0, camera, DVec3::Z, None, None, 8),
             [1.0; 3]
         );
     }

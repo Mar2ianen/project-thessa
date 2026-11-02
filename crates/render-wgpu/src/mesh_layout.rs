@@ -64,17 +64,7 @@ pub(super) fn pipeline_layout(
             sampler(11),
         ],
     });
-    let mut material = vec![buffer(0, Stages::FRAGMENT, true)];
-    for binding in [1, 3, 5, 7] {
-        material.extend([
-            texture(binding, wgpu::TextureViewDimension::D2),
-            sampler(binding + 1),
-        ]);
-    }
-    let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("mesh-material-layout"),
-        entries: &material,
-    });
+    let material = material_layout(device);
     let shadow_entries = [
         buffer(0, Stages::FRAGMENT, true),
         entry(
@@ -113,5 +103,19 @@ pub(super) fn pipeline_layout(
         label: Some("opaque-mesh-layout"),
         bind_group_layouts: &layouts,
         immediate_size: 0,
+    })
+}
+
+pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let mut material = vec![buffer(0, Stages::FRAGMENT, true)];
+    for binding in [1, 3, 5, 7] {
+        material.extend([
+            texture(binding, wgpu::TextureViewDimension::D2),
+            sampler(binding + 1),
+        ]);
+    }
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("mesh-material-layout"),
+        entries: &material,
     })
 }

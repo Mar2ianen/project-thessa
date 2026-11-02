@@ -1730,6 +1730,11 @@ impl Scene {
         renderer.update(self, backend, width, height, exposure)
     }
 
+    pub fn sunset_epoch(&self) -> Result<thessa_sim_core::SimTime, String> {
+        self.celestial
+            .descending_sun_epoch(self.center.normalize(), 4.0_f64.to_radians())
+    }
+
     /// Explicit presentation sampling, separate from wall-time streaming
     /// debounce. An unchanged SimTime performs no ephemeris or lighting work.
     /// Stage the full sample before mutation so failure preserves the old frame.
@@ -1833,12 +1838,19 @@ impl Scene {
     pub fn update_sky_layers(
         &self,
         backend: &Backend,
-        layers: &crate::sky_layers::SkyLayers,
+        layers: &mut crate::sky_layers::SkyLayers,
         width: u32,
         height: u32,
         exposure: f32,
     ) -> Result<(), BackendError> {
+        layers.share_sunlight(self.gpu_environment.as_ref());
         if let Some(binding) = &self.gpu_environment {
+            binding.update_sunlight_camera(
+                backend,
+                self.view(width, height, exposure)
+                    .world_position_m
+                    .to_array(),
+            )?;
             let haze =
                 self.local_haze_policy
                     .map(|(extinction_per_m, height_m, directional_source)| {
@@ -1900,6 +1912,14 @@ impl Scene {
                         .as_ref()
                         .and_then(|field| field.background_grid()),
                 );
+                let sunlight = self
+                    .environment
+                    .as_mut()
+                    .map(|f| f.sunlight_lut())
+                    .transpose()
+                    .map_err(BackendError::Device)?
+                    .flatten();
+                binding.update_sunlight(backend, sunlight)?;
                 renderer.share_environment(backend, Some(&binding));
                 self.gpu_environment = Some(binding);
             }

@@ -156,4 +156,10 @@ no tile classifier, SSR, history denoiser or static depth cache is claimed.
 The [2026-11-02 research intake](113_RENDER_RESEARCH_INTAKE.md) maps the user's
 new handoff and 80 external sources to P0–P6, with exact input/image identities.
 Bounded RT binding negotiation and shared source-disc extinction are applied;
-remaining masks/water/caching/classifier/SSR/multiple-scattering work stays open.
+remaining masks/water/caching/classifier/SSR work stays open.
+[Doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) implements optional
+isotropic higher-order atmosphere in the shared field; cloud/ground bounce
+and full multiple-scattering model accuracy remain open. FHD/QHD improve
+readability, but current captures still fail horizon/ground/composition parity.
+Generated artwork is valid visual direction; old unmatched Cycles renders and
+projected golden art studies cannot establish numeric or geometry parity.

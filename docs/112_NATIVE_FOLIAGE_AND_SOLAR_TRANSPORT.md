@@ -4,6 +4,9 @@ Status: implemented representation/transport corrections, full coastal visual
 and performance parity incomplete; 2026-11-02. This supersedes the MASK/direct
 sunlight limitations in the dated docs 94/110/111 without rewriting their
 historical evidence. TAA and primary RT shadow correction remain default-off.
+The later [doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) supersedes
+this checkpoint's single-scattering-only limitation and records that the
+artificial horizon band still occurs with changed residency.
 
 ## Actual plants, rather than unresolved opaque needles
 
@@ -85,9 +88,10 @@ is introduced.
 Native quality selects 128×32/64, 192×48/96 or 256×64/128 table/integration
 budgets. The table is cached with the existing optical state. Sky evaluation
 uses the **same view integral**, replacing repeated coarse solar marches with
-table samples. This remains single scattering; setting
-`atmosphere.multiple_scattering=true` does not implement native multiple
-scattering. Higher-order sky/cloud coupling remains a tracked gap.
+table samples. At this checkpoint it remained single scattering. The later
+[doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) implements the
+existing multiple-scattering flag through an isotropic source; cloud/ground
+bounce remains a tracked gap.
 
 The shared environment storage appends the table, with a 256-byte common
 metadata ABI. Camera altitude is subtracted in f64 before upload. Four reads
@@ -195,7 +199,7 @@ the scene. Acceptance requires fixed-input captures and affordable moving views.
 
 | Gap | Current slice | Next acceptance |
 | --- | --- | --- |
-| Orange monotony / flat light | Atmospheric sunlight and common sky/cloud extinction, physical sunset epoch | Cooler hemispherical sky contribution and converged native multiple scattering; coherent exposure without a blanket orange grade; actual warm/cool full-frame comparison |
+| Orange monotony / flat light | Atmospheric sunlight and common sky/cloud extinction, physical sunset epoch | Optional isotropic higher-order source and cooler ambient now implemented (doc 114); cloud/ground bounce, richer structured sky, coherent exposure and full visual acceptance remain |
 | Ground / close microrelief | Existing scanned soil, canonical CBT height detail, roughness/normal channels retained | Distinguish soil, litter, moss and water at near/middle distances; remove repeating/mushy transfer and verify motion/filter continuity against declared scale |
 | Wetness / puddles | Existing basin fill, bounded pools, wet soil and spectral response retained | Readable water depth/basin boundaries, Fresnel and confidence-checked screen reflections; current primary land/water scene-object reflections and refraction remain open |
 | Instancing / medium tiers | Three scanned fern forms and existing world-addressed colonies, stable full lamina | Moisture/topographic cohorts, age/pose variation, intermediate cover and clearings without increasing fern counts indiscriminately |

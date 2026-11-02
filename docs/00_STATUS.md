@@ -27,13 +27,18 @@ pinned CC0 fern laminae, alpha-aware raster shadows and shared MASK ray
 traversal, MSAA coverage, corrected backface normal maps, cached atmospheric
 sunlight for surfaces/sky/clouds, and a physical B03 sunset epoch. RADV material/
 visibility controls pass. SSR/contact receiver buffers, AMD-style tile queues,
-static-caster depth caching, native multiple scattering, BLEND ray transport
+static-caster depth caching, cloud/ground bounce, BLEND ray transport
 and full-scene visual/performance acceptance remain open. The complete user
 critique is tracked in doc 112's integrated-scene table.
 [Doc 113](113_RENDER_RESEARCH_INTAKE.md) records the new downloaded research,
 80-source catalogue, exact diagnostic-image identity and applied/pending slices.
 Direct receiver shadow queries now also skip exactly extinguished solar RGB;
 this adds no approximate light threshold or caster-cache claim.
+[Doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) implements optional
+native isotropic higher-order atmosphere in the existing field, with numerical
+and frozen-geometry native Off/On/Off controls. FHD/QHD captures and preserved
+Cycles/art comparisons confirm that the artificial horizon and ground/sky/
+composition gaps remain; there is no accepted coastal speedup or visual parity.
 
 ## Current native integration checkpoint
 
@@ -815,7 +820,7 @@ trace is eligible). Mostly dielectric primary texels and the then-black
 environment were consistent with the tiny delta; changed pixels were not
 individually attributed. The native viewer now consumes resolved atmosphere
 enable/quality/steps/density/multi-star/airglow settings to evaluate the shared physical
-single-scattering sky into a direction grid: sky background, mesh raster reflections and RT
+sky into a direction grid (first order plus optional isotropic higher orders, doc 114): sky background, mesh raster reflections and RT
 misses sample it; terrain/mesh diffuse ambient comes from its local-radial
 hemisphere integral. Unchanged fields upload once, not every frame; disabling
 releases grid storage and the background consumer. The background shares the

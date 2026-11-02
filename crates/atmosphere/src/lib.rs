@@ -10,8 +10,10 @@ pub mod clouds;
 mod eclipse;
 mod emission;
 mod lights;
+mod multiple_scattering;
 mod optics;
 mod scattering;
+pub use multiple_scattering::MultipleScatteringLut;
 mod transmittance_lut;
 pub use transmittance_lut::TransmittanceLut;
 
@@ -31,5 +33,5 @@ pub use optics::{
 };
 pub use scattering::{
     SkyResult, aerial_perspective, airglow_radiance, hg_phase, rayleigh_phase, sky_radiance,
-    sky_radiance_lut, transmittance,
+    sky_radiance_lut, sky_radiance_lut_with_multiple, transmittance,
 };

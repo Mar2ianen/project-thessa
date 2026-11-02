@@ -1381,7 +1381,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             resolved.specular_reflections
         );
         println!(
-            "sky_background={} shared_environment_publication=true; single-scattering field, native stars/source discs and depth-clipped clouds/aurora; full physical aerial perspective unported",
+            "sky_background={} shared_environment_publication=true; shared optical field, native stars/source discs and depth-clipped clouds/aurora; full physical aerial perspective unported",
             renderer.sky_enabled()
         );
         println!(
@@ -1457,21 +1457,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
         match scene.environment_stats() {
-            Some(field) if field.enabled => println!(
-                "environment=enabled grid={}x{} view_steps={} sun_steps={} ambient_lux=[{:.2},{:.2},{:.2}] evaluations={} skipped={} storage_bytes={} last_evaluation_ms={:.2} aurora_steps={}; shared sky/emission field, sampled by background, raster and RT reflection terms",
-                field.width,
-                field.height,
-                field.view_steps,
-                field.sun_steps,
-                field.ambient_lux[0],
-                field.ambient_lux[1],
-                field.ambient_lux[2],
-                field.evaluated,
-                field.skipped,
-                field.storage_bytes,
-                field.last_evaluation_ms,
-                field.aurora_steps
-            ),
+            Some(field) if field.enabled => {
+                println!(
+                    "environment_multiple_scattering active={} cpu_source_bytes={} builds={} last_build_ms={:.3} max_feedback={:.6}; isotropic higher-order source, black ground, shared sky grid",
+                    field.multiple_scattering,
+                    field.multiple_storage_bytes,
+                    field.multiple_builds,
+                    field.multiple_build_ms,
+                    field.multiple_max_response
+                );
+                println!(
+                    "environment=enabled grid={}x{} view_steps={} sun_steps={} ambient_lux=[{:.2},{:.2},{:.2}] evaluations={} skipped={} storage_bytes={} last_evaluation_ms={:.2} aurora_steps={}; shared sky/emission field, sampled by background, raster and RT reflection terms",
+                    field.width,
+                    field.height,
+                    field.view_steps,
+                    field.sun_steps,
+                    field.ambient_lux[0],
+                    field.ambient_lux[1],
+                    field.ambient_lux[2],
+                    field.evaluated,
+                    field.skipped,
+                    field.storage_bytes,
+                    field.last_evaluation_ms,
+                    field.aurora_steps
+                );
+            }
             Some(_) => println!(
                 "environment=disabled; isotropic ambient_lux/PI reflection term, no sky integration"
             ),

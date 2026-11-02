@@ -1,0 +1,216 @@
+{
+  "date": "2026-11-02",
+  "status": "implemented optional isotropic atmosphere closure; full coastal parity and affordability NOT achieved",
+  "capture_identity": {
+    "source_base": "c7e78805976f022fcc1867e99cfbd5fbc5e1abec",
+    "source_patch_sha256": "f9402adecf13a4f5657c83d42829a9b700bb41fa016ca94d6a12166b609a89a4",
+    "new_module_sha256": "ca401c462469ac93df6a1c1672eb1cee3b555fb112aeafcdc796b91544505df4",
+    "binary_sha256": "f33d28df04ca8c0a947725d6516abde7e547b720dfeccf795cebe0d47804aa80",
+    "runtime_snapshot": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/source",
+    "comparison": "separate native runs: same inputs and full plant population; adaptive terrain residency NOT frozen; diagnostic stage fences NOT game FPS"
+  },
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02",
+  "model": {
+    "equation": "Psi = angular_average(isotropic single scattering) / (1 - angular_average(unit isotropic scattering response))",
+    "ground": "black",
+    "cloud_or_terrain_bounce": false,
+    "phase": "Rayleigh/HG for first order; isotropic closure for higher orders",
+    "solar_owner": "existing TransmittanceLut and atmosphere optics",
+    "finite_cell_source": "-expm1(-extinction * length) / extinction, length in vacuum; also corrects MS-Off first-order source",
+    "quality": {
+      "Low": [
+        16,
+        8,
+        16,
+        16
+      ],
+      "Medium": [
+        32,
+        16,
+        32,
+        24
+      ],
+      "High": [
+        64,
+        32,
+        64,
+        32
+      ]
+    },
+    "quality_columns": [
+      "width",
+      "height",
+      "directions",
+      "view_steps"
+    ],
+    "cpu_storage_bytes": {
+      "Low": 1536,
+      "Medium": 6144,
+      "High": 24576
+    },
+    "additional_gpu_allocations_or_passes": 0
+  },
+  "accuracy": {
+    "reference": "independent 16x32 angular tensor quadrature, 128 view steps, 6 height/sun cases; reference of same declared closure, NOT a full multiple-scattering path tracer",
+    "high_max_absolute_error_per_unit_stellar_irradiance": 0.0009262781562802067,
+    "32x16_64directions_64steps_max_error": 0.0010420163205862414,
+    "asserted_absolute_bound": 0.0015
+  },
+  "gpu_controls": {
+    "software_frozen_geometry": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/frozen-native-software-v2.log",
+    "result": "pass: native terrain and X15 mesh retain geometry, instance/work counts, source lighting/time; source changes ambient and pixels; off restores exact bytes",
+    "fixture_scope": "257x257 native terrain and retained X15, no coastal forest or quality acceptance",
+    "software_test_binary_sha256": "67f7fff8b80650e8f39edbc186863b98690b0b83efbc5e8492526b42bdee5556",
+    "initial_rejected_test": "expected upload bytes to remain fixed on first mesh publication; corrected to compare geometry/work excluding upload accounting",
+    "interrupted_full_run": {
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-on-command.json",
+      "result": "outer exec returned 143; no completed frame or performance result; last trace intent opaque_and_msaa frame 11",
+      "no_kernel_reset_observed": true
+    },
+    "rejected_short_attempt": "--warmup unsupported; failed argument validation without GPU setup",
+    "final_test_binary_sha256": "d436da6025de293dbde1914e6e57474438ddbb6c35d74cc7cf57aa4d99e710e7",
+    "final_software_log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/software-final.log",
+    "final_radv_log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/radv-final.log",
+    "native_radv_result": "pass: same frozen terrain/X15 fixture and exact Off round trip, renderD128 only, no display"
+  },
+  "resolution": {
+    "identity": {
+      "source_commit": "c7e78805976f022fcc1867e99cfbd5fbc5e1abec",
+      "source_tree": "44fff8d60ab205e1c983e5198f47158f1373ee79",
+      "archive_sha256": "34659a3a5716a9304f5105d886449c952d4ecc7b6096c15cf41ba44f3bd536ec",
+      "binary_sha256": "8888e731b1b759529085b2c171266d4cfc9e395cac3bddf45e97fea0c535ad2a",
+      "profile_sha256": "0f29815231a482227eaed81c43cc85b510f9272c629e3b0e5f4fc92ee181cebc",
+      "mode": "full population, same source/camera/epoch/EV/graphics; resolution-driven CBT refinement may differ; no equal-work speedup claim"
+    },
+    "scope": "same full plant population and source/camera/profile; resolution changes adaptive CBT/residency; stage-fenced wall diagnostic, NOT FPS or GPU timestamps",
+    "rows": [
+      {
+        "extent": [
+          1280,
+          720
+        ],
+        "median_ms": 570.144,
+        "terrain_triangles": 6348,
+        "height_pages": 748,
+        "msaa_target_bytes": 44236800
+      },
+      {
+        "extent": [
+          1920,
+          1080
+        ],
+        "median_ms": 861.648,
+        "terrain_triangles": 10626,
+        "height_pages": 726,
+        "msaa_target_bytes": 99532800
+      },
+      {
+        "extent": [
+          2560,
+          1440
+        ],
+        "median_ms": 1206.419,
+        "terrain_triangles": 14314,
+        "height_pages": 706,
+        "msaa_target_bytes": 176947200
+      }
+    ]
+  },
+  "runs": [
+    {
+      "label": "ms-off",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-off-command.json",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-off.png",
+      "png_sha256": "575a057f03fa08ba7a1c4bc4a8b3c7b6d4d0ca5410226f7eabc31c7e15adfdb5",
+      "hdr_sha256": "bc3a80686fff27c0ea38005576833cc3a2185e733bc52975f08d5baa1624861f",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=278 drawn_triangles=11232 frames=3 median_ms=888.781 p95_ms=902.143 p99_ms=902.143 max_ms=902.143 reciprocal_median_fps=1.1 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-off.png",
+      "multiple": "environment_multiple_scattering active=false cpu_source_bytes=0 builds=0 last_build_ms=0.000 max_feedback=0.000000; isotropic higher-order source, black ground, shared sky grid",
+      "ambient": "environment=enabled grid=64x32 view_steps=32 sun_steps=8 ambient_lux=[3867.15,3429.11,1866.08] evaluations=1 skipped=34 storage_bytes=40960 last_evaluation_ms=277.46 aurora_steps=8; shared sky/emission field, sampled by background, raster and RT reflection terms",
+      "full_plant_candidates": 17992,
+      "candidate_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "same_geometry_performance_pair": false
+    },
+    {
+      "label": "ms-on-retry",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-on-retry-command.json",
+      "png": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-on-retry.png",
+      "png_sha256": "1c5d2d4604ddad0d2694c5a070fbb42932d7004344810034cf2d7b709db20733",
+      "hdr_sha256": "63f2b0d75fc88035beb7069054214e23e7c3df1ea463cdb474c3ffcfaff8babe",
+      "summary": "adapter=AMD Radeon 880M Graphics (RADV STRIX1) canonical_tiles=254 drawn_triangles=6772 frames=1 median_ms=846.983 p95_ms=846.983 p99_ms=846.983 max_ms=846.983 reciprocal_median_fps=1.2 screenshot=/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/ms-on-retry.png",
+      "multiple": "environment_multiple_scattering active=true cpu_source_bytes=24576 builds=1 last_build_ms=1896.383 max_feedback=0.652996; isotropic higher-order source, black ground, shared sky grid",
+      "ambient": "environment=enabled grid=64x32 view_steps=32 sun_steps=8 ambient_lux=[5003.15,5641.91,5556.76] evaluations=1 skipped=31 storage_bytes=40960 last_evaluation_ms=2175.86 aurora_steps=8; shared sky/emission field, sampled by background, raster and RT reflection terms",
+      "full_plant_candidates": 17992,
+      "candidate_triangles": 19652948,
+      "primary_mesh_triangles": 2768212,
+      "same_geometry_performance_pair": false
+    }
+  ],
+  "references": [
+    {
+      "label": "cycles-procedural",
+      "original": "/tmp/cycles_b03_procedural",
+      "role": "independent approximate old-geometry Cycles render; qualitative comparison only",
+      "display_sha256": "ef8211af74f107f00cfae0d7268bc8201d9b04d6a3daed0c5054db8147154ac6",
+      "metrics_sha256": "2b60774958e71a4f726daffe0b29137f677855fa27023e25ac05da9ed9fb0745"
+    },
+    {
+      "label": "golden-art",
+      "original": "/tmp/cycles_b03_golden_v33",
+      "role": "art study with projected target sky/ground and added foliage; visual lighting/material/composition reference, never geometry or numeric parity oracle",
+      "display_sha256": "5fa7f4c03c78c22921bd7899e2d081bb8fbcc1336c6ca7b64c38e5d17e2ae4f8",
+      "metrics_sha256": "734d9c7f5fca5a7887a7b31d2b040184ac70fa8a96c2cf36430cb6b66653dbba"
+    }
+  ],
+  "visual_findings": [
+    "Higher-order source cools ambient and reduces orange monotony, without a painted color grade.",
+    "Structured blue/gold sky, rich low/middle vegetation, wet soil/water separation and close ground remain far from the art target.",
+    "Full captures still show an artificial elevated horizon band, with different shapes as residency changes; no horizon fix is accepted.",
+    "Old procedural Cycles uses different geometry, source/sky/transport/materials and approximation gains; no current RMSE is meaningful.",
+    "FHD/QHD improve leaf readability but do not repair these causes."
+  ],
+  "checks": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/thessa-ms-atmosphere-final.log",
+      "sha256": "39ab1e2ae2d47fe39fff68752f7c2699f3dec3918eca1eb8290a6bd9e40e6df3"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/thessa-ms-cache-final.log",
+      "sha256": "57304b03f8443416c0ddfae848e0165d66f4b56692a95684e118a69c5ade46a0"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/thessa-ms-environment-final.log",
+      "sha256": "d794d43d5f57d2e05fa335b84bd08acc1248180f7bbb9e42c2298374743e87f4"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/thessa-ms-clippy-final4.log",
+      "sha256": "f78211f5b87159a119fb09bc141d79389588b738575a4e0b4aee605a73deb7c7"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/thessa-ms-client-check.log",
+      "sha256": "e256779350633f7b51c6f887a5e4da6e1bf18f1fe085f0b928075a4a7ff27970"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/thessa-ms-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/software-final.log",
+      "sha256": "40b5db8e958024b7346ee30584c4a457acd2bd81a07151a91bf1f625431d304f",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/software-final-command.json"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/radv-final.log",
+      "sha256": "431a8552d6b638b52bfda662e7ca16a08400bb11f340ebba07efe1b4b3a0067a",
+      "command": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/multiple-scattering-2026-11-02/radv-final-command.json"
+    }
+  ],
+  "final_source_files": {
+    "apps/terrain-native/src/environment.rs": "5abb10744cf91989d756c534db24b99f7eaa2db70434a4425ef53cf9f31745f9",
+    "apps/terrain-native/src/main.rs": "29a480570edca496f4beadf33aee08ca3ee62387df7a60a2b05769a052d72f4c",
+    "apps/terrain-native/src/scene.rs": "aac94b51ad76f046d7f16144ab0007737cd4727ebc2dc2bbd3490ab989919f77",
+    "crates/atmosphere/src/lib.rs": "d09eef04316548723bc96f1133af3dffea627d69419518f9ba7fd8d4e4772831",
+    "crates/atmosphere/src/scattering.rs": "ee435f898bbedfc8df3dcc7217a92aa3b39da53d29cff967a35a81d1ef83bb42",
+    "crates/atmosphere/src/multiple_scattering.rs": "14b8c4600ae0f7758eb1cae3311abf1c6423d6a85f119bb3a6340891f8e1e8c0"
+  }
+}

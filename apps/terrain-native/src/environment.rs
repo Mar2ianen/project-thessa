@@ -66,6 +66,7 @@ pub struct EnvironmentBudget {
     pub multi_star: bool,
     pub airglow: bool,
     pub scattering: bool,
+    pub multiple_scattering: bool,
     pub aurora_steps: u32,
     pub aurora_intensity: f32,
     pub aurora_animate: bool,
@@ -96,6 +97,7 @@ impl EnvironmentBudget {
             multi_star: settings.multi_star,
             airglow: settings.airglow,
             scattering: settings.atmosphere_enabled,
+            multiple_scattering: settings.atmosphere_enabled && settings.multiple_scattering,
             aurora_steps: if !settings.aurora_shell || settings.aurora_intensity == 0.0 {
                 0
             } else {
@@ -123,6 +125,11 @@ pub struct EnvironmentStats {
     pub sun_steps: u32,
     pub ambient_lux: [f32; 3],
     pub storage_bytes: u64,
+    pub multiple_scattering: bool,
+    pub multiple_storage_bytes: u64,
+    pub multiple_builds: u64,
+    pub multiple_build_ms: f64,
+    pub multiple_max_response: f64,
     pub last_evaluation_ms: f64,
     pub aurora_steps: u32,
 }
@@ -131,6 +138,10 @@ pub struct EnvironmentStats {
 pub struct EnvironmentField {
     optics: AtmosphereOptics,
     sunlight: Option<std::sync::Arc<thessa_atmosphere::TransmittanceLut>>,
+    multiple: Option<thessa_atmosphere::MultipleScatteringLut>,
+    multiple_unavailable: bool,
+    multiple_builds: u64,
+    multiple_build_ms: f64,
     budget: Option<EnvironmentBudget>,
     grid: Option<EnvironmentRadiance>,
     background: Option<EnvironmentRadiance>,
@@ -158,6 +169,10 @@ impl EnvironmentField {
         Some(Self {
             optics: base,
             sunlight: None,
+            multiple: None,
+            multiple_unavailable: false,
+            multiple_builds: 0,
+            multiple_build_ms: 0.,
             budget: None,
             grid: None,
             background: None,
@@ -179,6 +194,11 @@ impl EnvironmentField {
             return;
         }
         self.budget = budget;
+        if !budget.is_some_and(|b| b.multiple_scattering) {
+            self.multiple = None;
+        }
+        self.multiple_unavailable = false;
+        self.multiple_build_ms = 0.;
         self.grid = None;
         self.background = None;
         self.frames_since_evaluation = u64::MAX;
@@ -228,6 +248,7 @@ impl EnvironmentField {
         let started = std::time::Instant::now();
         self.sunlight_lut()
             .expect("validated native atmospheric table");
+        self.update_multiple();
         let evaluated = self.evaluate_components_at(camera_body_m, lights, sim_time_s);
         (self.grid, self.background) =
             evaluated.map_or((None, None), |(grid, background)| (Some(grid), background));
@@ -308,13 +329,14 @@ impl EnvironmentField {
                         elevation.cos() * azimuth.sin(),
                     );
                     let sky = if let Some(table) = &self.sunlight {
-                        thessa_atmosphere::sky_radiance_lut(
+                        thessa_atmosphere::sky_radiance_lut_with_multiple(
                             &optics,
                             camera_body_m,
                             direction,
                             lights,
                             budget.view_steps,
                             table,
+                            self.multiple.as_ref(),
                         )
                         .expect("sky and sunlight share optical state")
                     } else {
@@ -435,6 +457,51 @@ impl EnvironmentField {
         Ok(self.sunlight.clone())
     }
 
+    fn update_multiple(&mut self) {
+        let Some(budget) = self.budget.filter(|b| b.multiple_scattering) else {
+            self.multiple = None;
+            return;
+        };
+        if self.multiple_unavailable {
+            return;
+        }
+        let Some(solar) = &self.sunlight else {
+            return;
+        };
+        let optics = self
+            .star_optics()
+            .expect("multiple scattering requires the shared atmosphere");
+        let (width, height, directions, steps) = match budget.width {
+            0..=8 => (16, 8, 16, 16),
+            9..=16 => (32, 16, 32, 24),
+            _ => (64, 32, 64, 32),
+        };
+        if self
+            .multiple
+            .as_ref()
+            .is_some_and(|m| m.matches(&optics, width, height, directions, steps))
+        {
+            return;
+        }
+        let started = std::time::Instant::now();
+        match thessa_atmosphere::MultipleScatteringLut::build(
+            &optics, solar, width, height, directions, steps,
+        ) {
+            Ok(table) => {
+                self.multiple = Some(table);
+                self.multiple_builds += 1;
+            }
+            Err(reason) => {
+                self.multiple = None;
+                self.multiple_unavailable = true;
+                eprintln!(
+                    "native_multiple_scattering: {reason}; retaining single-scattering fallback"
+                );
+            }
+        }
+        self.multiple_build_ms = started.elapsed().as_secs_f64() * 1000.;
+    }
+
     pub fn star_optics(&self) -> Option<AtmosphereOptics> {
         let budget = self.budget?;
         if !budget.scattering {
@@ -464,6 +531,11 @@ impl EnvironmentField {
                     .background
                     .as_ref()
                     .map_or(0, EnvironmentRadiance::storage_bytes),
+            multiple_scattering: self.multiple.is_some(),
+            multiple_storage_bytes: self.multiple.as_ref().map_or(0, |m| m.storage_bytes()),
+            multiple_builds: self.multiple_builds,
+            multiple_build_ms: self.multiple_build_ms,
+            multiple_max_response: self.multiple.as_ref().map_or(0., |m| m.max_response()),
             last_evaluation_ms: self.last_evaluation_ms,
             aurora_steps: budget.map_or(0, |b| b.aurora_steps),
         }
@@ -526,6 +598,73 @@ fn lights_changed(before: &[CelestialLight], after: &[CelestialLight]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multiple_scattering_respects_resolved_disable_and_reuses_optical_cache() {
+        let camera = DVec3::Y * 3_200_002.;
+        let light = CelestialLight {
+            direction_to_star: DVec3::new(0.8, 0.6, 0.),
+            irradiance_w_m2: 1000.,
+            color_rgb: [1.; 3],
+            angular_radius_rad: 0.005,
+            visibility: 1.,
+        };
+        let mut settings = settings(Quality::Low, 8);
+        settings.aurora_shell = false;
+        settings.multiple_scattering = false;
+        let mut field =
+            EnvironmentField::new(3_200_000., 5.02e13, Some(thessa_atmosphere())).unwrap();
+        field.set_budget(EnvironmentBudget::resolve(&settings));
+        field.update(camera, std::slice::from_ref(&light));
+        assert_eq!(field.stats().multiple_builds, 0);
+        assert_eq!(field.stats().multiple_storage_bytes, 0);
+        let direct = field.grid().unwrap().ambient_lux();
+        settings.multiple_scattering = true;
+        field.set_budget(EnvironmentBudget::resolve(&settings));
+        field.update(camera, std::slice::from_ref(&light));
+        let active = field.stats();
+        assert!(active.multiple_scattering);
+        assert_eq!(active.multiple_builds, 1);
+        assert_eq!(active.multiple_storage_bytes, 16 * 8 * 12);
+        assert!(active.multiple_max_response < 1.);
+        let indirect = field.grid().unwrap().ambient_lux();
+        for c in 0..3 {
+            assert!(indirect[c] > direct[c]);
+        }
+        field.update(camera, std::slice::from_ref(&light));
+        assert_eq!(field.stats().multiple_builds, 1);
+        let mut moved = light.clone();
+        moved.direction_to_star = DVec3::new(0.6, 0.8, 0.);
+        field.update(camera + DVec3::Y * 100., &[moved]);
+        assert_eq!(
+            field.stats().multiple_builds,
+            1,
+            "pose reuses the optical source"
+        );
+        settings.airglow = !settings.airglow;
+        field.set_budget(EnvironmentBudget::resolve(&settings));
+        field.update(camera, std::slice::from_ref(&light));
+        assert_eq!(
+            field.stats().multiple_builds,
+            1,
+            "emission changes do not change scattering cache"
+        );
+        settings.atmosphere_density_scale *= 0.8;
+        field.set_budget(EnvironmentBudget::resolve(&settings));
+        field.update(camera, std::slice::from_ref(&light));
+        assert_eq!(field.stats().multiple_builds, 2);
+        settings.multiple_scattering = false;
+        field.set_budget(EnvironmentBudget::resolve(&settings));
+        assert!(field.multiple.is_none());
+        field.update(camera, std::slice::from_ref(&light));
+        assert_eq!(field.stats().multiple_storage_bytes, 0);
+        settings.multiple_scattering = true;
+        settings.atmosphere_enabled = false;
+        field.set_budget(EnvironmentBudget::resolve(&settings));
+        field.update(camera, &[]);
+        assert_eq!(field.stats().multiple_builds, 2);
+        assert!(field.multiple.is_none());
+    }
 
     #[test]
     #[ignore = "benchmark: native target-size aurora grids, latency and representation error"]

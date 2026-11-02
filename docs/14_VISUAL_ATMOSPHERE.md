@@ -14,7 +14,7 @@ atmosphere paths plus shared CPU-side optical inputs. Full cloud/weather
 coupling and every ray-aware mode described below are not shipped.
 
 The Bevy-free native viewer consumes resolved materials, shared raster/mesh RT
-shadows and a shared single-scattering sky field for background, mesh/RT misses
+shadows and a shared optical sky field with optional isotropic higher orders for background, mesh/RT misses
 and opt-in spectral ocean reflection. Native mesh ray queries include resident
 terrain and bounded near-ocean geometry. It does not yet consume the Bevy LUT,
 or aerial-perspective paths described here. Native stars/source discs and
@@ -567,9 +567,10 @@ show_atmosphere_bounds = false
 show_rt_proxies = false
 ```
 
-`multiple_scattering`, upper-atmosphere emission, volumetric clouds and some
-debug switches are parsed and exposed through GUI metadata even where the
-current renderer reports them as reserved follow-up work. Shell-deck clouds,
+Some switches in this archival example were initially reserved. Native
+`multiple_scattering` is now consumed (doc 114); upper-atmosphere emission and
+volumetric clouds also have existing native consumers. Remaining unsupported
+debug switches are reported as follow-up work. Shell-deck clouds,
 aurora shells, gas-giant bands, and the engine plume are consumed by the
 renderer (not reserved). Unknown keys are ignored by
 older builds; they are not a second hidden settings system.
@@ -830,6 +831,8 @@ cloud/atmosphere transport, and the coastal correction is not yet an affordable
 production setting. [Doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md)
 now supplies atmospheric direct sunlight through the existing model's cached
 radial/chord table, shared by surfaces, sky evaluation and cloud sources.
-The native sky remains single scattering even when the requested multiple-
-scattering flag is true. Higher-order coupling and full sunset-reference
-acceptance remain open.
+[Doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) now consumes the
+resolved multiple-scattering flag using a cached isotropic higher-order source
+in the shared CPU sky field. Black-ground/local-isotropy limits, synchronous
+startup cost and tested error envelope are explicit. Cloud/terrain bounce,
+general finite aerial transport and full sunset-reference acceptance remain open.

@@ -1,4 +1,4 @@
-//! Analytic single-scattering queries shared by raster and ray-aware backends.
+//! Atmospheric view transport shared by raster and ray-aware backends.
 //!
 //! The same functions validate the shader approximation, feed future LUT
 //! baking, and answer ray-aware queries (camera rays, light/shadow rays,
@@ -196,9 +196,16 @@ pub fn sky_radiance(
     view_steps: u32,
     sun_steps: u32,
 ) -> SkyResult {
-    sky_radiance_transport(optics, camera_m, view_dir, lights, view_steps, |p, d| {
-        transmittance(optics, p, d, sun_steps)
-    })
+    sky_radiance_transport::<false>(
+        optics,
+        camera_m,
+        view_dir,
+        lights,
+        view_steps,
+        |p, d| transmittance(optics, p, d, sun_steps),
+        None,
+    )
+    .0
 }
 
 /// The same view integral with cached solar extinction; the table must match
@@ -211,7 +218,22 @@ pub fn sky_radiance_lut(
     view_steps: u32,
     table: &crate::TransmittanceLut,
 ) -> Option<SkyResult> {
+    sky_radiance_lut_with_multiple(optics, camera_m, view_dir, lights, view_steps, table, None)
+}
+
+/// Existing view transport with an optional isotropic higher-order source.
+/// Direct solar extinction and view transmission keep the same optical owner.
+pub fn sky_radiance_lut_with_multiple(
+    optics: &AtmosphereOptics,
+    camera_m: DVec3,
+    view_dir: DVec3,
+    lights: &[CelestialLight],
+    view_steps: u32,
+    table: &crate::TransmittanceLut,
+    multiple: Option<&crate::MultipleScatteringLut>,
+) -> Option<SkyResult> {
     if !table.optics_match(optics)
+        || multiple.is_some_and(|m| !m.optics_match(optics))
         || !camera_m.is_finite()
         || camera_m.length() > f64::MAX.sqrt() * 0.25
         || !view_dir.is_finite()
@@ -221,35 +243,30 @@ pub fn sky_radiance_lut(
     {
         return None;
     }
-    Some(sky_radiance_transport(
-        optics,
-        camera_m,
-        view_dir,
-        lights,
-        view_steps,
-        |p, d| {
-            let radius = p.length();
-            if d == DVec3::ZERO {
-                return [1.; 3];
-            }
-            table
-                .sample(
-                    radius - optics.inner_radius_m,
-                    (p / radius).dot(d.normalize()).clamp(-1., 1.),
-                )
-                .expect("finite atmospheric integration point")
-        },
-    ))
+    Some(
+        sky_radiance_transport::<false>(
+            optics,
+            camera_m,
+            view_dir,
+            lights,
+            view_steps,
+            |p, d| sampled_solar(table, p, d),
+            multiple,
+        )
+        .0,
+    )
 }
 
-fn sky_radiance_transport(
+fn sky_radiance_transport<const RESPONSE: bool>(
     optics: &AtmosphereOptics,
     camera_m: DVec3,
     view_dir: DVec3,
     lights: &[CelestialLight],
     view_steps: u32,
     solar: impl Fn(DVec3, DVec3) -> [f64; 3],
-) -> SkyResult {
+    multiple: Option<&crate::MultipleScatteringLut>,
+) -> (SkyResult, [f64; 3]) {
+    let mut response = [0.0; 3];
     let dir = view_dir.normalize_or_zero();
     let mut result = SkyResult {
         radiance_rgb: [0.0; 3],
@@ -257,23 +274,31 @@ fn sky_radiance_transport(
     };
     if camera_m.length_squared() < optics.inner_radius_m * optics.inner_radius_m {
         result.transmittance_rgb = [0.0; 3];
-        return result;
+        return (result, response);
     }
     if dir == DVec3::ZERO {
-        return result;
+        return (result, response);
     }
     let Some((t0, t1)) = intersect_atmosphere(optics, camera_m, dir) else {
-        return result;
+        return (result, response);
     };
     let nv = view_steps.clamp(1, 256) as usize;
     let dt = ((t1 - t0) / nv as f64).max(0.0);
     let mut view_tau = [0.0_f64; 3];
     for i in 0..nv {
         let p = camera_m + dir * (t0 + (i as f64 + 0.5) * dt);
-        let step_tau = extinction_rgb(optics, p).map(|s| (s * dt).min(10.0));
+        let sigma = extinction_rgb(optics, p);
+        let step_tau = sigma.map(|s| s * dt);
         let (sr, sm) = scattering_split(optics, p);
         // Transmittance from the sample toward the camera.
         let t_view = view_tau.map(|t| (-t).exp());
+        let weight: [f64; 3] =
+            std::array::from_fn(|c| t_view[c] * cell_source_integral(sigma[c], dt));
+        if RESPONSE {
+            for c in 0..3 {
+                response[c] += weight[c] * (sr[c] + sm[c]);
+            }
+        }
         for light in lights {
             let w = light.weighted_rgb();
             if w == [0.0; 3] {
@@ -281,11 +306,21 @@ fn sky_radiance_transport(
             }
             let sun_t = solar(p, light.direction_to_star);
             let cos_theta = dir.dot(light.direction_to_star).clamp(-1.0, 1.0);
-            let pr = rayleigh_phase(cos_theta);
-            let pm = hg_phase(optics.mie.asymmetry_g, cos_theta);
+            let pr = if RESPONSE {
+                1.0 / (4.0 * std::f64::consts::PI)
+            } else {
+                rayleigh_phase(cos_theta)
+            };
+            let pm = if RESPONSE {
+                pr
+            } else {
+                hg_phase(optics.mie.asymmetry_g, cos_theta)
+            };
+            let higher = multiple.map_or([0.; 3], |m| m.sample_point(p, light.direction_to_star));
             for c in 0..3 {
                 let scatter = sr[c] * pr + sm[c] * pm;
-                result.radiance_rgb[c] += t_view[c] * scatter * w[c] * sun_t[c] * dt;
+                result.radiance_rgb[c] +=
+                    weight[c] * w[c] * (scatter * sun_t[c] + (sr[c] + sm[c]) * higher[c]);
             }
         }
         for c in 0..3 {
@@ -294,11 +329,66 @@ fn sky_radiance_transport(
     }
     result.transmittance_rgb = view_tau.map(|t| (-t.min(50.0)).exp());
     // Weak night-side airglow limb term (spec section 11).
-    let glow = airglow_radiance(optics, camera_m, dir);
+    let glow = if RESPONSE {
+        [0.; 3]
+    } else {
+        airglow_radiance(optics, camera_m, dir)
+    };
     for (rad, g) in result.radiance_rgb.iter_mut().zip(glow) {
         *rad += g;
     }
-    result
+    (result, response)
+}
+
+// Exact homogeneous-cell source integral; exp_m1 preserves the vacuum limit.
+pub(crate) fn cell_source_integral(extinction: f64, length: f64) -> f64 {
+    if extinction == 0.0 {
+        length
+    } else {
+        -(-extinction * length).exp_m1() / extinction
+    }
+}
+
+fn sampled_solar(table: &crate::TransmittanceLut, p: DVec3, d: DVec3) -> [f64; 3] {
+    if d == DVec3::ZERO {
+        return [1.; 3];
+    }
+    let radius = p.length();
+    table
+        .sample(
+            radius - table.inner_radius_m(),
+            (p / radius).dot(d.normalize()).clamp(-1., 1.),
+        )
+        .expect("finite atmospheric integration point")
+}
+
+/// Unit-irradiance isotropic source and unit isotropic-field response, using
+/// the same atmosphere clipping, density and view transport as the sky.
+pub(crate) fn isotropic_transfer(
+    optics: &AtmosphereOptics,
+    p: DVec3,
+    view: DVec3,
+    sun: DVec3,
+    table: &crate::TransmittanceLut,
+    steps: u32,
+) -> ([f64; 3], [f64; 3]) {
+    let light = CelestialLight {
+        direction_to_star: sun,
+        irradiance_w_m2: 1.,
+        color_rgb: [1.; 3],
+        angular_radius_rad: 0.,
+        visibility: 1.,
+    };
+    let (sky, response) = sky_radiance_transport::<true>(
+        optics,
+        p,
+        view,
+        &[light],
+        steps,
+        |p, d| sampled_solar(table, p, d),
+        None,
+    );
+    (sky.radiance_rgb, response)
 }
 
 /// Aerial perspective between two points: surviving fraction plus inscatter

@@ -20,7 +20,8 @@ this milestone's index/commit. No main integration is authorized here.
 The handoff PNG's **decoded RGBA bytes exactly match** the earlier actual
 `b03-sunset-foliage-v1.png`. This establishes its image identity, not an
 independent physically matched renderer reference or a good-looking target.
-The user's separate photographic/Cycles split remains qualitative art direction.
+The user's separate photographic/Cycles split and generated images are
+explicitly accepted as qualitative visual art direction, not geometry truth.
 No artwork is projected into rendering and no implementer vote is blind acceptance.
 
 The reports correctly distinguish Minecraft's Rust/wgpu Horizon from Decima's
@@ -36,7 +37,7 @@ included or copied.
 | Research package | Current code/evidence | Remaining acceptance |
 | --- | --- | --- |
 | P0 / reproducible baseline and masks | Source/binary/profile hashes, exact commands, raw PNG/HDR, scene exports and per-stage trace records exist; new full-population frame identities are in doc 112 | Frozen residency/topology and matched GPU timestamp ABBA; separate material/direct/ambient/depth/transport diagnostic views still missing |
-| P1 / coherent sunlight | One neutral optical LUT now serves sky, source discs, primary land/water, mesh/RT shading and primary/reflected cloud sources; CPU/GPU altitude/tangent/publication controls pass | Complete vacuum/noon/grazing/post-sunset multi-star/eclipsed HDR scene matrix, general finite aerial transport and multiple scattering |
+| P1 / coherent sunlight | One neutral optical LUT now serves sky, source discs, primary land/water, mesh/RT shading and primary/reflected cloud sources; CPU/GPU altitude/tangent/publication controls pass | Optional isotropic atmospheric higher orders now implemented and numerically/native validated ([doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md)); full vacuum/noon/grazing/post-sunset HDR scene matrix, general finite aerial transport and cloud/ground bounce remain open |
 | P2 / horizon and atmosphere | Removed use of skirt sentinel as physical solar altitude; actual newer horizon wall disappears | Cause is not isolated because height residency changed; explicit terrain/sea/sky/cloud/depth masks and fixed-input segment diagnosis remain necessary |
 | P3 / soil and water | Existing basin solver, scanned substrate and water IOR/Fresnel retained; no replacement hydrology or roughness tuning added | Test smooth dry land, wet soil and true water independently; separate water presence from roughness/near-datum inference; then depth-aware water optics and confidence-checked SSR |
 | P4 / static shadows and sparse RT | MASK raster and candidate-ray coverage, conservative admission, material/UV/mip controls and actual full-population RT publication implemented; bounded capability negotiation removes artificial descriptor rejection | Static mesh depth cache with exact dynamic depth composition/invalidation, current-frame receivers, 8×4 queue, finite-source sampling and denoising; no classifier/cache speedup claimed |
@@ -88,12 +89,14 @@ Follow the research's sequence rather than beginning every new subsystem:
    Keep physical angular source size, independent stars, opacity and history
    epochs. Do not add ReSTIR merely for three stellar sources.
 5. Profile cloud and material cost, then improve the measured bottleneck.
-   Native multiple scattering is still missing despite its existing flag.
-   Preserve the shared atmosphere owner and validate a bounded physical model.
+   The existing multiple-scattering flag now activates a bounded isotropic
+   source in the shared atmosphere owner (doc 114); cloud/ground bounce and
+   full-model reference acceptance remain open.
 
 No external renderer benchmark is transferred to Thessa. The 80 references are
 a research catalogue, not 80 independently reproduced implementations. Newly
 opened primary AMD/Bruneton/glTF/Guerrilla/Epic material informs this milestone;
-Hillaire's author publication/source is identified for the atmosphere follow-up.
+The atmosphere follow-up (doc 114) independently implements Hillaire's
+isotropic closure after inspecting the author's publication/source.
 The original four-cascade full-High workload has not been executed here; all
 physical runs use isolated Vulkan and unchanged per-stage trace admission.

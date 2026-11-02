@@ -3466,3 +3466,12 @@ scanned close soil, existing pools and CBT remain the target. Earlier orange
 captures and rejected botanical specimens are retained, not acceptance. See
 doc 112 for all open composition/material/atmosphere/hybrid-shadow/performance
 gaps and the executed evidence.
+
+## Higher-order sky, resolution and reference continuation — 2026-11-02
+
+[Doc 114](114_NATIVE_MULTIPLE_SCATTERING_AND_RESOLUTION.md) adds optional native
+isotropic atmospheric higher orders with a bounded CPU source table and
+frozen-geometry native Off/On/Off coverage. FHD/QHD and full-population captures
+are retained alongside old Cycles and generated-art visual references. These
+still show an artificial horizon band, weak ground/water separation and
+composition/sky gaps; this is not reference parity or a coastal speedup.

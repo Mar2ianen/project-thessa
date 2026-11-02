@@ -63,6 +63,12 @@ against the existing dense f64 optical model; disabling atmospheric optics
 ignores the cached table exactly. This extends the existing state/publication,
 not a parallel atmosphere.
 
+The immediate follow-up also moves direct visibility behind the delivered-
+energy test in terrain, mesh and ray-hit shading. Exactly extinguished sources
+need no receiver ray. This is the P1/P4 causal zero-work boundary, with no light
+threshold, approximation or lost geometry; it is not the planned CSM cache or
+tile classifier. Regression evidence is linked in doc 112.
+
 ## Next bounded packages
 
 Follow the research's sequence rather than beginning every new subsystem:

@@ -131,8 +131,8 @@ fn rt_reflection(
         var visibility:array<f32,3>;
         var sunlight:array<vec3<f32>,3>;
         for (var i = 0u; i < 3u; i++) {
-            if any(light.colors[i].rgb > vec3(0.0)) {
-                sunlight[i]=env_sunlight(surface.position,light.directions[i].xyz,light.colors[i].rgb);
+            sunlight[i]=env_sunlight(surface.position,light.directions[i].xyz,light.colors[i].rgb);
+            if any(sunlight[i] > vec3(0.0)) {
                 let shadow_normal=select(surface.geometry,-surface.geometry,dot(surface.geometry,light.directions[i].xyz)<0.0);
                 visibility[i]=surface_visibility(surface.position,shadow_normal,i);
                 let cosines=mesh_diffuse_cosines(surface.normal,surface.geometry,light.directions[i].xyz);

@@ -250,3 +250,21 @@ new local solar table, sky/cloud transport or three independent source slots.
 Do not treat that existing adapter as a matched numerical sunlight oracle.
 The independent CPU/GPU transport controls above are the current numerical
 reference; external renderer export/transport parity remains open.
+
+## Zero delivered-energy continuation
+
+After the first publication, direct-light loops in primary terrain, meshes and
+ray hits now test **delivered** stellar RGB after solar transport, rather than
+only the top-of-atmosphere input. If the planet has extinguished a source
+exactly, it cannot contribute direct radiance and needs no shadow lookup/query
+or direct BRDF evaluation. No epsilon, low-light cutoff, material change,
+density reduction or new resource is introduced. Ambient, emission and other
+sources retain their existing paths. With solar transport disabled, delivered
+RGB equals the input and the previous behavior is retained.
+
+[The follow-up artifact](artifacts/zero-energy-shadow-gate-2026-11-02.json)
+records 75 core controls plus rerun RADV library/solar, 30 scene RT, primary
+land/water, MASK and surface-lighting suites. This avoids unnecessary receiver
+queries; it does not cull the CSM caster layers or implement AMD tile dispatch.
+The full scene was not re-timed to manufacture a speed ratio from changing
+residency; an equal-work performance measurement remains open.

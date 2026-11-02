@@ -670,8 +670,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let radial_up=normalize(mat3x3<f32>(render_from_body[0].xyz,render_from_body[1].xyz,render_from_body[2].xyz)*direction);
     var land_direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
-        if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
-            sunlight[i]=cbt_sunlight(input.render_position,radial_up,lighting.directions[i].xyz,lighting.colors_lux[i].rgb);
+        sunlight[i]=cbt_sunlight(input.render_position,radial_up,lighting.directions[i].xyz,lighting.colors_lux[i].rgb);
+        if (any(sunlight[i] > vec3(0.0))) {
             visibility[i] = cbt_shadow_visibility(input.render_position, receiver_normal, i);
             let incoming = sunlight[i] * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
                 * visibility[i];
@@ -709,7 +709,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if (cbt_specular_enabled() && water_material < 1.0) {
         var land_reflection = vec3(0.0);
         for (var i = 0u; i < 3u; i = i + 1u) {
-            if (any(lighting.colors_lux[i].rgb > vec3(0.0))) {
+            if (any(sunlight[i] > vec3(0.0))) {
                 land_reflection += ocean_sun_reflection(shaded_normal, eye, lighting.directions[i].xyz,
                     sunlight[i], roughness, 0.04)
                     * visibility[i];

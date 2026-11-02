@@ -1,0 +1,9 @@
+# Large generated/reference files stay outside ordinary Git.
+scene.glb
+linear.rgba16f
+golden_radiance.exr
+golden_reference.jpg
+ground_textures/
+cycles_display.png
+thessa_display.png
+radiance.exr

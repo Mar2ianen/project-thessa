@@ -1,0 +1,4 @@
+Canonical Thessa coastal world scene geometry and textures.
+Procedural game geometry: GPL-3.0-or-later; see LICENSING.md.
+Third-party materials retain their own licenses and attribution.
+Integration correction: the earlier Gemini export incorrectly labeled all content MIT/CC0.

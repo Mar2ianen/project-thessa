@@ -66,6 +66,12 @@ pub fn adopt_snapshot(
     mode: ControlMode,
     snapshot: &Snapshot,
 ) -> Result<FlightPose, String> {
+    if let Some(sample) = &snapshot.rocket_plumes {
+        sample.validate(VehicleId::PRIMARY)?;
+        if sample.interval_end.0 > snapshot.flight_time_s {
+            return Err("accepted rocket interval is newer than the authority snapshot".into());
+        }
+    }
     let pose = checked_snapshot_pose(snapshot, ephemeris, authority.reference_body)?;
     let density = authority
         .atmosphere

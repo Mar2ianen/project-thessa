@@ -1845,6 +1845,7 @@ mod tests {
             rails_advanced_s: 0.0,
             reaction_wheel_torque_body_nm: [0.0; 3],
             parachutes: vec![],
+            rocket_plumes: None,
             wake_notice: None,
             flight_error: None,
         };

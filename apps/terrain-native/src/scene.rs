@@ -34,6 +34,7 @@ pub struct Scene {
     /// `ExecuteManeuver` fixture semantics: never re-sent in a session).
     maneuver_kick_sent: bool,
     plume: crate::plume::Cache,
+    accepted_plumes: Vec<crate::plume::Cache>,
     pub docking: Option<crate::docking::Demo>,
     night_mask: Option<([u32; 2], Vec<u8>)>,
     launch_site: [f64; 3],
@@ -97,6 +98,7 @@ struct RemoteFlight {
     snapshots: u64,
     last_tick: Option<u64>,
     parachutes: Option<thessa_flight_authority::instruments::ParachuteSummary>,
+    rocket_plumes: Option<thessa_flight_net::plume::RocketPlumeSample>,
     fleet: FleetObserver,
 }
 
@@ -501,6 +503,7 @@ impl Scene {
             vehicle: None,
             maneuver_kick_sent: false,
             plume: Default::default(),
+            accepted_plumes: Vec::new(),
             docking: None,
             night_mask: None,
             camera: thessa_flight_authority::camera::FlightCamera::pilot_default(),
@@ -738,16 +741,30 @@ impl Scene {
         server: Option<&std::path::Path>,
         timeout: std::time::Duration,
     ) -> Result<(), String> {
+        self.enable_server_flight_with_vehicle(server, timeout, None)
+    }
+
+    pub fn enable_server_flight_with_vehicle(
+        &mut self,
+        server: Option<&std::path::Path>,
+        timeout: std::time::Duration,
+        definition: Option<&std::path::Path>,
+    ) -> Result<(), String> {
         if timeout.is_zero() {
             return Err("server timeout must be nonzero".into());
         }
         if self.vehicle.is_some() || self.sample.time != thessa_sim_core::SimTime::EPOCH {
             return Err("server flight requires an empty epoch vehicle scene".into());
         }
-        let link = match server {
-            Some(path) => thessa_flight_net::embedded::EmbeddedLink::spawn_server(path, timeout)?,
-            None => thessa_flight_net::embedded::EmbeddedLink::spawn(timeout)?,
+        let server = match server {
+            Some(path) => path.to_path_buf(),
+            None => std::env::current_exe()
+                .map_err(|e| e.to_string())?
+                .with_file_name(format!("thessa-server{}", std::env::consts::EXE_SUFFIX)),
         };
+        let link = thessa_flight_net::embedded::EmbeddedLink::spawn_server_with_vehicle(
+            &server, timeout, definition,
+        )?;
         self.setup_flight()?;
         self.remote = Some(RemoteFlight {
             link: Some(link),
@@ -757,6 +774,7 @@ impl Scene {
             snapshots: 0,
             last_tick: None,
             parachutes: None,
+            rocket_plumes: None,
             fleet: FleetObserver::default(),
         });
         self.clock.authority_paused = None;
@@ -901,6 +919,7 @@ impl Scene {
             snapshot,
         )?;
         remote.last_tick = Some(snapshot.tick);
+        remote.rocket_plumes = snapshot.rocket_plumes.clone();
         remote.parachutes = thessa_flight_authority::instruments::ParachuteSummary::checked(
             flight,
             &snapshot.parachutes,
@@ -950,15 +969,16 @@ impl Scene {
         if !link.send_input(&input) || link.is_closed() {
             return Err("embedded server link lost".into());
         }
-        let latest = link.latest_snapshot();
-        let display = link.interpolated_snapshot();
+        let primary = link.latest_primary_frame();
+        let latest = primary.as_ref().map(|p| p.snapshot.clone());
+        let display = link.interpolated_primary_snapshot();
         let fleet = link.latest_fleet_snapshot();
-        let geometry = link.latest_fleet_geometry();
+        let geometry = primary.map(|p| p.geometry);
         let age = link.fleet_snapshot_age();
         remote.fleet.age_s = age.map(|age| age.as_secs_f64());
         remote.fleet.stale = age.is_some_and(|age| age > remote.timeout);
         if link
-            .snapshot_age()
+            .primary_frame_age()
             .unwrap_or_else(|| remote.started.elapsed())
             > remote.timeout
         {
@@ -1495,6 +1515,21 @@ impl Scene {
             }
         }
     }
+    /// Read-only source used by rendering and opt-in capture telemetry.
+    pub fn rocket_plume_sample(&self) -> Option<thessa_flight_net::plume::RocketPlumeSample> {
+        if let Some(remote) = &self.remote {
+            remote.rocket_plumes.clone()
+        } else {
+            self.flight.as_ref().and_then(|flight| {
+                thessa_flight_net::plume::RocketPlumeSample::from_authority(
+                    flight,
+                    self.celestial.ephemeris(),
+                    thessa_sim_core::VehicleId::PRIMARY,
+                )
+            })
+        }
+    }
+
     /// Read-only extraction from local authority or the server-fed replica.
     /// The provisional deck belongs only to the explicit starter X-15, never
     /// to arbitrary retained geometry or a fabricated server engine state.
@@ -1508,6 +1543,112 @@ impl Scene {
     ) -> Result<(), BackendError> {
         let settings = backend.resolve_graphics(&self.requested);
         let view = self.view(width, height, exposure);
+        if !settings.plume_enabled
+            || self.map_active()
+            || self.flight_stopped()
+            || self
+                .remote
+                .as_ref()
+                .is_some_and(|r| r.snapshots == 0 || r.fleet.stale)
+        {
+            self.plume.clear();
+            self.accepted_plumes.clear();
+            return renderer.update_plume(backend, &view, &settings, None);
+        }
+        let sample = self.rocket_plume_sample();
+        if let Some(sample) = sample {
+            sample
+                .validate(thessa_sim_core::VehicleId::PRIMARY)
+                .map_err(BackendError::Device)?;
+            let pose = if self.remote.is_some() {
+                self.primary_presentation
+                    .filter(|(revision, _)| *revision == self.last_primary_revision)
+                    .map(|(_, pose)| pose)
+            } else {
+                self.flight
+                    .as_ref()
+                    .and_then(thessa_flight_authority::presentation::FlightPose::from_authority)
+            };
+            let Some(pose) = pose else {
+                self.accepted_plumes.clear();
+                return renderer.update_plume(backend, &view, &settings, None);
+            };
+            let render_axes = |v| {
+                self.sample.frame.render_to_body_direction(
+                    thessa_flight_authority::presentation::inertial_to_render_axes(v),
+                )
+            };
+            let rotation = self
+                .flight
+                .as_ref()
+                .unwrap()
+                .state
+                .orientation_body_to_inertial;
+            let angular = self
+                .flight
+                .as_ref()
+                .unwrap()
+                .state
+                .angular_velocity_body_rps;
+            let input = crate::plume::Input {
+                // Actual allocated state is consumed with source throttle one.
+                throttle: 1.0,
+                engine_active: true,
+                sim_time_s: pose.time().0,
+                air_velocity_scene_mps: render_axes(DVec3::from_array(
+                    sample.air_velocity_inertial_mps,
+                )),
+                angular_velocity_scene_rps: render_axes(rotation * angular),
+                air_rotation_scene_rps: render_axes(DVec3::from_array(
+                    sample.air_rotation_inertial_rps,
+                )),
+            };
+            let env = thessa_plume_core::PlumeEnvironment {
+                pressure_pa: sample.pressure_pa,
+                density_kg_m3: sample.density_kg_m3,
+                temperature_k: sample.temperature_k,
+                oxygen_fraction: sample.oxygen_mole_fraction,
+                flow_velocity_local_mps: [0.0; 3],
+            };
+            self.plume.clear();
+            self.accepted_plumes
+                .resize_with(sample.nozzles.len(), Default::default);
+            let mut draws = Vec::new();
+            for (nozzle, cache) in sample.nozzles.iter().zip(&mut self.accepted_plumes) {
+                if let Some(thessa_render_wgpu::plume::PlumeFrame::Volume(draw)) = cache
+                    .accepted_frame(
+                        nozzle,
+                        pose,
+                        self.sample.frame,
+                        input,
+                        env,
+                        view.world_position_m,
+                        &settings,
+                    )
+                {
+                    draws.push(draw);
+                }
+            }
+            let frame = match draws.len() {
+                0 => None,
+                1 => Some(thessa_render_wgpu::plume::PlumeFrame::Volume(
+                    draws.pop().unwrap(),
+                )),
+                _ => Some(thessa_render_wgpu::plume::PlumeFrame::Volumes(draws.into())),
+            };
+            return renderer.update_plume(backend, &view, &settings, frame);
+        }
+        self.accepted_plumes.clear();
+        // Installed rockets lacking an accepted sample never borrow the X15 deck.
+        if self.remote.is_none()
+            && self
+                .flight
+                .as_ref()
+                .is_some_and(|f| !f.vehicle.engines.is_empty() || !f.vehicle.systems.is_empty())
+        {
+            self.plume.clear();
+            return renderer.update_plume(backend, &view, &settings, None);
+        }
         let input = (settings.plume_enabled
             && !self.map_active()
             && !self.flight_stopped()
@@ -1538,7 +1679,11 @@ impl Scene {
             .ok()?;
             let altitude = kinematics.altitude_m;
             let orientation = flight.state.orientation_body_to_inertial;
-            let render_axes = thessa_flight_authority::presentation::inertial_to_render_axes;
+            let render_axes = |v| {
+                self.sample.frame.render_to_body_direction(
+                    thessa_flight_authority::presentation::inertial_to_render_axes(v),
+                )
+            };
             let env = crate::plume::environment(
                 flight
                     .atmosphere
@@ -1551,13 +1696,13 @@ impl Scene {
                     throttle: flight.throttle,
                     engine_active: flight.engine_active,
                     sim_time_s: flight.flight_time_s,
-                    air_velocity_render_mps: render_axes(
+                    air_velocity_scene_mps: render_axes(
                         -(orientation * kinematics.air_velocity_body_mps),
                     ),
-                    angular_velocity_render_rps: render_axes(
+                    angular_velocity_scene_rps: render_axes(
                         orientation * flight.state.angular_velocity_body_rps,
                     ),
-                    air_rotation_render_rps: render_axes(flight.atmosphere.body_rotation_rad_s),
+                    air_rotation_scene_rps: render_axes(flight.atmosphere.body_rotation_rad_s),
                 },
                 env,
                 self.vehicle.as_ref()?.1,

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "B03-canonical-coast-v1",
+  "name": "Thessa Canonical Coastal World Scene",
+  "geometry": "scene.glb",
+  "coordinate_system": "glTF 2.0 right-handed Y-up (camera-relative origin)",
+  "camera": {
+    "eye_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "camera_body_m": [
+      -2835052.2195998533,
+      1279289.8344336036,
+      -752292.8158699585
+    ],
+    "forward": [
+      0.41880459013504334,
+      0.9012505198717933,
+      0.11113152438728204
+    ],
+    "up": [
+      -0.8711037408270371,
+      0.4332983965246382,
+      -0.23115097292964076
+    ],
+    "right": [
+      -0.2564780458420575,
+      1.8595422146550078e-9,
+      0.9665500566453036
+    ],
+    "fov_y_rad": 0.9,
+    "aspect_ratio": 1.7777777777777777,
+    "near_m": 0.1,
+    "far_m": 1000.0,
+    "exposure": 1.0
+  },
+  "sun": {
+    "direction_to_light": [
+      -0.9999995231628418,
+      -1.6633927089060307e-6,
+      0.0009530528332106769
+    ],
+    "illuminance_rgb_lux": [
+      89105.109375,
+      80363.125,
+      73153.8203125
+    ]
+  },
+  "ambient": {
+    "ambient_rgb_lux": [
+      5983.697265625,
+      8214.12109375,
+      9322.7158203125
+    ]
+  },
+  "stats": {
+    "terrain_triangles": 6340,
+    "plant_instances": 27857,
+    "plant_triangles": 112813834,
+    "plant_prototypes": 37
+  }
+}

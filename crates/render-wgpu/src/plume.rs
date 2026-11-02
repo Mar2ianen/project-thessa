@@ -9,6 +9,12 @@ use glam::{Vec3, Vec4};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+#[path = "plume_multi.rs"]
+mod multi;
+
+/// Hard backend capacity; excess sources fail explicitly, never disappear.
+pub const MAX_JOINT_FIELDS: usize = 64;
+
 const MAX_STATIONS: usize = 64;
 const MAX_CENTERS: usize = 33;
 const FRAME_BYTES: u64 = 160;
@@ -59,12 +65,15 @@ pub struct ConeDraw {
 pub enum PlumeFrame {
     Volume(VolumeDraw),
     Cone(ConeDraw),
+    /// Joint transport of overlapping fields; never alpha-sort individual jets.
+    Volumes(Arc<[VolumeDraw]>),
 }
 
 /// Work submitted by the last update/encode, never fabricated GPU time.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PlumeStats {
     pub draw_calls: u32,
+    pub source_count: u32,
     /// Steps per merged ray interval (one for a straight cylinder).
     pub march_steps: u32,
     /// Maximum steps per interval after analytic shock-resolution demand.
@@ -99,6 +108,7 @@ pub struct PlumeRenderer {
     impostor: wgpu::Texture,
     published_impostor: Option<Arc<[u8]>>,
     active: Option<PlumeFrame>,
+    multi: Option<multi::MultiVolume>,
     stats: PlumeStats,
 }
 
@@ -331,6 +341,7 @@ impl PlumeRenderer {
             impostor: texture,
             published_impostor: None,
             active: None,
+            multi: None,
             stats: PlumeStats::default(),
         })
     }
@@ -357,6 +368,34 @@ impl PlumeRenderer {
         let Some(frame) = frame else {
             return Ok(());
         };
+        if let PlumeFrame::Volumes(draws) = &frame {
+            if draws.is_empty() {
+                return Ok(());
+            }
+            if draws.len() > MAX_JOINT_FIELDS {
+                return Err(BackendError::Device(format!(
+                    "{} plume fields exceed joint transport capacity {MAX_JOINT_FIELDS}",
+                    draws.len()
+                )));
+            }
+            if self.multi.is_none() {
+                self.multi = Some(multi::MultiVolume::new(
+                    backend,
+                    self.format,
+                    &self.global_layout,
+                ));
+            }
+            self.stats = self
+                .multi
+                .as_mut()
+                .unwrap()
+                .update(backend, params, draws)?;
+            if self.stats.draw_calls > 0 {
+                self.active = Some(frame);
+            }
+            return Ok(());
+        }
+        self.multi = None;
         let view = ViewUniformBlock::new(params)
             .ok_or_else(|| BackendError::Device("invalid plume camera".into()))?;
         let frame_bytes = bytes(
@@ -369,49 +408,8 @@ impl PlumeRenderer {
         );
         let draw_bytes = match &frame {
             PlumeFrame::Volume(draw) => {
-                if ![1, 2, 4, 8].contains(&draw.pixel_grid)
-                    || !(2..=MAX_STATIONS).contains(&draw.profile.len())
-                    || !draw
-                        .origin_len
-                        .iter()
-                        .chain(draw.axis_radius.iter())
-                        .chain(draw.animation.iter())
-                        .chain(draw.radial_reference.iter())
-                        .chain(draw.shock_cells.iter())
-                        .all(|v| v.is_finite())
-                    || draw.shock_cells[0] < 0.0
-                    || (draw.shock_cells[0] > 0.0
-                        && (draw.shock_cells[1] <= 0.0 || draw.shock_cells[2] < 1.0))
-                    || draw.origin_len[3] <= 0.0
-                    || draw.axis_radius[3] <= 0.0
-                    || (Vec3::from_slice(&draw.axis_radius).length_squared() - 1.0).abs() > 1e-3
-                    || (Vec3::from_array(draw.radial_reference).length_squared() - 1.0).abs() > 1e-3
-                    || Vec3::from_array(draw.radial_reference)
-                        .dot(Vec3::from_slice(&draw.axis_radius))
-                        .abs()
-                        > 1e-3
-                    || !draw.profile.iter().flatten().all(|v| v.is_finite())
-                    || draw.profile.windows(2).any(|pair| pair[0][0] > pair[1][0])
-                {
-                    return Err(BackendError::Device(
-                        "invalid plume axial publication".into(),
-                    ));
-                }
+                validate_volume(draw)?;
                 if !draw.centerline.is_empty() {
-                    let valid = (2..=MAX_CENTERS).contains(&draw.centerline.len())
-                        && draw.centerline.iter().flatten().all(|v| v.is_finite())
-                        && draw.centerline[0][3] == 0.0
-                        && draw.centerline.last().unwrap()[3] == draw.origin_len[3]
-                        && draw.centerline.windows(2).all(|p| {
-                            let d2 =
-                                Vec3::from_slice(&p[0]).distance_squared(Vec3::from_slice(&p[1]));
-                            p[0][3] < p[1][3] && d2.is_finite() && d2 > 1e-12
-                        });
-                    if !valid {
-                        return Err(BackendError::Device(
-                            "invalid plume centerline publication".into(),
-                        ));
-                    }
                     let data = bytes(draw.centerline.iter().flatten().copied());
                     backend.queue.write_buffer(&self.centerline, 0, &data);
                     self.stats.centerline_upload_bytes = data.len() as u64;
@@ -438,27 +436,9 @@ impl PlumeRenderer {
                     };
                 self.stats.pixel_ray_limit = draw.pixel_grid * draw.pixel_grid;
                 self.stats.centerline_segments = draw.centerline.len().saturating_sub(1) as u32;
-                bytes(
-                    rect.into_iter()
-                        .chain(draw.origin_len)
-                        .chain(draw.axis_radius)
-                        .chain([
-                            draw.profile.len() as f32,
-                            draw.animation[0],
-                            draw.animation[1],
-                            draw.animation[2],
-                        ])
-                        .chain([
-                            draw.animation[3],
-                            f32::from(draw.diamonds),
-                            f32::from(draw.tail_dissolve),
-                            draw.centerline.len() as f32,
-                        ])
-                        .chain(draw.radial_reference)
-                        .chain([draw.pixel_grid as f32])
-                        .chain(draw.shock_cells),
-                )
+                encode_volume(draw, rect)
             }
+            PlumeFrame::Volumes(_) => unreachable!("handled by joint transport"),
             PlumeFrame::Cone(draw) => {
                 if draw.texture.len() != 32 * 256 * 4 {
                     return Err(BackendError::Device(
@@ -490,6 +470,7 @@ impl PlumeRenderer {
         backend.queue.write_buffer(&self.draw, 0, &draw_bytes);
         self.stats.frame_upload_bytes = (frame_bytes.len() + draw_bytes.len()) as u64;
         self.stats.draw_calls = 1;
+        self.stats.source_count = 1;
         self.active = Some(frame);
         Ok(())
     }
@@ -505,6 +486,12 @@ impl PlumeRenderer {
         let Some(active) = &self.active else {
             return;
         };
+        if let PlumeFrame::Volumes(_) = active {
+            if let Some(multi) = &self.multi {
+                multi.encode(encoder, color, depth, &self.global_layout);
+            }
+            return;
+        }
         let global = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("plume-camera-depth"),
             layout: &self.global_layout,
@@ -543,6 +530,7 @@ impl PlumeRenderer {
                 pass.set_bind_group(1, &self.volume_bind, &[]);
                 pass.draw(0..6, 0..1);
             }
+            PlumeFrame::Volumes(_) => unreachable!("handled by joint transport"),
             PlumeFrame::Cone(_) => {
                 pass.set_pipeline(&self.cone_pipeline);
                 pass.set_bind_group(1, &self.cone_bind, &[]);
@@ -551,6 +539,75 @@ impl PlumeRenderer {
             }
         }
     }
+}
+
+fn validate_volume(draw: &VolumeDraw) -> Result<(), BackendError> {
+    if ![1, 2, 4, 8].contains(&draw.pixel_grid)
+        || !(2..=MAX_STATIONS).contains(&draw.profile.len())
+        || !draw
+            .origin_len
+            .iter()
+            .chain(draw.axis_radius.iter())
+            .chain(draw.animation.iter())
+            .chain(draw.radial_reference.iter())
+            .chain(draw.shock_cells.iter())
+            .all(|v| v.is_finite())
+        || draw.shock_cells[0] < 0.0
+        || (draw.shock_cells[0] > 0.0 && (draw.shock_cells[1] <= 0.0 || draw.shock_cells[2] < 1.0))
+        || draw.origin_len[3] <= 0.0
+        || draw.axis_radius[3] <= 0.0
+        || (Vec3::from_slice(&draw.axis_radius).length_squared() - 1.0).abs() > 1e-3
+        || (Vec3::from_array(draw.radial_reference).length_squared() - 1.0).abs() > 1e-3
+        || Vec3::from_array(draw.radial_reference)
+            .dot(Vec3::from_slice(&draw.axis_radius))
+            .abs()
+            > 1e-3
+        || !draw.profile.iter().flatten().all(|v| v.is_finite())
+        || draw.profile.windows(2).any(|pair| pair[0][0] > pair[1][0])
+    {
+        return Err(BackendError::Device(
+            "invalid plume axial publication".into(),
+        ));
+    }
+    if !draw.centerline.is_empty() {
+        let valid = (2..=MAX_CENTERS).contains(&draw.centerline.len())
+            && draw.centerline.iter().flatten().all(|v| v.is_finite())
+            && draw.centerline[0][3] == 0.0
+            && draw.centerline.last().unwrap()[3] == draw.origin_len[3]
+            && draw.centerline.windows(2).all(|p| {
+                let d2 = Vec3::from_slice(&p[0]).distance_squared(Vec3::from_slice(&p[1]));
+                p[0][3] < p[1][3] && d2.is_finite() && d2 > 1e-12
+            });
+        if !valid {
+            return Err(BackendError::Device(
+                "invalid plume centerline publication".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn encode_volume(draw: &VolumeDraw, rect: [f32; 4]) -> Vec<u8> {
+    bytes(
+        rect.into_iter()
+            .chain(draw.origin_len)
+            .chain(draw.axis_radius)
+            .chain([
+                draw.profile.len() as f32,
+                draw.animation[0],
+                draw.animation[1],
+                draw.animation[2],
+            ])
+            .chain([
+                draw.animation[3],
+                f32::from(draw.diamonds),
+                f32::from(draw.tail_dissolve),
+                draw.centerline.len() as f32,
+            ])
+            .chain(draw.radial_reference)
+            .chain([draw.pixel_grid as f32])
+            .chain(draw.shock_cells),
+    )
 }
 
 fn pipeline(

@@ -470,7 +470,7 @@ The checked-in vertical slice currently contains:
      names and exact authoritative contact parts (64 parts per secondary); the
      first row opens an auto-fit body-frame wireframe. Missing geometry and
      budget omission are explicit; no partial hull or X-15 copy is substituted.
-      Names are labels, not model IDs. Wire v10 carries retained body-shell
+      Names are labels, not model IDs. Wire v11 carries retained body-shell
      appearance with explicit absent/over-budget states (8 parts, 1,024 vertices,
      4,096 indices per secondary). Native draws available shells with a neutral
      finish through the existing opaque mesh pass, only when a secondary's
@@ -799,7 +799,8 @@ state. Its native capture now uses the existing mesh/display/perf consumers,
 with verified static 880M repeats and explicit scene/geometry hashes.
 [B02 asset ingestion](docs/91_B02_ASSET_PROVENANCE.md) pins full evaluated
 CC0 Fern/Moss geometry in an external cache, with reproducible conversion and
-explicit material losses. Native B02 rendering remains pending; no coastal
+explicit material losses. Native B02 now renders through the shared path
+([integration audit](docs/110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md)); no coastal
 speedup or reference parity claimed. The first
 [external Cycles B01 diagnostic](docs/92_EXTERNAL_RENDERER_COMPARISON.md) now
 captures the same GLB/camera with explicit BSDF/light-unit/AA differences;
@@ -851,13 +852,16 @@ validation, with engine calibration and live per-nozzle extraction still open.
 now retain the liquid/solid/chamber points used by resource allocation, published
 only after an accepted physical tick. [Accepted nozzle outlets](docs/109_ACCEPTED_NOZZLE_OUTLETS.md)
 now retain authored circular exits and allocated plume state through COM shifts,
-with missing legacy geometry explicit. The fixed native plume deck is unchanged;
-owner/revision binding, remote publication and live consumption remain F03 work.
+with missing legacy geometry explicit. [Native scene/nozzle integration](docs/110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md)
+adds wire v11, coherent primary pose/geometry publication, accepted primary
+nozzle consumption and joint optical transport. Fleet plumes, calibrated emission,
+field illumination and cloud overlap remain open. B03 has actual native/Cycles
+controls, with substantial material/light and full-density shadow-cost gaps.
 
 [Compiled plume gallery](docs/102_COMPILED_PLUME_GALLERY.md) compares nine
 pressure/throttle/view controls with stock Cycles at 256/2048 samples. Matching
-the volume ray start fixes the reference inside-camera mismatch. Live nozzle
-extraction and calibration remain open.
+the volume ray start fixes the reference inside-camera mismatch. Live primary extraction is now integrated in doc 110; fleet extraction and
+calibration remain open.
 
 [Production CBT flight and scratch traffic](docs/103_CBT_FLIGHT_AND_SCRATCH.md)
 verify a frozen ground–orbit–ground replay, closedness and exhaustion recovery.

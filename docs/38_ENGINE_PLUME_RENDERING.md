@@ -663,9 +663,12 @@ This is read-only source data, not another propulsion solve.
 [Doc 109](109_ACCEPTED_NOZZLE_OUTLETS.md) now retains authored circular outlets,
 physical gamma and already-allocated plume state, rebasing outlet positions
 with postburn/manual-transfer COM changes. Legacy/annular geometry remains
-explicitly unavailable. The native fixed engine deck remains provisional:
-owner/frame-revision binding, remote transport and multi-nozzle consumption
-are still required before F03 is done.
+explicitly unavailable. [Doc 110](110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md)
+adds wire v11 accepted samples, coherent primary owner/geometry binding and
+native per-nozzle consumption in the hull scene frame. Multiple primary nozzles
+sum optical coefficients before transport. The scalar starter deck remains
+provisional; fleet rendering, gimbal geometry, history and calibrated real-source
+emission remain open before F03/visual acceptance.
 Already-allocated flow must not receive the requested throttle a second time.
 
 [Doc 102](102_COMPILED_PLUME_GALLERY.md) adds nine frozen compiled-engine

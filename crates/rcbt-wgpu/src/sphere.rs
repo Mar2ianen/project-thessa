@@ -107,7 +107,7 @@ impl SphereGpu {
         let indices = make(
             "sphere-active-indices",
             &words(&initial_indices),
-            wgpu::BufferUsages::STORAGE,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         );
         let areas = make(
             "sphere-classified-areas",

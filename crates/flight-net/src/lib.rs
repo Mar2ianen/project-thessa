@@ -424,6 +424,8 @@ pub struct Snapshot {
     /// Per-canopy phase and physical load from the latest authority step.
     #[serde(default)]
     pub parachutes: Vec<ParachuteLoad>,
+    /// Accepted rocket interval in this snapshot's exact body/appearance frame.
+    pub rocket_plumes: Option<plume::RocketPlumeSample>,
     pub wake_notice: Option<String>,
     pub flight_error: Option<String>,
 }
@@ -431,6 +433,7 @@ pub struct Snapshot {
 #[cfg(not(target_arch = "wasm32"))]
 pub mod embedded;
 pub mod geometry;
+pub mod plume;
 pub mod presentation;
 
 /// Encode a game message into a framed byte stream chunk.
@@ -575,6 +578,16 @@ impl FleetSnapshot {
         {
             return Err("invalid fleet capacity or non-primary ID ordering".into());
         }
+        for vehicle in &self.vehicles {
+            if let Some(sample) = &vehicle.snapshot.rocket_plumes {
+                sample.validate(vehicle.vehicle_id)?;
+                if !vehicle.snapshot.flight_time_s.is_finite()
+                    || sample.interval_end.0 > vehicle.snapshot.flight_time_s
+                {
+                    return Err("fleet rocket interval is newer than its snapshot".into());
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -710,7 +723,7 @@ mod tests {
 
     #[test]
     fn fleet_snapshot_round_trips_behind_its_own_kind() {
-        let snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             geometry_revision: 1,
             appearance_frame_revision: 1,
             tick: 7,
@@ -726,9 +739,14 @@ mod tests {
             rails_advanced_s: 0.0,
             reaction_wheel_torque_body_nm: [0.0; 3],
             parachutes: Vec::new(),
+            rocket_plumes: None,
             wake_notice: None,
             flight_error: None,
         };
+        let mut sample = plume::tests::sample();
+        sample.vehicle_id = VehicleId::new(2);
+        sample.interval_end = thessa_sim_core::SimTime(1.5);
+        snapshot.rocket_plumes = Some(sample);
         let fleet = FleetSnapshot {
             geometry_revision: 1,
             vehicles: vec![FleetVehicleSnapshot {
@@ -736,6 +754,23 @@ mod tests {
                 snapshot: snapshot.clone(),
             }],
         };
+        fleet.validate_membership().unwrap();
+        let mut invalid = fleet.clone();
+        invalid.vehicles[0]
+            .snapshot
+            .rocket_plumes
+            .as_mut()
+            .unwrap()
+            .vehicle_id = VehicleId::PRIMARY;
+        assert!(invalid.validate_membership().is_err());
+        let mut invalid = fleet.clone();
+        invalid.vehicles[0]
+            .snapshot
+            .rocket_plumes
+            .as_mut()
+            .unwrap()
+            .interval_end = thessa_sim_core::SimTime(2.0);
+        assert!(invalid.validate_membership().is_err());
         let frame = encode_fleet_snapshot(&fleet).expect("encode");
         let mut decoder = FrameDecoder::new();
         let frames = decoder.push(&frame).expect("split");
@@ -869,6 +904,7 @@ mod tests {
                 moment_body_nm: [0.0, 8_400.0, 0.0].into(),
                 line_extension_m: 0.0,
             }],
+            rocket_plumes: Some(plume::tests::sample()),
             wake_notice: None,
             flight_error: None,
         }
@@ -989,6 +1025,26 @@ mod tests {
         assert_eq!(envelope.kind, kind::SNAPSHOT);
         let back: Snapshot = decode_payload(&envelope).expect("payload");
         assert_eq!(back, snapshot);
+    }
+
+    #[test]
+    fn interpolation_keeps_the_accepted_interval_and_does_not_interpolate_flow() {
+        let mut previous = sample_snapshot();
+        previous.flight_time_s = 59.0;
+        let latest = sample_snapshot();
+        previous.rocket_plumes.as_mut().unwrap().interval_end = thessa_sim_core::SimTime(59.0);
+        previous.rocket_plumes.as_mut().unwrap().nozzles[0]
+            .state
+            .as_mut()
+            .unwrap()
+            .mass_flow_kg_s = 10.0;
+        let presentation = presentation::interpolate_snapshot(&previous, &latest, 0.5);
+        assert_eq!(presentation.flight_time_s, 59.5);
+        assert_eq!(presentation.rocket_plumes, latest.rocket_plumes);
+        assert_eq!(
+            presentation.rocket_plumes.unwrap().interval_end,
+            thessa_sim_core::SimTime(60.0)
+        );
     }
 
     #[test]

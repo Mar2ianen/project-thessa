@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "scene_id": "B02-vegetation-v1",
+  "adapter_source": {
+    "commit": "e3ab8655ba4a3acd30c6a91e15f498e6383a22df",
+    "dirty": false,
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_sha256": {}
+  },
+  "adapter_sha256": "c994d65ffd71006d79976aae0c54362d96a9adada4303c700710d37381e1bd02",
+  "native_capture_sha256": "5198160455fbfb634c17f812e20da3cd3a6ffbcdb8b4f6d80ef74d260e5407d0",
+  "native_source": {
+    "commit": "e3ab8655ba4a3acd30c6a91e15f498e6383a22df",
+    "dirty": false,
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_sha256": {}
+  },
+  "native_platform": {
+    "os": "linux",
+    "cpu": "x86_64",
+    "gpu": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "backend": "Vulkan; radv; Mesa 26.2.5-arch1.1"
+  },
+  "native_build": {
+    "commit": "e3ab8655ba4a3acd30c6a91e15f498e6383a22df",
+    "version": "0.0.1",
+    "profile": "release"
+  },
+  "reference_geometry_sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+  "reference_scene_manifest_sha256": "52b5eedcd77b60b86048fba405defb002a6a56b2f844113b95dd7690d2cc6aa5",
+  "engine": {
+    "name": "Blender Cycles",
+    "version": "5.2.2 LTS",
+    "build_hash": "d13f752e3b9c",
+    "binary_sha256": "bc9eee8315e136d7ea48411e1bbfb29709f6069a79d9219d6eff793857f45233",
+    "device": "CPU",
+    "threads": 20
+  },
+  "capture": {
+    "width": 640,
+    "height": 480,
+    "exposure_gain": 0.00020345052,
+    "samples": 64,
+    "seed": 0,
+    "adaptive_sampling": false,
+    "denoising": false,
+    "max_bounces": 1,
+    "transparent_max_bounces": 16,
+    "shadows": false,
+    "filter": "BOX, width 1",
+    "tone_mapping": "shared per-channel Reinhard then sRGB",
+    "color_management": "scene-linear EXR; no AgX/Standard view baked into comparison",
+    "loaded_exr_color_space": "Linear Rec.709",
+    "camera_world_matrix_blender": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.46000000834465027
+      ],
+      [
+        0.0,
+        0.5155630111694336,
+        -0.8568515777587891,
+        -2.799999952316284
+      ],
+      [
+        0.0,
+        0.8568515777587891,
+        0.5155630111694336,
+        1.600000023841858
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "camera_vertical_fov_rad": 0.8726646304130554,
+    "sun_energy_numeric": 10000.0,
+    "sun_angle_rad": 0.0,
+    "triangles": 6232,
+    "mesh_objects": 4,
+    "alpha_mode": "MASK",
+    "alpha_cutoff": 0.5
+  },
+  "light_units": "Operational numeric mapping: 1 Thessa RGB lux input = 1 Cycles normalized SUN energy unit. No spectral/luminous-efficacy calibration; absolute photometric equivalence is unverified.",
+  "differences": [
+    "Cycles glTF Principled BSDF with alpha clip versus Thessa direct GGX/Lambert/Fresnel masked discard and derivative roughness filtering",
+    "Cycles path sampling/BOX pixel reconstruction versus native raster MSAA=1 point sampling",
+    "Cycles float32 radiance versus Thessa pre-exposed float16 render target",
+    "CPU offline Cycles render versus GPU raster; durations are not a performance comparison"
+  ],
+  "render_wall_s": 0.4682749779894948,
+  "metrics": {
+    "rgb_components": 921600,
+    "foreground_union_pixels": 16480,
+    "pre_exposed_linear_rgb_mae": 0.0006014475244327259,
+    "pre_exposed_linear_rgb_rmse": 0.0036630173946273245,
+    "relative_l2_against_thessa": 0.4096697767458684,
+    "top_10_pixels_fraction_of_squared_error": 0.012688806025795384,
+    "interpretation": "Whole-frame diagnostic including cutout silhouette/filtering and BRDF differences; no pass threshold or parity claim."
+  },
+  "acceptance": {
+    "physical": "not evaluated",
+    "visual": "not evaluated",
+    "performance": "not comparable",
+    "temporal": "not evaluated"
+  },
+  "artifacts_sha256": {
+    "radiance.exr": "8150a83c079b275b665b279fc7f7755a2f75d4da3eee3f1d6ea29032f19f7c09",
+    "linear.rgba32f": "c6ab7b8418f05a325f057a98bc329913d12c4ea1b65cdc96c7e337fabe86b9f7",
+    "display.png": "e2f5fa06e9a6389b6f30b5c42f646b65415f6bc20bd2f8f239011ea0d24df6ec",
+    "thessa.png": "a62e104367759a7ada96ddac4dd1a5f6420c187e4ded6b0438026db199018799",
+    "scene.glb": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+    "scene.json": "52b5eedcd77b60b86048fba405defb002a6a56b2f844113b95dd7690d2cc6aa5",
+    "scene.LICENSE.txt": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+  }
+}

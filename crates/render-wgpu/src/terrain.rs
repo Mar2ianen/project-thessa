@@ -2348,6 +2348,78 @@ impl TerrainRenderer {
             .map(|b| u32::from_le_bytes(*b))
             .collect())
     }
+
+    /// Read back the active conforming terrain triangles in camera-relative coordinates.
+    pub fn read_conforming_mesh(
+        &self,
+        backend: &Backend,
+    ) -> Result<Option<thessa_render_core::mesh::Primitive>, BackendError> {
+        let Some(topology) = &self.topology else {
+            return Ok(None);
+        };
+        let draw = self.read_draw(backend)?;
+        let vertex_count = draw.first().copied().unwrap_or(0) as usize;
+        if vertex_count == 0 {
+            return Ok(None);
+        }
+        let triangle_count = vertex_count / 3;
+        let index_bytes = read_buffer(backend, &topology.gpu.indices)?;
+        let vertex_bytes = read_buffer(backend, &topology.surface.vertices)?;
+
+        if !vertex_count.is_multiple_of(3) || triangle_count > index_bytes.len() / 4 {
+            return Err(BackendError::Device(
+                "invalid canonical draw/index count".into(),
+            ));
+        }
+        let mut vertices = Vec::with_capacity(vertex_count);
+        let mut indices = Vec::with_capacity(vertex_count);
+        for bytes in index_bytes[..triangle_count * 4].as_chunks::<4>().0 {
+            let slot = u32::from_le_bytes(*bytes) as usize;
+            let start = slot
+                .checked_mul(3 * 48)
+                .ok_or_else(|| BackendError::Device("canonical vertex offset overflow".into()))?;
+            let end = start
+                .checked_add(3 * 48)
+                .ok_or_else(|| BackendError::Device("canonical vertex end overflow".into()))?;
+            let data = vertex_bytes.get(start..end).ok_or_else(|| {
+                BackendError::Device("canonical slot outside surface buffer".into())
+            })?;
+            let tri: [thessa_render_core::mesh::Vertex; 3] = std::array::from_fn(|corner| {
+                let v = &data[corner * 48..];
+                let f = |i: usize| f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap());
+                let position = [f(0), f(1), f(2)];
+                thessa_render_core::mesh::Vertex {
+                    position,
+                    normal: [f(4), f(5), f(6)],
+                    uv: [position[0] * 0.05, position[2] * 0.05],
+                }
+            });
+            if tri
+                .iter()
+                .any(|v| v.position.iter().chain(&v.normal).any(|x| !x.is_finite()))
+            {
+                return Err(BackendError::Device(
+                    "nonfinite canonical surface publication".into(),
+                ));
+            }
+            let [a, b, c] = tri.map(|v| glam::Vec3::from(v.position));
+            // Virtual roots publish zero geometry and are intentionally omitted.
+            if (b - a).cross(c - a).length_squared() <= 1e-8 {
+                continue;
+            }
+            let base = u32::try_from(vertices.len())
+                .map_err(|_| BackendError::Device("canonical vertex count overflow".into()))?;
+            vertices.extend(tri);
+            indices.extend([base, base + 1, base + 2]);
+        }
+
+        Ok(Some(thessa_render_core::mesh::Primitive {
+            ambient_visibility: vec![],
+            vertices,
+            indices,
+            material: 0,
+        }))
+    }
 }
 
 fn ocean_height_range(page: &HeightPage) -> Option<(f64, f64)> {

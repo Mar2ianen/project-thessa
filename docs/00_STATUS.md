@@ -49,6 +49,9 @@ macro normal gradient continuity beyond ~5m (`xy = channels.rg` preserved on mac
 pages, `shaded_normal` fallback in height field operator), separates open-water
 classification from wet soil, adds `footprint`, `material_lod`, and `relief_weight`
 diagnostics, and validates 16x anisotropy on High quality.
+[Doc 117](117_UNDERSTORY_GROUND_BOUNCE_AND_CANOPY_TRANSPORT.md) implements physical
+canopy sky occlusion and warm golden ground bounce in terrain and mesh understory paths,
+and calibrates botanical diffuse transmission (0.24–0.28) for thin fronds and crowns.
 
 ## Current native integration checkpoint
 

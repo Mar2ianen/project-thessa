@@ -814,7 +814,7 @@ fn primary_local_haze_is_shared_and_releases_without_material_uploads() {
 
 #[test]
 #[ignore = "GPU: native terrain classification diagnostic, regular/conforming"]
-fn diagnostic_water_weight_exposes_wet_soil_false_positive_without_lighting() {
+fn diagnostic_water_weight_is_explicit_and_independent_of_roughness_or_height() {
     let backend = Backend::bring_up().unwrap();
     for conforming in [false, true] {
         for height in [-1.0, 0.0, 2.0] {
@@ -827,29 +827,39 @@ fn diagnostic_water_weight_exposes_wet_soil_false_positive_without_lighting() {
                 thessa_graphics::TerrainDebugView::WaterWeight,
                 height,
             );
-            for roughness in [56u8, 115, 204] {
-                material(&backend, &mut terrain, roughness, 1 + u64::from(roughness));
-                let image = draw_from(
-                    &backend,
-                    &mut terrain,
-                    [65, 65],
-                    DVec3::Z * 1200.,
-                    DVec3::ZERO,
-                );
-                let rgb = center(&image);
-                let r = f64::from(roughness) / 255.;
-                let t = ((r - 0.18) / (0.22 - 0.18)).clamp(0., 1.);
-                let ht = (height / 0.25).clamp(0., 1.);
-                let expected = (1. - t * t * (3. - 2. * t)) * (1. - ht * ht * (3. - 2. * ht));
-                for value in rgb {
-                    assert!(
-                        (f64::from(value) / 255. - expected).abs() < 0.015,
-                        "conforming={conforming} height={height} roughness={roughness} pixel={rgb:?} expected={expected}"
+            let mut generation = 0;
+            // Include a missing plane AFTER water so stale slot bytes cannot leak.
+            for coverage in [Some(255), Some(64), Some(0), None] {
+                for roughness in [10u8, 115, 240] {
+                    generation += 1;
+                    let page = CbtMaterialPage::from_rgba8([0, 0, 0, roughness].repeat(128 * 128))
+                        .unwrap();
+                    let page = coverage.map_or_else(
+                        || page.clone(),
+                        |c| {
+                            page.clone()
+                                .with_water_coverage(vec![c; 128 * 128])
+                                .unwrap()
+                        },
                     );
-                }
-                // Wet soil (roughness 115 ~ 0.45) receives exactly 0 water weight on land.
-                if roughness >= 115 {
-                    assert_eq!(rgb[0], 0, "wet soil must not receive water weight");
+                    let pages = MaterialPages::from_iter(
+                        (8..14).map(|id| (id, (generation, page.clone()))),
+                    );
+                    terrain
+                        .update_materials(&backend, &(8..14).collect::<Vec<_>>(), &pages)
+                        .unwrap();
+                    let image = draw_from(
+                        &backend,
+                        &mut terrain,
+                        [65, 65],
+                        DVec3::Z * 1200.,
+                        DVec3::ZERO,
+                    );
+                    let rgb = center(&image);
+                    assert!(
+                        rgb.iter().all(|v| v.abs_diff(coverage.unwrap_or(0)) <= 1),
+                        "conforming={conforming} height={height} roughness={roughness} coverage={coverage:?} rgb={rgb:?}"
+                    );
                 }
             }
         }

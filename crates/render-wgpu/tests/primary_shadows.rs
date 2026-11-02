@@ -159,6 +159,8 @@ fn run_case(water: bool, alpha: Option<[f32; 3]>) {
             let page = thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8(
                 [100, 130, 70, 10].repeat(128 * 128),
             )
+            .unwrap()
+            .with_water_coverage(vec![255; 128 * 128])
             .unwrap();
             terrain
                 .update_materials(&backend, &[8], &[(8, (1, page))].into())

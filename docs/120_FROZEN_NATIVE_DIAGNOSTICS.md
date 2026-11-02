@@ -59,5 +59,6 @@ The physical run uses the retained isolated render-node runner and serial
 per-stage fences with a 20M mesh-triangle admission limit. Its wall times are
 **not production FPS or GPU timestamp measurements**. There is no quality or
 speedup claim: this milestone makes subsequent defect comparisons causal.
-Water presence, source-error bounds, actual sky visibility/bounce and complete
-receiver/component outputs are the next independent tasks from doc 119.
+Doc 121 subsequently implements independent water presence. Source-error
+bounds, actual sky visibility/bounce and complete receiver/component outputs
+remain separate tasks from doc 119.

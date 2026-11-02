@@ -513,21 +513,21 @@ fn scene_oracle(jitter_enabled: bool) {
                 .unwrap();
                 if water_material_loaded {
                     let ids = (8..14).collect::<Vec<_>>();
-                    let pages = ids
-                        .iter()
-                        .map(|&id| {
-                            (
+                    let pages =
+                        ids.iter()
+                            .map(|&id| {
+                                (
                                 id,
                                 (
                                     1,
                                     thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8(
                                         [10, 40, 80, 0].repeat(128 * 128),
                                     )
-                                    .unwrap(),
+                                    .unwrap().with_water_coverage(vec![255;128*128]).unwrap(),
                                 ),
                             )
-                        })
-                        .collect();
+                            })
+                            .collect();
                     terrain.update_materials(&backend, &ids, &pages).unwrap();
                 }
                 let build = if static_mesh {

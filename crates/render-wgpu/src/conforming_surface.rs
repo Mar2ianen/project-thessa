@@ -391,6 +391,7 @@ impl ConformingSurface {
                 vertices: self.vertices.clone(),
                 directory: materials.directory.clone(),
                 material: materials.texture.clone(),
+                water: materials.water_texture.clone(),
                 sampler: materials.sampler.clone(),
                 radius_m: self.radius_m,
                 capacity: self.capacity.div_ceil(2048) as usize,

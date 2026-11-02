@@ -234,18 +234,21 @@ fn spectral_surface_displaces_shared_geometry_without_drift_and_keeps_land_fixed
         exposure: 0.7,
     };
     terrain.update_view(&backend, &view).unwrap();
-    let material = |roughness| {
+    let material = |roughness, water| {
         [(
             8u64,
             (
                 u64::from(roughness),
-                CbtMaterialPage::from_rgba8([20, 40, 80, roughness].repeat(128 * 128)).unwrap(),
+                CbtMaterialPage::from_rgba8([20, 40, 80, roughness].repeat(128 * 128))
+                    .unwrap()
+                    .with_water_coverage(vec![water; 128 * 128])
+                    .unwrap(),
             ),
         )]
         .into()
     };
     terrain
-        .update_materials(&backend, &[8], &material(30))
+        .update_materials(&backend, &[8], &material(30, 255))
         .unwrap();
     terrain.update_ocean(&backend, 0.0).unwrap();
     assert_eq!(terrain.ocean_stats().deformed_patches, 1);
@@ -268,6 +271,15 @@ fn spectral_surface_displaces_shared_geometry_without_drift_and_keeps_land_fixed
         }
     }
     assert!(moved > 500, "no ocean geometry displacement: {moved}");
+    terrain
+        .update_materials(&backend, &[8], &material(240, 255))
+        .unwrap();
+    terrain.update_ocean(&backend, 0.0).unwrap();
+    assert_eq!(
+        terrain.read_vertices(&backend).unwrap(),
+        waves,
+        "rough water retains the same wave geometry"
+    );
     terrain.update_ocean(&backend, 0.0).unwrap();
     assert_eq!(
         terrain.read_vertices(&backend).unwrap(),
@@ -295,20 +307,20 @@ fn spectral_surface_displaces_shared_geometry_without_drift_and_keeps_land_fixed
             .any(|p| p.as_slice() != &pixels[..4])
     );
     terrain
-        .update_materials(&backend, &[8], &material(255))
+        .update_materials(&backend, &[8], &material(255, 0))
         .unwrap();
     terrain.update_ocean(&backend, 0.0).unwrap();
     assert_eq!(
         terrain.read_vertices(&backend).unwrap(),
         datum,
-        "rough land/ice cannot become displaced water"
+        "declared land/ice cannot become displaced water"
     );
     // A height regeneration supersedes, rather than corrupts, the old backup.
     let raised = HeightPage::bake(&[10.0; 4], 2, 0.001).unwrap();
     terrain.update_pages(&backend, &[(0, &raised)]).unwrap();
     let land = terrain.read_vertices(&backend).unwrap();
     terrain
-        .update_materials(&backend, &[8], &material(30))
+        .update_materials(&backend, &[8], &material(30, 0))
         .unwrap();
     terrain.update_ocean(&backend, 0.5).unwrap();
     assert_eq!(terrain.read_vertices(&backend).unwrap(), land);
@@ -388,7 +400,10 @@ fn deformed_cube_edge_and_camera_rebase_agree_within_two_millimetres() {
         + DVec3::from_array(anchors[1].anchor_body_m))
         * 0.5;
     let mut eye = center + center.normalize() * 50.0;
-    let material = CbtMaterialPage::from_rgba8([20, 40, 80, 30].repeat(128 * 128)).unwrap();
+    let material = CbtMaterialPage::from_rgba8([20, 40, 80, 30].repeat(128 * 128))
+        .unwrap()
+        .with_water_coverage(vec![255; 128 * 128])
+        .unwrap();
     terrain
         .update_materials(
             &backend,

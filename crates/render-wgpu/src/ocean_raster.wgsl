@@ -1,5 +1,4 @@
-fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,height:f32,roughness:f32,albedo:vec3<f32>,footprint:f32,visibility:array<f32,3>,sunlight:array<vec3<f32>,3>)->vec4<f32>{
-    let weight=ocean_material_weight(height,roughness);
+fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,weight:f32,roughness:f32,albedo:vec3<f32>,footprint:f32,visibility:array<f32,3>,sunlight:array<vec3<f32>,3>)->vec4<f32>{
     if(weight<=0.0){return vec4(0.0);}
     let wave=ocean_spectral(position,direction,footprint);
     let n=normalize(direction-wave.gradient);
@@ -7,7 +6,7 @@ fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,he
     let f0=ocean_frame.optics.x;
     let fresnel=ocean_schlick(f0,max(dot(n,eye),0.0));
     // Slope variance is an optical lobe width, not destroyed wave energy.
-    let alpha2=pow(ocean_frame.optics.y,4.0)+wave.variance;
+    let alpha2=pow(max(ocean_frame.optics.y,roughness),4.0)+wave.variance;
     let optical_roughness=clamp(pow(alpha2,0.25),0.02,1.0);
     var illumination=env_ambient_lux(lighting.ambient_lux.rgb);
     var reflection=vec3(0.0);

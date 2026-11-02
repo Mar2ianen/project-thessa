@@ -17,8 +17,7 @@ fn deform_ocean(@builtin(global_invocation_id) gid:vec3<u32>){
     let radial=normalize(frame.geometry.normal.xyz*deform.radius+p.xyz);
     let relative=frame.anchor_hi_m.xyz+(frame.anchor_lo_m.xyz+p.xyz);
     let sample=material_at_level(material_address(radial),vec2(0.0),vec2(0.0),17u);
-    let roughness=sample.value.a+1.0-sample.coverage;
-    let weight=ocean_material_weight(n.w,roughness)
+    let weight=sample.water_coverage
         *(1.0-smoothstep(deform.distance*0.5,deform.distance,length(relative)));
     if(weight<=0.0){return;}
     // Keep sub-cell waves in shading, not spatially aliased vertex motion.

@@ -293,7 +293,7 @@ impl TerrainMirror {
         }
     }
 
-    fn material(&mut self, backend: &Backend, color: [u8; 4], generation: u64) {
+    fn material(&mut self, backend: &Backend, color: [u8; 4], generation: u64, water: u8) {
         let slot = self.anchor.tile;
         let mut node = 8 + u64::from(slot.face);
         for bit in (0..slot.level).rev() {
@@ -301,6 +301,8 @@ impl TerrainMirror {
         }
         let page =
             thessa_rcbt_core::material_page::CbtMaterialPage::from_rgba8(color.repeat(128 * 128))
+                .unwrap()
+                .with_water_coverage(vec![water; 128 * 128])
                 .unwrap();
         self.terrain
             .update_materials(backend, &[node], &[(node, (generation, page))].into())
@@ -327,7 +329,7 @@ fn resident_terrain_hits_share_materials_and_dirty_only_blas() {
     };
     let settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
     let mut scene = TerrainMirror::new(&backend, &settings, false);
-    scene.material(&backend, [255, 0, 0, 255], 1);
+    scene.material(&backend, [255, 0, 0, 255], 1, 0);
     let lights = lighting([0.0; 3]);
     let red = scene.draw(&backend, &lights);
     let pixel = center(&red);
@@ -374,7 +376,7 @@ fn resident_terrain_hits_share_materials_and_dirty_only_blas() {
     assert_eq!(scene.mesh.rt_stats().terrain_blas_builds, 1);
     // Material-only publication is visible through shared raster resources,
     // without rebuilding geometry, hit buffers, or the TLAS.
-    scene.material(&backend, [0, 0, 255, 255], 2);
+    scene.material(&backend, [0, 0, 255, 255], 2, 0);
     let blue = center(&scene.draw(&backend, &lights));
     assert!(
         (183..=187).contains(&blue[2])
@@ -439,7 +441,7 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
     )
     .unwrap();
     let demand = (8..14).collect::<Vec<_>>();
-    let pages = |rgba: [u8; 4], generation| {
+    let pages = |rgba: [u8; 4], generation, water| {
         demand
             .iter()
             .map(|&id| {
@@ -447,14 +449,17 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
                     id,
                     (
                         generation,
-                        CbtMaterialPage::from_rgba8(rgba.repeat(128 * 128)).unwrap(),
+                        CbtMaterialPage::from_rgba8(rgba.repeat(128 * 128))
+                            .unwrap()
+                            .with_water_coverage(vec![water; 128 * 128])
+                            .unwrap(),
                     ),
                 )
             })
             .collect()
     };
     owner
-        .update_materials(&backend, &demand, &pages([255, 0, 0, 255], 1))
+        .update_materials(&backend, &demand, &pages([255, 0, 0, 255], 1, 0))
         .unwrap();
     let binding = owner.material_binding();
     let height = owner.height_surface_source(&backend).unwrap();
@@ -536,7 +541,7 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
         "no new emission means no AS rebuild"
     );
     owner
-        .update_materials(&backend, &demand, &pages([0, 255, 0, 255], 2))
+        .update_materials(&backend, &demand, &pages([0, 255, 0, 255], 2, 0))
         .unwrap();
     let green = capture(&surface, &mut mesh, false, &view);
     assert!(
@@ -666,7 +671,7 @@ fn conforming_publications_feed_existing_ray_scene_without_stale_blas() {
     field.update_frame(&backend.queue, next, 1000.0).unwrap();
     field.update(&backend, 0.0).unwrap();
     owner
-        .update_materials(&backend, &demand, &pages([20, 40, 80, 30], 3))
+        .update_materials(&backend, &demand, &pages([20, 40, 80, 30], 3, 255))
         .unwrap();
     surface
         .set_ocean(&backend, &water, Some(&field), &binding)
@@ -807,7 +812,7 @@ fn terrain_budget_rejects_whole_partition_and_recovers_without_stale_blockers() 
     let mut settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
     settings.rt_max_instances = 2; // one live mesh pairing + one terrain; unused capacity is not a pairing.
     let mut scene = TerrainMirror::new(&backend, &settings, false);
-    scene.material(&backend, [255, 0, 0, 255], 1);
+    scene.material(&backend, [255, 0, 0, 255], 1, 0);
     let lights = lighting([0.0; 3]);
     let enabled = scene.draw(&backend, &lights);
     assert_eq!(scene.mesh.rt_stats().terrain_instances, 1);
@@ -906,7 +911,7 @@ fn terrain_membership_is_independent_of_vehicle_participation_and_empty_tlas_is_
     let mut settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
     settings.rt_vehicles = false;
     let mut scene = TerrainMirror::new(&backend, &settings, false);
-    scene.material(&backend, [255, 0, 0, 255], 1);
+    scene.material(&backend, [255, 0, 0, 255], 1, 0);
     let lights = lighting([0.0; 3]);
     assert!(center(&scene.draw(&backend, &lights))[0] > 170);
     assert_eq!(scene.mesh.rt_stats().instances, 1);
@@ -943,7 +948,7 @@ fn ocean_hits_use_shared_deformed_grid_and_spectral_normals_without_global_rebui
     request.ocean.significant_height_m = 0.4;
     let settings = backend.resolve_graphics(&request);
     let mut scene = TerrainMirror::new(&backend, &settings, false);
-    scene.material(&backend, [20, 40, 180, 30], 1);
+    scene.material(&backend, [20, 40, 180, 30], 1, 255);
     scene
         .terrain
         .update_view(&backend, &camera(scene.origin))
@@ -1007,7 +1012,7 @@ fn ocean_near_geometry_and_ray_cost_diagnostic() {
                     .collect::<Vec<_>>(),
             )
             .unwrap();
-        scene.material(&backend, [20, 40, 180, 30], 1);
+        scene.material(&backend, [20, 40, 180, 30], 1, 255);
         scene
             .terrain
             .update_view(&backend, &camera(scene.origin))

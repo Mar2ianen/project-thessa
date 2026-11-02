@@ -83,7 +83,7 @@ pub(crate) fn supported(limits: &wgpu::Limits, ocean: bool, sky: bool) -> bool {
         && limits.max_acceleration_structures_per_shader_stage >= 1
         && limits.max_storage_buffers_per_shader_stage >= 8
         && limits.max_uniform_buffers_per_shader_stage >= 7 + u32::from(ocean) + u32::from(sky)
-        && limits.max_sampled_textures_per_shader_stage >= 9 + u32::from(ocean)
+        && limits.max_sampled_textures_per_shader_stage >= 10 + u32::from(ocean)
         && limits.max_samplers_per_shader_stage >= 5 + u32::from(ocean)
 }
 
@@ -125,15 +125,18 @@ impl PrimaryShadow {
         for binding in [14, 16, 20] {
             entries.push(buffer(binding, Stages::VERTEX_FRAGMENT, false));
         }
-        for binding in [6, 10, 12, 17, 18, 19] {
+        for binding in [6, 10, 12, 17, 18, 19, 22] {
             entries.push(texture(
                 binding,
-                if [12, 19].contains(&binding) {
+                if [12, 19, 22].contains(&binding) {
                     Dimension::D2Array
                 } else {
                     Dimension::D2
                 },
             ));
+        }
+        if geometry.iter().any(|e| e.binding == 21) {
+            entries.push(buffer(21, Stages::FRAGMENT, true));
         }
         entries.extend([sampler(7), sampler(13)]);
         let geometry_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

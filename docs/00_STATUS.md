@@ -53,8 +53,11 @@ specular-disable behavior restored, and unsupported global fade tuning reverted.
 Frozen GPU controls pass. [Doc 120](120_FROZEN_NATIVE_DIAGNOSTICS.md) closes
 in-process published-frame replay: 17 actual FHD terrain views preserve exact
 depth/geometry and beauty round-trip identity. Independent process restore, real
-indirect visibility/GI, water presence, source-error bounds and affordable visual
-parity remain open. Docs 117/118 are historical appearance-tuning records, not accepted
+indirect visibility/GI, source-error bounds and affordable visual parity remain
+open. [Doc 121](121_LIQUID_WATER_SURFACE_CONTRACT.md) replaces the water
+roughness/height predicate with an independently filtered liquid-coverage plane
+shared by native raster/waves/ray hits and Bevy raw/compact residency. Finite
+water optics and subtexel coastline integration remain open. Docs 117/118 are historical appearance-tuning records, not accepted
 physical calibration.
 
 ## Current native integration checkpoint

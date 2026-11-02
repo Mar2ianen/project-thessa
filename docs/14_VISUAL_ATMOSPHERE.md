@@ -846,8 +846,9 @@ full transport-component decomposition or visual/cost acceptance.
 [Render causal-contract audit](119_RENDER_CAUSAL_CONTRACT_AUDIT.md)
 rejects the later primary-sun bounce/sky-occlusion heuristic with a frozen
 source-slot permutation control, restores specular-disable semantics and
-reverts an unsupported global fade change. Water classification is still a
-roughness/height heuristic; source accuracy and actual indirect transport
-remain open. [Frozen native diagnostics](120_FROZEN_NATIVE_DIAGNOSTICS.md) now
+reverts an unsupported global fade change. Independent liquid-water coverage now replaces the roughness/height
+classifier across native raster, waves and ray hits, plus Bevy material residency;
+see [the surface contract](121_LIQUID_WATER_SURFACE_CONTRACT.md).
+Source accuracy and actual indirect transport remain open. [Frozen native diagnostics](120_FROZEN_NATIVE_DIAGNOSTICS.md) now
 replay 17 views of one published FHD frame with byte-identical depth and beauty
 round-trip checks; this is diagnostic evidence, not visual parity or FPS.

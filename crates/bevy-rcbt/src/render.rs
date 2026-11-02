@@ -533,7 +533,11 @@ struct CbtGpuMeshPipeline {
 /// The native consumer adds only mesh-stage IO to the portable material shader.
 #[cfg(feature = "mesh-shaders")]
 fn cbt_mesh_wgsl() -> String {
-    format!("enable wgpu_mesh_shader;\n{CBT_RASTER_WGSL}\n{}", MESH_WGSL)
+    format!(
+        "enable wgpu_mesh_shader;\n{}\n{}",
+        thessa_rcbt_core::shaders::with_material_water_coverage(CBT_RASTER_WGSL, 0, 22, false),
+        MESH_WGSL
+    )
 }
 
 /// Installs extraction and GPU preparation for the universal CBT plugin.
@@ -912,6 +916,16 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
         },
         count: None,
     });
+    raster_entries.push(BindGroupLayoutEntry {
+        binding: 22,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Texture {
+            sample_type: TextureSampleType::Float { filterable: true },
+            view_dimension: TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    });
     let raster_bind_group_layout =
         device.create_bind_group_layout("thessa-cbt-raster-layout", &raster_entries);
     let raster_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -921,7 +935,9 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
     });
     let raster_shader = device.create_and_validate_shader_module(ShaderModuleDescriptor {
         label: Some("thessa-cbt-raster-shader"),
-        source: ShaderSource::Wgsl(Cow::Borrowed(CBT_RASTER_WGSL)),
+        source: ShaderSource::Wgsl(Cow::Owned(
+            thessa_rcbt_core::shaders::with_material_water_coverage(CBT_RASTER_WGSL, 0, 22, false),
+        )),
     });
 
     #[cfg(feature = "mesh-shaders")]
@@ -1883,6 +1899,10 @@ fn draw_cbt_geometry(
                 BindGroupEntry {
                     binding: 18,
                     resource: BindingResource::TextureView(&city_image.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 22,
+                    resource: BindingResource::TextureView(&material_array.water_view),
                 },
                 // Bevy pages are albedo-only. The empty normal directory makes
                 // the raster shader resolve a flat normal, so binding the

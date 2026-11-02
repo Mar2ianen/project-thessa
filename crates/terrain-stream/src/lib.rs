@@ -83,7 +83,9 @@ pub fn spawn_material_job_with_relief(
             page.rgba,
             normal_maps.then_some(page.normal),
         )
-        .expect("fixed material page layout");
+        .expect("fixed material page layout")
+        .with_water_coverage(page.water_coverage)
+        .expect("fixed liquid-water plane");
         if page.base_normal.is_empty() {
             material
         } else {

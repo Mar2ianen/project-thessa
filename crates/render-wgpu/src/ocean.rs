@@ -145,6 +145,10 @@ impl OceanGeometry {
                     binding: 7,
                     resource: materials.directory.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&materials.water_view),
+                },
             ],
         });
         let field_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -188,7 +192,7 @@ pub fn shader(group: u32) -> String {
 /// Shared compute variant of the canonical material sampler (no implicit
 /// derivatives in a geometry pass). Both geometry consumers use the same code.
 pub(crate) fn geometry_material_shader(directory_binding: u32) -> String {
-    thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
+    thessa_rcbt_core::shaders::with_material_water_coverage(thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL, 0, directory_binding + 1, true)
         .replace("@binding(16)", &format!("@binding({directory_binding})"))
         .replace("textureSampleGrad(material_texture, material_sampler, uv, i32(layer),\n                dx * extent * (125.0 / 128.0), dy * extent * (125.0 / 128.0))", "textureSampleLevel(material_texture, material_sampler, uv, i32(layer), 0.0)")
 }

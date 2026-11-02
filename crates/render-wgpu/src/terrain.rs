@@ -775,7 +775,7 @@ impl TerrainRenderer {
         } else {
             "fn cbt_terrain_debug_view()->u32 { return TERRAIN_DEBUG_VIEW; }"
         };
-        let raster_source = shaders::CBT_RASTER_WGSL
+        let raster_source = shaders::with_material_water_coverage(shaders::CBT_RASTER_WGSL, 0, 22, false)
             .replace("fn cbt_terrain_debug_view()->u32 { return TERRAIN_DEBUG_VIEW; }", diagnostic_hook)
             .replace("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = false;",&format!("const MATERIAL_SPECULAR_FILTER_ENABLED: bool = {};",settings.is_some_and(|s|s.surface_quality!=thessa_graphics::Quality::Low)))
             .replace(
@@ -924,6 +924,10 @@ impl TerrainRenderer {
                 wgpu::BindingResource::TextureView(&materials.normal_view),
             ),
             (20, materials.normal_directory.as_entire_binding()),
+            (
+                22,
+                wgpu::BindingResource::TextureView(&materials.water_view),
+            ),
         ]
         .into_iter()
         .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource })
@@ -2170,6 +2174,7 @@ impl TerrainRenderer {
                 vertices: self.vertices.clone(),
                 directory: self.materials.directory.clone(),
                 material: self.materials.view.clone(),
+                water: self.materials.water_view.clone(),
                 sampler: self.materials.sampler.clone(),
                 radius_m: self.body_radius_m,
                 capacity: self.node_ids.len(),

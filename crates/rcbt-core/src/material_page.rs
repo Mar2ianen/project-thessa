@@ -26,6 +26,7 @@ pub struct CbtMaterialPage {
     mips: Arc<[Vec<u8>]>,
     normal_mips: Option<Arc<[Vec<u8>]>>,
     base_normal_mips: Option<Arc<[Vec<u8>]>>,
+    water_coverage_mips: Option<Arc<[Vec<u8>]>>,
 }
 
 impl CbtMaterialPage {
@@ -51,6 +52,7 @@ impl CbtMaterialPage {
             mips: mips.into(),
             normal_mips: normal_mips.map(Into::into),
             base_normal_mips: None,
+            water_coverage_mips: None,
         })
     }
 
@@ -67,10 +69,55 @@ impl CbtMaterialPage {
         self.base_normal_mips.as_deref()
     }
 
+    /// Independent liquid-water area coverage, R8_UNORM. Missing planes mean
+    /// declared land, never inference from roughness or displaced height.
+    /// Uses the same chart/border/residency as colour, with area-filtered mips.
+    pub fn with_water_coverage(mut self, coverage: Vec<u8>) -> Option<Self> {
+        if coverage.len() != (MATERIAL_PAGE_SIZE * MATERIAL_PAGE_SIZE) as usize {
+            return None;
+        }
+        // Retain exact integer sums through the hierarchy: quantization at an
+        // intermediate mip must not accumulate into the final coverage.
+        let mut sums: Vec<u32> = coverage.iter().map(|&v| u32::from(v)).collect();
+        let mut mips = vec![coverage];
+        let mut size = MATERIAL_PAGE_SIZE as usize;
+        let mut area = 1_u32;
+        while size > 1 {
+            let next_size = size / 2;
+            let mut next = vec![0; next_size * next_size];
+            for y in 0..next_size {
+                for x in 0..next_size {
+                    next[y * next_size + x] = (0..2)
+                        .flat_map(|dy| (0..2).map(move |dx| (dy, dx)))
+                        .map(|(dy, dx)| sums[(y * 2 + dy) * size + x * 2 + dx])
+                        .sum();
+                }
+            }
+            area *= 4;
+            mips.push(
+                next.iter()
+                    .map(|sum| ((sum + area / 2) / area) as u8)
+                    .collect(),
+            );
+            sums = next;
+            size = next_size;
+        }
+        self.water_coverage_mips = Some(mips.into());
+        Some(self)
+    }
+
+    pub fn water_coverage_mips(&self) -> Option<&[Vec<u8>]> {
+        self.water_coverage_mips.as_deref()
+    }
+
     pub fn byte_len(&self) -> usize {
-        self.base_normal_mips
+        self.water_coverage_mips
             .as_ref()
             .map_or(0, |mips| mips.iter().map(Vec::len).sum::<usize>())
+            + self
+                .base_normal_mips
+                .as_ref()
+                .map_or(0, |mips| mips.iter().map(Vec::len).sum::<usize>())
             + self.mips.iter().map(Vec::len).sum::<usize>()
             + self
                 .normal_mips
@@ -111,6 +158,7 @@ impl CbtMaterialPage {
             mips: mips.into(),
             normal_mips: normal_mips.map(Into::into),
             base_normal_mips: None,
+            water_coverage_mips: None,
         })
     }
 }
@@ -227,6 +275,43 @@ fn valid_chain(mips: &[Vec<u8>], stride: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn liquid_water_mips_preserve_area_and_do_not_depend_on_colour_or_normals() {
+        let coverage: Vec<u8> = (0..128 * 128)
+            .map(|i| if i % 7 == 0 { 255 } else { 0 })
+            .collect();
+        let page = CbtMaterialPage::from_rgba8([3, 4, 5, 255].repeat(128 * 128))
+            .unwrap()
+            .with_water_coverage(coverage.clone())
+            .unwrap();
+        assert_eq!(page.byte_len(), 87_380 + 21_845);
+        let mips = page.water_coverage_mips().unwrap();
+        assert!(std::ptr::eq(
+            mips,
+            page.clone().water_coverage_mips().unwrap()
+        ));
+        for (level, mip) in mips.iter().enumerate() {
+            let span = 1 << level;
+            let width = 128 / span;
+            for y in 0..width {
+                for x in 0..width {
+                    let sum: u32 = (y * span..(y + 1) * span)
+                        .flat_map(|yy| (x * span..(x + 1) * span).map(move |xx| yy * 128 + xx))
+                        .map(|i| u32::from(coverage[i]))
+                        .sum();
+                    let exact = f64::from(sum) / (span * span) as f64;
+                    assert!((f64::from(mip[y * width + x]) - exact).abs() <= 0.5);
+                }
+            }
+        }
+        assert!(
+            CbtMaterialPage::from_rgba8(vec![0; 128 * 128 * 4])
+                .unwrap()
+                .with_water_coverage(vec![0; 4])
+                .is_none()
+        );
+    }
+
     #[test]
     fn base_plane_is_validated_shared_and_independently_mipped() {
         let full = super::CbtMaterialPage::from_rgba8_with_normals(

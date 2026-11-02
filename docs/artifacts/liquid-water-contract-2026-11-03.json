@@ -1,0 +1,203 @@
+{
+  "base_commit": "a3ad3dcce6ac43c8e908cc87af43fa65149fcf60",
+  "binary_sha256": "ff1a1b0412384154e97dedbb0f5911e33349ab9e9c1f34d7b645079d8d8e01cc",
+  "source_patch_sha256": "9d372c658deaf5621f789f0ca6144f46e63f88f7c65ecd8bb91a31426614035e",
+  "status": "independent liquid coverage implemented; no finite-water-optics, source-error, indirect lighting, visual parity or speedup claim",
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/water-contract-2026-11-03",
+  "fhd": {
+    "complete": true,
+    "extent": [
+      1920,
+      1080
+    ],
+    "sample_count": 4,
+    "sim_time_s": 74566.63966240163,
+    "exposure": 0.00040690103196538985,
+    "beauty_round_trip_identical": true,
+    "published_geometry_identical": true,
+    "draw": [
+      27672,
+      1,
+      0,
+      0
+    ],
+    "mesh_stats": "Some(MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19660054, draw_calls: 22, draw_commands: 2178, triangles: 2775318, frame_upload_bytes: 576 })",
+    "pending_jobs": [
+      8,
+      4
+    ],
+    "material_resident_levels": [
+      6,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      4,
+      0,
+      4,
+      1,
+      3,
+      0,
+      10,
+      0,
+      62,
+      49,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "manifest_sha256": "a7fa72c9abf5879c0dd0bdabfb9c71684f3d51ba0b33f94dbd557d82727586f4",
+  "checks": {
+    "core_cpu": {
+      "log": "core_cpu.log",
+      "outcomes": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.05s",
+        "test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s",
+        "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s"
+      ]
+    },
+    "source_cpu": {
+      "log": "source_cpu.log",
+      "outcomes": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.20s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.31s"
+      ]
+    },
+    "bevy_compact_cpu": {
+      "log": "bevy_compact_cpu.log",
+      "outcomes": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 12s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.04s"
+      ]
+    },
+    "strict_clippy": {
+      "log": "strict_clippy.log",
+      "outcomes": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.30s"
+      ]
+    },
+    "client_check": {
+      "log": "client_check.log",
+      "outcomes": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.88s"
+      ]
+    },
+    "architecture": {
+      "log": "architecture.log",
+      "outcomes": [
+        "Architecture: OK (44 workspace packages, 20 guarded foundations; runtime/build closure, own dev edges only)"
+      ]
+    },
+    "terrain_environment-software-v3": {
+      "outcomes": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 8.31s"
+      ],
+      "log_sha256": "308ff3e3d17a93904b507c297ccce3680e423bed80f4cfa71ec3682825e9c8d3"
+    },
+    "ocean-software-v3": {
+      "outcomes": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 11.13s"
+      ],
+      "log_sha256": "a38dd05f11f1e337a5d05695bccff756eeb18167d80c4ef66466724c6acf45e2"
+    },
+    "material-software-v3": {
+      "outcomes": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 16.53s"
+      ],
+      "log_sha256": "4a0b2678ab952d8874b140f0c5d516dc687878b9ed6bee33f55a9410729fc03e"
+    },
+    "terrain_environment-radv-v3": {
+      "outcomes": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 8.72s"
+      ],
+      "log_sha256": "366fd2e71c5e36bfae6369e3edb94caa52fc144daf0495d58dba27d3cfa9325d"
+    },
+    "ocean-radv-v3": {
+      "outcomes": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.03s"
+      ],
+      "log_sha256": "c95c7d415e9771a72020d4e7f52f4242fc2e31921d6d7f763f36fbac7707be0c"
+    },
+    "material-radv-v3": {
+      "outcomes": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.18s"
+      ],
+      "log_sha256": "2abcc31120c391242e9e6423a454be0f1b594155b1fe1eefc0c3b6685dd85dbc"
+    },
+    "primary_shadows-radv-v3": {
+      "outcomes": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.26s"
+      ],
+      "log_sha256": "b41efbcbca16877fb8c5204f891ebfbd2d0c6eac0ee91f616920a53f85300682"
+    },
+    "ray_scene-radv-v4": {
+      "outcomes": [
+        "test result: ok. 30 passed; 0 failed; 2 ignored; 0 measured; 2 filtered out; finished in 5.85s"
+      ],
+      "log_sha256": "66c40c62181a8404159bab128dcf34135549257b6e3a02bce4963cb696102cc9"
+    },
+    "motion_vectors-radv-v4": {
+      "outcomes": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.66s"
+      ],
+      "log_sha256": "45b9d6a2fba0e6b03bae1250d5210d9bd64b33c285ca36831e00971e39f2fa32"
+    }
+  },
+  "inherited_normal_fixture": {
+    "baseline_commit": "a3ad3dc",
+    "baseline_failure_log": "material-baseline.log",
+    "fixed_test_expectation": "missing canonical base plane preserves geometric normal plus full optical perturbation; complete-base Lambert oracles remain strict"
+  },
+  "limits": [
+    "No in-client Bevy GPU launch; shared shader GPU paths, render bridge compile and compact CPU replay verified",
+    "No production FPS or cross-process frozen baseline comparison",
+    "Subtexel coastline integration and finite depth optics remain open"
+  ],
+  "files_sha256": {
+    "full-fhd-command.json": "ba68d9e5dd23f384c23e07242aac169969eb5d5630b2872119b8235c8b168fe1",
+    "identity-v4.json": "e19c7f75daccf152cc8c391be0fb917711f91044e5cf4f4c048eb3e99f5b8e0f",
+    "material-baseline-command.json": "b3a3b60c9a44bc930e6191b261edc47f29e2b0d1d9ed314960ba953297c6a0f8",
+    "material-baseline.bin": "a720dc5ae688ac4d797e174cabf9667188a66c79d65214218af4367774997e57",
+    "material-radv-v3-command.json": "8d65892c4ed2ac05a5a0e87b89f4da1b56ae88671b93e6b0068a5313ba53eef3",
+    "material-software-command.json": "509428f6ce081d5ed1bd45b94654d0ee270673a4672b9813592efc05ff46d232",
+    "material-software-v3-command.json": "12d29cdd9a5d120fc2479743bde272345379c40aab2380654c64b39c37ba15e5",
+    "material-v3.bin": "4044dfe45b9fc70a5fc115de4c8d6db63bd42d6e83e384b50676f697e35ac230",
+    "material.bin": "87392a446735c40aa0f76ffa6a94c3528d34b95e70fb8807bd518456552e12ed",
+    "motion_vectors-radv-v4-command.json": "2d05130901506a0fa5f5e504b02542c09238813e49265f2390b52efd3e453eb4",
+    "motion_vectors-v3.bin": "0d11d9292255e990bf605f33d81992395526a97b3dd510b0a7ca332f61c35b9a",
+    "motion_vectors.bin": "6d5f509bc1dede60c2d0d3d357b19a17a04b76032ee7953f9474b83e467bc8f5",
+    "native-v4.bin": "ff1a1b0412384154e97dedbb0f5911e33349ab9e9c1f34d7b645079d8d8e01cc",
+    "ocean-radv-v3-command.json": "386d3db266d022ba8ae834f918f1cf52bf88474f403860cc27f66669bb97a949",
+    "ocean-software-command.json": "1d8f30697650b2a899111834451c64e7f2728f185e4129fcdb89486d175d2c1a",
+    "ocean-software-v3-command.json": "b91d17a3afd138105700c187406cb0e25c3ed7a94f9cab045ddca3c51370f944",
+    "ocean-v3.bin": "4283ba3044a57d3e63cc384fae9aa088ad0eec232c128526f28150976d8a61e1",
+    "ocean.bin": "0dea67ec06d1df8ad14b1e1e3e789c2cb160eda3cb99d11b4acd62b998d70379",
+    "primary_shadows-radv-v3-command.json": "390ea4607e011f6fc515959aded71e64a241bc5d135decf44408c7a516321534",
+    "primary_shadows-v3.bin": "72893a4cfe20f41a5faddc78201d5599976b7a17f15e05a9f583d598d16a1443",
+    "ray-scene-v4.bin": "5594617fefe8be28c73d2c760f0868b3c4d4ac8ceb2990b1ba0428e4dd365993",
+    "ray_scene-radv-v3-command.json": "b0598f23da207d016a14a8a283668fba78b6d6003e86e3e60ed48b8bd152f775",
+    "ray_scene-radv-v4-command.json": "3e533456ad0e86a4b76e60744f33d06200fdb63a0dcec067de36b2df38af1a9d",
+    "ray_scene-v3.bin": "ec1eb1be6b9e2cb8a6b500e81b1371854cdf569789d034cc867b1f6d96ece910",
+    "source-v4.patch": "9d372c658deaf5621f789f0ca6144f46e63f88f7c65ecd8bb91a31426614035e",
+    "terrain_environment-radv-v3-command.json": "f686ce76ac60e847ecbd3e9f04dcd402182237921e52541db1131e86a8aefea5",
+    "terrain_environment-software-command.json": "43656533017a27433fdd55844470e1eeb5a7d33d3182a6ba3d421d166e6f161d",
+    "terrain_environment-software-v3-command.json": "bde1b29669460cfdff70d3823bfc16fe8e78973efb20554d0f4f7cc9e4af6992",
+    "terrain_environment-v3.bin": "75b443483b3b95f3835ca1cc0ade76a47a481698759521cf1a7320f9f2ddb49c",
+    "terrain_environment.bin": "9241aa95b5bba9796cf9766e7445a0d88e8e93e7af9b265754ee66af350123da"
+  }
+}

@@ -811,6 +811,8 @@ pub struct GpuMaterialPage {
     pub rgba: Vec<u8>,
     pub normal: Vec<u8>,
     pub base_normal: Vec<u8>,
+    /// Liquid-water coverage from the canonical bathymetry/ice field.
+    pub water_coverage: Vec<u8>,
 }
 
 pub const GPU_MATERIAL_PAGE_SIZE: u32 = 128;
@@ -895,6 +897,7 @@ pub fn build_gpu_material_page_with_relief(
     }
 
     let mut rgba = Vec::with_capacity(size * size * 4);
+    let mut water_coverage = Vec::with_capacity(size * size);
     let ground = if ground_detail && samples.iter().any(|s| s.height_m > 0.0) {
         dirs.iter()
             .map(|&dir| {
@@ -937,6 +940,11 @@ pub fn build_gpu_material_page_with_relief(
                     .map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8),
             );
             rgba.push((material.roughness.clamp(0.0, 1.0) * 255.0).round() as u8);
+            water_coverage.push(if samples[index].height_m < 0.0 {
+                ((1.0 - material.snow_cover).clamp(0.0, 1.0) * 255.0).round() as u8
+            } else {
+                0
+            });
             if normal_maps {
                 normal_detail_scales.push(material.normal_detail_scale as f64);
                 if !ground.is_empty() {
@@ -955,6 +963,7 @@ pub fn build_gpu_material_page_with_relief(
             rgba,
             normal: Vec::new(),
             base_normal: Vec::new(),
+            water_coverage,
         };
     }
     let floor_heights: Vec<f64> = ground
@@ -1052,6 +1061,7 @@ pub fn build_gpu_material_page_with_relief(
         rgba,
         normal,
         base_normal,
+        water_coverage,
     }
 }
 
@@ -1507,6 +1517,49 @@ mod surface_regressions {
                 }
             }
         }
+    }
+    #[test]
+    fn liquid_water_plane_uses_unclamped_source_and_existing_ice_cover() {
+        let field = field();
+        let mut land = 0;
+        let mut water = 0;
+        for face in [0, 2] {
+            let key = TileKey {
+                face,
+                level: 0,
+                x: 0,
+                y: 0,
+            };
+            let page = build_gpu_material_page_with_normals(&field, key, false);
+            assert_eq!(page.water_coverage.len(), 128 * 128);
+            for y in [1, 16, 48, 80, 112, 126] {
+                for x in [1, 16, 48, 80, 112, 126] {
+                    let dir = key.direction((x as f64 - 1.) / 125., (y as f64 - 1.) / 125.);
+                    let sample = field.sample_surface(dir, TEXTURE_DETAIL_MIN_WL_M);
+                    let expected = if sample.height_m < 0.0 {
+                        let appearance = surface_appearance_filtered(
+                            &field,
+                            &sample,
+                            dir,
+                            key.span_m(field.params.radius_m) / 125.,
+                        );
+                        ((1.0 - appearance.snow_cover).clamp(0.0, 1.0) * 255.).round() as u8
+                    } else {
+                        0
+                    };
+                    assert_eq!(page.water_coverage[y * 128 + x], expected);
+                    if sample.height_m < 0. {
+                        water += 1;
+                    } else {
+                        land += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            water > 0 && land > 0,
+            "fixture must cover land and bathymetry"
+        );
     }
     fn field() -> PlanetField {
         let recipe =

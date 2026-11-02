@@ -141,7 +141,27 @@ is substituted for those contracts in this milestone.
 
 Current continuation: [doc 120](120_FROZEN_NATIVE_DIAGNOSTICS.md) implements
 step 1 as an in-process published-frame replay, with a complete FHD sequence.
-Independent process restore and steps 2–5 remain open.
+Independent process restore remains open. [Doc 121](121_LIQUID_WATER_SURFACE_CONTRACT.md)
+closes the independent water-presence slice of step 2; source accuracy and
+steps 3–5 remain open.
+
+## Task-by-task acceptance ledger
+
+| Task | Current result | Closure criterion / existing owner |
+|---|---|---|
+| Frozen published native frame | Closed in doc 120 | Same-process view replay, unchanged depth/vertices/topology/epochs, beauty A/B/A identity; native QA over existing owners |
+| Independent liquid-water presence | Closed in doc 121 | Explicit source coverage; rough land/rough water/missing-plane GPU controls; raster, waves, rays and Bevy residency agree |
+| Height source versus CBT chord error | Open | Quantify each independently at fixed residency/camera, control transient and stationary error; existing worldgen/height stream and conforming LOD |
+| Geometry-based sky visibility and bounce | Open | Actual geometry/field inputs, source-slot invariance, no direct/emission attenuation by ambient visibility, reference error and disabled/cheap tiers; existing environment/FastRT owners |
+| Current-frame receiver depth/normal/material tags | Open | Same visible surfaces/coverage as beauty, selective allocation and portable fallback; existing terrain/mesh/MSAA ownership |
+| Exact additive radiance components | Open | Sum matches frozen linear HDR within format rounding, including direct/indirect/specular/emission/air; shader terms are final contributions rather than irradiance source views |
+| Physically matched external-engine controls | Open | Same camera/time/assets/materials/exposure and readiness, independent transport oracle; artwork remains a separate visual target |
+| Production quality/cost acceptance | Open | Real production GPU stages, repeatable same-workload A/B, unchanged populations and acceptable image/temporal error; fenced diagnostic wall time cannot substitute |
+
+Each remaining row is a separate implementation/acceptance task. Completing the
+first two rows is not closure of step 2 as a whole, GI, a receiver pipeline or
+reference parity. No completion mark is based solely on adding a flag or a
+promising single image.
 
 ## Executed validation
 

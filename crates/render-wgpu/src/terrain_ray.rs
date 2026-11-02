@@ -24,6 +24,7 @@ pub struct TerrainRaySource {
     pub(crate) vertices: wgpu::Buffer,
     pub(crate) directory: wgpu::Buffer,
     pub(crate) material: wgpu::TextureView,
+    pub(crate) water: wgpu::TextureView,
     pub(crate) sampler: wgpu::Sampler,
     pub(crate) radius_m: f64,
     pub(crate) capacity: usize,
@@ -34,6 +35,7 @@ impl TerrainRaySource {
         self.vertices == other.vertices
             && self.directory == other.directory
             && self.material == other.material
+            && self.water == other.water
             && self.sampler == other.sampler
             && self.conforming_configuration == other.conforming_configuration
             && match (&self.conforming, &other.conforming) {

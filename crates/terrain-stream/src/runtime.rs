@@ -121,7 +121,9 @@ impl TerrainStream {
                     page.rgba,
                     policy.normal_maps.then_some(page.normal),
                 )
-                .ok_or("invalid material page")?,
+                .ok_or("invalid material page")?
+                .with_water_coverage(page.water_coverage)
+                .ok_or("invalid liquid-water plane")?,
             );
         }
         Ok(Self {

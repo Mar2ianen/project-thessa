@@ -36,6 +36,8 @@ pub(crate) struct MicrostoreResidency {
     >,
     /// Current compact residency in wire bytes (gauge, not lifetime).
     pub wire_bytes: u64,
+    /// Exact scalar planes retained alongside the lossy colour codec.
+    pub semantic_bytes: u64,
     /// Lifetime RGBA bytes decoded at encode time (once per generation).
     pub decoded_bytes: u64,
     /// Lifetime CPU encode seconds (page -> compact form, once per generation).
@@ -63,8 +65,23 @@ impl MicrostoreResidency {
             self.decoded_bytes += decoded.iter().map(Vec::len).sum::<usize>() as u64;
             let shadow = crate::material_pages::CbtMaterialPage::from_decoded_mips(decoded)
                 .expect("decoded levels keep mip shapes");
+            // Lossy colour compression cannot erase or recreate water semantics.
+            let shadow = if let Some(mips) = page.water_coverage_mips() {
+                shadow
+                    .with_water_coverage(mips[0].clone())
+                    .expect("valid semantic plane")
+            } else {
+                shadow
+            };
             self.pages.insert(*id, (*generation, levels, shadow));
         }
+        self.semantic_bytes = self
+            .pages
+            .values()
+            .filter_map(|(_, _, p)| p.water_coverage_mips())
+            .flatten()
+            .map(Vec::len)
+            .sum::<usize>() as u64;
         self.wire_bytes = self
             .pages
             .values()
@@ -77,6 +94,7 @@ impl MicrostoreResidency {
 
 pub(super) struct MaterialArray {
     pub view: TextureView,
+    pub water_view: TextureView,
     pub sampler: Sampler,
     pub slots: RawBufferVec<[u32; 4]>,
     pub directory: RawBufferVec<[u32; 4]>,
@@ -85,6 +103,7 @@ pub(super) struct MaterialArray {
     /// to the flat geometric normal without a second texture allocation.
     pub normal_directory: RawBufferVec<[u32; 4]>,
     texture: Texture,
+    water_texture: Texture,
     cache: SlotCache,
     topology_generation: u64,
     pages_generation: u64,
@@ -112,6 +131,24 @@ impl MaterialArray {
             dimension: Some(TextureViewDimension::D2Array),
             ..Default::default()
         });
+        let water_texture = device.create_texture(&TextureDescriptor {
+            label: Some("cbt-liquid-water-array"),
+            size: Extent3d {
+                width: MATERIAL_PAGE_SIZE,
+                height: MATERIAL_PAGE_SIZE,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 8,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let water_view = water_texture.create_view(&TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::D2Array),
+            ..Default::default()
+        });
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("cbt-material-sampler"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -125,6 +162,8 @@ impl MaterialArray {
         Self {
             texture,
             view,
+            water_texture,
+            water_view,
             sampler,
             slots: RawBufferVec::new(BufferUsages::STORAGE),
             directory: RawBufferVec::new(BufferUsages::STORAGE),
@@ -202,6 +241,36 @@ impl MaterialArray {
                     TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(size * 4),
+                        rows_per_image: Some(size),
+                    },
+                    Extent3d {
+                        width: size,
+                        height: size,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            for level in 0..8 {
+                let size = MATERIAL_PAGE_SIZE >> level;
+                let zero = vec![0; (size * size) as usize];
+                let data = page
+                    .water_coverage_mips()
+                    .map_or(zero.as_slice(), |m| m[level].as_slice());
+                queue.write_texture(
+                    TexelCopyTextureInfo {
+                        texture: &self.water_texture,
+                        mip_level: level as u32,
+                        origin: Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: change.slot,
+                        },
+                        aspect: TextureAspect::All,
+                    },
+                    data,
+                    TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(size),
                         rows_per_image: Some(size),
                     },
                     Extent3d {
@@ -312,10 +381,11 @@ impl MaterialArray {
         let shadow = self.microstore.update(pages);
         self.prepare(topology, &shadow, device, queue);
         eprintln!(
-            "[material-storage] microstore_compact: {} pages, wire {} B, decoded {} B lifetime, \
+            "[material-storage] microstore_compact: {} pages, colour wire {} B, scalar planes {} B, decoded {} B lifetime, \
              encode {:.2} ms lifetime, {} pages encoded lifetime",
             self.microstore.pages.len(),
             self.microstore.wire_bytes,
+            self.microstore.semantic_bytes,
             self.microstore.decoded_bytes,
             self.microstore.encode_secs * 1000.0,
             self.microstore.pages_encoded,
@@ -345,6 +415,32 @@ mod residency_tests {
     use super::*;
     use crate::material_microstore::rock_rgba;
     use crate::material_pages::CbtMaterialPage;
+
+    #[test]
+    fn compact_colour_replay_preserves_independent_water_planes() {
+        let coverage: Vec<u8> = (0..128 * 128)
+            .map(|i| if i % 7 == 0 { 255 } else { 0 })
+            .collect();
+        let page = CbtMaterialPage::from_rgba8(rock_rgba(128, 42))
+            .unwrap()
+            .with_water_coverage(coverage)
+            .unwrap();
+        let mut pages = CbtRenderMaterialPages::default();
+        pages.set_page(8, page.clone());
+        let mut cache = MicrostoreResidency::default();
+        let shadow = cache.update(&pages);
+        assert_eq!(cache.semantic_bytes, 21_845);
+        assert_eq!(
+            shadow.source_pages()[&8].1.water_coverage_mips(),
+            page.water_coverage_mips()
+        );
+        assert_eq!(
+            cache.update(&pages).source_pages()[&8]
+                .1
+                .water_coverage_mips(),
+            page.water_coverage_mips()
+        );
+    }
 
     fn real_pages(ids: &[u64], seed: u64) -> CbtRenderMaterialPages {
         let mut out = CbtRenderMaterialPages::default();

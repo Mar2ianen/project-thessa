@@ -18,6 +18,7 @@ pub struct MaterialBinding {
     /// RG8_SNORM full normals, or RGBA8_SNORM with base-height normal in BA. Pages without a normal
     /// layer are absent from `normal_directory` and resolve to a flat normal.
     pub normal_texture: wgpu::TextureView,
+    pub water_texture: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
     pub directory: wgpu::Buffer,
     pub normal_directory: wgpu::Buffer,
@@ -39,12 +40,14 @@ pub struct MaterialUpload {
 pub(crate) struct MaterialArray {
     pub view: wgpu::TextureView,
     pub normal_view: wgpu::TextureView,
+    pub water_view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
     pub slots: wgpu::Buffer,
     pub directory: wgpu::Buffer,
     pub normal_directory: wgpu::Buffer,
     texture: wgpu::Texture,
     normal_texture: wgpu::Texture,
+    water_texture: wgpu::Texture,
     normal_maps: bool,
     relief: bool,
     cache: SlotCache,
@@ -64,6 +67,7 @@ impl MaterialArray {
         MaterialBinding {
             texture: self.view.clone(),
             normal_texture: self.normal_view.clone(),
+            water_texture: self.water_view.clone(),
             sampler: self.sampler.clone(),
             directory: self.directory.clone(),
             normal_directory: self.normal_directory.clone(),
@@ -115,6 +119,24 @@ impl MaterialArray {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let water_texture = backend.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("owned-cbt-liquid-water-array"),
+            size: wgpu::Extent3d {
+                width: MATERIAL_PAGE_SIZE,
+                height: MATERIAL_PAGE_SIZE,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 8,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let water_view = water_texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
@@ -172,12 +194,14 @@ impl MaterialArray {
         Ok(Self {
             view,
             normal_view,
+            water_view,
             sampler,
             slots,
             directory,
             normal_directory,
             texture,
             normal_texture,
+            water_texture,
             normal_maps,
             relief,
             cache,
@@ -233,6 +257,37 @@ impl MaterialArray {
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(size * 4),
+                        rows_per_image: Some(size),
+                    },
+                    wgpu::Extent3d {
+                        width: size,
+                        height: size,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                stats.bytes += data.len();
+            }
+            for level in 0..8 {
+                let size = MATERIAL_PAGE_SIZE >> level;
+                let zero = vec![0; (size * size) as usize];
+                let data = page
+                    .water_coverage_mips()
+                    .map_or(zero.as_slice(), |m| m[level].as_slice());
+                backend.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.water_texture,
+                        mip_level: level as u32,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: change.slot,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(size),
                         rows_per_image: Some(size),
                     },
                     wgpu::Extent3d {
@@ -439,7 +494,7 @@ mod tests {
         let pages = MaterialPages::from([(12, (1, page))]);
         let stats = array.prepare(&backend, &[12], &[12], &pages).unwrap();
         assert_eq!(stats.normal_pages, 0);
-        assert_eq!(stats.bytes, 87_380);
+        assert_eq!(stats.bytes, 87_380 + 21_845);
         assert!(
             array
                 .normal_directory_data

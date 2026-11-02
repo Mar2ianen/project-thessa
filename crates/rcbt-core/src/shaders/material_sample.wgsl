@@ -66,9 +66,14 @@ fn material_coordinates(address: MaterialAddress, extent: f32) -> MaterialCoordi
     return MaterialCoordinates(tile, (floor(base) - tile) + relative);
 }
 
+// A consumer without a declared semantic plane is land. Backends replace this
+// hook to sample R8_UNORM with the SAME page, chart, gradients and weight.
+fn material_water_coverage(uv:vec2<f32>,layer:i32,dx:vec2<f32>,dy:vec2<f32>)->f32 { return 0.0; }
+
 // Premultiplied resident contribution; uncovered weight uses the globe map.
 struct MaterialSample {
     value: vec4<f32>,
+    water_coverage: f32,
     coverage: f32,
 };
 
@@ -154,7 +159,7 @@ fn material_at_level(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, req
     var level = requested;
     var extent = exp2(f32(level));
     var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
-    var result = MaterialSample(vec4(0.0), 0.0);
+    var result = MaterialSample(vec4(0.0), 0.0, 0.0);
     var remaining = 1.0;
     loop {
         let layer = material_layer(id);
@@ -165,6 +170,7 @@ fn material_at_level(address: MaterialAddress, dx: vec2<f32>, dy: vec2<f32>, req
             let uv = (material_coordinates(address, extent).local * 125.0 + 1.5) / 128.0;
             result.value += textureSampleGrad(material_texture, material_sampler, uv, i32(layer),
                 dx * extent * (125.0 / 128.0), dy * extent * (125.0 / 128.0)) * weight;
+            result.water_coverage += material_water_coverage(uv, i32(layer), dx * extent * (125.0 / 128.0), dy * extent * (125.0 / 128.0)) * weight;
             result.coverage += weight;
             remaining -= weight;
             if (remaining <= 0.00001) { break; }

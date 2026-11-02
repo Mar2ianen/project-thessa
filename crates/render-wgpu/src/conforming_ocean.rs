@@ -66,12 +66,12 @@ impl ConformingOcean {
             label: Some("cbt-ocean"),
             source: wgpu::ShaderSource::Wgsl(shader_source().into()),
         });
-        let entries = (0..6)
+        let entries = (0..7)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: match binding {
-                    3 => wgpu::BindingType::Texture {
+                    3 | 6 => wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
@@ -171,6 +171,10 @@ impl ConformingOcean {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: materials.directory.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&materials.water_texture),
                 },
             ],
         });

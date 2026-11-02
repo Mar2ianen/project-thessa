@@ -1,7 +1,9 @@
 # 116 — Ground detail normal continuity and water separation
 
 Status: macro-normal changes retained; water threshold narrowing is not semantic
-water separation. Later audit and current limits: [doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md).
+water separation at this milestone. Later audit: [doc 119](119_RENDER_CAUSAL_CONTRACT_AUDIT.md).
+[Doc 121](121_LIQUID_WATER_SURFACE_CONTRACT.md) subsequently replaces the
+predicate with an independent scalar source plane.
 2026-11-02.
 Addresses user investigation regarding ground degradation beyond ~5 metres, wet
 soil semantic confusion with ocean water, and anisotropic filtering.

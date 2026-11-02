@@ -38,6 +38,24 @@ pub const MATERIAL_SAMPLE_WGSL: &str = concat!(
     include_str!("shaders/material_sample.wgsl")
 );
 
+/// Replace the backend-neutral land fallback with the declared scalar plane.
+/// Compute geometry consumers explicitly sample mip zero; raster/ray consumers
+/// pass their existing footprint gradients. No backend API enters this contract.
+pub fn with_material_water_coverage(
+    source: &str,
+    group: u32,
+    binding: u32,
+    compute: bool,
+) -> String {
+    let sample = if compute {
+        "textureSampleLevel(material_water_texture, material_sampler, uv, layer, 0.0).r"
+    } else {
+        "textureSampleGrad(material_water_texture, material_sampler, uv, layer, dx, dy).r"
+    };
+    source.replace("fn material_water_coverage(uv:vec2<f32>,layer:i32,dx:vec2<f32>,dy:vec2<f32>)->f32 { return 0.0; }",
+        &format!("@group({group}) @binding({binding}) var material_water_texture:texture_2d_array<f32>;\nfn material_water_coverage(uv:vec2<f32>,layer:i32,dx:vec2<f32>,dy:vec2<f32>)->f32 {{ return {sample}; }}"))
+}
+
 /// Portable WGSL chunk `ocean.wgsl`.
 pub const OCEAN_WGSL: &str = include_str!("shaders/ocean.wgsl");
 
@@ -653,11 +671,9 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         roughness += textureSampleGrad(roughness_texture, surface_sampler, uv, dx, dy).g
             * (1.0 - detail_weight);
     }
-    // Classify before material-normal perturbation: water owns its wave normal.
-    // Ocean/water body has open-water roughness (< 0.22) and is at or below datum (height <= 0.25m).
-    // Wet soil on land (roughness >= 0.22 or height > 0.25m) remains dielectric land.
-    var water_material = (1.0 - smoothstep(0.18, 0.22, roughness))
-        * (1.0 - smoothstep(0.0, 0.25, input.height_m));
+    // Liquid-water coverage is a declared source field, independent of
+    // roughness and the clamped/displaced raster height. Missing source is land.
+    var water_material = clamp(mix(coarse.water_coverage, fine.water_coverage, fract(material_lod)), 0.0, 1.0);
     // Diagnostic outputs are unexposed linear values, before light/haze.
     if (cbt_terrain_debug_view() == 1u) { return vec4(vec3(water_material), 1.0); }
     if (cbt_terrain_debug_view() == 2u) {
@@ -789,7 +805,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             sky * vec3(0.015, 0.018, 0.015)) * fresnel;
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
     }
-    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,input.height_m,roughness,albedo,footprint_m,visibility,sunlight);
+    let spectral_ocean = cbt_spectral_ocean(input.render_position,receiver_normal,direction,water_material,roughness,albedo,footprint_m,visibility,sunlight);
     if (cbt_terrain_debug_view() != 7u) { radiance = mix(radiance,spectral_ocean.rgb,spectral_ocean.a); }
     // Night city lights: warm emissive mask over inhabited land, gated by
     // the terminator. Day diffuse outshines it by orders of magnitude, so no

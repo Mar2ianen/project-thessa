@@ -48,8 +48,7 @@ fn deform_conforming_ocean(@builtin(global_invocation_id) gid:vec3<u32>) {
     let uv=vec2<f32>(v.address.xy)/536870912.0;
     let radial=material_direction(uv,u32(v.normal_face.w));
     let sample=material_at_level(material_address(radial),vec2(0.0),vec2(0.0),17u);
-    let roughness=sample.value.a+1.0-sample.coverage;
-    let weight=ocean_material_weight(v.position_height.w,roughness)*taper;
+    let weight=sample.water_coverage*taper;
     if(weight<=0.0){return;}
     let footprint=bitcast<f32>(atomicLoad(&extent.footprint));
     // Coarse geometry stays optical-only. Avoid a

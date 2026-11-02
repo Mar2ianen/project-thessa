@@ -15,6 +15,7 @@ const MATERIAL_NORMAL_MIP_BIAS: f32 = 0.0;
 
 struct RasterMaterialSample {
     value: vec4<f32>,
+    water_coverage: f32,
     normal: vec2<f32>,
     base_normal: vec2<f32>,
     height_coverage: f32,
@@ -40,7 +41,7 @@ fn material_at_level_raster_with_height_field(address:MaterialAddress,dx:vec2<f3
     var level = requested;
     var extent = exp2(f32(level));
     var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
-    var result = RasterMaterialSample(vec4(0.0), vec2(0.0), vec2(0.0), 0.0, 0.0);
+    var result = RasterMaterialSample(vec4(0.0), 0.0, vec2(0.0), vec2(0.0), 0.0, 0.0);
     var remaining = 1.0;
     loop {
         let layer = material_layer(id);
@@ -73,6 +74,7 @@ fn material_at_level_raster_with_height_field(address:MaterialAddress,dx:vec2<f3
                 result.normal += xy / z * weight;
               }
             }
+            result.water_coverage += material_water_coverage(uv, i32(layer), dx * footprint, dy * footprint) * weight;
             result.coverage += weight;
             remaining -= weight;
             if (remaining <= 0.00001) { break; }

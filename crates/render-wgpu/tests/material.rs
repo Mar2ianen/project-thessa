@@ -277,7 +277,7 @@ fn material_publication_reuses_uploads_falls_back_and_rejects_invalid_snapshots(
         .unwrap();
     assert_eq!(
         (stats.pages, stats.bytes, stats.residents),
-        (1, red.byte_len(), 1)
+        (1, red.byte_len() + 21_845, 1)
     );
     let red_frame = render(&renderer);
     let mid = (128 * 257 + 128) * 4;
@@ -553,7 +553,7 @@ fn material_normal_gpu_and_upload_cost() {
             let drained_ms = start.elapsed().as_secs_f64() * 1000.0;
             assert_eq!(stats.pages, 128);
             assert_eq!(stats.normal_pages, enabled * 128);
-            assert_eq!(stats.bytes, 128 * (87_380 + enabled * 43_690));
+            assert_eq!(stats.bytes, 128 * (87_380 + 21_845 + enabled * 43_690));
             if round >= 2 {
                 enqueue[enabled].push(queued_ms);
                 drained[enabled].push(drained_ms);
@@ -566,7 +566,7 @@ fn material_normal_gpu_and_upload_cost() {
         eprintln!(
             "material_normal_upload enabled={} pages=128 bytes={} measurements=10 enqueue_median_ms={:.6} enqueue_p95_ms={:.6} drained_median_ms={:.6} drained_p95_ms={:.6}; counterbalanced repeated dirty snapshots, enqueue is CPU validation/residency/write_texture, drained includes queue submit and GPU wait, not isolated DMA or streaming latency",
             enabled == 1,
-            128 * (87_380 + enabled * 43_690),
+            128 * (87_380 + 21_845 + enabled * 43_690),
             enqueue[enabled][5],
             enqueue[enabled][9],
             drained[enabled][5],
@@ -650,7 +650,10 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
             target.read_rgba8(&backend).unwrap()
         };
         let rgba = [255, 0, 0, if water { 40 } else { 255 }].repeat(128 * 128);
-        let flat = CbtMaterialPage::from_rgba8(rgba.clone()).unwrap();
+        let flat = CbtMaterialPage::from_rgba8(rgba.clone())
+            .unwrap()
+            .with_water_coverage(vec![if water { 255 } else { 0 }; 128 * 128])
+            .unwrap();
         // Signed +/-102/127 exercises both directions through the real sampler;
         // zero is an exact flat y slope.
         let encoded = thessa_rcbt_core::material_page::encode_material_normal_component(
@@ -658,6 +661,8 @@ fn material_normal_plane_perturbs_actual_raster_diffuse_and_clears_on_removal() 
         );
         let tilted =
             CbtMaterialPage::from_rgba8_with_normals(rgba, Some([encoded, 0].repeat(128 * 128)))
+                .unwrap()
+                .with_water_coverage(vec![if water { 255 } else { 0 }; 128 * 128])
                 .unwrap();
         let mut source = MaterialPageStore::default();
         source.set_page(12, flat.clone());
@@ -826,9 +831,9 @@ fn height_field_normals_are_independent_of_geometry_and_material_levels() {
             frames.push(render(&renderer));
         }
         if relief_level > 17 {
-            assert_eq!(
+            assert_ne!(
                 frames[0], frames[1],
-                "geometric relief must not receive its full bump slope twice"
+                "without a canonical base plane, retain geometry and optical bump; do not discard either"
             );
             // Full RG is zero; the BA canonical base normal independently
             // changes the actual Lambert raster, regardless of geometry slope.

@@ -467,9 +467,9 @@ pub fn plan_with_terrain(
                 }
                 || plan.textures.len() as u32
                     + if plan.masked && plan.primary_shadows {
-                        10 + u32::from(settings.ocean.enabled)
+                        11 + u32::from(settings.ocean.enabled)
                     } else {
-                        7
+                        8
                     }
                     + u32::from(terrain.ocean.is_some())
                     > limits.max_sampled_textures_per_shader_stage
@@ -532,11 +532,12 @@ impl Plan {
                     buffer(7, ShaderStages::FRAGMENT, false),
                     texture(8, TextureViewDimension::D2Array),
                     sampler(9),
+                    texture(10, TextureViewDimension::D2Array),
                 ]);
             }
         }
         let base = if self.reflections && self.terrain.is_some() {
-            10
+            11
         } else {
             6
         };
@@ -568,7 +569,7 @@ impl Plan {
 fn sampling_shader(plan: &Plan) -> String {
     let mut sampling = String::new();
     let map_base = if plan.terrain.is_some() && plan.reflections {
-        10
+        11
     } else {
         6
     };
@@ -590,7 +591,7 @@ fn sampling_shader(plan: &Plan) -> String {
 
 pub fn shader(plan: &Plan) -> String {
     let mut sampling = sampling_shader(plan);
-    let map_base = if plan.terrain.is_some() { 10 } else { 6 };
+    let map_base = if plan.terrain.is_some() { 11 } else { 6 };
     if let Some((terrain, _)) = &plan.terrain
         && plan.reflections
     {
@@ -607,11 +608,16 @@ pub fn shader(plan: &Plan) -> String {
             f32::from(b) / 255.0
         ));
         sampling.push_str(
-            &thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL
-                .replace("@group(0) @binding(16)", "@group(3) @binding(7)"),
+            &thessa_rcbt_core::shaders::with_material_water_coverage(
+                thessa_rcbt_core::shaders::MATERIAL_SAMPLE_WGSL,
+                3,
+                10,
+                false,
+            )
+            .replace("@group(0) @binding(16)", "@group(3) @binding(7)"),
         );
         let hit=include_str!("terrain_ray.wgsl").replace("// OCEAN_HIT_HOOK",if terrain.ocean.is_some(){
-            "let water=ocean_material_weight(n0.w*bary.x+n1.w*bary.y+n2.w*bary.z,roughness);\nif(water>0.0){let wave=ocean_spectral(position,direction,0.0);normal=normalize(mix(normal,direction-wave.gradient,water));normal=select(normal,-normal,dot(normal,geometry)<0.0);roughness=mix(roughness,clamp(pow(pow(ocean_frame.optics.y,4.0)+wave.variance,0.25),0.02,1.0),water);dielectric=mix(0.04,ocean_frame.optics.x,water);}"
+            "let water=sample.water_coverage;\nif(water>0.0){let wave=ocean_spectral(position,direction,0.0);normal=normalize(mix(normal,direction-wave.gradient,water));normal=select(normal,-normal,dot(normal,geometry)<0.0);roughness=mix(roughness,clamp(pow(pow(max(ocean_frame.optics.y,roughness),4.0)+wave.variance,0.25),0.02,1.0),water);dielectric=mix(0.04,ocean_frame.optics.x,water);}"
         }else{""});
         if terrain.ocean.is_some() {
             let base = map_base + plan.textures.len() * 2;
@@ -935,11 +941,15 @@ impl RayScene {
                         binding: 9,
                         resource: wgpu::BindingResource::Sampler(&terrain.source.sampler),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&terrain.source.water),
+                    },
                 ]);
             }
         }
         let map_base = if terrain.is_some() && plan.reflections {
-            10
+            11
         } else {
             6
         };

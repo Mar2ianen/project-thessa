@@ -732,6 +732,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         shadow = 1.0 - lighting.shadow_params.y * smoothstep(0.05, 0.6, cloud_alpha);
     }
     let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
+    if (TERRAIN_DEBUG_VIEW == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
+    if (TERRAIN_DEBUG_VIEW == 14u) { return vec4(surface_ambient * view.exposure / OCEAN_PI, 1.0); }
     var illuminance = surface_ambient + direct * shadow;
     let diffuse = albedo * illuminance / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
@@ -751,6 +753,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         }
         let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
         land_reflection += environment.rgb;
+        if (TERRAIN_DEBUG_VIEW == 15u) { return vec4(land_reflection * view.exposure, 1.0); }
         var land_ambient = surface_ambient;
         if (any(land_ambient > vec3(0.0))) {
             land_ambient *= cbt_land_ambient_transmission(roughness);
@@ -759,6 +762,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         radiance = mix(diffuse, land_diffuse * (1.0 - environment.a) + land_reflection,
             1.0 - water_material);
     }
+    if (TERRAIN_DEBUG_VIEW == 15u) { return vec4(0.0, 0.0, 0.0, 1.0); }
     if (cbt_specular_enabled() && water > 0.0) {
         let rotation = mat3x3<f32>(render_from_body[0].xyz, render_from_body[1].xyz, render_from_body[2].xyz);
         let up = normalize(rotation * direction);

@@ -666,6 +666,9 @@ pub enum TerrainDebugView {
     Footprint = 10,
     MaterialLod = 11,
     ReliefWeight = 12,
+    Direct = 13,
+    Ambient = 14,
+    Specular = 15,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

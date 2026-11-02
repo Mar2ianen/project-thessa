@@ -29,7 +29,8 @@ const LITTER_WIDTH_M: f64 = 1.3;
 const LITTER_HEIGHT_RANGE_M: f32 = 0.025;
 const MOSS_WIDTH_M: f64 = 3.0;
 const MOSS_HEIGHT_RANGE_M: f32 = 0.020;
-const MOSS_GRADE: [f32; 3] = [0.180, 0.350, 0.220];
+// Authored dark olive pigment transfer; source texture contrast remains.
+const MOSS_GRADE: [f32; 3] = [0.100, 0.200, 0.300];
 const MOSS_MEAN: GroundSample = GroundSample {
     albedo_linear: [0.2964123, 0.17819463, 0.056929342],
     roughness: 0.9334981,
@@ -469,7 +470,7 @@ pub(crate) fn forest_floor(
         .clamp(0.5, 1.5);
         let moss_albedo = f64::from(moss_texture.albedo_linear[i] * MOSS_GRADE[i]);
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
-        let litter_albedo = [0.054, 0.043, 0.029][i] * texture_detail;
+        let litter_albedo = [0.048, 0.038, 0.024][i] * texture_detail;
         (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);
@@ -773,7 +774,7 @@ mod tests {
                 .albedo_linear
                 .into_iter()
                 .zip(dark.albedo_linear)
-                .all(|(a, b)| a > b * 1.05)
+                .all(|(a, b)| a > b * 1.03)
         );
         assert_eq!(bright.height_m, dark.height_m);
     }

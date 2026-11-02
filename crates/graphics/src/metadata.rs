@@ -942,7 +942,7 @@ pub fn describe() -> Vec<SettingMeta> {
             path: "debug.terrain_view",
             label: "Native terrain diagnostic",
             kind: SettingKind::Enum,
-            range: "none | water_weight | height | distance | normal | albedo | roughness | land_only | geometry | height_page_level | footprint | material_lod | relief_weight",
+            range: "none | water_weight | height | distance | normal | albedo | roughness | land_only | geometry | height_page_level | footprint | material_lod | relief_weight | direct | ambient | specular",
             step: "-",
             unit: "-",
             advanced: true,

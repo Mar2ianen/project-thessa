@@ -1702,21 +1702,21 @@ fn lycopsid_tree_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form
             (5, 8.35, 3.85, 1.80, 0.45, 0.30), // Ascending juvenile fronds
             (9, 8.05, spread_reach, 1.35, 1.40, 0.60), // Spreading mature canopy umbrella
             (6, 7.70, outer_reach, 0.80, 2.25, 0.90), // Descending cascading fronds
-            (4, 7.30, 3.20, 0.20, 2.80, 1.20), // Hanging senescent mantle skirt
+            (4, 7.30, 3.20, 0.12, 3.20, 1.20), // Hanging senescent mantle skirt
         ],
         _ => [
             (2, 8.28, 2.35, 2.10, 0.15, 0.12), // Emerging apical young fronds
             (3, 8.10, 3.65, 1.75, 0.45, 0.35), // Ascending juvenile fronds
             (4, 7.85, spread_reach, 1.40, 1.30, 0.62), // Spreading mature canopy umbrella
             (3, 7.55, outer_reach, 0.85, 2.15, 0.95), // Descending cascading fronds
-            (2, 7.20, 2.80, 0.20, 2.60, 1.25), // Hanging senescent mantle skirt
+            (2, 7.20, 2.80, 0.12, 3.00, 1.25), // Hanging senescent mantle skirt
         ],
     };
     for (tier, &(count, base_y, reach_base, rise, drop, phase_offset)) in tiers.iter().enumerate() {
         if base_y == 7.20 || (form == 1 && base_y == 7.30) {
             mesh.senescent = Some(PlantSenescence {
                 first_vertex: mesh.positions.len() as u32,
-                albedo_srgb: [0.29, 0.23, 0.15],
+                albedo_srgb: [0.24, 0.18, 0.11],
                 diffuse_transmission: 0.08,
             });
         }

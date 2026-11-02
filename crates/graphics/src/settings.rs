@@ -587,6 +587,9 @@ impl Default for EnginePlumeSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RaytracingParticipation {
+    /// Opt-in primary ground/water receiver correction; raster shadows remain the fallback.
+    #[serde(default)]
+    pub primary_shadows: bool,
     /// Native hit-attribute/texture storage, not driver-owned AS memory.
     #[serde(default = "default_rt_memory")]
     pub scene_memory_mib: u32,
@@ -629,6 +632,7 @@ fn default_ray_bias() -> f32 {
 impl Default for RaytracingParticipation {
     fn default() -> Self {
         Self {
+            primary_shadows: false,
             terrain: true,
             scene_memory_mib: default_rt_memory(),
             max_instances: default_rt_instances(),

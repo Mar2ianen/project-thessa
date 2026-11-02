@@ -818,6 +818,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Legacy field-derived nozzle point light; currently unavailable in the native renderer.",
         },
         SettingMeta {
+            path: "raytracing.primary_shadows",
+            label: "Ground and water ray shadows",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: true,
+            restart_required: true,
+            description: "Opt-in scene-object shadow correction for ground and water. Requires ray tracing and shadows; adds ray-query cost. Raster shadows remain the fallback.",
+        },
+        SettingMeta {
             path: "raytracing.terrain",
             label: "RT terrain participation",
             kind: SettingKind::Bool,

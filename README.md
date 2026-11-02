@@ -917,3 +917,10 @@ pressure-dependent shape, absorption, photometric emission and 3D motion.
 Daylight emission is visible without an exposure-only gain. In the measured
 straight/curved controls it costs about 23–33% less than Medium; finer Medium/High
 sampling remains necessary for thin-feature and axial-view accuracy.
+
+[FastRT primary shadow receivers](docs/111_FASTRT_PRIMARY_SHADOW_RECEIVERS.md)
+now share the existing scene with ground and spectral water, behind explicit
+`raytracing.primary_shadows = true` (default false). Scalar query gates and
+primary ground/water GPU controls pass; querying every lit sample remains too
+expensive for the coastal target. The next appearance/cost work uses the full
+sunset forest composition, atmospheric sunlight and cheaper cached/screen data.

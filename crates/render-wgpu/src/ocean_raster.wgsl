@@ -1,4 +1,4 @@
-fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,height:f32,roughness:f32,albedo:vec3<f32>,footprint:f32)->vec4<f32>{
+fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,height:f32,roughness:f32,albedo:vec3<f32>,footprint:f32,visibility:array<f32,3>)->vec4<f32>{
     let weight=ocean_material_weight(height,roughness);
     if(weight<=0.0){return vec4(0.0);}
     let wave=ocean_spectral(position,direction,footprint);
@@ -13,9 +13,8 @@ fn cbt_spectral_ocean(position:vec3<f32>,normal:vec3<f32>,direction:vec3<f32>,he
     var reflection=vec3(0.0);
     for(var i=0u;i<3u;i++){
         // Geometry controls shadow filtering; optical wave normals remain BRDF inputs.
-        let visibility=cbt_shadow_visibility(position,normal,i);
-        illumination+=lighting.colors_lux[i].rgb*max(dot(n,lighting.directions[i].xyz),0.0)*visibility;
-        if(cbt_specular_enabled()) {reflection+=ocean_sun_reflection(n,eye,lighting.directions[i].xyz,lighting.colors_lux[i].rgb,optical_roughness,f0)*visibility;}
+        illumination+=lighting.colors_lux[i].rgb*max(dot(n,lighting.directions[i].xyz),0.0)*visibility[i];
+        if(cbt_specular_enabled()) {reflection+=ocean_sun_reflection(n,eye,lighting.directions[i].xyz,lighting.colors_lux[i].rgb,optical_roughness,f0)*visibility[i];}
     }
     if(!cbt_specular_enabled()){return vec4(albedo*illumination/OCEAN_PI,weight);}
     reflection+=env_radiance_from(position,reflect(-eye,n),lighting.ambient_lux.rgb)*fresnel;

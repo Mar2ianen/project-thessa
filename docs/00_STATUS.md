@@ -15,6 +15,16 @@ Legend: ✅ implemented · 🟡 partial (shipped slice + open remainder) ·
 🔵 design baseline/target (no code yet) · 🕰️ historical record (dated audit,
 do not update in place).
 
+## Current visual/cost priority
+
+The latest user target is the full-density sunset forest with wet soil/puddles
+and structured blue/gold sky at affordable cost. Low-density captures are only
+bounded diagnostics. [Doc 111](111_FASTRT_PRIMARY_SHADOW_RECEIVERS.md) adds the
+executed FastRT scalar visibility gate and optional primary ground/water RT
+shadow receiver using the existing scene. It defaults off after the expensive
+coastal trace; SSR/contact traces, static-caster depth caching, atmospheric
+sunlight and full-scene visual/performance acceptance remain open.
+
 ## Current native integration checkpoint
 
 [Doc 110](110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md) integrates reviewed Gemini

@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "status": "implemented opt-in visibility receiver; affordable coastal parity incomplete",
+  "base": "62f48c19e6eb06eb452048de36540aedfe6d73d6",
+  "raw_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/primary-rt-shadows-2026-11-02",
+  "default_primary_shadows": false,
+  "new_setting": "raytracing.primary_shadows",
+  "scene_owner": "existing mesh RayScene TLAS, no duplicate AS",
+  "additional_parameter_bytes_if_requested": 16,
+  "checks": {
+    "fastrt": 12,
+    "graphics": 52,
+    "rcbt_core": 75,
+    "render_wgpu_regular": 42,
+    "primary_radV_control": 1,
+    "scene_rt_radV": 28,
+    "surface_lighting_radV": 6,
+    "scalar_policy_gpu": "12 inputs each on RADV880M and llvmpipe",
+    "python": 52,
+    "architecture": "44 packages /20 foundations",
+    "strict_all_target_clippy": "graphics,fastrt,rcbt-core,render-wgpu,terrain-native passed",
+    "client": "cargo check --tests passed"
+  },
+  "final_opt_in_gpu": [
+    {
+      "test": "primary_shadows",
+      "exit": 0,
+      "binary_sha256": "c11557021aa856505223e68c215694ee554f936835d339b6f37d92ef10214245"
+    },
+    {
+      "test": "ray_scene",
+      "exit": 0,
+      "binary_sha256": "12b575d03cb2a15aee4118992cb841c0ca412ef9e41ba9d53cf93148deaae5a7"
+    },
+    {
+      "test": "thessa_render_wgpu",
+      "exit": 0,
+      "binary_sha256": "ff5041d25eee189c5b31db395084d80d1bae1e4cc569090b157eda6b86c00c2b"
+    }
+  ],
+  "source_sha256": {
+    "apps/client/src/atmosphere.rs": "e9b0ad581f29f798006c802741035f3dfeb45f0fb828b16a9dade46ca482e731",
+    "apps/terrain-native/src/main.rs": "151ec6f057aa789fcff738a8c8e869bdf388dd1c7b1cd835989da7763e5e5fd0",
+    "crates/fastrt/Cargo.toml": "ce28b13e9fedaa0feb7b9aa36e54833b000f31b8c3468e28875d3b68be53f1c2",
+    "crates/fastrt/src/lib.rs": "b321f614f8e762eadc6708717e0e4ea9b09a84894c0e4b700d47ca9bec968c9f",
+    "crates/fastrt/src/visibility.rs": "1d1cb24f701ca851e65ba7e7a42d3ad813f321c145d2c69f8c60231a68e15e92",
+    "crates/graphics/src/metadata.rs": "7fcf44869dfb4cf872b5a35c08a56a93158fda30032296f7e709629c837eada5",
+    "crates/graphics/src/resolve.rs": "0c59c9da49d8a0f3548d740b934a80d36f3064b7194d6f506aa46d778ef86959",
+    "crates/graphics/src/settings.rs": "8a21746571be7dcf09cf1c4de11fc9fa21af2c82f85e7be5de32386cff1d10d2",
+    "crates/rcbt-core/src/shaders.rs": "cd7b1173aaffd8810f9cd1d5e63db11682b5389c8fef8f9bfdbbd2eafd7e9422",
+    "crates/rcbt-core/src/shaders/raster_surface_hooks.wgsl": "4cc15432d16cd1478f98735adc7d9e2ab365ac122c21bc13bce6ec83ededc682",
+    "crates/render-wgpu/src/lib.rs": "d200f944a8a621bc42d7dad656269081c08a19240a948691d0c3ad88a55c633b",
+    "crates/render-wgpu/src/mesh.rs": "9f14b7de0e58659b09956787821c5066cfc75e4afacfea3094bea720f49f82f3",
+    "crates/render-wgpu/src/ocean_raster.wgsl": "fea191afe15f83d9185ad920bba094d0630a0d7cd0273d4ef5ac2148f60a7a88",
+    "crates/render-wgpu/src/ray_query.wgsl": "0462e4710166646bc6266ce65af43b3f4be5140327b8f4c7874007d8586a1598",
+    "crates/render-wgpu/src/ray_scene.rs": "bbf314710d7149728c75b5c4f6e169f878064e516cf30390944948c6ccf09ee0",
+    "crates/render-wgpu/src/terrain.rs": "b41eeb03e668563c73886aea3be94e0bf8d0071d2970460535a7e1132f4db07e",
+    "crates/render-wgpu/src/terrain_shadow.rs": "b7ae6bc09f66fd46e74c5e7c77490c54dbc0a9038db636fd715b5d48f8465cf3",
+    "crates/render-wgpu/tests/primary_shadows.rs": "f0839c69c013a073dd6cf3b364157f6a209e9811bc1dc7085fd3560db164debb"
+  },
+  "evidence": {
+    "final-identities.json": {
+      "bytes": 3013,
+      "sha256": "060f1c2a2884987d130e1e273e290d0f9a5b00c550dec636bf61f3f6be57ce93"
+    },
+    "final-gpu-results.json": {
+      "bytes": 285,
+      "sha256": "5a53672695504a4dea6b224070a6c008b02926c50c1795bd6c616aadcec19f9d"
+    },
+    "opt-in-results.json": {
+      "bytes": 429,
+      "sha256": "e11d5354ff7a6ca2d5b5dd1a5a3f4b7f717fa00d5573d3f14bc5e1183e592879"
+    },
+    "opt-in-clippy.log": {
+      "bytes": 8226,
+      "sha256": "f390a52ef3ab1f6b4ad548fb38eb6dbf4159470dcac032080d054f44509ce9a5"
+    },
+    "client-check.log": {
+      "bytes": 1483,
+      "sha256": "92539c9eadacd19e2a25e4fed195e67268512eec4532a73a36cce3803b14c750"
+    },
+    "core-tests.log": {
+      "bytes": 15719,
+      "sha256": "26f7ed628c21f20538e9bb20959d43ae75889dbe4752c48dbe9562eee3a96760"
+    },
+    "settings-tests.log": {
+      "bytes": 6274,
+      "sha256": "de9fba64cd1c790233a0776df3f78d0590ad01f736e5de1c2baff9da591bda82"
+    },
+    "architecture.log": {
+      "bytes": 310,
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    "python-tests.log": {
+      "bytes": 268,
+      "sha256": "c5be308d769af191a95cfcc9ff7fe9b8f44dd2a9ceadfd10e1b0fc863701ef34"
+    },
+    "final-policy-radv.log": {
+      "bytes": 277,
+      "sha256": "797c3c26fd286c60be83eabec2abe6f8f01991963fe51e4f466f1b0dfb51d89d"
+    },
+    "final-policy-software.log": {
+      "bytes": 271,
+      "sha256": "e7e646b604a44ae7116ebb3c38ea159a02118379e406b0c27e97b00a9b4cfcd2"
+    },
+    "final-lighting.log": {
+      "bytes": 779,
+      "sha256": "eb9b789837229f21e388566e15951abf370b718dfcb5e0ca624f868dbed34559"
+    },
+    "optin-primary_shadows.log": {
+      "bytes": 1249,
+      "sha256": "ce784d9e9436fed99ef66868f5c929a47bbd86983ca4f626d2020dca891c869f"
+    },
+    "optin-ray_scene.log": {
+      "bytes": 2969,
+      "sha256": "1d2307fb187db92ac393ea7feee5090d0b6fbcb608418f7ec00c0783289f199b"
+    },
+    "optin-thessa_render_wgpu.log": {
+      "bytes": 7977,
+      "sha256": "47636c6eef433086928014bb9b174888d50d42713384dd501671a3c552503529"
+    },
+    "native-b03.log": {
+      "bytes": 8295,
+      "sha256": "ac6c489468125107d2bd673dae11d577aeb086d6d37af2821e0afc18885be84d"
+    },
+    "native-command.json": {
+      "bytes": 1978,
+      "sha256": "613bd9b523a9486cf54223cd67eb75b0ac03db102fac88a3ee0f151584365398"
+    },
+    "b03-primary-rt.png": {
+      "bytes": 327936,
+      "sha256": "db5a5079fbb7956049994f0d9325323ac7506f7885c8455108bc47c01d8e5279"
+    },
+    "b03-primary-rt.rgba16f": {
+      "bytes": 1843200,
+      "sha256": "6cc992834dd7ea45f3a022b6e7b1b247dea1a9b0cfc8eeb0018aa970ae484a58"
+    },
+    "b03-primary-rt-export/scene.glb": {
+      "bytes": 22012276,
+      "sha256": "fc2e89efeb4b835774a8bf9691184c7a8ab61c4b147ecafd820b0c11ee06f395"
+    },
+    "b03-primary-rt-export/scene.json": {
+      "bytes": 1372,
+      "sha256": "c5eb869929b9ac06eea3f181673d6bb4ac14466036ce5bd7dbb98aa2769a098c"
+    },
+    "b03-primary-rt-trace.toml": {
+      "bytes": 136385,
+      "sha256": "5845f1ca40d0f7b895202ecb9a56ea4e79bfe1b8c565dea7893010dbc792ee52"
+    },
+    "user-reference-target.png": {
+      "bytes": 2081855,
+      "sha256": "0155ed0f0ded5ddf99b59a81b227f673df908272e0d08b68772b3661963dac71"
+    }
+  },
+  "numeric_oracles": {
+    "ground_clear_rgb": [
+      145,
+      22,
+      123
+    ],
+    "ground_red_light_blocked_rgb": [
+      18,
+      22,
+      123
+    ],
+    "water_clear_rgba": [
+      85,
+      12,
+      59,
+      0
+    ],
+    "water_red_light_blocked_rgba": [
+      7,
+      12,
+      59,
+      0
+    ],
+    "rt_miss_matches_raster_bytes": true,
+    "remove_restore_empty_range": true,
+    "independent_blue_star_unchanged": true
+  },
+  "native_b03": {
+    "scope": "pre-default-off-flag diagnostic; replay current source with primary_shadows=true. Same receiver/math, final gated GPU controls separate. Low density, not full reference target.",
+    "extent": [
+      640,
+      360
+    ],
+    "msaa_samples": 4,
+    "measured_frames": 3,
+    "trace_fenced_median_ms": 272.243,
+    "not_game_fps": true,
+    "tlas_instances": 8077,
+    "rt_source_triangles": 384104,
+    "plants_instances": 8013,
+    "primary_receiver_allocated": true,
+    "primary_receiver_active": true,
+    "exported_terrain_triangles": 6134,
+    "old_export_terrain_triangles": 6258,
+    "old_cycles_reuse_valid": false,
+    "timing_scope": "serial queue-fence diagnostics; no timestamp or equal-work performance win"
+  },
+  "reference_scope": "User-provided full-density forest/sunset appearance target, not matched numerical oracle. Low preview cannot establish parity.",
+  "next": [
+    "Static mesh shadow depth cache separate from changing CBT terrain; inspect opaque/cloud cost too.",
+    "Atmospheric direct sunlight through existing model/lookup, physical sunset epoch, full botanical composition.",
+    "SSR/contact frame buffers and confidence plus sparse fallback; not implemented yet.",
+    "Calibrated plume optics/illumination/history and water physics remain open."
+  ],
+  "blind_votes": 0,
+  "parity_accepted": false,
+  "performance_win_claimed": false,
+  "main_merge": false
+}

@@ -321,6 +321,10 @@ impl MeshRenderer {
         )
     }
 
+    pub(crate) fn primary_shadow(&self, camera: [f64; 3]) -> Option<&wgpu::BindGroup> {
+        self.rt.as_ref()?.primary_shadow(camera)
+    }
+
     pub fn rt_reason(&self) -> Option<&str> {
         self.rt_reason.as_deref()
     }

@@ -1,11 +1,12 @@
-//! Sparse ray-tracing classification for FastRT (Stage 1, backend-neutral).
+//! Sparse geometry classification and visibility-query policy for FastRT.
 //!
 //! The raster scene and the RT scene are not required to match
 //! (`docs/39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` §17): every candidate keeps
 //! its raster representation, and this crate decides which RT
 //! representation — if any — an accelerator should build for it. There is
 //! no accelerator here (no BLAS/TLAS, frame allocator or dispatch); this is
-//! the pure policy layer. `render-wgpu` consumes full/conditional primitive
+//! the pure policy layer. [`visibility`] additionally supplies a scalar
+//! sample-level gate shared with portable shaders. `render-wgpu` consumes full/conditional primitive
 //! classification before its existing hardware RT feasibility checks.
 //!
 //! Contract:
@@ -25,6 +26,8 @@
 //! `u64::MAX` costs cannot overflow the policy.
 
 #![forbid(unsafe_code)]
+
+pub mod visibility;
 
 /// Axis-aligned bounds in metres. Invariant: every component is finite and
 /// `min <= max` per axis. Degenerate (zero-volume) bounds are valid — a flat

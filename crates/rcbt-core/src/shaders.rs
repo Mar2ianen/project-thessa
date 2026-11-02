@@ -734,7 +734,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
     let sun_present=any(sunlight[0]>vec3(0.0));
     let canopy_sky=select(1.0,mix(0.52,1.0,visibility[0]),sun_present);
-    let ground_bounce=select(vec3(0.0),sunlight[0]*(0.16*albedo)*(1.0-visibility[0]),sun_present);
+    let ground_bounce=select(vec3(0.0),sunlight[0]*(0.24*albedo)*(1.0-visibility[0]),sun_present);
     let understory_ambient=select(surface_ambient,surface_ambient*canopy_sky+ground_bounce,any(lighting.ambient_lux.rgb>vec3(0.0)));
     if (TERRAIN_DEBUG_VIEW == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
     if (TERRAIN_DEBUG_VIEW == 14u) { return vec4(understory_ambient * view.exposure / OCEAN_PI, 1.0); }

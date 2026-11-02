@@ -110,7 +110,7 @@ pub(super) fn append(
     }
     let high = settings.surface_quality == thessa_graphics::Quality::High;
     let moss_limit = if high { 192 } else { 64 };
-    let pool_limit = if high { 24 } else { 8 };
+    let pool_limit = if high { 96 } else { 8 };
     let anchor = DVec3::from(window.direction(0.5, 0.5)) * field.params.radius_m;
     let mut sites: Vec<_> = prepared
         .descriptors
@@ -232,28 +232,28 @@ pub(super) fn append(
         let material = prepared.asset.materials.len();
         let f0 = ((1.333_f32 - 1.0) / (1.333 + 1.0)).powi(2);
         prepared.asset.materials.push(Material {
-            base_color: [0.012, 0.010, 0.008, 1.0],
+            base_color: [0.008, 0.006, 0.004, 1.0],
             metallic: 0.0,
-            roughness: 0.020,
+            roughness: 0.008,
             dielectric_f0: f0,
             ..Default::default()
         });
         let mut water = blank(material);
         let mut centers: Vec<DVec3> = vec![];
         let side = 17;
-        let radius = 1.35;
+        let radius = 1.65;
         let spacing = radius * 2.0 / (side - 1) as f64;
         let mut pool_sites = sites.clone();
         pool_sites.sort_by_cached_key(|item| {
             let distance2 =
                 (DVec3::from(item.direction) * field.params.radius_m - anchor).length_squared();
             let rank = rng::hash01(field.params.seed, 7291, item.id.0 as i64, 0)
-                * (1.0 + distance2 / half_span.powi(2));
+                * (0.20 + distance2 / (half_span * 0.5).powi(2));
             (rank.to_bits(), item.id)
         });
         for d in pool_sites
             .iter()
-            .filter(|d| rng::hash01(field.params.seed, 7200, d.id.0 as i64, 0) < 0.30)
+            .filter(|d| rng::hash01(field.params.seed, 7200, d.id.0 as i64, 0) < 0.55)
             .take(256)
         {
             if stats.ground_puddles >= pool_limit {
@@ -263,12 +263,12 @@ pub(super) fn append(
             let center = up * field.params.radius_m;
             if centers
                 .iter()
-                .any(|p| p.distance_squared(center) < (radius * 1.5_f64).powi(2))
+                .any(|p| p.distance_squared(center) < (radius * 1.15_f64).powi(2))
             {
                 continue;
             }
             let cover = lod::ground_cover_at(field, d.direction, 0.012);
-            if cover.wetness < 0.25 {
+            if cover.wetness < 0.18 {
                 continue;
             }
             let (east, north, _) = enu_basis(d.direction);
@@ -293,8 +293,8 @@ pub(super) fn append(
                 &heights,
                 side,
                 spacing,
-                (cover.wetness * 1.8).min(0.95),
-                0.045,
+                (cover.wetness * 2.2).min(0.98),
+                0.055,
             ) else {
                 continue;
             };
@@ -413,7 +413,7 @@ mod tests {
         );
         assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 192);
         assert!(stats.ground_litter_fragments > 0 && stats.ground_litter_fragments <= 2048);
-        assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 24);
+        assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 96);
         assert!(stats.ground_water_samples <= 256 * 17 * 17);
         assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 37);
         let local = &prepared.asset.primitives[prepared.local_ground_start.unwrap()..];

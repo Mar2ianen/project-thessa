@@ -135,7 +135,7 @@ pub(super) fn append(
     material.normal_texture = remap(material.normal_texture);
     material.occlusion_texture = remap(material.occlusion_texture);
     material.alpha_mode = AlphaMode::Mask;
-    material.diffuse_transmission = 0.18;
+    material.diffuse_transmission = 0.28;
     material.base_color = match form {
         1 => [0.85, 1.0, 0.9, 1.0],
         2 => [1.0, 0.94, 0.72, 1.0],

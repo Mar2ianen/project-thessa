@@ -732,9 +732,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         shadow = 1.0 - lighting.shadow_params.y * smoothstep(0.05, 0.6, cloud_alpha);
     }
     let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
+    let sun_present=any(sunlight[0]>vec3(0.0));
+    let canopy_sky=select(1.0,mix(0.52,1.0,visibility[0]),sun_present);
+    let ground_bounce=select(vec3(0.0),sunlight[0]*(0.10*albedo)*(1.0-visibility[0]),sun_present);
+    let understory_ambient=select(surface_ambient,surface_ambient*canopy_sky+ground_bounce,any(lighting.ambient_lux.rgb>vec3(0.0)));
     if (TERRAIN_DEBUG_VIEW == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
-    if (TERRAIN_DEBUG_VIEW == 14u) { return vec4(surface_ambient * view.exposure / OCEAN_PI, 1.0); }
-    var illuminance = surface_ambient + direct * shadow;
+    if (TERRAIN_DEBUG_VIEW == 14u) { return vec4(understory_ambient * view.exposure / OCEAN_PI, 1.0); }
+    var illuminance = understory_ambient + direct * shadow;
     let diffuse = albedo * illuminance / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
     // Land roughness is a material property, not only an ocean classifier.
@@ -754,7 +758,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         let environment = cbt_land_environment(input.render_position,shaded_normal,eye,roughness,lighting.ambient_lux.rgb);
         land_reflection += environment.rgb;
         if (TERRAIN_DEBUG_VIEW == 15u) { return vec4(land_reflection * view.exposure, 1.0); }
-        var land_ambient = surface_ambient;
+        var land_ambient = understory_ambient;
         if (any(land_ambient > vec3(0.0))) {
             land_ambient *= cbt_land_ambient_transmission(roughness);
         }

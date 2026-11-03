@@ -73,6 +73,13 @@ Near-soil investigation also confirms coarse material residency beyond the
 fine-page footprint; longer readiness restores much of that coverage but does
 not repair the closest material. Scheduler/refinement candidates were rejected,
 not shipped as a soil fix; see doc 119's continuation.
+[Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) now raises the bounded
+near-eye cover budget to 3,400 moss and 4,800 grass sites on High, gives moss
+colonies a rounded multi-ring profile, and raises wet porous-soil roughness to
+0.88 while reserving mirror-like roughness for explicit basin water. A matched
+FHD B03 frame is denser at ground level, but visible bare/muddy substrate and
+the remaining material/residency issue are still open; the capture does not
+establish visual parity or a performance win.
 
 ## Current native integration checkpoint
 
@@ -954,3 +961,9 @@ residuals in the existing pages. Actual FHD depth/topology/albedo/roughness/wate
 controls remain identical while close optical normals regain missing detail.
 No extra GPU pass/storage is introduced; source-cache CPU cost and unresolved
 residency/reference acceptance are explicit.
+
+[Terrain material-page capacity](125_TERRAIN_MATERIAL_PAGE_CAPACITY.md)
+resolves 128/256/512 layers for Low/Medium/High ground-detail quality, capped
+by the adapter limit. Unknown/legacy hosts keep 256. Native High retained 357
+GPU pages versus 256 in the preceding fixed-view capture; page priority,
+complete residency, and close-ground visual acceptance remain open.

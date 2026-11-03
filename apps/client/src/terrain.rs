@@ -351,6 +351,7 @@ fn resolve_terrain_capabilities(
     );
     let caps = Capabilities {
         ambient_visibility_supported: Some(false),
+        terrain_material_array_layers: None, // Legacy host retains its existing capacity.
         shadow_raster_subpixel_bits: None, // Legacy shadow pipeline does not consume sample culling.
         raster_msaa4_supported: None,
         material_compact_supported: Some(true), // Legacy CPU predecode residency.

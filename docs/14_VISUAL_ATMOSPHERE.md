@@ -870,3 +870,52 @@ residuals in the existing pages. Actual FHD depth/topology/albedo/roughness/wate
 controls remain identical while close optical normals regain missing detail.
 No extra GPU pass/storage is introduced; source-cache CPU cost and unresolved
 residency/reference acceptance are explicit.
+
+[Terrain material-page capacity](125_TERRAIN_MATERIAL_PAGE_CAPACITY.md) resolves
+128/256/512 layers by Low/Medium/High ground-detail quality, capped by the
+adapter. Unknown and legacy hosts keep 256. The 512-layer FHD capture retained
+357 GPU pages versus 256 before; this does not establish full material residency
+or close-ground visual acceptance.
+
+## Near-ground grass, moss, and wet soil
+
+[Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) records the current B03
+forest-floor slice. It follows AMD's curved-blade construction idea: grass is
+made from bent quadratic centerlines with tapered silhouettes, then collected
+into deterministic ground patches. It does not port AMD's mesh-shader path.
+Moss uses compact lobed bases with three vertical profile rings and short
+curved shoots, so the patches read as small cushions instead of broad flat
+plates. Ground-position samples use the same scanned/relief surface as nearby
+litter and pebbles.
+
+The High near-eye budget admits at most 3,400 moss colonies, 4,800 grass tufts,
+and 24 small basin pools; Medium caps these at 1,200, 1,600, and 4. Low or
+disabled ground detail emits none of this geometry. Variants are world-seeded
+and share the existing opaque and shadow mesh path. They do not add a pass,
+texture, wind simulation, or hydrology.
+
+Wet soil roughness now tends toward 0.88 with fine mineral variation, following
+the PBR interpretation used by Unreal: values near one broaden and diffuse
+reflections. Only explicit filled basins use near-mirror roughness (0.008),
+keeping isolated water glints separate from the porous substrate. This improves
+the broad wet-floor response; it does not fix all visible ground banding or
+residency blur.
+
+AMD's [procedural grass article](https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/)
+describes Bézier-shaped blades, patch construction, and distance-dependent
+geometry reduction. Unreal's [Material Inputs reference](https://dev.epicgames.com/documentation/en-us/unreal-engine/material-inputs-in-unreal-engine)
+defines roughness from mirror-like at zero to matte at one and discusses
+spatially mapped roughness. Thessa reuses these shape/material principles while
+retaining its own CPU preparation, terrain sampling, and graphics-quality
+resolver.
+
+The matched 1920×1080 B03 sunset capture is at
+`outputs/ground-detail-repair-2026-11-03/ground-cover-dense-fhd-20s/views/01-none.png`.
+With the same fixed camera and 20-second prestream, this High frame reports
+3,400 moss colonies, 4,295 grass tufts, and 24 pools. Surface prototype
+preparation took 4.57 s; mesh payload was 43.14 MB against the existing 48 MB
+admission budget, with 16.34 MB of material-page textures reported separately.
+The increased budget adds visible low cover but approaches the mesh payload
+ceiling. This single hardware capture is not a frame-rate study. The closer
+floor remains patchy and exposes muddy scan texture; no reference-parity claim
+is made.

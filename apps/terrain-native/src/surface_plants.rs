@@ -110,6 +110,9 @@ pub struct Diagnostics {
     pub ground_window: Option<TileKey>,
     pub ground_pebbles: usize,
     pub ground_moss_clumps: usize,
+    pub ground_grass_tufts: usize,
+    pub ground_moss_meshes: usize,
+    pub ground_grass_meshes: usize,
     pub ground_litter_fragments: usize,
     pub ground_puddles: usize,
     pub ground_water_samples: usize,
@@ -136,6 +139,9 @@ impl Diagnostics {
         [
             ("native_surface_ground_water_basins", self.ground_water_basins.to_string()),
             ("native_surface_ground_moss_clumps", self.ground_moss_clumps.to_string()),
+            ("native_surface_ground_grass_tufts", self.ground_grass_tufts.to_string()),
+            ("native_surface_ground_moss_meshes", self.ground_moss_meshes.to_string()),
+            ("native_surface_ground_grass_meshes", self.ground_grass_meshes.to_string()),
             ("native_surface_ground_litter_fragments", self.ground_litter_fragments.to_string()),
             ("native_surface_ground_puddles", self.ground_puddles.to_string()),
             ("native_surface_ground_water_samples", self.ground_water_samples.to_string()),
@@ -174,8 +180,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 B02 filtered fronds / full-reduced woody scaffolds / disjoint L24 ground-clump IDs with world-addressed 8 m colony occupancy; canonical 32 m descriptors / optional shared optical soil pose; no collision; shared opaque/shadow/environment path"
-            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; pinned CC0 B02 filtered fronds / full-reduced woody scaffolds; canonical 32 m descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
+                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 8 m colony occupancy; patchy scanned-soil moss domes and curved grass tufts: Medium <=1200/1600, High <=3400/4800; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/shadow/environment path"
+            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }

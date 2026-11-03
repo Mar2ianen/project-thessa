@@ -189,6 +189,8 @@ pub struct Capabilities {
     pub terrain_conforming_supported: Option<bool>,
     /// Adapter supports anisotropic texture filtering.
     pub terrain_anisotropy_supported: Option<bool>,
+    /// Raw material host's available array layers. Unknown retains legacy 256.
+    pub terrain_material_array_layers: Option<u32>,
     /// Enabled mesh feature and sufficient terrain shader limits on the device.
     pub terrain_mesh_supported: Option<bool>,
     /// `Some(true)` when the adapter exposes ray-query features.
@@ -211,6 +213,7 @@ impl Capabilities {
             material_compact_supported: None,
             terrain_conforming_supported: None,
             terrain_anisotropy_supported: None,
+            terrain_material_array_layers: None,
             ray_query_supported: None,
             is_discrete_gpu: None,
             terrain_mesh_supported: None,
@@ -320,6 +323,8 @@ pub struct ResolvedGraphicsSettings {
     pub terrain_ground_puddles: bool,
     #[serde(default = "default_terrain_anisotropy")]
     pub terrain_material_anisotropy: u16,
+    #[serde(default = "default_terrain_material_page_layers")]
+    pub terrain_material_page_layers: u32,
     pub specular_reflections: bool,
     #[serde(default)]
     pub ambient_visibility_samples: u32,
@@ -435,6 +440,10 @@ impl Default for ResolvedGraphicsSettings {
     }
 }
 
+fn default_terrain_material_page_layers() -> u32 {
+    256
+}
+
 fn default_terrain_anisotropy() -> u16 {
     1
 }
@@ -442,6 +451,49 @@ fn default_terrain_anisotropy() -> u16 {
 #[cfg(test)]
 mod terrain_topology_tests {
     use super::*;
+    #[test]
+    fn material_capacity_tracks_quality_host_limits_and_disabled_detail() {
+        let mut request = RequestedGraphics::default();
+        for enabled in [false, true] {
+            request.renderer.terrain_ground_detail = enabled;
+            for (quality, wanted) in [
+                (Quality::Low, 128),
+                (Quality::Medium, 256),
+                (Quality::High, 512),
+            ] {
+                request.renderer.surface_quality = quality;
+                for limit in [None, Some(128), Some(256), Some(512), Some(2048)] {
+                    let resolved = ResolvedGraphicsSettings::from_requested(
+                        &request,
+                        &Capabilities {
+                            terrain_material_array_layers: limit,
+                            ..Capabilities::unknown()
+                        },
+                    );
+                    let preferred = if enabled { wanted } else { 256 };
+                    let expected = limit.map_or(256, |v| preferred.min(v));
+                    assert_eq!(resolved.terrain_material_page_layers, expected);
+                    assert_eq!(
+                        resolved.as_meta_map()["terrain_material_page_layers"],
+                        expected.to_string()
+                    );
+                }
+            }
+        }
+        let old = toml::to_string(&ResolvedGraphicsSettings::default()).unwrap();
+        let old = old
+            .lines()
+            .filter(|line| !line.starts_with("terrain_material_page_layers ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            toml::from_str::<ResolvedGraphicsSettings>(&old)
+                .unwrap()
+                .terrain_material_page_layers,
+            256
+        );
+    }
+
     #[test]
     fn terrain_anisotropy_tracks_resolved_detail_quality_and_capabilities() {
         let mut request = RequestedGraphics::default();
@@ -839,6 +891,21 @@ impl ResolvedGraphicsSettings {
             &mut notes,
         );
         let terrain_ground_detail = requested.renderer.terrain_ground_detail;
+        let preferred_material_layers = if terrain_ground_detail {
+            match requested.renderer.surface_quality {
+                Quality::Low => 128,
+                Quality::Medium => 256,
+                Quality::High => 512,
+            }
+        } else {
+            256
+        };
+        let terrain_material_page_layers = caps
+            .terrain_material_array_layers
+            .map_or(256, |limit| preferred_material_layers.min(limit.max(1)));
+        if terrain_material_page_layers < preferred_material_layers {
+            notes.push(format!("terrain material page capacity unavailable/limited; using {terrain_material_page_layers} layers instead of {preferred_material_layers}"));
+        }
         let terrain_material_anisotropy =
             if terrain_ground_detail && caps.terrain_anisotropy_supported == Some(true) {
                 match requested.renderer.surface_quality {
@@ -988,6 +1055,7 @@ impl ResolvedGraphicsSettings {
             terrain_ground_puddles: terrain_ground_detail
                 && requested.renderer.terrain_ground_puddles,
             terrain_material_anisotropy,
+            terrain_material_page_layers,
             specular_reflections: requested.renderer.specular_reflections,
             ambient_visibility_samples: if requested.renderer.ambient_visibility
                 && hdr
@@ -1333,6 +1401,10 @@ impl ResolvedGraphicsSettings {
             self.terrain_material_max_level().to_string(),
         );
         map.insert(
+            "terrain_material_page_layers".into(),
+            self.terrain_material_page_layers.to_string(),
+        );
+        map.insert(
             "terrain_material_anisotropy".into(),
             self.terrain_material_anisotropy.to_string(),
         );
@@ -1621,6 +1693,7 @@ mod tests {
                 material_compact_supported: supported,
                 terrain_conforming_supported: supported,
                 terrain_anisotropy_supported: supported,
+                terrain_material_array_layers: None,
                 terrain_mesh_supported: supported,
                 ray_query_supported: supported,
                 is_discrete_gpu: supported,

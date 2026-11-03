@@ -980,3 +980,16 @@ residuals in the existing pages. Actual FHD depth/topology/albedo/roughness/wate
 controls remain identical while close optical normals regain missing detail.
 No extra GPU pass/storage is introduced; source-cache CPU cost and unresolved
 residency/reference acceptance are explicit.
+
+[Terrain material-page capacity](docs/125_TERRAIN_MATERIAL_PAGE_CAPACITY.md)
+now resolves 128/256/512 page layers for Low/Medium/High ground-detail quality,
+capped by the reported adapter limit. Unknown and legacy hosts retain 256.
+Native High FHD evidence raises resident material pages from 256 to 357; this
+does not claim complete residency or visual parity.
+
+[Patchy ground cover and wet-soil response](docs/126_PATCHY_GROUND_COVER_AND_WET_SOIL.md)
+adds bounded curved grass tufts and rounded moss colonies to the existing near-
+ground mesh path, raises wet porous-soil roughness while keeping smooth BRDFs on
+separate basin water, and caps High at 3,400 moss / 4,800 grass sites. A matched
+FHD B03 capture shows increased cover; bare substrate and full reference parity
+remain open.

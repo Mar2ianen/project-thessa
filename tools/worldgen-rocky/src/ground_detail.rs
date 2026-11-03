@@ -444,11 +444,11 @@ fn cover_and_moss(
         value * band_weight(wavelength, texel_m)
     };
     let moss_field = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
-    let moss = smooth(0.28, 0.58, damp)
-        * (0.45 + 0.55 * smooth(0.02, 0.20, canopy))
-        * smooth(-0.12, 0.18, moss_field)
+    let moss = smooth(0.20, 0.50, damp)
+        * (0.58 + 0.42 * smooth(0.02, 0.20, canopy))
+        * smooth(-0.18, 0.14, moss_field)
         * band_weight(0.85, texel_m)
-        * 0.85;
+        * 0.92;
     let texture = if moss > 0.0 {
         sample_moss(q, seed, texel_m)
     } else {
@@ -520,7 +520,11 @@ pub(crate) fn forest_floor(
     });
     let dry = f64::from(ground.roughness);
     // Authored porous-soil prior; moisture alone does not supply a smooth water film.
-    let wet_roughness = dry * (1.0 - wet) + (0.48 * (1.0 - fine_mineral * 0.20)) * wet;
+    // Wet porous soil stays rough; only explicit basin geometry receives a
+    // water-like smooth BRDF. Wetness darkens and broadens highlights without
+    // turning the whole substrate into a polished film.
+    let wet_soil_roughness = 0.88 * (1.0 - fine_mineral * 0.08);
+    let wet_roughness = dry * (1.0 - wet) + wet_soil_roughness * wet;
     let moss_roughness = wet_roughness * (1.0 - moss) + f64::from(moss_texture.roughness) * moss;
     GroundSample {
         albedo_linear,
@@ -749,7 +753,10 @@ mod tests {
         }
         let dry = forest_floor(mean, q, 77, 0.012, 0.0, 0.0);
         let wet = forest_floor(mean, q, 77, 0.012, 1.0, 0.0);
-        assert!(wet.roughness < dry.roughness);
+        assert!(
+            wet.roughness > 0.80,
+            "porous wet soil remains matte; only explicit pools are smooth"
+        );
         assert!(
             wet.albedo_linear
                 .into_iter()

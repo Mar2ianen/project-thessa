@@ -97,9 +97,18 @@ pub struct Backend {
 /// Device limits for one bring-up. Byte-identical to `Limits::default()`
 /// unless ray tracing was negotiated, in which case the acceleration-structure
 /// budgets and bounded material/receiver bindings come from the adapter.
+/// High ground-detail quality may also negotiate more raw material layers.
 /// Negotiating capacity allocates no scene resources.
-fn limits_for(adapter: &wgpu::Adapter, features: wgpu::Features) -> wgpu::Limits {
-    limits_for_caps(&adapter.limits(), features)
+fn limits_for(
+    adapter: &wgpu::Adapter,
+    features: wgpu::Features,
+    material_layers: u32,
+) -> wgpu::Limits {
+    let mut limits = limits_for_caps(&adapter.limits(), features);
+    limits.max_texture_array_layers = limits
+        .max_texture_array_layers
+        .max(material_layers.min(adapter.limits().max_texture_array_layers));
+    limits
 }
 
 fn limits_for_caps(caps: &wgpu::Limits, features: wgpu::Features) -> wgpu::Limits {
@@ -195,6 +204,7 @@ impl Backend {
     ) -> thessa_graphics::ResolvedGraphicsSettings {
         let mut caps = self.caps;
         caps.material_compact_supported = Some(false);
+        caps.terrain_material_array_layers = Some(self.device.limits().max_texture_array_layers);
         caps.ray_query_supported = Some(
             self.device
                 .features()
@@ -253,10 +263,17 @@ impl Backend {
                 experimental = thessa_wgpu_exp::experimental_consent();
             }
         }
+        let material_layers = graphics.map_or(256, |request| {
+            thessa_graphics::ResolvedGraphicsSettings::from_requested(
+                request,
+                &probe_capabilities(&adapter),
+            )
+            .terrain_material_page_layers
+        });
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("thessa-render-backend"),
             required_features: features,
-            required_limits: limits_for(&adapter, features),
+            required_limits: limits_for(&adapter, features, material_layers),
             experimental_features: experimental,
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
@@ -465,6 +482,7 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         && limits.max_mesh_invocations_per_dimension >= MESH_WORKGROUP_SIZE
         && limits.max_storage_buffers_per_shader_stage >= MESH_STORAGE_BUFFERS;
     Capabilities {
+        terrain_material_array_layers: Some(adapter.limits().max_texture_array_layers),
         // Vulkan guarantees centered 1x samples and at least four subpixel bits.
         // Other APIs retain the ordinary caster path until their contract is proved.
         shadow_raster_subpixel_bits: (adapter.get_info().backend == wgpu::Backend::Vulkan)

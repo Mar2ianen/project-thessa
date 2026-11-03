@@ -1997,7 +1997,7 @@ impl Scene {
             TerrainCapacity {
                 patches: 1024,
                 height_grid_size: 33,
-                material_layers: backend.device.limits().max_texture_array_layers.min(256),
+                material_layers: resolved.terrain_material_page_layers,
             },
             Some(&resolved),
             Some(sea),

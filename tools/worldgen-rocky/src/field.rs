@@ -128,6 +128,7 @@ pub struct PlanetField {
     /// Offline erosion delta only; fine spectral relief remains analytic.
     frozen_erosion: Option<FrozenErosion>,
     civilization: Option<crate::civilization::CivilizationRecipe>,
+    surface_sculpt: Option<thessa_rcbt_core::surface_sculpt::SurfaceSculpt>,
 }
 
 struct FrozenErosion {
@@ -214,6 +215,32 @@ fn source_signatures_match_exact(baked: &serde_json::Value, live: &serde_json::V
 }
 
 impl PlanetField {
+    /// Attach a frozen authored height layer before sharing the field with jobs.
+    /// Live replacement requires a new stream: resident pages are snapshots.
+    pub fn with_surface_sculpt(
+        mut self,
+        layer: thessa_rcbt_core::surface_sculpt::SurfaceSculpt,
+    ) -> Result<Self, String> {
+        if layer.radius_m() != self.params.radius_m {
+            return Err("surface sculpt belongs to a different planet radius".into());
+        }
+        if self.surface_sculpt.is_some() {
+            return Err("surface sculpt is already attached".into());
+        }
+        if layer.allocated_pages() > 0 {
+            self.surface_sculpt = Some(layer);
+        }
+        Ok(self)
+    }
+
+    fn sculpted_height_m(&self, dir: [f64; 3], height: f64) -> f64 {
+        self.surface_sculpt.as_ref().map_or(height, |layer| {
+            height
+                + layer
+                    .sample(dir)
+                    .expect("canonical field direction must be finite and unit")
+        })
+    }
     pub fn has_frozen_erosion(&self) -> bool {
         self.frozen_erosion.is_some()
     }
@@ -221,6 +248,11 @@ impl PlanetField {
     /// Stable source identity. A frozen erosion bake may not cross recipes,
     /// seeds, body geometry, landmarks or calibrated datum/climate contracts.
     pub fn source_signature(&self) -> Result<String, String> {
+        if self.surface_sculpt.is_some() {
+            return Err(
+                "authored surface sculpt must remain separate from geological erosion bakes".into(),
+            );
+        }
         serde_json::to_string(&serde_json::json!({
             "contract": "thessa-analytic-source-v1",
             "params": self.params, "features": self.features,
@@ -380,6 +412,7 @@ impl PlanetField {
             temperature_offset_k: 0.0,
             frozen_erosion: None,
             civilization: None,
+            surface_sculpt: None,
         };
         let (context, offset) = build_context(&field);
         field.context = context;
@@ -430,8 +463,9 @@ impl PlanetField {
         let knobs: TerrainKnobs = self.params.knobs.into();
         let (meso_h, micro_h) = self.detail_parts_m(dir, min_wl, knobs, macro_h);
         let height = prefix_m + meso_h + micro_h - self.sea_offset_m;
+        let height = self.regional_height(dir, min_wl, height, macro_h);
         let height = self
-            .regional_height(dir, min_wl, height, macro_h)
+            .sculpted_height_m(dir, height)
             .clamp(self.params.height_min_m, self.params.height_max_m);
         self.finish_sample(dir, height, macro_h, meso_h + micro_h, 0.0)
     }
@@ -721,6 +755,7 @@ impl PlanetField {
         let (meso_h, micro_h) = self.detail_parts_m(dir, min_wl, knobs, macro_h);
         let height = prefix_m + meso_h + micro_h - self.sea_offset_m;
         let height = self.regional_height(dir, min_wl, height, macro_h);
+        let height = self.sculpted_height_m(dir, height);
         height.clamp(self.params.height_min_m, self.params.height_max_m)
     }
 
@@ -762,6 +797,7 @@ impl PlanetField {
         }
         if regional {
             height = self.regional_height(dir, min_wl, height, macro_h);
+            height = self.sculpted_height_m(dir, height);
         }
         height = height.clamp(self.params.height_min_m, self.params.height_max_m);
         (height, macro_h - self.sea_offset_m, meso_h + micro_h)
@@ -2341,5 +2377,98 @@ mod obstacle_tests {
             "relief {}",
             report.max_height_m
         );
+    }
+}
+
+#[cfg(test)]
+mod surface_sculpt_tests {
+    use super::*;
+    use thessa_rcbt_core::surface_sculpt::SurfaceSculpt;
+
+    fn field() -> PlanetField {
+        let recipe: crate::spec_recipe::SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn authored_sculpt_reaches_contact_prefix_and_height_pages() {
+        let original = field();
+        let radius = original.params.radius_m;
+        let dir = (0..2048)
+            .map(|i| {
+                crate::sphere::dir_from_latlon(
+                    -60.0 + (i % 64) as f64 * 2.0,
+                    -180.0 + (i / 64) as f64 * 11.0,
+                )
+            })
+            .find(|&d| (10.0..2000.0).contains(&original.height_m(d, 32.0)))
+            .unwrap();
+        let h = original.height_m(dir, 32.0);
+        let mut layer = SurfaceSculpt::new(radius, 0.025, 64).unwrap();
+        let touched = layer.apply_dab(dir, 0.4, -0.04).unwrap();
+        let delta = layer.sample(dir).unwrap();
+        assert!((-0.04..-0.035).contains(&delta));
+        let sculpted = original.with_surface_sculpt(layer).unwrap();
+        assert!(
+            sculpted.source_signature().is_err(),
+            "do not bake authored edits into geological erosion identity"
+        );
+        assert!((sculpted.height_m(dir, 32.0) - h - delta).abs() < 1e-9);
+        let (prefix, macro_h) = sculpted.height_prefix_m(dir);
+        assert!(
+            (sculpted.height_from_prefix(dir, prefix, macro_h, 32.0)
+                - sculpted.height_m(dir, 32.0))
+            .abs()
+                < 1e-8
+        );
+        assert_eq!(
+            sculpted.sample_surface(dir, 32.0).height_m,
+            sculpted.height_m(dir, 32.0)
+        );
+        assert!(
+            (sculpted
+                .sample_surface_from_prefix(dir, prefix, macro_h, 32.0)
+                .height_m
+                - sculpted.height_m(dir, 32.0))
+            .abs()
+                < 1e-8
+        );
+        // Existing GPU page builder consumes the same authored field without
+        // any renderer-specific sculpt sampler or a second displacement pass.
+        let key = touched[0];
+        let tile = crate::lod::TileKey {
+            face: key.face,
+            level: key.level,
+            x: key.x,
+            y: key.y,
+        };
+        let page = crate::lod::bake_height_page(&sculpted, tile, 33, 0.001).unwrap();
+        let mut worst: f64 = 0.0;
+        for y in 0..33 {
+            for x in 0..33 {
+                let u = x as f64 / 32.0;
+                let v = y as f64 / 32.0;
+                let expected = sculpted.height_m(tile.direction(u, v), 32.0).max(0.0);
+                worst = worst.max((f64::from(page.sample(u as f32, v as f32)) - expected).abs());
+            }
+        }
+        assert!(
+            worst <= 0.001,
+            "authored height lost on page publication: {worst}"
+        );
+    }
+
+    #[test]
+    fn empty_layer_retains_canonical_heights_and_rejects_other_body() {
+        let original = field();
+        let dir = crate::sphere::dir_from_latlon(25.0, 34.0);
+        let h = original.height_m(dir, 32.0);
+        let radius = original.params.radius_m;
+        let empty = SurfaceSculpt::new(radius, 0.025, 64).unwrap();
+        let sculpted = original.with_surface_sculpt(empty).unwrap();
+        assert_eq!(sculpted.height_m(dir, 32.0).to_bits(), h.to_bits());
+        let other = SurfaceSculpt::new(radius * 2.0, 0.025, 64).unwrap();
+        assert!(sculpted.with_surface_sculpt(other).is_err());
     }
 }

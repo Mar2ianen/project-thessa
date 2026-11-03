@@ -1,0 +1,94 @@
+{
+  "baseline": "2a0cf45",
+  "source_reference": {
+    "repository": "https://github.com/Game-Crafters-Guild/OpenEngine",
+    "revision": "bdf5c2710fe37c1c5ddbac7787477daa87524af3",
+    "license": "MIT",
+    "adaptation": "independent Rust sparse-page and angular-stamp mechanisms; no source/kernel copy",
+    "files": [
+      {
+        "path": "Engine/Modules/CBTTerrain/Include/CBTTerrain/SphereSculptLayer.h",
+        "sha256": "e676d44d524da0ed414d21037a9bf6fd3286c7ef33f9bd781c061bbf77ad65f9"
+      },
+      {
+        "path": "Engine/Modules/CBTTerrain/Include/CBTTerrain/SphereSculptPaging.h",
+        "sha256": "9b0ba85f7341f656f2c84bb125b3acc4fb31313296625de5892652c55304006b"
+      }
+    ]
+  },
+  "checks": {
+    "core": "82 passed; subsequent manual workload is ignored by normal run",
+    "worldgen": "296 passed, 1 ignored; focused sculpt tests rerun after erosion-identity guard",
+    "gpu": "1 passed; baseline/edited/restored",
+    "native": "cargo check passed",
+    "clippy": "core/worldgen lib+tests and renderer sculpt test passed",
+    "architecture": "passed"
+  },
+  "gpu": {
+    "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "extent": [
+      65,
+      65
+    ],
+    "debug_view": "Normal",
+    "delta_m": -0.04,
+    "radius_m": 0.3,
+    "source_pages": 16,
+    "source_sample_bytes": 139392,
+    "pixels_changed_over_8_codes": 950,
+    "restored_frame_identical": true,
+    "binary_sha256": "eb4d2f4fe2d9cddc6834e5618d13d9daf565bc1871253b32f7a219e42bc5b6fd"
+  },
+  "cpu_workload": {
+    "profile": "unoptimized test",
+    "dabs": 128,
+    "track_extent_m": 10.16,
+    "samples": 100000,
+    "write_ms": 55.345,
+    "sample_ms": 30.021,
+    "source_pages": 30,
+    "source_sample_bytes": 261360,
+    "whole_renderer_timing": false
+  },
+  "limits": [
+    "immutable pre-stream snapshot only",
+    "no disk persistence",
+    "no contact/soil physics",
+    "no live dirty page updates",
+    "no new B03 visual parity acceptance"
+  ],
+  "artifacts": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/core-tests.log",
+      "sha256": "057aa2bc29c7392363418c71f1ad6e7686c0fa98b40fa74ab99995642448f96b"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/cpu-workload.log",
+      "sha256": "13009dacb3491aeccf483fc741dceeaad27a334372e7b7c3f351da300f0b16aa"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/gpu-test.log",
+      "sha256": "ef7ca65b6235ca118b3de1935637cb882910b3bcc7823c42844d04894802e6a4"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/sculpt-base.png",
+      "sha256": "cce55c42af6a415c35cdeac8a4299d81450df943f0aa56c786721889428c22fa"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/sculpt-restored.png",
+      "sha256": "cce55c42af6a415c35cdeac8a4299d81450df943f0aa56c786721889428c22fa"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/sculpt-sculpt.png",
+      "sha256": "b995b635b92c7e116d581817977b10bfa6c164f9a5ce23231367095b8fa34050"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/worldgen-tests.log",
+      "sha256": "ee559d036824d87353c9333596d54abc54cd9bd6aba5d67a437e3fb274ffd55a"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt/clippy.log",
+      "sha256": "fdb061806cbd9ebdc788af563d2d828b6b5bd5798ed99b71bb95ef83278b3cb8"
+    }
+  ]
+}

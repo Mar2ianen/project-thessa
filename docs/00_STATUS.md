@@ -94,6 +94,12 @@ independent actual-raster test fails on the old shader and passes after the
 correction; full-height and no-base fallback checks also pass. This does not
 close the near-soil visual or moving-camera acceptance gap.
 
+[Sparse planetary surface sculpt](129_SPARSE_PLANET_SURFACE_SCULPT.md)
+adapts OpenEngine's radius-scaled sparse edit-layer mechanism into backend-neutral
+Rust and canonical field/page sampling. CPU and actual raster tests resolve
+authored depressions. Live contact-driven tracks, streaming invalidation, disk
+persistence and improved soil appearance remain unimplemented.
+
 ## Current native integration checkpoint
 
 [Doc 110](110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md) integrates reviewed Gemini

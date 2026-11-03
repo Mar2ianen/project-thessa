@@ -26,6 +26,7 @@ pub mod material_page;
 pub mod material_source;
 pub mod packed;
 pub mod shaders;
+pub mod surface_sculpt;
 pub mod tile_anchor;
 
 pub use bisector_pool::{Bisector, BisectorHandle, BisectorPool, BisectorPoolError};

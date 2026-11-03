@@ -1,6 +1,7 @@
 # 1 — Spatial plant communities
 
-Status: first implementation; neighbor competition and visual acceptance open.
+Status: placement implementation criteria closed after tests, independent technical
+review and capture inspection; overall scene/reference parity remains open.
 
 ## Research
 
@@ -22,3 +23,35 @@ The first 64 m candidate was rejected as too sparse near this camera. The retain
 24 m prior makes fully empty cores rarer, with transition thresholds -0.65/-0.10
 on the existing value-noise field. Its current specimen still has lower total
 plant abundance; this is not proof of equal-cost or superior forest quality.
+
+## Sequential completion — neighbor-aware communities
+
+Implementation acceptance for this item requires: correlated stands/glades;
+existing climate/water/slope eligibility; actual neighboring tree root/crown
+influence; quality-stable source neighborhoods; cube-face continuity; bounded
+source/candidate costs; technical review and an actual scene capture. Full
+biological growth/competition is not required by this rendering task.
+
+The adapter now builds a body-fixed 32 m spatial index from the full-density
+community-filtered tree population, before visual quality thinning. Canonical
+coarse tree IDs are thinned through one stable hash on both coarse and near
+contexts; Low/Medium membership intentionally changes from the former direct
+density threshold. High membership remains. The full source shares the existing
+9×4096 candidate and output ceilings; lower quality may perform more canonical
+CPU sampling than previously. No new per-frame GPU work or render pass occurs.
+
+Crown centers/radii reuse the actual woody sockets and the same dimensions as
+the pinned foliage renderer. Stem-base exclusion uses the scaffold's conservative
+near-root radial extent. These are ecological proximity/clearance proxies,
+not a sky-visibility, photon transport or exact collision solver. Ferns tolerate
+shelter; reeds and short grass favor gaps; small plants are rejected where their
+footprint overlaps the conservative root exclusion. No extra shading AO is used.
+The query halo expands from geometric reach (large scaled trees may exceed a
+single 32 m cell); it is not hard-coded to 27 cells.
+
+Window queries now reproject beyond cube edges instead of clamping to one face.
+Tests cover all six faces/corners, root exclusion, smooth crown proximity,
+different fern/reed response, input-order invariance and canonical neighborhood
+counts across quality. Existing coarse/near identity and quality-subset tests
+remain. The standard FHD capture retains 20 frozen diagnostic views. Source and
+review evidence: `docs/artifacts/forest-neighbor-communities-2026-11-04.json`.

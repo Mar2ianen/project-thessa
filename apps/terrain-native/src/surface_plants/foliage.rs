@@ -53,6 +53,23 @@ pub(super) fn copy_material(asset: &mut MeshAsset, source: &MeshAsset, index: us
     material
 }
 
+/// Shared authored crown/blade dimensions: rendering and habitat use one source.
+pub(super) fn dimensions(tree: bool, form: u8, socket_index: usize) -> (f32, f32, f32) {
+    if tree {
+        match form {
+            1 => (4.7_f32, 2.0, 1.8),
+            2 => (if socket_index == 0 { 3.3 } else { 4.0 }, 1.8, 1.8),
+            _ => (3.6, 1.7, 1.5),
+        }
+    } else {
+        match form {
+            1 => (0.65, 0.45, 0.0),
+            2 => (2.2, 1.1, 0.0),
+            _ => (1.3, 0.75, 0.0),
+        }
+    }
+}
+
 pub(super) fn append(
     prepared: &mut Prepared,
     prototype: &thessa_worldgen_rocky::offline::PlantMesh,
@@ -96,19 +113,7 @@ pub(super) fn append(
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for (socket_index, socket) in sockets.into_iter().enumerate() {
-        let (target_radius, target_height, target_drop) = if tree {
-            match form {
-                1 => (4.7_f32, 2.0, 1.8),
-                2 => (if socket_index == 0 { 3.3 } else { 4.0 }, 1.8, 1.8),
-                _ => (3.6, 1.7, 1.5),
-            }
-        } else {
-            match form {
-                1 => (0.65, 0.45, 0.0),
-                2 => (2.2, 1.1, 0.0),
-                _ => (1.3, 0.75, 0.0),
-            }
-        };
+        let (target_radius, target_height, target_drop) = dimensions(tree, form, socket_index);
         let horizontal = target_radius / radius;
         let vertical = target_height / (max.y - min.y);
         let drop = target_drop / (radius * radius);

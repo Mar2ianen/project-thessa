@@ -421,6 +421,7 @@ pub(super) fn append(
     settings: &ResolvedGraphicsSettings,
     field: &PlanetField,
     window: TileKey,
+    habitat: &super::canopy_habitat::CanopyHabitat,
     stats: &mut Diagnostics,
 ) -> Result<(), String> {
     if !settings.terrain_ground_detail || settings.surface_quality == thessa_graphics::Quality::Low
@@ -586,7 +587,13 @@ pub(super) fn append(
         // Moisture controls occupancy, but moss is not a competing mask: the
         // two low strata can coexist. Stable per-site hashes retain patchiness.
         // A separate three-way palette keeps grass from reading as one object.
+        let niche =
+            habitat.at(DVec3::from(d.direction) * (field.params.radius_m + d.ground_height_m));
+        if niche.root_clearance_m < 0.12 {
+            continue;
+        }
         let density = cover.wetness
+            * (1.0 - 0.55 * niche.shelter)
             * thessa_worldgen_rocky::scatter::vegetation_community_occupancy(
                 field.params.seed,
                 field.params.radius_m,

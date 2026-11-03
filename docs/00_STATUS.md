@@ -21,7 +21,8 @@ do not update in place).
 the latest seven critique items into research, applicability review, implementation
 and evidence. Shared 24 m plant communities, cattail spikes, distinct textured
 low grass, single-apex tree weighting and explicit 0.3 m survey diagnostics are
-implemented. Neighbor competition, coherent soil/plant transitions, refined leaf
+implemented. Tree-neighbor crown/root eligibility and cross-face query halos are now implemented
+and verified independently of visual quality. Coherent soil/plant transitions, refined leaf
 transport, finite-path atmosphere, close-soil quality and coastline integration
 remain partial/open. No full-scene parity or performance win is claimed.
 

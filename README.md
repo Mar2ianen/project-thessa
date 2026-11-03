@@ -1025,3 +1025,9 @@ separate research/review/implementation items. Current changes add shared plant
 community gaps, cattail spikes, distinct low grass and single-apex tree dominance,
 plus explicit 0.3 m soil diagnostics. Lighting, close-soil and shoreline reference
 acceptance remain open.
+
+The first forest-quality item now includes neighbor-aware plant eligibility:
+full-density canonical tree crowns/roots guide understory and grass independently
+of render quality, with cross-face query halos. This closes the placement mechanism
+slice; overall forest realism remains dependent on the following material/light/
+atmosphere/shore items in doc 132.

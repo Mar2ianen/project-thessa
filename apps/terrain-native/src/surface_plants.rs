@@ -13,6 +13,7 @@ use thessa_worldgen_rocky::{
     sphere::enu_basis,
 };
 
+mod canopy_habitat;
 mod foliage;
 mod ground;
 mod moss;
@@ -127,6 +128,8 @@ pub struct Diagnostics {
     pub understory_candidates: u64,
     pub understory_samples: u64,
     pub understory_accepted: usize,
+    pub canopy_habitat_trees: usize,
+    pub understory_neighbor_rejected: usize,
     pub understory_scale_bins: [usize; 4],
     pub replaced_coarse_clumps: usize,
     pub preparation_job_pending: bool,
@@ -174,6 +177,8 @@ impl Diagnostics {
             ("native_surface_understory_candidate_visits", self.understory_candidates.to_string()),
             ("native_surface_understory_surface_samples", self.understory_samples.to_string()),
             ("native_surface_understory_accepted", self.understory_accepted.to_string()),
+            ("native_surface_canopy_habitat_trees", self.canopy_habitat_trees.to_string()),
+            ("native_surface_understory_neighbor_rejected", self.understory_neighbor_rejected.to_string()),
             ("native_surface_understory_scale_bins_lt_045_070_095", format!("{:?}", self.understory_scale_bins)),
             ("native_surface_understory_replaced_coarse_clumps", self.replaced_coarse_clumps.to_string()),
             ("native_surface_plants_preparation_job_pending", self.preparation_job_pending.to_string()),
@@ -182,8 +187,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD12 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 24 m community occupancy and 8 m local colonies; textured CC0 moss-shoot colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four distinct grass shape families per palette and a shared root/body/tip pigment ramp; moisture/community-gated grass can coexist with moss; tall wetland clumps include brown volumetric cattail spikes; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
-            } else {"WORLD12 <=9 same-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
+                "WORLD13 <=9 cross-face L14 large-plant windows plus <=49 cross-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 24 m communities, 8 m local colonies and canonical tree-neighbor root/crown niches; textured CC0 moss-shoot colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four distinct grass shape families per palette and a shared root/body/tip pigment ramp; moisture/community-gated grass can coexist with moss; tall wetland clumps include brown volumetric cattail spikes; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
+            } else {"WORLD13 <=9 cross-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }
@@ -372,6 +377,7 @@ pub fn prepare(
         candidates_visited: 0,
         surface_samples: 0,
     };
+    let reference_canopy = settings.surface_plants_enabled;
     for region in neighboring_windows(window, 1)
         .into_iter()
         .filter(|_| settings.surface_plants_enabled)
@@ -382,7 +388,11 @@ pub fn prepare(
             region,
             ScatterPopulation::Plants,
             ScatterPolicy {
-                density_scale: settings.surface_plants_density_scale,
+                density_scale: if reference_canopy {
+                    1.0
+                } else {
+                    settings.surface_plants_density_scale
+                },
                 max_candidates: settings
                     .surface_plants_max_candidates
                     .checked_sub(batch.candidates_visited)
@@ -404,6 +414,20 @@ pub fn prepare(
         batch.items.extend(part.items);
     }
     batch.items.sort_unstable_by_key(|item| item.id);
+    let habitat = canopy_habitat::CanopyHabitat::new(
+        if reference_canopy && near_window.is_some() {
+            batch.items.as_slice()
+        } else {
+            &[]
+        },
+        field.params.radius_m,
+    );
+    if reference_canopy && settings.surface_plants_density_scale < 1.0 {
+        batch.items.retain(|item| {
+            thessa_worldgen_rocky::rng::hash01(field.params.seed, 7840, item.id.0 as i64, 0)
+                < settings.surface_plants_density_scale
+        });
+    }
     let mut diagnostics = Diagnostics {
         reason: if batch.items.is_empty() {
             "no_eligible_plants"
@@ -415,6 +439,7 @@ pub fn prepare(
         samples: batch.surface_samples,
         accepted: batch.items.len(),
         retained: batch.items.len(),
+        canopy_habitat_trees: habitat.tree_count(),
         ..Default::default()
     };
     if let Some(near) = near_window.filter(|_| settings.surface_understory_enabled) {
@@ -447,7 +472,7 @@ pub fn prepare(
                 .map_err(|_| "understory item budget does not fit usize")?
                 .checked_sub(diagnostics.understory_accepted)
                 .ok_or("understory item budget exhausted")?;
-            let near_batch = scatter_region(
+            let mut near_batch = scatter_region(
                 field.params.seed,
                 field.params.radius_m,
                 region,
@@ -461,6 +486,11 @@ pub fn prepare(
                 |dir| community_plant_surface(field, dir),
             )
             .map_err(|e| e.to_string())?;
+            let before_neighbors = near_batch.items.len();
+            near_batch.items.retain(|item| {
+                habitat.accepts_understory(item, field.params.seed, field.params.radius_m)
+            });
+            diagnostics.understory_neighbor_rejected += before_neighbors - near_batch.items.len();
             diagnostics.understory_candidates += near_batch.candidates_visited;
             diagnostics.understory_samples += near_batch.surface_samples;
             diagnostics.understory_accepted += near_batch.items.len();
@@ -570,7 +600,14 @@ pub fn prepare(
         }
     }
     if let Some(near) = near_window.filter(|_| settings.terrain_ground_pebbles_max_items > 0) {
-        wet_ground::append(&mut prepared, settings, field, near, &mut diagnostics)?;
+        wet_ground::append(
+            &mut prepared,
+            settings,
+            field,
+            near,
+            &habitat,
+            &mut diagnostics,
+        )?;
     }
     if settings.shadow_enabled && settings.shadow_mesh_lod_error_texels > 0.0 {
         append_shadow_lods(&mut prepared);
@@ -629,13 +666,13 @@ pub fn prepare(
 }
 
 fn neighboring_windows(center: TileKey, radius: i64) -> std::collections::BTreeSet<TileKey> {
-    let edge = (1_i64 << center.level) - 1;
     (-radius..=radius)
         .flat_map(|dy| {
-            (-radius..=radius).map(move |dx| TileKey {
-                x: (i64::from(center.x) + dx).clamp(0, edge) as u32,
-                y: (i64::from(center.y) + dy).clamp(0, edge) as u32,
-                ..center
+            (-radius..=radius).map(move |dx| {
+                window_at_level(
+                    DVec3::from(center.direction(dx as f64 + 0.5, dy as f64 + 0.5)),
+                    center.level,
+                )
             })
         })
         .collect()
@@ -1148,6 +1185,7 @@ mod tests {
             understory: near,
         };
         let mut previous = Vec::new();
+        let mut reference_tree_count = None;
         for quality in [
             thessa_graphics::Quality::Low,
             thessa_graphics::Quality::Medium,
@@ -1163,6 +1201,11 @@ mod tests {
             );
             let (prepared, stats) = prepare(context, &resolved, field).unwrap();
             let prepared = prepared.unwrap();
+            assert!(stats.canopy_habitat_trees > 0 && stats.understory_neighbor_rejected > 0);
+            assert_eq!(
+                *reference_tree_count.get_or_insert(stats.canopy_habitat_trees),
+                stats.canopy_habitat_trees
+            );
             assert_eq!(stats.understory_windows, 49);
             assert_eq!(stats.understory_candidates, 200_704);
             assert_eq!(stats.candidates, 237_568);
@@ -1665,7 +1708,16 @@ mod tests {
             x: 0,
             y: 0,
         };
-        assert_eq!(neighboring_windows(edge, 1).len(), 4);
+        let neighbors = neighboring_windows(edge, 1);
+        assert_eq!(neighbors.len(), 8);
+        assert_eq!(
+            neighbors
+                .iter()
+                .map(|k| k.face)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -1696,6 +1748,27 @@ mod tests {
                     let actual = matrix.transform_point3(local.as_vec3()).as_dvec3();
                     let expected = expected + root.rotation * (local * root.scale);
                     assert!((actual - expected).length() < 0.0002);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn neighborhood_halos_cross_cube_edges_without_clamping_to_the_original_face() {
+        for face in 0..6 {
+            for (x, y) in [(0, 0), (0, 8192), (16383, 8192), (16383, 16383)] {
+                let key = TileKey {
+                    face,
+                    level: WINDOW_LEVEL,
+                    x,
+                    y,
+                };
+                let halo = neighboring_windows(key, 1);
+                assert!(halo.contains(&key));
+                assert!(halo.len() <= 9 && halo.iter().any(|k| k.face != face));
+                for t in [-0.4, 0.2, 0.8, 1.4] {
+                    let direction = DVec3::from(key.direction(t, 0.5));
+                    assert!(halo.contains(&window_at_level(direction, WINDOW_LEVEL)));
                 }
             }
         }

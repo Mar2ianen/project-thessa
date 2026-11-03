@@ -276,7 +276,7 @@ pub struct ResolvedGraphicsSettings {
     /// Nested visual density subset, never a change to habitat, height or IDs.
     #[serde(default)]
     pub surface_plants_density_scale: f64,
-    /// Up to nine same-face L14 windows, each with 4096 canonical cells.
+    /// Up to nine chart-adjacent L14 windows, each with 4096 canonical cells.
     #[serde(default)]
     pub surface_plants_max_candidates: u64,
     /// Output ceiling, not a reservation or a target population count.

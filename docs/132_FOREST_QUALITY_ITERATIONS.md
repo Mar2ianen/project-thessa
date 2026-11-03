@@ -6,7 +6,7 @@ and verification. A researched item is not an implemented or visually accepted i
 
 | Item | Record | Current implementation status |
 | --- | --- | --- |
-| 1 | [Spatial communities](forest-quality/01_COMMUNITIES.md) | Shared 24 m occupancy integrated; neighbor competition open |
+| 1 | [Spatial communities](forest-quality/01_COMMUNITIES.md) | Closed placement slice: communities, canonical crown/root niches, cross-face halos |
 | 2 | [Ground transitions](forest-quality/02_GROUND_TRANSITIONS.md) | Distinct low grass and pigment ramp; parent litter/moss transition open |
 | 3 | [Leaf transport](forest-quality/03_LEAF_LIGHT.md) | Existing direct/sky transmission audited; new scattering lobe open |
 | 4 | [Tree architecture](forest-quality/04_TREE_ARCHITECTURE.md) | Single/forked morphotypes now weighted 65/25/10; new architecture open |
@@ -68,3 +68,10 @@ additional soil/interior/crown/100 m-range camera captures are single beauty
 views; the standard sunset capture owns the 20 frozen diagnostic buffers. A
 separately oriented backlit specimen and matched source-residency before/after
 controls are still required for the complete five-camera rubric.
+
+Item 1's placement criteria are now closed: canonical neighbor influence,
+quality/source stability and cross-face halos pass tests and independent review.
+Luna's v10/v11 inspection found no tall-tree density loss or new boundary artifact;
+the 1,786 rejected clumps account for the intended lower understory density.
+This does not close overall forest realism or certify a blind preference. See
+[neighbor evidence](artifacts/forest-neighbor-communities-2026-11-04.json).

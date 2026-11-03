@@ -545,3 +545,11 @@ This intentionally changes accepted plant membership, never candidate IDs or
 transforms of surviving descriptors. Generic synthetic-area density tests remain
 valid. This authored prior supplies correlated gaps; it does not simulate neighbor
 shade, dispersal, competition or growth.
+
+Native neighbor eligibility now derives a canonical full-density tree neighborhood
+before renderer-quality thinning. Coarse and near contexts share stable hash
+thinning for tree descriptors; High membership is unchanged while Low/Medium
+membership intentionally changes. Query halos cross cube charts instead of
+clamping at an edge. Actual crown sockets/dimensions and scaffold root bounds
+drive understory eligibility, not another renderer shadow field. Doc 132 item 1
+records the bounded CPU cost, tests and GPU evidence.

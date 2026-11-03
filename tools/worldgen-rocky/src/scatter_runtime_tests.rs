@@ -334,3 +334,30 @@ fn canonical_plant_batch_cost() {
         );
     }
 }
+
+#[test]
+fn community_prior_changes_only_plant_cover_not_canonical_substrate() {
+    let field = canonical_field();
+    for i in 0..64 {
+        let dir = dir_from_latlon(LAND[0] + i as f64 * 0.00001, LAND[1]);
+        let base = canonical_plant_surface(field, dir);
+        let plants = community_plant_surface(field, dir);
+        let occupancy =
+            vegetation_community_occupancy(field.params.seed, field.params.radius_m, dir);
+        assert_eq!(base.ground_height_m, plants.ground_height_m);
+        assert_eq!(base.slope_rise_run, plants.slope_rise_run);
+        assert_eq!(base.water_height_m, plants.water_height_m);
+        assert_eq!(
+            plants.vegetation.ground01,
+            base.vegetation.ground01 * occupancy
+        );
+        assert_eq!(
+            plants.vegetation.canopy01,
+            base.vegetation.canopy01 * occupancy
+        );
+        assert_eq!(
+            plants.vegetation.reeds01,
+            base.vegetation.reeds01 * occupancy
+        );
+    }
+}

@@ -27,6 +27,13 @@ const JITTER_BITS: u8 = 24;
 const MAX_ROCK_DENSITY_PER_KM2: f64 = 640.0;
 pub const PLANT_DENSITY_PER_KM2: f64 = 3000.0;
 
+/// World-fixed community occupancy at the stand scale, shared by all plant strata.
+/// This is an authored habitat prior, not simulated shade or neighbor competition.
+pub fn vegetation_community_occupancy(seed: u64, radius_m: f64, direction: [f64; 3]) -> f64 {
+    let p = direction.map(|v| v * (radius_m / 24.0));
+    crate::appearance::smooth(-0.65, -0.10, rng::value_noise3(seed, 439, p[0], p[1], p[2]))
+}
+
 /// Fixed canonical ground/placement cutoff and geometry scale, in metres.
 /// This is a plant placement contract, not a query/render LOD or erosion grid.
 pub const PLANT_SURFACE_WAVELENGTH_M: f64 = 32.0;
@@ -55,6 +62,17 @@ pub fn canonical_plant_surface(field: &crate::field::PlanetField, dir: [f64; 3])
         Some(field.water_height_m(dir)),
         crate::ecology::vegetation_cover(&sample, material_slope),
     )
+}
+
+/// Plant community prior over the same canonical substrate. Pebbles and material
+/// pages retain the original substrate eligibility rather than inheriting glades.
+pub fn community_plant_surface(field: &crate::field::PlanetField, dir: [f64; 3]) -> ScatterSurface {
+    let mut surface = canonical_plant_surface(field, dir);
+    let occupancy = vegetation_community_occupancy(field.params.seed, field.params.radius_m, dir);
+    surface.vegetation.ground01 *= occupancy;
+    surface.vegetation.canopy01 *= occupancy;
+    surface.vegetation.reeds01 *= occupancy;
+    surface
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

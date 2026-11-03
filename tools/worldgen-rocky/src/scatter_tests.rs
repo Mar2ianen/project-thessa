@@ -131,6 +131,35 @@ fn understory_colonies_are_bounded_continuous_and_world_addressed() {
 }
 
 #[test]
+fn community_field_has_real_glades_and_preserves_spherical_continuity() {
+    let mut bare = 0;
+    let mut closed = 0;
+    for seed in [7, 42, 2026] {
+        for i in 0..4096 {
+            let dir = crate::lod::normalize([1.0, 0.2, i as f64 * 2e-6]);
+            let near = crate::lod::normalize([1.0, 0.2, i as f64 * 2e-6 + 1e-8]);
+            let cover = vegetation_community_occupancy(seed, RADIUS_M, dir);
+            assert!((0.0..=1.0).contains(&cover));
+            bare += usize::from(cover == 0.0);
+            closed += usize::from(cover == 1.0);
+            assert!((cover - vegetation_community_occupancy(seed, RADIUS_M, near)).abs() < 0.01);
+        }
+        let a = crate::lod::normalize([1.0, 1.0 - 1e-10, 0.2]);
+        let b = crate::lod::normalize([1.0, 1.0 + 1e-10, 0.2]);
+        assert!(
+            (vegetation_community_occupancy(seed, RADIUS_M, a)
+                - vegetation_community_occupancy(seed, RADIUS_M, b))
+            .abs()
+                < 0.001
+        );
+    }
+    assert!(
+        bare > 100 && closed > 100,
+        "actual zero-occupancy glades and fully occupied stands: {bare}/{closed}"
+    );
+}
+
+#[test]
 fn understory_cohorts_respect_requested_scale_bounds_and_fixed_scale() {
     for (min, max) in [(0.55, 1.10), (0.8, 0.8)] {
         let batch = scatter_region(

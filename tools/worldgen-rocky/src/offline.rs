@@ -386,8 +386,8 @@ pub struct PlantMesh {
     /// Optional separate stem reflectance. Historical bakes are single-material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stem: Option<PlantStem>,
-    /// Terminal foliage group with authored dry-leaf optics. Historical bakes
-    /// have no group; consumers must not infer leaf age from mesh height.
+    /// Terminal dry-organ group (leaves or seed spikes). Historical bakes have
+    /// no group; this is optical metadata, not simulated organ age.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub senescent: Option<PlantSenescence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1168,7 +1168,17 @@ pub fn plant_form(id: crate::scatter::ScatterId, kind: crate::scatter::ScatterKi
                 2
             }
         }
-        crate::scatter::ScatterKind::LycopsidTree => ((choice * 3.0) as u8).min(2),
+        // Most arborescent ferns retain one apical rosette. Forked fictional
+        // morphotypes remain distinct accents, not the dominant architecture.
+        crate::scatter::ScatterKind::LycopsidTree => {
+            if choice < 0.65 {
+                1
+            } else if choice < 0.90 {
+                0
+            } else {
+                2
+            }
+        }
         _ => 0,
     }
 }
@@ -1474,7 +1484,7 @@ fn fern_clump_form(mesh: &mut PlantMesh, detail: impl Into<PlantDetail>, form: u
     }
 }
 
-/// Two height tiers of slender curved blades around a low tussock.
+/// Cattail-like wetland clump: strap leaves, erect culms and dry cylindrical spikes.
 /// Blade bases stay on local Y = 0.
 fn reed_clump(mesh: &mut PlantMesh, reduced: bool) {
     const STEMS: usize = 10;
@@ -1521,6 +1531,41 @@ fn reed_clump(mesh: &mut PlantMesh, reduced: bool) {
             false,
         );
     }
+    // Flowering culms share the leaf material; dry spike tissue is a separate
+    // terminal optical group through the existing dry-organ material path.
+    let stalks: Vec<_> = (0..3)
+        .map(|i| {
+            let angle = 0.45 + i as f64 * 2.1;
+            // Keep the tilted bottom ring above the canonical root plane.
+            let base = [angle.cos() * 0.07, 0.00012, angle.sin() * 0.07];
+            let axis = crate::lod::normalize([0.025 * angle.cos(), 1.0, 0.025 * angle.sin()]);
+            let height = [1.48, 1.65, 1.38][i];
+            tapered_limb(mesh, base, axis, 6, &[(0.0, 0.0045), (height, 0.003)]);
+            (offset(base, scaled(axis, height)), axis)
+        })
+        .collect();
+    let first_vertex = mesh.positions.len() as u32;
+    for (i, (base, axis)) in stalks.into_iter().enumerate() {
+        let radius = 0.013 + i as f64 * 0.0015;
+        tapered_limb(
+            mesh,
+            base,
+            axis,
+            6,
+            &[
+                (0.0, radius * 0.65),
+                (0.018, radius),
+                (0.18, radius),
+                (0.205, 0.003),
+                (0.25, 0.002),
+            ],
+        );
+    }
+    mesh.senescent = Some(PlantSenescence {
+        first_vertex,
+        albedo_srgb: [0.30, 0.18, 0.085],
+        diffuse_transmission: 0.0,
+    });
 }
 
 fn tree_terminals(form: u8) -> &'static [[f64; 3]] {
@@ -3024,13 +3069,26 @@ mod tests {
         for id in 1..8193 {
             let id = crate::scatter::ScatterId(id);
             counts[super::plant_form(id, crate::scatter::ScatterKind::FernClump) as usize] += 1;
-            assert_eq!(
-                super::plant_form(id, crate::scatter::ScatterKind::LycopsidTree),
-                ((crate::rng::hash01(0, 6182, id.0 as i64, 0) * 3.0) as u8).min(2)
-            );
         }
         for (count, target) in counts.into_iter().zip([0.50, 0.35, 0.15]) {
             assert!((count as f64 / 8192.0 - target).abs() < 0.04);
+        }
+    }
+
+    #[test]
+    fn tree_communities_favor_single_apices_without_losing_forked_morphotypes() {
+        let mut counts = [0_usize; 3];
+        for id in 1..8193 {
+            let form = super::plant_form(
+                crate::scatter::ScatterId(id),
+                crate::scatter::ScatterKind::LycopsidTree,
+            );
+            counts[form as usize] += 1;
+            let sockets = super::plant_crown_attachments(form);
+            assert_eq!(sockets.len(), if form == 1 { 1 } else { 2 });
+        }
+        for (count, target) in counts.into_iter().zip([0.25, 0.65, 0.10]) {
+            assert!((count as f64 / 8192.0 - target).abs() < 0.03);
         }
     }
 
@@ -4022,7 +4080,7 @@ mod tests {
     }
 
     #[test]
-    fn reed_clump_has_slender_leaf_area_without_losing_its_height() {
+    fn cattail_clump_has_bounded_surface_area_and_retains_wetland_height() {
         let mesh = plant_prototypes().remove(1);
         let area: f64 = prototype_triangles(&mesh)
             .iter()
@@ -4032,12 +4090,46 @@ mod tests {
             })
             .sum();
         assert!(
-            (0.15..0.50).contains(&area),
-            "authored reed leaf area {area} m2"
+            (0.15..0.70).contains(&area),
+            "cattail leaf/culm/spike area {area} m2"
         );
         let height = mesh.positions.iter().map(|p| p[1]).fold(0.0_f32, f32::max);
         assert!((1.2..2.0).contains(&height));
-        assert_eq!(mesh.indices.len() / 3, 1304);
+        assert_eq!(mesh.indices.len() / 3, 1520);
+    }
+
+    #[test]
+    fn cattails_publish_brown_volumetric_seed_heads_above_the_leaves() {
+        let mesh = plant_prototypes().remove(1);
+        let dry = mesh
+            .senescent
+            .as_ref()
+            .expect("dry seed-head optical group");
+        assert!(dry.albedo_srgb[0] > dry.albedo_srgb[1] && dry.albedo_srgb[1] > dry.albedo_srgb[2]);
+        assert_eq!(dry.diffuse_transmission, 0.0);
+        let heads = &mesh.positions[dry.first_vertex as usize..];
+        let min = heads.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+        let max = heads.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            min > 1.35 && max > 1.85 && max < 2.0,
+            "seed heads must crown tall culms: {min}..{max}"
+        );
+        let lateral = heads.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max)
+            - heads.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        assert!(
+            lateral > 0.10,
+            "several separately positioned flowering culms"
+        );
+        assert!(
+            mesh.normals[dry.first_vertex as usize..]
+                .iter()
+                .any(|n| n[0].abs() > 0.6)
+        );
+        assert!(
+            mesh.normals[dry.first_vertex as usize..]
+                .iter()
+                .any(|n| n[2].abs() > 0.6)
+        );
     }
 
     #[test]
@@ -4374,7 +4466,7 @@ mod tests {
             let triangles = mesh.indices.len() / 3;
             let (minimum, ceiling) = match mesh.kind {
                 ScatterKind::FernClump => (17956, 17956),
-                ScatterKind::ReedClump => (1200, 1350),
+                ScatterKind::ReedClump => (1500, 1540),
                 ScatterKind::LycopsidTree => (141274, 141274),
                 kind => panic!("unexpected prototype kind {kind:?}"),
             };
@@ -4542,7 +4634,16 @@ mod tests {
             for (first, points, normal) in prototype_triangles(&mesh) {
                 let middle = centroid(points);
                 let stem = mesh.stem.as_ref().is_some_and(|s| first < s.vertex_count);
-                if mesh.kind != ScatterKind::LycopsidTree && middle[1] > 0.4 * max_y && !stem {
+                let seed_head = mesh.kind == ScatterKind::ReedClump
+                    && mesh
+                        .senescent
+                        .as_ref()
+                        .is_some_and(|s| first >= s.first_vertex);
+                if mesh.kind != ScatterKind::LycopsidTree
+                    && middle[1] > 0.4 * max_y
+                    && !stem
+                    && !seed_head
+                {
                     assert!(
                         normal[1] > -0.25,
                         "{:?} upper surface faces down at {middle:?}: {normal:?}",

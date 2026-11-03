@@ -1019,3 +1019,9 @@ authored source. Live region refresh and contact-driven tracks remain open.
 adds pinned CC0 shoot forms and shared albedo/alpha/normal/ORM material maps,
 with unchanged colony counts/draw groups and higher explicit source cost.
 Reference-quality soil and full-scene acceptance remain open.
+
+[Forest quality iterations](docs/132_FOREST_QUALITY_ITERATIONS.md) track seven
+separate research/review/implementation items. Current changes add shared plant
+community gaps, cattail spikes, distinct low grass and single-apex tree dominance,
+plus explicit 0.3 m soil diagnostics. Lighting, close-soil and shoreline reference
+acceptance remain open.

@@ -77,3 +77,7 @@ control while retaining visible moss. The FHD candidate submits 3,680,080
 primary mesh triangles and 51,040,872 shadow mesh triangles over three passes,
 versus 3,408,188 / 50,225,196 in the preceding source. Counts express added
 work; neither debug frame duration nor these counts prove production speed.
+
+Doc [132](132_FOREST_QUALITY_ITERATIONS.md) records subsequent plant-community,
+cattail and low-grass changes. The counters above describe this moss iteration's
+capture, not the later scene membership or source group count.

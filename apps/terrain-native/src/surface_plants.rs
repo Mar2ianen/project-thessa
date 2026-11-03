@@ -7,7 +7,8 @@ use thessa_worldgen_rocky::{
     field::PlanetField,
     lod::TileKey,
     scatter::{
-        ScatterItem, ScatterPolicy, ScatterPopulation, canonical_plant_surface, scatter_region,
+        ScatterItem, ScatterPolicy, ScatterPopulation, canonical_plant_surface,
+        community_plant_surface, scatter_region,
     },
     sphere::enu_basis,
 };
@@ -181,8 +182,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 8 m colony occupancy; textured CC0 moss-shoot colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four geometry variants per grass palette; moisture-gated grass can coexist with moss; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
-            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
+                "WORLD12 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 24 m community occupancy and 8 m local colonies; textured CC0 moss-shoot colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four distinct grass shape families per palette and a shared root/body/tip pigment ramp; moisture/community-gated grass can coexist with moss; tall wetland clumps include brown volumetric cattail spikes; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
+            } else {"WORLD12 <=9 same-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }
@@ -391,7 +392,7 @@ pub fn prepare(
                     .ok_or("canopy item budget exhausted")?,
                 ..Default::default()
             },
-            |dir| canonical_plant_surface(field, dir),
+            |dir| community_plant_surface(field, dir),
         )
         .map_err(|e| e.to_string())?;
         batch.candidates_visited += part.candidates_visited;
@@ -457,7 +458,7 @@ pub fn prepare(
                     max_items: remaining_items,
                     ..Default::default()
                 },
-                |dir| canonical_plant_surface(field, dir),
+                |dir| community_plant_surface(field, dir),
             )
             .map_err(|e| e.to_string())?;
             diagnostics.understory_candidates += near_batch.candidates_visited;
@@ -740,10 +741,10 @@ fn collect_shadow_lods(
                 continue;
             };
             let material = &prepared.asset.materials[p.material];
-            let organ = if material.diffuse_transmission == 0.0 {
-                0
-            } else if material.base_texture.is_none() {
+            let organ = if material.base_texture.is_none() {
                 2
+            } else if material.diffuse_transmission == 0.0 {
+                0
             } else {
                 1
             };
@@ -936,7 +937,9 @@ fn convert_with_detail(
             prepared.asset.materials.push(Material {
                 base_color,
                 base_texture: (!dry).then_some(base),
-                normal_texture: Some(normal),
+                normal_texture: (!(dry
+                    && prototype.kind == thessa_worldgen_rocky::scatter::ScatterKind::ReedClump))
+                    .then_some(normal),
                 metallic_roughness_texture: Some(mr),
                 metallic: 0.0,
                 roughness: if stem { 0.85 } else { 1.0 },
@@ -1379,7 +1382,10 @@ mod tests {
                 assert_eq!(material.diffuse_transmission, expected_transmission);
                 assert_eq!(material.metallic, 0.0);
                 assert_eq!(material.base_texture.is_some(), dry.is_none());
-                assert!(material.normal_texture.is_some());
+                assert_eq!(
+                    material.normal_texture.is_some(),
+                    !(dry.is_some() && prototype.kind == ScatterKind::ReedClump)
+                );
                 assert!(material.metallic_roughness_texture.is_some());
                 if !stem && dry.is_none() {
                     let texture = &prepared.asset.textures[material.base_texture.unwrap()];
@@ -1743,14 +1749,15 @@ mod tests {
         assert!(!prepared.rt_budget_fits(0));
         assert!(!prepared.rt_budget_fits(256));
         assert!(!prepared.rt_budget_fits(299));
-        assert!(prepared.rt_budget_fits(300));
+        assert!(!prepared.rt_budget_fits(449));
+        assert!(prepared.rt_budget_fits(450));
         assert!(prepared.rt_budget_fits(4096));
         let mut settings = settings(thessa_graphics::Quality::High);
         settings.ray_tracing = thessa_graphics::ResolvedRayTracing::Local;
         settings.rt_vehicles = true;
         settings.rt_max_instances = 256;
         assert!(!prepared.rt_admitted(&settings));
-        settings.rt_max_instances = 300;
+        settings.rt_max_instances = 450;
         assert!(prepared.rt_admitted(&settings));
         settings.rt_max_instances = 0;
         settings.rt_vehicles = false;
@@ -1764,7 +1771,7 @@ mod tests {
         assert_eq!(prepared.descriptors.len(), 300);
         assert_eq!(prepared.instances.len(), 300);
         let demand: u32 = prepared.ranges.iter().map(|r| r.end - r.start).sum();
-        assert_eq!(demand, 300);
+        assert_eq!(demand, 450);
         let unique: std::collections::BTreeSet<_> =
             prepared.ranges.iter().map(|r| (r.start, r.end)).collect();
         assert_eq!(unique.iter().map(|(a, b)| b - a).sum::<u32>(), 300);

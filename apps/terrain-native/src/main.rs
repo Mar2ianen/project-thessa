@@ -296,7 +296,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "Survey: --scene b03-sunset selects the first baked-ephemeris descending 4-degree primary sun at B03 (explicit --sim-time overrides). --scene b03 loads the canonical coastal camera/profile in the native window or headless; individual survey flags override its defaults. --site 0|1|2 selects COAST/HIGHLANDS/VOLCANIC (default 1), incompatible with flight modes or --vehicle-preview. --survey-distance 80..2000000 sets deterministic survey framing in metres after the site reset. Window F6 cycles sites; right-drag orbit; Shift-right-drag free look; wheel zoom; Backquote resets. Selecting a site resets distance and free look, preserving orbit."
                 );
                 println!(
-                    "Fixed survey: --survey-lat -90..90 --survey-lon -180..180 (east-positive, required together, conflicts with --site) sets a numeric terrain target, not a launch site. --survey-eye-agl 2..2000000 places the eye exactly above canonical ground/sea datum at its actual direction (1m height sampling), instead of distance-based elevation/5m clearance; 2m uses a 0.1m near plane. Survey-only; incompatible with flight, preview, docking and map. Bookmark selection clears both overrides. --perf-capture records the final resolved survey camera/source, not a trajectory or coastal acceptance."
+                    "Fixed survey: --survey-lat -90..90 --survey-lon -180..180 (east-positive, required together, conflicts with --site) sets a numeric terrain target, not a launch site. --survey-eye-agl 0.3..2000000 places the eye exactly above canonical ground/sea datum at its actual direction (1m height sampling), instead of distance-based elevation/5m clearance; 0.3m uses a 0.015m near plane; 2m uses 0.1m. Survey-only; incompatible with flight, preview, docking and map. Bookmark selection clears both overrides. --perf-capture records the final resolved survey camera/source, not a trajectory or coastal acceptance."
                 );
                 println!(
                     "--throttle FRACTION (0..=1, requires --flight or --server-flight) presets throttle intent before the first frame. --engine-on arms engine intent. Window flight keys: WASDQE stick, Shift/Ctrl throttle slew, X cut, Z full, Space engine, C cycle control law, T SAS toggle, hold F to temporarily invert SAS, CapsLock precision; R/Y/G/P toggle RCS/wheels/gear/chutes. Mouse Aim uses the cursor with a 6% deadband; stick keys take over. Camera drag, UI capture, focus loss and pause cannot also steer. Server input acceptance means queued, not acknowledged; systems checkboxes show demands."
@@ -1645,8 +1645,8 @@ fn validate_fixed_survey(
     if unavailable && (lat.is_some() || lon.is_some() || eye_agl.is_some()) {
         return Err("fixed survey controls are incompatible with flight, preview, docking or map");
     }
-    if eye_agl.is_some_and(|m| !m.is_finite() || !(2.0..=2_000_000.0).contains(&m)) {
-        return Err("--survey-eye-agl must be finite and within 2..=2000000 m");
+    if eye_agl.is_some_and(|m| !m.is_finite() || !(0.3..=2_000_000.0).contains(&m)) {
+        return Err("--survey-eye-agl must be finite and within 0.3..=2000000 m");
     }
     match (lat, lon) {
         (None, None) => Ok(None),
@@ -1704,7 +1704,7 @@ mod survey_cli_tests {
         );
         for lat in [-90.0, 0.0, 90.0] {
             for lon in [-180.0, 0.0, 180.0] {
-                for agl in [2.0, 50.0, 2_000_000.0] {
+                for agl in [0.3, 2.0, 10.0, 100.0, 2_000_000.0] {
                     assert_eq!(
                         validate_fixed_survey(Some(lat), Some(lon), Some(agl), None, false),
                         Ok(Some([lat, lon]))
@@ -1729,7 +1729,7 @@ mod survey_cli_tests {
         ] {
             assert!(validate_fixed_survey(lat, lon, None, None, false).is_err());
         }
-        for agl in [f64::NAN, f64::INFINITY, -2.0, 0.0, 1.99, 2_000_001.0] {
+        for agl in [f64::NAN, f64::INFINITY, -2.0, 0.0, 0.299, 2_000_001.0] {
             assert!(validate_fixed_survey(None, None, Some(agl), None, false).is_err());
         }
         assert!(validate_fixed_survey(Some(0.0), Some(0.0), None, Some(0), false).is_err());

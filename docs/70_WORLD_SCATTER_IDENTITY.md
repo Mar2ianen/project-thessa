@@ -534,3 +534,14 @@ minus local water, clamped at zero; missing water retains neutral weights.
 The 1.35 early-filter capacity bound remains conservative. Tests cover
 continuity at all former thresholds, monotonicity, bounds and vertical-datum
 invariance. This is an authored habitat prior, not a hydrological solver.
+
+## Stand-scale community refinement (doc 132)
+
+The native plant adapter now uses `community_plant_surface`: existing canonical
+ecological covers are multiplied by one world-fixed 24 m occupancy prior. The
+base `canonical_plant_surface` contract remains unchanged for substrate and
+pebbles. Native low grass uses the same community field plus its moisture gate.
+This intentionally changes accepted plant membership, never candidate IDs or
+transforms of surviving descriptors. Generic synthetic-area density tests remain
+valid. This authored prior supplies correlated gaps; it does not simulate neighbor
+shade, dispersal, competition or growth.

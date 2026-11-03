@@ -264,18 +264,32 @@ fn grass_tuft(mesh: &mut Primitive, seed: u64, patch_id: i64, height_scale: f64)
     let north = DVec3::Z;
     let hash = |channel| rng::hash01(seed, channel, patch_id, 0);
     let fan_phase = hash(7480) * std::f64::consts::TAU;
+    let family = patch_id.rem_euclid(GRASS_SHAPE_VARIANTS as i64) as usize;
     for blade in 0..GRASS_BLADES_PER_TUFT {
         let sector = blade as f64 * std::f64::consts::TAU / GRASS_BLADES_PER_TUFT as f64;
         let jitter = (hash(7500 + blade) - 0.5) * 0.55;
-        let angle = fan_phase + sector + jitter;
+        let angle = fan_phase
+            + if family == 3 {
+                (sector - std::f64::consts::PI) * 0.45 + jitter
+            } else {
+                sector + jitter
+            };
         let radial = (east * angle.cos() + north * angle.sin()).normalize();
         let side = up.cross(radial).normalize();
         // The shared crown stays on the sampled soil; radial cantilever spread
         // restores the tuft footprint without offsetting any blade root.
         let base = DVec3::ZERO;
-        let length = (0.13 + hash(7620 + blade) * 0.15) * height_scale;
-        let width = (0.0038 + hash(7660 + blade) * 0.0028) * 1.6;
-        let bend = radial * (0.10 + hash(7700 + blade) * 0.12) * height_scale;
+        let juvenile = if blade.is_multiple_of(4) { 0.58 } else { 1.0 };
+        let length = (0.13 + hash(7620 + blade) * 0.15)
+            * height_scale
+            * [1.0, 0.68, 1.20, 0.88][family]
+            * juvenile;
+        let width = (0.0038 + hash(7660 + blade) * 0.0028) * 1.6 * [1.0, 1.45, 0.75, 1.15][family];
+        let bend = radial
+            * (0.10 + hash(7700 + blade) * 0.12)
+            * height_scale
+            * [1.0, 0.90, 1.70, 1.40][family]
+            * juvenile;
         curved_blade(
             mesh,
             base,
@@ -293,6 +307,48 @@ fn grass_tuft(mesh: &mut Primitive, seed: u64, patch_id: i64, height_scale: f64)
             DVec3::ZERO,
         );
     }
+}
+
+// OpenEngine's canopy root/body/tip ramp, represented by the existing UV
+// texture path. Geometry keeps UV.y=0 at roots for shared contact diagnostics.
+fn grass_color_texture(asset: &mut MeshAsset) -> usize {
+    use thessa_render_core::mesh::{Image, Texture, Wrap};
+    let mut rgba8 = Vec::with_capacity(16 * 64 * 4);
+    for y in 0..64 {
+        let t = y as f32 / 63.0;
+        let rise = (t / 0.35).clamp(0.0, 1.0);
+        let rise = rise * rise * (3.0 - 2.0 * rise);
+        let dry = ((t - 0.72) / 0.28).clamp(0.0, 1.0);
+        for x in 0..16 {
+            let ridge = 1.0 - 0.16 * ((x as f32 / 15.0 - 0.5) * 2.0).abs();
+            for c in 0..3 {
+                let linear = ([0.48, 0.60, 0.38][c] * (1.0 - rise) + rise)
+                    * (1.0 - dry + dry * [1.18, 1.02, 0.64][c])
+                    * ridge;
+                let encoded = if linear <= 0.0031308 {
+                    12.92 * linear
+                } else {
+                    1.055 * linear.powf(1.0 / 2.4) - 0.055
+                };
+                rgba8.push((encoded.clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+            rgba8.push(255);
+        }
+    }
+    let image = asset.images.len();
+    asset.images.push(Image {
+        width: 16,
+        height: 64,
+        rgba8,
+    });
+    let texture = asset.textures.len();
+    asset.textures.push(Texture {
+        image,
+        wrap: [Wrap::Clamp; 2],
+        linear: true,
+        min_linear: true,
+    });
+    texture
 }
 
 fn ground_position(field: &PlanetField, p: DVec3) -> DVec3 {
@@ -479,10 +535,13 @@ pub(super) fn append(
         stats.ground_litter_fragments += 1;
     }
     publish(prepared, litter, anchor);
+    let grass_texture = grass_color_texture(&mut prepared.asset);
     let grass_materials = GRASS_PALETTES.map(|base_color| {
         let material = prepared.asset.materials.len();
         prepared.asset.materials.push(Material {
             base_color,
+            base_texture: Some(grass_texture),
+            diffuse_transmission: 0.18,
             metallic: 0.0,
             roughness: 0.88,
             double_sided: true,
@@ -527,7 +586,12 @@ pub(super) fn append(
         // Moisture controls occupancy, but moss is not a competing mask: the
         // two low strata can coexist. Stable per-site hashes retain patchiness.
         // A separate three-way palette keeps grass from reading as one object.
-        let density = cover.wetness;
+        let density = cover.wetness
+            * thessa_worldgen_rocky::scatter::vegetation_community_occupancy(
+                field.params.seed,
+                field.params.radius_m,
+                d.direction,
+            );
         if hash(7422) > density {
             continue;
         }
@@ -893,8 +957,8 @@ mod tests {
         prepared.asset.validate().unwrap();
         assert_eq!(
             prepared.asset.images.len(),
-            3,
-            "moss palettes must share one base/normal/ORM set"
+            4,
+            "moss palettes share PBR maps; grass adds one small color ramp"
         );
         assert!(prepared.same_prototypes(&prepared));
         assert_eq!(

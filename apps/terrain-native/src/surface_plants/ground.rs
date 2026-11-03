@@ -190,10 +190,10 @@ mod tests {
             stats.ground_pebbles
                 + stats.ground_moss_meshes
                 + usize::from(stats.ground_litter_fragments > 0)
-                + stats.ground_grass_meshes
+                + stats.ground_grass_tufts
                 + usize::from(stats.ground_puddles > 0)
         );
-        assert!(prepared.asset.images.is_empty());
+        assert_eq!(prepared.asset.images.len(), 4);
         for item in prepared.descriptors.iter().take(16) {
             assert_eq!(
                 item.ground_height_m,

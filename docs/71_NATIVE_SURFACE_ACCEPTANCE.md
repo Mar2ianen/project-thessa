@@ -29,7 +29,7 @@ surface-to-orbit quality. No shoreline coordinate is invented by this document.
   either dateline spelling are valid. Conflicts with `--site`.
   The HUD identifies this target as `FIXED COORDINATES`, not the previously
   selected bookmark; numeric coordinates remain in capture metadata.
-- `--survey-eye-agl METRES` sets radial eye clearance in `[2, 2000000]` m.
+- `--survey-eye-agl METRES` sets radial eye clearance in `[0.3, 2000000]` m.
   It can accompany either numeric coordinates or an existing bookmark. The
   shared survey orbit/distance still selects the eye direction; the override
   sets its radius to `body radius + max(canonical height, 0) + requested AGL`.

@@ -76,8 +76,9 @@ not shipped as a soil fix; see doc 119's continuation.
 [Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) adds bounded reusable grass
 crowns and moss: High caps 4,250 / 21,200, Medium 1,200 / 1,600. Shared blade
 geometry now reaches a true point without degenerate triangles, and each crown
-is sampled against the canonical optical surface. Five focused numerical and
-budget cases pass. The latest FHD B03 source payload is 22.35 MB of the 48 MB
+is sampled against the canonical optical surface. Six focused numerical and
+budget cases pass, including a moss facet-area bound. Smooth domes have been
+replaced by short shoots; convincing moss remains open. The latest FHD B03 source payload is 25.92 MB of the 48 MB
 limit, with 2.51 MB of instances and 16.34 MB of images separately; it is not a
 measured speedup. The broad-leaf v3 candidate improves coverage, but full visual acceptance remains open.
 [Doc 127](127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md) establishes the independent

@@ -110,3 +110,58 @@ fn near_camera_grass_roots_follow_the_same_soil_surface() {
         "root clearance must be within -20..6 mm, sampled={roots}, min={worst_burial}, max={worst_float}"
     );
 }
+
+#[test]
+fn moss_does_not_publish_large_untextured_sheet_triangles() {
+    let field = thessa_flight_authority::launch_site::canonical_world_field().unwrap();
+    let dir = DVec3::new(-2835051.776623983, 1279289.634545036, -752292.6983244818).normalize();
+    let (east, north, _) = enu_basis(dir.to_array());
+    let center = dir * field.params.radius_m;
+    let frame = GroundPatchFrame {
+        field: &field,
+        center,
+        east: east.into(),
+        north: north.into(),
+        anchor: center,
+    };
+    let mut mesh = blank(0);
+    moss_cushion(
+        &mut mesh,
+        &frame,
+        [0.20, 0.17],
+        0.08,
+        0.37,
+        field.params.seed,
+        812,
+    );
+    assert!(
+        mesh.indices.len() >= 48,
+        "the fixture must contain resolved moss structure"
+    );
+    let largest_area = mesh
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|tri| {
+            let p = tri.map(|i| DVec3::from(mesh.vertices[i as usize].position.map(f64::from)));
+            (p[1] - p[0]).cross(p[2] - p[0]).length() * 0.5
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(
+        largest_area <= 0.0008,
+        "untextured moss needs leaf-scale structure, not broad green facets: largest area={largest_area} m²"
+    );
+    let tallest = mesh
+        .vertices
+        .iter()
+        .map(|v| {
+            let p = center + DVec3::from(v.position.map(f64::from));
+            p.length() - ground_position(&field, p).length()
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(
+        (0.015..=0.12).contains(&tallest),
+        "moss must have bounded volume: {tallest} m"
+    );
+}

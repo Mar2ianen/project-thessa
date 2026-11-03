@@ -9,10 +9,12 @@ canonical-surface root contact; it does not establish rendered-page agreement.
 
 - High admits at most 4,250 moss cushions and 21,200 grass tufts. Medium caps
   these at 1,200 and 1,600. Low and disabled ground detail publish no cover.
-- Moss uses ten-sided, three-ring lobed cushions and eight short curved shoots,
-  in three olive palettes. Its continuous mask follows dampness and shallow
-  depressions. The latest footprint is 30% wider than the prior compact shape;
-  the untextured broad facets remain an acknowledged visual weakness.
+- Moss uses 24 short curved shoots per colony in three olive palettes. Each
+  root is sampled independently against optical soil after its jittered
+  golden-angle offset. A continuous local heading field correlates neighboring
+  shoots. Lengths are 26–60 mm with pointed tips; broad smooth dome faces are
+  removed. The occupancy mask follows dampness and shallow depressions. This
+  is a fine-shoot approximation, not validated botanical moss realism.
 - Grass uses fourteen curved, pointed blades per crown and four shape variants
   per palette, twelve reusable prototypes in total. High admits up to four
   independently rooted tufts around each selected site. Their height is sampled
@@ -60,7 +62,9 @@ roots against the canonical optical sampler, permitting at most 6 mm float and
 burial from the broad, rigid multi-tuft prototype. Independently positioned
 crowns pass. Existing cover tests also retain full-canopy admission, bounded
 counts, source payload, geometry reuse and Low/Off behavior; all five focused
-checks passed in the root checkout.
+checks passed for v3. V4 adds a moss fixture bounding individual triangle area
+to 8 cm² and checking 15–120 mm of occupied height; all six focused checks pass.
+This rejects large bare facets without proving convincing moss appearance.
 
 This root fixture is a canonical-sampler consistency check. It does not read
 GPU height residency, quantized page interpolation or the CBT triangle chord.
@@ -82,10 +86,11 @@ config, simulation time 74566.63966240163 and 20 seconds of prestream on Radeon
 | `ground-cover-moss-pair-fhd-20s` | 8,500 / 15,900 | 43,368,564 | Rejected: prominent smooth green polygonal pads |
 | `luna-pointed-grounded-v2-fhd-20s` | 4,250 / 21,200 | 22,348,356 | Numerical correction passes; visual coverage rejected as insufficient |
 | `luna-broad-cantilever-v3-fhd-20s` | 4,250 / 21,200 | 22,348,356 | Retained as a bounded shape improvement; reference target remains unaccepted |
+| `luna-moss-shoots-v4-fhd-20s` | 4,250 / 21,200 | 25,918,356 | Retained: smooth moss facets removed; dense natural coverage remains open |
 
 The last capture uses 16,343,040 bytes of source images separately from mesh
 payload, 2,508,416 instance-buffer bytes, 36 mesh draw calls and 5,361 submitted
-instances in v2 (5,394 in v3). All 20 frozen diagnostic views retain identical published geometry,
+instances in v2 (5,394 in v3 and v4). All 20 frozen diagnostic views retain identical published geometry,
 depth and beauty round-trip within that run. Native log, exact command and dirty
 source/binary fingerprints are preserved beside the frame. An initial attempt
 with both diagnostic sequence and perf-capture was rejected by the CLI before
@@ -107,3 +112,15 @@ same; visibility bounds admit a slightly different set of instances. The five
 focused tests, strict native all-target Clippy, release build and architecture
 gate passed in the root checkout. Rooted crowns, substrate quality and moss
 appearance still do not satisfy the reference scene as a whole.
+
+V4 was reviewed against [Lengyel et al. (2001), real-time fur](https://hhoppe.com/proj/fur/)
+and the explicit strand/flow-field representation in
+[iMoss](https://github.com/ledhieu/imoss/tree/8e3409a77bb370738ce6738fef0c6e892b6cdd1c).
+No shell pass, iMoss code, assets, fake lighting or supersampling were imported.
+iMoss is a stylized Marimo algae study under CC-BY-NC 4.0, used only for
+algorithm/visual inspection. Its strand volume suggests a representation, not
+a terrestrial moss botanical oracle. Root review observes that the smooth
+green facets are gone, but the small shoots still read as sparse fine clutter.
+V4 passed six focused tests, strict all-target native Clippy and a release
+build. The 20-view FHD capture preserves frozen geometry/depth/beauty identity.
+The additional source geometry is a measured cost, not a performance gain.

@@ -85,8 +85,10 @@ are unavailable; its feature description cannot substitute for source review.
 2. Measure roots against the selected GPU height page and rendered CBT chord,
    including parent fallback, publication changes and camera motion. A test
    comparing `ground_position` against itself cannot prove that contract.
-3. Replace the broad untextured moss facets with convincing small-scale
-   structure/material coverage. Doubling smooth domes was explicitly rejected.
+3. V4 removes broad untextured moss facets using independently rooted short
+   shoots, informed by Lengyel et al. fur-volume research and iMoss strand/flow
+   geometry (doc 126). Doubling smooth domes was explicitly rejected. Dense
+   natural moss appearance and temporal coverage remain open.
 4. Audit close-soil source bandwidth, material footprint/filtering and geometric
    relief as separate causes. Roughness 0.96 did not repair the visible failure;
    more vegetation is useful composition but does not close material quality.

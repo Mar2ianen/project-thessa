@@ -989,9 +989,10 @@ does not claim complete residency or visual parity.
 
 [Patchy ground cover and wet-soil response](docs/126_PATCHY_GROUND_COVER_AND_WET_SOIL.md)
 adds reusable curved grass crowns and soil-following moss to the existing mesh
-path. High is bounded at 4,250 moss cushions / 21,200 grass tufts; Medium retains
+path. High is bounded at 4,250 short-shoot moss colonies / 21,200 grass tufts; Medium retains
 1,200 / 1,600. Pointed tips and canonical-surface root contact pass independent
-geometry checks. The FHD B03 frame still falls short visually; root agreement
+geometry checks. Smooth moss domes are replaced by individually rooted short
+shoots with a spatially correlated heading field. The FHD B03 frame still falls short visually; root agreement
 with resident CBT height pages and close-soil quality remain open.
 [Reference-driven iterations](docs/127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md)
 record actual Unreal, OpenEngine CBT/grass and AMD source mechanisms, reviewer-

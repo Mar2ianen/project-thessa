@@ -56,6 +56,22 @@
           "sha256": "e945aa8a1330db71c9cf9639c84b880eb19b80bf1f681fce2e957ca5aa51b053"
         }
       ]
+    },
+    {
+      "name": "iMoss",
+      "url": "https://github.com/ledhieu/imoss",
+      "revision": "8e3409a77bb370738ce6738fef0c6e892b6cdd1c",
+      "license_boundary": "CC-BY-NC-4.0; algorithm/visual inspection only; no code or assets copied",
+      "inspected_files": [
+        {
+          "path": "src/components/MossBall.svelte",
+          "sha256": "03951b5d2e41f595d10b7c55f6dbaf187191766ab358b77855eaad770f68e9bc"
+        },
+        {
+          "path": "src/shaders/mossball.vert",
+          "sha256": "bd2fd6e6013c59a20c6eb4716d680c79ce89e00c8025c8ed86251c86099e5fa6"
+        }
+      ]
     }
   ],
   "external_engine_builds_run": false,

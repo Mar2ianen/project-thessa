@@ -15,6 +15,8 @@ const PALETTE_COUNT: usize = ORGANIC_PALETTES.len();
 const GRASS_BLADES_PER_TUFT: u32 = 14;
 const GRASS_TUFTS_PER_HIGH_PATCH: usize = 4;
 const GRASS_SHAPE_VARIANTS: usize = 4;
+const MOSS_SHOOTS_PER_CUSHION: usize = 24;
+const MOSS_BLADE_SEGMENTS: usize = 2;
 const GRASS_PALETTES: [[f32; 4]; 3] = [
     [0.035, 0.102, 0.014, 1.0],
     [0.055, 0.116, 0.017, 1.0],
@@ -57,17 +59,6 @@ fn folded_leaf(mesh: &mut Primitive, points: [DVec3; 5], anchor: DVec3) {
     }
     mesh.indices
         .extend(faces.into_iter().flatten().map(|i| start + i as u32));
-}
-
-fn organic_triangle(mesh: &mut Primitive, mut vertices: [(DVec3, DVec3); 3], anchor: DVec3) {
-    let [a, b, c] = vertices.map(|v| v.0);
-    let expected = vertices.iter().map(|v| v.1).sum::<DVec3>();
-    if (b - a).cross(c - a).dot(expected) < 0.0 {
-        vertices.swap(1, 2);
-    }
-    for (position, normal) in vertices {
-        vertex(mesh, position, normal, anchor);
-    }
 }
 
 fn organic_triangle_uv(
@@ -211,8 +202,9 @@ fn curved_blade(
     );
 }
 
-// Low, lobed cushions break up the scanned soil without becoming flat decals.
-// Each point follows the same rendered soil height source as rocks and litter.
+// Moss is represented as a patch of short, pointed micro-shoots rather than a
+// continuous dome. The staggered roots follow the soil, while a slowly varying
+// heading field avoids making each patch read as one radial starburst.
 fn moss_cushion(
     mesh: &mut Primitive,
     frame: &GroundPatchFrame<'_>,
@@ -232,55 +224,34 @@ fn moss_cushion(
     let [radius_x, radius_z] = radii;
     let up = center.normalize();
     let soil = ground_position(field, center);
-    const SIDES: usize = 10;
-    let mut lower = [(DVec3::ZERO, DVec3::ZERO); SIDES];
-    let mut middle = [(DVec3::ZERO, DVec3::ZERO); SIDES];
-    let mut upper = [(DVec3::ZERO, DVec3::ZERO); SIDES];
-    for i in 0..SIDES {
-        let angle = std::f64::consts::TAU * i as f64 / SIDES as f64;
-        let lobe =
-            1.0 + 0.11 * (3.0 * angle + phase).sin() + 0.045 * (5.0 * angle - phase * 0.7).cos();
-        let radial = (east * angle.cos() + north * angle.sin()).normalize();
-        let sample = |scale: f64, lift: f64| {
-            let surface = ground_position(
-                field,
-                soil + east * (radius_x * scale * lobe * angle.cos())
-                    + north * (radius_z * scale * lobe * angle.sin()),
-            );
-            surface + up * lift
-        };
-        lower[i] = (sample(1.0, 0.002), (radial * 0.62 + up * 0.78).normalize());
-        middle[i] = (
-            sample(0.76, height * (0.34 + 0.035 * lobe)),
-            (radial * 0.44 + up * 0.90).normalize(),
-        );
-        upper[i] = (
-            sample(0.43, height * (0.72 + 0.055 * lobe)),
-            (radial * 0.24 + up * 0.97).normalize(),
-        );
-    }
-    let apex = (soil + up * height, up);
-    for i in 0..SIDES {
-        let j = (i + 1) % SIDES;
-        organic_triangle(mesh, [lower[i], lower[j], middle[j]], anchor);
-        organic_triangle(mesh, [lower[i], middle[j], middle[i]], anchor);
-        organic_triangle(mesh, [middle[i], middle[j], upper[j]], anchor);
-        organic_triangle(mesh, [middle[i], upper[j], upper[i]], anchor);
-        organic_triangle(mesh, [upper[i], upper[j], apex], anchor);
-    }
     let hash = |channel| rng::hash01(seed, channel, id, 0);
-    for leaf in 0..8 {
-        let angle = phase + hash(7900 + leaf) * std::f64::consts::TAU;
-        let radial = (east * angle.cos() + north * angle.sin()).normalize();
+    for leaf in 0..MOSS_SHOOTS_PER_CUSHION {
+        // A golden-angle distribution fills the colony interior without a
+        // visible ring boundary. Small deterministic jitter breaks the spiral.
+        let root_angle =
+            phase + leaf as f64 * 2.399_963_229_728_653 + (hash(7900 + leaf as u32) - 0.5) * 0.38;
+        let root_radius = ((leaf as f64 + 0.5) / MOSS_SHOOTS_PER_CUSHION as f64).sqrt()
+            * (0.72 + hash(7940 + leaf as u32) * 0.20);
+        let root_offset = east * (radius_x * root_radius * root_angle.cos())
+            + north * (radius_z * root_radius * root_angle.sin());
+        let soil_root = ground_position(field, soil + root_offset) + up * 0.001;
+
+        // A seeded low-frequency field in local patch coordinates makes nearby
+        // roots share a heading; small per-shoot jitter keeps the flow organic.
+        let local_x = root_offset.dot(east) / radius_x;
+        let local_z = root_offset.dot(north) / radius_z;
+        let field_phase_x = hash(7920) * std::f64::consts::TAU;
+        let field_phase_z = hash(7921) * std::f64::consts::TAU;
+        let field_phase_detail = hash(7922) * std::f64::consts::TAU;
+        let heading_field = 0.68 * (2.3 * local_x + field_phase_x).sin()
+            + 0.55 * (2.0 * local_z + field_phase_z).cos()
+            + 0.18 * (4.4 * local_x - 3.7 * local_z + field_phase_detail).sin();
+        let heading = phase + heading_field + (hash(7980 + leaf as u32) - 0.5) * 0.20;
+        let radial = (east * heading.cos() + north * heading.sin()).normalize();
         let side = up.cross(radial).normalize();
-        let root_radius = 0.018 + hash(7940 + leaf) * 0.055;
-        let soil_root = ground_position(
-            field,
-            soil + east * (angle.cos() * root_radius) + north * (angle.sin() * root_radius),
-        ) + up * 0.003;
-        let length = 0.028 + hash(7980 + leaf) * 0.034;
-        let width = 0.002 + hash(8020 + leaf) * 0.0018;
-        let lean = radial * (0.008 + hash(8060 + leaf) * 0.018);
+        let length = (0.026 + hash(8020 + leaf as u32) * 0.034).min(height * 0.82);
+        let width = 0.0030 + hash(8060 + leaf as u32) * 0.0014;
+        let lean = radial * (0.006 + hash(8100 + leaf as u32) * 0.014);
         curved_blade(
             mesh,
             soil_root,
@@ -288,8 +259,8 @@ fn moss_cushion(
             BladeShape {
                 length,
                 half_width: width,
-                segments: 4,
-                taper_start: None,
+                segments: MOSS_BLADE_SEGMENTS,
+                taper_start: Some(0.34),
             },
             anchor,
         );
@@ -888,8 +859,8 @@ mod tests {
                 .iter()
                 .map(|mesh| mesh.indices.len())
                 .sum::<usize>(),
-            stats.ground_moss_clumps * (50 + 8 * 8) * 3,
-            "each compact rounded cushion has three dome rings and eight curved leaflets"
+            stats.ground_moss_clumps * MOSS_SHOOTS_PER_CUSHION * (MOSS_BLADE_SEGMENTS * 2) * 3,
+            "each moss colony has 24 short shoots with two curved blade segments"
         );
         let litter = local
             .iter()

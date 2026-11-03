@@ -1,0 +1,626 @@
+{
+  "base_commit": "7d2777cff634b11943f01d4eb189e3ac248059e6",
+  "source_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit",
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03",
+  "no_reference_parity_or_speedup_claim": true,
+  "status": "Opt-in native HDR diffuse-sky receivers and finite-range scalar current-frame visibility implemented. Off is resource-free; GI, full G-buffers, moving-camera error/visual acceptance remain open.",
+  "quality_samples": [
+    8,
+    16,
+    32
+  ],
+  "oracle": {
+    "directions": 65536,
+    "reference_occlusion": [
+      0.21095,
+      0.22092
+    ],
+    "actual_occlusion_range": [
+      0.1929,
+      0.1962
+    ],
+    "absolute_fixture_envelope": 0.06,
+    "limits": "Selected contact under all tiers/MSAA1/4. This is not a universal screen-depth error bound."
+  },
+  "tests": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/software-all-receivers.log",
+      "bytes": 1052,
+      "sha256": "1dca8b1d296840013729450f8f6de448811027c36a5ea19796b6e933941b1a78"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/radv-all-receivers.log",
+      "bytes": 1045,
+      "sha256": "2a5d65c97f1b71c415cf3fdeef73bc6179910608f9802848ca95fd0109c9a2d7"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/ambient_visibility-all.bin",
+      "bytes": 160966672,
+      "sha256": "bdcb50863e046536f6e3ca48799d93a67a2e0722a5e52e8e99f2f4eb9842ac39"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/ambient_visibility-centroid-software.log",
+      "bytes": 982,
+      "sha256": "1f5d34a9457a99d5ed09f04501cf1ab007315760e7ba82aca074c62ab43a7628"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/ambient_visibility-centroid-radv.log",
+      "bytes": 975,
+      "sha256": "c82c18b62a7984e661e0a0e9cbee7e685316166535810253cd14332fd43e6564"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/thessa-ambient-graphics2.log",
+      "bytes": 5096,
+      "sha256": "38d5f61863505c7059b6187126e28d264edb6aeee13c129ddefeff4513019fb5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/thessa-ambient-core.log",
+      "bytes": 22814,
+      "sha256": "ddd95fed20aa76b431e3e93f197c411b6b27f5ba4bbbf14a4064ea8e12ed0a2d"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/thessa-ambient-clippy-final.log",
+      "bytes": 364,
+      "sha256": "3c5d593a4ae03874032ff701d8cf86ee6038fed0e29a0d8d793e12d0b097d8db"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/thessa-ambient-architecture.log",
+      "bytes": 310,
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/thessa-ambient-check-final.log",
+      "bytes": 759,
+      "sha256": "6fcffe94b9520793a0d820f2804d93d9fe1127e8dec99972ad43499ecff9e270"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/thessa-ambient-native-tests.log",
+      "bytes": 26333,
+      "sha256": "7c492bebb46184b621f486b0e0296d991ec1b8ab2e85b50c0c3adeadfef1c245"
+    }
+  ],
+  "fhd_retained_policy": {
+    "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd",
+    "manifest": {
+      "complete": true,
+      "extent": [
+        1920,
+        1080
+      ],
+      "sample_count": 4,
+      "sim_time_s": 74566.63966240163,
+      "beauty_round_trip_identical": true,
+      "published_geometry_identical": true,
+      "ambient_receiver_identical": true,
+      "material_resident_levels": [
+        6,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        4,
+        0,
+        7,
+        1,
+        3,
+        0,
+        8,
+        0,
+        62,
+        49,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "pending_jobs": [
+        8,
+        4
+      ],
+      "mesh_stats": "Some(MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19660054, draw_calls: 22, draw_commands: 2178, triangles: 2775318, frame_upload_bytes: 576 })",
+      "views": [
+        {
+          "ambient_visibility_enabled": false,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "00-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "01-none"
+        },
+        {
+          "ambient_visibility_enabled": false,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "02-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "03-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "water_weight",
+          "name": "04-water_weight"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "height",
+          "name": "05-height"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "distance",
+          "name": "06-distance"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "normal",
+          "name": "07-normal"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "albedo",
+          "name": "08-albedo"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "roughness",
+          "name": "09-roughness"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "geometry",
+          "name": "10-geometry"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "height_page_level",
+          "name": "11-height_page_level"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "footprint",
+          "name": "12-footprint"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "material_lod",
+          "name": "13-material_lod"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "relief_weight",
+          "name": "14-relief_weight"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "direct",
+          "name": "15-direct"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "ambient",
+          "name": "16-ambient"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "specular",
+          "name": "17-specular"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "land_only",
+          "name": "18-land_only"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "19-none"
+        }
+      ]
+    },
+    "cpu_material_pages": 146,
+    "identity": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/identity.json",
+        "bytes": 803,
+        "sha256": "38766c9b6855628cbbf1e8e7609cf90b68e714037b21def0481714066ccc35ca"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/full-fhd-command.json",
+        "bytes": 2328,
+        "sha256": "e165e1f4e3bf382d08c31ea4271b1047a7db74eacaf2b46ae128cb0e11725539"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/native.bin",
+        "bytes": 730547936,
+        "sha256": "6a2bd9d397398d207b6a6b29c9bb703cc5710a3e5383ac6c65fc505179d98d81"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/source.patch",
+        "bytes": 51891,
+        "sha256": "8903c700cfdfe1d048dc63a37ce2ebcba8bdf332a8c367d147f2a3bb08ae1145"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/manifest.json",
+        "bytes": 105923,
+        "sha256": "f98dc94da0df92ff9632e201718844d0802f88a57c6632c6f54f715f4619823f"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/depth.f32",
+        "bytes": 8294400,
+        "sha256": "4742ad4a92587a51ef7db38de963d45278877448e300a2ff271ce79825cfcf04"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/00-none.rgba16f",
+        "bytes": 16588800,
+        "sha256": "75d7a88fd3b3d7d3a13639478e72493fc61ea41bdfeedbbb3c0dd7e62e294e05"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/01-none.rgba16f",
+        "bytes": 16588800,
+        "sha256": "27469f855c239c1432124eb46be2fc8a55527aa4edc82c22e2058658262129dc"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/00-none.diffuse-sky.rgba16f",
+        "bytes": 16588800,
+        "sha256": "8a6e19e1dc7c0afae01164f2dc556134f4b2cebb97202d3ad9fbc8e6d71adf1c"
+      }
+    ]
+  },
+  "fhd_timestamp_control": {
+    "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd",
+    "manifest": {
+      "complete": true,
+      "extent": [
+        1920,
+        1080
+      ],
+      "sample_count": 4,
+      "sim_time_s": 74566.63966240163,
+      "beauty_round_trip_identical": true,
+      "published_geometry_identical": true,
+      "ambient_receiver_identical": true,
+      "material_resident_levels": [
+        6,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        5,
+        1,
+        29,
+        14,
+        3,
+        35,
+        15,
+        2,
+        30,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "pending_jobs": [
+        8,
+        4
+      ],
+      "mesh_stats": "Some(MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19660054, draw_calls: 22, draw_commands: 2178, triangles: 2775318, frame_upload_bytes: 576 })",
+      "views": [
+        {
+          "ambient_visibility_enabled": false,
+          "ambient_visibility_gpu_ms": 1.7088067539939882,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "00-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.785833129829407,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "01-none"
+        },
+        {
+          "ambient_visibility_enabled": false,
+          "ambient_visibility_gpu_ms": 1.824787118122101,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "02-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.6262098436088563,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "03-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 2.9783789569015506,
+          "depth_identical": true,
+          "mode": "water_weight",
+          "name": "04-water_weight"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.031600077690125,
+          "depth_identical": true,
+          "mode": "height",
+          "name": "05-height"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.1669372199363712,
+          "depth_identical": true,
+          "mode": "distance",
+          "name": "06-distance"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.0827372389297487,
+          "depth_identical": true,
+          "mode": "normal",
+          "name": "07-normal"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.174191002212525,
+          "depth_identical": true,
+          "mode": "albedo",
+          "name": "08-albedo"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.121811480472565,
+          "depth_identical": true,
+          "mode": "roughness",
+          "name": "09-roughness"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.01052002532959,
+          "depth_identical": true,
+          "mode": "geometry",
+          "name": "10-geometry"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.00919751253891,
+          "depth_identical": true,
+          "mode": "height_page_level",
+          "name": "11-height_page_level"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.0653842680702215,
+          "depth_identical": true,
+          "mode": "footprint",
+          "name": "12-footprint"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 2.9980162680358893,
+          "depth_identical": true,
+          "mode": "material_lod",
+          "name": "13-material_lod"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 2.9522092341041564,
+          "depth_identical": true,
+          "mode": "relief_weight",
+          "name": "14-relief_weight"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.072197212749481,
+          "depth_identical": true,
+          "mode": "direct",
+          "name": "15-direct"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.009117360248566,
+          "depth_identical": true,
+          "mode": "ambient",
+          "name": "16-ambient"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.1061417077102664,
+          "depth_identical": true,
+          "mode": "specular",
+          "name": "17-specular"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.799939932929993,
+          "depth_identical": true,
+          "mode": "land_only",
+          "name": "18-land_only"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "ambient_visibility_gpu_ms": 3.797094526622773,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "19-none"
+        }
+      ]
+    },
+    "cpu_material_pages": 146,
+    "identity": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/identity.json",
+        "bytes": 327,
+        "sha256": "36710deb8bdff770db0f80a26b5abd7818fc345d8b7f25d4ee4c2a0a56c270c6"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/command.json",
+        "bytes": 2360,
+        "sha256": "e31912adf45649bc906dfa419115a580763f8727898fe3ce2f763451f51de0de"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/native.bin",
+        "bytes": 730821208,
+        "sha256": "862ff193a4d269d5acd72da1e6c499769bd0885be87521e53f73b46647c46a24"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/source.patch",
+        "bytes": 62441,
+        "sha256": "e5d4d9378b3b51c089ad5c17c421fb5f8c5e8249118fba8a3b3cd97b07c71614"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/views/manifest.json",
+        "bytes": 105507,
+        "sha256": "b45977c618df37eaeb37134707f5009c3a370d19554046bd9a7eabae1ee09bfb"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/views/depth.f32",
+        "bytes": 8294400,
+        "sha256": "044a16eb68d4f756bcc0f5ee17b8eb9ac79714db81418b9bece0f628ea5a15b4"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/views/00-none.rgba16f",
+        "bytes": 16588800,
+        "sha256": "adf7874767c86c04e734beb56ec787dd19aebb43f89d497f1cd866a52fb9a499"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/views/01-none.rgba16f",
+        "bytes": 16588800,
+        "sha256": "efc6fd39db0fe3cece03d8f36344cda8699b75f84818e897c44a98f379af128a"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/soil-source-error-fhd/views/00-none.diffuse-sky.rgba16f",
+        "bytes": 16588800,
+        "sha256": "e68fba634fdc4c8b69eae3744056019bb6b337873068e5c2ee85dd20a7003102"
+      }
+    ]
+  },
+  "timing_limit": "Timestamp-enabled FHD capture uses a rejected material-scheduling experiment, archived in its source.patch. AO shader/path is the retained implementation. About 3.8ms enabled pass excludes MRT/depth/composition; fenced QA intervals are not production FPS. QA disabled pass still runs; actual production Off allocates/encodes nothing.",
+  "b05": {
+    "extent": [
+      640,
+      480
+    ],
+    "measured_frames": 3,
+    "off_on_hdr_byte_identical": true,
+    "note": "Zero sky component, so this checks host transparency/emission composition, not AO quality. Fixture tests separately exercise nonzero sky transport.",
+    "files": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-off/command.json",
+        "bytes": 1964,
+        "sha256": "354360b5a687adb344c255b86c1910851418666740b2198d2d6040870f44930b"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-off/graphics.toml",
+        "bytes": 718,
+        "sha256": "9de954a98ed6c726eadf2b46f4f14c870e570c2d5fd1cc5ace276465b4afc876"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-off/run.log",
+        "bytes": 117,
+        "sha256": "8b01cb99066ea0db52b17f3e78f984c6f474365a480dfc7849224a7218a6a04d"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-off/frame.rgba16f",
+        "bytes": 2457600,
+        "sha256": "babdc325b707b883f1b8637fa05c29d56ce79e2b913c92ed7a9b8f55f378865b"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-off/perf.json",
+        "bytes": 19024,
+        "sha256": "159f5178f05d2d2f0997a5eea89b5f373e2a80262a55e8151da80f995d369910"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-off/scene.json",
+        "bytes": 1542,
+        "sha256": "8ce4f3e288f73af2523aecc9e049f583c99b2d5b5bd4c1041f80033a92ee79fb"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-on/command.json",
+        "bytes": 1958,
+        "sha256": "4938f7fce5087908349208c6bb4f52511e8a12c5a38345cb6ef59fb700167754"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-on/graphics.toml",
+        "bytes": 717,
+        "sha256": "1c252a0b90e324129b99091246c4c2ce0a5a522b226ffcc7cdefe2080485ca4b"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-on/run.log",
+        "bytes": 117,
+        "sha256": "8b01cb99066ea0db52b17f3e78f984c6f474365a480dfc7849224a7218a6a04d"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-on/frame.rgba16f",
+        "bytes": 2457600,
+        "sha256": "babdc325b707b883f1b8637fa05c29d56ce79e2b913c92ed7a9b8f55f378865b"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-on/perf.json",
+        "bytes": 19020,
+        "sha256": "cbc3035352cc4d4d2ddc0651f3e2c286d96909de7546c5d3654d39a8b77ed193"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/b05-on/scene.json",
+        "bytes": 1542,
+        "sha256": "8ce4f3e288f73af2523aecc9e049f583c99b2d5b5bd4c1041f80033a92ee79fb"
+      }
+    ]
+  },
+  "partial_attempts": {
+    "software_regression": "surface_lighting-software-final.log terminated 143 after three passing tests. Complete eight-test surface regression passed on RADV only in this milestone.",
+    "other_attempts": "Earlier short depth-search fixtures failed the box-oracle control; archived original logs are retained. Final all-receivers software/RADV tests pass."
+  }
+}

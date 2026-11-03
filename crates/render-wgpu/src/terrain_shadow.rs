@@ -31,6 +31,7 @@ pub(crate) fn raster_pipeline(
     format: wgpu::TextureFormat,
     samples: u32,
     conforming: bool,
+    ambient_output: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("cbt-raster"),
@@ -67,11 +68,7 @@ pub(crate) fn raster_pipeline(
             module,
             entry_point: Some("fragment"),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &crate::ambient_visibility::color_targets(format, ambient_output, None),
         }),
         multiview_mask: None,
         cache: None,
@@ -213,7 +210,15 @@ impl PrimaryShadow {
             label: Some("primary-shadow-terrain"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
-        let pipeline = raster_pipeline(device, &module, Some(&layout), format, samples, conforming);
+        let pipeline = raster_pipeline(
+            device,
+            &module,
+            Some(&layout),
+            format,
+            samples,
+            conforming,
+            raster_source.contains("struct AmbientSurfaceOutput"),
+        );
         let geometry = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("primary-shadow-terrain"),
             layout: &geometry_layout,
@@ -281,6 +286,7 @@ impl PrimaryShadow {
                     self.format,
                     self.samples,
                     self.conforming,
+                    self.source.contains("struct AmbientSurfaceOutput"),
                 );
                 *cached = Some((schema.shader.clone(), pipeline));
             }

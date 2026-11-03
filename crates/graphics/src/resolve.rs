@@ -199,6 +199,8 @@ pub struct Capabilities {
     pub hdr_render_target_supported: Option<bool>,
     /// Compute, filterable RGBA16Float storage/history and copyable Depth32Float.
     pub temporal_supported: Option<bool>,
+    /// Native host provides diffuse-sky MRT output and HDR subtractive composition.
+    pub ambient_visibility_supported: Option<bool>,
 }
 
 impl Capabilities {
@@ -214,6 +216,7 @@ impl Capabilities {
             terrain_mesh_supported: None,
             hdr_render_target_supported: None,
             temporal_supported: None,
+            ambient_visibility_supported: None,
         }
     }
 }
@@ -318,6 +321,10 @@ pub struct ResolvedGraphicsSettings {
     #[serde(default = "default_terrain_anisotropy")]
     pub terrain_material_anisotropy: u16,
     pub specular_reflections: bool,
+    #[serde(default)]
+    pub ambient_visibility_samples: u32,
+    #[serde(default)]
+    pub ambient_visibility_radius_m: f32,
     pub native_shadow_map_size: u32,
     pub shadow_filter_radius: u32,
     /// Remaining raster-shadow map budget available for mesh draw commands.
@@ -704,6 +711,11 @@ impl ResolvedGraphicsSettings {
     pub fn from_requested(requested: &RequestedGraphics, caps: &Capabilities) -> Self {
         let mut notes = Vec::new();
         let hdr = requested.renderer.hdr && caps.hdr_render_target_supported != Some(false);
+        if requested.renderer.ambient_visibility
+            && (!hdr || caps.ambient_visibility_supported != Some(true))
+        {
+            notes.push("diffuse sky visibility requires native HDR receiver support; using unoccluded sky fallback".into());
+        }
         let taa_supported = requested.temporal.taa && caps.temporal_supported != Some(false);
         let temporal_motion_vectors = (requested.temporal.motion_vectors || taa_supported) && hdr;
         let temporal_jitter =
@@ -977,6 +989,30 @@ impl ResolvedGraphicsSettings {
                 && requested.renderer.terrain_ground_puddles,
             terrain_material_anisotropy,
             specular_reflections: requested.renderer.specular_reflections,
+            ambient_visibility_samples: if requested.renderer.ambient_visibility
+                && hdr
+                && caps.ambient_visibility_supported == Some(true)
+            {
+                match requested.renderer.ambient_visibility_quality {
+                    Quality::Low => 8,
+                    Quality::Medium => 16,
+                    Quality::High => 32,
+                }
+            } else {
+                0
+            },
+            ambient_visibility_radius_m: if requested
+                .renderer
+                .ambient_visibility_radius_m
+                .is_finite()
+            {
+                requested
+                    .renderer
+                    .ambient_visibility_radius_m
+                    .clamp(0.05, 20.0)
+            } else {
+                2.0
+            },
             backend: ResolvedBackend { name: backend_name },
             terrain,
             terrain_topology,
@@ -1385,6 +1421,14 @@ impl ResolvedGraphicsSettings {
         map.insert("hdr".to_string(), self.hdr.to_string());
         map.insert("tone_mapping".into(), self.tone_mapping.as_str().into());
         map.insert(
+            "ambient_visibility_samples".into(),
+            self.ambient_visibility_samples.to_string(),
+        );
+        map.insert(
+            "ambient_visibility_radius_m".into(),
+            self.ambient_visibility_radius_m.to_string(),
+        );
+        map.insert(
             "raster_msaa_samples".into(),
             self.raster_msaa_samples.to_string(),
         );
@@ -1582,6 +1626,7 @@ mod tests {
                 is_discrete_gpu: supported,
                 hdr_render_target_supported: supported,
                 temporal_supported: supported,
+                ambient_visibility_supported: supported,
             };
             // Exclude preset-label changes so complete resolved equality pins
             // isolation, including RT, shadow, topology and fallback notes.
@@ -2661,5 +2706,64 @@ mod terrain_diagnostic_tests {
             );
         }
         assert!(RequestedGraphics::from_toml("[debug]\nterrain_view = \"water_guess\"\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod ambient_visibility_tests {
+    use super::*;
+    #[test]
+    fn diffuse_sky_visibility_is_explicit_capability_gated_and_budget_only() {
+        let mut request = RequestedGraphics::default();
+        let caps = Capabilities {
+            ambient_visibility_supported: Some(true),
+            ..Capabilities::unknown()
+        };
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &caps).ambient_visibility_samples,
+            0
+        );
+        request.renderer.ambient_visibility = true;
+        for (quality, samples) in [
+            (Quality::Low, 8),
+            (Quality::Medium, 16),
+            (Quality::High, 32),
+        ] {
+            request.renderer.ambient_visibility_quality = quality;
+            let resolved = ResolvedGraphicsSettings::from_requested(&request, &caps);
+            assert_eq!(resolved.ambient_visibility_samples, samples);
+            assert_eq!(resolved.ambient_visibility_radius_m, 2.);
+            assert!(
+                !resolved.temporal_taa
+                    && !resolved.temporal_jitter
+                    && !resolved.temporal_motion_vectors
+            );
+        }
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &Capabilities::unknown())
+                .ambient_visibility_samples,
+            0
+        );
+        request.renderer.hdr = false;
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &caps).ambient_visibility_samples,
+            0
+        );
+        request.renderer.hdr = true;
+        request.renderer.ambient_visibility_radius_m = f32::NAN;
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &caps).ambient_visibility_radius_m,
+            2.
+        );
+        request.renderer.ambient_visibility_radius_m = 200.;
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&request, &caps).ambient_visibility_radius_m,
+            20.
+        );
+        let loaded=RequestedGraphics::from_toml("version=1\n[renderer]\nambient_visibility=true\nambient_visibility_quality=\"high\"\nambient_visibility_radius_m=1.5\n").unwrap();
+        assert_eq!(
+            ResolvedGraphicsSettings::from_requested(&loaded, &caps).ambient_visibility_samples,
+            32
+        );
     }
 }

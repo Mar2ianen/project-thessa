@@ -13,7 +13,8 @@ struct Lighting { ambient:vec4<f32>, directions:array<vec4<f32>,3>, colors:array
 @group(1) @binding(6) var normal_sampler:sampler;
 @group(1) @binding(7) var ao_texture:texture_2d<f32>;
 @group(1) @binding(8) var ao_sampler:sampler;
-struct Output { @builtin(position) clip:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) uv:vec2<f32>, @location(2) position:vec3<f32>, @location(3) ambient:f32 }
+// Thin MSAA triangles may miss the pixel centre; centroid keeps attributes on the covered surface.
+struct Output { @builtin(position) clip:vec4<f32>, @interpolate(perspective, centroid) @location(0) normal:vec3<f32>, @interpolate(perspective, centroid) @location(1) uv:vec2<f32>, @interpolate(perspective, centroid) @location(2) position:vec3<f32>, @interpolate(perspective, centroid) @location(3) ambient:f32 }
 @vertex fn vertex(@location(0) position:vec3<f32>, @location(1) normal:vec3<f32>, @location(2) uv:vec2<f32>, @location(3) ambient:f32, @builtin(instance_index) i:u32)->Output {
     var out:Output;
     let matrix=instances[i];
@@ -52,7 +53,7 @@ fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3
     let shading=dot(normal,light_direction);let side=dot(geometry,light_direction);
     return vec2(select(0.0,max(shading,0.0),side>0.0),select(0.0,max(-shading,0.0),side<0.0));
 }
-fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
+fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32,ambient_component:vec3<f32>,baked_visibility:f32)->vec4<f32> {
     return vec4(radiance*view.exposure,1.0);
 }
 @fragment fn fragment(in:Output,@builtin(front_facing) front:bool)->@location(0) vec4<f32> {
@@ -96,15 +97,16 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
             direct_transmit+=sunlight[i]*bwd*visibility[i];
         }
     }
+    var front_ambient=light.ambient.rgb;
     var ambient=light.ambient.rgb;
-    if(material.quality!=0u){ambient=(1.0-transmission)*env_diffuse_irradiance(normal,ambient)+transmission*env_diffuse_irradiance(-normal,ambient);}
+    if(material.quality!=0u){front_ambient=env_diffuse_irradiance(normal,ambient);ambient=(1.0-transmission)*front_ambient+transmission*env_diffuse_irradiance(-normal,ambient);}
     let amb_up=ambient*ao;
     let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;
     let diffuse_ambient=albedo*amb_up/OCEAN_PI;
     let diffuse_total=diffuse_ambient+diffuse_direct;
     if (material.quality==0u && material.reflections==0u) {
         let low_rad = env_local_haze(in.position,diffuse_total*(1.0-material.factors.x)+material.emission.rgb,light.ambient.rgb);
-        return mesh_fragment_output(low_rad,base_sample.a*material.color.a);
+        return mesh_fragment_output(low_rad,base_sample.a*material.color.a,env_haze_transmittance(in.position)*diffuse_ambient*(1.0-material.factors.x)*(1.0-transmission),ao);
     }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
@@ -129,5 +131,5 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32)->vec4<f32> {
         }
     }
     radiance=env_local_haze(in.position,radiance+material.emission.rgb,light.ambient.rgb);
-    return mesh_fragment_output(radiance,base_sample.a*material.color.a);
+    return mesh_fragment_output(radiance,base_sample.a*material.color.a,env_haze_transmittance(in.position)*(vec3(1.0)-fresnel)*(1.0-metallic)*albedo*ao/OCEAN_PI*(1.0-transmission)*front_ambient,ao);
 }

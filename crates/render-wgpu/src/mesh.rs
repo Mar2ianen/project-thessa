@@ -739,12 +739,21 @@ impl MeshRenderer {
                         ),
                         // Unknown/moving meshes remain motion-invalid. Immutable
                         // geometry shares terrain's camera-only reconstruction.
-                        primary_shader(
-                            mode,
-                            !static_geometry
-                                && ray_tracing.is_some_and(|s| s.temporal_motion_vectors),
-                            coverage_msaa
-                        )
+                        {
+                            let source = primary_shader(
+                                mode,
+                                !static_geometry
+                                    && ray_tracing.is_some_and(|s| s.temporal_motion_vectors),
+                                coverage_msaa,
+                            );
+                            if ray_tracing.is_some_and(|s| s.ambient_visibility_samples > 0)
+                                && mode != AlphaMode::Blend
+                            {
+                                crate::ambient_visibility::mesh_shader(source)
+                            } else {
+                                source
+                            }
+                        }
                     )
                     .into(),
                 ),
@@ -861,12 +870,13 @@ impl MeshRenderer {
                         ],
                         ..Default::default()
                     },
-                    targets: &[Some(wgpu::ColorTargetState {
+                    targets: &crate::ambient_visibility::color_targets(
                         format,
-                        blend: (mode == AlphaMode::Blend)
+                        ray_tracing.is_some_and(|s| s.ambient_visibility_samples > 0)
+                            && mode != AlphaMode::Blend,
+                        (mode == AlphaMode::Blend)
                             .then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    ),
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -1510,6 +1520,44 @@ impl MeshRenderer {
             t.mark(encoder, 2);
             t.resolve(encoder);
         }
+    }
+
+    /// Draw only opaque/MASK surfaces to the optional diffuse-sky receiver.
+    /// Encode acceleration structures before this pass, then apply visibility
+    /// and compose transparent surfaces with the original single-target pipeline.
+    pub fn encode_opaque_with_ambient(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        resolve: Option<&wgpu::TextureView>,
+        ambient: &crate::ambient_visibility::AmbientVisibility,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("mesh-diffuse-sky-receiver"),
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(ambient.attachment()),
+            ],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        self.draw_opaque_into_pass(&mut pass);
     }
 
     /// Draw rigid mesh instances directly into an existing compatible render pass.

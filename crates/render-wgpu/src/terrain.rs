@@ -742,7 +742,7 @@ impl TerrainRenderer {
         } else {
             hooks.push_str(&crate::clouds::SHADER.replace("@group(0)", "@group(2)"));
             hooks.push_str(
-                "fn env_local_haze(p:vec3<f32>,r:vec3<f32>,a:vec3<f32>)->vec3<f32>{return r;}\n",
+                "fn env_local_haze(p:vec3<f32>,r:vec3<f32>,a:vec3<f32>)->vec3<f32>{return r;}\nfn env_haze_transmittance(p:vec3<f32>)->f32{return 1.0;}\n",
             );
         }
         // Displacement samples material at vertices, independently of this
@@ -818,6 +818,12 @@ impl TerrainRenderer {
                     settings.map_or(0, |s| s.terrain_normal_mip_bias())
                 ),
             );
+        let ambient_output = settings.is_some_and(|s| s.ambient_visibility_samples > 0);
+        let raster_source = if ambient_output {
+            crate::ambient_visibility::terrain_shader(raster_source)
+        } else {
+            raster_source
+        };
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cbt-raster"),
             source: wgpu::ShaderSource::Wgsl(
@@ -839,6 +845,7 @@ impl TerrainRenderer {
             format,
             settings.map_or(1, |s| s.raster_msaa_samples),
             topology.is_some(),
+            ambient_output,
         );
         // Globe asset loading and effect settings remain in the client.
         let globe = solid_texture(backend, FALLBACK_ALBEDO, false);
@@ -2246,6 +2253,28 @@ impl TerrainRenderer {
         store_depth: bool,
         resolve_target: Option<&wgpu::TextureView>,
     ) {
+        self.encode_opaque_scene_with_ambient_ops(
+            encoder,
+            color,
+            depth,
+            mesh,
+            store_depth,
+            resolve_target,
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_opaque_scene_with_ambient_ops(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        mesh: Option<&crate::mesh::MeshRenderer>,
+        store_depth: bool,
+        resolve_target: Option<&wgpu::TextureView>,
+        ambient: Option<&crate::ambient_visibility::AmbientVisibility>,
+    ) {
         if self.topology.is_none() {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_bind_group(0, &self.classify_bind, &[]);
@@ -2267,9 +2296,8 @@ impl TerrainRenderer {
         let primary_pipeline = primary_scene
             .as_ref()
             .map(|(primary, (_, schema))| primary.masked_pipeline(*schema));
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("owned-unified-scene-frame"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        let attachments = [
+            Some(wgpu::RenderPassColorAttachment {
                 view: color,
                 depth_slice: None,
                 resolve_target,
@@ -2282,12 +2310,18 @@ impl TerrainRenderer {
                     }),
                     store: wgpu::StoreOp::Store,
                 },
-            })],
+            }),
+            ambient.map(|a| a.attachment()),
+        ];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("owned-unified-scene-frame"),
+            color_attachments: &attachments[..if ambient.is_some() { 2 } else { 1 }],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: if store_depth
+                        || ambient.is_some()
                         || self.motion_vectors
                         || self.plume.as_ref().is_some_and(|p| p.active())
                     {
@@ -2334,6 +2368,9 @@ impl TerrainRenderer {
         if let Some(mesh) = mesh {
             mesh.draw_opaque_into_pass(&mut pass);
         }
+        if ambient.is_some() {
+            return;
+        }
         // Far depth, no depth writes: terrain and opaque meshes reject covered
         // pixels before sky sampling. UI remains a separate overlay pass.
         if let Some(sky) = &self.sky {
@@ -2343,6 +2380,43 @@ impl TerrainRenderer {
             mesh.draw_transparent_into_pass(&mut pass);
         }
         drop(pass);
+    }
+
+    pub fn encode_background_transparent(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        resolve_target: Option<&wgpu::TextureView>,
+        mesh: Option<&crate::mesh::MeshRenderer>,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("scene-background-transparent"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color,
+                depth_slice: None,
+                resolve_target,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        if let Some(sky) = &self.sky {
+            sky.draw(&mut pass);
+        }
+        if let Some(mesh) = mesh {
+            mesh.draw_transparent_into_pass(&mut pass);
+        }
     }
 
     /// Translucent, depth-clipped plume, after opaque motion diagnostics.

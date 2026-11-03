@@ -272,7 +272,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "--docking-demo runs the retained isolated vacuum two-craft Rapier/DockingSession fixture with actual solved poses and D1 CAD rest surfaces. Not flight/fleet authority. Headless --docking-time 0..30 seeks a deterministic fixed-step replay before warmup; --docking-step 0..0.05 advances per frame (default 1/60, zero freezes). Window uses elapsed admission capped at 0.05s. Incompatible with flight/map/site/preview/time controls. Cabin impact is a diagnostic structural cue; vacuum exterior stays silent."
                 );
                 println!(
-                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --terrain-diagnostic-sequence NEW_DIR replays 17 terrain views of the frozen final CBT frame, with depth/geometry/beauty A/B/A checks. Requires static survey, HDR, RT Off and temporal Off; replay readback is not production timing. --frame-sequence NEW_DIR writes frame-000000.png onward for measured frames only; requires a new directory and --headless. PNG readback/writes are outside frame samples but perturb streaming wall cadence; this is visual evidence, not performance-equivalent replay. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
+                    "thessa-terrain-native [--headless image.png] [--frames N] [--graphics graphics.toml] [--prestream-seconds 3] [--sweep] [--sim-time 0] [--sim-step 0] [--hud|--no-hud]\nWindow: egui HUD on by default (with hud feature); Left/Right orbit; Up/Down zoom; Esc exit when UI does not capture input.\nHeadless: HUD off by default; --hud includes it in capture/timings. --terrain-diagnostic-sequence NEW_DIR replays 17 terrain views of the frozen final CBT frame (20 with ambient-visibility Off/On/Off controls), with depth/geometry/beauty A/B/A checks. Requires static survey, HDR, RT Off and temporal Off; replay readback is not production timing. --frame-sequence NEW_DIR writes frame-000000.png onward for measured frames only; requires a new directory and --headless. PNG readback/writes are outside frame samples but perturb streaming wall cadence; this is visual evidence, not performance-equivalent replay. --sweep advances orbit by 0.006 rad per rendered frame; pre-stream defaults to 3s.\n--sim-time samples baked ephemerides/flight terrain spin and the optional spectral sea at seconds from epoch; --sim-step (headless only) advances sample time per rendered frame, including 30 warmup frames. Defaults preserve the frozen epoch. This is presentation validation, not server warp.\nLive canonical terrain streaming viewer, not the complete game client.\nConsumes exposure/vsync, retained fleet mesh/material settings, shared raster shadows, textured mesh ray queries with resident terrain membership, persistent conforming CBT terrain (regular-patch fallback) and spectral ocean, shared sky/environment and manual HDR/tonemapping. Native stars/source discs and depth-clipped clouds/aurora are implemented, including shared cloud shadows/reflections. Aerial perspective, primary terrain/ocean scene-object RT reflections, automatic exposure and bloom remain unported."
                 );
                 println!(
                     "--vehicle-preview loads the shared X15 mesh source at the exact initial flight pose (epoch only); diagnostic preview, not live flight. Camera distance: 8..180m, reset 32m.\nX15: North American X-15 Plane by cmoreau, CC BY 4.0; assets/models/north_american_x-15_plane.LICENSE.txt contains the source/license links."
@@ -789,7 +789,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "before GPU backend creation",
             )?;
         }
-        let backend = if perf_capture.is_some() {
+        let backend = if perf_capture.is_some()
+            || (terrain_diagnostic_sequence.is_some()
+                && scene.requested.renderer.ambient_visibility)
+        {
             Backend::bring_up_for_graphics_profiled(&scene.requested)?
         } else {
             Backend::bring_up_for_graphics(&scene.requested)?
@@ -842,6 +845,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             width,
             height,
         )?;
+        let mut ambient_visibility =
+            thessa_render_wgpu::ambient_visibility::AmbientVisibility::new(
+                &backend,
+                &resolved,
+                [width, height],
+            )?;
+        println!(
+            "native_ambient_visibility samples={} radius_m={} target_bytes={} current_frame=true diffuse_sky_only=true",
+            resolved.ambient_visibility_samples,
+            resolved.ambient_visibility_radius_m,
+            ambient_visibility.as_ref().map_or(0, |v| v.target_bytes())
+        );
         let msaa = thessa_render_wgpu::msaa::SceneMsaa::new(
             &backend,
             &resolved,
@@ -1065,7 +1080,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(perf) = &perf {
                 perf.mark(&mut encoder, 2);
             }
-            renderer.encode_opaque_scene_resolved_ops(
+            renderer.encode_opaque_scene_with_ambient_ops(
                 &mut encoder,
                 msaa.as_ref()
                     .map_or(display.scene_color(&target.color), |s| &s.color),
@@ -1073,9 +1088,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                 mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
                 sky_layers.enabled() || motion.is_some() || msaa.is_some(),
                 msaa.as_ref().map(|_| display.scene_color(&target.color)),
+                ambient_visibility.as_ref(),
             );
             if let Some(msaa) = &msaa {
                 msaa.resolve_depth(&mut encoder, &target.depth);
+            }
+            if let Some(ambient) = &mut ambient_visibility {
+                ambient.encode(
+                    &backend,
+                    &mut encoder,
+                    msaa.as_ref()
+                        .map_or(display.scene_color(&target.color), |s| &s.color),
+                    msaa.as_ref().map(|_| display.scene_color(&target.color)),
+                    &target.depth,
+                    msaa.as_ref().map(|s| s.depth()),
+                    &view,
+                    jitter,
+                    true,
+                )?;
+                renderer.encode_background_transparent(
+                    &mut encoder,
+                    msaa.as_ref()
+                        .map_or(display.scene_color(&target.color), |s| &s.color),
+                    msaa.as_ref().map_or(&target.depth, |s| s.depth()),
+                    msaa.as_ref().map(|_| display.scene_color(&target.color)),
+                    mesh_renderer.as_ref().and_then(scene::SceneMeshes::opaque),
+                );
             }
             if let Some(trace) = &mut gpu_trace {
                 let triangles = mesh_renderer
@@ -1245,6 +1283,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 display: &display,
                 sky: &sky_layers,
                 msaa: msaa.as_ref(),
+                ambient_visibility: ambient_visibility.as_mut(),
                 target: &target,
                 settings: &resolved,
                 exposure,

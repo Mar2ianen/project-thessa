@@ -113,6 +113,15 @@ fn run_reference_scene(
         extent[0],
         extent[1],
     )?;
+    let msaa = thessa_render_wgpu::msaa::SceneMsaa::new(
+        &backend,
+        &resolved,
+        display.scene_format(),
+        extent,
+    )?;
+    let mut ambient_visibility = thessa_render_wgpu::ambient_visibility::AmbientVisibility::new(
+        &backend, &resolved, extent,
+    )?;
     let mut meshes = MeshRenderer::with_surface(
         &backend,
         &input.asset,
@@ -147,16 +156,18 @@ fn run_reference_scene(
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: display.scene_color(&target.color),
+                    view: msaa
+                        .as_ref()
+                        .map_or(display.scene_color(&target.color), |s| &s.color),
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: msaa.as_ref().map(|_| display.scene_color(&target.color)),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &target.depth,
+                    view: msaa.as_ref().map_or(&target.depth, |s| s.depth()),
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -169,11 +180,86 @@ fn run_reference_scene(
         if let Some(gpu) = &gpu {
             gpu.mark(&mut encoder, 1);
         }
-        meshes.encode(
-            &mut encoder,
-            display.scene_color(&target.color),
-            &target.depth,
-        );
+        if let Some(ambient) = &mut ambient_visibility {
+            meshes.encode_rt(&mut encoder);
+            meshes.encode_opaque_with_ambient(
+                &mut encoder,
+                msaa.as_ref()
+                    .map_or(display.scene_color(&target.color), |s| &s.color),
+                msaa.as_ref().map_or(&target.depth, |s| s.depth()),
+                msaa.as_ref().map(|_| display.scene_color(&target.color)),
+                ambient,
+            );
+            if let Some(msaa) = &msaa {
+                msaa.resolve_depth(&mut encoder, &target.depth);
+            }
+            ambient.encode(
+                &backend,
+                &mut encoder,
+                msaa.as_ref()
+                    .map_or(display.scene_color(&target.color), |s| &s.color),
+                msaa.as_ref().map(|_| display.scene_color(&target.color)),
+                &target.depth,
+                msaa.as_ref().map(|s| s.depth()),
+                &view,
+                thessa_render_core::temporal::JitterOffset::ZERO,
+                true,
+            )?;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reference-transparent"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: msaa
+                        .as_ref()
+                        .map_or(display.scene_color(&target.color), |s| &s.color),
+                    depth_slice: None,
+                    resolve_target: msaa.as_ref().map(|_| display.scene_color(&target.color)),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: msaa.as_ref().map_or(&target.depth, |s| s.depth()),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            meshes.draw_transparent_into_pass(&mut pass);
+        } else if let Some(msaa) = &msaa {
+            meshes.encode_rt(&mut encoder);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reference-msaa-mesh"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &msaa.color,
+                    depth_slice: None,
+                    resolve_target: Some(display.scene_color(&target.color)),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: msaa.depth(),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            meshes.draw_into_pass(&mut pass);
+        } else {
+            meshes.encode(
+                &mut encoder,
+                display.scene_color(&target.color),
+                &target.depth,
+            );
+        }
         if let Some(gpu) = &gpu {
             gpu.mark(&mut encoder, 2);
         }

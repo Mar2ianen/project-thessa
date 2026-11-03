@@ -26,7 +26,7 @@ coastal trace. [Doc 112](112_NATIVE_FOLIAGE_AND_SOLAR_TRANSPORT.md) now adds
 pinned CC0 fern laminae, alpha-aware raster shadows and shared MASK ray
 traversal, MSAA coverage, corrected backface normal maps, cached atmospheric
 sunlight for surfaces/sky/clouds, and a physical B03 sunset epoch. RADV material/
-visibility controls pass. SSR/contact receiver buffers, AMD-style tile queues,
+visibility controls pass. SSR, complete receiver buffers, AMD-style tile queues,
 static-caster depth caching, cloud/ground bounce, BLEND ray transport
 and full-scene visual/performance acceptance remain open. The complete user
 critique is tracked in doc 112's integrated-scene table.
@@ -59,6 +59,20 @@ roughness/height predicate with an independently filtered liquid-coverage plane
 shared by native raster/waves/ray hits and Bevy raw/compact residency. Finite
 water optics and subtexel coastline integration remain open. Docs 117/118 are historical appearance-tuning records, not accepted
 physical calibration.
+
+[Doc 122](122_MSAA_MESH_CENTROID_INTERPOLATION.md) corrects native mesh MSAA
+attribute extrapolation with centroid interpolation; a reproduced negative-HDR
+fixture now remains nonnegative without a radiance clamp.
+[Doc 123](123_NATIVE_DIFFUSE_SKY_VISIBILITY.md) adds opt-in native HDR diffuse-sky
+receivers and 8/16/32-probe depth visibility, preserving direct light, emission,
+reflection, air in-scattering and leaf back transmission. Same-frame controls
+and a bounded independent ray/box oracle pass. Defaults remain Off; bounce,
+complete receivers, moving-camera acceptance and affordable reference parity
+remain open. Frozen sequences add Off/On/Off controls only when allocated.
+Near-soil investigation also confirms coarse material residency beyond the
+fine-page footprint; longer readiness restores much of that coverage but does
+not repair the closest material. Scheduler/refinement candidates were rejected,
+not shipped as a soil fix; see doc 119's continuation.
 
 ## Current native integration checkpoint
 

@@ -17,6 +17,8 @@ pub struct Capture<'a> {
     pub display: &'a DisplayTransform,
     pub sky: &'a crate::sky_layers::SkyLayers,
     pub msaa: Option<&'a SceneMsaa>,
+    pub ambient_visibility:
+        Option<&'a mut thessa_render_wgpu::ambient_visibility::AmbientVisibility>,
     pub target: &'a OffscreenTarget,
     pub settings: &'a ResolvedGraphicsSettings,
     pub exposure: f32,
@@ -104,10 +106,15 @@ impl Capture<'_> {
         });
         let manifest_path = directory.join("manifest.json");
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
-        let mut reference_hdr = None;
-        let mut reference_png = None;
+        let mut reference_hdr = [None, None];
+        let mut reference_png = [None, None];
+        let mut reference_ambient = None;
+        let ambient_gpu = self
+            .ambient_visibility
+            .as_ref()
+            .and_then(|_| thessa_render_wgpu::timing::GpuIntervals::new(self.backend, 2));
         let mut reference_depth = None;
-        let sequence = [
+        let modes = [
             V::None,
             V::WaterWeight,
             V::Height,
@@ -126,7 +133,12 @@ impl Capture<'_> {
             V::LandOnly,
             V::None,
         ];
-        for (index, mode) in sequence.into_iter().enumerate() {
+        let mut sequence: Vec<_> = modes.into_iter().map(|mode| (mode, true)).collect();
+        if self.ambient_visibility.is_some() {
+            sequence.splice(0..0, [(V::None, false), (V::None, true), (V::None, false)]);
+        }
+        let view_count = sequence.len();
+        for (index, (mode, ambient_enabled)) in sequence.into_iter().enumerate() {
             let mut request = self.scene.requested.clone();
             request.debug.terrain_view = mode;
             let settings = self.backend.resolve_graphics(&request);
@@ -142,7 +154,7 @@ impl Capture<'_> {
                 .backend
                 .device
                 .create_command_encoder(&Default::default());
-            self.renderer.encode_opaque_scene_resolved_ops(
+            self.renderer.encode_opaque_scene_with_ambient_ops(
                 &mut encoder,
                 self.msaa
                     .map_or(self.display.scene_color(&self.target.color), |m| &m.color),
@@ -151,9 +163,40 @@ impl Capture<'_> {
                 true,
                 self.msaa
                     .map(|_| self.display.scene_color(&self.target.color)),
+                self.ambient_visibility.as_deref(),
             );
             if let Some(msaa) = self.msaa {
                 msaa.resolve_depth(&mut encoder, &self.target.depth);
+            }
+            if let Some(ambient) = &mut self.ambient_visibility {
+                if let Some(gpu) = &ambient_gpu {
+                    gpu.mark(&mut encoder, 0);
+                }
+                ambient.encode(
+                    self.backend,
+                    &mut encoder,
+                    self.msaa
+                        .map_or(self.display.scene_color(&self.target.color), |s| &s.color),
+                    self.msaa
+                        .map(|_| self.display.scene_color(&self.target.color)),
+                    &self.target.depth,
+                    self.msaa.map(SceneMsaa::depth),
+                    &view,
+                    thessa_render_core::temporal::JitterOffset::ZERO,
+                    ambient_enabled,
+                )?;
+                if let Some(gpu) = &ambient_gpu {
+                    gpu.mark(&mut encoder, 1);
+                }
+                self.renderer.encode_background_transparent(
+                    &mut encoder,
+                    self.msaa
+                        .map_or(self.display.scene_color(&self.target.color), |s| &s.color),
+                    self.msaa.map_or(&self.target.depth, SceneMsaa::depth),
+                    self.msaa
+                        .map(|_| self.display.scene_color(&self.target.color)),
+                    self.meshes.and_then(crate::scene::SceneMeshes::opaque),
+                );
             }
             if let Some(trace) = &mut self.trace {
                 trace.checkpoint(
@@ -176,6 +219,9 @@ impl Capture<'_> {
                 &self.target.depth,
             );
             self.display.encode(&mut encoder, &self.target.color);
+            if let Some(gpu) = &ambient_gpu {
+                gpu.resolve(&mut encoder);
+            }
             self.backend.queue.submit([encoder.finish()]);
             let pixels = self.target.read_rgba8(self.backend)?;
             let radiance = thessa_render_wgpu::readback::read_color(self.backend, hdr)?;
@@ -190,13 +236,26 @@ impl Capture<'_> {
                 reference_depth = Some(depth);
             }
             if mode == V::None {
-                if let Some(expected) = &reference_hdr {
-                    if &radiance != expected || reference_png.as_ref() != Some(&pixels) {
+                let case = usize::from(ambient_enabled);
+                if let Some(ambient) = &self.ambient_visibility {
+                    let receiver =
+                        thessa_render_wgpu::readback::read_color(self.backend, &ambient.texture)?;
+                    if reference_ambient.as_ref().is_some_and(|r| r != &receiver) {
+                        return Err("frozen diffuse-sky receiver changed in Off/On/Off".into());
+                    }
+                    reference_ambient = Some(receiver.clone());
+                    std::fs::write(
+                        directory.join(format!("{label}.diffuse-sky.rgba16f")),
+                        receiver,
+                    )?;
+                }
+                if let Some(expected) = &reference_hdr[case] {
+                    if &radiance != expected || reference_png[case].as_ref() != Some(&pixels) {
                         return Err("frozen beauty A/B/A is not byte-identical".into());
                     }
                 } else {
-                    reference_hdr = Some(radiance.clone());
-                    reference_png = Some(pixels.clone());
+                    reference_hdr[case] = Some(radiance.clone());
+                    reference_png[case] = Some(pixels.clone());
                 }
             }
             crate::write_rgba_png(
@@ -206,10 +265,14 @@ impl Capture<'_> {
                 &pixels,
             )?;
             std::fs::write(directory.join(format!("{label}.rgba16f")), &radiance)?;
+            let ambient_gpu_ms = ambient_gpu
+                .as_ref()
+                .map(|gpu| gpu.read(self.backend).map(|v| v[0] * 1000.0))
+                .transpose()?;
             manifest["views"]
                 .as_array_mut()
                 .unwrap()
-                .push(serde_json::json!({"name":label,"mode":mode,"depth_identical":true}));
+                .push(serde_json::json!({"name":label,"mode":mode,"depth_identical":true,"ambient_visibility_enabled":ambient_enabled,"ambient_visibility_gpu_ms":ambient_gpu_ms}));
             std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
         }
         if self.scene.temporal_epoch(self.renderer, self.meshes) != epoch
@@ -225,9 +288,14 @@ impl Capture<'_> {
         manifest["complete"] = true.into();
         manifest["beauty_round_trip_identical"] = true.into();
         manifest["published_geometry_identical"] = true.into();
+        manifest["ambient_receiver_identical"] = if reference_ambient.is_some() {
+            true.into()
+        } else {
+            serde_json::Value::Null
+        };
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
         println!(
-            "frozen_terrain_diagnostics={} views=17 depth_identical=true beauty_round_trip_identical=true published_geometry_identical=true; diagnostic replay, not production timing",
+            "frozen_terrain_diagnostics={} views={view_count} depth_identical=true beauty_round_trip_identical=true published_geometry_identical=true; diagnostic replay, not production timing",
             directory.display()
         );
         Ok(())

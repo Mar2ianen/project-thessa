@@ -210,14 +210,19 @@ fn env_haze_sphere_length(direction:vec3<f32>,distance:f32,top:f32)->f32 {
     if(abs(q)>0.0){a=min(q,c/q);z=max(q,c/q);}
     return max(0.0,min(distance,z)-max(0.0,a));
 }
-fn env_local_haze(position:vec3<f32>,radiance:vec3<f32>,ambient:vec3<f32>)->vec3<f32> {
-    if(env_meta.local_haze.x<=0.0 || !env_enabled()){return radiance;}
+fn env_haze_transmittance(position:vec3<f32>)->f32 {
+    if(env_meta.local_haze.x<=0.0 || !env_enabled()){return 1.0;}
     let distance=length(position);
-    if(distance<=0.0){return radiance;}
+    if(distance<=0.0){return 1.0;}
     let direction=position/distance;
     let length_m=max(0.0,env_haze_sphere_length(direction,distance,env_meta.local_haze.y)
         -env_haze_sphere_length(direction,distance,0.0));
-    let transmittance=exp(-env_meta.local_haze.x*length_m);
+    return exp(-env_meta.local_haze.x*length_m);
+}
+fn env_local_haze(position:vec3<f32>,radiance:vec3<f32>,ambient:vec3<f32>)->vec3<f32> {
+    let transmittance=env_haze_transmittance(position);
+    if(transmittance==1.0){return radiance;}
+    let direction=position/length(position);
     var source=env_ambient_lux(ambient)/OCEAN_PI;
     if(env_meta.haze_up.w>0.0){
         // Below-horizon sky texels include solid-body occlusion, not the

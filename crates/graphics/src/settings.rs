@@ -208,6 +208,14 @@ pub struct RendererSettings {
     pub terrain_ground_puddles: bool,
     #[serde(default = "default_true")]
     pub specular_reflections: bool,
+    /// Native screen-space visibility of diffuse sky; no direct/emission modulation.
+    #[serde(default)]
+    pub ambient_visibility: bool,
+    #[serde(default)]
+    pub ambient_visibility_quality: Quality,
+    #[serde(default = "default_ambient_radius")]
+    pub ambient_visibility_radius_m: f32,
+
     /// Maximum native depth-atlas storage across three lights and all cascades.
     #[serde(default = "default_shadow_memory")]
     pub shadow_memory_mib: u32,
@@ -251,6 +259,10 @@ fn default_exposure() -> f32 {
     13.0
 }
 
+fn default_ambient_radius() -> f32 {
+    2.0
+}
+
 fn default_shadow_memory() -> u32 {
     64
 }
@@ -276,6 +288,9 @@ impl Default for RendererSettings {
             terrain_ground_detail: false,
             terrain_ground_puddles: false,
             specular_reflections: true,
+            ambient_visibility: false,
+            ambient_visibility_quality: Quality::Medium,
+            ambient_visibility_radius_m: default_ambient_radius(),
             shadow_memory_mib: default_shadow_memory(),
             fleet_meshes: true,
             fleet_quality: Quality::High,

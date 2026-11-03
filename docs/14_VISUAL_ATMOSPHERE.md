@@ -852,3 +852,13 @@ see [the surface contract](121_LIQUID_WATER_SURFACE_CONTRACT.md).
 Source accuracy and actual indirect transport remain open. [Frozen native diagnostics](120_FROZEN_NATIVE_DIAGNOSTICS.md) now
 replay 17 views of one published FHD frame with byte-identical depth and beauty
 round-trip checks; this is diagnostic evidence, not visual parity or FPS.
+
+
+Native meshes now interpolate covered MSAA attributes at the centroid, preventing
+negative baked visibility on thin foliage ([doc 122](122_MSAA_MESH_CENTROID_INTERPOLATION.md)).
+Opt-in native HDR diffuse-sky receivers and current-frame contact visibility
+are implemented with 8/16/32 probes and a resource-free disabled path
+([doc 123](123_NATIVE_DIFFUSE_SKY_VISIBILITY.md)). This is local scalar
+visibility, not bounce/GI, complete G-buffers or accepted soil/reference parity.
+The frozen diagnostic sequence adds three visibility Off/On/Off controls when
+the receiver exists; ordinary sequences retain 17 views.

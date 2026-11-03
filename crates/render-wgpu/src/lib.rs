@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use thessa_graphics::Capabilities;
 
+pub mod ambient_visibility;
 pub mod clouds;
 mod conforming_ocean;
 pub mod conforming_surface;
@@ -524,6 +525,9 @@ pub fn probe_capabilities(adapter: &wgpu::Adapter) -> Capabilities {
         terrain_conforming_supported: Some(
             limits.max_storage_buffers_per_shader_stage >= 8
                 && limits.max_storage_buffer_binding_size >= 131072 * 144,
+        ),
+        ambient_visibility_supported: Some(
+            limits.max_color_attachments >= 2 && limits.max_color_attachment_bytes_per_sample >= 16,
         ),
         hdr_render_target_supported: Some(
             adapter

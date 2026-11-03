@@ -6,7 +6,9 @@ process restoration, transport decomposition and reference parity remain open.
 ## Published-frame contract
 
 `thessa-terrain-native --terrain-diagnostic-sequence NEW_DIR` captures 17 terrain
-views after normal warmup/rendering. It freezes the already-published CBT
+views after normal warmup/rendering. With the optional doc 123 ambient receiver,
+three beauty Off/On/Off controls precede these views (20 total); the actual HDR
+receiver must remain byte-identical across controls. It freezes the already-published CBT
 vertices, topology records/state, draw arguments, height/material residency,
 meshes, camera, ephemeris time, exposure, sky/ocean/light resources and shadow
 atlas. No stream polling, simulation tick, topology update, mesh preparation or
@@ -22,7 +24,10 @@ new diagnostic storage. An explicitly configured diagnostic renderer allocates
 one 16-byte uniform and supports resolved view changes without recreating the
 renderer. The sequence seeds that opt-in allocation when the input requests
 None; its saved requested/resolved configuration records this QA seed.
-No production receiver image or extra production pass is introduced.
+The diagnostic flag itself introduces no production receiver image or pass.
+The independent opt-in ambient visibility effect has its own receiver/pass
+contract in doc 123. Diagnostic runs request optional GPU timestamps for that
+pass; missing timestamp support is recorded explicitly as unavailable.
 
 Each view writes PNG and raw pre-exposed RGBA16Float. One raw resolved
 Depth32Float image, raw vertex/topology buffers, requested/resolved graphics,
@@ -60,5 +65,6 @@ per-stage fences with a 20M mesh-triangle admission limit. Its wall times are
 **not production FPS or GPU timestamp measurements**. There is no quality or
 speedup claim: this milestone makes subsequent defect comparisons causal.
 Doc 121 subsequently implements independent water presence. Source-error
-bounds, actual sky visibility/bounce and complete receiver/component outputs
-remain separate tasks from doc 119.
+bounds, bounce and complete receiver/component outputs remain separate tasks
+from doc 119; bounded current-frame sky visibility is subsequently implemented
+in doc 123.

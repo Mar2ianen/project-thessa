@@ -754,6 +754,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if (cbt_terrain_debug_view() == 14u) { return vec4(surface_ambient * view.exposure / OCEAN_PI, 1.0); }
     var illuminance = surface_ambient + direct * shadow;
     let diffuse = albedo * illuminance / OCEAN_PI;
+    var ambient_component = albedo * surface_ambient / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
     // Land roughness is a material property, not only an ocean classifier.
     // Reuse the existing dielectric GGX kernel and linear-lux convention;
@@ -777,6 +778,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             land_ambient *= cbt_land_ambient_transmission(roughness);
         }
         let land_diffuse = albedo * (land_ambient + land_direct * shadow) / OCEAN_PI;
+        ambient_component = mix(ambient_component,albedo*land_ambient/OCEAN_PI*(1.0-environment.a),1.0-water_material);
         radiance = mix(diffuse, land_diffuse * (1.0 - environment.a) + land_reflection,
             1.0 - water_material);
     }
@@ -823,6 +825,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             radiance += vec3(1.0, 0.72, 0.42) * (mask * night * lighting.city_params.x * 500.0);
         }
     }
+    // AMBIENT_COMPONENT_OUTPUT
     // Same pre-exposed linear HDR convention as Bevy PBR.
     return vec4(radiance * view.exposure, 1.0);
 }

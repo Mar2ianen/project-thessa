@@ -21,6 +21,7 @@ struct State {
     display: thessa_render_wgpu::display::DisplayTransform,
     motion: Option<thessa_render_wgpu::motion::SceneMotion>,
     msaa: Option<thessa_render_wgpu::msaa::SceneMsaa>,
+    ambient_visibility: Option<thessa_render_wgpu::ambient_visibility::AmbientVisibility>,
     temporal: Option<thessa_render_wgpu::scene_temporal::SceneTemporal>,
     mesh_renderer: Option<crate::scene::SceneMeshes>,
     depth: wgpu::TextureView,
@@ -106,6 +107,11 @@ impl State {
         );
         let depth_texture = depth(&backend, config.width, config.height);
         let depth = depth_texture.create_view(&Default::default());
+        let ambient_visibility = thessa_render_wgpu::ambient_visibility::AmbientVisibility::new(
+            &backend,
+            &resolved,
+            [config.width, config.height],
+        )?;
         let msaa = thessa_render_wgpu::msaa::SceneMsaa::new(
             &backend,
             &resolved,
@@ -157,6 +163,7 @@ impl State {
             display,
             motion,
             msaa,
+            ambient_visibility,
             temporal,
             mesh_renderer,
             depth,
@@ -203,6 +210,13 @@ impl State {
         {
             self.drawable = false;
             eprintln!("MSAA resize rejected: {error}");
+            return;
+        }
+        if let Some(ambient) = &mut self.ambient_visibility
+            && let Err(error) = ambient.resize(&self.backend, [width, height])
+        {
+            self.drawable = false;
+            eprintln!("ambient receiver resize rejected: {error}");
             return;
         }
         self.config.width = width;
@@ -403,7 +417,7 @@ impl State {
         if let Some(mesh) = &mut self.mesh_renderer {
             mesh.encode_rt(&mut encoder);
         }
-        self.renderer.encode_opaque_scene_resolved_ops(
+        self.renderer.encode_opaque_scene_with_ambient_ops(
             &mut encoder,
             self.msaa
                 .as_ref()
@@ -414,9 +428,36 @@ impl State {
                 .and_then(crate::scene::SceneMeshes::opaque),
             self.sky_layers.enabled() || self.motion.is_some() || self.msaa.is_some(),
             self.msaa.as_ref().map(|_| self.display.scene_color(&color)),
+            self.ambient_visibility.as_ref(),
         );
         if let Some(msaa) = &self.msaa {
             msaa.resolve_depth(&mut encoder, &self.depth);
+        }
+        if let Some(ambient) = &mut self.ambient_visibility {
+            ambient.encode(
+                &self.backend,
+                &mut encoder,
+                self.msaa
+                    .as_ref()
+                    .map_or(self.display.scene_color(&color), |s| &s.color),
+                self.msaa.as_ref().map(|_| self.display.scene_color(&color)),
+                &self.depth,
+                self.msaa.as_ref().map(|s| s.depth()),
+                &view,
+                jitter,
+                true,
+            )?;
+            self.renderer.encode_background_transparent(
+                &mut encoder,
+                self.msaa
+                    .as_ref()
+                    .map_or(self.display.scene_color(&color), |s| &s.color),
+                self.msaa.as_ref().map_or(&self.depth, |s| s.depth()),
+                self.msaa.as_ref().map(|_| self.display.scene_color(&color)),
+                self.mesh_renderer
+                    .as_ref()
+                    .and_then(crate::scene::SceneMeshes::opaque),
+            );
         }
         if let Some(motion) = &self.motion {
             motion.encode(

@@ -1,0 +1,316 @@
+{
+  "base_commit": "7d2777cff634b11943f01d4eb189e3ac248059e6",
+  "source_root": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit",
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03",
+  "no_reference_parity_or_speedup_claim": true,
+  "status": "Native mesh coverage interpolation fixed, with reproduced red/green production-renderer test. No soil/source-error closure.",
+  "red": {
+    "minimum_hdr_rgb": -0.33325195,
+    "negative_rgb_channels": 93,
+    "note": "The old fixture also had no positive covered channel; the initial assertion reported that first. Reordered green fixture checks negative-domain failure first, without changing geometry or source visibility."
+  },
+  "green": {
+    "software": {
+      "minimum": 0,
+      "maximum": 0.14733887,
+      "negative_rgb_channels": 0
+    },
+    "radv_880m": {
+      "minimum": 0,
+      "maximum": 0.14794922,
+      "negative_rgb_channels": 0
+    }
+  },
+  "fixtures": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-red.log",
+      "bytes": 622,
+      "sha256": "8e178ba96867100144092b9bca652acd8595149be6e65e5a803546fe3cd70ba5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-red.bin",
+      "bytes": 154973232,
+      "sha256": "42cfd6ae980a55bb5e6438e36b809618e52fd298709f5ec49e93d92cbed62a01"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-red-command.json",
+      "bytes": 1345,
+      "sha256": "e32071c40aac9277233e8c9ed48b075e3ebcd6afaa2b6bfb1a76337a50b38f69"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-source-before.wgsl",
+      "bytes": 8125,
+      "sha256": "7d27314b1a3f6e5754163399b33cb9c9714e454b95be9966900a44ce0c9ec870"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid_interpolation-centroid-software.log",
+      "bytes": 251,
+      "sha256": "1febc1116a122626c20e93f371e5949a195174eac8981520c263f0a791c734c0"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid_interpolation-centroid-radv.log",
+      "bytes": 251,
+      "sha256": "77b6e855f26c55912467183842cad5a168dfc22e9e3549c88a3236cc137bc1d1"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/surface_lighting-centroid-radv.log",
+      "bytes": 939,
+      "sha256": "c0b29bbbe88cc050a3d1c6a951621f498b60876e9d5e3db3dff9d4512755510c"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/terrain_environment-centroid-radv.log",
+      "bytes": 13981,
+      "sha256": "f13553302279ca371f283e9fa90950805e9e7a6f8fa446d366886ca93e0df4e5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/primary_shadows-centroid-radv.log",
+      "bytes": 7733,
+      "sha256": "d85f5eaca55b2c7176cbc643fb5e32d80d80a5e4e4f8d25b810c5a5d22234868"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/motion_vectors-centroid-radv.log",
+      "bytes": 8165,
+      "sha256": "8f3f475b9503449e68e2c50241d5a1e0c3b82ad4ca2b8e5e8afa9178d060f06a"
+    }
+  ],
+  "fhd": {
+    "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd",
+    "manifest": {
+      "complete": true,
+      "extent": [
+        1920,
+        1080
+      ],
+      "sample_count": 4,
+      "sim_time_s": 74566.63966240163,
+      "beauty_round_trip_identical": true,
+      "published_geometry_identical": true,
+      "ambient_receiver_identical": true,
+      "material_resident_levels": [
+        6,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        4,
+        0,
+        7,
+        1,
+        3,
+        0,
+        8,
+        0,
+        62,
+        49,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "pending_jobs": [
+        8,
+        4
+      ],
+      "mesh_stats": "Some(MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19660054, draw_calls: 22, draw_commands: 2178, triangles: 2775318, frame_upload_bytes: 576 })",
+      "views": [
+        {
+          "ambient_visibility_enabled": false,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "00-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "01-none"
+        },
+        {
+          "ambient_visibility_enabled": false,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "02-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "03-none"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "water_weight",
+          "name": "04-water_weight"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "height",
+          "name": "05-height"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "distance",
+          "name": "06-distance"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "normal",
+          "name": "07-normal"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "albedo",
+          "name": "08-albedo"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "roughness",
+          "name": "09-roughness"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "geometry",
+          "name": "10-geometry"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "height_page_level",
+          "name": "11-height_page_level"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "footprint",
+          "name": "12-footprint"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "material_lod",
+          "name": "13-material_lod"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "relief_weight",
+          "name": "14-relief_weight"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "direct",
+          "name": "15-direct"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "ambient",
+          "name": "16-ambient"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "specular",
+          "name": "17-specular"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "land_only",
+          "name": "18-land_only"
+        },
+        {
+          "ambient_visibility_enabled": true,
+          "depth_identical": true,
+          "mode": "none",
+          "name": "19-none"
+        }
+      ]
+    },
+    "cpu_material_pages": 146,
+    "identity": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/identity.json",
+        "bytes": 803,
+        "sha256": "38766c9b6855628cbbf1e8e7609cf90b68e714037b21def0481714066ccc35ca"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/full-fhd-command.json",
+        "bytes": 2328,
+        "sha256": "e165e1f4e3bf382d08c31ea4271b1047a7db74eacaf2b46ae128cb0e11725539"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/native.bin",
+        "bytes": 730547936,
+        "sha256": "6a2bd9d397398d207b6a6b29c9bb703cc5710a3e5383ac6c65fc505179d98d81"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/source.patch",
+        "bytes": 51891,
+        "sha256": "8903c700cfdfe1d048dc63a37ce2ebcba8bdf332a8c367d147f2a3bb08ae1145"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/manifest.json",
+        "bytes": 105923,
+        "sha256": "f98dc94da0df92ff9632e201718844d0802f88a57c6632c6f54f715f4619823f"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/depth.f32",
+        "bytes": 8294400,
+        "sha256": "4742ad4a92587a51ef7db38de963d45278877448e300a2ff271ce79825cfcf04"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/00-none.rgba16f",
+        "bytes": 16588800,
+        "sha256": "75d7a88fd3b3d7d3a13639478e72493fc61ea41bdfeedbbb3c0dd7e62e294e05"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/01-none.rgba16f",
+        "bytes": 16588800,
+        "sha256": "27469f855c239c1432124eb46be2fc8a55527aa4edc82c22e2058658262129dc"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ambient-visibility-2026-11-03/centroid-full-fhd/views/00-none.diffuse-sky.rgba16f",
+        "bytes": 16588800,
+        "sha256": "8a6e19e1dc7c0afae01164f2dc556134f4b2cebb97202d3ad9fbc8e6d71adf1c"
+      }
+    ]
+  },
+  "fhd_measurements": {
+    "negative_hdr_off": 0,
+    "negative_hdr_on": 0,
+    "negative_receiver": 0,
+    "changed_pixels": 314491,
+    "brightening_pixels": 0,
+    "mean_rgb_reduction": [
+      0.000574008678086102,
+      0.0005701998597942293,
+      0.00025158864445984364
+    ],
+    "max_radiance_reduction": 0.05975341796875,
+    "all_controls_pass": true,
+    "mesh_stats": "Some(MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19660054, draw_calls: 22, draw_commands: 2178, triangles: 2775318, frame_upload_bytes: 576 })",
+    "views": 20
+  }
+}

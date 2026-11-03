@@ -142,8 +142,9 @@ is substituted for those contracts in this milestone.
 Current continuation: [doc 120](120_FROZEN_NATIVE_DIAGNOSTICS.md) implements
 step 1 as an in-process published-frame replay, with a complete FHD sequence.
 Independent process restore remains open. [Doc 121](121_LIQUID_WATER_SURFACE_CONTRACT.md)
-closes the independent water-presence slice of step 2; source accuracy and
-steps 3–5 remain open.
+closes the independent water-presence slice of step 2. Doc 123 subsequently
+implements the scalar diffuse-sky visibility/receiver slice of steps 3–4;
+source accuracy, bounce, complete receivers and step 5 remain open.
 
 ## Task-by-task acceptance ledger
 
@@ -152,16 +153,17 @@ steps 3–5 remain open.
 | Frozen published native frame | Closed in doc 120 | Same-process view replay, unchanged depth/vertices/topology/epochs, beauty A/B/A identity; native QA over existing owners |
 | Independent liquid-water presence | Closed in doc 121 | Explicit source coverage; rough land/rough water/missing-plane GPU controls; raster, waves, rays and Bevy residency agree |
 | Height source versus CBT chord error | Open | Quantify each independently at fixed residency/camera, control transient and stationary error; existing worldgen/height stream and conforming LOD |
-| Geometry-based sky visibility and bounce | Open | Actual geometry/field inputs, source-slot invariance, no direct/emission attenuation by ambient visibility, reference error and disabled/cheap tiers; existing environment/FastRT owners |
-| Current-frame receiver depth/normal/material tags | Open | Same visible surfaces/coverage as beauty, selective allocation and portable fallback; existing terrain/mesh/MSAA ownership |
+| Geometry-based sky visibility and bounce | Partial: doc 123 closes bounded current-frame scalar sky visibility; bounce/offscreen remain open | Actual geometry/field inputs, source-slot invariance, no direct/emission attenuation by ambient visibility, reference error and disabled/cheap tiers; existing environment/FastRT owners |
+| Current-frame receiver depth/normal/material tags | Partial: doc 123 exports the actual diffuse-sky contribution and reuses matching depth; complete normal/material tags remain open | Same visible surfaces/coverage as beauty, selective allocation and portable fallback; existing terrain/mesh/MSAA ownership |
 | Exact additive radiance components | Open | Sum matches frozen linear HDR within format rounding, including direct/indirect/specular/emission/air; shader terms are final contributions rather than irradiance source views |
 | Physically matched external-engine controls | Open | Same camera/time/assets/materials/exposure and readiness, independent transport oracle; artwork remains a separate visual target |
 | Production quality/cost acceptance | Open | Real production GPU stages, repeatable same-workload A/B, unchanged populations and acceptable image/temporal error; fenced diagnostic wall time cannot substitute |
 
 Each remaining row is a separate implementation/acceptance task. Completing the
-first two rows is not closure of step 2 as a whole, GI, a receiver pipeline or
-reference parity. No completion mark is based solely on adding a flag or a
-promising single image.
+first two rows is not closure of step 2 as a whole, GI or reference parity.
+Doc 123 supplies a partial receiver pipeline; it does not close the complete
+normal/material/decomposed-radiance task. No completion mark is based solely
+on adding a flag or a promising single image.
 
 ## Executed validation
 
@@ -177,3 +179,35 @@ aesthetic win is claimed.
 CPU, strict lint, architecture and client checks are recorded in the artifact.
 The regression test's pre-fix failure is retained rather than relabeled as a
 passing baseline.
+
+## Near-ground investigation, 2026-11-03
+
+The user's FHD close-ground complaint is not closed by centroid interpolation
+or ambient visibility. Frozen depth/chart samples in the retained B03 frame
+find available L22/L23 pages (about 12.2/6.1 mm per texel) at roughly 6–10 m, but
+L18/L20 and sometimes L16 fallback (195/48.8/781 mm) at roughly 12–23 m.
+An offline page-neighbour/ancestry reconstruction also estimates full fine-page
+weight at the selected closest points, so missing neighbours are not a general
+explanation for the closest material. These reconstructed weights are an
+offline estimate, not a new GPU source-level output.
+
+A separate 20-second readiness control using the same executable improves
+middle-ground detail in the image and makes L21/L22 available at selected
+points in the CPU cache, while the closest poor material appearance persists.
+That control has 399 CPU pages but only 256 GPU slots, so its CPU-ID ancestry
+is an availability upper bound, not proof of each selected GPU source.
+The original frame has 146 CPU and 146 GPU pages, without that ambiguity.
+Geometry/residency publication differs
+between processes; this is a readiness diagnostic, not a frozen aesthetic A/B
+or a moving-camera fix. The source scans contain fine reflectance detail;
+normal/height/material integration at close range still needs causal isolation.
+FHD, TAA (Off), the global 1×1-map fade and CBT triangle count do not explain
+away this material-source gap.
+
+Two source-error-priority scheduler candidates were rejected after actual FHD
+captures traded closest detail for broader coverage. A 512-leaf refinement-cap
+candidate failed retained quality/coverage tests and was also reverted. No
+scheduler, selection-budget or soil-source change from these experiments is
+retained. Commands, source patches, raw comparisons and the depth-to-chart
+sampling method are preserved in
+[the investigation artifact](artifacts/near-soil-diagnosis-2026-11-03.json).

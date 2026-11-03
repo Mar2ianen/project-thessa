@@ -997,3 +997,9 @@ with resident CBT height pages and close-soil quality remain open.
 [Reference-driven iterations](docs/127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md)
 record actual Unreal, OpenEngine CBT/grass and AMD source mechanisms, reviewer-
 owned acceptance tests and rejected candidates.
+
+[Partial ground-normal coverage correction](docs/128_PARTIAL_GROUND_NORMAL_COVERAGE.md)
+fixes duplicate optical slope during partial canonical-height residency. An
+independent actual-raster test fails on the old shader and passes after the
+correction; full-height and no-base fallback checks also pass. This does not
+close the near-soil visual or moving-camera acceptance gap.

@@ -908,3 +908,134 @@ fn height_field_normals_are_independent_of_geometry_and_material_levels() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
+fn partial_height_field_coverage_does_not_amplify_optical_slope() {
+    use thessa_graphics::{Quality, ResolvedGraphicsSettings, TerrainDebugView};
+    let backend = Backend::bring_up().expect("requires a local adapter");
+    let key = TileKey::new(4, 22, 1 << 21, 1 << 21).unwrap();
+    let anchor = TileAnchor::new(key, 3_200_000.0).unwrap();
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.001).unwrap();
+    let settings = ResolvedGraphicsSettings {
+        terrain_ground_detail: true,
+        surface_quality: Quality::High,
+        terrain_ground_relief_max_level: 22,
+        terrain_normal_maps: true,
+        terrain_debug_view: TerrainDebugView::Normal,
+        specular_reflections: false,
+        shadow_enabled: false,
+        ..Default::default()
+    };
+    let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &[TerrainPatch {
+            anchor,
+            page: &height,
+        }],
+        OffscreenTarget::FORMAT,
+        thessa_render_wgpu::terrain::TerrainCapacity {
+            patches: 1,
+            material_layers: 2,
+            height_grid_size: 2,
+        },
+        Some(&settings),
+    )
+    .unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    let mut source = MaterialPageStore::default();
+    let id = thessa_rcbt_core::conforming_surface::page_id(key).unwrap();
+    // Both pages carry identical optical gradients. Only the fine page carries
+    // a canonical (flat) base plane: its residency feather must not boost bump.
+    source.set_priority(vec![id, 12]);
+    source.set_page(
+        12,
+        CbtMaterialPage::from_rgba8_with_normals(
+            [255, 0, 0, 255].repeat(128 * 128),
+            Some([47, 0].repeat(128 * 128)),
+        )
+        .unwrap(),
+    );
+    source.set_page(
+        id,
+        CbtMaterialPage::from_rgba8_with_normals(
+            [255, 0, 0, 255].repeat(128 * 128),
+            Some([47, 0].repeat(128 * 128)),
+        )
+        .unwrap()
+        .with_base_normals([0, 0].repeat(128 * 128))
+        .unwrap(),
+    );
+    renderer
+        .update_materials(&backend, source.priority(), source.source_pages())
+        .unwrap();
+    let render = |renderer: &TerrainRenderer| {
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        renderer.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        target.read_rgba8(&backend).unwrap()
+    };
+    let decode = |v: u8| {
+        let x = f64::from(v) / 255.0;
+        if x <= 0.04045 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let mut partial_samples = 0;
+    for local_x in [0.008, 0.016, 0.024, 0.5] {
+        let raw = DVec3::from(anchor.raw_center)
+            + DVec3::from(anchor.raw_axis_u) * (2.0 * (local_x - 0.5) * anchor.half_extent);
+        let center = raw.normalize() * anchor.radius_m;
+        let eye = center + raw.normalize() * 0.12;
+        renderer
+            .update_view(
+                &backend,
+                &ViewParams {
+                    world_from_view: glam::dcamera::rh::view::look_at_mat4(eye, center, DVec3::Y)
+                        .inverse(),
+                    clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                        0.6, 1.0, 0.01, 10000.0,
+                    ),
+                    world_position_m: eye,
+                    exposure: 1.0,
+                },
+            )
+            .unwrap();
+        let mid = (32 * 65 + 32) * 4;
+        renderer
+            .set_terrain_debug_view(
+                &backend,
+                &ResolvedGraphicsSettings {
+                    terrain_debug_view: TerrainDebugView::ReliefWeight,
+                    ..settings.clone()
+                },
+            )
+            .unwrap();
+        let coverage = decode(render(&renderer)[mid]);
+        if coverage > 0.05 && coverage < 0.95 {
+            partial_samples += 1;
+        }
+        renderer
+            .set_terrain_debug_view(&backend, &settings)
+            .unwrap();
+        let frame = render(&renderer);
+        // Normal diagnostic is linear n*0.5+0.5 stored in an sRGB target.
+        // RG normal encoding reconstructs z before converting to a slope, so
+        // the independent flat-plane oracle is exactly n.x = 47/127.
+        let nx = decode(frame[mid]) * 2.0 - 1.0;
+        let expected = 47.0 / 127.0;
+        eprintln!(
+            "partial-height normal: local_x={local_x} coverage={coverage:.6} nx={nx:.6} expected={expected:.6}"
+        );
+        assert!(
+            (nx - expected).abs() < 0.025,
+            "optical normal amplified at local_x={local_x}, coverage={coverage}: nx={nx}, expected={expected}"
+        );
+    }
+    assert!(
+        partial_samples >= 2,
+        "fixture must exercise partial canonical coverage, got {partial_samples}"
+    );
+}

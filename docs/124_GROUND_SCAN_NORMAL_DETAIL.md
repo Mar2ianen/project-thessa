@@ -91,3 +91,9 @@ Sources: [Forest Ground 04](https://polyhaven.com/a/forest_ground_04),
 The gradient composition is an independent implementation; no source code was
 copied from the paper's demo. The scans remain authored optical proxies for
 Thessa's floor, not a claim of botanical/geological identity.
+
+[Partial ground-normal coverage correction](128_PARTIAL_GROUND_NORMAL_COVERAGE.md)
+fixes duplicate optical slope during partial canonical-height residency. An
+independent actual-raster test fails on the old shader and passes after the
+correction; full-height and no-base fallback checks also pass. This does not
+close the near-soil visual or moving-camera acceptance gap.

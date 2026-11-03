@@ -906,3 +906,9 @@ improvement at unchanged population. [Doc 127](127_REFERENCE_DRIVEN_GROUND_ITERA
 records the actual Unreal placement source, OpenEngine's same-page CBT/grass
 source, and the captured broad curved-blade candidate. Lighting, soil, vegetation,
 shadows and temporal acceptance still require further integration.
+
+[Partial ground-normal coverage correction](128_PARTIAL_GROUND_NORMAL_COVERAGE.md)
+fixes duplicate optical slope during partial canonical-height residency. An
+independent actual-raster test fails on the old shader and passes after the
+correction; full-height and no-base fallback checks also pass. This does not
+close the near-soil visual or moving-camera acceptance gap.

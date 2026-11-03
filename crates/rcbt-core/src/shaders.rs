@@ -709,7 +709,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         let weight=(1.0-smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m))*(1.0-water_material);
         let base=mix(coarse.base_normal,fine.base_normal,fract(material_lod));
         let height_coverage=mix(coarse.height_coverage,fine.height_coverage,fract(material_lod))*weight;
-        shaded_normal=material_height_field_normal(shaded_normal,address,(mix(coarse.normal,fine.normal,fract(material_lod))+base)*weight,height_coverage,render_from_body);
+        let optical=mix(coarse.normal,fine.normal,fract(material_lod))*weight;
+        // The fallback already carries (1-C) of optical detail; add only its C share.
+        let resolved_gradient=optical*height_coverage+base*weight;
+        shaded_normal=material_height_field_normal(shaded_normal,address,resolved_gradient,height_coverage,render_from_body);
     }
     if(MATERIAL_SPECULAR_FILTER_ENABLED && cbt_specular_enabled()) {
         roughness=mix(surface_filtered_roughness(roughness,dpdx(shaded_normal),dpdy(shaded_normal)),roughness,water_material);

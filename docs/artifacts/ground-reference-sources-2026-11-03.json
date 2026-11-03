@@ -72,6 +72,22 @@
           "sha256": "bd2fd6e6013c59a20c6eb4716d680c79ce89e00c8025c8ed86251c86099e5fa6"
         }
       ]
+    },
+    {
+      "name": "Unity Graphics surface gradients",
+      "url": "https://github.com/Unity-Technologies/Graphics",
+      "revision": "0efc28ea742b1966b9dd9cc4489e58b986a13faf",
+      "license_boundary": "Unity source used for mechanism inspection; no implementation copied",
+      "inspected_files": [
+        {
+          "path": "Packages/com.unity.render-pipelines.core/ShaderLibrary/NormalSurfaceGradient.hlsl",
+          "sha256": "3e197764ea9011b4f314daafaf041e2c99527a26c598b423bf5ac25813960ae7"
+        },
+        {
+          "path": "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Lit/LitDataIndividualLayer.hlsl",
+          "sha256": "995d81092f6169e53dbec614d9e4c8e6164ce3a6276e3514147a3b1e2271a3e4"
+        }
+      ]
     }
   ],
   "external_engine_builds_run": false,

@@ -115,3 +115,9 @@ that those pages were resident in the actual frame or that quantization alone
 causes the difference. The probe lives outside production and adds no runtime
 path. Exact input source hashes for inspected engines are in
 [`ground-reference-sources-2026-11-03.json`](artifacts/ground-reference-sources-2026-11-03.json).
+
+[Partial ground-normal coverage correction](128_PARTIAL_GROUND_NORMAL_COVERAGE.md)
+fixes duplicate optical slope during partial canonical-height residency. An
+independent actual-raster test fails on the old shader and passes after the
+correction; full-height and no-base fallback checks also pass. This does not
+close the near-soil visual or moving-camera acceptance gap.

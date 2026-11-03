@@ -88,6 +88,12 @@ same-page grass placement exposes the remaining CPU-root versus resident-page/
 CBT-chord contract. Close soil, convincing moss, moving-camera quality and full
 reference parity remain open.
 
+[Partial ground-normal coverage correction](128_PARTIAL_GROUND_NORMAL_COVERAGE.md)
+fixes duplicate optical slope during partial canonical-height residency. An
+independent actual-raster test fails on the old shader and passes after the
+correction; full-height and no-base fallback checks also pass. This does not
+close the near-soil visual or moving-camera acceptance gap.
+
 ## Current native integration checkpoint
 
 [Doc 110](110_NATIVE_SCENE_AND_NOZZLE_INTEGRATION.md) integrates reviewed Gemini

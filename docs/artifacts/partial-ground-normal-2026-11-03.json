@@ -1,0 +1,73 @@
+{
+  "baseline": "dcc73be",
+  "scenario": "partial canonical base-plane residency on flat terrain; full B03 High control",
+  "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+  "performance_equivalent": false,
+  "reference_parity_accepted": false,
+  "old_shader_failure": {
+    "height_coverage": 0.1559264637,
+    "actual_normal_x": 0.598205476,
+    "expected_normal_x": 0.3700787401574803
+  },
+  "fixed_shader": {
+    "coverages": [
+      0.155926,
+      0.496933,
+      0.846873,
+      1.0
+    ],
+    "actual_normal_x": 0.373371,
+    "tolerance": 0.025
+  },
+  "foreground": {
+    "roi": [
+      400,
+      800,
+      1500,
+      1080
+    ],
+    "pure_terrain_pixels": 209624,
+    "partial_coverage_pixels": 0,
+    "full_coverage_pixels": 209624,
+    "zero_coverage_pixels": 0,
+    "scope": "pure terrain interior pixels selected by exact geometry diagnostic colors; mesh/MSAA boundaries excluded; one frozen B03 frame"
+  },
+  "artifacts": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-partial-before.log",
+      "sha256": "f094292cf898831226c3d7186b56ba8b3d2fbc61745e76d6ebf27090a7aa22f8"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-partial-after.log",
+      "sha256": "4a6609cf639fcb3a63905404519c27c6677e2b8a8b45fd6df76c0c13c49134e6"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-full-fallback-after.log",
+      "sha256": "856289f004c001322ebca1aafaba2024f24ba8297c9e72da7e15631e5fe1c5fa"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-gradient-v5-fhd-20s/command.json",
+      "sha256": "c767bfb172de244da98738a42a24cab7dd254831562664b3f38f26840282b126"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-gradient-v5-fhd-20s/provenance.json",
+      "sha256": "6ba1305721c370382e0235ee20e7ccc89ced9d19f7ff1f0e1a70b8d4979fbd16"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-gradient-v5-fhd-20s/full-fhd.png",
+      "sha256": "bd8d83c8de98ac7ad7e884d0a56fd6e4bc60671eb3748c22f895a6b3b61540a6"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-gradient-v5-fhd-20s/native.log",
+      "sha256": "b05115adb33d06552686ae92a92f1a97912778d8228f1abf5a571a658c83f455"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-gradient-v5-fhd-20s/foreground-height-coverage.json",
+      "sha256": "96d02f90e38ae0c1040c17c216e661600cf230abd13982f201f604a01da34809"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/optical-gradient-v5-fhd-20s/views/manifest.json",
+      "sha256": "74a64e2d91e371083c1edc3ad309910abc092e83abf6f349638470ec7d8e59cd"
+    }
+  ]
+}

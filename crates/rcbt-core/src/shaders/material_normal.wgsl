@@ -125,13 +125,14 @@ fn material_perturb_normal(geometric: vec3<f32>, address: MaterialAddress, tange
     return normalize(geometric + projected);
 }
 
-// Resolve canonical base + optical grain once. The geometry normal remains
-// authoritative for visibility; source shading is independent of height LOD.
-fn material_height_field_normal(geometric:vec3<f32>,address:MaterialAddress,gradient:vec2<f32>,coverage:f32,render_from_body:mat4x4<f32>)->vec3<f32> {
-    if(coverage<=0.0){return geometric;}
+// Blend an already-perturbed optical fallback toward canonical base-height
+// geometry. The caller supplies only the optical share needed by coverage,
+// because the fallback already contains the full optical gradient.
+fn material_height_field_normal(fallback_normal:vec3<f32>,address:MaterialAddress,gradient:vec2<f32>,coverage:f32,render_from_body:mat4x4<f32>)->vec3<f32> {
+    if(coverage<=0.0){return fallback_normal;}
     let basis=material_face_basis(address.uv+address.offset,address.face);
     let rotation=mat3x3<f32>(render_from_body[0].xyz,render_from_body[1].xyz,render_from_body[2].xyz);
     let radial=rotation*basis[2];
     let tangent=rotation*(basis[0]*gradient.x+basis[1]*gradient.y);
-    return normalize(geometric*(1.0-coverage)+(radial*coverage+tangent)*max(0.0001,dot(geometric,radial)));
+    return normalize(fallback_normal*(1.0-coverage)+(radial*coverage+tangent)*max(0.0001,dot(fallback_normal,radial)));
 }

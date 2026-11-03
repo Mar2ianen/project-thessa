@@ -1617,15 +1617,18 @@ and footprint filtering remain; there is no unfiltered texture or slope gain.
 Determinism, boundary continuity and a non-repetition counterexample are tested.
 
 Fine CBT height pages add the mean-centered source relief, masked by the final
-canonical ground coverage, to the existing 32 m-filtered terrain. L17 and lower
-retain their old samples. Fine pages retain the same quantized residual layout,
-with a 1 mm acceptance budget instead of 0.5 m; the old budget was an error
-limit, not a fixed quantization step. The authored source range is 60 mm, not a
-calibrated terrain scan or authoritative collision update. Shared vertices
-sample the same directory address independently of bisector allocation. The
-source page's geometric normals own fine displaced relief, preventing the full
-material bump from being counted twice. A separate sub-grid residual normal is
-not implemented; material normals remain the fallback on coarse pages.
+canonical ground coverage, to the existing 32 m-filtered terrain. Current High
+streaming enables relief at levels whose height-grid spacing is below 4 m
+(including L17); Low retains the undisplaced source. This supersedes the earlier
+blanket statement that L17 and lower are unchanged. Fine pages retain the same
+quantized residual layout, with a 1 mm acceptance budget instead of 0.5 m; the
+old budget was an error limit, not a fixed quantization step. The authored scan
+range is 60 mm; this does not bound the combined procedural grain/moss relief
+or update authoritative collision. Shared vertices sample the same directory
+address independently of bisector allocation. Current shading composes a
+canonical base-height plane with optical detail, retaining geometry/optical
+fallback when that plane is absent. Doc 124 subsequently adds scan-normal
+residuals; doc 128 fixes duplicate optical slope at partial base-plane coverage.
 
 | Surface quality | Material ceiling | Soil-height data ceiling | Pebble density subset |
 | --- | ---: | ---: | ---: |

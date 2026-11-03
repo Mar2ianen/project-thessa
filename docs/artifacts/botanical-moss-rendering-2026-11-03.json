@@ -1,0 +1,94 @@
+{
+  "baseline": "d8a3ff2",
+  "reference": {
+    "openengine_revision": "bdf5c2710fe37c1c5ddbac7787477daa87524af3",
+    "path": "Engine/Modules/TerrainGrass/Shaders/TerrainGrass/terrain_grass_surface.glsl",
+    "sha256": "5d9e1502acf96df615fbfa40f778ab9c19c6956fb1de8d175475792ffa8090e2",
+    "asset": "https://polyhaven.com/a/moss_01",
+    "license": "CC0-1.0",
+    "packed_asset_sha256": "e2324cb2c5cf29f241113dbf42166cb1ac0bb2e48a93e33e7e7f5ac0064f8003"
+  },
+  "profile": "debug; serial-stage-fenced diagnostics; not production timing",
+  "performance_equivalent": false,
+  "checks": {
+    "wet_ground": "6 passed; 1 ignored macro executed separately",
+    "asset": "1 passed",
+    "shared_fern_materials": "1 passed",
+    "macro_gpu": "passed; visible moss retained, cutout removes 5452 carrier-control pixels",
+    "frozen_sequence": "20 views; geometry/depth/beauty identity within run",
+    "clippy": "native all targets passed",
+    "architecture": "passed"
+  },
+  "current_counters": {
+    "native_surface_ground_grass_meshes": "12",
+    "native_surface_ground_grass_tufts": "21200",
+    "native_surface_ground_moss_clumps": "4250",
+    "native_surface_ground_moss_meshes": "3",
+    "native_surface_plants_draw_calls": "36",
+    "native_surface_plants_instance_buffer_bytes": "2508416",
+    "native_surface_plants_prototype_payload_bytes": "33531332",
+    "native_surface_plants_prototype_texture_bytes": "28925952"
+  },
+  "mesh_draw": "mesh_submitted=MeshDrawStats { instances: 5394, candidate_instances: 39194, candidate_triangles: 22100504, draw_calls: 36, draw_commands: 4380, triangles: 3680080, frame_upload_bytes: 576 }; drawn_triangles above counts terrain only; live_flight=false",
+  "shadow_draw": "shadow_atlas_bytes=12582912 shadow_active_layers=3 shadow_rendered_passes=3 terrain_shadow_draws=ShadowDrawStats { candidate_slots: 393216, submitted_slots: 393216, draw_calls: 3, indirect: true, mesh_candidate_instances: 121806, mesh_submitted_instances: 102364, mesh_candidate_triangles: 66301512, mesh_submitted_triangles: 51040872, mesh_draw_calls: 108, mesh_draw_commands: 5450, mesh_indirect: true, mesh_indirect_upload_bytes: 0, mesh_sample_rejected_instances: 10312, mesh_lod_instances: 0, mesh_lod_triangles_saved: 0, mesh_lod_max_error_microtexels: 0 } material_quality=High specular_reflections=true",
+  "review": {
+    "author_preview": "root; no independent or blind aesthetic acceptance",
+    "initial_wide_candidate": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v6-fhd-20s",
+    "initial_wide_macro": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-specimen",
+    "current_macro": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-tight-specimen",
+    "overall_reference_parity": false,
+    "limits": [
+      "soil shader/material remains unchanged",
+      "independent-process material residency differs",
+      "moving-camera/RT stability not established",
+      "macro has neutral QA lighting and no terrain backdrop; not beauty acceptance",
+      "attempted 0.45m native eye rejected by existing CLI >=2m limit before rendering"
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/full-fhd.png",
+      "sha256": "cfe90852b03d3f472fa53015588d3b5078d9946a41667744de468be0654c2a40"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/native.log",
+      "sha256": "16df4e122ab17dc117721161c7d9ea5c1ae8017e0e470c46eca20eea8f201c23"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/command.json",
+      "sha256": "232faec8f6704008ae0829a9b1e5a855110eecb61407f816b10a0f2e81ed9e91"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/provenance.json",
+      "sha256": "4128924904a282063b69eb1ef2f74aeb5357a0af2e4b9f568fa7d557c966fa04"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/views/manifest.json",
+      "sha256": "e49ccc6735a0f164414cedb039b0431d9da14f10cc3c9d22c84a6c47a07d310e"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/cpu-tests.log",
+      "sha256": "f6dcc5e8f3f748a7b00ca2f7c8efeeae4cb3d6c46f8b9050f5a7143fae3b5ed8"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/fern-material-tests.log",
+      "sha256": "89316dee3fb40fa7c7df1c0cb6177b234f6b152154ff02edd41960545e4fadf4"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/clippy.log",
+      "sha256": "3ed2d9260f7d54617235d367439e7bc4cd562a789f92beeb76c7c3a92a231a19"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-v7-fhd-20s/macro-test.log",
+      "sha256": "990b962929863e702437e974c2d88b0148cc427fcd4a383da8946ee41da82331"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-tight-specimen/moss-cutout.png",
+      "sha256": "41ff26a6b749810797408ace5d520b61f5d8d4c79030a20fb767de00b7091247"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/botanical-moss-tight-specimen/moss-opaque-control.png",
+      "sha256": "3c2bb71d1bc646a72f5a9039d90d69af79dd4e3d62450d0c82f86aa7fbfabd57"
+    }
+  ]
+}

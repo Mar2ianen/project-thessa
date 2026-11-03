@@ -1,0 +1,52 @@
+{
+  "source": "https://polyhaven.com/a/moss_01",
+  "author": "Rob Tuytel",
+  "license": "CC0-1.0",
+  "source_forms": [
+    7,
+    8,
+    9
+  ],
+  "triangles": [
+    6,
+    6,
+    8
+  ],
+  "transforms": "gallery node translations removed; source shoot coordinates/UVs retained",
+  "material_conversion": "diffuse JPEG + separate alpha -> RGBA PNG; MASK 0.5; standard normal/ORM retained; unsupported specular/ior extensions removed for native dielectric prior",
+  "sources": {
+    "moss_01_1k.gltf": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/moss_01/moss_01_1k.gltf",
+      "md5": "1baba498fd3936673609dda5ecfe960a",
+      "sha256": "36fe6cb9889abb33f4dbee402928e260a3e7dfaec043d39b80b1e3afff684f65"
+    },
+    "moss_01.bin": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/moss_01/moss_01.bin",
+      "md5": "cdb092878a81b3208a162d79546892fe",
+      "sha256": "440e3cadbd93ad383cdbb9b4c17c3236774924c33ff62ac409ab00b8ed622861"
+    },
+    "moss_01_diff_1k.jpg": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/moss_01/moss_01_diff_1k.jpg",
+      "md5": "5768f973a7d6d2846a2e76a6b0669a83",
+      "sha256": "7c8d0794dd9db0a82f668a276896818d195c644cfed35f0fbf984a3260e70e50"
+    },
+    "moss_01_alpha_1k.png": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/moss_01/moss_01_alpha_1k.png",
+      "md5": "e55f1cca390d93f23980a5fdbe1dc705",
+      "sha256": "00da5c2d0164338c2330587737ff65cefb5575de0c7019ae20bd6f60976608c0"
+    },
+    "moss_01_nor_gl_1k.jpg": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/moss_01/moss_01_nor_gl_1k.jpg",
+      "md5": "faf161f708abe274db1b8087800fa08b",
+      "sha256": "531d6bea634ac956d87b176a89740f229ec7e8137a6413e290bab640c6a8b0ec"
+    },
+    "moss_01_arm_1k.jpg": {
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/moss_01/moss_01_arm_1k.jpg",
+      "md5": "e3b6adf32db7076885afe0e179cc1850",
+      "sha256": "0cf0aabfc370a51e7d330ae01e63ca380f88a9bb0fcfa94730374476183a12cf"
+    }
+  },
+  "path": "assets/vegetation/moss-shoots-01.glb",
+  "bytes": 1050036,
+  "sha256": "e2324cb2c5cf29f241113dbf42166cb1ac0bb2e48a93e33e7e7f5ac0064f8003"
+}

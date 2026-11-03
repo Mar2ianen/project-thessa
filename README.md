@@ -1014,3 +1014,8 @@ improved soil appearance remain unimplemented.
 add exact checksummed snapshots and bounded world-bound file save/load with
 atomic publication. Loaded-layer CPU heights and raster frames match the
 authored source. Live region refresh and contact-driven tracks remain open.
+
+[Botanical moss rendering](docs/131_BOTANICAL_MOSS_RENDERING.md)
+adds pinned CC0 shoot forms and shared albedo/alpha/normal/ORM material maps,
+with unchanged colony counts/draw groups and higher explicit source cost.
+Reference-quality soil and full-scene acceptance remain open.

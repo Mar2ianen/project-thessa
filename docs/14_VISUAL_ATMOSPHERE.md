@@ -884,16 +884,16 @@ cover: High admits 4,250 moss cushions / 21,200 grass crowns, Medium 1,200 /
 1,600. Low and disabled detail publish none. Twelve reusable shape/palette
 prototypes supply pointed blades. Each crown is placed after its world-fixed
 patch offset and aligned to a frame sampled from the canonical optical soil.
-Moss and grass coexist in damp patches. V4 replaces broad untextured moss
-facets with 24 individually rooted short shoots per colony and a continuous
-local heading field. Doubling the earlier smooth pads was rejected after an
-actual FHD frame; the replacement still lacks convincing dense moss coverage.
+Moss and grass coexist in damp patches. The current source replaces untextured
+moss strips with three pinned CC0 botanical shoot forms, shared PBR maps and
+alpha cutouts. Colonies group the same 24 independently rooted shoots more
+closely. Dense natural coverage remains open; see doc 131.
 
 The shared blade-tip/root cases and existing cover/budget tests pass. These
 checks prove contact against the CPU optical sampler; they do not establish
 contact with the currently resident GPU height page or CBT triangle chord.
-The latest fixed B03 diagnostic frame reports 25,918,356 mesh-prototype bytes,
-2,508,416 instance-buffer bytes and 16,343,040 source-image bytes. Its 20 frozen
+The latest fixed B03 diagnostic frame reports approximately 33.53 MB of mesh-prototype data,
+2,508,416 instance-buffer bytes and 28,925,952 source-image bytes. Its 20 frozen
 views preserve geometry/depth/beauty identity within the run. Independent runs
 have different page publications and are not exact pixel A/B controls. Serial
 stage-fenced durations are not game FPS or evidence of an acceleration.

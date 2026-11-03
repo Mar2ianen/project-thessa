@@ -133,7 +133,8 @@ fn moss_does_not_publish_large_untextured_sheet_triangles() {
         0.37,
         field.params.seed,
         812,
-    );
+    )
+    .unwrap();
     assert!(
         mesh.indices.len() >= 48,
         "the fixture must contain resolved moss structure"
@@ -164,4 +165,184 @@ fn moss_does_not_publish_large_untextured_sheet_triangles() {
         (0.015..=0.12).contains(&tallest),
         "moss must have bounded volume: {tallest} m"
     );
+}
+
+#[test]
+#[ignore = "small actual-GPU moss macro specimen; optional THESSA_TEST_ARTIFACT_DIR"]
+fn capture_textured_moss_macro_and_verify_cutout_coverage() {
+    use thessa_rcbt_core::lighting::SurfaceLighting;
+    use thessa_render_wgpu::{
+        Backend, mesh::MeshRenderer, terrain::OffscreenTarget, view::ViewParams,
+    };
+    let field = thessa_flight_authority::launch_site::canonical_world_field().unwrap();
+    let dir = DVec3::new(-2835051.776623983, 1279289.634545036, -752292.6983244818).normalize();
+    let (east, north, _) = enu_basis(dir.to_array());
+    let center = ground_position(&field, dir * field.params.radius_m);
+    let frame = GroundPatchFrame {
+        field: &field,
+        center,
+        east: east.into(),
+        north: north.into(),
+        anchor: center,
+    };
+    let mut prepared = Prepared {
+        asset: MeshAsset {
+            primitives: vec![],
+            materials: vec![],
+            images: vec![],
+            textures: vec![],
+        },
+        shadow_lods: vec![],
+        descriptors: vec![],
+        instances: vec![],
+        ranges: vec![],
+        reduced_primitives: vec![],
+        local_ground_start: None,
+    };
+    let material = super::super::moss::materials(&mut prepared).unwrap()[0];
+    let mut primitive = blank(material);
+    moss_cushion(
+        &mut primitive,
+        &frame,
+        [0.10, 0.085],
+        0.08,
+        0.37,
+        field.params.seed,
+        812,
+    )
+    .unwrap();
+    let local = DMat3::from_cols(east.into(), dir, -DVec3::from(north)).transpose();
+    for v in &mut primitive.vertices {
+        v.position = (local * DVec3::from(v.position.map(f64::from)))
+            .as_vec3()
+            .to_array();
+        v.normal = (local * DVec3::from(v.normal.map(f64::from)))
+            .as_vec3()
+            .to_array();
+    }
+    prepared.asset.primitives.push(primitive);
+    prepared.asset.validate().unwrap();
+    let backend = Backend::bring_up().unwrap();
+    let target = OffscreenTarget::new(&backend, 640, 480).unwrap();
+    let eye = DVec3::new(0.12, 0.16, 0.36);
+    let view = ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(
+            eye,
+            DVec3::new(0.0, 0.02, 0.0),
+            DVec3::Y,
+        )
+        .inverse(),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+            0.8,
+            640.0 / 480.0,
+            0.005,
+            10.0,
+        ),
+        world_position_m: eye,
+        exposure: 1.0,
+    };
+    let lights = SurfaceLighting {
+        ambient_lux: [std::f32::consts::PI; 4],
+        directions: [[0.3, 0.8, 0.51961523, 0.0], [0.0; 4], [0.0; 4]],
+        colors_lux: [[2.0, 2.0, 2.0, 0.0], [0.0; 4], [0.0; 4]],
+    };
+    let mut images = Vec::new();
+    for mode in [
+        thessa_render_core::mesh::AlphaMode::Mask,
+        thessa_render_core::mesh::AlphaMode::Opaque,
+    ] {
+        for m in &mut prepared.asset.materials {
+            m.alpha_mode = mode;
+        }
+        let mut renderer =
+            MeshRenderer::new(&backend, &prepared.asset, OffscreenTarget::FORMAT, 1).unwrap();
+        renderer
+            .update(
+                &backend,
+                &view,
+                &lights,
+                &[MeshInstance {
+                    position_m: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
+                    scale: 1.0,
+                }],
+            )
+            .unwrap();
+        let mut encoder = backend.device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("moss macro specimen"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.06,
+                            g: 0.065,
+                            b: 0.07,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        renderer.encode(&mut encoder, &target.color, &target.depth);
+        backend.queue.submit([encoder.finish()]);
+        images.push(target.read_rgba8(&backend).unwrap());
+    }
+    let background = &images[0][..3];
+    let visible = images[0]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| {
+            p[..3]
+                .iter()
+                .zip(background)
+                .any(|(a, b)| a.abs_diff(*b) > 8)
+        })
+        .count();
+    assert!(
+        visible > 500,
+        "cutout must retain actual moss, visible pixels={visible}"
+    );
+    let changed = images[0]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(images[1].as_chunks::<4>().0)
+        .filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(a, b)| a.abs_diff(*b) > 8))
+        .count();
+    assert!(
+        changed > 500,
+        "alpha mask must remove rectangular carrier pixels: {changed}"
+    );
+    eprintln!("actual moss macro: 24 shoots, cutout_vs_opaque_changed_pixels={changed}");
+    if let Some(dir) = std::env::var_os("THESSA_TEST_ARTIFACT_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, data) in ["cutout", "opaque-control"].into_iter().zip(images) {
+            let mut png = png::Encoder::new(
+                std::fs::File::create(dir.join(format!("moss-{name}.png"))).unwrap(),
+                640,
+                480,
+            );
+            png.set_color(png::ColorType::Rgba);
+            png.set_depth(png::BitDepth::Eight);
+            png.write_header().unwrap().write_image_data(&data).unwrap();
+        }
+    }
 }

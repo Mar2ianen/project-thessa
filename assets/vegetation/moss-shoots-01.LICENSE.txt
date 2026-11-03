@@ -1,0 +1,7 @@
+Moss 01 — Rob Tuytel / Poly Haven
+Source: https://polyhaven.com/a/moss_01
+License: CC0-1.0 (https://creativecommons.org/publicdomain/zero/1.0/)
+Poly Haven license statement: https://polyhaven.com/license
+Derived subset: three low-triangle shoot forms, separate diffuse/alpha packed
+into RGBA, standard normal/ORM maps, gallery node offsets removed.
+See moss-shoots-01.provenance.json and tools/worldgen-rocky/import_moss_shoots.py.

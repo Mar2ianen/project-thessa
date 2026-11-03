@@ -14,6 +14,7 @@ use thessa_worldgen_rocky::{
 
 mod foliage;
 mod ground;
+mod moss;
 mod wet_ground;
 
 pub const WINDOW_LEVEL: u8 = 14;
@@ -180,8 +181,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 8 m colony occupancy; short-shoot moss colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four geometry variants per grass palette; moisture-gated grass can coexist with moss; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/shadow/environment path"
-            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/shadow/environment path"}.into()),
+                "WORLD11 <=9 same-face L14 large-plant windows plus <=49 same-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 8 m colony occupancy; textured CC0 moss-shoot colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four geometry variants per grass palette; moisture-gated grass can coexist with moss; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
+            } else {"WORLD11 <=9 same-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }

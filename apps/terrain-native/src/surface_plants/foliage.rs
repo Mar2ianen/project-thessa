@@ -16,6 +16,43 @@ fn source() -> Result<&'static MeshAsset, String> {
         .map_err(Clone::clone)
 }
 
+pub(super) fn copy_material(asset: &mut MeshAsset, source: &MeshAsset, index: usize) -> Material {
+    let mut material = source.materials[index].clone();
+    let mut remap = |texture: Option<usize>| -> Option<usize> {
+        texture.map(|index| {
+            let texture = &source.textures[index];
+            let image = &source.images[texture.image];
+            let image_index = asset
+                .images
+                .iter()
+                .position(|i| {
+                    i.width == image.width && i.height == image.height && i.rgba8 == image.rgba8
+                })
+                .unwrap_or_else(|| {
+                    let i = asset.images.len();
+                    asset.images.push(image.clone());
+                    i
+                });
+            let mut copy = *texture;
+            copy.image = image_index;
+            asset
+                .textures
+                .iter()
+                .position(|t| t == &copy)
+                .unwrap_or_else(|| {
+                    let i = asset.textures.len();
+                    asset.textures.push(copy);
+                    i
+                })
+        })
+    };
+    material.base_texture = remap(material.base_texture);
+    material.metallic_roughness_texture = remap(material.metallic_roughness_texture);
+    material.normal_texture = remap(material.normal_texture);
+    material.occlusion_texture = remap(material.occlusion_texture);
+    material
+}
+
 pub(super) fn append(
     prepared: &mut Prepared,
     prototype: &thessa_worldgen_rocky::offline::PlantMesh,
@@ -99,41 +136,7 @@ pub(super) fn append(
         }
         indices.extend(original.indices.iter().map(|i| first + i));
     }
-    let mut material = source.materials[original.material].clone();
-    let mut remap = |texture: Option<usize>| -> Option<usize> {
-        texture.map(|index| {
-            let texture = &source.textures[index];
-            let image = &source.images[texture.image];
-            let image_index = prepared
-                .asset
-                .images
-                .iter()
-                .position(|i| {
-                    i.width == image.width && i.height == image.height && i.rgba8 == image.rgba8
-                })
-                .unwrap_or_else(|| {
-                    let i = prepared.asset.images.len();
-                    prepared.asset.images.push(image.clone());
-                    i
-                });
-            let mut copy = *texture;
-            copy.image = image_index;
-            prepared
-                .asset
-                .textures
-                .iter()
-                .position(|t| t == &copy)
-                .unwrap_or_else(|| {
-                    let i = prepared.asset.textures.len();
-                    prepared.asset.textures.push(copy);
-                    i
-                })
-        })
-    };
-    material.base_texture = remap(material.base_texture);
-    material.metallic_roughness_texture = remap(material.metallic_roughness_texture);
-    material.normal_texture = remap(material.normal_texture);
-    material.occlusion_texture = remap(material.occlusion_texture);
+    let mut material = copy_material(&mut prepared.asset, source, original.material);
     material.alpha_mode = AlphaMode::Mask;
     material.diffuse_transmission = 0.28;
     material.base_color = match form {

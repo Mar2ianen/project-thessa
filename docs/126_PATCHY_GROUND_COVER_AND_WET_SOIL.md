@@ -9,12 +9,12 @@ canonical-surface root contact; it does not establish rendered-page agreement.
 
 - High admits at most 4,250 moss cushions and 21,200 grass tufts. Medium caps
   these at 1,200 and 1,600. Low and disabled ground detail publish no cover.
-- Moss uses 24 short curved shoots per colony in three olive palettes. Each
-  root is sampled independently against optical soil after its jittered
-  golden-angle offset. A continuous local heading field correlates neighboring
-  shoots. Lengths are 26–60 mm with pointed tips; broad smooth dome faces are
-  removed. The occupancy mask follows dampness and shallow depressions. This
-  is a fine-shoot approximation, not validated botanical moss realism.
+- Moss uses 24 individually rooted, textured CC0 botanical shoots per colony,
+  in three tint materials sharing base/normal/ORM images. Three folded source
+  forms replace the untextured strips; standard alpha MASK removes carriers.
+  A continuous local heading field correlates neighboring shoots. The tighter
+  colony footprint groups the same population; actual leaf/branch detail comes
+  from the pinned source UVs and cutout maps. See doc 131 for conversion/limits.
 - Grass uses fourteen curved, pointed blades per crown and four shape variants
   per palette, twelve reusable prototypes in total. High admits up to four
   independently rooted tufts around each selected site. Their height is sampled
@@ -27,7 +27,8 @@ canonical-surface root contact; it does not establish rendered-page agreement.
   blunt caps and zero-area tip triangles for all supported segment counts 1–4.
   Vertex compaction includes UVs, preserving distinct texture coordinates.
 - Cover uses existing mesh instances, materials, shadows and publication. There
-  is no added pass or image. More reusable instances reduce source mesh bytes
+  is no added pass. The shared moss maps add 12,582,912 source-image bytes.
+  More reusable instances reduce source mesh bytes
   but can increase culling/submission work; source bytes do not prove speedup.
 - Wet porous soil retains roughness 0.88 with existing mineral/litter variation.
   Explicit basin water uses 0.008. High admits 24 pools, Medium 4. Cover/pools
@@ -90,7 +91,7 @@ config, simulation time 74566.63966240163 and 20 seconds of prestream on Radeon
 
 The last capture uses 16,343,040 bytes of source images separately from mesh
 payload, 2,508,416 instance-buffer bytes, 36 mesh draw calls and 5,361 submitted
-instances in v2 (5,394 in v3 and v4). All 20 frozen diagnostic views retain identical published geometry,
+instances in v2 (5,394 in the subsequent fixed-camera captures). All 20 frozen diagnostic views retain identical published geometry,
 depth and beauty round-trip within that run. Native log, exact command and dirty
 source/binary fingerprints are preserved beside the frame. An initial attempt
 with both diagnostic sequence and perf-capture was rejected by the CLI before
@@ -124,3 +125,8 @@ green facets are gone, but the small shoots still read as sparse fine clutter.
 V4 passed six focused tests, strict all-target native Clippy and a release
 build. The 20-view FHD capture preserves frozen geometry/depth/beauty identity.
 The additional source geometry is a measured cost, not a performance gain.
+
+The current botanical source/colony iteration is recorded in
+[doc 131](131_BOTANICAL_MOSS_RENDERING.md). The preceding v3/v4 records remain
+historical; current source payload is approximately 33.53 MB of mesh and
+28.93 MB of images, with the unchanged 36 mesh groups and population caps.

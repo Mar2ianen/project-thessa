@@ -6,17 +6,11 @@ use thessa_worldgen_rocky::{lod, rng, scatter::ScatterKind, surface_water::fill_
 #[path = "wet_ground_acceptance.rs"]
 mod acceptance_tests;
 
-const ORGANIC_PALETTES: [[f32; 4]; 3] = [
-    [0.039, 0.095, 0.020, 1.0],
-    [0.060, 0.119, 0.024, 1.0],
-    [0.034, 0.073, 0.015, 1.0],
-];
-const PALETTE_COUNT: usize = ORGANIC_PALETTES.len();
+const PALETTE_COUNT: usize = 3;
 const GRASS_BLADES_PER_TUFT: u32 = 14;
 const GRASS_TUFTS_PER_HIGH_PATCH: usize = 4;
 const GRASS_SHAPE_VARIANTS: usize = 4;
 const MOSS_SHOOTS_PER_CUSHION: usize = 24;
-const MOSS_BLADE_SEGMENTS: usize = 2;
 const GRASS_PALETTES: [[f32; 4]; 3] = [
     [0.035, 0.102, 0.014, 1.0],
     [0.055, 0.116, 0.017, 1.0],
@@ -213,7 +207,8 @@ fn moss_cushion(
     phase: f64,
     seed: u64,
     id: i64,
-) {
+) -> Result<(), String> {
+    let source = super::moss::source()?;
     let GroundPatchFrame {
         field,
         center,
@@ -250,21 +245,17 @@ fn moss_cushion(
         let radial = (east * heading.cos() + north * heading.sin()).normalize();
         let side = up.cross(radial).normalize();
         let length = (0.026 + hash(8020 + leaf as u32) * 0.034).min(height * 0.82);
-        let width = 0.0030 + hash(8060 + leaf as u32) * 0.0014;
-        let lean = radial * (0.006 + hash(8100 + leaf as u32) * 0.014);
-        curved_blade(
+        let variant = ((hash(8100 + leaf as u32) * 3.0) as usize).min(2);
+        super::moss::append_shoot(
             mesh,
+            &source.primitives[variant],
             soil_root,
-            BladePose { up, lean, side },
-            BladeShape {
-                length,
-                half_width: width,
-                segments: MOSS_BLADE_SEGMENTS,
-                taper_start: Some(0.34),
-            },
+            DMat3::from_cols(side, up, radial),
+            length / 0.025,
             anchor,
         );
     }
+    Ok(())
 }
 
 fn grass_tuft(mesh: &mut Primitive, seed: u64, patch_id: i64, height_scale: f64) {
@@ -404,17 +395,7 @@ pub(super) fn append(
         )
     });
     let start = prepared.asset.primitives.len();
-    let moss_materials = ORGANIC_PALETTES.map(|base_color| {
-        let material = prepared.asset.materials.len();
-        prepared.asset.materials.push(Material {
-            base_color,
-            metallic: 0.0,
-            roughness: 0.98,
-            double_sided: true,
-            ..Default::default()
-        });
-        material
-    });
+    let moss_materials = super::moss::materials(prepared)?;
     let mut moss_meshes = moss_materials.map(blank);
     // Stable world-addressed candidates are admitted near-first; the underlying
     // damp/moss field creates patches instead of a uniform scatter carpet.
@@ -452,14 +433,14 @@ pub(super) fn append(
             &mut moss_meshes[palette],
             &frame,
             [
-                (0.085 + hash(7800) * 0.105) * 1.30,
-                (0.072 + hash(7801) * 0.092) * 1.30,
+                (0.085 + hash(7800) * 0.105) * 0.65,
+                (0.072 + hash(7801) * 0.092) * 0.65,
             ],
             0.052 + cover.moss * 0.025 + hash(7802) * 0.022,
             hash(7803) * std::f64::consts::TAU,
             field.params.seed,
             d.id.0 as i64,
-        );
+        )?;
         stats.ground_moss_clumps += 1;
     }
     for mesh in moss_meshes {
@@ -779,7 +760,7 @@ mod tests {
         assert!(!first.same_prototypes(&make(0.001)));
     }
     #[test]
-    fn coastal_cover_publishes_bounded_water_and_moss_without_extra_passes_or_images() {
+    fn coastal_cover_publishes_bounded_water_and_textured_moss_without_extra_passes() {
         let eye = DVec3::new(-2835051.776623983, 1279289.634545036, -752292.6983244818);
         let forward = DVec3::new(0.4133582597898216, 0.9039379739103636, 0.10968631813657403);
         let dir = eye.normalize().to_array();
@@ -854,13 +835,14 @@ mod tests {
             distant_moss_vertices >= 1000,
             "bounded near priority must retain moss in neighboring cells"
         );
-        assert_eq!(
-            moss_meshes
-                .iter()
-                .map(|mesh| mesh.indices.len())
-                .sum::<usize>(),
-            stats.ground_moss_clumps * MOSS_SHOOTS_PER_CUSHION * (MOSS_BLADE_SEGMENTS * 2) * 3,
-            "each moss colony has 24 short shoots with two curved blade segments"
+        let moss_triangles = moss_meshes
+            .iter()
+            .map(|m| m.indices.len() / 3)
+            .sum::<usize>();
+        assert!(
+            (stats.ground_moss_clumps * MOSS_SHOOTS_PER_CUSHION * 6
+                ..=stats.ground_moss_clumps * MOSS_SHOOTS_PER_CUSHION * 8)
+                .contains(&moss_triangles)
         );
         let litter = local
             .iter()
@@ -909,7 +891,11 @@ mod tests {
         eprintln!("water triangles in showcase cone: {visible}");
         assert!(visible > 0);
         prepared.asset.validate().unwrap();
-        assert!(prepared.asset.images.is_empty());
+        assert_eq!(
+            prepared.asset.images.len(),
+            3,
+            "moss palettes must share one base/normal/ORM set"
+        );
         assert!(prepared.same_prototypes(&prepared));
         assert_eq!(
             prepared.descriptors.len(),

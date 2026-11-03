@@ -78,8 +78,9 @@ crowns and moss: High caps 4,250 / 21,200, Medium 1,200 / 1,600. Shared blade
 geometry now reaches a true point without degenerate triangles, and each crown
 is sampled against the canonical optical surface. Six focused numerical and
 budget cases pass, including a moss facet-area bound. Smooth domes have been
-replaced by short shoots; convincing moss remains open. The latest FHD B03 source payload is 25.92 MB of the 48 MB
-limit, with 2.51 MB of instances and 16.34 MB of images separately; it is not a
+replaced by shoots, now using pinned botanical geometry/PBR cutouts (doc 131);
+convincing dense moss remains open. The latest FHD B03 source payload is approximately 33.53 MB of the 48 MB
+limit, with 2.51 MB of instances and 28.93 MB of images separately; it is not a
 measured speedup. The broad-leaf v3 candidate improves coverage, but full visual acceptance remains open.
 [Doc 127](127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md) establishes the independent
 Luna implementation/reviewer loop and pins actual Unreal foliage placement,
@@ -104,6 +105,11 @@ improved soil appearance remain unimplemented.
 add exact checksummed snapshots and bounded world-bound file save/load with
 atomic publication. Loaded-layer CPU heights and raster frames match the
 authored source. Live region refresh and contact-driven tracks remain open.
+
+[Botanical moss rendering](131_BOTANICAL_MOSS_RENDERING.md)
+adds pinned CC0 shoot forms and shared albedo/alpha/normal/ORM material maps,
+with unchanged colony counts/draw groups and higher explicit source cost.
+Reference-quality soil and full-scene acceptance remain open.
 
 ## Current native integration checkpoint
 

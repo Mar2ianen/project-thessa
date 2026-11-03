@@ -946,3 +946,11 @@ The contrast-aware plume quadrature cuts the near High curved control from
 regressions in some light cases. These are isolated pass timings. Stock Cycles
 thin-jet image differences remain large and visual parity is not accepted;
 [doc 106](106_SPATIAL_SHOCK_FIELD.md) records all cases and limits.
+
+
+[Ground scan normal detail](124_GROUND_SCAN_NORMAL_DETAIL.md) now imports
+the existing scans' normal maps as footprint-matched, rotated surface-gradient
+residuals in the existing pages. Actual FHD depth/topology/albedo/roughness/water
+controls remain identical while close optical normals regain missing detail.
+No extra GPU pass/storage is introduced; source-cache CPU cost and unresolved
+residency/reference acceptance are explicit.

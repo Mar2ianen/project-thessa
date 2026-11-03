@@ -966,19 +966,29 @@ pub fn build_gpu_material_page_with_relief(
             water_coverage,
         };
     }
-    let floor_heights: Vec<f64> = ground
+    let floor: Vec<(f64, [f64; 3])> = ground
         .iter()
         .enumerate()
         .map(|(i, g)| {
-            f64::from(g.height_m)
-                + ground_cover_from_sample(
-                    field,
+            let cover = ground_cover_from_sample(
+                field,
+                dirs[i],
+                &samples[i],
+                texel_m,
+                f64::from(g.height_m),
+            );
+            let residual = if ground_weights[i] > 0.0 {
+                crate::ground_detail::sample_residual(
                     dirs[i],
-                    &samples[i],
+                    field.params.radius_m,
+                    field.params.seed,
                     texel_m,
-                    f64::from(g.height_m),
+                    cover.moss,
                 )
-                .moss_height_m
+            } else {
+                [0.; 3]
+            };
+            (f64::from(g.height_m) + cover.moss_height_m, residual)
         })
         .collect();
     let grain = material_normal_grain_samples(field, &dirs, &samples, size, texel_m);
@@ -1024,8 +1034,18 @@ pub fn build_gpu_material_page_with_relief(
                         .map(|v| v * field.params.radius_m),
                     sub(dirs[y1 * size + x], dirs[y0 * size + x])
                         .map(|v| v * field.params.radius_m),
-                    floor_heights[y * size + x1] - floor_heights[y * size + x0],
-                    floor_heights[y1 * size + x] - floor_heights[y0 * size + x],
+                    floor[y * size + x1].0 - floor[y * size + x0].0
+                        + dot(
+                            floor[y * size + x].1,
+                            sub(dirs[y * size + x1], dirs[y * size + x0])
+                                .map(|v| v * field.params.radius_m),
+                        ),
+                    floor[y1 * size + x].0 - floor[y0 * size + x].0
+                        + dot(
+                            floor[y * size + x].1,
+                            sub(dirs[y1 * size + x], dirs[y0 * size + x])
+                                .map(|v| v * field.params.radius_m),
+                        ),
                 );
                 for i in 0..2 {
                     gradient[i] += floor_gradient[i] * ground_weights[y * size + x];
@@ -1588,6 +1608,51 @@ mod surface_regressions {
         assert!(a.albedo.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         let mesh = build_tile(&field, key, 24);
         assert!(mesh.positions.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn scan_normal_pages_match_neighbor_aprons_and_preserve_scalar_materials() {
+        let frozen = crate::offline::FrozenSurface::read_gzip(
+            &include_bytes!("../../../data/worldgen/thessa-erosion-v3.surface.json.gz")[..],
+        )
+        .unwrap();
+        let field = field().with_frozen_erosion(&frozen).unwrap();
+        let key = TileKey {
+            face: 1,
+            level: 22,
+            x: 1540664,
+            y: 3043475,
+        };
+        let a = build_gpu_material_page_with_relief(&field, key, true, true, true);
+        let b = build_gpu_material_page_with_relief(
+            &field,
+            TileKey {
+                x: key.x + 1,
+                ..key
+            },
+            true,
+            true,
+            true,
+        );
+        let disabled = build_gpu_material_page_with_relief(&field, key, false, true, true);
+        assert_eq!(a.rgba, disabled.rgba);
+        assert_eq!(a.water_coverage, disabled.water_coverage);
+        assert!(disabled.normal.is_empty());
+        assert!(a.normal.iter().any(|&v| v != 0));
+        for y in 1..=126 {
+            let ai = (y * 128 + 126) * 2;
+            let bi = (y * 128 + 1) * 2;
+            assert_eq!(
+                &a.normal[ai..ai + 2],
+                &b.normal[bi..bi + 2],
+                "normal seam at {y}"
+            );
+            assert_eq!(
+                &a.base_normal[ai..ai + 2],
+                &b.base_normal[bi..bi + 2],
+                "base seam at {y}"
+            );
+        }
     }
 
     #[test]

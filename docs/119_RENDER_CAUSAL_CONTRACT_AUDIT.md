@@ -211,3 +211,10 @@ scheduler, selection-budget or soil-source change from these experiments is
 retained. Commands, source patches, raw comparisons and the depth-to-chart
 sampling method are preserved in
 [the investigation artifact](artifacts/near-soil-diagnosis-2026-11-03.json).
+
+
+Continuation: [doc 124](124_GROUND_SCAN_NORMAL_DETAIL.md) isolates and closes
+the missing scan-normal input in the closest material. The scans' normal maps
+were absent from the importer; footprint-matched gradient residuals now supply
+them without counting height twice. Matched FHD geometric/scalar-material outputs
+remain identical. This does not close the transient/coarse residency task.

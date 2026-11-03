@@ -1,0 +1,15 @@
+{
+  "license": "CC0-1.0",
+  "source_url": "https://polyhaven.com/a/brown_mud_leaves_01",
+  "source_png_url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/brown_mud_leaves_01/brown_mud_leaves_01_nor_gl_1k.png",
+  "source_png_md5": "bfa4b76dc2218b8b953d3eb2055fafad",
+  "source_png_sha256": "0c5c37348830b6a36024a114359e26aaf2f48bf2b435a5ef2d6999bcd4b530b7",
+  "path": "assets/textures/mud-litter-01.normal.bin.gz",
+  "sha256": "170940894fb7dd18a83da65098b0ee8671e34f447d7d3802cedcf2736deb2b4f",
+  "side": 512,
+  "bytes": 735704,
+  "format": "GN01 + u32 side + RGB8 OpenGL normal",
+  "processing": "RGB16-to-RGB8 conversion; slope-area downsample only for the existing 512-square litter swatch",
+  "nonpositive_z_source_texels": 0,
+  "fallback": "A folded normal cannot be represented by a single-valued height graph; runtime retains its height-derived slope, not an infinite tangent gradient."
+}

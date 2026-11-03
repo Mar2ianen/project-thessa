@@ -25,3 +25,10 @@ leaves the packed CC0 source unchanged; it is not measured mineral taxonomy.
 The transfer runs at native resolution before runtime linear-light mip averaging.
 The old 512x512 downsample is superseded by WORLD42 (doc 77); GPU residency
 budgets and the second mud/litter scan's 512x512 source are unchanged.
+
+The companion forest-ground-04.normal.bin.gz contains CC0 OpenGL normals from the
+same Poly Haven scan. Exact URLs, checksums and processing are in
+forest-ground-04.normal.provenance.json. Reproduce with
+tools/worldgen-rocky/import_ground_normals.py. The old color/roughness/height
+swatch is unchanged. Runtime gradients are optical shading detail; they do not
+add collision geometry or a measured physical displacement calibration.

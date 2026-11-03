@@ -1,0 +1,303 @@
+{
+  "base_commit": "721dc7bec0dc1d32a27cddb9d00ccd1937d6f8dc",
+  "raw_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03",
+  "status": "Missing scan-normal input implemented in existing optical pages. No extra GPU pass/binding/triangle. Broader residency and full reference/cost acceptance remain open.",
+  "measurements": {
+    "before": {
+      "near_normal_mixed_difference_rms": 0.04167802259325981,
+      "selected_quads": 287609
+    },
+    "after": {
+      "near_normal_mixed_difference_rms": 0.11391427367925644,
+      "selected_quads": 287609
+    },
+    "invariants": {
+      "depth.f32": true,
+      "topology.bin": true,
+      "08-albedo.rgba16f": true,
+      "09-roughness.rgba16f": true,
+      "04-water_weight.rgba16f": true,
+      "13-material_lod.rgba16f": true,
+      "11-height_page_level.rgba16f": true,
+      "10-geometry.rgba16f": true
+    },
+    "vertex_changed_component_counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      23641,
+      0
+    ],
+    "vertex_position_normal_chart_address_identical": true,
+    "only_changed_vertex_component": "height-source physical slot index, component10; page generation/epochs differ between independent processes",
+    "note": "Selected near-ground frequency statistic is a detail diagnostic, not independent photorealism or blind preference acceptance.",
+    "page_controls": {
+      "0": {
+        "rgba": true,
+        "base-normal": true,
+        "water": true,
+        "normal": false
+      },
+      "1": {
+        "rgba": true,
+        "base-normal": true,
+        "water": true,
+        "normal": false
+      },
+      "2": {
+        "rgba": true,
+        "base-normal": true,
+        "water": true,
+        "normal": false
+      },
+      "3": {
+        "rgba": true,
+        "base-normal": true,
+        "water": true,
+        "normal": false
+      }
+    }
+  },
+  "source_cache_cpu_bytes": 25165816,
+  "assets": [
+    {
+      "path": "assets/textures/forest-ground-04.normal.bin.gz",
+      "bytes": 2907776,
+      "sha256": "5f22aa227c387fbd7998533869d255b97a335a4beb93bb4640c599cd257e5b08"
+    },
+    {
+      "path": "assets/textures/forest-ground-04.normal.provenance.json",
+      "bytes": 903,
+      "sha256": "6f7773b2eb0ce0917eb2009730f23fd218ed7f28cae8cccd807ec1e8802e3e35"
+    },
+    {
+      "path": "assets/textures/forest-moss-litter-02.normal.bin.gz",
+      "bytes": 3045178,
+      "sha256": "1f94b48f200bc532a01046a78f4ab26f8dc5efad54cdf5641c4a2dc7995b496d"
+    },
+    {
+      "path": "assets/textures/forest-moss-litter-02.normal.provenance.json",
+      "bytes": 908,
+      "sha256": "2ffcc643014c61fc571b54b7a90badc719d2dde28c27b42cd08ce7232e499ee1"
+    },
+    {
+      "path": "assets/textures/mud-litter-01.normal.bin.gz",
+      "bytes": 735704,
+      "sha256": "170940894fb7dd18a83da65098b0ee8671e34f447d7d3802cedcf2736deb2b4f"
+    },
+    {
+      "path": "assets/textures/mud-litter-01.normal.provenance.json",
+      "bytes": 907,
+      "sha256": "66f45657244908814a002594ff8141524aac1aedd9f9f752b8f5e0213c63902e"
+    }
+  ],
+  "release_page_benchmark": {
+    "before": [
+      {
+        "count": 32,
+        "ground_detail": false,
+        "normal_maps": true,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 123.96108,
+        "page_p50_ms": 122.765291,
+        "page_p95_ms": 123.766283,
+        "workload": "32 paired frozen-erosion land pages, face 3, levels 17/20/21/22; counterbalanced"
+      },
+      {
+        "count": 32,
+        "ground_detail": true,
+        "normal_maps": true,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 325.771344,
+        "page_p50_ms": 153.663983,
+        "page_p95_ms": 161.049888,
+        "workload": "32 paired frozen-erosion land pages, face 3, levels 17/20/21/22; counterbalanced"
+      }
+    ],
+    "after": [
+      {
+        "count": 32,
+        "ground_detail": false,
+        "normal_maps": true,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 133.130696,
+        "page_p50_ms": 125.43908300000001,
+        "page_p95_ms": 128.709092,
+        "workload": "32 paired frozen-erosion land pages, face 3, levels 17/20/21/22; counterbalanced"
+      },
+      {
+        "count": 32,
+        "ground_detail": true,
+        "normal_maps": true,
+        "not_frame_time_or_loading_benchmark": true,
+        "page_max_ms": 300.26663399999995,
+        "page_p50_ms": 158.918381,
+        "page_p95_ms": 166.270322,
+        "workload": "32 paired frozen-erosion land pages, face 3, levels 17/20/21/22; counterbalanced"
+      }
+    ]
+  },
+  "benchmark_limits": "32 paired canonical source-generation pages per version, ground-detail Off/On counterbalanced. One run per version; not GPU/frame time, no speedup claimed.",
+  "fhd": {
+    "complete": true,
+    "beauty_round_trip_identical": true,
+    "ambient_receiver_identical": true,
+    "published_geometry_identical": true,
+    "extent": [
+      1920,
+      1080
+    ],
+    "sample_count": 4,
+    "sim_time_s": 74566.63966240163,
+    "mesh_stats": "Some(MeshDrawStats { instances: 2474, candidate_instances: 17992, candidate_triangles: 19660054, draw_calls: 22, draw_commands: 2178, triangles: 2775318, frame_upload_bytes: 576 })",
+    "material_resident_levels": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      2,
+      4,
+      6,
+      0,
+      32,
+      66,
+      89,
+      49,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "pending_jobs": [
+      0,
+      4
+    ]
+  },
+  "fhd_state_limit": "Independent processes: geometric positions/normals/chart coordinates, depth, topology and all tested scalar material images match exactly. Physical height-slot indices/publication epochs differ. No general cross-process restoration claim.",
+  "oracle_limits": "Mip residual subtraction and UV rotations have independent known-case controls. Actual-source gradient RMS/detail is not a universal angular/energy bound for normal-mapped terrain; subpixel visibility, geometry and temporal acceptance remain open.",
+  "blind_pair": {
+    "review_directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/blind",
+    "prepared": true,
+    "independent_votes": 0
+  },
+  "records": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/normals-fhd-20s/command.json",
+      "bytes": 2329,
+      "sha256": "3cffeafce7d3ecb7ee62780b94b69e75fd32c6158739d384da43f83391359f09"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/normals-fhd-20s/source.patch",
+      "bytes": 8222,
+      "sha256": "72756eadf1a799a7e00ea7d27e26fda13b572be8b979ba7fdb1c6092e7d4af2e"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/normals-fhd-20s/identity.json",
+      "bytes": 143,
+      "sha256": "2bff8a5c3a140f8087da0e59952a4cb0f99658cfdfddce25c4b440167478024b"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/normals-fhd-20s/native.bin",
+      "bytes": 737558312,
+      "sha256": "c7ad4cbcc1ce5373dc0b9bd05515aa85c092a70b47ec3c8c80090c16f0f4cc0b"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/normals-fhd-20s/views/manifest.json",
+      "bytes": 118608,
+      "sha256": "6b14a32be883030fd9e36c4046d28df4132c8acc05ea9f25b6a79d42350ebcee"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/measurements.json",
+      "bytes": 1435,
+      "sha256": "fb19324dbd94b154ea24db10a06849175567496bbd9ae9d2f30a9b06d8323f76"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/material-pages-before.bin",
+      "bytes": 37240512,
+      "sha256": "1b5348af58b8ae121f1b1f59e4755971c111346aaa3fa1ff80670185c70f6fe5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/material-pages-after.bin",
+      "bytes": 37240512,
+      "sha256": "1b5348af58b8ae121f1b1f59e4755971c111346aaa3fa1ff80670185c70f6fe5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/pages-before-run.log",
+      "bytes": 1315,
+      "sha256": "b12e2bf5c53a5bcd62f795542a45854a5247d34e276a9a6c56c968b5a8e0fcf0"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/pages-before/pages.json",
+      "bytes": 908,
+      "sha256": "d510568f90c1c66ddf86fd840e4e688b57f1a9e4b3d28e041a364d341bbde4b4"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/pages-after/pages.json",
+      "bytes": 916,
+      "sha256": "7fe14b6104f2f08e26f7e2f912f414e57696138b3f8f69fb7e17fdd97363cbb6"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-normals-tests2.log",
+      "bytes": 24339,
+      "sha256": "842b167a9a71dc9f9576a115521bff202c08ddc1c344fc971a619486bbc17880"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-normal-seams.log",
+      "bytes": 886,
+      "sha256": "7ca0f4fd2891b09c0be62a748242902c43e296a96cc95cc8aa8e7ff45745d744"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-stream-tests.log",
+      "bytes": 3935,
+      "sha256": "1f4784bda5131a1368756a36f7d4dc26dd054d77896e7b79f0c3bac6f168160d"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-client-check.log",
+      "bytes": 921,
+      "sha256": "6d04762bb8b5528c58ed0be786f81c3cf8401ab55f1e3e410c1ec44bb1940704"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-clippy-final.log",
+      "bytes": 800,
+      "sha256": "7593b4774c4b73e5c002b1f1824f6717f4a21e5e699bfe070cccb232456a2b74"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-architecture.log",
+      "bytes": 310,
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-repack.log",
+      "bytes": 76,
+      "sha256": "fe16f9bea68841d0f27ecd43ff8eea12888e566b753d5fb39c2063a20a8bf75d"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/thessa-ground-pages-after.log",
+      "bytes": 1181,
+      "sha256": "d5ebbdf7c1f8691e014c53fff3fda1975b0c1a192eb0e8836baf127c51a9599d"
+    }
+  ]
+}

@@ -2,6 +2,9 @@
 //! Source scales/licenses: assets/textures/{forest-ground-04,mud-litter-01,forest-moss-litter-02}.LICENSE.txt.
 use std::{io::Read, sync::OnceLock};
 
+mod normal;
+pub(crate) use normal::sample_residual;
+
 pub const SWATCH_WIDTH_M: f64 = 3.15;
 pub const HEIGHT_RANGE_M: f32 = 0.060;
 const SOIL_SIDE: usize = 1024;
@@ -15,13 +18,13 @@ pub(crate) struct GroundSample {
     pub height_m: f32,
 }
 
-struct Mip {
+struct Mip<const N: usize = 5> {
     side: usize,
     // RGB linear reflectance, linear perceptual roughness, relative height (m).
-    pixels: Vec<[f32; 5]>,
+    pixels: Vec<[f32; N]>,
 }
 
-struct Texture(Vec<Mip>);
+struct Texture<const N: usize = 5>(Vec<Mip<N>>);
 static TEXTURE: OnceLock<Texture> = OnceLock::new();
 static LITTER: OnceLock<Texture> = OnceLock::new();
 static MOSS: OnceLock<Texture> = OnceLock::new();
@@ -161,17 +164,20 @@ impl Texture {
         }
         Self(mips)
     }
+}
 
-    fn sample(&self, uv: [f64; 2], lod: f64) -> [f32; 5] {
+impl<const N: usize> Texture<N> {
+    fn sample(&self, uv: [f64; 2], lod: f64) -> [f32; N] {
         let lod = lod.clamp(0.0, (self.0.len() - 1) as f64);
         let a = self.0[lod.floor() as usize].sample(uv);
         let b = self.0[lod.ceil() as usize].sample(uv);
         std::array::from_fn(|c| a[c] + (b[c] - a[c]) * lod.fract() as f32)
     }
     #[cfg(test)]
-    fn sample_stochastic(&self, uv: [f64; 2], lod: f64, seed: u64, projection: u32) -> [f32; 5] {
+    fn sample_stochastic(&self, uv: [f64; 2], lod: f64, seed: u64, projection: u32) -> [f32; N] {
         self.sample_stochastic_width(uv, lod, seed, projection, SWATCH_WIDTH_M)
     }
+    #[cfg(test)]
     fn sample_stochastic_width(
         &self,
         uv: [f64; 2],
@@ -179,14 +185,25 @@ impl Texture {
         seed: u64,
         projection: u32,
         width_m: f64,
-    ) -> [f32; 5] {
+    ) -> [f32; N] {
+        self.sample_stochastic_transformed(uv, lod, seed, projection, width_m, |v, _| v)
+    }
+    fn sample_stochastic_transformed(
+        &self,
+        uv: [f64; 2],
+        lod: f64,
+        seed: u64,
+        projection: u32,
+        width_m: f64,
+        transform: impl Fn([f32; N], u32) -> [f32; N],
+    ) -> [f32; N] {
         let cell = uv.map(|v| v.floor() as i64);
         // A 30 cm transition keeps most of each patch unblurred. Adjacent
         // cells share corner sources, so colour and physical height agree.
         let half_blend = 0.15 / width_m;
         let t = uv
             .map(|v| crate::appearance::smooth(0.5 - half_blend, 0.5 + half_blend, v - v.floor()));
-        let mut result = [0.0; 5];
+        let mut result = [0.0; N];
         for y in 0..2 {
             for x in 0..2 {
                 let weight = (if x == 0 { 1.0 - t[0] } else { t[0] })
@@ -202,13 +219,17 @@ impl Texture {
                         cell[1] + y,
                     )
                 };
-                let rotated = match ((hash(0) * 4.0) as u32).min(3) {
+                let rotation = ((hash(0) * 4.0) as u32).min(3);
+                let rotated = match rotation {
                     0 => uv,
                     1 => [-uv[1], uv[0]],
                     2 => [-uv[0], -uv[1]],
                     _ => [uv[1], -uv[0]],
                 };
-                let value = self.sample([rotated[0] + hash(1), rotated[1] + hash(2)], lod);
+                let value = transform(
+                    self.sample([rotated[0] + hash(1), rotated[1] + hash(2)], lod),
+                    rotation,
+                );
                 for (out, value) in result.iter_mut().zip(value) {
                     *out += value * weight as f32;
                 }
@@ -218,8 +239,8 @@ impl Texture {
     }
 }
 
-impl Mip {
-    fn sample(&self, uv: [f64; 2]) -> [f32; 5] {
+impl<const N: usize> Mip<N> {
+    fn sample(&self, uv: [f64; 2]) -> [f32; N] {
         let p = uv.map(|v| v.rem_euclid(1.0) * self.side as f64 - 0.5);
         let xy = p.map(|v| v.floor() as i64);
         let [u, v] = p.map(|v| v.fract().rem_euclid(1.0) as f32);
@@ -287,6 +308,29 @@ fn sample_texture(
     texel_m: f64,
     width_m: f64,
 ) -> GroundSample {
+    let planes = sample_planes(texture, dir, radius_m, seed, texel_m, width_m, |v, _| v);
+    let mut value = [0.; 5];
+    for plane in planes {
+        for (out, v) in value.iter_mut().zip(plane) {
+            *out += v;
+        }
+    }
+    GroundSample {
+        albedo_linear: [value[0], value[1], value[2]],
+        roughness: value[3],
+        height_m: value[4],
+    }
+}
+
+fn sample_planes<const N: usize>(
+    texture: &Texture<N>,
+    dir: [f64; 3],
+    radius_m: f64,
+    seed: u64,
+    texel_m: f64,
+    width_m: f64,
+    transform: impl Fn([f32; N], u32) -> [f32; N],
+) -> [[f32; N]; 3] {
     let p: [f64; 3] = std::array::from_fn(|i| {
         dir[i] * radius_m / width_m + crate::rng::hash01(seed, 1741 + i as u32, 0, 0)
     });
@@ -298,26 +342,27 @@ fn sample_texture(
         .max(1.0)
         .log2();
     let projections = [[p[2], p[1]], [p[0], p[2]], [p[0], p[1]]];
-    let mut value = [0.0; 5];
+    let mut value = [[0.0; N]; 3];
     for (projection, (uv, weight)) in projections.into_iter().zip(weights).enumerate() {
         if weight / sum < 1e-8 {
             continue;
         }
-        for (out, sample) in value.iter_mut().zip(texture.sample_stochastic_width(
-            uv,
-            lod,
-            seed,
-            projection as u32,
-            width_m,
-        )) {
+        for (out, sample) in
+            value[projection]
+                .iter_mut()
+                .zip(texture.sample_stochastic_transformed(
+                    uv,
+                    lod,
+                    seed,
+                    projection as u32,
+                    width_m,
+                    &transform,
+                ))
+        {
             *out += sample * (weight / sum) as f32;
         }
     }
-    GroundSample {
-        albedo_linear: [value[0], value[1], value[2]],
-        roughness: value[3],
-        height_m: value[4],
-    }
+    value
 }
 
 fn sample_moss(q: [f64; 3], seed: u64, texel_m: f64) -> GroundSample {

@@ -862,3 +862,11 @@ are implemented with 8/16/32 probes and a resource-free disabled path
 visibility, not bounce/GI, complete G-buffers or accepted soil/reference parity.
 The frozen diagnostic sequence adds three visibility Off/On/Off controls when
 the receiver exists; ordinary sequences retain 17 views.
+
+
+[Ground scan normal detail](124_GROUND_SCAN_NORMAL_DETAIL.md) now imports
+the existing scans' normal maps as footprint-matched, rotated surface-gradient
+residuals in the existing pages. Actual FHD depth/topology/albedo/roughness/water
+controls remain identical while close optical normals regain missing detail.
+No extra GPU pass/storage is introduced; source-cache CPU cost and unresolved
+residency/reference acceptance are explicit.

@@ -21,3 +21,10 @@ Exact URLs use https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/
 brown_mud_leaves_01/brown_mud_leaves_01_{diff,rough,disp}_1k.png.
 Source SHA256 hashes, output hash and quantized means are recorded in the
 adjacent mud-litter-01.provenance.json. Pillow/NumPy are offline tooling only.
+
+The companion mud-litter-01.normal.bin.gz contains CC0 OpenGL normals from the
+same Poly Haven scan. Exact URLs, checksums and processing are in
+mud-litter-01.normal.provenance.json. Reproduce with
+tools/worldgen-rocky/import_ground_normals.py. The old color/roughness/height
+swatch is unchanged. Runtime gradients are optical shading detail; they do not
+add collision geometry or a measured physical displacement calibration.

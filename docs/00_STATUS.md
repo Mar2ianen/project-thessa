@@ -77,9 +77,10 @@ not shipped as a soil fix; see doc 119's continuation.
 near-eye cover budget to 3,400 moss and 4,800 grass sites on High, gives moss
 colonies a rounded multi-ring profile, and raises wet porous-soil roughness to
 0.88 while reserving mirror-like roughness for explicit basin water. A matched
-FHD B03 frame is denser at ground level, but visible bare/muddy substrate and
-the remaining material/residency issue are still open; the capture does not
-establish visual parity or a performance win.
+FHD B03 iteration shifts the moss pigment modestly toward green without changing
+its mask. Visible bare/muddy substrate and the remaining material/residency
+issue are still open; the capture does not establish visual parity or a
+performance win.
 
 ## Current native integration checkpoint
 

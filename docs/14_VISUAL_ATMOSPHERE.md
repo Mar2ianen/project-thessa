@@ -910,12 +910,13 @@ retaining its own CPU preparation, terrain sampling, and graphics-quality
 resolver.
 
 The matched 1920×1080 B03 sunset capture is at
-`outputs/ground-detail-repair-2026-11-03/ground-cover-dense-fhd-20s/views/01-none.png`.
-With the same fixed camera and 20-second prestream, this High frame reports
-3,400 moss colonies, 4,295 grass tufts, and 24 pools. Surface prototype
-preparation took 4.57 s; mesh payload was 43.14 MB against the existing 48 MB
-admission budget, with 16.34 MB of material-page textures reported separately.
-The increased budget adds visible low cover but approaches the mesh payload
-ceiling. This single hardware capture is not a frame-rate study. The closer
-floor remains patchy and exposes muddy scan texture; no reference-parity claim
-is made.
+`outputs/ground-detail-repair-2026-11-03/ground-cover-green-moss-fhd-20s/views/01-none.png`.
+It uses the same fixed camera and 20-second prestream as the earlier density
+capture, with a moderate green shift to the moss pigment and the same coverage
+mask. This High frame reports 3,400 moss colonies, 4,295 grass tufts, and 24
+pools. Surface prototype preparation took 4.59 s; mesh payload was 43.14 MB
+against the existing 48 MB admission budget, with 16.34 MB of material-page
+textures reported separately. The increased cover adds visible low vegetation
+and approaches the mesh payload ceiling. This single hardware capture is not a
+frame-rate study. The closer floor remains patchy and exposes muddy scan
+texture; no reference-parity claim is made.

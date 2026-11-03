@@ -32,8 +32,8 @@ const LITTER_WIDTH_M: f64 = 1.3;
 const LITTER_HEIGHT_RANGE_M: f32 = 0.025;
 const MOSS_WIDTH_M: f64 = 3.0;
 const MOSS_HEIGHT_RANGE_M: f32 = 0.020;
-// Authored dark olive pigment transfer; source texture contrast remains.
-const MOSS_GRADE: [f32; 3] = [0.100, 0.200, 0.300];
+// Authored olive-green pigment transfer; source texture contrast remains.
+const MOSS_GRADE: [f32; 3] = [0.100, 0.300, 0.150];
 const MOSS_MEAN: GroundSample = GroundSample {
     albedo_linear: [0.2964123, 0.17819463, 0.056929342],
     roughness: 0.9334981,

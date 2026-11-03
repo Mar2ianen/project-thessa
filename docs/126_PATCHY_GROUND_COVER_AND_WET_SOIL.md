@@ -10,8 +10,11 @@ substrate; this is a bounded visual improvement, not reference parity.
   near-eye ground window. Medium caps these at 1,200 and 1,600. Low and disabled
   ground detail publish no cover geometry.
 - Moss colonies use a 10-sided footprint, three height-profile rings, short
-  curved shoots, and three dark olive material variants. Ground samples follow
-  the same scanned-soil relief source used by pebbles and litter.
+  curved shoots, and three olive-green material variants. Ground samples follow
+  the same scanned-soil relief source used by pebbles and litter. The authored
+  pigment transfer now shifts moderately toward green while retaining the
+  source texture's local contrast; the distribution mask is unchanged so the
+  exposed substrate remains legible between colonies.
 - Grass tufts use 14 curved, tapered blades with deterministic per-world
   variation in direction, length, width, and bend. Moss and grass are emitted
   into the current aggregate mesh/material ranges; no per-plant draw or new
@@ -40,19 +43,20 @@ the separation between porous wet soil (rough) and discrete basin water
 ## Capture evidence
 
 The fixed B03 sunset camera was rendered at 1920×1080 with 20 seconds of
-prestream on Radeon 880M/RADV. The density iteration is preserved at
-`outputs/ground-detail-repair-2026-11-03/ground-cover-dense-fhd-20s/`; the same
-camera/config and earlier shape/color iterations are adjacent. It reports
-3,400 moss colonies, 4,295 grass tufts, 24 pools, 4,569 ms
-surface-plant/ground preparation, 43,135,668 bytes of mesh prototype payload,
-and 16,343,040 bytes of prototype textures. Mesh payload remains 4.86 MB below
-the existing 48,000,000-byte admission limit; texture bytes are reported
-separately. These individual captures do not establish steady-state FPS or a
-general performance result.
+prestream on Radeon 880M/RADV. The density and pigment iterations are preserved
+at `outputs/ground-detail-repair-2026-11-03/ground-cover-dense-fhd-20s/` and
+`outputs/ground-detail-repair-2026-11-03/ground-cover-green-moss-fhd-20s/`;
+the camera/config are matched. The latest capture reports 3,400 moss colonies,
+4,295 grass tufts, 24 pools, 4,593 ms surface-plant/ground preparation,
+43,135,668 bytes of mesh prototype payload, and 16,343,040 bytes of prototype
+textures. Mesh payload remains 4.86 MB below the existing 48,000,000-byte
+admission limit; texture bytes are reported separately. These individual
+captures do not establish steady-state FPS or a general performance result.
 
-The final image has more low ground cover and rounded, smaller moss groups than
-the prior iteration. Some muddy ground remains exposed and still has visible
-banding/scan character; the grass cap is not saturated because the damp-habitat
-mask rejects some candidates. The material-page residency issue at the closest
-footprint and full visual parity remain open. No change was made to the CBT
-terrain topology or material-page ownership.
+Compared with the earlier shape/color iterations, the latest image has more
+low cover and rounded, smaller, greener moss groups. Some muddy ground remains
+exposed and still has visible banding/scan character; the grass cap is not
+saturated because the damp-habitat mask rejects some candidates. The
+material-page residency issue at the closest footprint and full visual parity
+remain open. No change was made to the CBT terrain topology or material-page
+ownership.

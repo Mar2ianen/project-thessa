@@ -991,5 +991,6 @@ does not claim complete residency or visual parity.
 adds bounded curved grass tufts and rounded moss colonies to the existing near-
 ground mesh path, raises wet porous-soil roughness while keeping smooth BRDFs on
 separate basin water, and caps High at 3,400 moss / 4,800 grass sites. A matched
-FHD B03 capture shows increased cover; bare substrate and full reference parity
+FHD B03 capture also records a restrained green shift in moss pigment while
+keeping the distribution mask fixed; bare substrate and full reference parity
 remain open.

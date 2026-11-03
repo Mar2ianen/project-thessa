@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-03",
+  "sources": [
+    {
+      "name": "OpenEngine",
+      "url": "https://github.com/Game-Crafters-Guild/OpenEngine",
+      "revision": "bdf5c2710fe37c1c5ddbac7787477daa87524af3",
+      "license_boundary": "MIT",
+      "inspected_files": [
+        {
+          "path": "Engine/Modules/CBTTerrain/Shaders/CBT/cbt_planet_page.glsl",
+          "sha256": "4c0ae3b869aff4be2ba414810b74d08d523ba0299c58f24c23bb49244a87fa7f"
+        },
+        {
+          "path": "Engine/Modules/CBTTerrain/Shaders/CBT/cbt_kernels.comp",
+          "sha256": "124435a0e5d584ef7e310a47baaebccf6126c63f513b8cbf0b3fe10f7071fae7"
+        },
+        {
+          "path": "Engine/Modules/TerrainGrass/Shaders/TerrainGrass/grass_surface_pages.glsl",
+          "sha256": "0c11f4b20098a8cd61ccb1afd5002a6e632d914a3cdd8f1a00b87579638774c4"
+        },
+        {
+          "path": "Engine/Modules/TerrainGrass/Shaders/TerrainGrass/terrain_grass_vertex_modifier.glsl",
+          "sha256": "b8fd2d9b31b1b02144ad1b2823c41d69c88972f5fb334b2c0da6efd7c40e4202"
+        },
+        {
+          "path": "Engine/Modules/TerrainGrass/Include/TerrainGrass/GrassClumpModel.h",
+          "sha256": "3b1fc432442fef0dfe48b056be0898e5041cbebccaaa386e8c4f05310ed53c05"
+        }
+      ]
+    },
+    {
+      "name": "AMD Hybrid Shadows",
+      "url": "https://github.com/GPUOpen-Effects/Hybrid-Shadows",
+      "revision": "0cf18422a73eda8b4a23870091372a7717387f3e",
+      "license_boundary": "MIT",
+      "inspected_files": [
+        {
+          "path": "src/Shaders/Classify.hlsl",
+          "sha256": "dbef9c856da40bf0bea5fa44284eb829d6ffbf004f8094bd6f6056bd90001584"
+        },
+        {
+          "path": "src/Shaders/ShadowRaytrace.hlsl",
+          "sha256": "f81d3b979310671272624dfac8da36e293b6af3d954a710cc101cd8fc3196036"
+        }
+      ]
+    },
+    {
+      "name": "Unreal Engine",
+      "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Landscape/FGrassVariety",
+      "revision": "Linux installed source 5.8.4",
+      "license_boundary": "Epic EULA; independently implemented ideas",
+      "inspected_files": [
+        {
+          "path": "Engine/Source/Runtime/Landscape/Private/LandscapeGrass.cpp",
+          "sha256": "e945aa8a1330db71c9cf9639c84b880eb19b80bf1f681fce2e957ca5aa51b053"
+        }
+      ]
+    }
+  ],
+  "external_engine_builds_run": false,
+  "reference_parity_accepted": false
+}

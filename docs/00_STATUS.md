@@ -73,15 +73,19 @@ Near-soil investigation also confirms coarse material residency beyond the
 fine-page footprint; longer readiness restores much of that coverage but does
 not repair the closest material. Scheduler/refinement candidates were rejected,
 not shipped as a soil fix; see doc 119's continuation.
-[Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) now raises the bounded
-near-eye cover budget to 4,000 moss and 4,800 grass sites on High, gives moss
-colonies a rounded multi-ring profile, and raises wet porous-soil roughness to
-0.88 while reserving mirror-like roughness for explicit basin water. A matched
-FHD B03 iteration broadens the continuous moss mask and biases it toward
-centimetre-scale depressions; the latest captured mesh payload is 45.82 MB of
-the existing 48 MB budget. Visible bare/muddy substrate and the remaining
-material/residency issue are still open; serial-fence capture timing is not a
-performance result.
+[Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) adds bounded reusable grass
+crowns and moss: High caps 4,250 / 21,200, Medium 1,200 / 1,600. Shared blade
+geometry now reaches a true point without degenerate triangles, and each crown
+is sampled against the canonical optical surface. Five focused numerical and
+budget cases pass. The latest FHD B03 source payload is 22.35 MB of the 48 MB
+limit, with 2.51 MB of instances and 16.34 MB of images separately; it is not a
+measured speedup. The broad-leaf v3 candidate improves coverage, but full visual acceptance remains open.
+[Doc 127](127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md) establishes the independent
+Luna implementation/reviewer loop and pins actual Unreal foliage placement,
+OpenEngine spherical CBT/grass, and AMD Hybrid Shadows source. OpenEngine's
+same-page grass placement exposes the remaining CPU-root versus resident-page/
+CBT-chord contract. Close soil, convincing moss, moving-camera quality and full
+reference parity remain open.
 
 ## Current native integration checkpoint
 

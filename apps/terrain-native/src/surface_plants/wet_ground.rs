@@ -2,16 +2,23 @@
 use super::*;
 use thessa_worldgen_rocky::{lod, rng, scatter::ScatterKind, surface_water::fill_closed_basin};
 
+#[cfg(test)]
+#[path = "wet_ground_acceptance.rs"]
+mod acceptance_tests;
+
 const ORGANIC_PALETTES: [[f32; 4]; 3] = [
-    [0.028, 0.068, 0.014, 1.0],
-    [0.043, 0.085, 0.017, 1.0],
-    [0.024, 0.052, 0.011, 1.0],
+    [0.039, 0.095, 0.020, 1.0],
+    [0.060, 0.119, 0.024, 1.0],
+    [0.034, 0.073, 0.015, 1.0],
 ];
 const PALETTE_COUNT: usize = ORGANIC_PALETTES.len();
+const GRASS_BLADES_PER_TUFT: u32 = 14;
+const GRASS_TUFTS_PER_HIGH_PATCH: usize = 4;
+const GRASS_SHAPE_VARIANTS: usize = 4;
 const GRASS_PALETTES: [[f32; 4]; 3] = [
-    [0.025, 0.073, 0.010, 1.0],
-    [0.039, 0.083, 0.012, 1.0],
-    [0.018, 0.054, 0.009, 1.0],
+    [0.035, 0.102, 0.014, 1.0],
+    [0.055, 0.116, 0.017, 1.0],
+    [0.026, 0.076, 0.012, 1.0],
 ];
 
 fn blank(material: usize) -> Primitive {
@@ -63,6 +70,26 @@ fn organic_triangle(mesh: &mut Primitive, mut vertices: [(DVec3, DVec3); 3], anc
     }
 }
 
+fn organic_triangle_uv(
+    mesh: &mut Primitive,
+    mut vertices: [(DVec3, DVec3, [f32; 2]); 3],
+    anchor: DVec3,
+) {
+    let [a, b, c] = vertices.map(|v| v.0);
+    let expected = vertices.iter().map(|v| v.1).sum::<DVec3>();
+    if (b - a).cross(c - a).dot(expected) < 0.0 {
+        vertices.swap(1, 2);
+    }
+    for (position, normal, uv) in vertices {
+        mesh.indices.push(mesh.vertices.len() as u32);
+        mesh.vertices.push(Vertex {
+            position: (position - anchor).as_vec3().to_array(),
+            normal: normal.as_vec3().to_array(),
+            uv,
+        });
+    }
+}
+
 #[derive(Clone, Copy)]
 struct GroundPatchFrame<'a> {
     field: &'a PlanetField,
@@ -79,59 +106,109 @@ struct BladePose {
     side: DVec3,
 }
 
-// Four-segment curved blades follow AMD's patch geometry idea: each leaf keeps
-// a persistent root, a bent centreline, a pointed silhouette and a narrow
-// width profile instead of collapsing to a flat diamond at grazing angles.
+#[derive(Clone, Copy)]
+struct BladeShape {
+    length: f64,
+    half_width: f64,
+    segments: usize,
+    taper_start: Option<f64>,
+}
+
+// Curved blades follow AMD's patch geometry idea: each leaf keeps a persistent
+// root, bent centreline, pointed silhouette and narrow tapered width profile.
 fn curved_blade(
     mesh: &mut Primitive,
     base: DVec3,
     pose: BladePose,
-    length: f64,
-    half_width: f64,
+    shape: BladeShape,
     anchor: DVec3,
 ) {
+    let BladeShape {
+        length,
+        half_width,
+        segments,
+        taper_start,
+    } = shape;
     let BladePose { up, lean, side } = pose;
     let control = base + up * (length * 0.56) + lean * 0.30;
     let tip = base + up * length + lean;
-    let mut left = [DVec3::ZERO; 5];
-    let mut right = [DVec3::ZERO; 5];
-    let mut normals = [DVec3::ZERO; 5];
-    for i in 0..5 {
-        let t = i as f64 * 0.25;
+    debug_assert!((1..=4).contains(&segments));
+    let sample = |t: f64| {
         let one_minus = 1.0 - t;
         let center =
             base * (one_minus * one_minus) + control * (2.0 * one_minus * t) + tip * (t * t);
         let tangent = (control - base) * (2.0 * one_minus) + (tip - control) * (2.0 * t);
-        let taper = (one_minus.sqrt() * 0.86 + 0.14).min(1.0);
+        let taper = if let Some(start) = taper_start {
+            let x = ((t - start) / (1.0 - start)).clamp(0.0, 1.0);
+            let smooth = x * x * (3.0 - 2.0 * x);
+            1.0 - smooth * smooth
+        } else {
+            one_minus.sqrt() * 0.92
+        };
         let width = half_width * taper;
-        left[i] = center - side * width;
-        right[i] = center + side * width;
         let mut normal = side.cross(tangent).normalize();
         if normal.dot(up) < 0.0 {
             normal = -normal;
         }
-        normals[i] = (normal * 0.82 + up * 0.18).normalize();
+        let normal = (normal * 0.82 + up * 0.18).normalize();
+        (center - side * width, center + side * width, normal)
+    };
+    let mut rings = [(0.0, DVec3::ZERO, DVec3::ZERO, DVec3::ZERO); 4];
+    for (i, ring) in rings.iter_mut().take(segments).enumerate() {
+        let t = if segments == 1 {
+            0.04
+        } else {
+            0.04 + 0.76 * i as f64 / (segments - 1) as f64
+        };
+        let (left, right, normal) = sample(t);
+        *ring = (t, left, right, normal);
     }
-    for i in 0..4 {
-        organic_triangle(
+    let root_normal = rings[0].3;
+    let (_, left, right, normal) = rings[0];
+    organic_triangle_uv(
+        mesh,
+        [
+            (base, root_normal, [0.0, 0.0]),
+            (left, normal, [0.0, rings[0].0 as f32]),
+            (right, normal, [1.0, rings[0].0 as f32]),
+        ],
+        anchor,
+    );
+    for pair in rings[..segments].windows(2) {
+        let (previous_t, previous_left, previous_right, previous_normal) = pair[0];
+        let (t, left, right, normal) = pair[1];
+        let previous_v = previous_t as f32;
+        let v = t as f32;
+        organic_triangle_uv(
             mesh,
             [
-                (left[i], normals[i]),
-                (right[i], normals[i]),
-                (left[i + 1], normals[i + 1]),
+                (previous_left, previous_normal, [0.0, previous_v]),
+                (previous_right, previous_normal, [1.0, previous_v]),
+                (left, normal, [0.0, v]),
             ],
             anchor,
         );
-        organic_triangle(
+        organic_triangle_uv(
             mesh,
             [
-                (right[i], normals[i]),
-                (right[i + 1], normals[i + 1]),
-                (left[i + 1], normals[i + 1]),
+                (previous_right, previous_normal, [1.0, previous_v]),
+                (right, normal, [1.0, v]),
+                (left, normal, [0.0, v]),
             ],
             anchor,
         );
     }
+    let (previous_t, previous_left, previous_right, previous_normal) = rings[segments - 1];
+    let (_, _, tip_normal) = sample(1.0);
+    organic_triangle_uv(
+        mesh,
+        [
+            (previous_left, previous_normal, [0.0, previous_t as f32]),
+            (previous_right, previous_normal, [1.0, previous_t as f32]),
+            (tip, tip_normal, [0.5, 1.0]),
+        ],
+        anchor,
+    );
 }
 
 // Low, lobed cushions break up the scanned soil without becoming flat decals.
@@ -208,44 +285,35 @@ fn moss_cushion(
             mesh,
             soil_root,
             BladePose { up, lean, side },
-            length,
-            width,
+            BladeShape {
+                length,
+                half_width: width,
+                segments: 4,
+                taper_start: None,
+            },
             anchor,
         );
     }
 }
 
-fn grass_tuft(
-    mesh: &mut Primitive,
-    frame: &GroundPatchFrame<'_>,
-    seed: u64,
-    id: i64,
-    height_scale: f64,
-) {
-    let GroundPatchFrame {
-        field,
-        center,
-        east,
-        north,
-        anchor,
-    } = *frame;
-    let up = center.normalize();
-    let soil = ground_position(field, center);
-    let hash = |channel| rng::hash01(seed, channel, id, 0);
-    for blade in 0..14 {
-        let angle = hash(7500 + blade) * std::f64::consts::TAU;
+fn grass_tuft(mesh: &mut Primitive, seed: u64, patch_id: i64, height_scale: f64) {
+    let up = DVec3::Y;
+    let east = DVec3::X;
+    let north = DVec3::Z;
+    let hash = |channel| rng::hash01(seed, channel, patch_id, 0);
+    let fan_phase = hash(7480) * std::f64::consts::TAU;
+    for blade in 0..GRASS_BLADES_PER_TUFT {
+        let sector = blade as f64 * std::f64::consts::TAU / GRASS_BLADES_PER_TUFT as f64;
+        let jitter = (hash(7500 + blade) - 0.5) * 0.55;
+        let angle = fan_phase + sector + jitter;
         let radial = (east * angle.cos() + north * angle.sin()).normalize();
         let side = up.cross(radial).normalize();
-        let root_angle = hash(7540 + blade) * std::f64::consts::TAU;
-        let root_radius = 0.02 + hash(7580 + blade) * 0.105;
-        let base = ground_position(
-            field,
-            soil + east * (root_angle.cos() * root_radius)
-                + north * (root_angle.sin() * root_radius),
-        ) + up * 0.0015;
-        let length = (0.11 + hash(7620 + blade) * 0.11) * height_scale;
-        let width = 0.0038 + hash(7660 + blade) * 0.0028;
-        let bend = radial * (0.030 + hash(7700 + blade) * 0.050);
+        // The shared crown stays on the sampled soil; radial cantilever spread
+        // restores the tuft footprint without offsetting any blade root.
+        let base = DVec3::ZERO;
+        let length = (0.13 + hash(7620 + blade) * 0.15) * height_scale;
+        let width = (0.0038 + hash(7660 + blade) * 0.0028) * 1.6;
+        let bend = radial * (0.10 + hash(7700 + blade) * 0.12) * height_scale;
         curved_blade(
             mesh,
             base,
@@ -254,9 +322,13 @@ fn grass_tuft(
                 lean: bend,
                 side,
             },
-            length,
-            width,
-            anchor,
+            BladeShape {
+                length,
+                half_width: width,
+                segments: 3,
+                taper_start: Some(0.40),
+            },
+            DVec3::ZERO,
         );
     }
 }
@@ -295,18 +367,7 @@ fn publish(prepared: &mut Prepared, mut mesh: Primitive, anchor: DVec3) {
     if mesh.indices.is_empty() {
         return;
     }
-    let mut unique = std::collections::BTreeMap::new();
-    let mut vertices = Vec::new();
-    for index in &mut mesh.indices {
-        let v = mesh.vertices[*index as usize];
-        let key = (v.position.map(f32::to_bits), v.normal.map(f32::to_bits));
-        *index = *unique.entry(key).or_insert_with(|| {
-            let i = vertices.len() as u32;
-            vertices.push(v);
-            i
-        });
-    }
-    mesh.vertices = vertices;
+    compact_vertices(&mut mesh);
     let start = prepared.instances.len() as u32;
     prepared.instances.push(MeshInstance {
         position_m: anchor,
@@ -316,6 +377,25 @@ fn publish(prepared: &mut Prepared, mut mesh: Primitive, anchor: DVec3) {
     prepared.asset.primitives.push(mesh);
     prepared.ranges.push(start..start + 1);
     prepared.reduced_primitives.push(false);
+}
+
+fn compact_vertices(mesh: &mut Primitive) {
+    let mut unique = std::collections::BTreeMap::new();
+    let mut vertices = Vec::new();
+    for index in &mut mesh.indices {
+        let v = mesh.vertices[*index as usize];
+        let key = (
+            v.position.map(f32::to_bits),
+            v.normal.map(f32::to_bits),
+            v.uv.map(f32::to_bits),
+        );
+        *index = *unique.entry(key).or_insert_with(|| {
+            let i = vertices.len() as u32;
+            vertices.push(v);
+            i
+        });
+    }
+    mesh.vertices = vertices;
 }
 
 pub(super) fn append(
@@ -330,8 +410,12 @@ pub(super) fn append(
         return Ok(());
     }
     let high = settings.surface_quality == thessa_graphics::Quality::High;
-    let moss_limit = if high { 4000 } else { 1200 };
-    let grass_limit = if high { 4800 } else { 1600 };
+    let moss_limit = if high { 4250 } else { 1200 };
+    let grass_limit = if high {
+        GRASS_TUFTS_PER_HIGH_PATCH * 5300
+    } else {
+        1600
+    };
     let pool_limit = if high { 24 } else { 4 };
     let anchor = DVec3::from(window.direction(0.5, 0.5)) * field.params.radius_m;
     let mut sites: Vec<_> = prepared
@@ -396,7 +480,10 @@ pub(super) fn append(
         moss_cushion(
             &mut moss_meshes[palette],
             &frame,
-            [0.085 + hash(7800) * 0.105, 0.072 + hash(7801) * 0.092],
+            [
+                (0.085 + hash(7800) * 0.105) * 1.30,
+                (0.072 + hash(7801) * 0.092) * 1.30,
+            ],
             0.052 + cover.moss * 0.025 + hash(7802) * 0.022,
             hash(7803) * std::f64::consts::TAU,
             field.params.seed,
@@ -451,7 +538,23 @@ pub(super) fn append(
         });
         material
     });
-    let mut grass_meshes = grass_materials.map(blank);
+    let grass_tufts_per_patch = if high { GRASS_TUFTS_PER_HIGH_PATCH } else { 1 };
+    let mut grass_meshes = Vec::with_capacity(PALETTE_COUNT * GRASS_SHAPE_VARIANTS);
+    for (palette, material) in grass_materials.into_iter().enumerate() {
+        for variant in 0..GRASS_SHAPE_VARIANTS {
+            let mut mesh = blank(material);
+            let shape_id = palette * GRASS_SHAPE_VARIANTS + variant;
+            grass_tuft(
+                &mut mesh,
+                field.params.seed ^ (0x6772_6173_735f_0000 + shape_id as u64 * 0x9e37),
+                shape_id as i64,
+                if high { 1.08 } else { 0.84 },
+            );
+            grass_meshes.push(mesh);
+        }
+    }
+    let mut grass_instances: Vec<Vec<MeshInstance>> =
+        (0..grass_meshes.len()).map(|_| Vec::new()).collect();
     let mut grass_sites = sites.clone();
     grass_sites.sort_by_cached_key(|item| {
         let distance2 =
@@ -460,7 +563,7 @@ pub(super) fn append(
             * (1.0 + distance2 / half_span.powi(2));
         (rank.to_bits(), item.id)
     });
-    for d in &grass_sites {
+    'sites: for d in &grass_sites {
         if stats.ground_grass_tufts >= grass_limit {
             break;
         }
@@ -469,35 +572,83 @@ pub(super) fn append(
             continue;
         }
         let hash = |channel| rng::hash01(field.params.seed, channel, d.id.0 as i64, 0);
-        // Dampness and the broader moss field control local density. A separate
-        // three-way pigment palette keeps this low stratum from reading as one
-        // repeated green object.
-        let density = cover.wetness * (0.94 - 0.46 * cover.moss).clamp(0.35, 0.94);
+        // Moisture controls occupancy, but moss is not a competing mask: the
+        // two low strata can coexist. Stable per-site hashes retain patchiness.
+        // A separate three-way palette keeps grass from reading as one object.
+        let density = cover.wetness;
         if hash(7422) > density {
             continue;
         }
-        let palette = ((hash(7423) * PALETTE_COUNT as f64) as usize).min(PALETTE_COUNT - 1);
-        let (east, north, _) = enu_basis(d.direction);
-        let frame = GroundPatchFrame {
-            field,
-            center: DVec3::from(d.direction) * (field.params.radius_m + d.ground_height_m),
-            east: DVec3::from(east),
-            north: DVec3::from(north),
-            anchor,
+        let (east, north, up) = enu_basis(d.direction);
+        let east = DVec3::from(east);
+        let north = DVec3::from(north);
+        let radial = DVec3::from(up);
+        let surface = radial * field.params.radius_m;
+        let east_tangent = ground_position(field, surface + east) - ground_position(field, surface);
+        let north_tangent =
+            ground_position(field, surface + north) - ground_position(field, surface);
+        let ground_normal = east_tangent.cross(north_tangent).normalize();
+        let ground_normal = if ground_normal.dot(radial) < 0.0 {
+            -ground_normal
+        } else {
+            ground_normal
         };
-        grass_tuft(
-            &mut grass_meshes[palette],
-            &frame,
-            field.params.seed,
-            d.id.0 as i64,
-            if high { 1.0 } else { 0.84 },
-        );
-        stats.ground_grass_tufts += 1;
+        let east_axis =
+            (east_tangent - ground_normal * east_tangent.dot(ground_normal)).normalize();
+        let basis = DMat3::from_cols(east_axis, ground_normal, east_axis.cross(ground_normal));
+        let scale = if high {
+            0.88 + hash(7425) * 0.24
+        } else {
+            0.92 + hash(7425) * 0.16
+        };
+        for tuft in 0..grass_tufts_per_patch {
+            if stats.ground_grass_tufts >= grass_limit {
+                break 'sites;
+            }
+            let tuft_hash = |channel| {
+                rng::hash01(
+                    field.params.seed,
+                    channel + tuft as u32 * 31,
+                    d.id.0 as i64,
+                    0,
+                )
+            };
+            let palette =
+                ((tuft_hash(7423) * PALETTE_COUNT as f64) as usize).min(PALETTE_COUNT - 1);
+            let variant = ((tuft_hash(7426) * GRASS_SHAPE_VARIANTS as f64) as usize)
+                .min(GRASS_SHAPE_VARIANTS - 1);
+            let shape = palette * GRASS_SHAPE_VARIANTS + variant;
+            let angle = tuft_hash(7430) * std::f64::consts::TAU;
+            let radius = if tuft == 0 {
+                0.0
+            } else {
+                0.10 + tuft_hash(7431) * 0.11
+            };
+            let site = DVec3::from(d.direction) * field.params.radius_m
+                + east * (angle.cos() * radius)
+                + north * (angle.sin() * radius);
+            let position = ground_position(field, site);
+            let yaw = tuft_hash(7424) * std::f64::consts::TAU;
+            grass_instances[shape].push(MeshInstance {
+                position_m: position,
+                rotation: (DQuat::from_mat3(&basis) * DQuat::from_rotation_y(yaw)).normalize(),
+                scale,
+            });
+            stats.ground_grass_tufts += 1;
+        }
     }
-    for mesh in grass_meshes {
-        let before = prepared.asset.primitives.len();
-        publish(prepared, mesh, anchor);
-        stats.ground_grass_meshes += usize::from(prepared.asset.primitives.len() > before);
+    for (mut mesh, instances) in grass_meshes.into_iter().zip(grass_instances) {
+        if instances.is_empty() {
+            continue;
+        }
+        compact_vertices(&mut mesh);
+        let start = prepared.instances.len() as u32;
+        prepared.instances.extend(instances);
+        let end = prepared.instances.len() as u32;
+        prepared.asset.primitives.push(mesh);
+        prepared.ranges.push(start..end);
+        prepared.reduced_primitives.push(false);
+        stats.ground_grass_meshes += 1;
     }
     if settings.terrain_ground_puddles {
         let material = prepared.asset.materials.len();
@@ -685,10 +836,13 @@ mod tests {
             stats.prototype_bytes,
             prepared.asset.primitives.len()
         );
-        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 4000);
-        assert!(stats.ground_grass_tufts > 0 && stats.ground_grass_tufts <= 4800);
+        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 4250);
+        assert!(
+            stats.ground_grass_tufts > 0
+                && stats.ground_grass_tufts <= 5300 * GRASS_TUFTS_PER_HIGH_PATCH
+        );
         assert!(stats.ground_moss_meshes <= PALETTE_COUNT);
-        assert!(stats.ground_grass_meshes <= PALETTE_COUNT);
+        assert!(stats.ground_grass_meshes <= PALETTE_COUNT * GRASS_SHAPE_VARIANTS);
         assert!(stats.ground_litter_fragments > 0 && stats.ground_litter_fragments <= 2048);
         assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 24);
         assert!(stats.ground_water_samples <= 256 * 17 * 17);

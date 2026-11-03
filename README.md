@@ -988,8 +988,11 @@ Native High FHD evidence raises resident material pages from 256 to 357; this
 does not claim complete residency or visual parity.
 
 [Patchy ground cover and wet-soil response](docs/126_PATCHY_GROUND_COVER_AND_WET_SOIL.md)
-adds bounded curved grass tufts and rounded moss colonies to the existing near-
-ground mesh path, raises wet porous-soil roughness while keeping smooth BRDFs on
-separate basin water, and caps High at 4,000 moss / 4,800 grass sites. A matched
-FHD B03 capture confirms more moss in the continuous damp/hollow mask; bare
-substrate and full reference parity remain open.
+adds reusable curved grass crowns and soil-following moss to the existing mesh
+path. High is bounded at 4,250 moss cushions / 21,200 grass tufts; Medium retains
+1,200 / 1,600. Pointed tips and canonical-surface root contact pass independent
+geometry checks. The FHD B03 frame still falls short visually; root agreement
+with resident CBT height pages and close-soil quality remain open.
+[Reference-driven iterations](docs/127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md)
+record actual Unreal, OpenEngine CBT/grass and AMD source mechanisms, reviewer-
+owned acceptance tests and rejected candidates.

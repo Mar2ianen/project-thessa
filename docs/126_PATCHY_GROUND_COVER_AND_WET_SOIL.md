@@ -1,72 +1,109 @@
 # 126 — Patchy ground cover and wet-soil response
 
-Status: implemented in native near-ground preparation and the canonical
-worldgen material response. The B03 sunset still has visible bare and muddy
-substrate; this is a bounded visual improvement, not reference parity.
+Status: implemented native cover geometry and canonical wet-soil response;
+reference visual acceptance remains open. The floor still exposes repetitive,
+muddy substrate. The latest reviewed numerical slice fixes blade tips and
+canonical-surface root contact; it does not establish rendered-page agreement.
 
-## Changes
+## Current implementation
 
-- High admits at most 4,000 moss colonies and 4,800 grass tufts in the existing
-  near-eye ground window. Medium caps these at 1,200 and 1,600. Low and disabled
-  ground detail publish no cover geometry.
-- Moss colonies use a 10-sided footprint, three height-profile rings, short
-  curved shoots, and three olive-green material variants. Ground samples follow
-  the same scanned-soil relief source used by pebbles and litter. Their
-  continuous pigment mask admits more values from the moss field and biases
-  coverage toward centimetre-scale hollows at equal dampness. It retains scan
-  contrast and leaves exposed substrate between colonies; High increases the
-  bounded population from 3,400 to 4,000 without changing per-colony geometry.
-- Grass tufts use 14 curved, tapered blades with deterministic per-world
-  variation in direction, length, width, and bend. Moss and grass are emitted
-  into the current aggregate mesh/material ranges; no per-plant draw or new
-  rendering pass is added.
-- Wet porous soil uses a roughness prior of 0.88, modulated by fine mineral
-  variation and existing moss/litter material response. Explicit basin water
-  remains separate and uses roughness 0.008. High admits at most 24 pools;
-  Medium admits 4.
-- The cover and pool populations are static optical scenery. This does not add
-  wind, collision, growth, soil displacement, or hydrology.
+- High admits at most 4,250 moss cushions and 21,200 grass tufts. Medium caps
+  these at 1,200 and 1,600. Low and disabled ground detail publish no cover.
+- Moss uses ten-sided, three-ring lobed cushions and eight short curved shoots,
+  in three olive palettes. Its continuous mask follows dampness and shallow
+  depressions. The latest footprint is 30% wider than the prior compact shape;
+  the untextured broad facets remain an acknowledged visual weakness.
+- Grass uses fourteen curved, pointed blades per crown and four shape variants
+  per palette, twelve reusable prototypes in total. High admits up to four
+  independently rooted tufts around each selected site. Their height is sampled
+  after the world-fixed offset. A frame from neighboring surface samples aligns
+  the tuft to local terrain, and deterministic yaw/scale vary its appearance.
+  Grass keeps a broad body through 40% of its curve before tapering to a point;
+  a wider sector-jittered fan restores the footprint lost by the shared crown.
+  Moisture gates occupancy; moss no longer excludes grass from its patches.
+- Blades carry longitudinal UVs from root zero to tip one. Root/tip fans avoid
+  blunt caps and zero-area tip triangles for all supported segment counts 1–4.
+  Vertex compaction includes UVs, preserving distinct texture coordinates.
+- Cover uses existing mesh instances, materials, shadows and publication. There
+  is no added pass or image. More reusable instances reduce source mesh bytes
+  but can increase culling/submission work; source bytes do not prove speedup.
+- Wet porous soil retains roughness 0.88 with existing mineral/litter variation.
+  Explicit basin water uses 0.008. High admits 24 pools, Medium 4. Cover/pools
+  remain optical scenery without wind, collision, growth or hydrology.
 
-## External renderer references
+## Implementation references
 
-AMD's [procedural grass rendering article](https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/)
-describes quadratic Bézier blade silhouettes, patch formation, and reducing
-far geometry while compensating apparent coverage. The implementation adopts
-the bent, tapered blade construction and patch grouping, but remains on the
-existing CPU-built native mesh path; it does not port the AMD mesh shader.
+AMD's [procedural grass research implementation](https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/)
+provides quadratic blade geometry, patches and coverage compensation. Thessa
+keeps CPU preparation and the existing portable renderer rather than adopting
+its mesh shader backend.
 
-Epic's [Unreal material input documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/material-inputs-in-unreal-engine)
-defines roughness as the spread of reflected light, from mirror-like at zero to
-diffuse/matte at one, and notes that roughness can vary spatially. This informed
-the separation between porous wet soil (rough) and discrete basin water
-(smooth), rather than applying one polished response to the whole wet floor.
+Unreal 5.8.4's actual `Engine/Source/Runtime/Landscape/Private/LandscapeGrass.cpp`
+was inspected at lines 2388–2440 and 2588–2665. It obtains placement height from
+triangle barycentrics and derives the corresponding triangle normal before
+aligning each instance. Thessa independently samples its canonical optical
+surface and builds a finite-difference frame. The distinction matters: this is
+not yet placement against the currently resident rendered triangle. The public
+[FGrassVariety declaration](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Landscape/FGrassVariety)
+identifies the related alignment, jitter and variation controls.
 
-Epic's [Landscape Materials](https://dev.epicgames.com/documentation/unreal-engine/landscape-materials-in-unreal-engine)
-and [Open World Tools Tips](https://dev.epicgames.com/documentation/unreal-engine/open-world-tools-tips)
-show material-layer weights and foliage masks sharing placement semantics,
-with height blending used for overlays such as soil beneath grass. Thessa's
-existing moisture/canopy mask now also follows local depressions for moss; it
-remains a continuous worldgen field, not a port of Unreal's layer system.
+[Doc 127](127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md) records the inspected
+OpenEngine CBT/grass source, the AMD shadow implementation and the review loop.
 
-## Capture evidence
+## Numerical checks
 
-The fixed B03 sunset camera was rendered at 1920×1080 with 20 seconds of
-prestream on Radeon 880M/RADV. Earlier shape/color iterations are preserved at
-`outputs/ground-detail-repair-2026-11-03/ground-cover-dense-fhd-20s/` and
-`outputs/ground-detail-repair-2026-11-03/ground-cover-green-moss-fhd-20s/`;
-the latest mask/population iteration is
-`outputs/ground-detail-repair-2026-11-03/ground-cover-moss-dense-fhd-20s/`.
-All use the same camera and graphics config. The latest capture reports 4,000
-moss colonies, 4,251 grass tufts, 24 pools, 4,946 ms surface-plant/ground
-preparation, 45,821,076 bytes of mesh prototype payload, and 16,343,040 bytes
-of prototype textures. Mesh payload is 2.18 MB below the existing
-48,000,000-byte admission limit; texture bytes are reported separately. The
-capture uses serial stage fences with `performance_equivalent=false`, so its
-frame timing is diagnostic and not a performance result.
+Reviewer-owned `wet_ground_acceptance.rs` checks pointed centerline tips,
+nondegenerate triangles, finite unit normals and root/tip UV semantics for
+segment counts 1–4. The near-eye fixture inspects actual transformed grass
+roots against the canonical optical sampler, permitting at most 6 mm float and
+20 mm burial. It initially reproduced approximately 108 mm float and 122 mm
+burial from the broad, rigid multi-tuft prototype. Independently positioned
+crowns pass. Existing cover tests also retain full-canopy admission, bounded
+counts, source payload, geometry reuse and Low/Off behavior; all five focused
+checks passed in the root checkout.
 
-Compared with the matched 3,400-colony frame, the latest image adds 600 small
-moss colonies and shifts more cover into shallow depressions. Muddy ground and
-scan banding remain visible, and the increased mesh payload narrows the existing
-admission headroom. The closest material-page residency issue and full visual
-parity remain open. No change was made to CBT terrain topology or material-page
-ownership.
+This root fixture is a canonical-sampler consistency check. It does not read
+GPU height residency, quantized page interpolation or the CBT triangle chord.
+That remaining contract is explicitly tracked in doc 127.
+
+## B03 capture and rejected candidates
+
+All captures below use the fixed B03 sunset camera, 1920×1080, the same graphics
+config, simulation time 74566.63966240163 and 20 seconds of prestream on Radeon
+880M/RADV. Paths are relative to the task's external outputs directory,
+`ground-detail-repair-2026-11-03/`.
+
+| Capture | Moss / grass | Mesh prototype bytes | Outcome |
+| --- | ---: | ---: | --- |
+| `ground-cover-moss-dense-fhd-20s` | 4,000 / 4,251 | 45,821,076 | Previous compact cover; muddy bare floor remains |
+| `ground-cover-grass-moss-balanced-fhd-20s` | 4,250 / 5,300 | 46,630,852 | Distributed unique geometry; density remains source-budget limited |
+| `ground-grass-instanced-patches-fhd-20s` | 4,250 / 15,900 | 22,334,580 | Reusable three-tuft patches; broad rigid roots were later found incorrect |
+| `ground-grass-moss-varied-fhd-20s` | 4,250 / 15,900 | 22,458,564 | Twelve shape/palette groups; coverage still weak |
+| `ground-cover-moss-pair-fhd-20s` | 8,500 / 15,900 | 43,368,564 | Rejected: prominent smooth green polygonal pads |
+| `luna-pointed-grounded-v2-fhd-20s` | 4,250 / 21,200 | 22,348,356 | Numerical correction passes; visual coverage rejected as insufficient |
+| `luna-broad-cantilever-v3-fhd-20s` | 4,250 / 21,200 | 22,348,356 | Retained as a bounded shape improvement; reference target remains unaccepted |
+
+The last capture uses 16,343,040 bytes of source images separately from mesh
+payload, 2,508,416 instance-buffer bytes, 36 mesh draw calls and 5,361 submitted
+instances in v2 (5,394 in v3). All 20 frozen diagnostic views retain identical published geometry,
+depth and beauty round-trip within that run. Native log, exact command and dirty
+source/binary fingerprints are preserved beside the frame. An initial attempt
+with both diagnostic sequence and perf-capture was rejected by the CLI before
+rendering and is recorded separately.
+
+These are serial stage-fenced diagnostic captures with
+`performance_equivalent=false`; their frame durations are not game FPS.
+Independent runs also publish different material-page sets, so they do not
+establish exact pixel A/B identity. The root review is openly labeled rather
+than presented as blind subjective acceptance. Ground texturing, moss shape,
+coverage, temporal stability and affordable full-scene parity remain open.
+
+A roughness-only 0.88→0.96 experiment barely changed the visible soil and was
+reverted. It does not support raising roughness again as the cause-level fix.
+
+The v3 root review observed broader, visibly curved leaf bodies and improved
+local coverage at unchanged tuft/moss counts. Source byte counts remain the
+same; visibility bounds admit a slightly different set of instances. The five
+focused tests, strict native all-target Clippy, release build and architecture
+gate passed in the root checkout. Rooted crowns, substrate quality and moss
+appearance still do not satisfy the reference scene as a whole.

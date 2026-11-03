@@ -879,44 +879,28 @@ or close-ground visual acceptance.
 
 ## Near-ground grass, moss, and wet soil
 
-[Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) records the current B03
-forest-floor slice. It follows AMD's curved-blade construction idea: grass is
-made from bent quadratic centerlines with tapered silhouettes, then collected
-into deterministic ground patches. It does not port AMD's mesh-shader path.
-Moss uses compact lobed bases with three vertical profile rings and short
-curved shoots, so the patches read as small cushions instead of broad flat
-plates. Ground-position samples use the same scanned/relief surface as nearby
-litter and pebbles.
+[Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) records bounded native ground
+cover: High admits 4,250 moss cushions / 21,200 grass crowns, Medium 1,200 /
+1,600. Low and disabled detail publish none. Twelve reusable shape/palette
+prototypes supply pointed blades. Each crown is placed after its world-fixed
+patch offset and aligned to a frame sampled from the canonical optical soil.
+Moss and grass coexist in damp patches; the broad untextured moss facets remain
+an appearance gap. Doubling those pads was rejected after an actual FHD frame.
 
-The High near-eye budget admits at most 4,000 moss colonies, 4,800 grass tufts,
-and 24 small basin pools; Medium caps these at 1,200, 1,600, and 4. Low or
-disabled ground detail emits none of this geometry. Variants are world-seeded
-and share the existing opaque and shadow mesh path. They do not add a pass,
-texture, wind simulation, or hydrology.
+The shared blade-tip/root cases and existing cover/budget tests pass. These
+checks prove contact against the CPU optical sampler; they do not establish
+contact with the currently resident GPU height page or CBT triangle chord.
+The latest fixed B03 diagnostic frame reports 22,348,356 mesh-prototype bytes,
+2,508,416 instance-buffer bytes and 16,343,040 source-image bytes. Its 20 frozen
+views preserve geometry/depth/beauty identity within the run. Independent runs
+have different page publications and are not exact pixel A/B controls. Serial
+stage-fenced durations are not game FPS or evidence of an acceleration.
 
-Wet soil roughness now tends toward 0.88 with fine mineral variation, following
-the PBR interpretation used by Unreal: values near one broaden and diffuse
-reflections. Only explicit filled basins use near-mirror roughness (0.008),
-keeping isolated water glints separate from the porous substrate. This improves
-the broad wet-floor response; it does not fix all visible ground banding or
-residency blur.
-
-AMD's [procedural grass article](https://gpuopen.com/learn/mesh_shaders/mesh_shaders-procedural_grass_rendering/)
-describes Bézier-shaped blades, patch construction, and distance-dependent
-geometry reduction. Unreal's [Material Inputs reference](https://dev.epicgames.com/documentation/en-us/unreal-engine/material-inputs-in-unreal-engine)
-defines roughness from mirror-like at zero to matte at one and discusses
-spatially mapped roughness. Thessa reuses these shape/material principles while
-retaining its own CPU preparation, terrain sampling, and graphics-quality
-resolver.
-
-The matched 1920×1080 B03 sunset capture is at
-`outputs/ground-detail-repair-2026-11-03/ground-cover-moss-dense-fhd-20s/views/01-none.png`.
-It uses the same fixed camera, graphics config, and 20-second prestream as the
-prior captures, with a lowered moss-field threshold, microdepression weighting,
-and a 4,000-colony High cap. The frame reports 4,000 moss colonies, 4,251 grass
-tufts, and 24 pools. Surface prototype preparation took 4.95 s; mesh payload
-was 45.82 MB against the existing 48 MB admission budget, with 16.34 MB of
-material-page textures reported separately. The capture uses serial stage
-fences with `performance_equivalent=false`, so it is not a frame-rate study.
-The floor remains patchy and exposes muddy scan texture; no reference-parity
-claim is made.
+Wet porous-soil roughness remains 0.88 while explicit basin water uses 0.008.
+The 0.96 soil experiment barely changed the visible defect and was reverted.
+The floor remains muddy/repetitive. The first rooted grass frame was rejected
+for weak, stiff coverage; v3 retains wider curved leaves as an incremental
+improvement at unchanged population. [Doc 127](127_REFERENCE_DRIVEN_GROUND_ITERATIONS.md)
+records the actual Unreal placement source, OpenEngine's same-page CBT/grass
+source, and the captured broad curved-blade candidate. Lighting, soil, vegetation,
+shadows and temporal acceptance still require further integration.

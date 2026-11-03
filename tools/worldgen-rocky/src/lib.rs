@@ -40,3 +40,5 @@ pub mod terrain;
 pub mod terrain_fields;
 
 pub mod surface_water;
+
+pub mod surface_sculpt_io;

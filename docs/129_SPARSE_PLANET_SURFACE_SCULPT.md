@@ -2,7 +2,8 @@
 
 Status: implemented CPU height-layer core, canonical field snapshot integration
 and actual GPU height-page consumption. Live wheel/foot contact production,
-stream invalidation, persistence and reference-quality soil remain open.
+stream invalidation and reference-quality soil remain open. Doc 130 adds disk
+checkpoint APIs; automatic saving and regional backing storage remain open.
 
 ## Primary source and existing owners
 
@@ -65,9 +66,9 @@ This is immutable snapshot integration. Replacing a populated live stream is
 not implemented: a new stream must consume the new field. There is no API that
 mutates a shared field while old jobs publish obsolete pages. Erosion-source
 signatures reject authored layers, preventing accidental double baking of edits
-into geological erosion identity. There is no save/load format for this layer.
-“Retained” here means owned CPU state across renderer/page rebuilding, not disk
-persistence or unlimited planetary traffic storage.
+into geological erosion identity. [Doc 130](130_SURFACE_SCULPT_CHECKPOINTS.md)
+adds an exact snapshot codec and world-bound file APIs. This first layer still
+has no unlimited planetary traffic storage or live region refresh.
 
 The layer changes source data, not an optional lighting effect. Existing
 render quality still determines which geometry/material samples can resolve
@@ -120,8 +121,8 @@ this milestone; a fresh full B03 visual improvement is not asserted.
 
 ## Next integration slices
 
-1. Journal/save/load plus bounded regional backing storage, so a long drive
-   does not fill a single resident authored-page pool.
+1. Snapshot save/load is implemented in doc 130. Add a journal and bounded
+   regional backing storage, so a long drive does not fill one authored-page pool.
 2. Changed-region invalidation of height/material jobs and publication, with
    stale result rejection and conservative refinement/height bounds. Reuse
    existing stream/cache/source generations; avoid a second topology system.

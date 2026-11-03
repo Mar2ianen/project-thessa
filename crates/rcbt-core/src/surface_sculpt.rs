@@ -6,6 +6,9 @@
 //! (`SphereSculptLayer.h` / `SphereSculptPaging.h`, revision bdf5c27); no
 //! upstream source code or CBT kernel is copied here.
 
+mod persistence;
+pub use persistence::SurfaceSculptSnapshotError;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -225,9 +228,12 @@ impl SurfaceSculpt {
         let tx = gx - x0 as f64;
         let ty = gy - y0 as f64;
         let at = |x: usize, y: usize| values[y * PAGE_SIDE + x];
-        let a = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
-        let b = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
-        Ok(a + (b - a) * ty)
+        // Convex interpolation also handles finite, opposite-sign endpoints
+        // whose subtraction would overflow after loading an authored snapshot.
+        let lerp = |a: f64, b: f64, t: f64| (a * (1.0 - t) + b * t).clamp(a.min(b), a.max(b));
+        let a = lerp(at(x0, y0), at(x1, y0), tx);
+        let b = lerp(at(x0, y1), at(x1, y1), tx);
+        Ok(lerp(a, b, ty))
     }
 
     pub fn allocated_pages(&self) -> usize {
@@ -525,6 +531,9 @@ mod planet_contact_acceptance {
         for center in centers {
             let mut layer = SurfaceSculpt::new(3_200_000.0, 0.025, 64).unwrap();
             layer.apply_dab(center, 0.20, -0.04).unwrap();
+            let bytes = layer.to_bytes();
+            let layer = SurfaceSculpt::from_bytes(&bytes, 64).unwrap();
+            assert_eq!(layer.to_bytes(), bytes);
             let peak = layer.sample(center).unwrap();
             assert!(
                 (peak + 0.04).abs() < 0.001,
@@ -574,5 +583,32 @@ mod workload {
             layer.allocated_pages(),
             layer.allocated_bytes()
         );
+    }
+}
+
+#[cfg(test)]
+mod snapshot_sample_acceptance {
+    use super::*;
+    #[test]
+    fn finite_opposite_sign_snapshot_values_remain_finite_when_sampled() {
+        let mut layer = SurfaceSculpt::new(2000.0, 10.0, 32).unwrap();
+        let touched = layer.apply_dab([0.0, 0.0, 1.0], 20.0, 1.0).unwrap();
+        let tile = touched[0];
+        let values = layer.pages.get_mut(&key_for(tile)).unwrap();
+        for (i, value) in values.iter_mut().enumerate() {
+            *value = if (i % PAGE_SIDE).is_multiple_of(2) {
+                f64::MAX
+            } else {
+                -f64::MAX
+            };
+        }
+        let restored = SurfaceSculpt::from_bytes(&layer.to_bytes(), 32).unwrap();
+        for x in 0..=32 {
+            let dir = page_sample_direction(tile, x, 16);
+            assert!(
+                restored.sample(dir).unwrap().is_finite(),
+                "finite authored endpoints overflowed at {x}"
+            );
+        }
     }
 }

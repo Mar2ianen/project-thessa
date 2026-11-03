@@ -1,0 +1,98 @@
+{
+  "baseline": "5bd0d14",
+  "reference": {
+    "repository": "https://github.com/Game-Crafters-Guild/OpenEngine",
+    "revision": "bdf5c2710fe37c1c5ddbac7787477daa87524af3",
+    "license": "MIT",
+    "source_copied": false,
+    "files": [
+      {
+        "path": "Engine/Modules/CBTTerrain/Include/CBTTerrain/SphereSculptSerialization.h",
+        "sha256": "80e67234ad1eae785edde44d0f8de8d6cfca2712a87fbca0e54bf8662505f7ac"
+      },
+      {
+        "path": "Engine/Modules/CBTTerrain/Source/SphereSculptSerialization.cpp",
+        "sha256": "da0653a9b9250c2a19ed5c4958c8cff382c32ee76f08aac969235ae1ac7a6686"
+      }
+    ]
+  },
+  "checks": {
+    "focused_core": "13 passed, 1 manual workload ignored",
+    "file_io": "5 passed",
+    "gpu": "1 passed, authored and decoded raster byte-identical, baseline round-trip byte-identical",
+    "clippy": "core/worldgen lib+tests and renderer sculpt test passed",
+    "native": "cargo check passed",
+    "architecture": "passed",
+    "formatting": "passed"
+  },
+  "gpu": {
+    "adapter": "AMD Radeon 880M Graphics (RADV STRIX1)",
+    "extent": [
+      65,
+      65
+    ],
+    "view": "Normal",
+    "changed_pixels": 950,
+    "authored_loaded_identical": true,
+    "baseline_round_trip_identical": true,
+    "binary_sha256": "acf207139fc0baf12dfb39f27c63010fe7c2f96b64c8b63ee562675c1984acbf"
+  },
+  "code": [
+    {
+      "path": "crates/rcbt-core/src/surface_sculpt.rs",
+      "sha256": "676467a47c630ba32ea359d032dd80ca5f874e506b74eedae4a631934be0fe5b"
+    },
+    {
+      "path": "crates/rcbt-core/src/surface_sculpt/persistence.rs",
+      "sha256": "9ef837712c178f7f6fe68a9ba462255a18f973b0c25550a96ac6daa8dfebc96f"
+    },
+    {
+      "path": "tools/worldgen-rocky/src/surface_sculpt_io.rs",
+      "sha256": "e6a6c4bc2ba5d1f58158079ba7dd4571513dc524e13bd197622d15e0a54ca407"
+    },
+    {
+      "path": "crates/render-wgpu/tests/surface_sculpt.rs",
+      "sha256": "98ef86490086bf0ca72c40c55e3afdd189b6ba1ed115ecd9a2ca4786cd1bc556"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/clippy.log",
+      "sha256": "9285321326bac206ff86aaaa7f8cf1f4635fb960fd6d7ba660c31956ea2adb5a"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/core-tests.log",
+      "sha256": "2e6900bcf76fb499f76aa4bef42de380fb9b918894d39b6141335b5c95f396c0"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/file-tests.log",
+      "sha256": "d2785427f6459bb99e12f125faba71e354e2b9c02d694e061f895f359bd31dc3"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/gpu-test.log",
+      "sha256": "f0da9918a580e28d612d2150abed6ab4ce21a9b3ac5138f1b91899486c85fa52"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/sculpt-base.png",
+      "sha256": "cce55c42af6a415c35cdeac8a4299d81450df943f0aa56c786721889428c22fa"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/sculpt-loaded.png",
+      "sha256": "b995b635b92c7e116d581817977b10bfa6c164f9a5ce23231367095b8fa34050"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/sculpt-restored.png",
+      "sha256": "cce55c42af6a415c35cdeac8a4299d81450df943f0aa56c786721889428c22fa"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/sparse-sculpt-persistence/sculpt-sculpt.png",
+      "sha256": "b995b635b92c7e116d581817977b10bfa6c164f9a5ce23231367095b8fa34050"
+    }
+  ],
+  "limits": [
+    "host APIs, no automatic game saves",
+    "immutable pre-stream load, no live region refresh",
+    "no contact/soil physics",
+    "no frame-time or B03 visual-quality claim"
+  ]
+}

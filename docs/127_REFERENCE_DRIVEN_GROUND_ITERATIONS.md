@@ -125,5 +125,10 @@ close the near-soil visual or moving-camera acceptance gap.
 [Sparse planetary surface sculpt](129_SPARSE_PLANET_SURFACE_SCULPT.md)
 adapts OpenEngine's radius-scaled sparse edit-layer mechanism into backend-neutral
 Rust and canonical field/page sampling. CPU and actual raster tests resolve
-authored depressions. Live contact-driven tracks, streaming invalidation, disk
-persistence and improved soil appearance remain unimplemented.
+authored depressions. Live contact-driven tracks, streaming invalidation and
+improved soil appearance remain unimplemented.
+
+[Surface sculpt checkpoints](130_SURFACE_SCULPT_CHECKPOINTS.md)
+add exact checksummed snapshots and bounded world-bound file save/load with
+atomic publication. Loaded-layer CPU heights and raster frames match the
+authored source. Live region refresh and contact-driven tracks remain open.

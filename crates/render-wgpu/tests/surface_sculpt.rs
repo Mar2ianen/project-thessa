@@ -25,6 +25,9 @@ fn sparse_sculpt_deforms_existing_height_raster_without_an_extra_pass() {
         sculpt.allocated_pages() <= 25,
         "a 60 cm stamp must fit its local 5x5 page neighborhood"
     );
+    let snapshot = sculpt.to_bytes();
+    let loaded = SurfaceSculpt::from_bytes(&snapshot, 64).unwrap();
+    assert_eq!(loaded.to_bytes(), snapshot);
     let settings = ResolvedGraphicsSettings {
         terrain_debug_view: TerrainDebugView::Normal,
         terrain_normal_maps: false,
@@ -42,7 +45,12 @@ fn sparse_sculpt_deforms_existing_height_raster_without_an_extra_pass() {
     };
     let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
     let mut frames = Vec::new();
-    for edited in [false, true, false] {
+    for (edited, source) in [
+        (false, &sculpt),
+        (true, &sculpt),
+        (true, &loaded),
+        (false, &sculpt),
+    ] {
         let heights: Vec<_> = (0..33 * 33)
             .map(|i| {
                 let u = (i % 33) as f64 / 32.0;
@@ -51,7 +59,7 @@ fn sparse_sculpt_deforms_existing_height_raster_without_an_extra_pass() {
                     + DVec3::from(anchor.raw_axis_u) * (2.0 * (u - 0.5) * anchor.half_extent)
                     + DVec3::from(anchor.raw_axis_v) * (2.0 * (v - 0.5) * anchor.half_extent);
                 1.0 + if edited {
-                    sculpt.sample(raw.normalize().to_array()).unwrap()
+                    source.sample(raw.normalize().to_array()).unwrap()
                 } else {
                     0.0
                 }
@@ -82,7 +90,10 @@ fn sparse_sculpt_deforms_existing_height_raster_without_an_extra_pass() {
     if let Some(directory) = std::env::var_os("THESSA_TEST_ARTIFACT_DIR") {
         let root = std::path::PathBuf::from(directory);
         std::fs::create_dir_all(&root).unwrap();
-        for (name, frame) in ["base", "sculpt", "restored"].into_iter().zip(&frames) {
+        for (name, frame) in ["base", "sculpt", "loaded", "restored"]
+            .into_iter()
+            .zip(&frames)
+        {
             let file = std::fs::File::create(root.join(format!("sculpt-{name}.png"))).unwrap();
             let mut encoder = png::Encoder::new(file, 65, 65);
             encoder.set_color(png::ColorType::Rgba);
@@ -95,8 +106,12 @@ fn sparse_sculpt_deforms_existing_height_raster_without_an_extra_pass() {
         }
     }
     assert_eq!(
-        frames[0], frames[2],
+        frames[0], frames[3],
         "restoring the base page must remove all sculpt response"
+    );
+    assert_eq!(
+        frames[1], frames[2],
+        "decoded sparse layer must reproduce the exact raster"
     );
     let changed = frames[0]
         .as_chunks::<4>()

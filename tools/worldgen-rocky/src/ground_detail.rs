@@ -444,10 +444,14 @@ fn cover_and_moss(
         value * band_weight(wavelength, texel_m)
     };
     let moss_field = noise(6143, 0.85, true) * 0.65 + noise(6148, 0.25, false) * 0.35;
+    // Preserve the broad damp/canopy mask, but bias moss toward existing
+    // centimetre-scale soil hollows instead of placing it independently of relief.
+    let hollows = 1.0 - smooth(-0.018, 0.012, source_height_m);
     let moss = smooth(0.20, 0.50, damp)
         * (0.58 + 0.42 * smooth(0.02, 0.20, canopy))
-        * smooth(-0.18, 0.14, moss_field)
+        * smooth(-0.22, 0.10, moss_field)
         * band_weight(0.85, texel_m)
+        * (0.78 + 0.22 * hollows)
         * 0.92;
     let texture = if moss > 0.0 {
         sample_moss(q, seed, texel_m)
@@ -462,7 +466,6 @@ fn cover_and_moss(
     // Moisture availability is canonical; scan hollows and metre-scale retention
     // distribute that availability. This is not a rain/runoff integrator.
     let retention = smooth(-0.30, 0.25, noise(6161, 2.4, true));
-    let hollows = 1.0 - smooth(-0.018, 0.012, source_height_m);
     (
         GroundCover {
             wetness: (damp * (0.50 + 0.35 * retention + 0.35 * hollows)).clamp(0.0, 1.0),
@@ -829,6 +832,25 @@ mod tests {
                 .all(|(a, b)| a > b * 1.03)
         );
         assert_eq!(bright.height_m, dark.height_m);
+    }
+
+    #[test]
+    fn moss_coverage_tracks_microdepressions_at_equal_dampness() {
+        let mut hollow_total = 0.0;
+        let mut ridge_total = 0.0;
+        for i in 0..400 {
+            let q = [
+                137.0 + (i % 20) as f64 * 0.13,
+                29.0,
+                -18.0 + (i / 20) as f64 * 0.13,
+            ];
+            let hollow = cover(q, 77, 0.012, 0.9, 0.6, -0.015);
+            let ridge = cover(q, 77, 0.012, 0.9, 0.6, 0.009);
+            assert!(hollow.moss >= ridge.moss);
+            hollow_total += hollow.moss;
+            ridge_total += ridge.moss;
+        }
+        assert!(hollow_total > ridge_total * 1.20);
     }
 
     #[test]

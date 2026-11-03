@@ -74,13 +74,14 @@ fine-page footprint; longer readiness restores much of that coverage but does
 not repair the closest material. Scheduler/refinement candidates were rejected,
 not shipped as a soil fix; see doc 119's continuation.
 [Doc 126](126_PATCHY_GROUND_COVER_AND_WET_SOIL.md) now raises the bounded
-near-eye cover budget to 3,400 moss and 4,800 grass sites on High, gives moss
+near-eye cover budget to 4,000 moss and 4,800 grass sites on High, gives moss
 colonies a rounded multi-ring profile, and raises wet porous-soil roughness to
 0.88 while reserving mirror-like roughness for explicit basin water. A matched
-FHD B03 iteration shifts the moss pigment modestly toward green without changing
-its mask. Visible bare/muddy substrate and the remaining material/residency
-issue are still open; the capture does not establish visual parity or a
-performance win.
+FHD B03 iteration broadens the continuous moss mask and biases it toward
+centimetre-scale depressions; the latest captured mesh payload is 45.82 MB of
+the existing 48 MB budget. Visible bare/muddy substrate and the remaining
+material/residency issue are still open; serial-fence capture timing is not a
+performance result.
 
 ## Current native integration checkpoint
 

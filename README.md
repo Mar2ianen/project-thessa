@@ -990,7 +990,6 @@ does not claim complete residency or visual parity.
 [Patchy ground cover and wet-soil response](docs/126_PATCHY_GROUND_COVER_AND_WET_SOIL.md)
 adds bounded curved grass tufts and rounded moss colonies to the existing near-
 ground mesh path, raises wet porous-soil roughness while keeping smooth BRDFs on
-separate basin water, and caps High at 3,400 moss / 4,800 grass sites. A matched
-FHD B03 capture also records a restrained green shift in moss pigment while
-keeping the distribution mask fixed; bare substrate and full reference parity
-remain open.
+separate basin water, and caps High at 4,000 moss / 4,800 grass sites. A matched
+FHD B03 capture confirms more moss in the continuous damp/hollow mask; bare
+substrate and full reference parity remain open.

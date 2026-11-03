@@ -888,7 +888,7 @@ curved shoots, so the patches read as small cushions instead of broad flat
 plates. Ground-position samples use the same scanned/relief surface as nearby
 litter and pebbles.
 
-The High near-eye budget admits at most 3,400 moss colonies, 4,800 grass tufts,
+The High near-eye budget admits at most 4,000 moss colonies, 4,800 grass tufts,
 and 24 small basin pools; Medium caps these at 1,200, 1,600, and 4. Low or
 disabled ground detail emits none of this geometry. Variants are world-seeded
 and share the existing opaque and shadow mesh path. They do not add a pass,
@@ -910,13 +910,13 @@ retaining its own CPU preparation, terrain sampling, and graphics-quality
 resolver.
 
 The matched 1920×1080 B03 sunset capture is at
-`outputs/ground-detail-repair-2026-11-03/ground-cover-green-moss-fhd-20s/views/01-none.png`.
-It uses the same fixed camera and 20-second prestream as the earlier density
-capture, with a moderate green shift to the moss pigment and the same coverage
-mask. This High frame reports 3,400 moss colonies, 4,295 grass tufts, and 24
-pools. Surface prototype preparation took 4.59 s; mesh payload was 43.14 MB
-against the existing 48 MB admission budget, with 16.34 MB of material-page
-textures reported separately. The increased cover adds visible low vegetation
-and approaches the mesh payload ceiling. This single hardware capture is not a
-frame-rate study. The closer floor remains patchy and exposes muddy scan
-texture; no reference-parity claim is made.
+`outputs/ground-detail-repair-2026-11-03/ground-cover-moss-dense-fhd-20s/views/01-none.png`.
+It uses the same fixed camera, graphics config, and 20-second prestream as the
+prior captures, with a lowered moss-field threshold, microdepression weighting,
+and a 4,000-colony High cap. The frame reports 4,000 moss colonies, 4,251 grass
+tufts, and 24 pools. Surface prototype preparation took 4.95 s; mesh payload
+was 45.82 MB against the existing 48 MB admission budget, with 16.34 MB of
+material-page textures reported separately. The capture uses serial stage
+fences with `performance_equivalent=false`, so it is not a frame-rate study.
+The floor remains patchy and exposes muddy scan texture; no reference-parity
+claim is made.

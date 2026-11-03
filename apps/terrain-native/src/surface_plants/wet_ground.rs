@@ -330,7 +330,7 @@ pub(super) fn append(
         return Ok(());
     }
     let high = settings.surface_quality == thessa_graphics::Quality::High;
-    let moss_limit = if high { 3400 } else { 1200 };
+    let moss_limit = if high { 4000 } else { 1200 };
     let grass_limit = if high { 4800 } else { 1600 };
     let pool_limit = if high { 24 } else { 4 };
     let anchor = DVec3::from(window.direction(0.5, 0.5)) * field.params.radius_m;
@@ -685,7 +685,7 @@ mod tests {
             stats.prototype_bytes,
             prepared.asset.primitives.len()
         );
-        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 3400);
+        assert!(stats.ground_moss_clumps > 0 && stats.ground_moss_clumps <= 4000);
         assert!(stats.ground_grass_tufts > 0 && stats.ground_grass_tufts <= 4800);
         assert!(stats.ground_moss_meshes <= PALETTE_COUNT);
         assert!(stats.ground_grass_meshes <= PALETTE_COUNT);

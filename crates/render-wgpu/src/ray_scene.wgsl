@@ -7,9 +7,9 @@
 // same shader substitutes an exact environment-only fallback, so the hook has
 // one call site and two implementations.
 //
-// Contract: the returned RGB is the reflected radiance leaving the surface.
-// A ray that hits nothing contributes `env * fresnel`, identical to the
-// environment term it replaces, so RT never invents sky or ambient light.
+// Contract: return reflected radiance and the material's unit-source GGX response.
+// A primary miss returns the same rough-GGX environment response as raster.
+// Hit chains share its unit-response budget; Low retains the F0 approximation.
 // Hits use barycentric smooth normals/UVs, shared raster textures/samplers,
 // sRGB base colour and linear MR/normal/AO. Medium/High carry a pixel cone;
 // Low retains the point-sampled material fallback.
@@ -89,7 +89,7 @@ fn rt_reflection(
     roughness: f32,
     ambient: vec3<f32>,
     occlusion: f32,
-) -> vec3<f32> {
+) -> EnvironmentSpecular {
     var cone_width=0.0;
     var cone_spread=0.0;
     if(!RT_LOW_QUALITY){
@@ -102,11 +102,12 @@ fn rt_reflection(
     // above the cutoff the estimate yields to the shared environment
     // exactly (mirror = 0 reproduces the raster term bit-for-bit).
     let mirror = clamp((RT_ROUGHNESS_CUTOFF - roughness) / RT_ROUGHNESS_CUTOFF, 0.0, 1.0);
-    if mirror <= 0.0 {
+    if mirror <= 0.0 || (!RT_LOW_QUALITY && all(env.reflectance==vec3(0.0))) {
         return env;
     }
     var radiance = vec3(0.0);
     var throughput = fresnel;
+    if(!RT_LOW_QUALITY){throughput=env.reflectance;}
     var origin = position + normal * RT_BIAS;
     var direction = reflect(-eye, normal);
     for (var bounce = 0u; bounce < RT_BOUNCES; bounce++) {
@@ -115,7 +116,7 @@ fn rt_reflection(
             if (bounce==0u) { return env; }
             // The miss contributes the environment radiance of that direction
             // through the accumulated chain weight, matching the raster term's
-            // operand order (`radiance * fresnel * occlusion`).
+            // operand order (radiance times unit-response weight times occlusion).
             radiance += env_radiance_from(origin,direction, ambient) * throughput;
             break;
         }
@@ -125,9 +126,16 @@ fn rt_reflection(
         radiance+=column.rgb*throughput;
         throughput*=column.a;
         radiance+=throughput*surface.emission;
+        let hit_f0 = mix(vec3(surface.dielectric), surface.albedo, surface.metallic);
         var ambient=light.ambient.rgb;
         if(!RT_LOW_QUALITY){ambient=(1.0-surface.transmission)*env_diffuse_irradiance(surface.normal,ambient)+surface.transmission*env_diffuse_irradiance(-surface.normal,ambient);}
-        var illuminance = ambient;
+        // Only the substrate term crosses the incoming interface; reflected
+        // environment radiance below must retain the unattenuated source.
+        var diffuse_ambient=ambient;
+        if(!RT_LOW_QUALITY && surface.metallic<1.0 && any(ambient>vec3(0.0))){
+            diffuse_ambient*=vec3(1.0)-env_average_reflectance(surface.roughness,hit_f0,MESH_ENV_SAMPLES);
+        }
+        var illuminance = diffuse_ambient;
         var visibility:array<f32,3>;
         var sunlight:array<vec3<f32>,3>;
         for (var i = 0u; i < 3u; i++) {
@@ -136,20 +144,26 @@ fn rt_reflection(
                 let shadow_normal=select(surface.geometry,-surface.geometry,dot(surface.geometry,light.directions[i].xyz)<0.0);
                 visibility[i]=surface_visibility(surface.position,shadow_normal,i);
                 let cosines=mesh_diffuse_cosines(surface.normal,surface.geometry,light.directions[i].xyz);
+                var incoming=vec3(1.0);
+                if(!RT_LOW_QUALITY && surface.metallic<1.0){
+                    let incident_normal=select(-surface.normal,surface.normal,dot(surface.geometry,light.directions[i].xyz)>0.0);
+                    incoming-=env_directional_reflectance(incident_normal,light.directions[i].xyz,surface.roughness,hit_f0,MESH_ENV_SAMPLES);
+                }
                 illuminance +=
                     sunlight[i]
                     * ((1.0-surface.transmission)*cosines.x+surface.transmission*cosines.y)
-                    * visibility[i];
+                    * visibility[i]*incoming;
             }
         }
-        let hit_f0 = mix(vec3(surface.dielectric), surface.albedo, surface.metallic);
-        let hit_fresnel =
-            select(surface_schlick_fresnel(hit_f0,dot(surface.normal,-direction)),hit_f0,RT_LOW_QUALITY);
+        var hit_reflectance=hit_f0;
+        if(!RT_LOW_QUALITY){
+            hit_reflectance=env_directional_reflectance(surface.normal,-direction,surface.roughness,hit_f0,MESH_ENV_SAMPLES);
+        }
         // Diffuse light leaving the hit toward this ray, then the specular
         // continuation of the same weighted chain.
         radiance +=
-            throughput * (vec3(1.0) - hit_fresnel) * (1.0 - surface.metallic) * surface.albedo
-            * (illuminance-ambient*(1.0-surface.occlusion)) / OCEAN_PI;
+            throughput * (vec3(1.0) - hit_reflectance) * (1.0 - surface.metallic) * surface.albedo
+            * (illuminance-diffuse_ambient*(1.0-surface.occlusion)) / OCEAN_PI;
         for (var i=0u;i<3u;i++) {
             if (any(light.colors[i].rgb>vec3(0.0)) && dot(surface.geometry,light.directions[i].xyz)>0.0) {
                 radiance += throughput*surface_sun_reflection(surface.normal,-direction,light.directions[i].xyz,
@@ -158,8 +172,8 @@ fn rt_reflection(
         }
         let reflected = reflect(direction,surface.normal);
         let continuation = clamp((RT_ROUGHNESS_CUTOFF-surface.roughness)/RT_ROUGHNESS_CUTOFF,0.0,1.0);
-        radiance += throughput*hit_fresnel*env_radiance_from(surface.position,reflected,ambient)*surface.occlusion*(1.0-continuation);
-        throughput *= hit_fresnel*continuation*surface.occlusion;
+        radiance += throughput*hit_reflectance*env_radiance_from(surface.position,reflected,ambient)*surface.occlusion*(1.0-continuation);
+        throughput *= hit_reflectance*continuation*surface.occlusion;
         origin = surface.position + surface.geometry * RT_BIAS;
         direction = reflected;
         if all(throughput < vec3(0.002)) {
@@ -169,5 +183,5 @@ fn rt_reflection(
     // Everything arriving through this chain is indirect at the primary
     // surface, including a secondary hit's direct stellar radiance. Apply
     // primary AO once here, not only on a miss (or once per bounce).
-    return mix(env, radiance * occlusion, mirror);
+    return EnvironmentSpecular(mix(env.radiance, radiance * occlusion, mirror),env.reflectance);
 }

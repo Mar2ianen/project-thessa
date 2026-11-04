@@ -691,3 +691,56 @@ fn capture_fallen_frond_case(form: usize, length: f64) {
         "frond carrier must not disappear into soil: visible={visible},retained={retained}"
     );
 }
+
+#[test]
+#[ignore = "actual-GPU living fern normal-map isolation; all variants require visual review"]
+fn capture_living_fern_normal_controls() {
+    use thessa_worldgen_rocky::{
+        offline,
+        scatter::{ScatterId, ScatterKind},
+    };
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("THESSA_TEST_ARTIFACT_DIR").expect("set a new THESSA_TEST_ARTIFACT_DIR"),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    for form in 0..3 {
+        let kind = ScatterKind::FernClump;
+        let id = (0..1000)
+            .map(ScatterId)
+            .find(|&id| offline::plant_form(id, kind) == form)
+            .unwrap();
+        let prepared = super::super::convert(
+            vec![ScatterItem {
+                id,
+                kind,
+                direction: DVec3::Y.to_array(),
+                ground_height_m: 0.0,
+                scale: 1.0,
+                yaw_rad: 0.0,
+            }],
+            3_200_000.0,
+        )
+        .unwrap();
+        let extent = super::super::foliage::dimensions(false, form, 0).0 as f64;
+        for (name, strength) in [("source", 1.0), ("reduced", 0.35), ("geometric", 0.0)] {
+            let mut asset = prepared.asset.clone();
+            for material in &mut asset.materials {
+                material.normal_scale *= strength;
+            }
+            let image = render_ground_specimen_quality(
+                &mut asset,
+                DVec3::new(1.3, 0.35, 1.7) * extent,
+                DVec3::Y * extent * 0.3,
+                &[thessa_render_core::mesh::AlphaMode::Mask],
+                thessa_graphics::Quality::High,
+            );
+            crate::write_rgba_png(
+                &directory.join(format!("living-fern-f{form}-{name}.png")),
+                640,
+                480,
+                &image[0],
+            )
+            .unwrap();
+        }
+    }
+}

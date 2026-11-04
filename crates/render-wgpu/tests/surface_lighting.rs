@@ -12,6 +12,9 @@ use thessa_render_wgpu::{
     terrain::{OffscreenTarget, TerrainCapacity, TerrainPatch, TerrainRenderer},
 };
 
+#[path = "support/ggx.rs"]
+mod ggx;
+
 fn backend() -> Option<Backend> {
     match Backend::bring_up() {
         Ok(backend) => Some(backend),
@@ -975,6 +978,275 @@ fn disabled_specular_keeps_direct_diffuse_independent_of_roughness() {
                 );
             } else {
                 reference = Some(image);
+            }
+        }
+    }
+}
+
+#[test]
+fn rough_mesh_furnace_matches_the_reciprocal_substrate_deficit() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    let instance = MeshInstance {
+        position_m: DVec3::ZERO,
+        rotation: DQuat::IDENTITY,
+        scale: 1.0,
+    };
+    let lights = SurfaceLighting {
+        ambient_lux: [std::f32::consts::PI; 4],
+        ..Default::default()
+    };
+    for quality in [Quality::Medium, Quality::High] {
+        for roughness in [0.2, 0.5, 1.0] {
+            let average = ggx::average_reference(f64::from(roughness), 0.04, 256);
+            for cosine in [-0.2_f32, 0.01, 0.5, 1.0] {
+                let outgoing =
+                    ggx::directional_reference(f64::from(roughness), f64::from(cosine), 0.04, 256);
+                let response = (outgoing + (1.0 - outgoing) * (1.0 - average)) * 0.5;
+                let expected = ((1.055 * response.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+                for transmission in [0.0, 0.28, 1.0] {
+                    let mut source = source();
+                    source.primitives.truncate(1);
+                    source.materials[0] = Material {
+                        base_color: [1.0; 4],
+                        metallic: 0.0,
+                        roughness,
+                        diffuse_transmission: transmission,
+                        ..Default::default()
+                    };
+                    for v in &mut source.primitives[0].vertices {
+                        v.normal = [(1.0 - cosine * cosine).sqrt(), 0.0, cosine];
+                    }
+                    let mut renderer = MeshRenderer::with_surface(
+                        &backend,
+                        &source,
+                        thessa_render_wgpu::mesh::SurfaceSettings {
+                            format: OffscreenTarget::FORMAT,
+                            capacity: 1,
+                            quality,
+                            reflections: true,
+                            shadows: None,
+                            ray_tracing: None,
+                        },
+                    )
+                    .unwrap();
+                    renderer
+                        .update(&backend, &camera(DVec3::ZERO), &lights, &[instance])
+                        .unwrap();
+                    let image = draw(&backend, &mut renderer, None);
+                    let center = &image[(64 * 129 + 64) * 4..(64 * 129 + 64) * 4 + 3];
+                    // Independent solid-angle reference; omitted internal returns
+                    // cause a real deficit, as in the existing terrain contract.
+                    assert!(
+                        center
+                            .iter()
+                            .all(|&v| v <= 188 && v.abs_diff(expected) <= 2),
+                        "white furnace: quality={quality:?} roughness={roughness} N.V={cosine} T={transmission} RGB={center:?} expected={expected}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mesh_colored_energy_and_disabled_reflection_fallbacks_keep_the_declared_budget() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    let render = |material: Material, quality: Quality, reflections: bool| {
+        let mut asset = source();
+        asset.primitives.truncate(1);
+        asset.materials[0] = material;
+        for v in &mut asset.primitives[0].vertices {
+            v.normal = [(1.0_f32 - 0.04).sqrt(), 0.0, 0.2];
+        }
+        let mut mesh = MeshRenderer::with_surface(
+            &backend,
+            &asset,
+            thessa_render_wgpu::mesh::SurfaceSettings {
+                format: OffscreenTarget::FORMAT,
+                capacity: 1,
+                quality,
+                reflections,
+                shadows: None,
+                ray_tracing: None,
+            },
+        )
+        .unwrap();
+        mesh.update(
+            &backend,
+            &camera(DVec3::ZERO),
+            &SurfaceLighting {
+                ambient_lux: [std::f32::consts::PI; 4],
+                ..Default::default()
+            },
+            &[MeshInstance {
+                position_m: DVec3::ZERO,
+                rotation: DQuat::IDENTITY,
+                scale: 1.0,
+            }],
+        )
+        .unwrap();
+        let pixels = draw(&backend, &mut mesh, None);
+        let center: [u8; 3] = pixels[(64 * 129 + 64) * 4..(64 * 129 + 64) * 4 + 3]
+            .try_into()
+            .unwrap();
+        center
+    };
+    let decode = |value: u8| {
+        let s = f32::from(value) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let encode = |value: f32| {
+        let s = if value <= 0.0031308 {
+            12.92 * value
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        };
+        (s.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    let base = [0.4, 0.1, 0.02, 1.0];
+    let avg_zero = ggx::average_reference(0.7, 0.0, 256) as f32;
+    let avg_one = ggx::average_reference(0.7, 1.0, 256) as f32;
+    for quality in [Quality::Low, Quality::Medium, Quality::High] {
+        for metallic in [0.0, 0.5, 1.0] {
+            let f0: [f32; 3] =
+                std::array::from_fn(|c| 0.04 * (1.0 - metallic) + base[c] * metallic);
+            let actual = render(
+                Material {
+                    base_color: base,
+                    metallic,
+                    roughness: 0.7,
+                    ..Default::default()
+                },
+                quality,
+                false,
+            );
+            let expected: [u8; 3] = std::array::from_fn(|c| {
+                let remaining = if quality == Quality::Low {
+                    1.0
+                } else {
+                    1.0 - f0[c]
+                };
+                encode(base[c] * (1.0 - metallic) * remaining * 0.5)
+            });
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(&a, b)| a.abs_diff(b) <= 2),
+                "reflections-off quality={quality:?} metal={metallic}: {actual:?} vs {expected:?}"
+            );
+            if quality == Quality::Low {
+                continue;
+            }
+            // Isolate E using a metal with the SAME F0; it has no diffuse term.
+            let isolated = render(
+                Material {
+                    base_color: [f0[0], f0[1], f0[2], 1.0],
+                    metallic: 1.0,
+                    roughness: 0.7,
+                    ..Default::default()
+                },
+                quality,
+                true,
+            );
+            let actual = render(
+                Material {
+                    base_color: base,
+                    metallic,
+                    roughness: 0.7,
+                    ..Default::default()
+                },
+                quality,
+                true,
+            );
+            let expected: [u8; 3] = std::array::from_fn(|c| {
+                let e = decode(isolated[c]) * 2.0;
+                let incoming = 1.0 - (avg_zero + (avg_one - avg_zero) * f0[c]);
+                encode((base[c] * (1.0 - metallic) * (1.0 - e) * incoming + e) * 0.5)
+            });
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(&a, b)| a.abs_diff(b) <= 2),
+                "colored energy quality={quality:?} metal={metallic}: {actual:?} vs {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn mesh_direct_substrate_keeps_both_interface_factors_on_each_leaf_side() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    let f0 = 0.5_f32;
+    let e = ggx::uniform_reference(1.0, f64::from(f0)) as f32;
+    let diffuse = (1.0 - e).powi(2);
+    let encode =
+        |v: f32| ((1.055 * v.powf(1.0 / 2.4) - 0.055).clamp(0.0, 1.0) * 255.0).round() as u8;
+    for quality in [Quality::Medium, Quality::High] {
+        for transmission in [0.0, 0.28, 1.0] {
+            for side in [-1.0, 1.0] {
+                let mut asset = source();
+                asset.primitives.truncate(1);
+                asset.materials[0] = Material {
+                    metallic: 0.0,
+                    roughness: 1.0,
+                    dielectric_f0: f0,
+                    diffuse_transmission: transmission,
+                    ..Default::default()
+                };
+                let mut renderer = MeshRenderer::with_surface(
+                    &backend,
+                    &asset,
+                    thessa_render_wgpu::mesh::SurfaceSettings {
+                        format: OffscreenTarget::FORMAT,
+                        capacity: 1,
+                        quality,
+                        reflections: true,
+                        shadows: None,
+                        ray_tracing: None,
+                    },
+                )
+                .unwrap();
+                let light = SurfaceLighting {
+                    directions: [[0.0, 0.0, side, 0.0], [0.0; 4], [0.0; 4]],
+                    colors_lux: [[std::f32::consts::PI; 4], [0.0; 4], [0.0; 4]],
+                    ..Default::default()
+                };
+                renderer
+                    .update(
+                        &backend,
+                        &camera(DVec3::ZERO),
+                        &light,
+                        &[MeshInstance {
+                            position_m: DVec3::ZERO,
+                            rotation: DQuat::IDENTITY,
+                            scale: 1.0,
+                        }],
+                    )
+                    .unwrap();
+                let bytes = draw(&backend, &mut renderer, None);
+                let pixel = &bytes[(64 * 129 + 64) * 4..(64 * 129 + 64) * 4 + 3];
+                let (partition, specular) = if side > 0.0 {
+                    (1.0 - transmission, f0 * 0.25)
+                } else {
+                    (transmission, 0.0)
+                };
+                let expected = encode((diffuse * partition + specular) * 0.5);
+                assert!(
+                    pixel.iter().all(|&v| v.abs_diff(expected) <= 2),
+                    "direct reciprocal budget {quality:?} side={side} T={transmission}: {pixel:?}, expected={expected}"
+                );
             }
         }
     }

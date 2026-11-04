@@ -42,11 +42,11 @@ fn surface_map_normal(normal:vec3<f32>, map_normal:vec3<f32>, scale:f32,
 override MESH_ALL_DOUBLE_SIDED:bool=false;
 override MESH_ENV_SAMPLES:u32=16u;
 override MESH_CLOUD_DIRECTIONS:u32=4u;
-fn mesh_environment(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32> {
+fn mesh_environment(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->EnvironmentSpecular {
     let budget=vec3<u32>(MESH_CLOUD_DIRECTIONS,min(MESH_CLOUD_DIRECTIONS,max(1u,u32(cloud_frame.deck.w))),1u);
     let response=env_specular_response(position,normal,eye,roughness,f0,ambient,MESH_ENV_SAMPLES,budget);
-    if(!env_enabled()){return ambient/OCEAN_PI*response.reflectance*occlusion;}
-    return response.radiance*occlusion;
+    if(!env_enabled()){return EnvironmentSpecular(ambient/OCEAN_PI*response.reflectance*occlusion,response.reflectance);}
+    return EnvironmentSpecular(response.radiance*occlusion,response.reflectance);
 }
 // A smooth/normal-mapped normal cannot move light across the actual sheet.
 fn mesh_diffuse_cosines(normal:vec3<f32>,geometry:vec3<f32>,light_direction:vec3<f32>)->vec2<f32> {
@@ -81,33 +81,6 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32,ambient_component:vec3<f32>
     let albedo=base_sample.rgb*material.color.rgb;
     // MESH_CUTOUT_COVERAGE
     let transmission=material.optical.x;
-    var direct_reflect=vec3(0.0);
-    var direct_transmit=vec3(0.0);
-    var visibility:array<f32,3>;
-    var sunlight:array<vec3<f32>,3>;
-    for (var i=0u;i<3u;i++) {
-        sunlight[i]=env_sunlight(in.position,light.directions[i].xyz,light.colors[i].rgb);
-        if (any(sunlight[i]>vec3(0.0))) {
-            let cosines=mesh_diffuse_cosines(normal,receiver_normal,light.directions[i].xyz);
-            let shadow_normal=select(receiver_normal,-receiver_normal,dot(receiver_normal,light.directions[i].xyz)<0.0);
-            visibility[i]=surface_visibility(in.position,shadow_normal,i);
-            let fwd=(1.0-transmission)*cosines.x;
-            let bwd=transmission*cosines.y;
-            direct_reflect+=sunlight[i]*fwd*visibility[i];
-            direct_transmit+=sunlight[i]*bwd*visibility[i];
-        }
-    }
-    var front_ambient=light.ambient.rgb;
-    var ambient=light.ambient.rgb;
-    if(material.quality!=0u){front_ambient=env_diffuse_irradiance(normal,ambient);ambient=(1.0-transmission)*front_ambient+transmission*env_diffuse_irradiance(-normal,ambient);}
-    let amb_up=ambient*ao;
-    let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;
-    let diffuse_ambient=albedo*amb_up/OCEAN_PI;
-    let diffuse_total=diffuse_ambient+diffuse_direct;
-    if (material.quality==0u && material.reflections==0u) {
-        let low_rad = env_local_haze(in.position,diffuse_total*(1.0-material.factors.x)+material.emission.rgb,light.ambient.rgb);
-        return mesh_fragment_output(low_rad,base_sample.a*material.color.a,env_haze_transmittance(in.position)*diffuse_ambient*(1.0-material.factors.x)*(1.0-transmission),ao);
-    }
     let eye=ocean_safe_normalize(-in.position,normal);
     let metallic=material.factors.x*mr.b;
     var roughness=material.factors.y*mr.g;
@@ -121,9 +94,54 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32,ambient_component:vec3<f32>
     let f0=mix(vec3(material.optical.y),albedo,metallic);
     var fresnel=f0;
     if (material.quality!=0u) { fresnel=surface_schlick_fresnel(f0,dot(normal,eye)); }
-    var radiance=(vec3(1.0)-fresnel)*(1.0-metallic)*diffuse_total;
+    let coupled_diffuse=material.quality!=0u && material.reflections!=0u && metallic<1.0;
+    var direct_reflect=vec3(0.0);
+    var direct_transmit=vec3(0.0);
+    var visibility:array<f32,3>;
+    var sunlight:array<vec3<f32>,3>;
+    for (var i=0u;i<3u;i++) {
+        sunlight[i]=env_sunlight(in.position,light.directions[i].xyz,light.colors[i].rgb);
+        if (any(sunlight[i]>vec3(0.0))) {
+            let cosines=mesh_diffuse_cosines(normal,receiver_normal,light.directions[i].xyz);
+            let shadow_normal=select(receiver_normal,-receiver_normal,dot(receiver_normal,light.directions[i].xyz)<0.0);
+            visibility[i]=surface_visibility(in.position,shadow_normal,i);
+            let fwd=(1.0-transmission)*cosines.x;
+            let bwd=transmission*cosines.y;
+            var incoming=vec3(1.0);
+            if(coupled_diffuse){
+                let incident_normal=select(-normal,normal,dot(receiver_normal,light.directions[i].xyz)>0.0);
+                incoming-=env_directional_reflectance(incident_normal,light.directions[i].xyz,roughness,f0,MESH_ENV_SAMPLES);
+            }
+            direct_reflect+=sunlight[i]*fwd*visibility[i]*incoming;
+            direct_transmit+=sunlight[i]*bwd*visibility[i]*incoming;
+        }
+    }
+    var front_ambient=light.ambient.rgb;
+    var ambient=light.ambient.rgb;
+    if(material.quality!=0u){front_ambient=env_diffuse_irradiance(normal,ambient);ambient=(1.0-transmission)*front_ambient+transmission*env_diffuse_irradiance(-normal,ambient);}
+    var ambient_transmission=vec3(1.0);
+    if(coupled_diffuse && any(ambient>vec3(0.0))){
+        ambient_transmission-=env_average_reflectance(roughness,f0,MESH_ENV_SAMPLES);
+    }
+    let amb_up=ambient*ao*ambient_transmission;
+    let diffuse_direct=albedo*(direct_reflect+direct_transmit)/OCEAN_PI;
+    let diffuse_ambient=albedo*amb_up/OCEAN_PI;
+    let diffuse_total=diffuse_ambient+diffuse_direct;
+    if (material.quality==0u && material.reflections==0u) {
+        let low_rad = env_local_haze(in.position,diffuse_total*(1.0-material.factors.x)+material.emission.rgb,light.ambient.rgb);
+        return mesh_fragment_output(low_rad,base_sample.a*material.color.a,env_haze_transmittance(in.position)*diffuse_ambient*(1.0-material.factors.x)*(1.0-transmission),ao);
+    }
+    // Deduct the same hemispherical GGX response that the environment adds.
+    // Schlick(N.V) alone can reach one while the rough/mapped lobe returns zero.
+    var reflected=EnvironmentSpecular(vec3(0.0),f0);
     if (material.reflections!=0u) {
-        radiance+=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
+        reflected=rt_reflection(in.position,normal,eye,f0,fresnel,roughness,light.ambient.rgb,ao);
+    }
+    var diffuse_reflectance=f0;
+    if(material.quality!=0u && material.reflections!=0u){diffuse_reflectance=reflected.reflectance;}
+    var radiance=(vec3(1.0)-diffuse_reflectance)*(1.0-metallic)*diffuse_total;
+    if (material.reflections!=0u) {
+        radiance+=reflected.radiance;
         for (var i=0u;i<3u;i++) {
             if (any(sunlight[i]>vec3(0.0)) && dot(receiver_normal,light.directions[i].xyz)>0.0) {
                 radiance+=surface_sun_reflection(normal,eye,light.directions[i].xyz,sunlight[i],roughness,f0)*visibility[i];
@@ -131,5 +149,5 @@ fn mesh_fragment_output(radiance:vec3<f32>,alpha:f32,ambient_component:vec3<f32>
         }
     }
     radiance=env_local_haze(in.position,radiance+material.emission.rgb,light.ambient.rgb);
-    return mesh_fragment_output(radiance,base_sample.a*material.color.a,env_haze_transmittance(in.position)*(vec3(1.0)-fresnel)*(1.0-metallic)*albedo*ao/OCEAN_PI*(1.0-transmission)*front_ambient,ao);
+    return mesh_fragment_output(radiance,base_sample.a*material.color.a,env_haze_transmittance(in.position)*(vec3(1.0)-diffuse_reflectance)*(1.0-metallic)*albedo*ao/OCEAN_PI*(1.0-transmission)*front_ambient*ambient_transmission,ao);
 }

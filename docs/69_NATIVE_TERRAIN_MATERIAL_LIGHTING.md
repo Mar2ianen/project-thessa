@@ -876,3 +876,8 @@ clear f64 ray becoming an edge hit after f32 narrowing. Interior colour toleranc
 remains two RGB8 codes, with explicit retained-interior counts and a minimum
 half-sample coverage requirement. Production shading and ray exclusion are
 unchanged; finite-precision shadow edges remain outside that interior bound.
+
+The shared mesh path now reuses this incoming/outgoing substrate contract in
+primary raster and secondary RT shading; see [doc 133](133_MESH_RECIPROCAL_GGX_BUDGET.md).
+This repairs black mapped-leaf patches without changing the terrain response.
+Its extra integration cost and unresolved release timing are recorded separately.

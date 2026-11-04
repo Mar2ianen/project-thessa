@@ -8,7 +8,7 @@ and verification. A researched item is not an implemented or visually accepted i
 | --- | --- | --- |
 | 1 | [Spatial communities](forest-quality/01_COMMUNITIES.md) | Closed placement slice: communities, canonical crown/root niches, cross-face halos |
 | 2 | [Ground transitions](forest-quality/02_GROUND_TRANSITIONS.md) | Parent-linked projected litter, cover-driven moss emergence and 32 m near-cover envelope in verification |
-| 3 | [Leaf transport](forest-quality/03_LEAF_LIGHT.md) | Existing direct/sky transmission audited; new scattering lobe open |
+| 3 | [Leaf transport](forest-quality/03_LEAF_LIGHT.md) | Shared mesh GGX black-patch correction verified; directional scattering lobe and scene acceptance open |
 | 4 | [Tree architecture](forest-quality/04_TREE_ARCHITECTURE.md) | Single/forked morphotypes now weighted 65/25/10; new architecture open |
 | 5 | [Forest depth](forest-quality/05_FOREST_DEPTH.md) | Existing spherical haze audited; finite-path integration open |
 | 6 | [Soil detail scale](forest-quality/06_SOIL_SCALE.md) | 0.3 m diagnostic camera enabled; material/normal analysis open |

@@ -143,224 +143,231 @@ fn diffuse_sky_visibility_preserves_other_light_and_round_trips_with_identical_d
         exposure: 1.,
     };
     let camera = ViewUniformBlock::new(&view).unwrap();
-    for (samples, probes) in [(1, 8), (1, 16), (1, 32), (4, 8), (4, 16), (4, 32)] {
-        let settings = ResolvedGraphicsSettings {
-            ambient_visibility_samples: probes,
-            ambient_visibility_radius_m: 2.,
-            raster_msaa_samples: samples,
-            hdr: true,
-            shadow_enabled: false,
-            specular_reflections: false,
-            ..Default::default()
-        };
-        let off_settings = ResolvedGraphicsSettings {
-            ambient_visibility_samples: 0,
-            ..settings.clone()
-        };
-        assert!(
-            AmbientVisibility::new(&backend, &off_settings, [0, 0])
-                .unwrap()
-                .is_none()
-        );
-        let target = OffscreenTarget::new(&backend, extent[0], extent[1]).unwrap();
-        let display = DisplayTransform::new(
-            &backend,
-            &settings,
-            OffscreenTarget::FORMAT,
-            extent[0],
-            extent[1],
-        )
-        .unwrap();
-        let msaa = SceneMsaa::new(&backend, &settings, display.scene_format(), extent).unwrap();
-        let mut visibility = AmbientVisibility::new(&backend, &settings, extent)
-            .unwrap()
+    for reflections in [false, true] {
+        for (samples, probes) in [(1, 8), (1, 16), (1, 32), (4, 8), (4, 16), (4, 32)] {
+            let settings = ResolvedGraphicsSettings {
+                ambient_visibility_samples: probes,
+                ambient_visibility_radius_m: 2.,
+                raster_msaa_samples: samples,
+                hdr: true,
+                shadow_enabled: false,
+                specular_reflections: reflections,
+                ..Default::default()
+            };
+            let off_settings = ResolvedGraphicsSettings {
+                ambient_visibility_samples: 0,
+                ..settings.clone()
+            };
+            assert!(
+                AmbientVisibility::new(&backend, &off_settings, [0, 0])
+                    .unwrap()
+                    .is_none()
+            );
+            let target = OffscreenTarget::new(&backend, extent[0], extent[1]).unwrap();
+            let display = DisplayTransform::new(
+                &backend,
+                &settings,
+                OffscreenTarget::FORMAT,
+                extent[0],
+                extent[1],
+            )
             .unwrap();
-        assert_eq!(
-            visibility.target_bytes(),
-            129 * 129 * 8 * if samples == 4 { 5 } else { 1 } + 144
-        );
-        for (scenario, transmission, emission, ambient, direct) in [
-            ("sky", 0., [0.; 3], std::f32::consts::PI, 0.),
-            ("baked", 0., [0.; 3], std::f32::consts::PI, 0.),
-            ("direct_emission", 0., [0.3, 0.7, 1.2], 0., 3.),
-            ("back_transmission", 1., [0.; 3], std::f32::consts::PI, 0.),
-        ] {
-            let mut asset = fixture(transmission, emission);
-            if scenario == "baked" {
-                asset.primitives[0].ambient_visibility = vec![0.25; 4];
-            }
-            let make = |settings: &ResolvedGraphicsSettings| {
-                MeshRenderer::with_surface(
-                    &backend,
-                    &asset,
-                    SurfaceSettings {
-                        format: display.scene_format(),
-                        capacity: 1,
-                        quality: Quality::High,
-                        reflections: false,
-                        shadows: None,
-                        ray_tracing: Some(settings),
-                    },
-                )
+            let msaa = SceneMsaa::new(&backend, &settings, display.scene_format(), extent).unwrap();
+            let mut visibility = AmbientVisibility::new(&backend, &settings, extent)
                 .unwrap()
-            };
-            let mut mesh = make(&settings);
-            let mut old = make(&off_settings);
-            let lights = thessa_rcbt_core::lighting::SurfaceLighting {
-                ambient_lux: [ambient, ambient, ambient, 0.],
-                directions: [[0., 1., 0., 0.], [0.; 4], [0.; 4]],
-                colors_lux: [[direct, direct, direct, 0.], [0.; 4], [0.; 4]],
-            };
-            let instances = [MeshInstance {
-                position_m: DVec3::ZERO,
-                rotation: glam::DQuat::IDENTITY,
-                scale: 1.,
-            }];
-            mesh.update(&backend, &view, &lights, &instances).unwrap();
-            old.update(&backend, &view, &lights, &instances).unwrap();
-            let draw = |mesh: &MeshRenderer,
-                        visibility: Option<&mut AmbientVisibility>,
-                        enabled: bool| {
-                let color = msaa
-                    .as_ref()
-                    .map_or(display.scene_color(&target.color), |s| &s.color);
-                let depth = msaa.as_ref().map_or(&target.depth, SceneMsaa::depth);
-                let resolve = msaa.as_ref().map(|_| display.scene_color(&target.color));
-                let mut encoder = backend.device.create_command_encoder(&Default::default());
-                {
-                    let mut attachments = vec![Some(wgpu::RenderPassColorAttachment {
-                        view: color,
-                        depth_slice: None,
-                        resolve_target: resolve,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
+                .unwrap();
+            assert_eq!(
+                visibility.target_bytes(),
+                129 * 129 * 8 * if samples == 4 { 5 } else { 1 } + 144
+            );
+            for (scenario, transmission, emission, ambient, direct) in [
+                ("sky", 0., [0.; 3], std::f32::consts::PI, 0.),
+                ("baked", 0., [0.; 3], std::f32::consts::PI, 0.),
+                ("direct_emission", 0., [0.3, 0.7, 1.2], 0., 3.),
+                ("back_transmission", 1., [0.; 3], std::f32::consts::PI, 0.),
+            ] {
+                let mut asset = fixture(transmission, emission);
+                if scenario == "baked" {
+                    asset.primitives[0].ambient_visibility = vec![0.25; 4];
+                }
+                let make = |settings: &ResolvedGraphicsSettings| {
+                    MeshRenderer::with_surface(
+                        &backend,
+                        &asset,
+                        SurfaceSettings {
+                            format: display.scene_format(),
+                            capacity: 1,
+                            quality: Quality::High,
+                            reflections,
+                            shadows: None,
+                            ray_tracing: Some(settings),
                         },
-                    })];
-                    if let Some(v) = visibility.as_ref() {
-                        attachments.push(Some(v.attachment()));
-                    }
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        color_attachments: &attachments,
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: depth,
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.),
+                    )
+                    .unwrap()
+                };
+                let mut mesh = make(&settings);
+                let mut old = make(&off_settings);
+                let lights = thessa_rcbt_core::lighting::SurfaceLighting {
+                    ambient_lux: [ambient, ambient, ambient, 0.],
+                    directions: [[0., 1., 0., 0.], [0.; 4], [0.; 4]],
+                    colors_lux: [[direct, direct, direct, 0.], [0.; 4], [0.; 4]],
+                };
+                let instances = [MeshInstance {
+                    position_m: DVec3::ZERO,
+                    rotation: glam::DQuat::IDENTITY,
+                    scale: 1.,
+                }];
+                mesh.update(&backend, &view, &lights, &instances).unwrap();
+                old.update(&backend, &view, &lights, &instances).unwrap();
+                let draw = |mesh: &MeshRenderer,
+                            visibility: Option<&mut AmbientVisibility>,
+                            enabled: bool| {
+                    let color = msaa
+                        .as_ref()
+                        .map_or(display.scene_color(&target.color), |s| &s.color);
+                    let depth = msaa.as_ref().map_or(&target.depth, SceneMsaa::depth);
+                    let resolve = msaa.as_ref().map(|_| display.scene_color(&target.color));
+                    let mut encoder = backend.device.create_command_encoder(&Default::default());
+                    {
+                        let mut attachments = vec![Some(wgpu::RenderPassColorAttachment {
+                            view: color,
+                            depth_slice: None,
+                            resolve_target: resolve,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                                 store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        ..Default::default()
-                    });
-                    mesh.draw_opaque_into_pass(&mut pass);
-                }
-                if let Some(msaa) = &msaa {
-                    msaa.resolve_depth(&mut encoder, &target.depth);
-                }
-                if let Some(v) = visibility {
-                    v.encode(
-                        &backend,
-                        &mut encoder,
-                        color,
-                        resolve,
-                        &target.depth,
-                        msaa.as_ref().map(SceneMsaa::depth),
-                        &view,
-                        thessa_render_core::temporal::JitterOffset::ZERO,
-                        enabled,
-                    )
-                    .unwrap();
-                }
-                display.encode(&mut encoder, &target.color);
-                backend.queue.submit([encoder.finish()]);
-                (
-                    thessa_render_wgpu::readback::read_color(
-                        &backend,
-                        display.scene_texture().unwrap(),
-                    )
-                    .unwrap(),
-                    thessa_render_wgpu::readback::read_depth(&backend, &target.depth_texture)
-                        .unwrap(),
-                    target.read_rgba8(&backend).unwrap(),
-                )
-            };
-            let baseline = draw(&old, None, false);
-            let a = draw(&mesh, Some(&mut visibility), false);
-            let b = draw(&mesh, Some(&mut visibility), true);
-            let c = draw(&mesh, Some(&mut visibility), false);
-            assert!(
-                baseline.0 == a.0,
-                "exporting the receiver must not change beauty: {scenario} MSAA{samples}"
-            );
-            assert!(a.0 == c.0, "Off/On/Off round trip: {scenario}");
-            assert!(
-                a.1 == b.1 && b.1 == c.1,
-                "visibility cannot modify scene depth"
-            );
-            if scenario != "sky" {
-                // Box still has diffuse sky; compare only the floor receiver.
-                let q = camera
-                    .clip_from_world
-                    .project_point3(Vec3::new(0., 0., 0.85) - eye.as_vec3());
-                let x = ((q.x * 0.5 + 0.5) * 129.) as usize;
-                let y = ((-q.y * 0.5 + 0.5) * 129.) as usize;
-                let pixel = y * 129 + x;
-                assert_eq!(
-                    rgba(&a.0, pixel),
-                    rgba(&b.0, pixel),
-                    "direct/emission/back transmission are outside this visibility term"
-                );
-            } else {
-                let receiver =
-                    thessa_render_wgpu::readback::read_color(&backend, &visibility.texture)
+                            },
+                        })];
+                        if let Some(v) = visibility.as_ref() {
+                            attachments.push(Some(v.attachment()));
+                        }
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            color_attachments: &attachments,
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: depth,
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(1.),
+                                        store: wgpu::StoreOp::Store,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            ..Default::default()
+                        });
+                        mesh.draw_opaque_into_pass(&mut pass);
+                    }
+                    if let Some(msaa) = &msaa {
+                        msaa.resolve_depth(&mut encoder, &target.depth);
+                    }
+                    if let Some(v) = visibility {
+                        v.encode(
+                            &backend,
+                            &mut encoder,
+                            color,
+                            resolve,
+                            &target.depth,
+                            msaa.as_ref().map(SceneMsaa::depth),
+                            &view,
+                            thessa_render_core::temporal::JitterOffset::ZERO,
+                            enabled,
+                        )
                         .unwrap();
-                let q = camera
-                    .clip_from_world
-                    .project_point3(Vec3::new(0., 0., 0.85) - eye.as_vec3());
-                let x = ((q.x * 0.5 + 0.5) * 129.) as usize;
-                let y = ((-q.y * 0.5 + 0.5) * 129.) as usize;
-                let pixel = y * 129 + x;
-                let depth = f32::from_le_bytes(a.1[pixel * 4..pixel * 4 + 4].try_into().unwrap());
-                let ndc = Vec3::new(
-                    (x as f32 + 0.5) / 129. * 2. - 1.,
-                    1. - (y as f32 + 0.5) / 129. * 2.,
-                    depth,
-                );
-                let p = camera.world_from_clip.project_point3(ndc) + eye.as_vec3();
-                // Nearest covered MSAA depth belongs to a subpixel sample, not
-                // necessarily the pixel centre used by the single-depth pass.
-                let adjacent = camera
-                    .world_from_clip
-                    .project_point3(ndc + Vec3::X * (2. / 129.))
-                    + eye.as_vec3();
+                    }
+                    display.encode(&mut encoder, &target.color);
+                    backend.queue.submit([encoder.finish()]);
+                    (
+                        thessa_render_wgpu::readback::read_color(
+                            &backend,
+                            display.scene_texture().unwrap(),
+                        )
+                        .unwrap(),
+                        thessa_render_wgpu::readback::read_depth(&backend, &target.depth_texture)
+                            .unwrap(),
+                        target.read_rgba8(&backend).unwrap(),
+                    )
+                };
+                let baseline = draw(&old, None, false);
+                let a = draw(&mesh, Some(&mut visibility), false);
+                let b = draw(&mesh, Some(&mut visibility), true);
+                let c = draw(&mesh, Some(&mut visibility), false);
                 assert!(
-                    p.y.abs() < (adjacent - p).length(),
-                    "oracle receiver must remain within one footprint of the floor: {p}"
+                    baseline.0 == a.0,
+                    "exporting the receiver must not change beauty: {scenario} MSAA{samples}"
                 );
-                let component = rgba(&receiver, pixel)[0];
-                let actual = (rgba(&a.0, pixel)[0] - rgba(&b.0, pixel)[0]) / component;
-                let reference = oracle(Vec3::new(p.x, 0., p.z), 2.);
-                eprintln!(
-                    "ambient_visibility MSAA{samples} probes={probes} actual={actual:.5} finite_box_oracle={reference:.5} receiver={p:?}"
-                );
+                assert!(a.0 == c.0, "Off/On/Off round trip: {scenario}");
                 assert!(
-                    actual > 0.03 && (actual - reference).abs() < 0.06,
-                    "bounded screen-space approximation must occlude the contact and remain near the independent oracle"
+                    a.1 == b.1 && b.1 == c.1,
+                    "visibility cannot modify scene depth"
                 );
-                if let Some(directory) = std::env::var_os("THESSA_TEST_ARTIFACT_DIR") {
-                    let out = std::path::PathBuf::from(directory)
-                        .join(format!("fixture-msaa{samples}-q{probes}"));
-                    for (name, frame) in [("off", &a), ("on", &b)] {
-                        let file = std::fs::File::create(out.with_extension(format!("{name}.png")))
+                if scenario != "sky" {
+                    // Box still has diffuse sky; compare only the floor receiver.
+                    let q = camera
+                        .clip_from_world
+                        .project_point3(Vec3::new(0., 0., 0.85) - eye.as_vec3());
+                    let x = ((q.x * 0.5 + 0.5) * 129.) as usize;
+                    let y = ((-q.y * 0.5 + 0.5) * 129.) as usize;
+                    let pixel = y * 129 + x;
+                    assert_eq!(
+                        rgba(&a.0, pixel),
+                        rgba(&b.0, pixel),
+                        "direct/emission/back transmission are outside this visibility term"
+                    );
+                } else {
+                    let receiver =
+                        thessa_render_wgpu::readback::read_color(&backend, &visibility.texture)
                             .unwrap();
-                        let mut encoder = png::Encoder::new(file, 129, 129);
-                        encoder.set_color(png::ColorType::Rgba);
-                        encoder.set_depth(png::BitDepth::Eight);
-                        encoder
-                            .write_header()
-                            .unwrap()
-                            .write_image_data(&frame.2)
-                            .unwrap();
+                    let q = camera
+                        .clip_from_world
+                        .project_point3(Vec3::new(0., 0., 0.85) - eye.as_vec3());
+                    let x = ((q.x * 0.5 + 0.5) * 129.) as usize;
+                    let y = ((-q.y * 0.5 + 0.5) * 129.) as usize;
+                    let pixel = y * 129 + x;
+                    let depth =
+                        f32::from_le_bytes(a.1[pixel * 4..pixel * 4 + 4].try_into().unwrap());
+                    let ndc = Vec3::new(
+                        (x as f32 + 0.5) / 129. * 2. - 1.,
+                        1. - (y as f32 + 0.5) / 129. * 2.,
+                        depth,
+                    );
+                    let p = camera.world_from_clip.project_point3(ndc) + eye.as_vec3();
+                    // Nearest covered MSAA depth belongs to a subpixel sample, not
+                    // necessarily the pixel centre used by the single-depth pass.
+                    let adjacent = camera
+                        .world_from_clip
+                        .project_point3(ndc + Vec3::X * (2. / 129.))
+                        + eye.as_vec3();
+                    assert!(
+                        p.y.abs() < (adjacent - p).length(),
+                        "oracle receiver must remain within one footprint of the floor: {p}"
+                    );
+                    let component = rgba(&receiver, pixel)[0];
+                    let actual = (rgba(&a.0, pixel)[0] - rgba(&b.0, pixel)[0]) / component;
+                    let reference = oracle(Vec3::new(p.x, 0., p.z), 2.);
+                    eprintln!(
+                        "ambient_visibility specular={reflections} MSAA{samples} probes={probes} actual={actual:.5} finite_box_oracle={reference:.5} receiver={p:?}"
+                    );
+                    assert!(
+                        actual > 0.03 && (actual - reference).abs() < 0.06,
+                        "bounded screen-space approximation must occlude the contact and remain near the independent oracle"
+                    );
+                    if let Some(directory) = std::env::var_os("THESSA_TEST_ARTIFACT_DIR") {
+                        let out = std::path::PathBuf::from(directory).join(format!(
+                            "fixture-specular{reflections}-msaa{samples}-q{probes}"
+                        ));
+                        for (name, frame) in [("off", &a), ("on", &b)] {
+                            let file =
+                                std::fs::File::create(out.with_extension(format!("{name}.png")))
+                                    .unwrap();
+                            let mut encoder = png::Encoder::new(file, 129, 129);
+                            encoder.set_color(png::ColorType::Rgba);
+                            encoder.set_depth(png::BitDepth::Eight);
+                            encoder
+                                .write_header()
+                                .unwrap()
+                                .write_image_data(&frame.2)
+                                .unwrap();
+                        }
                     }
                 }
             }

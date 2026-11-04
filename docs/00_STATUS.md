@@ -1027,3 +1027,13 @@ those defects. The full-chromaticity litter candidate was visually rejected;
 the retained candidate uses a subtle 10% scan chromatic residual around authored
 dry brown. Current package tests, Clippy, architecture and image-review records
 are in the item-2 document; no scene/reference or performance acceptance.
+
+[Mesh reciprocal GGX budget](133_MESH_RECIPROCAL_GGX_BUDGET.md) fixes the shared
+Schlick-only diffuse debit behind black living-leaf patches, using existing
+incoming/outgoing GGX response in primary raster and secondary RT hits. Nine
+matched fern specimens and an actual 0.3 m native frame were visually inspected;
+the leaf defect improves while close soil remains visibly unresolved. Local
+physical-GPU raster (9), ray (32), renderer unit (43), 27 energy probes and
+reflections-off/on ambient-visibility checks passed. Native tests, strict Clippy
+and architecture passed. Low/disabled fallbacks remain explicit. Release timing,
+directional leaf scattering and forest/reference acceptance remain open.

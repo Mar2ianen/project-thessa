@@ -677,7 +677,7 @@ return rt_visibility(position,normal,light.directions[sun].xyz,visibility,RT_BIA
 
 /// The same roughness-aware environment hook is used by raster fallback and
 /// primary RT misses. Querying geometry must not change an unobstructed sky.
-const REFLECTION_FALLBACK: &str = "fn rt_reflection(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,fresnel:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->vec3<f32>{return mesh_environment(position,normal,eye,f0,roughness,ambient,occlusion);}\n";
+const REFLECTION_FALLBACK: &str = "fn rt_reflection(position:vec3<f32>,normal:vec3<f32>,eye:vec3<f32>,f0:vec3<f32>,fresnel:vec3<f32>,roughness:f32,ambient:vec3<f32>,occlusion:f32)->EnvironmentSpecular{return mesh_environment(position,normal,eye,f0,roughness,ambient,occlusion);}\n";
 
 pub fn fallback_shader() -> String {
     format!(

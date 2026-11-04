@@ -1,0 +1,304 @@
+{
+  "date": "2026-11-04",
+  "baseline": "efeab0a",
+  "status": "common mesh black-patch defect corrected; forest parity, directional leaf scattering and release timing open",
+  "references": [
+    "https://google.github.io/filament/main/filament.html",
+    "docs/69_NATIVE_TERRAIN_MATERIAL_LIGHTING.md"
+  ],
+  "hardware": "AMD Radeon 880M Graphics, RADV STRIX1, Vulkan; renderD128-only isolated process; jobs serial",
+  "subjective_blind": false,
+  "performance_equivalent": false,
+  "visual_review": {
+    "reviewers": [
+      "root",
+      "luna_ground_iterations (nine specimens and shader review)"
+    ],
+    "specimens": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f0-geometric.png",
+        "sha256": "96db3615ffe1d57e180f5c0817c795bc3f68fe375834d7b4501f369d3290bf5e"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f0-reduced.png",
+        "sha256": "25d52dd4ae33b91f3d5f61c6d255b0166ab010f53f4cfc5d47faab346680fde2"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f0-source.png",
+        "sha256": "cc021e820934e4ada338c8d892a0e142fa8f761c3713d7320ea80e9031bb58c3"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f1-geometric.png",
+        "sha256": "7a6849549b50fa8f1308f7bf1b78619140f67e09ca8a26d42c81e5509737b881"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f1-reduced.png",
+        "sha256": "7c51b1b1f372c72e06eaed394f384cd9c75ccb46da147558cc953bc7a6796414"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f1-source.png",
+        "sha256": "fbe9ae88f628c924453ef571672c122e2a0ceb872d8d0af71aa5f71fb6853929"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f2-geometric.png",
+        "sha256": "3946fb404a39759baeb3d3b58a2ec6f63a4de22975e3b2d41f81352354dc7bf5"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f2-reduced.png",
+        "sha256": "592c1357adc7da86786746e6aed5ab3ec4a076dbf8166a3b4335fb6662b6ba73"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/living-fern-f2-source.png",
+        "sha256": "4cd6943f6cbfa5aada6891857e8271b233d6dcb2eae4afdc95e3c05d0ebef161"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/living-fern-v4-reciprocal-budget/review-all.jpg",
+        "sha256": "239b1346b04c70b6db427a5ec0fc806082b128225711eeccbb696036ff140a37"
+      }
+    ],
+    "comparisons": [
+      {
+        "image": "living-fern-f0-source.png",
+        "occupied_pixels": 16630,
+        "near_black_before": 491,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "73bac2205c261d199e69bee395b46eb32a2433acfa9628b0e1ed1e282e6502f4",
+        "after_sha256": "cc021e820934e4ada338c8d892a0e142fa8f761c3713d7320ea80e9031bb58c3"
+      },
+      {
+        "image": "living-fern-f0-reduced.png",
+        "occupied_pixels": 16630,
+        "near_black_before": 203,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "51490c4c67e4a82129de4320a1818365c4507f34cb7a7fd405b48b658ccfd1d3",
+        "after_sha256": "25d52dd4ae33b91f3d5f61c6d255b0166ab010f53f4cfc5d47faab346680fde2"
+      },
+      {
+        "image": "living-fern-f0-geometric.png",
+        "occupied_pixels": 16630,
+        "near_black_before": 209,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "51f082991fddd03dfcf752f698a703103151077e632a0f88770e66a34ddab678",
+        "after_sha256": "96db3615ffe1d57e180f5c0817c795bc3f68fe375834d7b4501f369d3290bf5e"
+      },
+      {
+        "image": "living-fern-f1-source.png",
+        "occupied_pixels": 24258,
+        "near_black_before": 1328,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "91a9487f197649494b810d794a99029f35792e4222d418bc5ac58154efc6d8e2",
+        "after_sha256": "fbe9ae88f628c924453ef571672c122e2a0ceb872d8d0af71aa5f71fb6853929"
+      },
+      {
+        "image": "living-fern-f1-reduced.png",
+        "occupied_pixels": 24258,
+        "near_black_before": 517,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "a9feec7ab13e5b67886d001be009ddf1b8e14f83f0f3a07723c6980afd044e31",
+        "after_sha256": "7c51b1b1f372c72e06eaed394f384cd9c75ccb46da147558cc953bc7a6796414"
+      },
+      {
+        "image": "living-fern-f1-geometric.png",
+        "occupied_pixels": 24258,
+        "near_black_before": 450,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "21995316e0ef8431b958be83897e68088e707518d680fd027872099ab7eeaa44",
+        "after_sha256": "7a6849549b50fa8f1308f7bf1b78619140f67e09ca8a26d42c81e5509737b881"
+      },
+      {
+        "image": "living-fern-f2-source.png",
+        "occupied_pixels": 15290,
+        "near_black_before": 1523,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "3cdc5f62c8f77ad2b1fda6bda43a9c4a3a8d56b35ca708f883bcbec0844168c5",
+        "after_sha256": "4cd6943f6cbfa5aada6891857e8271b233d6dcb2eae4afdc95e3c05d0ebef161"
+      },
+      {
+        "image": "living-fern-f2-reduced.png",
+        "occupied_pixels": 15290,
+        "near_black_before": 595,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "7e0765363131f60f1f877c5fa80478b5f4cd592d2be575535fe997378035b6c5",
+        "after_sha256": "592c1357adc7da86786746e6aed5ab3ec4a076dbf8166a3b4335fb6662b6ba73"
+      },
+      {
+        "image": "living-fern-f2-geometric.png",
+        "occupied_pixels": 15290,
+        "near_black_before": 519,
+        "near_black_after": 0,
+        "silhouette_identical": true,
+        "before_sha256": "e83c34c48b404ebcf2ad3566646cf5ba73f85fa1dd219db8c103934ef9989fdd",
+        "after_sha256": "3946fb404a39759baeb3d3b58a2ec6f63a4de22975e3b2d41f81352354dc7bf5"
+      }
+    ],
+    "native_close": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-soil-030m/full-fhd.png",
+        "sha256": "b50f33c21b1358a21ab8bcca248fa9c10ad41d0731a6dcd0e7253706ef5914b3"
+      }
+    ],
+    "native_wide": [
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/full-fhd.png",
+        "sha256": "8d41d304303b40bef18f67d1aae3017d632fca8fce9a6e3a5066f43caeafd5df"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/review-all.jpg",
+        "sha256": "761cd4fb272be698f1f0a53ffff99db773a5885f75c61b11a9055406732b0d6a"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/00-none.png",
+        "sha256": "9f443f2ad80a61176c0ca6f00b36420d0a53c042e8f96d91c23222da1b554f66"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/01-none.png",
+        "sha256": "8d41d304303b40bef18f67d1aae3017d632fca8fce9a6e3a5066f43caeafd5df"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/02-none.png",
+        "sha256": "9f443f2ad80a61176c0ca6f00b36420d0a53c042e8f96d91c23222da1b554f66"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/03-none.png",
+        "sha256": "8d41d304303b40bef18f67d1aae3017d632fca8fce9a6e3a5066f43caeafd5df"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/04-water_weight.png",
+        "sha256": "781450cb6ac7b64515b9df1c764145b5e4aefe106e133dc037ed522c825d38b4"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/05-height.png",
+        "sha256": "2dc7f1eba634f97d22a337985384f04dea474f3f84cc753b3f756c05e1db9945"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/06-distance.png",
+        "sha256": "7a122472e670d836c5b55e3611da530965cfd6d47d03f51004b377a57ddd476a"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/07-normal.png",
+        "sha256": "b06879d26db3d5af1209dab46ce587cfb3949989e7a3440433157d56bf8a1742"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/08-albedo.png",
+        "sha256": "43e35c9a84cc2551c48326d10bb8d168b66fa4e0b6915ce5f69c28ad6bb325da"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/09-roughness.png",
+        "sha256": "cd16dd51c068632239a4b2f3872bd6f494348320d92d12c9922d83d088674130"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/10-geometry.png",
+        "sha256": "c9ab84a945fd326c64425273e7d2923acad1f45d3cd2587f7226627fa872d017"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/11-height_page_level.png",
+        "sha256": "e5ded81b7978cad1571c8ee0279635bebd49d277c444bbd8ae30b75ceb605c76"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/12-footprint.png",
+        "sha256": "b21b37b347e36c3b7f41aee477fa3e97f77c58f1947c7ea4c19916f06858e517"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/13-material_lod.png",
+        "sha256": "77a6125dd690914813d4b77f1f94fdf9f93b77abbd8bee54a525e7e66a22d74a"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/14-relief_weight.png",
+        "sha256": "a93124bb87a68b20b7028ab0137cff53dc45d56aef7f64ac6d386c3ad8dac347"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/15-direct.png",
+        "sha256": "d8ad6c3efc9e954503be25e476df1f572a305f6abea0d3d3628cdd1ce3e3ad0c"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/16-ambient.png",
+        "sha256": "18618eefdbe0b14d165519818e9955defdc5dac0d402bda6d83116f744826c10"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/17-specular.png",
+        "sha256": "ebf52b89d24a135bdde216d7dec83eb5e126f101509553ee272c7169f3461abe"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/18-land_only.png",
+        "sha256": "1b58a18d1780aa33f87d439696484f092975fab5fb03b44d4c32796f1c607ab5"
+      },
+      {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/leaf-energy-v4-wide-fhd/views/19-none.png",
+        "sha256": "8d41d304303b40bef18f67d1aae3017d632fca8fce9a6e3a5066f43caeafd5df"
+      }
+    ],
+    "findings": [
+      "All nine source/reduced/geometric-normal fern variants visually inspected; identical silhouettes and no previous black patches.",
+      "Actual close and wide FHD frames inspected at native resolution; soil remains smeared, forest composition and reference quality remain unaccepted.",
+      "Complete wide sheet includes all 20 frozen diagnostic frames plus beauty; per-run depth, geometry and beauty round trip identical."
+    ],
+    "rejected_intermediates": [
+      "living-fern-v2-ggx-budget: outgoing-only material energy",
+      "leaf-energy-v3-soil-030m: outgoing-only material energy"
+    ],
+    "limits": [
+      "Unblinded causal correction, not subjective preference.",
+      "Timed native streaming captures are not exact whole-frame A/B.",
+      "Debug native serial fences prevent production timing inference."
+    ]
+  },
+  "checks": {
+    "raster": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/mesh-reciprocal-surface.log",
+      "sha256": "15a4059e0cc61844b16dc27e176fe8f192b4f0a03bba78baf34a654bf437e822"
+    },
+    "rays": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/mesh-reciprocal-rays-final.log",
+      "sha256": "28e27d689ab754330b22b34c693048ddbcf109f20078531b0f2d7ce6d622fc85"
+    },
+    "renderer_unit": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/mesh-reciprocal-unit.log",
+      "sha256": "928c6d6cbff9f9ebb9ea686175f68387d6a74ec02585190e8bb15060a370ab94"
+    },
+    "energy27": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/mesh-reciprocal-probe.log",
+      "sha256": "dd1730098454d13d2d3b22212b1d588be8631674ada74d866ddf31f972dff2fb"
+    },
+    "ambient_visibility": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/mesh-reciprocal-ambient.log",
+      "sha256": "6baeb5c37d82ec41a1e0369ada67b59655a814076c5c57a292b6a5400057637c"
+    },
+    "secondary_specular_red": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/mesh-reciprocal-rt-specular-red.log",
+      "sha256": "810c33f51a519b12aff4956a3b7f0667443ecd96e75ffaebef8d7a1c180ac50b"
+    },
+    "native": {
+      "path": "/tmp/thessa-mesh-reciprocal-native-tests.log",
+      "sha256": "e4b957d906851d665bdee7c4684ea8af0d86ca3ad1dcdc63ca6bf92e2aec9ab6"
+    },
+    "clippy": {
+      "path": "/tmp/thessa-mesh-reciprocal-clippy-final.log",
+      "sha256": "0831b04b6ac4bd74800960d031f6b6a3f08094ba18293603807a303ce3ddd307"
+    },
+    "architecture": {
+      "path": "/tmp/thessa-mesh-reciprocal-architecture-final.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    }
+  },
+  "cost": "Medium/High diffuse substrate adds S weights per source and 4S for nonzero aggregate ambient; up to56/112 extra weights; no new pass/texture/buffer. Low/reflections-off add none.",
+  "secondary_specular_regression": "High-F0 rough secondary material test reproduced 162 vs165 codes with unchanged2-code tolerance; diffuse-only incoming attenuation preserves incident specular fallback source.",
+  "results": {
+    "raster_passed": 9,
+    "ray_passed": 32,
+    "renderer_unit_passed": 43,
+    "native_passed": 153,
+    "native_ignored": 51,
+    "energy_probe_cases": 27,
+    "ambient_visibility_combinations": 12,
+    "clippy": "passed",
+    "architecture": "passed"
+  }
+}

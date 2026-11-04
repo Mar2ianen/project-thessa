@@ -1039,4 +1039,9 @@ near-cover envelope retains these layers through 32 m survey eye clearance,
 including the 10 m crown diagnostic, within unchanged population/window budgets.
 The scanned resting organs preserve pinna folds while removing their living
 rachis arch; shared-shadow/grazing views now accompany complete visual review.
-Foreground soil and the black patches visible on living leaves remain open.
+[Shared mesh energy correction](docs/133_MESH_RECIPROCAL_GGX_BUDGET.md) removes
+the reproduced black foliage patches by reusing the terrain's incoming/outgoing
+GGX substrate budget in raster and RT shading. Physical-GPU regressions and all
+nine fern controls pass; foreground soil, directional leaf scattering and scene
+parity remain open. Additional material integration cost is explicit; release
+performance is not yet accepted.

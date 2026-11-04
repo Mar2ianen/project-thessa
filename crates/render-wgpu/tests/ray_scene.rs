@@ -23,6 +23,23 @@ use thessa_render_wgpu::{
 const SIZE: u32 = 129;
 
 /// Camera at `origin` looking down -Z, matching the existing surface oracles.
+#[path = "support/ggx.rs"]
+mod ggx;
+
+// Smooth mirror limit of the renderer's existing Schlick-Smith masking law.
+// Finite alpha=.0025 differs by less than this oracle's two-code tolerance.
+fn primary_mirror_response() -> f32 {
+    let nv = std::f64::consts::FRAC_1_SQRT_2;
+    let k = 1.02_f64.powi(2) / 8.0;
+    (nv / (nv * (1.0 - k) + k)).powi(2) as f32
+}
+fn rough_diffuse_budget() -> f32 {
+    (1.0 - ggx::uniform_reference(1.0, 0.04) as f32).powi(2)
+}
+fn assert_reflected_rgb_near(actual: [u8; 3], hit: [f32; 3]) {
+    assert_rgb_near(actual, hit.map(|v| v * primary_mirror_response()));
+}
+
 fn camera(origin: DVec3) -> ViewParams {
     ViewParams {
         world_from_view: DMat4::from_translation(origin),
@@ -333,14 +350,7 @@ fn resident_terrain_hits_share_materials_and_dirty_only_blas() {
     let lights = lighting([0.0; 3]);
     let red = scene.draw(&backend, &lights);
     let pixel = center(&red);
-    // White dielectric GGX contributes ~15 encoded levels on the dark channels;
-    // diffuse red is ~185 at this sun/exposure, within two 8-bit levels.
-    assert!(
-        (183..=187).contains(&pixel[0])
-            && (13..=17).contains(&pixel[1])
-            && (13..=17).contains(&pixel[2]),
-        "terrain radiance: {pixel:?}"
-    );
+    assert_reflected_rgb_near(pixel, [rough_diffuse_budget() * 0.5 + 0.005, 0.005, 0.005]);
     assert_eq!(scene.mesh.rt_stats().terrain_instances, 1);
     assert_eq!(scene.mesh.rt_stats().terrain_blas_builds, 1);
     assert!(scene.mesh.rt_terrain_reason().is_none());
@@ -378,12 +388,7 @@ fn resident_terrain_hits_share_materials_and_dirty_only_blas() {
     // without rebuilding geometry, hit buffers, or the TLAS.
     scene.material(&backend, [0, 0, 255, 255], 2, 0);
     let blue = center(&scene.draw(&backend, &lights));
-    assert!(
-        (183..=187).contains(&blue[2])
-            && (13..=17).contains(&blue[0])
-            && (13..=17).contains(&blue[1]),
-        "material update: {blue:?}"
-    );
+    assert_reflected_rgb_near(blue, [0.005, 0.005, rough_diffuse_budget() * 0.5 + 0.005]);
     assert_eq!(scene.mesh.rt_stats().passes, 0);
     scene.origin.x += 0.125;
     scene.draw(&backend, &lights);
@@ -1240,9 +1245,12 @@ fn reflection_replaces_environment_with_scene_geometry() {
     assert_eq!(mesh.rt_stats().instances, 2);
     assert!(mesh.rt_stats().active);
     let reflected = center(&mirror);
-    // Normal incidence, roughness=1: diffuse red 0.96 plus white GGX
-    // 0.04/4, then exposure 0.5. The white lobe is physical, not texture noise.
-    assert_rgb_near(reflected, [0.485, 0.005, 0.005]);
+    // Secondary diffuse uses the independent hemispherical GGX integral;
+    // direct specular remains F0/4 at normal incidence and roughness=1.
+    assert_reflected_rgb_near(
+        reflected,
+        [rough_diffuse_budget() * 0.5 + 0.005, 0.005, 0.005],
+    );
     // The same instance set with RT resolved off has no environment light to
     // reflect, so the mirror pixel is exactly black.
     let off = backend.resolve_graphics(&requested(RayTracingRequest::Off));
@@ -1348,7 +1356,7 @@ fn reflected_emission_survives_without_illumination_or_diffuse_reflectance() {
         &instances(),
         &SurfaceLighting::default(),
     );
-    assert_rgb_near(sample, [0.5, 0.125, 0.]);
+    assert_reflected_rgb_near(sample, [0.5, 0.125, 0.]);
     asset.materials[1].emission_rgb = [0.; 3];
     assert_eq!(
         reflected_sample(
@@ -1424,9 +1432,9 @@ fn reflected_subpixel_checker_converges_to_linear_mean_while_camera_moves() {
     }
     eprintln!("reflected_checker samples={samples:?}");
     // Equal black/white area has linear mean 0.5, NOT encoded mean 0.5.
-    // Diffuse (0.96*0.5) + GGX normal-incidence 0.01, exposed by 0.5.
+    // Diffuse uses (1-E)*0.5; direct GGX is .01, then exposure .5.
     for pixel in samples {
-        assert_rgb_near(pixel, [0.245; 3]);
+        assert_reflected_rgb_near(pixel, [rough_diffuse_budget() * 0.25 + 0.005; 3]);
     }
 }
 
@@ -1451,11 +1459,11 @@ fn reflected_uvs_use_srgb_decode_before_bilinear_filtering() {
     placed[1].position_m.y = 0.75; // reflection hits UV=(0.5,0.25), not UV=(0.5,0.5).
     let pixel = reflected_sample(&backend, &settings, &asset, &placed, &lighting([0.0; 3]));
     let decode = |byte: f32| ((byte / 255.0 + 0.055) / 1.055).powf(2.4);
-    assert_rgb_near(
+    assert_reflected_rgb_near(
         pixel,
         [
-            0.96 * decode(128.0) * 0.25 + 0.005,
-            0.96 * decode(64.0) * 0.25 + 0.005,
+            rough_diffuse_budget() * decode(128.0) * 0.25 + 0.005,
+            rough_diffuse_budget() * decode(64.0) * 0.25 + 0.005,
             0.005,
         ],
     );
@@ -1495,12 +1503,12 @@ fn reflected_texture_wrap_modes_and_colour_spaces_match_raster_resources() {
             &instances(),
             &lighting([0.0; 3]),
         );
-        assert_rgb_near(
+        assert_reflected_rgb_near(
             pixel,
             if red {
-                [0.485, 0.005, 0.005]
+                [rough_diffuse_budget() * 0.5 + 0.005, 0.005, 0.005]
             } else {
-                [0.005, 0.485, 0.005]
+                [0.005, rough_diffuse_budget() * 0.5 + 0.005, 0.005]
             },
         );
     }
@@ -1516,8 +1524,9 @@ fn reflected_texture_wrap_modes_and_colour_spaces_match_raster_resources() {
     let mr = 128.0_f32 / 255.0;
     let albedo = ((mr + 0.055) / 1.055).powf(2.4);
     let fresnel = 0.04 * (1.0 - mr) + albedo * mr;
-    let expected = ((1.0 - fresnel) * (1.0 - mr) * albedo + fresnel / (4.0 * mr.powi(4))) * 0.5;
-    assert_rgb_near(
+    let e = ggx::uniform_reference(f64::from(mr), f64::from(fresnel)) as f32;
+    let expected = ((1.0 - e).powi(2) * (1.0 - mr) * albedo + fresnel / (4.0 * mr.powi(4))) * 0.5;
+    assert_reflected_rgb_near(
         reflected_sample(
             &backend,
             &settings,
@@ -1547,7 +1556,7 @@ fn reflected_mr_channels_and_quality_control_hit_shading() {
         &instances(),
         &lighting([0.0; 3]),
     );
-    assert_rgb_near(dielectric, [0.245; 3]); // factor 1 * B=0, roughness G=1.
+    assert_reflected_rgb_near(dielectric, [rough_diffuse_budget() * 0.25 + 0.005; 3]); // factor 1 * B=0, roughness G=1.
     asset.images[0].rgba8[2] = 255;
     let metal = reflected_sample(
         &backend,
@@ -1556,7 +1565,7 @@ fn reflected_mr_channels_and_quality_control_hit_shading() {
         &instances(),
         &lighting([0.0; 3]),
     );
-    assert_rgb_near(metal, [0.0625; 3]);
+    assert_reflected_rgb_near(metal, [0.0625; 3]);
     asset.images[0].rgba8[1] = 128;
     let smooth = reflected_sample(
         &backend,
@@ -1582,7 +1591,12 @@ fn reflected_mr_channels_and_quality_control_hit_shading() {
             &instances(),
             &lighting([0.0; 3]),
         );
-        assert_rgb_near(fallback, [0.0625; 3]); // MR texture omitted, factors preserved.
+        // Low retains F0 throughput; Medium uses the integrated response.
+        if quality == thessa_graphics::Quality::Low {
+            assert_rgb_near(fallback, [0.0625; 3]);
+        } else {
+            assert_reflected_rgb_near(fallback, [0.0625; 3]);
+        } // MR texture omitted, factors preserved.
     }
 }
 
@@ -1600,9 +1614,9 @@ fn hit_roughness_yields_to_environment_instead_of_tracing_a_perfect_mirror() {
         ambient_lux: [std::f32::consts::PI; 4],
         ..Default::default()
     };
-    assert_rgb_near(
+    assert_reflected_rgb_near(
         reflected_sample(&backend, &settings, &asset, &instances(), &lights),
-        [0.5; 3],
+        [ggx::uniform_reference(1.0, 1.0) as f32 * 0.5; 3],
     );
     asset.images[0].rgba8[1] = 0;
     // At roughness zero the ray returns to the primary mirror, exhausting the
@@ -1633,7 +1647,7 @@ fn reflected_ao_and_normal_maps_obey_the_existing_material_contract() {
         [0; 3]
     );
     primary.materials[0].occlusion_strength = 0.5;
-    assert_rgb_near(
+    assert_reflected_rgb_near(
         reflected_sample(
             &backend,
             &settings,
@@ -1641,7 +1655,7 @@ fn reflected_ao_and_normal_maps_obey_the_existing_material_contract() {
             &instances(),
             &lighting([0.0; 3]),
         ),
-        [0.2425, 0.0025, 0.0025],
+        [rough_diffuse_budget() * 0.25 + 0.0025, 0.0025, 0.0025],
     );
     let mut asset = textured_target();
     let id = map(&mut asset, 1, 1, vec![0, 0, 0, 255], false);
@@ -1655,7 +1669,7 @@ fn reflected_ao_and_normal_maps_obey_the_existing_material_contract() {
         [0; 3]
     );
     asset.materials[1].occlusion_strength = 0.5;
-    assert_rgb_near(
+    assert_reflected_rgb_near(
         reflected_sample(&backend, &settings, &asset, &instances(), &ambient),
         [0.25; 3],
     );
@@ -1677,7 +1691,7 @@ fn reflected_ao_and_normal_maps_obey_the_existing_material_contract() {
     for vertex in &mut asset.primitives[1].vertices {
         vertex.uv = [0.5; 2];
     }
-    assert_rgb_near(
+    assert_reflected_rgb_near(
         reflected_sample(
             &backend,
             &settings,
@@ -1685,7 +1699,7 @@ fn reflected_ao_and_normal_maps_obey_the_existing_material_contract() {
             &instances(),
             &lighting([0.0; 3]),
         ),
-        [0.485; 3],
+        [rough_diffuse_budget() * 0.5 + 0.005; 3],
     );
 }
 
@@ -2615,7 +2629,7 @@ fn thin_diffuse_partition_matches_front_back_and_secondary_hit_radiance() {
                     &instances(),
                     &lighting([0.0; 3]),
                 ),
-                [0.293; 3],
+                [(rough_diffuse_budget() * 0.6 + 0.01) * 0.5 * primary_mirror_response(); 3],
             );
             let mut backlight = lighting([0.0; 3]);
             // Tilt off the mirror's own stellar specular direction: otherwise
@@ -2624,7 +2638,8 @@ fn thin_diffuse_partition_matches_front_back_and_secondary_hit_radiance() {
             backlight.directions[0] = direction.extend(0.0).to_array();
             assert_rgb_near(
                 reflected_sample(&backend, &settings, &asset, &instances(), &backlight),
-                [0.192 / 1.36f32.sqrt() + 0.005; 3],
+                [rough_diffuse_budget() * 0.4 / 1.36f32.sqrt() * 0.5 * primary_mirror_response();
+                    3],
             );
         }
     }
@@ -2719,7 +2734,11 @@ fn masked_ray_candidates_use_material_alpha_and_continue_to_opaque_geometry() {
                 &camera(origin),
             ));
             assert!(mesh.rt_stats().active, "{:?}", mesh.rt_reason());
-            assert_rgb_near(pixel, [0., 0.5, 0.]);
+            if quality == thessa_graphics::Quality::Low {
+                assert_rgb_near(pixel, [0., 0.5, 0.]);
+            } else {
+                assert_reflected_rgb_near(pixel, [0., 0.5, 0.]);
+            }
         }
     }
 }
@@ -2824,4 +2843,91 @@ fn reflected_mask_uv_holes_match_cut_geometry_and_minified_alpha_is_stable() {
     assert!(
         matches!(thessa_render_wgpu::ray_scene::plan(&backend,&masked,Some(&settings),2,settings.surface_quality,true),thessa_render_wgpu::ray_scene::Enable::Unavailable(reason) if reason.contains("BLEND"))
     );
+}
+
+#[test]
+fn white_dielectric_meshes_preserve_the_furnace_through_rt_hits_and_fallbacks() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let mut settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
+    assert!(settings.ray_tracing.is_active());
+    let light = SurfaceLighting {
+        ambient_lux: [std::f32::consts::PI; 4],
+        ..Default::default()
+    };
+    for quality in [
+        thessa_graphics::Quality::Medium,
+        thessa_graphics::Quality::High,
+    ] {
+        settings.surface_quality = quality;
+        for primary_roughness in [0.2, 1.0] {
+            for hit_roughness in [0.2, 1.0] {
+                let ep = ggx::directional_reference(
+                    primary_roughness as f64,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    0.04,
+                    256,
+                ) as f32;
+                let ap = ggx::average_reference(primary_roughness as f64, 0.04, 256) as f32;
+                let eh = ggx::uniform_reference(hit_roughness as f64, 0.04) as f32;
+                let ah = ggx::average_reference(hit_roughness as f64, 0.04, 256) as f32;
+                let mirror = ((0.6 - primary_roughness) / 0.6_f32).clamp(0.0, 1.0);
+                let expected = ((1.0 - ep) * (1.0 - ap)
+                    + ep * (1.0 - mirror + mirror * ((1.0 - eh) * (1.0 - ah) + eh)))
+                    * 0.5;
+                for transmission in [0.0, 0.28] {
+                    let mut asset = source();
+                    for (i, material) in asset.materials.iter_mut().enumerate() {
+                        *material = Material {
+                            base_color: [1.0; 4],
+                            metallic: 0.0,
+                            roughness: if i == 0 {
+                                primary_roughness
+                            } else {
+                                hit_roughness
+                            },
+                            diffuse_transmission: transmission,
+                            ..Default::default()
+                        };
+                    }
+                    let pixel = reflected_sample(&backend, &settings, &asset, &instances(), &light);
+                    assert_rgb_near(pixel, [expected; 3]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rt_substrate_transmission_does_not_attenuate_reflected_environment() {
+    let Some(backend) = backend(RayTracingRequest::Local) else {
+        return;
+    };
+    let mut settings = backend.resolve_graphics(&requested(RayTracingRequest::Local));
+    let light = SurfaceLighting {
+        ambient_lux: [std::f32::consts::PI; 4],
+        ..Default::default()
+    };
+    let mut asset = source();
+    asset.materials[1] = Material {
+        base_color: [1.0; 4],
+        metallic: 0.0,
+        roughness: 1.0,
+        dielectric_f0: 0.5,
+        ..Default::default()
+    };
+    let e = ggx::uniform_reference(1.0, 0.5) as f32;
+    let a = ggx::average_reference(1.0, 0.5, 256) as f32;
+    // Only diffuse crosses the substrate interface; reflected sky keeps its
+    // incident radiance. High F0 makes accidental double attenuation observable.
+    let expected = ((1.0 - e) * (1.0 - a) + e) * 0.5;
+    for quality in [
+        thessa_graphics::Quality::Medium,
+        thessa_graphics::Quality::High,
+    ] {
+        settings.surface_quality = quality;
+        let pixel = reflected_sample(&backend, &settings, &asset, &instances(), &light);
+        assert_reflected_rgb_near(pixel, [expected; 3]);
+    }
 }

@@ -7,9 +7,9 @@ pub(crate) use normal::sample_residual;
 
 pub const SWATCH_WIDTH_M: f64 = 3.15;
 pub const HEIGHT_RANGE_M: f32 = 0.060;
-const SOIL_SIDE: usize = 1024;
+const SOIL_SIDE: usize = 2048;
 const LITTER_SIDE: usize = 512;
-const MOSS_SIDE: usize = 1024;
+const MOSS_SIDE: usize = 2048;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GroundSample {
@@ -35,9 +35,9 @@ const MOSS_HEIGHT_RANGE_M: f32 = 0.020;
 // Authored olive-green pigment transfer; source texture contrast remains.
 const MOSS_GRADE: [f32; 3] = [0.100, 0.300, 0.150];
 const MOSS_MEAN: GroundSample = GroundSample {
-    albedo_linear: [0.2964123, 0.17819463, 0.056929342],
-    roughness: 0.9334981,
-    height_m: -0.001536484,
+    albedo_linear: [0.29995373, 0.18097855, 0.0592629],
+    roughness: 0.9330085,
+    height_m: -0.0015365105,
 };
 const LITTER_MEAN: GroundSample = GroundSample {
     albedo_linear: [0.13887769, 0.10027028, 0.03611909],
@@ -65,9 +65,9 @@ pub(crate) fn encode_srgb(v: f64) -> f64 {
 /// same material mean, not legacy canopy colour. Pinned against the asset below.
 fn swatch_mean() -> GroundSample {
     GroundSample {
-        albedo_linear: [0.097_032_42, 0.068_543_516, 0.043_225_687],
-        roughness: 0.799_156_1,
-        height_m: -0.006_855_374,
+        albedo_linear: [0.106332146, 0.075658605, 0.04803002],
+        roughness: 0.7873502,
+        height_m: -0.00685546,
     }
 }
 
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn swatch_mips_preserve_linear_means_and_wrap_continuously() {
         let texture = Texture::decode();
-        assert_eq!(texture.0.len(), 11);
+        assert_eq!(texture.0.len(), 12);
         let base = &texture.0[0];
         for c in 0..5 {
             let mean =

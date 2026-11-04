@@ -1058,7 +1058,7 @@ fn resolved_material_lod_reports_parent_fallback_and_missing_pages() {
             DVec3::from(fine_anchor.raw_axis_v),
         )
         .inverse(),
-        clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.000625, 1.0, 0.01, 1000.0),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.115, 1.0, 0.01, 1000.0),
         world_position_m: eye,
         exposure: 1.0,
     };
@@ -1147,7 +1147,7 @@ fn resolved_material_lod_reports_parent_fallback_and_missing_pages() {
     let requested_lod = requested(&renderer);
     let parent_result = resolved(&renderer);
     assert!(
-        requested_lod > parent.level as f32 + 0.5,
+        requested_lod > parent.level as f32 + 0.5 && requested_lod < fine.level as f32,
         "requested LOD={requested_lod}"
     );
     assert!(
@@ -1389,6 +1389,144 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
             eprintln!(
                 "L24 magnification face={face} nominal_footprint_m={footprint_m} phases={} periods={periods:?} max_srgb_code_error={max_code_error}",
                 actual.len()
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; L25 page-address and subtexel-chart oracle"]
+fn l25_material_page_address_tracks_subtexel_motion_on_all_cube_faces() {
+    let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    const SIZE: u32 = 65;
+    const RADIUS_M: f64 = 3_200_000.0;
+    const FOOTPRINT_M: f64 = 0.000_734;
+    const PAGE_CELLS: f64 = 125.0;
+    let fov = 2.0 * (FOOTPRINT_M * f64::from(SIZE) / 4.0).atan();
+    let achieved_footprint = 4.0 * (fov * 0.5).tan() / f64::from(SIZE);
+    let page_pitch = 2.0 * RADIUS_M / 2_f64.powi(25) / PAGE_CELLS;
+    assert!((achieved_footprint / FOOTPRINT_M - 1.0).abs() < 1e-12);
+    assert!(
+        achieved_footprint < page_pitch,
+        "fixture must magnify L25 pages"
+    );
+
+    let low = 32_u8;
+    let high = 224_u8;
+    let to_linear = |byte: u8| {
+        let value = f64::from(byte) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let to_srgb_byte = |linear: f64| {
+        ((1.055 * linear.powf(1.0 / 2.4) - 0.055).clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    let rgba: Vec<u8> = (0..128 * 128)
+        .flat_map(|i| {
+            let x = i % 128;
+            [if x < 64 { low } else { high }, 0, 0, 255]
+        })
+        .collect();
+    let material = CbtMaterialPage::from_rgba8(rgba).unwrap();
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        surface_quality: thessa_graphics::Quality::High,
+        terrain_debug_view: thessa_graphics::TerrainDebugView::Albedo,
+        terrain_material_anisotropy: 1,
+        terrain_normal_maps: false,
+        terrain_ground_detail: true,
+        specular_reflections: false,
+        shadow_enabled: false,
+        ..Default::default()
+    };
+    assert_eq!(settings.terrain_material_max_level(), 25);
+    let target = OffscreenTarget::new(&backend, SIZE, SIZE).unwrap();
+
+    for face in 0..6 {
+        for child in [0, 7] {
+            let fine = TileKey::new(face, 25, 113_491 * 256 + child, 95_110 * 256 + 3).unwrap();
+            let geometry = TileKey::new(face, 22, fine.x >> 3, fine.y >> 3).unwrap();
+            let fine_anchor = TileAnchor::new(fine, RADIUS_M).unwrap();
+            let geometry_anchor = TileAnchor::new(geometry, RADIUS_M).unwrap();
+            let geometry_id = thessa_rcbt_core::conforming_surface::page_id(geometry).unwrap();
+            let material_id = (0..3).rev().fold(geometry_id, |id, bit| {
+                (id << 2) | (u64::from((fine.x >> bit) & 1) << 1) | u64::from((fine.y >> bit) & 1)
+            });
+            let pages = [(material_id, (1, material.clone()))].into_iter().collect();
+            let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+                &backend,
+                &[TerrainPatch {
+                    anchor: geometry_anchor,
+                    page: &height,
+                }],
+                OffscreenTarget::FORMAT,
+                thessa_render_wgpu::terrain::TerrainCapacity {
+                    patches: 1,
+                    material_layers: 1,
+                    height_grid_size: 2,
+                },
+                Some(&settings),
+            )
+            .unwrap();
+            renderer
+                .update_materials(&backend, &[material_id], &pages)
+                .unwrap();
+            renderer
+                .update_lighting(
+                    &backend,
+                    &SurfaceLighting {
+                        ambient_lux: [std::f32::consts::PI; 4],
+                        directions: [[0.0; 4]; 3],
+                        colors_lux: [[0.0; 4]; 3],
+                    },
+                )
+                .unwrap();
+
+            let mut observed = Vec::new();
+            for step in -4..=4 {
+                let local_u = 0.5 + f64::from(step) / 4096.0;
+                let center = DVec3::from(fine_anchor.project_body_m([local_u, 0.5], 0.0));
+                let eye = center + DVec3::from(fine_anchor.normal) * 2.0;
+                renderer
+                    .update_view(
+                        &backend,
+                        &ViewParams {
+                            world_from_view: glam::dcamera::rh::view::look_at_mat4(
+                                eye,
+                                center,
+                                DVec3::from(fine_anchor.raw_axis_v),
+                            )
+                            .inverse(),
+                            clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                                fov, 1.0, 0.01, 1000.0,
+                            ),
+                            world_position_m: eye,
+                            exposure: 1.0,
+                        },
+                    )
+                    .unwrap();
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                renderer.encode(&mut encoder, &target.color, &target.depth);
+                backend.queue.submit([encoder.finish()]);
+                let image = target.read_rgba8(&backend).unwrap();
+                observed.push(image[(32 * SIZE as usize + 32) * 4]);
+
+                let page_texel = local_u * PAGE_CELLS + 1.0;
+                let blend = page_texel.fract();
+                let linear = to_linear(low) * (1.0 - blend) + to_linear(high) * blend;
+                let expected = to_srgb_byte(linear);
+                assert!(
+                    observed.last().unwrap().abs_diff(expected) <= 2,
+                    "face={face}, step={step}, actual={}, expected={expected}",
+                    observed.last().unwrap()
+                );
+            }
+            assert!(
+                observed.windows(2).all(|pair| pair[0] < pair[1]),
+                "L25 material addressing must preserve subtexel motion on face {face}: {observed:?}"
             );
         }
     }

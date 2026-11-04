@@ -9,6 +9,7 @@
   "side": 512,
   "bytes": 735704,
   "format": "GN01 + u32 side + RGB8 OpenGL normal",
+  "source_png_bit_depth": 16,
   "processing": "RGB16-to-RGB8 conversion; slope-area downsample only for the existing 512-square litter swatch",
   "nonpositive_z_source_texels": 0,
   "fallback": "A folded normal cannot be represented by a single-valued height graph; runtime retains its height-derived slope, not an infinite tangent gradient."

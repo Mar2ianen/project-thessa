@@ -296,7 +296,7 @@ pub(crate) fn material_view_selection_at_height(
     max_level: u8,
     reference_height_m: f64,
 ) -> Vec<TileKey> {
-    let max_level = max_level.clamp(17, 24);
+    let max_level = max_level.clamp(17, 25);
     let surface_radius = view.radius + reference_height_m;
     let mut cover: BTreeSet<_> = base.iter().copied().collect();
     let error = |key: TileKey| {

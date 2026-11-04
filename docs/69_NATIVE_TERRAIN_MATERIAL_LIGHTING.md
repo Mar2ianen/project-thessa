@@ -140,8 +140,8 @@ material coordinates as a dyadic anchor plus small offsets through raster
 interpolation and page lookup. WORLD13 extends this precision contract to
 persistent conforming bisectors, reconstructing a common triangle face from
 exact integer addresses. The default material limit remains L17; optional
-ground detail permits bounded L20/L21/L24 material refinement on both topology
-paths (WORLD22); geometric relief retains its independent L22 maximum.
+ground detail permits bounded L20/L21/L25 material refinement on both topology
+paths (doc 135 supersedes WORLD22's High L24 ceiling); geometric relief retains its independent L22 maximum.
 
 With detail enabled, `surface_quality` Low/Medium/High resolves 1/4/16x material
 anisotropy against the adapter capability. Unknown/unsupported capabilities use
@@ -881,3 +881,10 @@ The shared mesh path now reuses this incoming/outgoing substrate contract in
 primary raster and secondary RT shading; see [doc 133](133_MESH_RECIPROCAL_GGX_BUDGET.md).
 This repairs black mapped-leaf patches without changing the terrain response.
 Its extra integration cost and unresolved release timing are recorded separately.
+
+[Doc 135](135_CLOSE_GROUND_BANDWIDTH.md) supersedes the earlier 1K source with
+matching 2K soil/moss planes and High L25 optical pages. It fixes the reproduced
+large-f32-index carry and cross-face neighbor precision failures, without changing
+geometry or GPU page budgets. Strict source-mean tests retain their tolerances;
+updated source statistics and the extra 224 MiB CPU mip/residual cache are explicit.
+The inspected close frames recover finer variation but retain the broad soil smear.

@@ -204,9 +204,9 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
         frustum: None,
         material_clip_from_eye: None,
     };
-    for limit in [17, 20, 21, 22, 23, 24, 255] {
+    for limit in [17, 20, 21, 22, 23, 24, 25, 255] {
         let pages = material_view_selection_with_limit(&[key], view, 1e-5, limit);
-        let budget = match limit.min(24) {
+        let budget = match limit.min(25) {
             17..=20 => 512,
             21 => 1024,
             _ => 2048,
@@ -236,8 +236,8 @@ fn close_material_refinement_reaches_configured_tiers_without_growing_budget() {
         forward: -near_dir,
         ..view
     };
-    let pages = material_view_selection_with_limit(&[near], near_view, 1e-5, 24);
-    assert_eq!(pages.iter().map(|k| k.level).max(), Some(24));
+    let pages = material_view_selection_with_limit(&[near], near_view, 1e-5, 25);
+    assert_eq!(pages.iter().map(|k| k.level).max(), Some(25));
     assert!(pages.len() <= 2048);
     assert_eq!(
         pages

@@ -53,6 +53,21 @@ fn optical_height_reference_is_epoch_cached_and_disabled_keeps_the_datum() {
 }
 
 #[test]
+fn high_material_stream_clamps_at_l25_without_changing_its_cache_budget() {
+    let stream = MaterialStream::with_detail(2048, MaterialPageStore::default(), true, true, 25);
+    assert_eq!(stream.max_level, 25);
+    assert_eq!(stream.cache_budget, 2048);
+
+    let over_limit =
+        MaterialStream::with_detail(2048, MaterialPageStore::default(), true, true, u8::MAX);
+    assert_eq!(over_limit.max_level, 25);
+    assert_eq!(over_limit.cache_budget, 2048);
+
+    let disabled = MaterialStream::with_detail(2048, MaterialPageStore::default(), true, false, 25);
+    assert_eq!(disabled.max_level, 17);
+}
+
+#[test]
 fn job_budget_defers_to_heights_and_deduplicates_shared_ancestors() {
     let mut stream = MaterialStream::new(32);
     let roots: Vec<_> = (0..6).map(TileKey::root).collect();

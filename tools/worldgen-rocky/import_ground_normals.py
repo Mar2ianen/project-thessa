@@ -4,7 +4,7 @@
 
 The existing material swatches remain unchanged. Downsampling averages surface
 slopes, then re-encodes RGB8. Runtime removes the matched height-map gradient.
-Pillow's RGB conversion quantizes the original RGB16 maps to RGB8, as recorded.
+Native RGB8 is preserved; RGB16 sources are converted to RGB8, as recorded.
 """
 import gzip
 import hashlib
@@ -16,9 +16,9 @@ import numpy as np
 from PIL import Image
 
 ASSETS = [
-    ("forest_ground_04", "forest-ground-04", 1024, "77c2337c8c8c47357f69b598e73a72de"),
-    ("brown_mud_leaves_01", "mud-litter-01", 512, "bfa4b76dc2218b8b953d3eb2055fafad"),
-    ("forest_leaves_02", "forest-moss-litter-02", 1024, "bc9d39e13ec80f8db325f15e73372626"),
+    ("forest_ground_04", "forest-ground-04", 2048, "2k", "c7bf8a98de1dee39cb6028e06b8bdd37"),
+    ("brown_mud_leaves_01", "mud-litter-01", 512, "1k", "bfa4b76dc2218b8b953d3eb2055fafad"),
+    ("forest_leaves_02", "forest-moss-litter-02", 2048, "2k", "cce2a8fd9454483a17f65b3cfc832725"),
 ]
 
 def encode_slopes(slopes):
@@ -28,14 +28,15 @@ def encode_slopes(slopes):
 
 def pack(source, destination):
     destination.mkdir(parents=True, exist_ok=True)
-    for asset, output, side, md5 in ASSETS:
-        path = source / (asset + "-nor_gl-1k.png")
+    for asset, output, side, resolution, md5 in ASSETS:
+        path = source / (asset + "-nor_gl-" + resolution + ".png")
         raw = path.read_bytes()
         assert hashlib.md5(raw).hexdigest() == md5, path
         image = np.asarray(Image.open(path).convert("RGB"))
-        assert image.shape == (1024, 1024, 3)
+        source_side = 2048 if resolution == "2k" else 1024
+        assert image.shape == (source_side, source_side, 3)
         folded = int(np.sum(image[..., 2] < 128))
-        if side != 1024:
+        if side != source_side:
             n = image.astype(float) / 255 * 2 - 1
             assert np.all(n[..., 2] > 0), "downsample requires representable source normals"
             slope = np.stack((-n[..., 0]/n[..., 2], n[..., 1]/n[..., 2]), axis=-1)
@@ -47,11 +48,12 @@ def pack(source, destination):
         target.write_bytes(packed)
         metadata = {
             "license": "CC0-1.0", "source_url": "https://polyhaven.com/a/" + asset,
-            "source_png_url": f"https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/{asset}/{asset}_nor_gl_1k.png",
+            "source_png_url": f"https://dl.polyhaven.org/file/ph-assets/Textures/png/{resolution}/{asset}/{asset}_nor_gl_{resolution}.png",
             "source_png_md5": md5, "source_png_sha256": hashlib.sha256(raw).hexdigest(),
             "path": str(target), "sha256": hashlib.sha256(packed).hexdigest(),
             "side": side, "bytes": len(packed), "format": "GN01 + u32 side + RGB8 OpenGL normal",
-            "processing": "RGB16-to-RGB8 conversion; slope-area downsample only for the existing 512-square litter swatch",
+            "source_png_bit_depth": raw[24],
+            "processing": ("native RGB8" if raw[24] == 8 else "RGB16-to-RGB8 conversion") + "; slope-area downsample only for the existing 512-square litter swatch",
             "nonpositive_z_source_texels": folded,
             "fallback": "A folded normal cannot be represented by a single-valued height graph; runtime retains its height-derived slope, not an infinite tangent gradient.",
         }

@@ -1,6 +1,6 @@
 # 6 — Physical scale and ground-normal energy
 
-Status: reference and existing implementation reviewed; foreground appearance open.
+Status: source/page bandwidth increased with integer L25 addresses; foreground appearance open.
 
 ## Research
 
@@ -30,3 +30,10 @@ bottom-third pixels have a requested/resolved gap above 0.5. Albedo and normal
 still look smeared; the approximately 3 mm source/page spacing is coarser than
 many foreground pixels. Source bandwidth, within-page mip filtering and separate
 normal residency remain separate tests, not an accepted quality repair.
+
+The [bandwidth candidate](../135_CLOSE_GROUND_BANDWIDTH.md) carries matching 2K
+soil/moss sources and High L25 optical pages (roughly 1.5 mm samples), retaining
+Low/Medium and fixed GPU budgets. It fixes reproduced f32 carry/cube-neighbor
+failures. Full 21-view source-only and L25 scene reviews see incremental finer
+variation, while the broad smeared soil remains. CPU source cache rises 224 MiB;
+release timing, broader view residency and soil/reference acceptance remain open.

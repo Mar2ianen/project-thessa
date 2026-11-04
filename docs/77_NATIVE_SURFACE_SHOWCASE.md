@@ -3485,3 +3485,13 @@ views. Actual FHD controls distinguish a flawed near-datum water predicate from
 the current sampled dry ground and identify transient coarse height coverage
 at the horizon. The ancestry experiment is retained as rejected evidence;
 full frozen capture, transport decomposition and reference acceptance remain open.
+
+## Current close-ground bandwidth continuation (2026-11-04)
+
+[Doc 135](135_CLOSE_GROUND_BANDWIDTH.md) supersedes the historical 1K/High-L24
+source ceiling above with native 2K soil/moss maps and High L25 optical pages.
+Integer page carries and cube-neighbor lookup pass the reproduced GPU controls.
+This is a bandwidth/addressing slice: actual 0.3 m FHD images retain broad smear,
+GPU caches remain bounded, and CPU source caches add 224 MiB. Reference and release
+performance acceptance remain open; historical WORLD records keep their original
+counts and source versions.

@@ -1045,3 +1045,12 @@ and all 21 frozen native views pass; every image was visually inspected. Only
 fine material ancestors do not explain the dominant albedo smear in this frame.
 Source/page sampling bandwidth and hardware mip behavior remain open. This does
 not measure separate normal-page residency or establish improved soil appearance.
+
+[Close-ground bandwidth](135_CLOSE_GROUND_BANDWIDTH.md) retains verified 2K
+soil/moss source planes with matching normals and High L25 optical pages.
+Actual GPU failures drove integer page carries and integer cube-neighbor
+presence; parent/missing-neighbor fallback remains. Low L20, Medium L21, disabled
+L17, L22 height geometry and page/cache budgets retain their limits. CPU source
+caches add 224 MiB and packed sources 54,062,744 bytes. Source-only L24 and L25
+native captures were reviewed completely: L25 recovers finer grain but the main
+smeared/striated soil appearance and scene/reference acceptance remain open.

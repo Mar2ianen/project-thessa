@@ -1,15 +1,16 @@
 {
   "license": "CC0-1.0",
   "source_url": "https://polyhaven.com/a/forest_ground_04",
-  "source_png_url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_nor_gl_1k.png",
-  "source_png_md5": "77c2337c8c8c47357f69b598e73a72de",
-  "source_png_sha256": "dc30ffdf75d28b2f02831201b377cf8cce4594d86bbcf46ba711dfcd35a5fcf0",
+  "source_png_url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_ground_04/forest_ground_04_nor_gl_2k.png",
+  "source_png_md5": "c7bf8a98de1dee39cb6028e06b8bdd37",
+  "source_png_sha256": "c0a6d53d29a88a1afb31964d08a32e228db615ebef0f90ff7af0d69d1f46a06c",
   "path": "assets/textures/forest-ground-04.normal.bin.gz",
-  "sha256": "5f22aa227c387fbd7998533869d255b97a335a4beb93bb4640c599cd257e5b08",
-  "side": 1024,
-  "bytes": 2907776,
+  "sha256": "e4aee951fde5c2e7d7f7e346abb2271636c6fe28eaec77832f162fe4db62bd3d",
+  "side": 2048,
+  "bytes": 11805717,
   "format": "GN01 + u32 side + RGB8 OpenGL normal",
-  "processing": "RGB16-to-RGB8 conversion; slope-area downsample only for the existing 512-square litter swatch",
+  "source_png_bit_depth": 8,
+  "processing": "native RGB8; slope-area downsample only for the existing 512-square litter swatch",
   "nonpositive_z_source_texels": 0,
   "fallback": "A folded normal cannot be represented by a single-valued height graph; runtime retains its height-derived slope, not an infinite tangent gradient."
 }

@@ -1,9 +1,9 @@
 {
   "path": "assets/textures/forest-moss-litter-02.bin.gz",
-  "sha256": "d4d7bdf25d43ea6b8874038b7289315c8c4edcf7ec01e47cc0b55adec536cb5f",
-  "bytes": 6140860,
-  "decoded_bytes": 6291464,
-  "side": 1024,
+  "sha256": "6c710138ada2c88b71381778b0544d2eac45af4a6b19287932cf9c96b181d0e2",
+  "bytes": 24651906,
+  "decoded_bytes": 25165832,
+  "side": 2048,
   "source_url": "https://polyhaven.com/a/forest_leaves_02",
   "license": "CC0-1.0",
   "width_m": 3.0,
@@ -11,16 +11,16 @@
   "height_is_authored_optical_prior": true,
   "sources": {
     "diffuse": {
-      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_leaves_02/forest_leaves_02_diffuse_1k.png",
-      "sha256": "09903abd88ae5a12932b79f03b0da15f7a952e9b43a4ad041eac31a3b925736d"
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_leaves_02/forest_leaves_02_diffuse_2k.png",
+      "sha256": "5f572a23d6e4a7c7ea132272945f7dabb301101641083f9f490e89b1f65be4e7"
     },
     "rough": {
-      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_leaves_02/forest_leaves_02_rough_1k.png",
-      "sha256": "3b99db84fcd4d6a2035086de36e06d399a7ad1edcf214335ccd443edd998ad9b"
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_leaves_02/forest_leaves_02_rough_2k.png",
+      "sha256": "88d0ae62b0ee124a183fcefece544f021125da709ead233717326bcb0d4baebd"
     },
     "disp": {
-      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_leaves_02/forest_leaves_02_disp_1k.png",
-      "sha256": "c5d626de38deda9fcbdb00f53f1898698bef11d264b8a2bdeb4fdcd42d399e90"
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_leaves_02/forest_leaves_02_disp_2k.png",
+      "sha256": "97a110abde191c2cf1dd30cf93c169c9e4395792568a4a7dd3757571f5a704bd"
     }
   }
 }

@@ -1,0 +1,462 @@
+{
+  "date": "2026-11-04",
+  "baseline": "529f51e",
+  "status": "retain bounded source/page bandwidth slice; main smeared/striated soil appearance and reference parity remain open",
+  "source_assets": [
+    {
+      "path": "assets/textures/forest-ground-04.normal.provenance.json",
+      "sha256": "a608e2bdadca78c2108bed36b33174151c4e8c8ee0f2ed79f137895f690d8102"
+    },
+    {
+      "path": "assets/textures/forest-ground-04.provenance.json",
+      "sha256": "3cea47b6c8aa8ede0a1f73dfddcc0722335e8325c3fcefcfeacc645c34518f3a"
+    },
+    {
+      "path": "assets/textures/forest-moss-litter-02.normal.provenance.json",
+      "sha256": "74ea256fdd2f4bac4ee3bb403c762b570192107b0be2cd97d9b63defe71e69c6"
+    },
+    {
+      "path": "assets/textures/forest-moss-litter-02.provenance.json",
+      "sha256": "18031b4f5afb94b58adbf9e758956d2cfcaed1683cafbc04168dd36dda79d478"
+    }
+  ],
+  "source_image_review": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-source-review/moss-native-center.png",
+      "sha256": "c65684b704226d1b126396bb6185e5b355ba61ef336756855f949a4d56a6d9a3"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-source-review/soil-native-center.png",
+      "sha256": "4e115320653cb2750fd1d0339f3c0ab12090f5cb2ce8438f40fdc90df6759ca7"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-source-review/source-all.jpg",
+      "sha256": "6c5e6698f3bfada45dd5b18d6f78574ec7f6ced8177833afb4666f30422ddc4f"
+    }
+  ],
+  "source_review": "All eight native source maps inspected on complete sheet, plus native-resolution soil/moss color crops; no broken channel/dimension detected.",
+  "hardware": "AMD Radeon880M/RADVSTRIX1; renderD128-only isolated processes; GPU jobs serial",
+  "captures": {
+    "ground2k-l24-soil-030m": {
+      "provenance": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/provenance.json",
+        "sha256": "8889c3f86821dde8ae042b8ddb40cc754986bb686637db93c9d682af33d4c157"
+      },
+      "manifest": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/manifest.json",
+        "sha256": "fe51773a2aecb199a4d988cbba301ceaa01113912805846e59e0330f0c638b8a"
+      },
+      "images": [
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/full-fhd.png",
+          "sha256": "ebf7f4e7677c2f5f84811cb85d1e69388f0cbee9cee4faa776da9611574c937f"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/review-all.jpg",
+          "sha256": "46db586c1b3c69d85a82a659f9fbc0c32bbbd3f8adf55cf30a4acf9e4bf16c0f"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/00-none.png",
+          "sha256": "f06f52860e44fa2315194bf6c6b66f5b1e61eb4477f689851f5f92218acf1fce"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/01-none.png",
+          "sha256": "ebf7f4e7677c2f5f84811cb85d1e69388f0cbee9cee4faa776da9611574c937f"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/02-none.png",
+          "sha256": "f06f52860e44fa2315194bf6c6b66f5b1e61eb4477f689851f5f92218acf1fce"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/03-none.png",
+          "sha256": "ebf7f4e7677c2f5f84811cb85d1e69388f0cbee9cee4faa776da9611574c937f"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/04-water_weight.png",
+          "sha256": "a800fedbe48f247f6d9adebd741c9566ab000e923b3cb92190b7f199af492b1a"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/05-height.png",
+          "sha256": "396ace959b77b7eba27615aedba46a6085273ff7781e24bf0da4e3d510e7e746"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/06-distance.png",
+          "sha256": "39f47175d08d085e181a2a1e3d474399b89f698977ac3c0f94a207a3535cb0d9"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/07-normal.png",
+          "sha256": "eca99566f7db5776751883037a38e1e8b06442f257344811468eb85d9c94a124"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/08-albedo.png",
+          "sha256": "a150bc234d6988666b84897baf1e3962d5fe64a884454022b4cb92e611bffe67"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/09-roughness.png",
+          "sha256": "841fc837677820804a04ceaef5482ab8eefc81a13a969a355c5d9d03dcc96730"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/10-geometry.png",
+          "sha256": "d7b3c2ac4e16a4f61cf2c7c98fdef1032c73309133f27f9f631ade01f2a00b36"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/11-height_page_level.png",
+          "sha256": "ea907abec8905fae7e538cd18a21ccfd9fbd26151bca9235dc20fb2fe89c8b54"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/12-footprint.png",
+          "sha256": "0cb4acbea235ba310fcdc0ebf1d99826afdcc3c2eed969c83c0eaa4abedfa59c"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/13-material_lod.png",
+          "sha256": "0ab666cfcef75940fea038424d926f43ce0ef3cb4512e625ded11f9c66624018"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/14-resolved_material_lod.png",
+          "sha256": "818a0a942abe6e7b4c2a71dd14a158b71f983cda2453641c13435c4a9169c8a9"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/15-relief_weight.png",
+          "sha256": "bc15a9916e1e8df79c58597699999ef7994001c435b34f0c5d502979fa0d932c"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/16-direct.png",
+          "sha256": "363cde94748a8726299c6c9aa83537f13c05e67d073fa90c3b2804c02c1de788"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/17-ambient.png",
+          "sha256": "204874db2200f072366592c6aa1d182811eab4024e83a2c150c2b711dc0e25f4"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/18-specular.png",
+          "sha256": "8fbd61ae0b1175f2752ce3eefb260f6d5628db511ed718c6e7becf4772c5fc38"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/19-land_only.png",
+          "sha256": "a34f5a44d489373b063df04fe8caf2d3fd08d5cda6e46c5c67f8dabe6368c639"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l24-soil-030m/views/20-none.png",
+          "sha256": "ebf7f4e7677c2f5f84811cb85d1e69388f0cbee9cee4faa776da9611574c937f"
+        }
+      ],
+      "visual_review": "root reviewed complete sheet plus native-resolution beauty; close albedo/normal opened separately",
+      "performance_equivalent": false
+    },
+    "ground2k-l25-v2-soil-030m": {
+      "provenance": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/provenance.json",
+        "sha256": "e0b812c5d91cd1f6692cfe2f17eb15e00cd0b73ad1cfb08682505b5a152406f8"
+      },
+      "manifest": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/manifest.json",
+        "sha256": "3d65a819ea4c9df8609876f2e96823a87f8f33b1bfcc0ba9e72b8ccada968d6c"
+      },
+      "images": [
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/full-fhd.png",
+          "sha256": "2c6d5abdc11fa576e4c6beefd6060d452f5c22e30daa084c0f486b82cd58da90"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/review-all.jpg",
+          "sha256": "c5c461856ae85b2eec3ed1bf631f2eee44af1263df539278831a4aedaf2ceb1e"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/00-none.png",
+          "sha256": "714c0df1a87dfb00daf788603a8533d4f6bd31ff47bc998bc536a9b823336f35"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/01-none.png",
+          "sha256": "2c6d5abdc11fa576e4c6beefd6060d452f5c22e30daa084c0f486b82cd58da90"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/02-none.png",
+          "sha256": "714c0df1a87dfb00daf788603a8533d4f6bd31ff47bc998bc536a9b823336f35"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/03-none.png",
+          "sha256": "2c6d5abdc11fa576e4c6beefd6060d452f5c22e30daa084c0f486b82cd58da90"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/04-water_weight.png",
+          "sha256": "3b2201203feebea52d7c45fe95c60d23b197e80211b0909fc31ea8c2fc620840"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/05-height.png",
+          "sha256": "85ea9a9a8d66228322eded67d4d883550f9a657132abbb6fbc792e9f43b15b28"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/06-distance.png",
+          "sha256": "613d509609055caf095b38a6ae731535f25c6d5b0c5385637e32ab314c2b0042"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/07-normal.png",
+          "sha256": "cd5709da1e5ccc64348f5326b43c69419855b9b12acfecefab41cbfdf7dd2f96"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/08-albedo.png",
+          "sha256": "3e2fbdf8e6850109eb3b95b2aaa5630e7fa8aeba5ef15b28e9f364b6a1331308"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/09-roughness.png",
+          "sha256": "4eb6553eb581a75b7f2228e0f7b4f0c4c329eabd0dc6f605c9a41db8c4da9dc7"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/10-geometry.png",
+          "sha256": "d1e26ac3e5afaace8fa6cb13a4d88a976bfd6ed1a9161f8829b4f557ba765a3b"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/11-height_page_level.png",
+          "sha256": "ab5f4ade9a0b1a3eac85a245b0bdc10209dbe8404adac8755b669f7e62b44a3d"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/12-footprint.png",
+          "sha256": "08eab77994f35998c6c1ccebed800c0634afdf3fce4645994cfe699f89a355d2"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/13-material_lod.png",
+          "sha256": "eb40d17cb5a31aa506e280573ecf5a93403dcf88986886c303692eadf484fa12"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/14-resolved_material_lod.png",
+          "sha256": "30715ac7a54168c495a93d58dfe3e4f5cad69c8c72db8a670d94c046fdda7030"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/15-relief_weight.png",
+          "sha256": "49723eb63fadd4c2a82e14f6f3f3bc01f085cc01859a4ce499f3da1557bc7413"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/16-direct.png",
+          "sha256": "e5d77eef899d00ba2df2a0fb2e3c40a71abb9ae9edbe52ae296adc7df1a5ddae"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/17-ambient.png",
+          "sha256": "0ca96e4d32401128822f21e53083919a1c1b20a19adcdae94f6b98fabc132bdd"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/18-specular.png",
+          "sha256": "d60b767545cea1fe381e36ef321d4a38d105189ee191073626afd0e6cbe1981a"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/19-land_only.png",
+          "sha256": "dcc73bfb8f39b580fd18a0d186d3e932d0075ce63f3cca76a948e096f2bbea7a"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-v2-soil-030m/views/20-none.png",
+          "sha256": "2c6d5abdc11fa576e4c6beefd6060d452f5c22e30daa084c0f486b82cd58da90"
+        }
+      ],
+      "visual_review": "root reviewed complete sheet plus native-resolution beauty; close albedo/normal opened separately",
+      "performance_equivalent": false
+    },
+    "ground2k-l25-final-wide-fhd": {
+      "provenance": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/provenance.json",
+        "sha256": "a50d01c7f1075c4f18466d9edc8529e1e37a0338f64177c00b4e5f6240684efa"
+      },
+      "manifest": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/manifest.json",
+        "sha256": "2aaf835b429f984bb21058d4c407c4498f655ea9472451c57b69005a1fded26a"
+      },
+      "images": [
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/full-fhd.png",
+          "sha256": "e4a03da48779d765c896fc58b1859cf31c79f80daf79c22c0a40edac91c1061e"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/review-all.jpg",
+          "sha256": "4b2e0290595882bb5e5e3e9df07998370b1d80b8fa9344f0fa9e93e9bcdf88dc"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/00-none.png",
+          "sha256": "650a8da272fda2c390c36336007ec208ced74950480facec31f8bcb08801188e"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/01-none.png",
+          "sha256": "e4a03da48779d765c896fc58b1859cf31c79f80daf79c22c0a40edac91c1061e"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/02-none.png",
+          "sha256": "650a8da272fda2c390c36336007ec208ced74950480facec31f8bcb08801188e"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/03-none.png",
+          "sha256": "e4a03da48779d765c896fc58b1859cf31c79f80daf79c22c0a40edac91c1061e"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/04-water_weight.png",
+          "sha256": "2bebf8587a3115619d6167e973c2919068fbfa4b41d6c397ca1d0dbd81722eca"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/05-height.png",
+          "sha256": "0b36ba4508cfa1ab8f9ad2deea68806efb500d3755f0391f022570bd6692e31b"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/06-distance.png",
+          "sha256": "9743815bd4b27d0796719af882655aab8fcc13fe5a042ef2c3570b6de37e847d"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/07-normal.png",
+          "sha256": "b791b447e8fcee49e0df84c28850394254711e7e137e588839d4fff31973db2f"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/08-albedo.png",
+          "sha256": "c7ca153d1b95ccfd65993567af67284fc784f53730c901e40421b6b8d0925938"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/09-roughness.png",
+          "sha256": "832269317e5c6deef397a15709712e90586b3a59ebbba12b063fb56bc793cef4"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/10-geometry.png",
+          "sha256": "ae183b40357a3e9a4d3fb7d2b3d3464ab3b1f12e1b8cf0bd95dc974b401b4bba"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/11-height_page_level.png",
+          "sha256": "f0b5e024c95b843f80cfa5e731833323252d6073381b1ed5c2227776d236e2a7"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/12-footprint.png",
+          "sha256": "fa46eba02aa2d17dd478be1f1cda3745bee875d594455d77b40ed7c668240b09"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/13-material_lod.png",
+          "sha256": "9df7da6aee14380867784cac5efbadbfe05e5f845e68324c9c258b3c768a9908"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/14-resolved_material_lod.png",
+          "sha256": "5424dc61e32e4d8d67495a1db40643c4fd5a0e8a5852940c41881efab4a6e128"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/15-relief_weight.png",
+          "sha256": "dd82f64808f74d377c5bf7d1a657668386daacbe974f07a92220effb6a308813"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/16-direct.png",
+          "sha256": "5699a3aafdb304ca3ff2e03b1e6448d95281787445568b16bf6ef31217ccadb7"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/17-ambient.png",
+          "sha256": "46aa091fb0ab66f46602c49708d9308b047dfe912b896297a74db0a543dab1bb"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/18-specular.png",
+          "sha256": "5a5a3398f08592fe415c4172a303ae69567ac83ad054645271e0f2a9f6cc7adc"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/19-land_only.png",
+          "sha256": "4e221399cdf64b07fc8ce2aabaa0c13bdc21674763a82e7cf3cbc65d749a4059"
+        },
+        {
+          "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-final-wide-fhd/views/20-none.png",
+          "sha256": "e4a03da48779d765c896fc58b1859cf31c79f80daf79c22c0a40edac91c1061e"
+        }
+      ],
+      "visual_review": "root reviewed complete sheet plus native-resolution beauty; close albedo/normal opened separately",
+      "performance_equivalent": false
+    }
+  },
+  "close_roi": {
+    "covered_bottom_pixels": 640570,
+    "requested_lod_percentiles": [
+      24.57275390625,
+      25.0,
+      25.0,
+      25.0,
+      25.0
+    ],
+    "resolved_lod_percentiles": [
+      23.9990234375,
+      25.0,
+      25.0,
+      25.0,
+      25.0
+    ],
+    "gap_over_half_level_fraction": 0.05344614952308101
+  },
+  "unblinded_review": {
+    "reviewers": [
+      "root",
+      "luna_ground_iterations"
+    ],
+    "decision": "finer foreground variation, no observed new scene regression; broad soil smear remains; not independent blind preference",
+    "limits": [
+      "Timed stream publication differs across captures, not exact whole-frame A/B.",
+      "L25 close capture predates cross-face neighbor helper; final wide includes it, and independent GPU edge fixture tests it.",
+      "Source means change after existing nonlinear transfer; not pure frequency-only color identity."
+    ]
+  },
+  "cost": {
+    "cpu_color_rough_height_cache_delta_bytes": 167772160,
+    "cpu_normal_residual_cache_delta_bytes": 67108864,
+    "cpu_total_cache_delta_bytes": 234881024,
+    "packed_source_old_bytes": 17790320,
+    "packed_source_new_bytes": 71853064,
+    "packed_source_delta_bytes": 54062744,
+    "gpu_fixed_cache_delta_bytes": 0,
+    "additional_passes": 0,
+    "release_timing_accepted": false
+  },
+  "results": {
+    "source_tests_passed": 15,
+    "worldgen_tests_passed": 305,
+    "worldgen_ignored": 1,
+    "graphics_tests_passed": 55,
+    "stream_tests_passed": 34,
+    "native_primary_tests_passed": 153,
+    "native_primary_ignored": 51,
+    "material_gpu_tests_passed": 10,
+    "ray_gpu_tests_passed": 32,
+    "cross_face_gpu_test_passed": true,
+    "cross_face_cases": 72,
+    "edge_levels": [
+      17,
+      24,
+      25
+    ],
+    "clippy": "passed",
+    "architecture": "passed"
+  },
+  "checks": {
+    "material": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-material-final.log",
+      "sha256": "deed609ab28582a738dae2008f14a54e2d1827d2a06a819a981da3cb8b9ad3e4"
+    },
+    "rays": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-rays-final.log",
+      "sha256": "b07bfcdf0615027d38bcab5e5ba2726a2ec6991c9e7b4fea2e2f82937c9e8c8b"
+    },
+    "edges": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-edges-final.log",
+      "sha256": "acd0178a5a518a2c7ab1db2906d18ebc1fcfd69c660c2a9d540f91321dd6b5b7"
+    },
+    "address_red": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground2k-l25-material-regressions.log",
+      "sha256": "ddb9a3b42c108a01e2cf9d7b5881084e2fb5d72b1d86e0faa8c5c8a4f2d09ccb"
+    },
+    "edge_red": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/l25-cross-face-red.log",
+      "sha256": "feb854d3f0315c70744d2bb68f867c4d46d8ef2db98954021444e628e40a350f"
+    },
+    "cpu": {
+      "path": "/tmp/thessa-ground2k-l25-cpu.log",
+      "sha256": "3836ac2ade0ab929d6decaa79cefc5e644276c04efaf5165e34aadf8d97c4ecc"
+    },
+    "graphics_final": {
+      "path": "/tmp/thessa-ground2k-l25-graphics-final.log",
+      "sha256": "e196f0567a4d173384602e8205f4af9566790bacd93f12fd0856dd7f19782553"
+    },
+    "native": {
+      "path": "/tmp/thessa-ground2k-l25-native-tests.log",
+      "sha256": "9a686b8d0d21c1d07e44d113fbe9885e32359de77771fadfecafcad780185a6e"
+    },
+    "clippy": {
+      "path": "/tmp/thessa-ground2k-l25-clippy-final2.log",
+      "sha256": "06842ce8d5d1999122155d1c5a382750283da18a48dc6a8383f1dd887b612d11"
+    },
+    "architecture": {
+      "path": "/tmp/thessa-ground2k-l25-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    }
+  }
+}

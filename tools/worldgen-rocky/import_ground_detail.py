@@ -13,18 +13,20 @@ from PIL import Image
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 expected = {
-    "diff": "8f4318ba5044aa147999b08a10302fb4",
-    "rough": "d9a63bc30621bf8edd1a3a44d2245a16",
-    "disp": "fb41f8f219e76d6a52095f12bb3c20b2",
+    "diff": "93972c83249ae015111c8da714e6162c",
+    "rough": "49bd9e53639081da4b8bda9163c469b5",
+    "disp": "aee602747c99de3ecee2c4d969775aaf",
 }
 maps = {}
 for name, digest in expected.items():
-    path = source / f"forest_ground_04_{name}_1k.png"
+    path = source / f"forest_ground_04_{name}_2k.png"
     assert hashlib.md5(path.read_bytes()).hexdigest() == digest, path
     maps[name] = np.asarray(Image.open(path))
 
 
-side = 1024
+side = 2048
+assert all(a.dtype == np.uint8 for k, a in maps.items() if k != "disp")
+assert maps["disp"].dtype == np.uint16
 assert maps["diff"].shape == (side, side, 3)
 assert maps["rough"].shape == maps["disp"].shape == (side, side)
 height = maps["disp"].astype("<u2")
@@ -48,9 +50,9 @@ metadata = {
     "height_is_authored_optical_prior": True,
     "sources": {
         name: {
-            "url": f"https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_{name}_1k.png",
+            "url": f"https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_ground_04/forest_ground_04_{name}_2k.png",
             "md5": digest,
-            "sha256": hashlib.sha256((source / f"forest_ground_04_{name}_1k.png").read_bytes()).hexdigest(),
+            "sha256": hashlib.sha256((source / f"forest_ground_04_{name}_2k.png").read_bytes()).hexdigest(),
         } for name, digest in expected.items()
     },
 }

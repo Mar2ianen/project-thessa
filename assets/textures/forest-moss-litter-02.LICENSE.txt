@@ -6,7 +6,7 @@ License: https://polyhaven.com/license
 CC0 legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
 Retrieved: 2026-10-26 via direct Poly Haven asset downloads.
 
-forest-moss-litter-02.bin.gz packs the native 1024x1024 RGB8 diffuse, R8
+forest-moss-litter-02.bin.gz packs the native 2048x2048 RGB8 diffuse, R8
 roughness and R16 displacement maps. tools/worldgen-rocky/import_moss_detail.py
 reproduces it after verifying each source SHA-256. Pillow and NumPy are used
 only by the offline importer. Source maps and packed bytes are identified in
@@ -21,3 +21,10 @@ forest-moss-litter-02.normal.provenance.json. Reproduce with
 tools/worldgen-rocky/import_ground_normals.py. The old color/roughness/height
 swatch is unchanged. Runtime gradients are optical shading detail; they do not
 add collision geometry or a measured physical displacement calibration.
+
+The 2026-11-04 bandwidth candidate uses verified native 2K RGB8/roughness R8,
+R16 displacement and matching native RGB8 OpenGL normals at the unchanged
+physical repeat/height range. It supersedes the earlier 1K source; exact URLs,
+checksums and packed bytes are in the current provenance manifests. The High
+optical material ceiling is evaluated separately from geometry and page budgets.
+Source mip/residual CPU memory increases; no measured speedup is claimed.

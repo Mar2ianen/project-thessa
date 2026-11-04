@@ -10,7 +10,7 @@ struct MaterialAddress {
 };
 
 struct MaterialCoordinates {
-    tile: vec2<f32>,
+    tile: vec2<i32>,
     local: vec2<f32>,
 };
 
@@ -62,8 +62,11 @@ fn material_chart_filter_footprint(address: MaterialAddress, dx: vec2<f32>, dy: 
 fn material_coordinates(address: MaterialAddress, extent: f32) -> MaterialCoordinates {
     let base = address.uv * extent;
     let relative = fract(base) + address.offset * extent;
-    let tile = clamp(floor(base) + floor(relative), vec2(0.0), vec2(extent - 1.0));
-    return MaterialCoordinates(tile, (floor(base) - tile) + relative);
+    // L25 page indices exceed f32's consecutive integer range. Keep the
+    // integer carry separate from the small fractional texture coordinate.
+    let desired = vec2<i32>(floor(base)) + vec2<i32>(floor(relative));
+    let tile = clamp(desired, vec2<i32>(0), vec2<i32>(i32(extent) - 1));
+    return MaterialCoordinates(tile, fract(relative) + vec2<f32>(desired - tile));
 }
 
 // A consumer without a declared semantic plane is land. Backends replace this
@@ -119,6 +122,39 @@ fn material_address(d: vec3<f32>) -> MaterialAddress {
     return MaterialAddress(clamp(uv * 0.5 + 0.5, vec2(0.0), vec2(0.99999994)), face, vec2(0.0));
 }
 
+// Immediate cube neighbours use the canonical face orientations, as in
+// conforming_address.wgsl. A float half-cell vanishes at positive L25 edges.
+fn material_neighbour_node(source_face:u32,tile:vec2<i32>,level:u32)->vec2<u32> {
+    let n=i32(1u<<level);
+    let p=tile*2+vec2(1-n);
+    var cube=vec3<i32>(0);
+    switch source_face {
+        case 0u:{cube=vec3(n,p.y,-p.x);}
+        case 1u:{cube=vec3(-n,p.y,p.x);}
+        case 2u:{cube=vec3(p.x,n,-p.y);}
+        case 3u:{cube=vec3(p.x,-n,p.y);}
+        case 4u:{cube=vec3(p.x,p.y,n);}
+        default:{cube=vec3(-p.x,p.y,-n);}
+    }
+    let a=abs(cube);
+    var face=select(5u,4u,cube.z>=0);
+    if(a.x>=a.y && a.x>=a.z){face=select(1u,0u,cube.x>=0);}
+    else if(a.y>=a.z){face=select(3u,2u,cube.y>=0);}
+    var uv=vec2<i32>(0);
+    switch face {
+        case 0u:{uv=vec2(-cube.z,cube.y);}
+        case 1u:{uv=vec2(cube.z,cube.y);}
+        case 2u:{uv=vec2(cube.x,-cube.z);}
+        case 3u:{uv=vec2(cube.x,cube.z);}
+        case 4u:{uv=cube.xy;}
+        default:{uv=vec2(-cube.x,cube.y);}
+    }
+    // For a one-cell step, perspective shrink is less than half a cell:
+    // the same discrete neighbour follows from orientation and edge clamping.
+    let xy=clamp((uv+vec2(n))/2,vec2<i32>(0),vec2(n-1));
+    return material_node(face,vec2<u32>(xy),level);
+}
+
 // Only missing neighbours need a transition to shared coarser data. A complete
 // equal-resolution neighbourhood keeps all its detail, including page edges.
 // Diagonals prevent a single resident quadrant from leaving a corner seam.
@@ -137,14 +173,12 @@ fn material_resident_weight(address: MaterialAddress, level: u32, feather: f32) 
             if (y < 0) { distance = max(distance, local.y); }
             if (y > 0) { distance = max(distance, 1.0 - local.y); }
             if (distance >= feather) { continue; }
-            let neighbour_tile = tile + vec2(f32(x), f32(y));
-            var id = material_node(address.face, vec2<u32>(max(neighbour_tile, vec2(0.0))), level);
+            let neighbour_tile = tile + vec2(x, y);
+            var id = material_node(address.face, vec2<u32>(max(neighbour_tile, vec2<i32>(0))), level);
             // Reproject across cube edges rather than clamping to this face.
             // Same-face neighbours already have an exact integer address.
-            if (any(neighbour_tile < vec2(0.0)) || any(neighbour_tile >= vec2(extent))) {
-                let neighbour_uv = (neighbour_tile + 0.5) / extent;
-                let neighbour = material_address(material_direction(neighbour_uv, address.face));
-                id = material_node(neighbour.face, vec2<u32>(neighbour.uv * extent), level);
+            if (any(neighbour_tile < vec2<i32>(0)) || any(neighbour_tile >= vec2<i32>(i32(extent)))) {
+                id = material_neighbour_node(address.face, neighbour_tile, level);
             }
             if (material_layer(id) == 0xffffffffu) {
                 weight = min(weight, smoothstep(0.0, feather, distance));

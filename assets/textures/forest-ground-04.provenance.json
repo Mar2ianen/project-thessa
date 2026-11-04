@@ -1,9 +1,9 @@
 {
   "path": "assets/textures/forest-ground-04.bin.gz",
-  "sha256": "483ec35cffb48cb0f6a1f52ddf5744ffccb1ec435dd71a2f2c91305f0e434cc8",
-  "bytes": 5696506,
-  "decoded_bytes": 6291464,
-  "side": 1024,
+  "sha256": "20620233c46595ca38c78b84982ea3522f313ef273ff84a0a7af88d6ff7d1b7a",
+  "bytes": 23092994,
+  "decoded_bytes": 25165832,
+  "side": 2048,
   "source_url": "https://polyhaven.com/a/forest_ground_04",
   "license": "CC0-1.0",
   "width_m": 3.15,
@@ -11,19 +11,19 @@
   "height_is_authored_optical_prior": true,
   "sources": {
     "diff": {
-      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_diff_1k.png",
-      "md5": "8f4318ba5044aa147999b08a10302fb4",
-      "sha256": "59fd7ca8dbfb83cd7adb487c67b744d80805a5abac60ce1fc89f2cd90c53c3cf"
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_ground_04/forest_ground_04_diff_2k.png",
+      "md5": "93972c83249ae015111c8da714e6162c",
+      "sha256": "e8c273851a153e751a3664891ba5cbb28713f0cf98aca442291ab7b27b79900e"
     },
     "rough": {
-      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_rough_1k.png",
-      "md5": "d9a63bc30621bf8edd1a3a44d2245a16",
-      "sha256": "d5827ac9071ae7cf98920bf1166b2b343ac0349fd3b0dc1b570f29ae67bea62c"
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_ground_04/forest_ground_04_rough_2k.png",
+      "md5": "49bd9e53639081da4b8bda9163c469b5",
+      "sha256": "1ea792fe7232bffbb002f863bf1048af15125730dba1d1a8564b10733abf9f71"
     },
     "disp": {
-      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_disp_1k.png",
-      "md5": "fb41f8f219e76d6a52095f12bb3c20b2",
-      "sha256": "d96e043c2b97120897b53414be520fd6a1ac6dcbb29b06f90ac4acff9c1e85df"
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_ground_04/forest_ground_04_disp_2k.png",
+      "md5": "aee602747c99de3ecee2c4d969775aaf",
+      "sha256": "013c03f6f0cb1b6c7fbcf1ce950bc09e93285dad0c1d953714a36b8dc1c93c3b"
     }
   }
 }

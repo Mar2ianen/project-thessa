@@ -244,7 +244,7 @@ The checked-in vertical slice currently contains:
      Regular-patch material sampling preserves local chart precision; the tested
       forest-floor colour-noise prototype was rejected, not shipped (doc 77).
       A distinct default-off CC0 soil/gravel experiment can refine regular-patch
-       materials to L20/L21/L24 with capability-resolved 1/4/16x anisotropy by
+       materials to L20/L21/L25 with capability-resolved 1/4/16x anisotropy by
        quality and a terrain-aware local distance reference; cross-LOD appearance and visual
       acceptance remain open (doc 77).
     RT hits now interpolate UVs/smooth normals and reuse raster base/MR/normal/AO
@@ -1051,3 +1051,10 @@ requested detail from resident ancestors. The inspected 0.3 m frame retains fine
 material pages across almost all covered foreground, yet albedo remains smeared;
 source bandwidth and within-page filtering are the next investigation. This is
 diagnostic evidence, not repaired soil or reference acceptance.
+
+[Close-ground bandwidth](docs/135_CLOSE_GROUND_BANDWIDTH.md) upgrades the existing
+soil/moss scans to native 2K and High optical pages to L25, with exact integer
+page carries and cross-face neighbor lookup. Low/Medium, height geometry and
+GPU page budgets retain their limits. Source caches add 224 MiB of CPU memory;
+actual FHD views show incremental finer grain while broad soil smear and scene
+reference acceptance remain open.

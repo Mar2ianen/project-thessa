@@ -12,17 +12,19 @@ from PIL import Image
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 expected = {
-    'diffuse': '09903abd88ae5a12932b79f03b0da15f7a952e9b43a4ad041eac31a3b925736d',
-    'rough': '3b99db84fcd4d6a2035086de36e06d399a7ad1edcf214335ccd443edd998ad9b',
-    'disp': 'c5d626de38deda9fcbdb00f53f1898698bef11d264b8a2bdeb4fdcd42d399e90',
+    'diffuse': '5f572a23d6e4a7c7ea132272945f7dabb301101641083f9f490e89b1f65be4e7',
+    'rough': '88d0ae62b0ee124a183fcefece544f021125da709ead233717326bcb0d4baebd',
+    'disp': '97a110abde191c2cf1dd30cf93c169c9e4395792568a4a7dd3757571f5a704bd',
 }
-url = 'https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_leaves_02/forest_leaves_02_{}_1k.png'
+url = 'https://dl.polyhaven.org/file/ph-assets/Textures/png/2k/forest_leaves_02/forest_leaves_02_{}_2k.png'
 maps = {}
 for name, digest in expected.items():
     path = source / (name + '.png')
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, path
     maps[name] = np.asarray(Image.open(path))
-side = 1024
+side = 2048
+assert all(a.dtype == np.uint8 for k, a in maps.items() if k != "disp")
+assert maps["disp"].dtype == np.uint16
 assert maps['diffuse'].shape == (side, side, 3)
 assert maps['rough'].shape == maps['disp'].shape == (side, side)
 packed = np.empty((side, side, 6), dtype=np.uint8)
